@@ -3,7 +3,7 @@
 // the shared `dy` load / an interior product emitted once, then N stores).
 //
 // Validates the GENERATED kernels (pasted verbatim below — headerless, exactly as
-// `baracuda-kernelgen` emits them) against an f64 CPU oracle PER OUTPUT, on both a
+// `unpopped` emits them) against an f64 CPU oracle PER OUTPUT, on both a
 // contiguous and a strided cell, and audits generated-vs-bespoke (the sibling
 // `binary_mul_backward_fp.cu` / `binary_div_backward_fp.cu` math, inlined). Also
 // a determinism check (two runs, bit-identical).

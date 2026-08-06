@@ -3,14 +3,14 @@
 //!
 //! §6.13 pins what a kernel computes; §6.20 pins the shape that computation
 //! produces. Kernelgen carries size *classes* (never literal extents) in
-//! [`baracuda_kernel_vocab::StructureKey`], so this oracle is the symbolic
+//! [`unpopped_vocab::StructureKey`], so this oracle is the symbolic
 //! shape-side companion — a function from operand shapes to the output shape,
 //! exactly the §6.20-0001 formulation.
 //!
 //! See `docs/superpowers/specs/2026-07-23-shape-oracle-design.md`.
 
 use crate::ir::{Access, AxisRole, OpDef, ReadIndex, SortLimit, WriteIndex};
-use baracuda_kernel_vocab::{Axis, DimExpr, MAX_RANK, ShapeExpr};
+use unpopped_vocab::{Axis, DimExpr, MAX_RANK, ShapeExpr};
 
 /// Sentinel marking a symbolic / data-dependent extent in a caller-supplied
 /// input shape. Any op whose output depends on a symbolic extent yields
@@ -334,7 +334,7 @@ pub enum ShapeRuleForm {
     /// [`ShapeRuleForm::NeedsReservedConstructor`] instead), so
     /// [`shape_rule_form`] never returns this today. It is kept as the §6.20
     /// vocabulary slot the bridge will emit the moment such an op ships — the
-    /// `DimExpr` machinery ([`pooled_axis_dim_expr`], [`baracuda_kernel_vocab::eval_dim`])
+    /// `DimExpr` machinery ([`pooled_axis_dim_expr`], [`unpopped_vocab::eval_dim`])
     /// is already built and tested, so wiring a slice/iota op to it is additive.
     Dim(DimExpr),
     /// The rule needs a constructor that is **reserved** at this vocabulary
@@ -464,7 +464,7 @@ fn same_as_frame_or_dims(input_shapes: &[Vec<i64>]) -> ShapeRuleForm {
 mod tests {
     use super::*;
     use crate::ir::{OpDef, ReduceOp, input};
-    use baracuda_kernel_vocab::{AxisMask, ElementKind};
+    use unpopped_vocab::{AxisMask, ElementKind};
 
     #[test]
     fn elementwise_output_is_the_broadcast_frame() {
@@ -866,7 +866,7 @@ mod tests {
         // The DimExpr the bridge WOULD emit once WithDim is registered must
         // evaluate to exactly what the concrete oracle computes — proving the
         // arithmetic form and the oracle agree before the wire opens.
-        use baracuda_kernel_vocab::{DimValue, Extent, eval_dim};
+        use unpopped_vocab::{DimValue, Extent, eval_dim};
         let e = pooled_axis_dim_expr(0, 1, 2, 2, 1, 0, 0);
         let shape = [Extent::Known(4), Extent::Known(8)];
         let ops: &[&[Extent]] = &[&shape];
@@ -883,8 +883,8 @@ mod tests {
         s
     }
 
-    fn od(shape: &[i64]) -> baracuda_kernel_vocab::OperandDesc {
-        baracuda_kernel_vocab::OperandDesc::new(
+    fn od(shape: &[i64]) -> unpopped_vocab::OperandDesc {
+        unpopped_vocab::OperandDesc::new(
             shape.len(),
             shape,
             &dense_strides(shape),
@@ -908,7 +908,7 @@ mod tests {
     /// derivation. The spec's §6 two-way pin.
     fn assert_oracle_agrees(
         op: &OpDef,
-        cat: baracuda_kernel_vocab::OpCategory,
+        cat: unpopped_vocab::OpCategory,
         in_shapes: &[Vec<i64>],
         out_shape: &[i64],
     ) {
@@ -922,10 +922,10 @@ mod tests {
         // Then the oracle must accept that same shape and produce it.
         let mut operands: Vec<_> = in_shapes.iter().map(|s| od(s)).collect();
         operands.push(od(out_shape));
-        let key = baracuda_kernel_vocab::structure_key(
+        let key = unpopped_vocab::structure_key(
             cat,
             &operands,
-            baracuda_kernel_vocab::ArchSku::Sm89,
+            unpopped_vocab::ArchSku::Sm89,
         );
         let plan = crate::plan::build_plan(op, &key);
         let inputs: Vec<_> = in_shapes.iter().map(|s| zeros(s)).collect();
@@ -940,7 +940,7 @@ mod tests {
     #[test]
     fn oracle_differential_agrees_on_every_supported_variant() {
         use crate::ir::{ReduceStage, SortOrder, reduced};
-        use baracuda_kernel_vocab::OpCategory;
+        use unpopped_vocab::OpCategory;
 
         // Elementwise.
         let add = OpDef::elementwise("add", 2, &[ElementKind::F32], input(0) + input(1));

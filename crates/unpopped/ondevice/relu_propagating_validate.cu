@@ -1,6 +1,6 @@
 // On-device BIT-IDENTITY validation of the bespoke NaN-PROPAGATING relu kernel
 // (baracuda-kernels-sys `unary_relu_propagating_fp.cu`, the family Fuel rebinds
-// OpKind::ReluElementwise to) against the baracuda-kernelgen GENERATED relu (the
+// OpKind::ReluElementwise to) against the unpopped GENERATED relu (the
 // semantics oracle — cuda.rs UnaryOp::Relu). Requires raw output bytes to be
 // memcmp-identical between:
 //   - the bespoke extern-C launcher (`baracuda_kernels_unary_relu_propagating_*_run`)
@@ -22,8 +22,8 @@
 //
 // Regeneration (from a VS dev shell) — first dump the generated oracle .cu, then
 // build the harness beside them:
-//   RELU_OUT=<outdir> cargo test -p baracuda-kernelgen dump_relu_sources -- --ignored --nocapture
-//   cp crates/baracuda-kernelgen/ondevice/relu_propagating_validate.cu <outdir>/
+//   RELU_OUT=<outdir> cargo test -p unpopped dump_relu_sources -- --ignored --nocapture
+//   cp crates/unpopped/ondevice/relu_propagating_validate.cu <outdir>/
 //   nvcc -O3 -arch=sm_89 -std=c++17 \
 //        -I C:/Projects/baracuda/crates/baracuda-kernels-sys/kernels/include \
 //        <outdir>/relu_propagating_validate.cu -o relu_propagating_validate

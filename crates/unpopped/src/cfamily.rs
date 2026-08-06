@@ -8,7 +8,7 @@
 //!
 //! The vocabulary is deliberately backend-neutral: it depends only on the
 //! neutral IR (`crate::ir`), the plan (`crate::plan::KernelPlan`), and the
-//! op/dtype vocab (`baracuda_kernel_vocab`) — never on any CUDA launch
+//! op/dtype vocab (`unpopped_vocab`) — never on any CUDA launch
 //! harness. It is the module the standalone kernel generator (Unpopped) keeps
 //! when the CUDA-specific emitter is later carved into its own crate.
 //!
@@ -34,7 +34,7 @@
 
 use crate::ir::{BinaryOp, ScalarExpr, UnaryOp, is_admissible_int_reduction_operand};
 use crate::plan::KernelPlan;
-use baracuda_kernel_vocab::ElementKind;
+use unpopped_vocab::ElementKind;
 
 /// CUDA scalar type for a dtype, or `None` if the backend can't lower it yet.
 /// `U8` (increment 0b) is the comparison-predicate mask dtype — `unsigned char`
@@ -694,7 +694,7 @@ mod int_div_or_const_root_gate_validate {
     //! `build_plan` to isolate `assert_int_op_admissibility`.
     use super::assert_no_int_div_or_const;
     use crate::ir::{BinaryOp, ScalarExpr, input, konst};
-    use baracuda_kernel_vocab::ElementKind;
+    use unpopped_vocab::ElementKind;
 
     // Root-Cmp positive case (mirrors the shipped `count` shape): a bare
     // `Cmp*` IS the reduction body root — admitted (0/1 Const operand

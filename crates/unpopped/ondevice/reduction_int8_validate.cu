@@ -16,8 +16,8 @@
 //      not stall at 2^24 (16,777,216) the way a float accumulator would.
 //
 // Build (from a VS dev shell, or with -ccbin pointed at cl.exe):
-//   cargo run -p baracuda-kernelgen --bin kernelgen -- <outdir>
-//   cp crates/baracuda-kernelgen/ondevice/reduction_int8_validate.cu <outdir>/
+//   cargo run -p unpopped --bin kernelgen -- <outdir>
+//   cp crates/unpopped/ondevice/reduction_int8_validate.cu <outdir>/
 //   nvcc -O3 -arch=sm_89 <outdir>/reduction_int8_validate.cu \
 //        -o <outdir>/reduction_int8_validate && <outdir>/reduction_int8_validate
 

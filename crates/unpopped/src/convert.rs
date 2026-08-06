@@ -18,7 +18,7 @@
 
 use crate::ir::{Expr, OpDef, ReduceOp, ScalarExpr, UnaryOp};
 use crate::lift::{LiftError, Lifted, binary_fn, unary_fn};
-use baracuda_kernel_vocab::ElementKind;
+use unpopped_vocab::ElementKind;
 use tree_sitter::{Node, Parser, Tree};
 
 /// Parse CUDA source into a tree-sitter CST (error-tolerant; unrecognized

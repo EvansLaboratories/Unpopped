@@ -9,8 +9,8 @@ in `bin/kernelgen.rs`; update both together.
 (`Enter-VsDevShell`), or an x64 Native Tools prompt. General shape:
 
 ```sh
-cargo run -p baracuda-kernelgen --bin kernelgen -- <outdir>   # generate the catalog .cu
-cp crates/baracuda-kernelgen/ondevice/<harness>.cu <outdir>/  # place harness beside them
+cargo run -p unpopped --bin kernelgen -- <outdir>   # generate the catalog .cu
+cp crates/unpopped/ondevice/<harness>.cu <outdir>/  # place harness beside them
 nvcc -O3 -arch=sm_89 <outdir>/<harness>.cu -o <outdir>/<harness> && <outdir>/<harness>
 ```
 
@@ -19,7 +19,7 @@ nvcc -O3 -arch=sm_89 <outdir>/<harness>.cu -o <outdir>/<harness> && <outdir>/<ha
 ## `unravel_bench.cu` — generated coord-unravel helper vs hand-written (Phase 1)
 
 The first **freestanding-helper** validation (IR-translation-hub roadmap, Phase 1,
-`docs/design/ir-translation-hub.md`): proves `baracuda-kernelgen` can emit a
+`docs/design/ir-translation-hub.md`): proves `unpopped` can emit a
 reusable `.cuh` helper — `baracuda::coord::gen::unravel_offset_1_r{N}`, produced by
 `emit_coord_unravel_helper` from the SAME `emit_unravel_decomp` routine that backs
 the inline strided kernels (single source of truth) — that is bit-identical to the
@@ -31,10 +31,10 @@ guard), then micro-benches both (compute-bound, REPEAT unravels/elem).
 Run (needs the bespoke include dir + the MSVC conforming preprocessor):
 
 ```sh
-UNRAVEL_OUT=<outdir> cargo test -p baracuda-kernelgen dump_coord_unravel_helper -- --ignored --nocapture
+UNRAVEL_OUT=<outdir> cargo test -p unpopped dump_coord_unravel_helper -- --ignored --nocapture
 nvcc -O3 -arch=sm_89 -std=c++17 -Xcompiler "/Zc:preprocessor /std:c++17" \
      -I <outdir> -I crates/baracuda-kernels-sys/kernels/include \
-     crates/baracuda-kernelgen/ondevice/unravel_bench.cu -o <outdir>/unravel_bench && <outdir>/unravel_bench
+     crates/unpopped/ondevice/unravel_bench.cu -o <outdir>/unravel_bench && <outdir>/unravel_bench
 ```
 
 **Last run** (RTX 4070 Laptop / sm_89 / CUDA 13.3): PASSED — correctness
@@ -65,10 +65,10 @@ round-trip. The intrinsic pick is emitted from the same `promote_load_f32` /
 Run:
 
 ```sh
-DTYPE_OUT=<outdir> cargo test -p baracuda-kernelgen dump_dtype_promote_helper -- --ignored --nocapture
+DTYPE_OUT=<outdir> cargo test -p unpopped dump_dtype_promote_helper -- --ignored --nocapture
 nvcc -O3 -arch=sm_89 -std=c++17 -Xcompiler "/Zc:preprocessor /std:c++17" \
      -I <outdir> -I crates/baracuda-kernels-sys/kernels/include \
-     crates/baracuda-kernelgen/ondevice/dtype_promote_validate.cu -o <outdir>/dtype_promote_validate && <outdir>/dtype_promote_validate
+     crates/unpopped/ondevice/dtype_promote_validate.cu -o <outdir>/dtype_promote_validate && <outdir>/dtype_promote_validate
 ```
 
 **Last run** (RTX 4070 Laptop / sm_89 / CUDA 13.3): PASSED — all **131072** codes
@@ -93,8 +93,8 @@ inputs (signed-zero / ±Inf / NaN edge seeds), and bit-compares.
 Run:
 
 ```sh
-LIFT_OUT=<outdir> cargo test -p baracuda-kernelgen --lib lift::tests::dump_lift_roundtrip -- --ignored --nocapture
-nvcc -O3 -arch=sm_89 -std=c++17 -I <outdir>      crates/baracuda-kernelgen/ondevice/lift_roundtrip_validate.cu -o <outdir>/lift_roundtrip_validate && <outdir>/lift_roundtrip_validate
+LIFT_OUT=<outdir> cargo test -p unpopped --lib lift::tests::dump_lift_roundtrip -- --ignored --nocapture
+nvcc -O3 -arch=sm_89 -std=c++17 -I <outdir>      crates/unpopped/ondevice/lift_roundtrip_validate.cu -o <outdir>/lift_roundtrip_validate && <outdir>/lift_roundtrip_validate
 ```
 
 **Last run** (RTX 4070 / sm_89 / CUDA 13.3): PASSED — all 4194304 elements
@@ -126,8 +126,8 @@ source (all 256 i8 + 256 u8), each cast to all 8 destinations, plus curated
 Run:
 
 ```sh
-CAST_OUT=<outdir> cargo test -p baracuda-kernelgen dump_cast_helper -- --ignored --nocapture
-nvcc -O3 -arch=sm_89 -std=c++17 -Xcompiler "/Zc:preprocessor /std:c++17"      -I <outdir> -I crates/baracuda-kernels-sys/kernels/include      crates/baracuda-kernelgen/ondevice/cast_validate.cu -o <outdir>/cast_validate && <outdir>/cast_validate
+CAST_OUT=<outdir> cargo test -p unpopped dump_cast_helper -- --ignored --nocapture
+nvcc -O3 -arch=sm_89 -std=c++17 -Xcompiler "/Zc:preprocessor /std:c++17"      -I <outdir> -I crates/baracuda-kernels-sys/kernels/include      crates/unpopped/ondevice/cast_validate.cu -o <outdir>/cast_validate && <outdir>/cast_validate
 ```
 
 **Last run** (RTX 4070 / sm_89 / CUDA 13.3): PASSED — every (source, destination)
@@ -340,8 +340,8 @@ companion example emits them (mirrors how the item-10 `_contract_tll` cells come
 from the catalog):
 
 ```sh
-cargo run -p baracuda-kernelgen --example emit_bias_batched -- <outdir>
-cp crates/baracuda-kernelgen/ondevice/contract_bias_batched_validate.cu <outdir>/
+cargo run -p unpopped --example emit_bias_batched -- <outdir>
+cp crates/unpopped/ondevice/contract_bias_batched_validate.cu <outdir>/
 nvcc -O3 -arch=sm_89 <outdir>/contract_bias_batched_validate.cu -lcublas \
      -o <outdir>/contract_bias_batched_validate
 <outdir>/contract_bias_batched_validate                          # correctness + cuBLAS + bench
@@ -438,9 +438,9 @@ catalog** (the exception to the header note above). Generate them with the
 library into `<outdir>`, then copy this harness beside them as usual:
 
 ```rust
-use baracuda_kernelgen::ir::BinaryOp;
-use baracuda_kernelgen::{generate, input, Cuda, OpDef};
-use baracuda_kernel_vocab::{structure_key, ArchSku, ElementKind, OpCategory, OperandDesc};
+use unpopped::ir::BinaryOp;
+use unpopped::{generate, input, Cuda, OpDef};
+use unpopped_vocab::{structure_key, ArchSku, ElementKind, OpCategory, OperandDesc};
 use ElementKind::{I32, S8, U8};
 
 let out = std::env::args().nth(1).expect("outdir");
@@ -506,12 +506,12 @@ Generate them with the library into `<outdir>`, then copy this harness beside
 them:
 
 ```rust
-use baracuda_kernelgen::ir::BinaryOp;
-use baracuda_kernelgen::{coord, generate, input, konst, param, Cuda, OpDef};
-use baracuda_kernel_vocab::{structure_key, ArchSku, ElementKind, OpCategory, OperandDesc};
+use unpopped::ir::BinaryOp;
+use unpopped::{coord, generate, input, konst, param, Cuda, OpDef};
+use unpopped_vocab::{structure_key, ArchSku, ElementKind, OpCategory, OperandDesc};
 
 let out = std::env::args().nth(1).expect("outdir");
-let write = |k: baracuda_kernelgen::GeneratedKernel| {
+let write = |k: unpopped::GeneratedKernel| {
     std::fs::write(format!("{out}/{}.cu", k.name), &k.source).unwrap();
 };
 let key_1in = |dt: ElementKind| {  // one input + output
@@ -585,12 +585,12 @@ kernels (called through their `extern "C" _run` launchers, keepdim ABI):
 Generate them into `<outdir>`, then copy the harness beside them:
 
 ```rust
-use baracuda_kernelgen::ir::BinaryOp;
-use baracuda_kernelgen::{generate, input, konst, reduced, Cuda, OpDef, ReduceOp, UnaryOp};
-use baracuda_kernel_vocab::{structure_key, ArchSku, ElementKind, OpCategory, OperandDesc};
+use unpopped::ir::BinaryOp;
+use unpopped::{generate, input, konst, reduced, Cuda, OpDef, ReduceOp, UnaryOp};
+use unpopped_vocab::{structure_key, ArchSku, ElementKind, OpCategory, OperandDesc};
 
 let out = std::env::args().nth(1).expect("outdir");
-let write = |k: baracuda_kernelgen::GeneratedKernel| {
+let write = |k: unpopped::GeneratedKernel| {
     std::fs::write(format!("{out}/{}.cu", k.name), &k.source).unwrap();
 };
 // last-axis reduce cell: [256,128] f32 input, [256] output of `out_dt`.
@@ -804,12 +804,12 @@ read is non-contiguous — `build_plan` forces it, never vectorized/packed):
 Generate them into `<outdir>`, then copy the harness beside them:
 
 ```rust
-use baracuda_kernelgen::ir::View;
-use baracuda_kernelgen::{generate, input, Cuda, OpDef};
-use baracuda_kernel_vocab::{structure_key, ArchSku, ElementKind, OpCategory, OperandDesc};
+use unpopped::ir::View;
+use unpopped::{generate, input, Cuda, OpDef};
+use unpopped_vocab::{structure_key, ArchSku, ElementKind, OpCategory, OperandDesc};
 
 let out = std::env::args().nth(1).expect("outdir");
-let write = |k: baracuda_kernelgen::GeneratedKernel| {
+let write = |k: unpopped::GeneratedKernel| {
     std::fs::write(format!("{out}/{}.cu", k.name), &k.source).unwrap();
 };
 // relu(x^T): x producer [N,M] dense (Permute operand 0 must have empty bcast).
@@ -929,12 +929,12 @@ rides the `entry_point` symbol (`gather_f32_i32` vs `gather_f32_i64` vs
 Generate them into `<outdir>`, then copy the harness beside them:
 
 ```rust
-use baracuda_kernelgen::ir::OobPolicy;
-use baracuda_kernelgen::{generate, Cuda, OpDef};
-use baracuda_kernel_vocab::{structure_key, ArchSku, ElementKind, OpCategory, OperandDesc};
+use unpopped::ir::OobPolicy;
+use unpopped::{generate, Cuda, OpDef};
+use unpopped_vocab::{structure_key, ArchSku, ElementKind, OpCategory, OperandDesc};
 
 let out = std::env::args().nth(1).expect("outdir");
-let write = |k: baracuda_kernelgen::GeneratedKernel| {
+let write = |k: unpopped::GeneratedKernel| {
     std::fs::write(format!("{out}/{}.cu", k.name), &k.source).unwrap();
 };
 let data = OperandDesc::new(2, &[128, 64], &[64, 1], ElementKind::F32, 256);
@@ -1060,11 +1060,11 @@ bug) while treating the atomic variant's atomicAdd as legitimate.
 Generate them into `<outdir>`, then copy the harness beside them:
 
 ```rust
-use baracuda_kernelgen::{generate, generate_variants, Cuda, OpDef};
-use baracuda_kernel_vocab::{structure_key, ArchSku, ElementKind, OpCategory, OperandDesc};
+use unpopped::{generate, generate_variants, Cuda, OpDef};
+use unpopped_vocab::{structure_key, ArchSku, ElementKind, OpCategory, OperandDesc};
 
 let out = std::env::args().nth(1).expect("outdir");
-let write = |k: &baracuda_kernelgen::GeneratedKernel| {
+let write = |k: &unpopped::GeneratedKernel| {
     std::fs::write(format!("{out}/{}.cu", k.name), &k.source).unwrap();
 };
 let (f32, i32) = (ElementKind::F32, ElementKind::I32);
@@ -1180,8 +1180,8 @@ Regenerate the `.cu` sources with the library dump tool, then copy the harness
 beside them:
 
 ```sh
-SCAN_OUT=<outdir> cargo test -p baracuda-kernelgen dump_scan_sources -- --ignored --nocapture
-cp crates/baracuda-kernelgen/ondevice/scan_validate.cu <outdir>/
+SCAN_OUT=<outdir> cargo test -p unpopped dump_scan_sources -- --ignored --nocapture
+cp crates/unpopped/ondevice/scan_validate.cu <outdir>/
 nvcc -O3 -arch=sm_89 <outdir>/scan_validate.cu -o <outdir>/scan_validate && <outdir>/scan_validate
 ```
 
@@ -1393,8 +1393,8 @@ entry symbols distinct.
 **Regeneration:** these cells are **not** in the `bin/kernelgen.rs` catalog.
 
 ```sh
-WINDOW_OUT=<outdir> cargo test -p baracuda-kernelgen dump_window_sources -- --ignored --nocapture
-cp crates/baracuda-kernelgen/ondevice/window_validate.cu <outdir>/
+WINDOW_OUT=<outdir> cargo test -p unpopped dump_window_sources -- --ignored --nocapture
+cp crates/unpopped/ondevice/window_validate.cu <outdir>/
 nvcc -O3 -arch=sm_89 <outdir>/window_validate.cu -o <outdir>/window_validate && <outdir>/window_validate
 ```
 
@@ -1513,8 +1513,8 @@ extreme for integers — all emitted **header-light** (`__int_as_float(0x7fc0000
 **Regeneration:** these cells are **not** in the `bin/kernelgen.rs` catalog.
 
 ```sh
-SORT_OUT=<outdir> cargo test -p baracuda-kernelgen dump_sort_sources -- --ignored --nocapture
-cp crates/baracuda-kernelgen/ondevice/sort_validate.cu <outdir>/
+SORT_OUT=<outdir> cargo test -p unpopped dump_sort_sources -- --ignored --nocapture
+cp crates/unpopped/ondevice/sort_validate.cu <outdir>/
 nvcc -O3 -arch=sm_89 <outdir>/sort_validate.cu -o <outdir>/sort_validate && <outdir>/sort_validate
 ```
 
@@ -1917,7 +1917,7 @@ NaN-SCRUBBING `fmaxf(x, 0)` Fmax-family semantics). The bespoke form is
 `-0.0` input stays `-0.0` — computed natively in f32/f64 and via the f32-detour
 (`widen → compare-select → narrow`) in f16/bf16.
 
-The **acceptance requirement** is BIT-IDENTITY to the baracuda-kernelgen
+The **acceptance requirement** is BIT-IDENTITY to the unpopped
 **generated** relu (the semantics oracle — `cuda.rs` `UnaryOp::Relu` lowers to
 exactly `x < 0.0f ? 0.0f : x` for f32/f64 and the per-lane f32-detour for
 f16/bf16). The harness `#include`s the bespoke `.cu` (its extern-C
@@ -1932,8 +1932,8 @@ raw output bytes to be **memcmp-identical**.
 committed harness is built beside them:
 
 ```sh
-RELU_OUT=<outdir> cargo test -p baracuda-kernelgen dump_relu_sources -- --ignored --nocapture
-cp crates/baracuda-kernelgen/ondevice/relu_propagating_validate.cu <outdir>/
+RELU_OUT=<outdir> cargo test -p unpopped dump_relu_sources -- --ignored --nocapture
+cp crates/unpopped/ondevice/relu_propagating_validate.cu <outdir>/
 nvcc -O3 -arch=sm_89 -std=c++17 \
      -I <kernels-sys>/kernels/include <outdir>/relu_propagating_validate.cu -o relu_propagating_validate
 ./relu_propagating_validate
@@ -2027,9 +2027,9 @@ ABI comment. The proof is the high-edge memcheck cell (case 8).
 **Regeneration:**
 
 ```sh
-OFFSET_OUT=<outdir> cargo test -p baracuda-kernelgen dump_offset_sources -- --ignored --nocapture
-OFFSET_OUT=<outdir> cargo test -p baracuda-kernelgen dump_rope_pair_sources -- --ignored --nocapture
-cp crates/baracuda-kernelgen/ondevice/offset_validate.cu <outdir>/
+OFFSET_OUT=<outdir> cargo test -p unpopped dump_offset_sources -- --ignored --nocapture
+OFFSET_OUT=<outdir> cargo test -p unpopped dump_rope_pair_sources -- --ignored --nocapture
+cp crates/unpopped/ondevice/offset_validate.cu <outdir>/
 nvcc -O3 -arch=sm_89 -std=c++17 \
      -I <kernels-sys>/kernels/include \
      -Xcompiler "/Zc:preprocessor /std:c++17" \
@@ -2216,7 +2216,7 @@ triu stored `-0.0` on masked negatives (84,489 accounted bit-diffs at
 `dump_select_sources` test (not the `bin/kernelgen.rs` catalog):
 
 ```text
-SELECT_OUT=<outdir> cargo test -p baracuda-kernelgen dump_select_sources -- --ignored --nocapture
+SELECT_OUT=<outdir> cargo test -p unpopped dump_select_sources -- --ignored --nocapture
 ```
 
 then copy `select_validate.cu` beside them and compile like
@@ -2309,8 +2309,8 @@ Generate the two kernels with the `dump_dropout_sources` test, then copy the
 harness beside them:
 
 ```sh
-DROPOUT_OUT=<outdir> cargo test -p baracuda-kernelgen dump_dropout_sources -- --ignored --nocapture
-cp crates/baracuda-kernelgen/ondevice/dropout_validate.cu <outdir>/
+DROPOUT_OUT=<outdir> cargo test -p unpopped dump_dropout_sources -- --ignored --nocapture
+cp crates/unpopped/ondevice/dropout_validate.cu <outdir>/
 # acceptance gate (bespoke header => conforming preprocessor + include path):
 nvcc -O3 -arch=sm_89 -std=c++17 -DWITH_BESPOKE \
      -I <kernels-sys>/kernels/include -Xcompiler "/Zc:preprocessor /std:c++17" \
@@ -2415,8 +2415,8 @@ f64 `_mo2_scalar` + `_mo2_strided_r2` alongside the f32 pair), then copy the har
 beside them and `nvcc`:
 
 ```
-DROPOUT_OUT=<outdir> cargo test -p baracuda-kernelgen dump_dropout_sources -- --ignored --nocapture
-cp crates/baracuda-kernelgen/ondevice/dropout_f64_validate.cu <outdir>/
+DROPOUT_OUT=<outdir> cargo test -p unpopped dump_dropout_sources -- --ignored --nocapture
+cp crates/unpopped/ondevice/dropout_f64_validate.cu <outdir>/
 # CPU-oracle build (headerless; PRIMARY gate + strided/determinism/f32-regression):
 nvcc -O3 -arch=sm_89 -std=c++17 -I <outdir> <outdir>/dropout_f64_validate.cu -o <outdir>/dropout_f64_validate
 # SECONDARY (adds the bespoke f64 widening cross-check + bench):
@@ -2494,8 +2494,8 @@ is uniform:
 
 Regenerate + build + run:
 ```
-IM2COL_OUT=<outdir> cargo test -p baracuda-kernelgen dump_im2col_sources -- --ignored --nocapture
-cp crates/baracuda-kernelgen/ondevice/im2col_validate.cu <outdir>/
+IM2COL_OUT=<outdir> cargo test -p unpopped dump_im2col_sources -- --ignored --nocapture
+cp crates/unpopped/ondevice/im2col_validate.cu <outdir>/
 nvcc -O3 -arch=sm_89 -std=c++17 -Xcompiler "/Zc:preprocessor" \
      -I crates/baracuda-kernels-sys/kernels/include \
      <outdir>/im2col_validate.cu -o <outdir>/im2col_validate && <outdir>/im2col_validate
@@ -2596,7 +2596,7 @@ would flip im2col from AOT-only to contract-carrying (needs the Fuel propose-fir
 On-device numeric proof for the sub-spec A contraction LAYOUT classes (Tasks
 1-9, `feat/ir-contraction-roles-layout`): the operand STRIDE pattern derives a
 discrete storage-order class via `classify_mat_layout`
-(`baracuda-kernel-vocab::structure_key`), and `emit_contraction` (`cuda.rs`)
+(`unpopped-vocab::structure_key`), and `emit_contraction` (`cuda.rs`)
 follows that class through extent-product address math — a broadcast
 (stride-0) axis is dropped from the binding entirely. Tasks 5/8 emit that
 address math; Tasks 6/9 proved it against the CPU oracle; this harness proves
@@ -2649,8 +2649,8 @@ The companion example emits them (mirrors `emit_bias_batched`):
 
 ```sh
 # 1. Emit the cells + place the harness (Rust build — NOT GPU-touching, NO lock):
-cargo run -p baracuda-kernelgen --example emit_contract_layout -- <outdir>
-cp crates/baracuda-kernelgen/ondevice/contract_layout_validate.cu <outdir>/
+cargo run -p unpopped --example emit_contract_layout -- <outdir>
+cp crates/unpopped/ondevice/contract_layout_validate.cu <outdir>/
 # 2. Compile (compile-only — NOT GPU-touching, NO lock; from a VS dev shell so nvcc finds cl.exe,
 #    e.g. a one-shot `cmd /c "<...>\vcvars64.bat && nvcc ..."`):
 nvcc -O3 -arch=sm_89 <outdir>/contract_layout_validate.cu -o <outdir>/contract_layout_validate.exe

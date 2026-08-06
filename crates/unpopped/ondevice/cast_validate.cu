@@ -14,10 +14,10 @@
 // bit-exactness: gen == hand for every pair, exhaustive over every f16 + bf16 +
 // i8 + u8 source code and a curated sample of the wider dtypes.
 //
-//   CAST_OUT=<work> cargo test -p baracuda-kernelgen dump_cast_helper -- --ignored
+//   CAST_OUT=<work> cargo test -p unpopped dump_cast_helper -- --ignored
 //   nvcc -O3 -arch=sm_89 -std=c++17 -Xcompiler "/Zc:preprocessor /std:c++17" \
 //        -I <work> -I crates/baracuda-kernels-sys/kernels/include \
-//        crates/baracuda-kernelgen/ondevice/cast_validate.cu -o <work>/cast_validate
+//        crates/unpopped/ondevice/cast_validate.cu -o <work>/cast_validate
 //   <work>/cast_validate
 #include <cstdio>
 #include <cstdint>

@@ -45,7 +45,7 @@ use crate::ir::{
     Access, AxisRole, BinaryOp, ContractionAxes, OobPolicy, OpDef, ReadIndex, ReduceOp, ScalarExpr,
     UnaryOp, WriteCombine, WriteIndex,
 };
-use baracuda_kernel_vocab::{AxisMask, ElementKind};
+use unpopped_vocab::{AxisMask, ElementKind};
 
 /// The KISS-Ops op-DAG (recipe) for `op`, or `None` if `op` is not yet expressible
 /// as a neutral recipe (unsupported access, or a node with no confirmed KISS-Ops
@@ -480,7 +480,7 @@ fn binary_kiss_name(op: BinaryOp) -> Option<&'static str> {
 mod tests {
     use super::*;
     use crate::ir::{BinaryOp, Expr, OpDef, ScalarExpr, UnaryOp, input, konst, param, reduced};
-    use baracuda_kernel_vocab::ElementKind::F32;
+    use unpopped_vocab::ElementKind::F32;
 
     fn unary_recipe(u: UnaryOp) -> Option<String> {
         let op = OpDef::elementwise(
@@ -677,7 +677,7 @@ mod tests {
         // (cuda.rs:2241; an integer average rounds, unrepresentable in a single-dtype
         // cell), so there is no such kernel to describe. Float Mean now emits the
         // sum+div-extent recipe (see the dedicated test below).
-        use baracuda_kernel_vocab::ElementKind::I32;
+        use unpopped_vocab::ElementKind::I32;
         let int_mean = OpDef::reduction("imean", 1, &[I32], input(0), ReduceOp::Mean);
         assert_eq!(semantics_dag(&int_mean), None);
     }
@@ -1091,7 +1091,7 @@ mod tests {
     #[test]
     fn rowreduce_integer_mean_stage_stays_an_honest_miss() {
         use crate::ir::{ReduceOp, ReduceStage};
-        use baracuda_kernel_vocab::ElementKind::I32;
+        use unpopped_vocab::ElementKind::I32;
         // INTEGER Mean stays an honest miss, as in the Reduction arm — an integer
         // average rounds (the emitter rejects int_acc && Mean), so no such kernel.
         let op = OpDef::row_reduce(
@@ -1118,7 +1118,7 @@ mod tests {
     #[test]
     fn gather_recipe_is_a_gather_node_over_data_and_index() {
         use crate::ir::OobPolicy;
-        use baracuda_kernel_vocab::ElementKind::{I32, I64, U32};
+        use unpopped_vocab::ElementKind::{I32, I64, U32};
         // A gather rides `op.read_index` (Access::Elementwise WITH an Indexed read),
         // so its recipe is NOT the plain elementwise body `in0` — it is a `gather[…]`
         // node over (data, index), child order data-then-index (Fuel's pinned
@@ -1147,7 +1147,7 @@ mod tests {
 
     #[test]
     fn scatter_add_recipe_is_a_scatter_node_over_value_and_index() {
-        use baracuda_kernel_vocab::ElementKind::{I32, U32};
+        use unpopped_vocab::ElementKind::{I32, U32};
         // scatter_add rides `op.write_index` (ScatterIndexed{combine: AtomicAdd}); the
         // recipe is a `scatter[…]` node over (value = body, index), child order
         // value-then-index. Fuel implements ScatterAdd = `scatter{atomic-add}`, so the
@@ -1170,7 +1170,7 @@ mod tests {
     #[test]
     fn unresolvable_scatter_combines_and_index_dtypes_stay_honest_misses() {
         use crate::ir::{OobPolicy, WriteCombine, WriteIndex};
-        use baracuda_kernel_vocab::ElementKind::{F32 as F32K, I32};
+        use unpopped_vocab::ElementKind::{F32 as F32K, I32};
         // Fuel implements ScatterAdd (atomic-add) ONLY; a bare-assign scatter and
         // atomic-max / atomic-min are Fuel-side gaps — an unresolvable recipe, so an
         // honest miss (None), never a fabricated combine token.

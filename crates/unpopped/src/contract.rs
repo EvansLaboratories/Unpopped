@@ -32,7 +32,7 @@
 use crate::backend::GeneratedKernel;
 use crate::ir::{BinaryOp, ExprDag, NodeId, OobPolicy, OpDef, ScalarExpr, UnaryOp};
 use crate::pattern::{PatternNode, derive_pattern, to_fkc};
-use baracuda_kernel_vocab::{Contiguity, ElementKind, StructureKey, VecWidth};
+use unpopped_vocab::{Contiguity, ElementKind, StructureKey, VecWidth};
 
 /// Canonicalize a caller's backend token to the exact capitalized spelling
 /// Fuel's FKC importer accepts (fuel-dispatch `fkc/lower.rs` `lower_backend`,
@@ -959,7 +959,7 @@ pub fn contract(
     // KISS-Contract §6.8 `accumulation_type` (sk3 RFC §4.2): a contraction/
     // reduction-bearing cell declares the dtype its fold accumulates in,
     // spelled from the SAME closed dtype set as the key's `<acc>` coordinate
-    // (`baracuda_kernel_vocab::dtype_token` — one dtype, two surfaces). A pure
+    // (`unpopped_vocab::dtype_token` — one dtype, two surfaces). A pure
     // elementwise/permutation cell has no fold, so the field is absent.
     let acc_dtype = match plan.access {
         // Gem cells: the key's `<acc>` IS the declaration — emitting from the
@@ -984,7 +984,7 @@ pub fn contract(
     if let Some(a) = acc_dtype {
         s.push_str(&format!(
             "  accumulation_type: {}\n",
-            baracuda_kernel_vocab::dtype_token(a)
+            unpopped_vocab::dtype_token(a)
         ));
     }
     s.push_str("  audited: true\n");

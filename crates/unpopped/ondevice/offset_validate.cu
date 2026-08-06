@@ -1,4 +1,4 @@
-// On-device validation of the BASE_OFFSET SLICE operand (baracuda-kernelgen
+// On-device validation of the BASE_OFFSET SLICE operand (unpopped
 // post-ramp increment): a per-operand runtime base ELEMENT offset added to an
 // operand's base pointer at kernel entry (`long long off{i}` launch arg, element
 // units) — a runtime launch-arg slice, NOT a stride View, NOT an index gather.
@@ -51,9 +51,9 @@
 // GPU/toolchain: RTX 4070 Laptop (sm_89), CUDA 13.3 / nvcc.
 //
 // Regeneration (from a VS dev shell) — dump the generated oracle .cu, then build:
-//   OFFSET_OUT=<outdir> cargo test -p baracuda-kernelgen dump_offset_sources -- --ignored --nocapture
-//   OFFSET_OUT=<outdir> cargo test -p baracuda-kernelgen dump_rope_pair_sources -- --ignored --nocapture
-//   cp crates/baracuda-kernelgen/ondevice/offset_validate.cu <outdir>/
+//   OFFSET_OUT=<outdir> cargo test -p unpopped dump_offset_sources -- --ignored --nocapture
+//   OFFSET_OUT=<outdir> cargo test -p unpopped dump_rope_pair_sources -- --ignored --nocapture
+//   cp crates/unpopped/ondevice/offset_validate.cu <outdir>/
 //   nvcc -O3 -arch=sm_89 -std=c++17 \
 //        -I C:/Projects/baracuda/crates/baracuda-kernels-sys/kernels/include \
 //        -Xcompiler "/Zc:preprocessor /std:c++17" \

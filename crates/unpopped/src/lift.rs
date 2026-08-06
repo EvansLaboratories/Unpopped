@@ -16,7 +16,7 @@
 //! against the oracle.
 
 use crate::ir::{BinaryOp, Expr, OpDef, ScalarExpr, UnaryOp};
-use baracuda_kernel_vocab::ElementKind;
+use unpopped_vocab::ElementKind;
 
 /// Why a source kernel could not be fully lifted — the KISS-Consume refusal
 /// taxonomy. Each variant is one machine-actionable category (see

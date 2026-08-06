@@ -19,7 +19,7 @@
 //   compute-sanitizer --tool racecheck ./rowreduce_bw_validate
 //
 // The generated .cu names track the bin/kernelgen.rs catalog cells; regenerate with
-//   cargo run -p baracuda-kernelgen --bin kernelgen -- <outdir>
+//   cargo run -p unpopped --bin kernelgen -- <outdir>
 // then copy this harness beside them (same convention as the other ondevice files).
 
 #include <cstdio>

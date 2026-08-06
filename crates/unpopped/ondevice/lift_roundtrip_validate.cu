@@ -11,11 +11,11 @@
 // not a tolerance. Both kernels compute `out[i] = in0[i]*in1[i] + in0[i]` as a
 // single `a*b+c` expression, so nvcc contracts both to the same fma -> identical.
 //
-//   LIFT_OUT=<work> cargo test -p baracuda-kernelgen --lib \
+//   LIFT_OUT=<work> cargo test -p unpopped --lib \
 //       lift::tests::dump_lift_roundtrip -- --ignored --nocapture
 //   nvcc -O3 -arch=sm_89 -std=c++17 \
 //        -I <work> \
-//        crates/baracuda-kernelgen/ondevice/lift_roundtrip_validate.cu \
+//        crates/unpopped/ondevice/lift_roundtrip_validate.cu \
 //        -o <work>/lift_roundtrip_validate
 //   <work>/lift_roundtrip_validate
 #include <cstdio>

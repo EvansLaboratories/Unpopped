@@ -9,7 +9,7 @@
 //! Baracuda) without a rewrite.
 
 use crate::ir::{BinaryOp, DagNode, ExprDag, NodeId, ScalarExpr, UnaryOp};
-use baracuda_kernel_vocab::ElementKind;
+use unpopped_vocab::ElementKind;
 
 /// A generated kernel: its exported symbol name and source text.
 ///
