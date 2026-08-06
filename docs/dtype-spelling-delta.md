@@ -47,35 +47,60 @@ old `Complex64` did not, so this rename is **not** mechanically safe for
 consumers and must land in a schema-version event with a migration note, never
 silently.
 
-## 4. `F32` and `F32Strict` are not dtypes — escalating
+## 4. `F32Strict` — the key codec is already right; the loss is non-contraction
 
-Their docs:
+**An earlier revision of this document overstated this item.** It claimed
+`F32`/`F32Strict`-as-dtypes was a vendor leak in the key. It is not: sk3 D4
+already retired the `f32s` token per KISS §6.1-0005, and `canonical_dtype` folds
+`F32Strict → F32` before the token is spelled. Unpopped already implements
+KISS's one-`f32` model. The correction matters, so it is recorded rather than
+quietly edited.
 
-- `F32` — *"IEEE 754 binary32 inputs reduced through **TF32 tensor cores**
-  (10-bit mantissa)."*
-- `F32Strict` — *"IEEE 754 binary32 inputs reduced through **SIMT CUDA cores** at
-  full f32 precision."*
+`F32Strict` surviving as an `ElementKind` variant is also deliberate and correct
+— it is the derivation *input* that says "strict SIMT math" on the operand
+channel, not a key dtype.
 
-Both are IEEE 754 binary32 in storage. They are the same data type. They differ
-only in **which NVIDIA execution unit performs the reduction** — TF32 tensor
-cores versus SIMT CUDA cores.
+**Two things do survive.**
 
-That is a compute-precision mode, not a data type, and it is a vendor-specific
-one. KISS already models math precision as its own coordinate (`<mp>`), which is
-where this distinction belongs. A SPIR-V or Metal backend has no TF32 and no
-"CUDA cores", so it cannot honour the distinction as a dtype — it would have to
-map both to `f32` and silently lose the caller's intent, or decline a dtype it
-demonstrably supports.
+*Cosmetic:* `F32` and `F32Strict` document themselves in one vendor's terms —
+"TF32 tensor cores", "SIMT CUDA cores". Worth rewording in a neutral vocabulary's
+public docs.
 
-This is a larger vendor-lineage leak than the `s`-prefix one: the prefix is
-cosmetic, but `F32`/`F32Strict` encode **one vendor's hardware topology into the
-data vocabulary**, and two of eighteen tokens are affected.
+*Substantive:* **the fold is lossless only for contractions.** `mp` occurs
+exactly once in the key, inside `ContractionKey`. A non-contraction op has no
+`contraction`, therefore no `<mp>` — while `canonical_dtype` folds `F32Strict`
+to `F32` regardless. So a strict-SIMT f32 reduction and a TF32 f32 reduction
+produce the **identical token**, with the distinction dropped: the fold is
+documented as "deliberately lossy", and for non-gem cells the coordinate it is
+supposed to ride does not exist.
 
-Unpopped is not proposing the fix unilaterally — this touches `<mp>`, the
-contraction key's `mp` field, and every impl's derivation. Raising it as an
-item-#2 escalation for the four-way. The likely shape is: one `f32` dtype, with
-the TF32-vs-strict choice expressed as math precision, which is where the
-contraction key already carries it.
+That is the accumulator gap's shape on a second axis, and it settles an open
+question in KISS's sk4 scoping: sk4's non-contraction coordinate set is
+**`(acc + mp)`** — the full analogue of gem's pair — not the accumulator alone.
+
+## 5. Codec absorption — the token is self-describing
+
+Tokens are version-prefixed (`sk3|bin|f32|cuda:sm89|…`, with
+`STRUCTURE_KEY_VERSION = 3` matching the literal `sk3`). That prefix is what
+makes a spelling change tractable:
+
+- **Pure renames** (`s8`→`i8`, `s4`→`i4`, `bin`→`b1`) can stay parseable across
+  the bump: a decoder keeps an `sk3` arm mapping the old spelling to the same
+  variant. Meaning is unchanged, so an old token still decodes to the identical
+  cell.
+- **The `c64` meaning-flip is safe too, because of the prefix.** `sk3|…|c64|…` is
+  a pair of `f64`; `sk4|…|c64|…` would be a pair of `f32`. A decoder never
+  guesses, and cross-version string equality cannot produce a false match because
+  the prefixes differ.
+- **The real hazard is detachment, not decoding.** A consumer that persists,
+  indexes, or compares a dtype sub-token *separately from its version prefix*
+  loses exactly the protection the prefix provides. A cache key holding `"c64"`
+  without `"sk4"` is where a silent meaning-flip would still bite.
+
+Recommended clause for the #2 RFC: **the version prefix is normative and
+inseparable — a dtype token has no meaning detached from its schema version, and
+implementations MUST NOT persist, index, or compare dtype sub-tokens
+independently of it.**
 
 ## Sequencing
 
