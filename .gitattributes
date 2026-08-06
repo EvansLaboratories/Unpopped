@@ -3,8 +3,12 @@
 # writes '\n'; force these goldens to LF on checkout so byte-identity holds on
 # Windows too (autocrlf would otherwise convert them to CRLF and fail the test).
 #
-# Carried over from the Baracuda workspace with the path re-pointed
-# (crates/baracuda-kernelgen -> crates/unpopped). This rule MUST be in place
-# before the goldens are ever checked out, or they land as CRLF and the
-# byte-identity tests fail on Windows.
-crates/unpopped/src/goldens/*.cu text eol=lf
+# Carried over from the Baracuda workspace. The original rule named
+# crates/baracuda-kernelgen/src/goldens/*.cu; after the CUDA emitter was carved
+# into baracuda-cuda-emit the goldens went WITH it, so that path matches nothing
+# here and the protection silently did not apply -- the 32 .cu harnesses under
+# ondevice/ landed as CRLF on the first cut and had to be renormalized.
+#
+# Match every .cu in the workspace instead of one directory, so a future
+# relocation cannot quietly drop the guarantee again.
+*.cu text eol=lf
