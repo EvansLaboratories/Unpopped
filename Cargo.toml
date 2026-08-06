@@ -1,0 +1,52 @@
+[workspace]
+resolver = "3"
+# Empty until the first crate is carved in from Baracuda. A `crates/*` glob is
+# an error while the directory has no manifests, so this becomes
+# `members = ["crates/*"]` with the `unpopped-vocab` cut.
+members = []
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+authors = ["The Unpopped contributors"]
+repository = "https://github.com/EvansLaboratories/Unpopped"
+homepage = "https://github.com/EvansLaboratories/Unpopped"
+# Deliberately vendor-NEUTRAL: Unpopped is the kernel generator + the neutral
+# vocabulary, not a CUDA project. Device/vendor backends live under their own
+# identities (`baracuda-*`, `vulkane-*`) and depend on these crates, never the
+# other way round. Keep CUDA/NVIDIA terms out of this metadata.
+keywords = ["kernel", "codegen", "compiler", "gpu", "ir"]
+categories = ["compilers", "development-tools", "science"]
+
+[workspace.dependencies]
+# Unpopped's own crates — path + version so they can be published independently.
+unpopped-vocab = { path = "crates/unpopped-vocab", version = "0.1.0" }
+# Dtype primitives. Versions match the Baracuda workspace the vocabulary was
+# carved from, so the extracted crate resolves identically on either side of the
+# split until it is published.
+half = { version = "2", default-features = false }
+float8 = { version = "0.7", default-features = false }
+
+# Materialized from the Baracuda workspace at extraction time (Baracuda promoted
+# missing_docs warn -> deny after a workspace-wide docs sweep took it to zero;
+# the extracted crates were written under that posture, so keeping it deny is
+# what makes them build unchanged).
+[workspace.lints.rust]
+missing_docs = "deny"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+# Pragmatic clippy posture: warn loud, but no draconian style enforcement.
+all = { level = "warn", priority = -1 }
+# Allow the patterns that idiomatic Rust at scale uses heavily:
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+lto = "thin"

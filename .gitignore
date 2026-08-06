@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Local developer tooling binary, kept out of the repo (same as the Baracuda
+# workspace, where it is likewise untracked). Listed explicitly so a broad
+# `git add -A` cannot sweep the 500KB+ binary into a commit.
+/supertool
+
