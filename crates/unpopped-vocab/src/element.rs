@@ -1015,12 +1015,20 @@ pub enum ElementKind {
     F16,
     /// Brain-float 16.
     Bf16,
-    /// IEEE 754 binary32 inputs reduced through TF32 tensor cores
-    /// (10-bit mantissa). Maps to the `f32` Rust type.
+    /// IEEE 754 binary32 storage, multiplied at reduced mantissa precision
+    /// where the target offers a faster reduced-precision path (on NVIDIA,
+    /// TF32 tensor cores at 10-bit mantissa). Maps to the `f32` Rust type.
     F32,
-    /// IEEE 754 binary32 inputs reduced through SIMT CUDA cores at full
-    /// f32 precision. Maps to the [`F32Strict`] wrapper type. Bit-stable
-    /// on the same hardware.
+    /// IEEE 754 binary32 storage, multiplied at full binary32 precision —
+    /// the target's strict path, declining any reduced-precision
+    /// substitution. Maps to the [`F32Strict`] wrapper type. Bit-stable on
+    /// the same hardware.
+    ///
+    /// This is a **derivation input on the operand channel**, not a key
+    /// dtype: `structure_key` folds it to [`ElementKind::F32`] and the
+    /// strict-vs-reduced axis rides the contraction cell's math-precision
+    /// coordinate (KISS-Classify §6.1-0005 forbids a strict-precision
+    /// dtype token).
     F32Strict,
     /// IEEE 754 binary64. Maps to the [`prim@f64`] Rust type.
     F64,
