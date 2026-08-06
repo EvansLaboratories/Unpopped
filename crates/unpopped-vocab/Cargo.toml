@@ -10,6 +10,13 @@ repository.workspace = true
 homepage.workspace = true
 keywords = ["kernel", "vocabulary", "codegen", "dispatch", "dtype"]
 categories = ["development-tools", "science"]
+readme = "README.md"
+# The license texts are duplicated into this crate directory so they ship inside
+# the published tarball. Cargo cannot package files above the crate root, so a
+# workspace-root-only copy would leave the crate on crates.io carrying no license
+# text -- which Apache-2.0 section 4(a) requires recipients to receive. The SPDX
+# expression above stays authoritative; `license-file` is deliberately NOT set,
+# since it names a single file and this crate is dual-licensed.
 
 [dependencies]
 # The half / float8 dtype primitives the KernelDtype hierarchy is built on.
