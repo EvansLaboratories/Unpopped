@@ -1328,7 +1328,7 @@ pub enum AttentionKind {
     /// `Q[my_slice] @ K^T @ V` for the full global sequence — but
     /// with O(N/P) memory where N = total seq len, P = ring size.
     /// Algorithm: Liu, Yan, Abbeel 2023 (arXiv:2310.01889; reference
-    /// at https://github.com/lhao499/RingAttention, Apache-2.0).
+    /// at <https://github.com/lhao499/RingAttention>, Apache-2.0).
     /// Tier 1 ships FW only, f16/bf16, head_dim=128. Behind the
     /// `ring_attention` cargo feature; pulls in `baracuda-nccl`.
     RingAttention = 10,

@@ -26,7 +26,7 @@
 //! the vocabulary with device views means every consumer inherits a driver FFI
 //! it has no use for.
 //!
-//! So the vocabulary is a leaf. It owns the [`DeviceRepr`](crate::DeviceRepr)
+//! So the vocabulary is a leaf. It owns the [`DeviceRepr`]
 //! memory-layout marker and needs only `half` / `float8`; it depends on no
 //! backend, no driver, and no vendor crate. Device-side types — tensor views,
 //! workspaces, the adapters that turn them into an [`OperandDesc`] — live in the

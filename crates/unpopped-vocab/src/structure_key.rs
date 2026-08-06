@@ -11,11 +11,12 @@
 //!    key's [`StructureKey::to_token`] string.
 //!
 //! The key is computed by [`structure_key`] from a slice of [`OperandDesc`] —
-//! the **minimal operand-description projection** the key reads. Fuel constructs
-//! each `OperandDesc` from its `FdxOperandDesc`; Baracuda callers use
-//! [`OperandDesc::from_tensor_ref`]. Neither side reimplements the key — both
-//! call this one function, so the build matrix and the runtime lookup speak the
-//! same language by construction.
+//! the **minimal operand-description projection** the key reads. Each
+//! `OperandDesc` is populated by the consuming runtime from its own device
+//! tensor / buffer view; that view-to-`OperandDesc` adapter lives in the runtime
+//! crate, not in this driver-free vocabulary. No consumer reimplements the key —
+//! they all call this one function, so the build matrix and the runtime lookup
+//! speak the same language by construction.
 //!
 //! # Scope (v1)
 //!
@@ -30,7 +31,7 @@
 //!   the interface, but v1 does not fold it into the key — quant operands are
 //!   out of scope until the quant pilot).
 //! - **Full canonicalization** (size-1 squeeze is applied; adjacent-contiguous
-//!   merge feeds [`StructureKey::eff_rank`]; legality-aware axis *reordering*
+//!   merge feeds the effective rank; legality-aware axis *reordering*
 //!   to maximize cell-merging is a follow-up).
 
 use crate::{ArchSku, ElementKind, OpCategory};
@@ -491,9 +492,9 @@ pub struct SymExtent {
 
 /// The minimal per-operand description [`structure_key`] reads.
 ///
-/// Owning and `Copy` (inline `[i64; MAX_RANK]` arrays, no lifetimes) so both
-/// Fuel (from `FdxOperandDesc`) and Baracuda (from [`TensorRef`]) construct it
-/// by value. Only `shape[0..rank]` / `strides[0..rank]` are meaningful.
+/// Owning and `Copy` (inline `[i64; MAX_RANK]` arrays, no lifetimes) so every
+/// consumer constructs it by value from whatever tensor or buffer view its own
+/// runtime uses. Only `shape[0..rank]` / `strides[0..rank]` are meaningful.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct OperandDesc {
     /// Tensor rank (`≤ MAX_RANK`).

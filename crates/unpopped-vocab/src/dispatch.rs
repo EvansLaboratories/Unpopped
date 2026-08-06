@@ -16,10 +16,11 @@
 //!   ingest seam item 08 (telemetry variant-selection) drives from Fuel's
 //!   `dispatch_record`/`miss_record` feed.
 //!
-//! The *timing* engine that produces [`CandidateResult`]s (the bench gate) and
-//! [`HwStamp::current`] (device query) live in the bench crate — this module is
-//! pure data + logic so it is unit-testable off-device and readable by the
-//! runtime dispatcher without a build-only dependency.
+//! The *timing* engine that produces [`CandidateResult`]s (the bench gate) lives
+//! outside this crate, and the runtime constructs the active [`HwStamp`] from the
+//! live device — both are inherently driver concerns. This module is pure data +
+//! logic so it is unit-testable off-device and readable by the runtime dispatcher
+//! without a build-only dependency.
 //!
 //! # Determinism
 //!

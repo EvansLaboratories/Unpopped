@@ -847,10 +847,9 @@ pub enum BiasElementKind {
 /// indexing / embedding / segment kernel families.
 ///
 /// Phase 11.5 (Fuel team feedback #7): split out as a sibling of
-/// [`Element`] so plans like [`crate::indexing::GatherPlan`] /
-/// [`crate::embedding::EmbeddingPlan`] / [`crate::segment::SegmentSumPlan`]
-/// can dispatch over the index dtype without coupling the value-dtype
-/// trait hierarchy. Today's members are `i32` (legacy) and `i64`
+/// [`Element`] so the op-specific plan types produced by the kernel
+/// generator (gather / embedding / segment-sum) can dispatch over the
+/// index dtype without coupling the value-dtype trait hierarchy. Today's members are `i32` (legacy) and `i64`
 /// (PyTorch default). Sealed because new members require a matching
 /// FFI entry point in the `*-kernels-sys` crate.
 pub trait IndexElement: DeviceRepr + index_sealed::Sealed + Copy + 'static {
