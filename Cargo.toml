@@ -1,9 +1,6 @@
 [workspace]
 resolver = "3"
-# Empty until the first crate is carved in from Baracuda. A `crates/*` glob is
-# an error while the directory has no manifests, so this becomes
-# `members = ["crates/*"]` with the `unpopped-vocab` cut.
-members = []
+members = ["crates/*"]
 
 [workspace.package]
 edition = "2024"

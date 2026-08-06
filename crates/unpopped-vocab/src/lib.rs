@@ -1,8 +1,9 @@
-//! # baracuda-kernel-vocab
+//! # unpopped-vocab
 //!
-//! The **driver-free classifier vocabulary** for the baracuda kernel facade:
-//! the pure-data types that describe *what a kernel operates on* and *how it is
-//! keyed for dispatch*, with **no dependency on the CUDA driver**.
+//! The **driver-free classifier vocabulary** for kernel generation: the
+//! pure-data types that describe *what a kernel operates on* and *how it is
+//! keyed for dispatch*, with **no dependency on any device driver, backend, or
+//! vendor crate**.
 //!
 //! - The [`KernelDtype`] umbrella trait + the [`Element`] / [`IntElement`] /
 //!   [`FpElement`] / [`BinElement`] / [`BiasElement`] hierarchy and the dtype
@@ -20,22 +21,31 @@
 //!
 //! ## Why this crate exists
 //!
-//! These types were carved out of `baracuda-kernels-types`, which also holds the
-//! **device-view** half (`MatrixRef` / `TensorRef` / `Workspace` + the
-//! `OperandDesc::from_tensor_ref` adapter). Those views pull `baracuda-driver`
-//! → `baracuda-cuda-sys` (the CUDA driver FFI). Neutral consumers — the kernel
-//! generator, kernel selectors, Fuel's seam — need only the *vocabulary*, not
-//! the driver. Depending on this leaf crate drops that transitive CUDA-driver
-//! pull entirely; this crate now **owns** the [`DeviceRepr`](crate::DeviceRepr)
-//! memory-layout marker (formerly borrowed from `baracuda-types`) and otherwise
-//! needs only `half` / `float8` — no `baracuda-*` dependency at all.
+//! A kernel generator, a kernel selector and a runtime all have to agree on
+//! *what a kernel is keyed by* — but only the runtime needs a device. Bundling
+//! the vocabulary with device views means every consumer inherits a driver FFI
+//! it has no use for.
 //!
-//! `baracuda-kernels-types` re-exports this crate wholesale, so its public API —
-//! both flat items and `::element` / `::layout` / … module paths — is unchanged
-//! for existing consumers.
+//! So the vocabulary is a leaf. It owns the [`DeviceRepr`](crate::DeviceRepr)
+//! memory-layout marker and needs only `half` / `float8`; it depends on no
+//! backend, no driver, and no vendor crate. Device-side types — tensor views,
+//! workspaces, the adapters that turn them into an [`OperandDesc`] — live in the
+//! vendor crates that own the device, and those crates depend on *this* one.
+//! The dependency only ever points this way.
+//!
+//! ## Provenance
+//!
+//! These types were developed in the [Baracuda] workspace as
+//! `baracuda-kernel-vocab`, carved out of `baracuda-kernels-types` to shed
+//! exactly the CUDA-driver pull described above, and extracted here so that
+//! generators and backends from different vendors can share one vocabulary. The
+//! commit history came with them — see `docs/history.md` in the repository for
+//! how to read it.
 //!
 //! This crate seeds the reference implementation of the **classifier-vocabulary**
 //! sub-standard of KISS (the Kernel Interface Standards Suite).
+//!
+//! [Baracuda]: https://github.com/ciresnave/baracuda
 //!
 //! # 1.0-freeze stability
 //!

@@ -23,7 +23,7 @@
 //!
 //! # Determinism
 //!
-//! The committed artifact ([emit side is `baracuda-kernelgen`]) is the *routing
+//! The committed artifact ([emit side is the `unpopped` generator]) is the *routing
 //! projection* of a table: `(token, winner, margin, provenance)` sorted by token
 //! and deduped. It carries **no** wall-clock timestamp, so it is byte-stable
 //! across runs. The richer [`HwStamp`] (device name, CUDA version, capture time)
@@ -50,7 +50,7 @@ pub const MIN_FLIP_MARGIN: f64 = 1.10;
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 #[non_exhaustive]
 pub enum Implementor {
-    /// A `baracuda-kernelgen`-emitted `.cu` — the thing we are deciding to ship or not.
+    /// An `unpopped`-generated `.cu` — the thing we are deciding to ship or not.
     Generated,
     /// cuBLAS / cuBLASLt.
     Cublas,

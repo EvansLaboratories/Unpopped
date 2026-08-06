@@ -898,7 +898,7 @@ fn derive_reduce_axes(op: OpCategory, operands: &[OperandDesc]) -> AxisMask {
 /// numeric dtype codes — review item E5 — and is deferred to that.)
 ///
 /// ```
-/// use baracuda_kernel_vocab::{
+/// use unpopped_vocab::{
 ///     structure_key_token, ArchSku, ElementKind, OpCategory, OperandDesc,
 /// };
 /// // a [128, 256] row-major f32 (in, in, out) triple for a binary elementwise add.
