@@ -385,6 +385,7 @@ pub struct OperandKey {
 /// directly; [`StructureKey::to_token`] gives the stable string form used on
 /// the telemetry wire.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct StructureKey {
     /// Schema version ([`STRUCTURE_KEY_VERSION`]).
     pub version: u16,
@@ -496,6 +497,7 @@ pub struct SymExtent {
 /// consumer constructs it by value from whatever tensor or buffer view its own
 /// runtime uses. Only `shape[0..rank]` / `strides[0..rank]` are meaningful.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct OperandDesc {
     /// Tensor rank (`≤ MAX_RANK`).
     pub rank: u8,
