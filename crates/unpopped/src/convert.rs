@@ -18,8 +18,8 @@
 
 use crate::ir::{Expr, OpDef, ReduceOp, ScalarExpr, UnaryOp};
 use crate::lift::{LiftError, Lifted, binary_fn, unary_fn};
-use unpopped_vocab::ElementKind;
 use tree_sitter::{Node, Parser, Tree};
+use unpopped_vocab::ElementKind;
 
 /// Parse CUDA source into a tree-sitter CST (error-tolerant; unrecognized
 /// constructs become `ERROR`/unhandled subtrees rather than failing).
@@ -725,18 +725,31 @@ mod tests {
         );
     }
 
+    /// Both of these must be refused, but they are refused for *different*
+    /// reasons, and the difference is the whole point of the two variants:
+    /// `Unrecognized` tells a consumer "ask for this op to be added", while
+    /// `Inexpressible` tells it "leave this fragment in the source language".
+    /// Collapsing them to "some error" would let a genuine recognizer gap be
+    /// mistaken for a hard IR limit and silently stop anyone from filing it.
     #[test]
     fn cuda_refuses_residue() {
+        // A non-`[i]` read is a recognizer gap: KISS-Ops *can* express a stencil.
         let neigh = "__global__ void k(const float* in0, float* out){ out[i] = in0[i+1]; }";
         assert!(matches!(
             lift_elementwise_cuda(neigh, "x", F32),
             Err(LiftError::Unrecognized(_))
         ));
+        // Shared memory has no neutral-IR representation at all, and the payload
+        // must name the construct so the caller can say which fragment stays.
         let smem = "__global__ void k(float* out){ __shared__ float s[32]; out[i] = s[0]; }";
-        assert!(matches!(
-            lift_elementwise_cuda(smem, "x", F32),
-            Err(LiftError::Unrecognized(_))
-        ));
+        assert!(
+            matches!(
+                lift_elementwise_cuda(smem, "x", F32),
+                Err(LiftError::Inexpressible(ref w)) if w == "__shared__"
+            ),
+            "got {:?}",
+            lift_elementwise_cuda(smem, "x", F32)
+        );
     }
 
     #[test]
@@ -752,15 +765,23 @@ mod tests {
         );
     }
 
+    /// Slang's `groupshared` is the same inexpressible-residue class as CUDA's
+    /// `__shared__` (see [`cuda_refuses_residue`]), and must be reported as such
+    /// — the two source languages spell it differently but the neutral answer
+    /// is identical, which is what makes the refusal category portable.
     #[test]
     fn slang_refuses_groupshared() {
         let src = "groupshared float s[256];\n\
             [numthreads(256,1,1)]\n\
             void k(uint3 tid : SV_DispatchThreadID) { output[tid.x] = s[0]; }";
-        assert!(matches!(
-            lift_elementwise_slang(src, "x", F32),
-            Err(LiftError::Unrecognized(_))
-        ));
+        assert!(
+            matches!(
+                lift_elementwise_slang(src, "x", F32),
+                Err(LiftError::Inexpressible(ref w)) if w == "groupshared"
+            ),
+            "got {:?}",
+            lift_elementwise_slang(src, "x", F32)
+        );
     }
 
     #[test]

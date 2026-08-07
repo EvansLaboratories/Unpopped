@@ -2568,8 +2568,7 @@ mod tests {
         // violating the KISS-Classify closed-membership / never-silently-accept
         // discipline (an untrusted peer supplies these tokens over the wire).
         let op = "co/00/v4/d16/f";
-        let too_many = std::iter::repeat(op)
-            .take(MAX_OPERANDS + 1)
+        let too_many = std::iter::repeat_n(op, MAX_OPERANDS + 1)
             .collect::<Vec<_>>()
             .join(";");
         let token = format!("sk3|bin|f32|cuda:sm89|ix32|grid|r2|{too_many}|-");

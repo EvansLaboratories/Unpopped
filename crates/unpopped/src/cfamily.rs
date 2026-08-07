@@ -385,7 +385,7 @@ pub fn binary_f32(op: BinaryOp, a: String, b: String) -> String {
         | BinaryOp::LogicalAnd
         | BinaryOp::LogicalOr
         | BinaryOp::LogicalXor => {
-            panic!("cuda backend: {op:?} is int-only (I32/I64/S8/U8) — it has no f32 lowering")
+            panic!("c-family lowering: {op:?} is int-only (I32/I64/S8/U8) — it has no f32 lowering")
         }
     }
 }
@@ -425,7 +425,7 @@ pub fn binary_f64(op: BinaryOp, a: String, b: String) -> String {
         | BinaryOp::LogicalAnd
         | BinaryOp::LogicalOr
         | BinaryOp::LogicalXor => {
-            panic!("cuda backend: {op:?} is int-only (I32/I64/S8/U8) — it has no f64 lowering")
+            panic!("c-family lowering: {op:?} is int-only (I32/I64/S8/U8) — it has no f64 lowering")
         }
     }
 }
@@ -477,7 +477,7 @@ pub fn binary_int(op: BinaryOp, a: String, b: String, dtype: ElementKind) -> Str
     if op.is_logical() {
         assert!(
             dtype == ElementKind::U8,
-            "cuda backend: {op:?} is U8 (Bool)-only — the bespoke logical surface \
+            "c-family lowering: {op:?} is U8 (Bool)-only — the bespoke logical surface \
              instantiates exactly uint8_t; got {dtype:?}"
         );
     }
@@ -491,7 +491,7 @@ pub fn binary_int(op: BinaryOp, a: String, b: String, dtype: ElementKind) -> Str
         BinaryOp::LogicalOr => format!("(({a} != 0 || {b} != 0) ? 1 : 0)"),
         BinaryOp::LogicalXor => format!("((({a} != 0) != ({b} != 0)) ? 1 : 0)"),
         other => panic!(
-            "cuda backend: {other:?} has no integer lowering — the bespoke \
+            "c-family lowering: {other:?} has no integer lowering — the bespoke \
              elementwise surface instantiates it for float dtypes only \
              (int dtype {dtype:?} must miss honestly at the plan gate)"
         ),
@@ -555,13 +555,13 @@ pub fn params_used(e: &ScalarExpr) -> Vec<u8> {
 
 /// Emitter backstop for the two dtype-blind spellings (increment 0c): panic if
 /// `e` contains an infix [`ScalarExpr::Div`] node or a [`ScalarExpr::Const`]
-/// leaf while `Cuda::lower` is lowering an INTEGER dtype. Both are spelled by
+/// leaf while `Backend::lower` is lowering an INTEGER dtype. Both are spelled by
 /// shared backend code with no dtype context (`lower_expr` emits C `/` and an
 /// f64 C literal for every dtype), so unlike the unary/binary-fn/int-only ops
 /// they have no per-op speller panic to catch a plan-gate bypass — and they are
 /// exactly the device-dangerous pair: integer `/0` is device-UB, and an
 /// f64-spelled Const injects double math into an int kernel (f64 cannot even
-/// represent all i64). Called from `Cuda::lower` over the body and every
+/// represent all i64). Called from `Backend::lower` over the body and every
 /// reduction-class stage/epilogue, independent of `assert_int_op_admissibility`.
 ///
 /// `in_reduction` mirrors `plan::assert_int_op_admissibility`'s rule 4 (the
@@ -596,17 +596,17 @@ pub fn assert_no_int_div_or_const(
         // A Coord at an int dtype is the SAME hazard class as Const (its
         // spelling is a float cast) — but it has its own dedicated backstop,
         // `assert_coord_lowerable`, which runs beside this walk in
-        // `Cuda::lower` for every dtype (not just int) and carries the
+        // `Backend::lower` for every dtype (not just int) and carries the
         // targeted message; no second assert here (one message per layer).
         ScalarExpr::Coord(_) => {}
         ScalarExpr::Const(_) => panic!(
-            "cuda backend: Const at an integer dtype ({dtype:?}) — a Const is \
+            "c-family lowering: Const at an integer dtype ({dtype:?}) — a Const is \
              spelled as an f64 C literal, which would silently run double math \
              in an integer kernel; the plan gate rejects this (an int-literal \
              speller is a follow-up)"
         ),
         ScalarExpr::Div(_, _) => panic!(
-            "cuda backend: infix Div has no integer lowering ({dtype:?}) — the \
+            "c-family lowering: infix Div has no integer lowering ({dtype:?}) — the \
              bespoke elementwise surface has no int div and C `/` by zero is \
              device-UB; the plan gate rejects this"
         ),
@@ -617,7 +617,7 @@ pub fn assert_no_int_div_or_const(
         // paths route through; the reduction-class accumulator closures
         // don't, so the walk is the layer that covers them).
         ScalarExpr::Select(_, _, _) => panic!(
-            "cuda backend: Select at an integer dtype ({dtype:?}) — v1 select is \
+            "c-family lowering: Select at an integer dtype ({dtype:?}) — v1 select is \
              float-only (the 0c U8/I8 cond-observer question is unresolved); the \
              plan gate rejects this"
         ),
@@ -657,11 +657,11 @@ pub fn assert_no_int_div_or_const(
 /// vectorized, so this is the declaration ctype at EVERY emitter (including the
 /// vectorized ones, whose OPERANDS are `float4`/`double2` but whose param stays
 /// `double p0`) — the F64-param increment's load-bearing distinction: pass THIS,
-/// never `vty`/`octype`. The `Cuda::lower` param assert (see the `matches!` on
+/// never `vty`/`octype`. The `Backend::lower` param assert (see the `matches!` on
 /// `plan.dtype` above) guarantees a param-bearing plan has a spellable scalar
 /// ctype, so the `expect` is unreachable for any op that actually declares a param.
 pub fn param_ctype(plan: &KernelPlan<'_>) -> &'static str {
-    scalar_ctype(plan.dtype).expect("param dtype checked by the Cuda::lower param assert")
+    scalar_ctype(plan.dtype).expect("param dtype checked by the Backend::lower param assert")
 }
 
 /// The trailing `, <ctype> p0, <ctype> p1, …` kernel-signature suffix for the
@@ -686,7 +686,7 @@ mod int_div_or_const_root_gate_validate {
     //! `plan::int_reduction_predicate_gate_validate`). This backstop normally
     //! only runs AFTER `plan::assert_int_op_admissibility` has already
     //! validated the op at `build_plan` time, so a composed-predicate body
-    //! never reaches it via the `generate()`/`Cuda::lower` path — the plan
+    //! never reaches it via the `generate()`/`Backend::lower` path — the plan
     //! gate rejects it first. These tests call the function directly (it is
     //! `pub(crate)`) to exercise it as an independent layer in its own right
     //! (the "gate every layer" principle the surrounding code comments name
