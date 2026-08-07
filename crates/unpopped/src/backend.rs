@@ -50,8 +50,22 @@ pub struct Provenance {
     /// produced**. Those come apart: change a lowering rule or an optimizer
     /// rewrite and the same request yields different code under an unchanged
     /// token. A consumer caching on the key alone would then serve a kernel baked
-    /// by a generator that no longer exists, with nothing to detect it — the same
-    /// silent-staleness class as caching on the cell identity alone, one level up.
+    /// by a generator that no longer exists, with nothing to detect it.
+    ///
+    /// Scope, stated precisely because it is easy to overclaim: caching on the key
+    /// alone is *already* forbidden — KISS-Synth §6.7-0004 requires a cache hit to
+    /// match `(structure_key, revision_hash)`, and this crate's
+    /// `kernel_revision_hash` is FNV-1a over the emitted **source**, i.e. over the
+    /// product rather than the recipe. A lowering change therefore already yields
+    /// a different hash. So this field is **not** what closes that hole, and it is
+    /// not a substitute for the revision hash.
+    ///
+    /// What it adds: an identity for the producer that survives where a
+    /// source-text hash does not. When [`GeneratedKernel`] grows a non-source
+    /// artifact — a SPIR-V word stream, a cubin — a hash over `source` covers
+    /// nothing, and the same holds across the *compile* step, where identical
+    /// source through a different toolchain version yields different device code
+    /// under an unchanged source hash. It is also comparable without hashing.
     ///
     /// So the producer must version what it bakes, because only the producer knows
     /// what it bakes — a consumer cannot enumerate that, and the baked set changes
@@ -64,6 +78,15 @@ pub struct Provenance {
     /// stamped automatically, so it cannot be forgotten, and it fails toward a
     /// needless rebuild rather than toward a stale kernel. A precise
     /// rules-digest could replace it later without changing this field's meaning.
+    ///
+    /// Coarse is right **here**, not universally, and the deciding variable is the
+    /// cost of a *false* invalidation. For a generator that cost is a recompile,
+    /// so over-invalidating is nearly free and unforgettable beats precise. For a
+    /// consumer holding a live artifact it can be ruinous — Fuel measured a 223×
+    /// reuse factor on a held decode plan, where a version-granularity stamp would
+    /// fire every step and destroy the thing it protects. They needed precise
+    /// never-recycled identity for the same rule. Do not copy this granularity
+    /// across the seam; copy the obligation.
     pub generator: String,
 }
 
