@@ -204,6 +204,13 @@ pub trait Backend {
 ///   (`expf(...)` is CUDA-specific);
 /// - `binary` — spells a non-infix [`BinaryOp`] over two operand strings
 ///   (`fmaxf(a, b)`, `powf(a, b)`).
+///
+/// `#[non_exhaustive]`: the seam set grows as non-C-family backends land (SPIR-V
+/// needs no textual spelling for several of these, and per-storage-class access
+/// is a known gap). Out-of-crate backends build one through [`Lowering::builder`],
+/// so a new seam with a sensible default is a minor version rather than a break
+/// of every emitter at once.
+#[non_exhaustive]
 pub struct Lowering<'a> {
     /// Operand-access spelling.
     pub leaf: &'a dyn Fn(u8) -> String,
@@ -231,11 +238,133 @@ pub struct Lowering<'a> {
     /// (the packed f16/bf16 pair path — `body_packs` excludes it) pass a
     /// panicking closure, the `coord` precedent.
     pub select: &'a dyn Fn(String, String, String) -> String,
+    /// Constant-literal spelling ([`ScalarExpr::Const`]).
+    ///
+    /// A seam rather than a fixed call to [`const_lit`] because the correct
+    /// spelling is **dtype-dependent and not universal**. [`const_lit`] renders an
+    /// `f64` as a C double literal; that is wrong for an integer dtype (`3.0` in
+    /// an `int` context), wrong for a backend whose literal syntax is not C's, and
+    /// carries `NAN`/`INFINITY` macros that only exist in C.
+    ///
+    /// The default is [`const_lit`], which is what every in-tree emitter uses
+    /// today, so opening this seam changed no emitted byte. The dtype-aware
+    /// spelling is a deliberate follow-up that WILL move goldens — see the
+    /// `const_lit` note about the optimizer's bit-preservation proofs, which are
+    /// stated against the current double-promoted semantics and must be
+    /// re-verified before the spelling changes.
+    ///
+    /// Backends capture the dtype the same way `unary`/`binary` do.
+    pub constant: &'a dyn Fn(f64) -> String,
+}
+
+/// Defaults for the seams [`LoweringBuilder`] does not require.
+///
+/// The three panicking ones mirror what every in-tree emitter already passes by
+/// hand: a body containing one of these leaves has been routed to an emitter that
+/// cannot spell it, which is a plan-gate bug, not a user error. Defaulting them
+/// means a backend that never sees such a body writes nothing, while one that
+/// does still fails loudly instead of emitting something plausible.
+mod default_seam {
+    pub(super) static REDUCED: fn(u8) -> String = |i| {
+        panic!(
+            "Lowering: a Reduced({i}) leaf reached an emitter with no `reduced` seam. \
+             Only a row-reduction emitter produces such a body; either supply \
+             `.reduced(..)` or route this body to a reduction schedule."
+        )
+    };
+    pub(super) static COORD: fn(u8) -> String = |d| {
+        panic!(
+            "Lowering: a Coord({d}) leaf reached an emitter with no `coord` seam. \
+             Coord bodies lower via a strided schedule only (a linear-index loop has \
+             no per-axis coordinates); either supply `.coord(..)` or route this body \
+             to Schedule::Strided."
+        )
+    };
+    pub(super) static SELECT: fn(String, String, String) -> String = |_c, _a, _b| {
+        panic!(
+            "Lowering: a Select leaf reached an emitter with no `select` seam. \
+             Select has its own bitwise contract (its arms must move raw bits and must \
+             never route through a promote-demote wrapper), which is why it is not \
+             expressible through the 2-operand `binary` seam. Supply `.select(..)`."
+        )
+    };
+    pub(super) static CONSTANT: fn(f64) -> String = super::const_lit;
+}
+
+/// Builds a [`Lowering`] — the only way an out-of-crate backend constructs one,
+/// since [`Lowering`] is `#[non_exhaustive]`.
+///
+/// `leaf`, `unary` and `binary` are required because every backend has a real
+/// answer for them. The rest default: `reduced`/`coord`/`select` to a panic naming
+/// the missing seam (a body needing them has been mis-routed), and `constant` to
+/// [`const_lit`].
+pub struct LoweringBuilder<'a> {
+    inner: Lowering<'a>,
+}
+
+impl<'a> Lowering<'a> {
+    /// Start building a `Lowering` from the three seams every backend must answer.
+    #[must_use]
+    pub fn builder(
+        leaf: &'a dyn Fn(u8) -> String,
+        unary: &'a dyn Fn(UnaryOp, String) -> String,
+        binary: &'a dyn Fn(BinaryOp, String, String) -> String,
+    ) -> LoweringBuilder<'a> {
+        LoweringBuilder {
+            inner: Lowering {
+                leaf,
+                reduced: &default_seam::REDUCED,
+                coord: &default_seam::COORD,
+                unary,
+                binary,
+                select: &default_seam::SELECT,
+                constant: &default_seam::CONSTANT,
+            },
+        }
+    }
+}
+
+impl<'a> LoweringBuilder<'a> {
+    /// Per-row reduced-scalar spelling ([`ScalarExpr::Reduced`]).
+    #[must_use]
+    pub fn reduced(mut self, f: &'a dyn Fn(u8) -> String) -> Self {
+        self.inner.reduced = f;
+        self
+    }
+    /// Output-coordinate spelling ([`ScalarExpr::Coord`]).
+    #[must_use]
+    pub fn coord(mut self, f: &'a dyn Fn(u8) -> String) -> Self {
+        self.inner.coord = f;
+        self
+    }
+    /// Ternary select spelling ([`ScalarExpr::Select`]).
+    #[must_use]
+    pub fn select(mut self, f: &'a dyn Fn(String, String, String) -> String) -> Self {
+        self.inner.select = f;
+        self
+    }
+    /// Constant-literal spelling ([`ScalarExpr::Const`]). Defaults to [`const_lit`].
+    #[must_use]
+    pub fn constant(mut self, f: &'a dyn Fn(f64) -> String) -> Self {
+        self.inner.constant = f;
+        self
+    }
+    /// Finish.
+    #[must_use]
+    pub fn build(self) -> Lowering<'a> {
+        self.inner
+    }
 }
 
 impl std::fmt::Debug for Lowering<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Lowering").finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for LoweringBuilder<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoweringBuilder").finish_non_exhaustive()
     }
 }
 
@@ -276,7 +405,7 @@ pub fn lower_expr(e: &ScalarExpr, lo: &Lowering<'_>) -> String {
         ScalarExpr::Reduced(i) => (lo.reduced)(*i),
         ScalarExpr::Coord(d) => (lo.coord)(*d),
         ScalarExpr::Param(i) => format!("p{i}"),
-        ScalarExpr::Const(v) => const_lit(*v),
+        ScalarExpr::Const(v) => (lo.constant)(*v),
         ScalarExpr::Unary(op, x) => (lo.unary)(*op, lower_expr(x, lo)),
         ScalarExpr::Binary(op, a, b) => (lo.binary)(*op, lower_expr(a, lo), lower_expr(b, lo)),
         ScalarExpr::Select(c, a, b) => {
@@ -426,7 +555,7 @@ fn lower_node(
         DagNode::Reduced(i) => (lo.reduced)(i),
         DagNode::Coord(d) => (lo.coord)(d),
         DagNode::Param(i) => format!("p{i}"),
-        DagNode::Const(v) => const_lit(v),
+        DagNode::Const(v) => (lo.constant)(v),
         DagNode::Unary(op, x) => {
             (lo.unary)(op, lower_node(dag, x, ctype, lo, refs, prelude, policy))
         }

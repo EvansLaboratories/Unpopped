@@ -40,7 +40,7 @@
 //!   scatter/offset/coord-free Elementwise cell, accepting only it inherently
 //!   excludes every complex case.
 
-use crate::backend::{Backend, GeneratedKernel, Lowering, lower_dag};
+use crate::backend::{Backend, GeneratedKernel, Lowering, const_lit, lower_dag};
 use crate::cfamily::{
     assert_no_int_div_or_const, binary_f32, binary_f64, binary_int, dtype_tag, out_ctype_of,
     param_args, param_ctype, scalar_ctype, select_f32, select_f64, store_expr_of, unary_f32,
@@ -171,6 +171,7 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
             unary: &|op, x| cpu_unary(op, x, plan.dtype),
             binary: &|op, a, b| cpu_binary(op, a, b, plan.dtype),
             select: &|c, a, b| cpu_select(c, a, b, plan.dtype),
+            constant: &const_lit,
         },
     );
     let store = store_expr_of(plan, 0, root);
