@@ -103,11 +103,36 @@ pub use text::{op_from_text, op_to_text};
 
 use unpopped_vocab::StructureKey;
 
+/// The validity key stamped onto everything this crate generates.
+///
+/// Built here rather than in the backend because this is the one place that holds
+/// both the requested cell and the backend identity, so a backend cannot stamp
+/// the wrong cell or forget to stamp at all. See [`backend::Provenance`].
+///
+/// Honest limit worth stating: this asserts *"produced in response to this
+/// request by this generator"*, not *"implements this cell"*. A backend that
+/// returned a kernel it built for some other plan would still get the requested
+/// key stamped on it. Verifying the kernel matches the cell is the oracle's job,
+/// not the stamp's.
+fn provenance_for(key: &StructureKey, backend: &dyn Backend) -> backend::Provenance {
+    backend::Provenance {
+        structure_key: key.to_token(),
+        backend: backend.name().to_string(),
+        provider: backend.provider().to_string(),
+        generator: concat!("unpopped ", env!("CARGO_PKG_VERSION")).to_string(),
+    }
+}
+
 /// Generate a specialized kernel for `op` at structure cell `key`, lowered by
 /// `backend`. Convenience over [`build_plan`] followed by [`Backend::lower`].
+///
+/// The result carries a [`backend::Provenance`]; a kernel a backend builds
+/// directly does not. Anything that caches or ships a kernel should require it.
 #[must_use]
 pub fn generate(op: &OpDef, key: &StructureKey, backend: &dyn Backend) -> GeneratedKernel {
-    backend.lower(&build_plan(op, key))
+    let mut k = backend.lower(&build_plan(op, key));
+    k.stamp(provenance_for(key, backend));
+    k
 }
 
 /// Generate the full **variant set** for a cell: the default lowering (tag
@@ -143,5 +168,15 @@ pub fn generate_variants(op: &OpDef, key: &StructureKey, backend: &dyn Backend) 
         launch_note,
     }];
     vs.extend(backend.lower_variants(&plan));
+    // Stamp EVERY kernel, including those a backend produced via `lower_variants`.
+    // A split-K pair ships two kernels under one cell; both are cacheable
+    // artifacts and both need to name what they were baked against, or the
+    // guarantee holds only for whichever one the caller happened to look at.
+    let p = provenance_for(key, backend);
+    for v in &mut vs {
+        for k in &mut v.kernels {
+            k.stamp(p.clone());
+        }
+    }
     vs
 }

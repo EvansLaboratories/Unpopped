@@ -190,7 +190,7 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
         s.push_str(&format!("        out[i] = {store};\n    }}\n"));
     }
     s.push_str("}\n");
-    GeneratedKernel { name, source: s }
+    GeneratedKernel::new(name, s)
 }
 
 /// Lower a unary op for `dtype` on the CPU — the twin of `baracuda_cuda_emit::cuda`'s

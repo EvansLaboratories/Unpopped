@@ -11,6 +11,62 @@
 use crate::ir::{BinaryOp, DagNode, ExprDag, NodeId, ScalarExpr, UnaryOp};
 use unpopped_vocab::ElementKind;
 
+/// What a generated kernel was baked against — its validity key.
+///
+/// A cached or persisted kernel outlives the call that produced it, and nothing
+/// in `(name, source)` says which cell it implements. A cache keyed on the side,
+/// by whatever the caller remembered, is correct only by convention — and
+/// [`crate::jit::Compiler`] explicitly anticipates "a pre-built-variant cache"
+/// slotting in, which is exactly where that convention would be relied on.
+///
+/// Fuel arrived at the general rule the expensive way — four silent, full-speed
+/// wrong-answer incidents in two days, every one an artifact outliving something
+/// it was baked against (model identity twice, a recorded CUDA graph, a KV
+/// allocation). Their `14-lifecycle.md` states it as: *a held artifact's validity
+/// key MUST name every such thing, or that thing MUST be unable to change for the
+/// artifact's lifetime — enforced by construction, not by convention.* They
+/// offered it as cross-project text; this is Unpopped honouring the "by
+/// construction" half.
+///
+/// Which is why this is stamped by [`crate::generate`] and not by the backend.
+/// The core holds the key and the backend identity at the one point both are
+/// known, so a backend cannot stamp the wrong cell — or forget.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Provenance {
+    /// The cell identity token this kernel was generated for.
+    ///
+    /// Carried as the token rather than a parsed key, byte-exact and never
+    /// interpreted here — KISS-CLASSIFY-6.9-0002 opaque carry. Comparing it is a
+    /// byte comparison (6.8-0002), never a subset or implication test.
+    pub structure_key: String,
+    /// [`Backend::name`] at generation time — the target language.
+    pub backend: String,
+    /// [`Backend::provider`] at generation time — who supplied the backend.
+    pub provider: String,
+    /// The generator that baked this kernel — `"unpopped <version>"`.
+    ///
+    /// [`Self::structure_key`] names **what was asked for**, not **what was
+    /// produced**. Those come apart: change a lowering rule or an optimizer
+    /// rewrite and the same request yields different code under an unchanged
+    /// token. A consumer caching on the key alone would then serve a kernel baked
+    /// by a generator that no longer exists, with nothing to detect it — the same
+    /// silent-staleness class as caching on the cell identity alone, one level up.
+    ///
+    /// So the producer must version what it bakes, because only the producer knows
+    /// what it bakes — a consumer cannot enumerate that, and the baked set changes
+    /// on the producer's release cadence, not the consumer's. (Fuel reached this
+    /// from the consumer side: an operand-identity check cannot detect a producer
+    /// that started baking one more thing.)
+    ///
+    /// Deliberately coarse. The crate version over-invalidates — a release that
+    /// changed no lowering still re-mints — and that is the intended trade: it is
+    /// stamped automatically, so it cannot be forgotten, and it fails toward a
+    /// needless rebuild rather than toward a stale kernel. A precise
+    /// rules-digest could replace it later without changing this field's meaning.
+    pub generator: String,
+}
+
 /// A generated kernel: its exported symbol name and source text.
 ///
 /// `#[non_exhaustive]`: a backend artifact grows a structured payload later (the
@@ -24,14 +80,42 @@ pub struct GeneratedKernel {
     pub name: String,
     /// The kernel source text, in the backend's language.
     pub source: String,
+    /// Set by [`crate::generate`]; `None` on a fragment a backend built directly.
+    /// Private so only the core can stamp it — see [`GeneratedKernel::provenance`].
+    provenance: Option<Provenance>,
 }
 
 impl GeneratedKernel {
     /// The canonical constructor — the only way an out-of-crate [`Backend`] builds
     /// a `GeneratedKernel` (the struct is `#[non_exhaustive]`).
+    ///
+    /// The result carries no [`Provenance`]: a backend is producing a fragment,
+    /// and it is [`crate::generate`] that knows which cell was asked for. That
+    /// asymmetry is deliberate — see [`Provenance`].
     #[must_use]
     pub fn new(name: String, source: String) -> Self {
-        Self { name, source }
+        Self {
+            name,
+            source,
+            provenance: None,
+        }
+    }
+
+    /// What this kernel was baked against, or `None` if it is a raw fragment.
+    ///
+    /// `Some` exactly when the kernel came through [`crate::generate`] or
+    /// [`crate::generate_variants`]. **Anything that caches, persists or ships a
+    /// kernel should require `Some` and treat `None` as unfit** — a `None` kernel
+    /// is one whose cell identity is known only to whoever happens to be holding
+    /// it, which is the convention this type exists to replace.
+    #[must_use]
+    pub fn provenance(&self) -> Option<&Provenance> {
+        self.provenance.as_ref()
+    }
+
+    /// Stamp the validity key. Crate-internal so the core is the only stamper.
+    pub(crate) fn stamp(&mut self, p: Provenance) {
+        self.provenance = Some(p);
     }
 }
 
