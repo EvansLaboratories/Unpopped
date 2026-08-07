@@ -1015,6 +1015,97 @@ mod tests {
         assert!(matches!(opt(input(0) / konst(0.0)), ScalarExpr::Div(_, _)));
     }
 
+    /// The `x / 2^k -> x * 2^-k` rule is sound **only because constants promote to
+    /// double**, and this measures exactly how much it depends on that.
+    ///
+    /// [`exact_pow2_recip`] asks "is this a normal power of two, and is its
+    /// reciprocal normal" **in f64**, and never sees the kernel's dtype. That is
+    /// the correct precondition for arithmetic performed in f64 — which is what
+    /// happens today, because [`crate::backend::const_lit`] emits a bare double
+    /// literal and C's usual arithmetic conversions promote the whole expression.
+    ///
+    /// Make constants dtype-correct (`2.0f` rather than `2.0`) and the arithmetic
+    /// moves to f32, where the f64 predicate is the WRONG question. Of the 2045
+    /// constants it accepts, **44 give different bits under f32 arithmetic**. The
+    /// cleanest witness is `c = 2^-149`: a perfectly normal f64 whose reciprocal
+    /// `2^149` overflows to infinity in f32, so `0.0 / c` is `0.0` while
+    /// `0.0 * (1/c)` is `NaN`.
+    ///
+    /// This test also pins the FIX, so it is not merely an alarm: asking the same
+    /// normality question in f32 admits 253 constants and **zero** of them differ.
+    /// So the repair is to make the predicate dtype-aware, not to weaken the rule
+    /// — which requires threading the kernel dtype into the optimizer, since
+    /// [`optimize`] currently takes only a [`ScalarExpr`].
+    ///
+    /// **The two changes are welded: whoever makes `const_lit` dtype-correct must
+    /// fix this predicate in the same change.** This test fails if the coupling is
+    /// ever silently broken in either direction.
+    #[test]
+    fn pow2_rule_soundness_is_coupled_to_double_promotion() {
+        fn normal_pow2_f32(v: f32) -> bool {
+            let b = v.to_bits();
+            let e = (b >> 23) & 0xff;
+            b & ((1u32 << 23) - 1) == 0 && e != 0 && e != 0xff
+        }
+
+        // Every f32 binade, both signs, plus the specials that expose inf/NaN
+        // divergence (0 * inf is NaN; 0 / subnormal is 0).
+        let mut xs: Vec<f32> = vec![
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            f32::NAN,
+            f32::INFINITY,
+            -f32::INFINITY,
+            f32::MIN_POSITIVE,
+            f32::from_bits(1),
+            f32::MAX,
+            3.0,
+            -7.25,
+        ];
+        for e in -149i32..=127 {
+            xs.push(f32::from_bits((((e + 150) as u32) << 23) | 0x0040_0000));
+        }
+
+        let (mut accepted, mut wrong_in_f32, mut f32_guarded, mut wrong_when_guarded) =
+            (0u32, 0u32, 0u32, 0u32);
+        for k in -1074i32..=1023 {
+            let c = (2.0f64).powi(k);
+            let Some(r) = exact_pow2_recip(c) else {
+                continue;
+            };
+            accepted += 1;
+            let (cf, rf) = (c as f32, r as f32);
+            let guarded = normal_pow2_f32(cf) && normal_pow2_f32(rf);
+            if guarded {
+                f32_guarded += 1;
+            }
+            let differs = xs.iter().any(|&x| {
+                let (a, b) = (x / cf, x * rf);
+                !((a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits())
+            });
+            if differs {
+                wrong_in_f32 += 1;
+                if guarded {
+                    wrong_when_guarded += 1;
+                }
+            }
+        }
+
+        assert_eq!(accepted, 2045, "the f64 predicate's acceptance set moved");
+        assert_eq!(
+            wrong_in_f32, 44,
+            "the f32 hazard set moved — re-derive before trusting the rule at f32"
+        );
+        assert_eq!(f32_guarded, 253, "the f32-normal acceptance set moved");
+        assert_eq!(
+            wrong_when_guarded, 0,
+            "asking normality in the KERNEL's dtype is the fix; if this is ever \
+             non-zero the repair is wrong and the rule needs a stronger precondition"
+        );
+    }
+
     #[test]
     fn abs_and_relu_idempotents_collapse() {
         let abs = |e: ScalarExpr| ScalarExpr::Unary(UnaryOp::Abs, Box::new(e));
