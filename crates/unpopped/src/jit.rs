@@ -31,9 +31,7 @@ use crate::link::{LinkEntry, link_entry};
 use crate::optimize::optimize;
 use crate::pattern::{PatternError, PatternNode, derive_pattern, to_fkc};
 use crate::{Backend, generate};
-use unpopped_vocab::{
-    ArchSku, ElementKind, MAX_OPERANDS, OpCategory, OperandDesc, structure_key,
-};
+use unpopped_vocab::{ArchSku, ElementKind, MAX_OPERANDS, OpCategory, OperandDesc, structure_key};
 
 /// A JIT synthesis request from Fuel (the strategist).
 #[derive(Clone, Debug)]

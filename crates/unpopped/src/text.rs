@@ -110,8 +110,8 @@ fn ek_from_str(s: &str) -> Result<unpopped_vocab::ElementKind, String> {
 
 /// `#[serde(with)]` bridge for a bare [`ElementKind`] field (dtype name string).
 pub(crate) mod ek {
-    use unpopped_vocab::ElementKind;
     use serde::{Deserialize, Deserializer, Serializer};
+    use unpopped_vocab::ElementKind;
 
     pub(crate) fn serialize<S: Serializer>(v: &ElementKind, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(super::ek_to_str(*v))
@@ -125,8 +125,8 @@ pub(crate) mod ek {
 
 /// `#[serde(with)]` bridge for a `Vec<ElementKind>` field (a list of dtype names).
 pub(crate) mod ek_vec {
-    use unpopped_vocab::ElementKind;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use unpopped_vocab::ElementKind;
 
     pub(crate) fn serialize<S: Serializer>(v: &[ElementKind], s: S) -> Result<S::Ok, S::Error> {
         let names: Vec<&'static str> = v.iter().map(|&k| super::ek_to_str(k)).collect();
@@ -146,8 +146,8 @@ pub(crate) mod ek_vec {
 
 /// `#[serde(with)]` bridge for an `Option<ElementKind>` field.
 pub(crate) mod ek_opt {
-    use unpopped_vocab::ElementKind;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use unpopped_vocab::ElementKind;
 
     pub(crate) fn serialize<S: Serializer>(
         v: &Option<ElementKind>,
@@ -169,8 +169,8 @@ pub(crate) mod ek_opt {
 /// `#[serde(with)]` bridge for a `Vec<Option<ElementKind>>` field (per-extra-output
 /// dtypes, each optionally uniform).
 pub(crate) mod ek_opt_vec {
-    use unpopped_vocab::ElementKind;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use unpopped_vocab::ElementKind;
 
     pub(crate) fn serialize<S: Serializer>(
         v: &[Option<ElementKind>],
@@ -198,8 +198,8 @@ pub(crate) mod ek_opt_vec {
 /// `#[serde(with)]` bridge for an [`AxisMask`](unpopped_vocab::AxisMask)
 /// field — serialized as its raw `u8` bitmask.
 pub(crate) mod axis {
-    use unpopped_vocab::AxisMask;
     use serde::{Deserialize, Deserializer, Serializer};
+    use unpopped_vocab::AxisMask;
 
     pub(crate) fn serialize<S: Serializer>(v: &AxisMask, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_u8(v.0)

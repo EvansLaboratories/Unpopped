@@ -7,9 +7,9 @@
 //! Describing the math here — rather than as opaque CUDA — is what lets the
 //! emitter vectorize, hoist, and fuse, because it can see the dataflow.
 
-use unpopped_vocab::{AxisMask, ElementKind};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use unpopped_vocab::{AxisMask, ElementKind};
 
 /// A scalar compute expression — the per-output-coordinate math, as a typed DAG.
 ///

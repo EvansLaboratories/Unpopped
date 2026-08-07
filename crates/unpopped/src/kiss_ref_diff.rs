@@ -26,13 +26,13 @@ use crate::ir::{OpDef, ReadIndex, WriteIndex};
 use crate::oracle::{self, TypedBuffer};
 use crate::plan::build_plan;
 use crate::recipe::semantics_dag;
-use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_key};
 use kiss_classify_vocab::Dtype;
 use kiss_ops_vocab::Op;
 use kiss_ref_core::{
     Combine, FlatDag, IndexRef, Monoid, Node, OobPolicy, RecipeEval, Tensor, eval_recipe,
     scalar_int, tensor_int,
 };
+use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_key};
 
 // ===========================================================================
 // The converter: emitted Semantics text -> kiss-ref FlatDag.
@@ -838,8 +838,8 @@ mod tests {
         BinaryOp, ContractionAxes, OpDef, ReduceOp, ReduceStage, UnaryOp, input, konst, param,
         reduced,
     };
-    use unpopped_vocab::{AxisMask, ElementKind};
     use kiss_ref_core::DetClass;
+    use unpopped_vocab::{AxisMask, ElementKind};
 
     /// relu(add(in0, in1)) built as a raw kiss-ref FlatDag (no converter) — the
     /// Task-0 smoke test, folded in here: proves the dev-deps resolve and

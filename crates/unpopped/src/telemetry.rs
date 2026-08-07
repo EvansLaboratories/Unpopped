@@ -750,12 +750,12 @@ pub fn variant_votes(ingest: &Ingest) -> Vec<VariantVote> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
     use unpopped_vocab::{
         ArchSku, DispatchEntry, DispatchTable, ElementKind, HwStamp, Implementor, OpCategory,
         OperandDesc, Provenance, ReportedCandidate, StructureKey, merge, reported_entry,
         structure_key, structure_key_token,
     };
-    use std::io::Cursor;
 
     // ---- fixtures ---------------------------------------------------------
 

@@ -922,11 +922,7 @@ mod tests {
         // Then the oracle must accept that same shape and produce it.
         let mut operands: Vec<_> = in_shapes.iter().map(|s| od(s)).collect();
         operands.push(od(out_shape));
-        let key = unpopped_vocab::structure_key(
-            cat,
-            &operands,
-            unpopped_vocab::ArchSku::Sm89,
-        );
+        let key = unpopped_vocab::structure_key(cat, &operands, unpopped_vocab::ArchSku::Sm89);
         let plan = crate::plan::build_plan(op, &key);
         let inputs: Vec<_> = in_shapes.iter().map(|s| zeros(s)).collect();
         let produced = crate::oracle::evaluate(&plan, &operands, &inputs, &[]);
