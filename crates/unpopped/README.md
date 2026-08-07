@@ -31,16 +31,22 @@ The dependency only ever points one way. Vendor and device crates depend on
 
 ## Backends
 
-Backends are **not** `unpopped-*` crates. They live under the identity of whoever
-owns the device and implement `unpopped::Backend` for their target:
+Each backend is its own crate implementing `unpopped::Backend` for its target:
 
 | target | crate |
 |---|---|
 | CUDA | [`baracuda-cuda-emit`](https://github.com/ciresnave/baracuda) — the `Cuda` emitter, its NVRTC compiler, and the Fuel synthesizer |
-| CPU (C99) | in-tree (`CpuC`) — the neutral reference backend |
+| CPU (C99) | in-tree (`CpuC`), relocating — the neutral reference backend |
+| Slang | in-tree, relocating |
 
-The `unpopped-*` namespace is reserved for Unpopped's own crates, so a third-party
-backend never has to ask permission for a name.
+Unpopped is moving to hosting **a normative reference emitter per target**, each
+in its own crate outside the core. The in-tree emitters above are scheduled to
+relocate; a project that originates an emitter may keep owning it, as Baracuda
+owns the CUDA one.
+
+Earlier revisions said the `unpopped-*` namespace was reserved for Unpopped's own
+crates so a third-party backend never had to ask permission for a name. That is
+no longer the intent — see the root README.
 
 ## Status
 

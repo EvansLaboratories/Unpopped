@@ -491,7 +491,16 @@ pub struct SymExtent {
     pub kind: SymKind,
 }
 
-/// The minimal per-operand description [`structure_key`] reads.
+/// The per-operand description [`structure_key`] is given.
+///
+/// NOT all of it reaches the key. `quant` and `symbolic` are carried here but
+/// are **not encoded into the token** and are read by nothing in this workspace —
+/// two operands differing only in quantization block size, or only in which axis
+/// is symbolic, produce byte-identical keys. Under KISS-CLASSIFY-6.8-0002 (byte-
+/// exact matching, subset/implication logic forbidden) that collision does not
+/// degrade gracefully, so do not populate these fields expecting the key to
+/// distinguish them. Pinned by `tests/operand_facts_reach_the_key.rs`; closing the
+/// gap changes the token grammar and is a schema event, not a patch.
 ///
 /// Owning and `Copy` (inline `[i64; MAX_RANK]` arrays, no lifetimes) so every
 /// consumer constructs it by value from whatever tensor or buffer view its own
