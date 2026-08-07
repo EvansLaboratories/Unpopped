@@ -13,8 +13,13 @@ use unpopped_vocab::{AxisMask, ElementKind};
 
 /// A scalar compute expression — the per-output-coordinate math, as a typed DAG.
 ///
-/// Backend-agnostic: the emitter lowers it to CUDA today (and other backends
-/// later) by walking the tree with a per-backend accessor for the leaves.
+/// Backend-agnostic: every emitter lowers it by walking the tree with per-backend
+/// accessors for the leaves (see [`crate::backend::Lowering`]).
+// ScalarExpr is intentionally NOT `#[non_exhaustive]`, the `EpilogueKind` rationale,
+// and it is the strongest case in the crate: ~740 sites match it, and an emitter or
+// oracle arm that silently ignored a new expression node would emit WRONG MATH with
+// no error. A new node MUST break every lowering, every oracle arm and every
+// optimizer rule at compile time so each one chooses to handle or reject it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ScalarExpr {
     /// The value of input operand `i` at the current coordinate.
@@ -1411,7 +1416,19 @@ impl ContractionAxes {
 }
 
 /// K-accumulation policy for a contraction.
+///
+/// `#[non_exhaustive]`: this enum's own doc promises the tensor-core/TF32 policies
+/// join as variants, and it is `Serialize`/`Deserialize` — so it is wire-capable
+/// and *will* grow. It is never matched anywhere (only constructed, at the two
+/// [`ContractionAxes`] sites), so unlike [`unpopped_vocab::EpilogueKind`] — which
+/// is deliberately left open-coded precisely so a new variant breaks every
+/// dispatcher — there is no match site that benefits from a build break here.
+/// Reserving the room now keeps the tensor-core work a minor version.
+///
+/// This is the same treatment [`ReductionAccum`] already carries for the sk4 seam;
+/// the two were inconsistent.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AccumSpec {
     /// Accumulate in `float` (`double` for f64/f32-strict inputs) — the SIMT
     /// path, deterministic for a fixed schedule; the same widening discipline
@@ -1578,6 +1595,10 @@ pub enum OobPolicy {
 /// which *coordinate* pairs with which stride; an `Indexed` read substitutes a
 /// runtime *value* for one coordinate. v1 keeps them mutually exclusive on the
 /// same input (a gathered-and-permuted operand is deferred — see the plan gate).
+// ReadIndex is intentionally NOT `#[non_exhaustive]`, the `EpilogueKind` rationale:
+// 39 sites match it, and an emitter that silently ignored a new read-index kind
+// would compute WRONG ADDRESSES rather than fail. A new variant must surface as a
+// build break at every one of those sites so each can wire it or explicitly reject.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub enum ReadIndex {
     /// Read operand `i` at the iteration coordinate — no indexing (default; every
