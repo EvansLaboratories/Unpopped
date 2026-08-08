@@ -368,6 +368,7 @@ pub fn try_build_plan<'a>(
     key: &'a StructureKey,
 ) -> Result<KernelPlan<'a>, PlanError> {
     check_no_half_nextafter(op, key.dtype)?;
+    check_int_op_admissibility(op, key.dtype)?;
     Ok(build_plan(op, key))
 }
 
@@ -1628,7 +1629,7 @@ fn assert_valid_offsets(op: &OpDef, _key: &StructureKey) {
     );
 }
 
-fn check_no_half_nextafter(op: &OpDef, dtype: ElementKind) -> Result<(), PlanError> {
+pub(crate) fn check_no_half_nextafter(op: &OpDef, dtype: ElementKind) -> Result<(), PlanError> {
     use crate::ir::BinaryOp;
     if !matches!(dtype, ElementKind::F16 | ElementKind::Bf16) {
         return Ok(());
@@ -1785,7 +1786,7 @@ pub fn is_int_dtype(dt: ElementKind) -> bool {
 ///    values `any`/`all`/`count` ever compare against, and the only values
 ///    that round-trip losslessly through `Const`'s dtype-oblivious f64
 ///    spelling — see `backend::const_lit`); anything else still declines.
-fn assert_int_op_admissibility(op: &OpDef, dtype: ElementKind) {
+pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Result<(), PlanError> {
     // Increment 5 — bincount exemption: a scatter with a bare `Const` body is the
     // integer-count histogram (`out[x[i]] += 1`). The `Const(1)` is NOT compute
     // (no int arithmetic, no double-math hazard) — it is a store literal the
@@ -1794,7 +1795,7 @@ fn assert_int_op_admissibility(op: &OpDef, dtype: ElementKind) {
     // int-Const rejection (which polices f64 literals inside int arithmetic) does
     // not apply; skip the walk for this one shape.
     if op_has_scatter(op) && matches!(op.body, ScalarExpr::Const(_)) {
-        return;
+        return Ok(());
     }
     let int_dt = is_int_dtype(dtype);
     let elementwise = matches!(op.access, Access::Elementwise);
@@ -1829,7 +1830,7 @@ fn assert_int_op_admissibility(op: &OpDef, dtype: ElementKind) {
         elementwise: bool,
         in_reduction: bool,
         at_reduction_root: bool,
-    ) {
+    ) -> Result<(), String> {
         match e {
             ScalarExpr::Input(_) | ScalarExpr::Reduced(_) => {}
             // Coord's own gate (`assert_coord_admissibility`, which also runs
@@ -1840,57 +1841,68 @@ fn assert_int_op_admissibility(op: &OpDef, dtype: ElementKind) {
             // moot for rule 3: an int-only op's operands are pinned to leaf
             // Inputs at 8-bit before Coord could ever appear there.
             ScalarExpr::Coord(_) => {}
-            ScalarExpr::Const(_) => assert!(
-                !int_dt,
-                "op '{op_name}': Const at int dtype {dtype:?} is rejected — a Const \
+            ScalarExpr::Const(_) => {
+                if !(!int_dt) {
+                    return Err(format!(
+                        "op '{op_name}': Const at int dtype {dtype:?} is rejected — a Const \
                  is spelled as an f64 C literal, which would silently run double \
                  math in an integer kernel (and f64 cannot represent all i64); \
                  int-literal Const spelling is a follow-up"
-            ),
-            ScalarExpr::Param(_) => assert!(
-                !int_dt,
-                "op '{op_name}': scalar params are f32-only (int dtype {dtype:?})"
-            ),
+                    ));
+                }
+            }
+            ScalarExpr::Param(_) => {
+                if !(!int_dt) {
+                    return Err(format!(
+                        "op '{op_name}': scalar params are f32-only (int dtype {dtype:?})"
+                    ));
+                }
+            }
             ScalarExpr::Unary(uop, x) => {
-                assert!(
-                    !int_dt,
-                    "op '{op_name}': {uop:?} has no integer lowering — the bespoke \
+                if !(!int_dt) {
+                    return Err(format!(
+                        "op '{op_name}': {uop:?} has no integer lowering — the bespoke \
                      unary elementwise surface is float-only, so int dtype {dtype:?} \
                      must miss honestly"
-                );
-                walk(x, op_name, dtype, int_dt, elementwise, in_reduction, false);
+                    ));
+                }
+                walk(x, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
             }
             ScalarExpr::Div(a, b) => {
-                assert!(
-                    !int_dt,
-                    "op '{op_name}': integer division is rejected at {dtype:?} — the \
+                if !(!int_dt) {
+                    return Err(format!(
+                        "op '{op_name}': integer division is rejected at {dtype:?} — the \
                      bespoke elementwise surface has no int div (binary_div_fp.cu is \
                      float-only) and C `/` division by zero is device-undefined; \
                      miss honestly"
-                );
-                walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false);
-                walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false);
+                    ));
+                }
+                walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+                walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
             }
             ScalarExpr::Binary(bop, a, b) => {
                 if bop.is_int_only() {
-                    assert!(
-                        elementwise,
-                        "op '{op_name}': {bop:?} is Elementwise-only in 0c — the \
+                    if !(elementwise) {
+                        return Err(format!(
+                            "op '{op_name}': {bop:?} is Elementwise-only in 0c — the \
                          reduction-class paths lower through the float accumulator \
                          spellers, which have no integer arms"
-                    );
-                    assert!(
-                        int_dt,
-                        "op '{op_name}': {bop:?} is int-only (I32/I64/S8/U8) — float \
+                        ));
+                    }
+                    if !(int_dt) {
+                        return Err(format!(
+                            "op '{op_name}': {bop:?} is int-only (I32/I64/S8/U8) — float \
                          dtype {dtype:?} must miss honestly (the bespoke bitwise/\
                          logical kernels have no float instantiation)"
-                    );
-                    assert!(
-                        !bop.is_logical() || dtype == ElementKind::U8,
-                        "op '{op_name}': {bop:?} is U8 (Bool)-only — the bespoke \
+                        ));
+                    }
+                    if !(!bop.is_logical() || dtype == ElementKind::U8) {
+                        return Err(format!(
+                            "op '{op_name}': {bop:?} is U8 (Bool)-only — the bespoke \
                          binary_logical_*_bool.cu surface instantiates exactly \
                          uint8_t, so {dtype:?} must miss honestly"
-                    );
+                        ));
+                    }
                     // Rule 3 (8-bit composition pin, v1): every operand of an
                     // int-only op at U8/S8 must be a LEAF Input — a composed
                     // operand's value differs between the inlined (un-truncated
@@ -1908,9 +1920,9 @@ fn assert_int_op_admissibility(op: &OpDef, dtype: ElementKind) {
                         ElementKind::U8 | ElementKind::S8 | ElementKind::S16 | ElementKind::U16
                     ) {
                         for (side, operand) in [("lhs", &**a), ("rhs", &**b)] {
-                            assert!(
-                                matches!(operand, ScalarExpr::Input(_)),
-                                "op '{op_name}': {bop:?} at {dtype:?} requires LEAF \
+                            if !(matches!(operand, ScalarExpr::Input(_))) {
+                                return Err(format!(
+                                    "op '{op_name}': {bop:?} at {dtype:?} requires LEAF \
                                  Input operands ({side} is a composed expression) — \
                                  at 8-bit dtypes a composed operand observes the \
                                  un-truncated promoted-int value when inlined but \
@@ -1918,11 +1930,12 @@ fn assert_int_op_admissibility(op: &OpDef, dtype: ElementKind) {
                                  tmp (one body, two results); v1 pins all int-op \
                                  operands at U8/S8 to leaves. Compose at I32/I64, \
                                  or wait for the dtype-aware truncating speller"
-                            );
+                                ));
+                            }
                         }
                     }
-                    walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false);
-                    walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false);
+                    walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+                    walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
                 } else if int_dt && in_reduction && at_reduction_root && bop.is_cmp() {
                     // Rule 4: an int-dtype Cmp* is admitted HERE ONLY — the
                     // reduction body/post predicate position of any/all/count
@@ -1967,21 +1980,25 @@ fn assert_int_op_admissibility(op: &OpDef, dtype: ElementKind) {
                             continue;
                         }
                         match operand {
-                            ScalarExpr::Const(v) => panic!(
-                                "op '{op_name}': int reduction-predicate {bop:?} \
+                            ScalarExpr::Const(v) => {
+                                return Err(format!(
+                                    "op '{op_name}': int reduction-predicate {bop:?} \
                                  Const({v}) at {side} must be exactly 0 or 1 — any \
                                  other value risks the f64-literal double-math \
                                  hazard this gate exists to prevent (Const always \
                                  lowers as an f64 C literal; 0/1 are the only \
                                  values that round-trip exactly into int compute)"
-                            ),
-                            other => panic!(
-                                "op '{op_name}': int reduction-predicate {bop:?} at \
+                                ));
+                            }
+                            other => {
+                                return Err(format!(
+                                    "op '{op_name}': int reduction-predicate {bop:?} at \
                                  {side} requires a leaf Input/Reduced or a 0/1 \
                                  Const, got {other:?} — composed operands are out \
                                  of scope for the any/all/count fused-predicate \
                                  shape"
-                            ),
+                                ));
+                            }
                         }
                     }
                 } else {
@@ -1991,17 +2008,18 @@ fn assert_int_op_admissibility(op: &OpDef, dtype: ElementKind) {
                     // reject as pre-rule-4, so a composed predicate misses
                     // honestly instead of being laundered through the float
                     // speller.
-                    assert!(
-                        !int_dt,
-                        "op '{op_name}': {bop:?} has no integer lowering — the \
+                    if !(!int_dt) {
+                        return Err(format!(
+                            "op '{op_name}': {bop:?} has no integer lowering — the \
                          bespoke elementwise surface instantiates it for float \
                          dtypes only, so int dtype {dtype:?} must miss honestly \
                          (a reduction-predicate Cmp* only lowers to integer at \
                          the body/post ROOT — nested inside Add/Sub/Mul it is \
                          out of scope for the any/all/count fused-predicate lift)"
-                    );
-                    walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false);
-                    walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false);
+                        ));
+                    }
+                    walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+                    walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
                 }
             }
             ScalarExpr::Add(a, b) | ScalarExpr::Sub(a, b) | ScalarExpr::Mul(a, b) => {
@@ -2012,8 +2030,8 @@ fn assert_int_op_admissibility(op: &OpDef, dtype: ElementKind) {
                 // composed-predicate leak: a Cmp* nested here (e.g. `Add(Cmp(..),
                 // Cmp(..))`) now falls to the fail-closed reject above instead of
                 // being admitted.
-                walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false);
-                walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false);
+                walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+                walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
             }
             ScalarExpr::Select(c, a, b) => {
                 // G1 (WHERE/SELECT): select is rejected OUTRIGHT at every int
@@ -2029,18 +2047,20 @@ fn assert_int_op_admissibility(op: &OpDef, dtype: ElementKind) {
                 // coverage is a later increment). Legal in EVERY Access arm at
                 // float dtypes (a select in a Reduction pre-expr is the
                 // masked-sum shape), so no elementwise-only assert here.
-                assert!(
-                    !int_dt,
-                    "op '{op_name}': Select has no integer lowering — v1 select is \
+                if !(!int_dt) {
+                    return Err(format!(
+                        "op '{op_name}': Select has no integer lowering — v1 select is \
                      float-only (f32/f32s/f64/f16/bf16), so int dtype {dtype:?} must \
                      miss honestly (the 0c U8/I8 cond-observer question is unresolved \
                      and bespoke where int coverage is a later increment)"
-                );
-                walk(c, op_name, dtype, int_dt, elementwise, in_reduction, false);
-                walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false);
-                walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false);
+                    ));
+                }
+                walk(c, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+                walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+                walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
             }
         }
+        Ok(())
     }
     let mut exprs: Vec<&ScalarExpr> = vec![&op.body];
     match &op.access {
@@ -2100,7 +2120,20 @@ fn assert_int_op_admissibility(op: &OpDef, dtype: ElementKind) {
             elementwise,
             in_reduction,
             in_reduction,
-        );
+        )
+        .map_err(|detail| PlanError::InadmissibleOpAtDtype { dtype, detail })?;
+    }
+    Ok(())
+}
+
+/// Panicking form of [`check_int_op_admissibility`] — the AOT gate.
+///
+/// The admissibility rules live once, in the checking form. This is the shape
+/// `build_plan` uses, where a violation is an authoring error worth failing
+/// loudly on rather than a request that cannot be served.
+fn assert_int_op_admissibility(op: &OpDef, dtype: ElementKind) {
+    if let Err(e) = check_int_op_admissibility(op, dtype) {
+        panic!("{e}");
     }
 }
 

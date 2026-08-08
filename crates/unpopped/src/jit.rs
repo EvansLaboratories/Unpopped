@@ -135,6 +135,13 @@ pub struct Recipe {
 pub enum JitError {
     /// A region op name outside the increment-1 IR vocabulary.
     UnsupportedOp(String),
+    /// The op/dtype pair is not admissible — the plan gate's own refusal.
+    ///
+    /// Replaces the `dtype_compatible` pre-screen, which was a SECOND
+    /// implementation of these rules kept in sync by hand. It had already lost
+    /// one (the 8-bit composition pin), which is the failure mode a mirrored
+    /// rule always eventually has. The gate now answers directly.
+    PlanRejected(crate::plan::PlanError),
     /// The backend refused to lower the plan, and said why.
     ///
     /// This is the decline that used to be a **panic across the trust boundary**.
@@ -324,11 +331,6 @@ fn synthesize_op(
     if !backend.supports_dtype(dtype) {
         return Err(JitError::UnsupportedDtype);
     }
-    // CUDA backend dtype limits: a unary / binary-fn node needs a float dtype, and
-    // scalar params are f32-only — honest miss rather than a lowering panic.
-    if !dtype_compatible(&op.body, dtype) {
-        return Err(JitError::UnsupportedDtype);
-    }
 
     // The schedule cell is keyed from Fuel's operand projection — never re-derived.
     let key = structure_key(op_category, operands, arch);
@@ -336,6 +338,10 @@ fn synthesize_op(
         body: optimize(&op.body),
         ..op.clone()
     };
+    // The op/dtype admissibility gate, asked DIRECTLY rather than through a
+    // mirror. `try_build_plan` is the same rules `build_plan` asserts, in the
+    // shape a trust boundary needs.
+    crate::plan::try_build_plan(&kernel_op, &key).map_err(JitError::PlanRejected)?;
     // `try_generate`, NOT `generate`. This is the trust boundary: a backend that
     // cannot lower the cell must come back as a typed decline, and `generate`
     // turns that refusal into a panic. Pinned by `tests/jit_never_unwinds.rs`.
@@ -620,103 +626,6 @@ fn binary_operands(
     Ok((a, b))
 }
 
-/// Whether the CUDA backend can lower `body` at `dtype` — the JIT's op×dtype
-/// legality gate (gate 2 behind `supports_dtype`; the same table the AOT plan
-/// gate `assert_int_op_admissibility` enforces — see the `ir::BinaryOp` docs):
-///
-/// - unary / float-binary-fn nodes require a float dtype (no integer math);
-///   `Nextafter` additionally excludes f16/bf16 (the half path computes
-///   promoted-to-f32, which would step the f32 lattice — the wrong neighbor;
-///   see `cuda_binary`);
-/// - the increment-0c INT-ONLY ops (bitwise/shift/logical) require an int
-///   dtype (`I32`/`I64`/`S8`/`U8`), the logical ops exactly `U8` — today
-///   defensive-only, since no `OpTag` names them (no region can request one),
-///   but the gate stands ahead of the vocabulary like the Nextafter arm does.
-///   NOTE: the AOT plan gate additionally pins int-op operands at `S8`/`U8`
-///   to leaf `Input`s (rule 3 — composed operands diverge under DAG sharing);
-///   moot here while no OpTag names these ops, but a future vocabulary
-///   extension must mirror that rule HERE before regions can compose them,
-///   or `build_plan` would panic across the JIT trust boundary;
-/// - a runtime scalar `Param` is f32-only; a `Const` is f64-spelled, so it
-///   rejects at int dtypes (double math in an int kernel — see the plan gate);
-/// - infix `Add`/`Sub`/`Mul` work at any supported dtype (int = wrapping);
-///   infix `Div` is FLOAT-ONLY — the bespoke surface has no int elementwise
-///   div and C `/0` is device-UB, so a uniform-int Div region declines even
-///   though the dtype itself is supported (the audited replacement for the 0b
-///   supports_dtype(U8) hold).
-fn dtype_compatible(body: &ScalarExpr, dtype: ElementKind) -> bool {
-    let is_float = matches!(
-        dtype,
-        ElementKind::F16
-            | ElementKind::Bf16
-            | ElementKind::F32
-            | ElementKind::F32Strict
-            | ElementKind::F64
-    );
-    let is_int = crate::plan::is_int_dtype(dtype);
-    let f32_only = matches!(dtype, ElementKind::F32 | ElementKind::F32Strict);
-    let is_half = matches!(dtype, ElementKind::F16 | ElementKind::Bf16);
-    struct Ctx {
-        is_float: bool,
-        is_int: bool,
-        f32_only: bool,
-        is_half: bool,
-        dtype: ElementKind,
-    }
-    fn walk(e: &ScalarExpr, c: &Ctx) -> bool {
-        match e {
-            // Reduced only appears in a RowReduce epilogue, which never reaches the
-            // JIT path (region_to_op builds Elementwise only) — treat as a benign
-            // float scalar leaf for exhaustiveness.
-            ScalarExpr::Input(_) | ScalarExpr::Reduced(_) => true,
-            // Coord (increment 0d) mirrors the AOT plan gate: f32/f64 only
-            // (halves round past 2048; ints would take the float-cast
-            // coordinate). Defensive today — `region_to_op` never constructs
-            // a Coord (OpTag::Iota is declined typed at `optag_name`, see the
-            // seam module) — but the gate stands ahead of the vocabulary like
-            // the Nextafter arm does, so a future Iota bridge cannot panic
-            // `build_plan` across the trust boundary.
-            ScalarExpr::Coord(_) => matches!(
-                c.dtype,
-                ElementKind::F32 | ElementKind::F32Strict | ElementKind::F64
-            ),
-            ScalarExpr::Const(_) => !c.is_int,
-            ScalarExpr::Param(_) => c.f32_only,
-            ScalarExpr::Unary(_, x) => c.is_float && walk(x, c),
-            ScalarExpr::Binary(op, a, b) => {
-                let op_ok = if op.is_int_only() {
-                    c.is_int && (!op.is_logical() || c.dtype == ElementKind::U8)
-                } else {
-                    c.is_float && !(c.is_half && matches!(op, BinaryOp::Nextafter))
-                };
-                op_ok && walk(a, c) && walk(b, c)
-            }
-            ScalarExpr::Div(a, b) => !c.is_int && walk(a, c) && walk(b, c),
-            ScalarExpr::Add(a, b) | ScalarExpr::Sub(a, b) | ScalarExpr::Mul(a, b) => {
-                walk(a, c) && walk(b, c)
-            }
-            // Select is float-only in v1 (f32/f32s/f64/f16/bf16) — mirrors the
-            // AOT plan gate (`assert_int_op_admissibility`'s Select arm): an
-            // int select would raise the 0c cond-observer question, so it
-            // declines typed here rather than panicking `build_plan` across
-            // the JIT trust boundary.
-            ScalarExpr::Select(cond, a, b) => {
-                c.is_float && walk(cond, c) && walk(a, c) && walk(b, c)
-            }
-        }
-    }
-    walk(
-        body,
-        &Ctx {
-            is_float,
-            is_int,
-            f32_only,
-            is_half,
-            dtype,
-        },
-    )
-}
-
 /// Inverse of [`crate::pattern`]'s `binary_name`. The increment-0a binaries
 /// (`Atan2`/`Copysign`/`Nextafter`/`FmaxIeee`/`FminIeee`/`RemTrunc`) have NO
 /// name here on purpose — §4.1/`OpTag` doesn't name them yet, so no region can
@@ -956,6 +865,24 @@ pub mod seam {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The op/dtype admissibility rules, asked of the ONE implementation.
+    ///
+    /// These assertions used to run against `jit::dtype_compatible`, a mirror of
+    /// the plan gate maintained by hand. The mirror is gone; the coverage is not.
+    /// Repointing them here means they now test the rules where the rules live,
+    /// which is strictly better — a mirror can pass its own tests while having
+    /// drifted from the thing it mirrors, and this one had (the 8-bit
+    /// composition pin was never copied across).
+    fn dtype_compatible(body: &ScalarExpr, dtype: ElementKind) -> bool {
+        let op = OpDef::elementwise("probe", 3, &[dtype], crate::ir::Expr(body.clone()));
+        // BOTH admissibility gates — the same pair `try_build_plan` runs. Calling
+        // only one is how a mirror starts drifting, which is the whole reason the
+        // mirror was deleted; the `nextafter_half` test caught exactly that when
+        // this helper first ran only the integer gate.
+        crate::plan::check_no_half_nextafter(&op, dtype).is_ok()
+            && crate::plan::check_int_op_admissibility(&op, dtype).is_ok()
+    }
 
     fn op_node(op: &str, operands: Vec<PatternNode>) -> PatternNode {
         PatternNode::Op {
