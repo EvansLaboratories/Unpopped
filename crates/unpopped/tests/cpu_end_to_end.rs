@@ -32,6 +32,9 @@ use unpopped::oracle::{Fidelity, TypedBuffer, compare, evaluate};
 use unpopped::{build_plan, generate};
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_key};
 
+/// `f32::NAN` shortened so the input tables below line up column-wise.
+const NAN_F: f32 = f32::NAN;
+
 /// A host C compiler and how to drive it.
 struct CCompiler {
     /// Base command, already carrying whatever environment it needs (the MSVC
@@ -99,14 +102,26 @@ fn find_compiler() -> Option<CCompiler> {
 
 impl CCompiler {
     /// Compile `src` to `exe`. Returns the compiler's diagnostics on failure.
-    fn compile(&self, src: &Path, exe: &Path) -> Result<(), String> {
+    ///
+    /// `optimize` selects `-O2` / `/O2` instead of the unoptimized default. It
+    /// matters for exactly one caller and it is not a performance knob: the
+    /// NaN-propagation test is checking whether an **optimizer** contracts the
+    /// emitted ternary into a NaN-suppressing max instruction. Run at `-O0` that
+    /// test passes trivially and proves nothing, because there is no optimizer to
+    /// do the contracting. The value-correctness tests stay unoptimized so a
+    /// failure there is unambiguously the emitter's rather than the compiler's.
+    fn compile(&self, src: &Path, exe: &Path, optimize: bool) -> Result<(), String> {
         let mut c = Command::new(self.cmd);
         if self.msvc {
             c.arg("-nologo")
+                .arg(if optimize { "-O2" } else { "-Od" })
                 .arg(src)
                 .arg(format!("-Fe:{}", exe.display()));
         } else {
-            c.arg(src).arg("-o").arg(exe).arg("-O0");
+            c.arg(src)
+                .arg("-o")
+                .arg(exe)
+                .arg(if optimize { "-O2" } else { "-O0" });
             if self.needs_libm {
                 c.arg("-lm");
             }
@@ -123,6 +138,52 @@ impl CCompiler {
     }
 }
 
+/// A C float literal for `v`.
+///
+/// Rust's `{:?}` renders these as `NaN` and `inf`, which are not C. The kernel
+/// source already pulls in `<math.h>` (the harness's own sentinel loop uses
+/// `NAN`), so the macros are available.
+fn c_float_lit(v: f32) -> String {
+    if v.is_nan() {
+        // The payload is not preserved through the printf/parse hop, and it does
+        // not need to be — the tests that use NaN inputs assert NaN-ness, not a
+        // specific bit pattern. See `max_propagates_nan_through_a_real_compiler`.
+        if v.is_sign_negative() {
+            "-(float)NAN".to_string()
+        } else {
+            "(float)NAN".to_string()
+        }
+    } else if v.is_infinite() {
+        if v.is_sign_negative() {
+            "-(float)INFINITY".to_string()
+        } else {
+            "(float)INFINITY".to_string()
+        }
+    } else {
+        format!("{v:?}f")
+    }
+}
+
+/// Parse one printed output element.
+///
+/// Deliberately **not** `parse().unwrap_or(NAN)`. Falling back to NaN on a parse
+/// failure silently converts "the kernel printed something unreadable" into "the
+/// kernel produced NaN", which is a real vacuity hazard: it would let a NaN
+/// assertion pass on garbage output, and it makes an unreadable line masquerade
+/// as the NEVER-WROTE sentinel and get diagnosed as the wrong bug entirely.
+///
+/// NaN spelling is platform-dependent — glibc prints `nan` / `-nan`, MSVC prints
+/// `-nan(ind)` — so accept those explicitly and panic on anything else.
+fn parse_out_elem(line: &str) -> f64 {
+    let t = line.trim();
+    let lower = t.to_ascii_lowercase();
+    if lower.starts_with("nan") || lower.starts_with("-nan") || lower.starts_with("+nan") {
+        return f64::NAN;
+    }
+    t.parse::<f64>()
+        .unwrap_or_else(|e| panic!("kernel printed an unparseable output element {t:?}: {e}"))
+}
+
 /// Wrap an emitted kernel in a `main` that NaN-fills the output, calls it, and
 /// prints every output element at full `f64` precision.
 ///
@@ -136,7 +197,7 @@ fn harness(kernel_src: &str, name: &str, n_in: usize, inputs: &[Vec<f32>]) -> St
     s.push_str("\n#include <stdio.h>\n\nint main(void) {\n");
 
     for (i, data) in inputs.iter().enumerate() {
-        let lits: Vec<String> = data.iter().map(|v| format!("{v:?}f")).collect();
+        let lits: Vec<String> = data.iter().map(|v| c_float_lit(*v)).collect();
         s.push_str(&format!(
             "    const float in{i}[{n}] = {{{}}};\n",
             lits.join(", ")
@@ -167,6 +228,7 @@ fn run_kernel(
     dtype: ElementKind,
     cat: OpCategory,
     inputs: &[Vec<f32>],
+    optimize: bool,
 ) -> Result<(Vec<f64>, TypedBuffer), String> {
     let n = inputs[0].len() as i64;
     let d = OperandDesc::new(1, &[n], &[1], dtype, 256);
@@ -180,7 +242,7 @@ fn run_kernel(
     let c_file = dir.join(format!("{tag}.c"));
     let exe = dir.join(format!("{tag}.exe"));
     std::fs::write(&c_file, &src).map_err(|e| format!("write: {e}"))?;
-    cc.compile(&c_file, &exe)?;
+    cc.compile(&c_file, &exe, optimize)?;
 
     let out = Command::new(&exe)
         .output()
@@ -191,7 +253,7 @@ fn run_kernel(
     let actual: Vec<f64> = String::from_utf8_lossy(&out.stdout)
         .lines()
         .filter(|l| !l.trim().is_empty())
-        .map(|l| l.trim().parse::<f64>().unwrap_or(f64::NAN))
+        .map(parse_out_elem)
         .collect();
 
     // The oracle leg — an independent f64 evaluator that shares no lowering code
@@ -277,6 +339,7 @@ fn cpu_c_kernels_launch_and_match_the_oracle() {
         ElementKind::F32,
         OpCategory::BinaryElementwise,
         &[a.clone(), b.clone()],
+        false,
     )
     .expect("add_f32 end-to-end");
     assert_wrote_and_correct("add_f32", &actual, &expected);
@@ -291,7 +354,135 @@ fn cpu_c_kernels_launch_and_match_the_oracle() {
         ElementKind::F32,
         OpCategory::BinaryElementwise,
         &[a.clone(), b.clone()],
+        false,
     )
     .expect("mul_f32 end-to-end");
     assert_wrote_and_correct("mul_f32", &actual, &expected);
+}
+
+/// `Max` propagates NaN **after the C compiler has had its way with the source**.
+///
+/// `docs/conformance.md` N2 makes NaN propagation through `Max`/`Min` normative:
+/// if either operand is NaN the result is NaN. That is *not* C `fmax`, not IEEE
+/// `maxNum`, and not GLSL `max` — every C-family target offers a built-in with
+/// the opposite behavior, so the emitter deliberately refuses them and spells the
+/// ternary out longhand:
+///
+/// ```c
+/// (a != a ? a : (b != b ? b : (a >= b ? a : b)))
+/// ```
+///
+/// # Why a text golden cannot cover this
+///
+/// The rule is implemented by *writing* that ternary and then assuming no
+/// compiler in the chain contracts it back into a max instruction. Every other
+/// test in this crate compares emitted source, which is exactly the layer at
+/// which the ternary is still present — so the assumption they all rest on is the
+/// one thing they structurally cannot check. Only compiling and running with NaN
+/// input can. (The same assumption is unverified on CUDA, where the chain is
+/// nvcc → ptxas → driver JIT and PTX `max.f32` is NaN-suppressing without the
+/// `.NaN` modifier. Settling that needs the on-device equivalent of this test.)
+///
+/// # Why the NaN sentinel is not used here
+///
+/// The other tests pre-fill the output with NaN so a survivor means NEVER-WROTE.
+/// That is unusable when NaN is the *expected answer*. Instead the input mixes
+/// both cases: lanes 0–1 have a NaN operand and must produce NaN, lanes 2–3 have
+/// none and must produce an exact finite value. The finite lanes are the positive
+/// control — they prove the kernel ran and computed, so an all-NaN output from a
+/// kernel that never wrote cannot pass.
+///
+/// # Why the SINGLE-NaN lanes are the ones that matter
+///
+/// Verified by mutation: replacing the emitter's ternary with `fmaxf` produces
+/// `[1.0, 1.0, 3.0, 3.0, -1.0, 5.0, NaN]`. Lane 6 — where *both* operands are
+/// NaN — still yields NaN, because `fmax(NaN, NaN)` is NaN. A test built only on
+/// the both-NaN case would pass the exact mutation this exists to catch. Lanes
+/// 0 and 1, with one NaN operand each, are what discriminate; lane 6 is kept only
+/// because it is free and covers the fold.
+#[test]
+fn max_propagates_nan_through_a_real_compiler() {
+    let Some(cc) = find_compiler() else {
+        eprintln!(
+            "SKIP max_propagates_nan_through_a_real_compiler: no host C compiler \
+             (tried cc, gcc, clang, cl). This test compiles and RUNS a kernel to \
+             check that NaN propagation survives the optimizer; without a \
+             toolchain it cannot execute."
+        );
+        return;
+    };
+
+    let dir: PathBuf = std::env::temp_dir().join("unpopped-e2e");
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    // Seven lanes, not four: the planner vectorizes a 4-element contiguous cell
+    // to `Vectorized { width: 4 }`, which the CpuC v1 emitter declines. Seven
+    // keeps it on the scalar path this backend serves.
+    //
+    // lane:            0    1    2    3     4    5     6
+    // NaN operand:     a    b    -    -     -    -    both
+    let a: Vec<f32> = vec![NAN_F, 1.0, 2.0, 3.0, -1.0, 5.0, NAN_F];
+    let b: Vec<f32> = vec![1.0, NAN_F, 3.0, 2.0, -2.0, 4.0, NAN_F];
+    // Lanes 2/3 are ordered oppositely and 4 is negative, so a lowering that
+    // returns one fixed operand — or that confuses max with min — fails the
+    // controls rather than sliding through.
+    const NAN_LANES: &[usize] = &[0, 1, 6];
+    const FINITE: &[(usize, f64)] = &[(2, 3.0), (3, 3.0), (4, -1.0), (5, 5.0)];
+
+    let max = OpDef::elementwise("maxop", 2, &[ElementKind::F32], input(0).max(input(1)));
+    let (actual, expected) = run_kernel(
+        &cc,
+        &dir,
+        "max_nan_f32",
+        &max,
+        ElementKind::F32,
+        OpCategory::BinaryElementwise,
+        &[a, b],
+        // OPTIMIZED — the whole point. See `CCompiler::compile`.
+        true,
+    )
+    .expect("max_nan_f32 end-to-end");
+
+    let want = expected.to_f64_vec();
+    assert_eq!(actual.len(), 7, "expected 7 output lanes, got {actual:?}");
+
+    // Harness precondition: the ORACLE must itself say the NaN lanes are NaN. If
+    // this trips, the oracle stopped implementing N2 and the rest of the test
+    // would be checking the emitter against a reference that no longer encodes
+    // the rule.
+    for &lane in NAN_LANES {
+        assert!(
+            want[lane].is_nan(),
+            "oracle no longer propagates NaN through Max at lane {lane} — it \
+             produced {want:?}. Conformance rule N2 is what this test protects, \
+             and the oracle is the reference for it."
+        );
+    }
+
+    // The claim.
+    for &lane in NAN_LANES {
+        assert!(
+            actual[lane].is_nan(),
+            "NaN was NOT propagated at lane {lane}: the compiled kernel gave {} \
+             where N2 requires NaN. The emitter spells a NaN-checking ternary, so \
+             a finite result here means something in the C toolchain contracted it \
+             into a NaN-suppressing max. Every source-level golden in this crate is \
+             blind to that, which is why this test compiles and runs. \
+             Full output: {actual:?}",
+            actual[lane]
+        );
+    }
+
+    // The positive control: without these, a kernel that wrote NaN everywhere —
+    // or never wrote at all, leaving the caller's buffer untouched — would
+    // satisfy every assertion above.
+    for &(lane, expect) in FINITE {
+        assert_eq!(
+            actual[lane], expect,
+            "finite lane {lane} is the positive control and must be exactly \
+             {expect}, got {}. If this fails, the kernel is not computing max at \
+             all and the NaN lanes prove nothing. Full output: {actual:?}",
+            actual[lane]
+        );
+    }
 }
