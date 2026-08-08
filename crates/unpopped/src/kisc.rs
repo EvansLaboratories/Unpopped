@@ -8,14 +8,31 @@
 //! which is what kills the silent-adopt-empty and truncation hazards the older
 //! `## `-heading framing was prone to.
 //!
-//! # Header-line format — PROVISIONAL
+//! # Header-line format — PROVISIONAL, and confirmed so
 //!
 //! KISS §6.11 pins the header's *fields* (magic `KISC`, `kiss-contract` kind, a
-//! version, `len=<N>`, `crc32=<…>`) but not yet the exact literal bytes. The
-//! spelling below is a concrete **strawman** proposed to Fuel for co-pinning
-//! (`baracuda:docs/fuel-reply-kisc-framing-2026-07-15.md`) and to KISS §6.11 as a golden
-//! vector. It is isolated in [`kisc_frame`]/[`kisc_unframe`] so pinning the final
-//! form is a localized change.
+//! version, `len=<N>`, `crc32=<…>`) but not the exact literal bytes. The spelling
+//! below is a **strawman**, and it is isolated in [`kisc_frame`]/[`kisc_unframe`]
+//! so pinning the final form stays a localized change.
+//!
+//! **Checked with Fuel (2026-08-08) rather than inferred: nobody has confirmed
+//! these bytes, and Fuel structurally cannot.** Their KISC reply is dated
+//! 2026-07-14 and *predates* the 2026-07-15 ask for the exact spelling — it
+//! adopts the *framing* (KISC as the single import frame, build-stamped
+//! `len`/`crc32`, one kernel per document) and says nothing about field order,
+//! hex case, or CRLF tolerance. And Fuel has **no KISC implementation at all**
+//! — zero hits for `KISC`/`crc32` across their sources — so there is no importer
+//! whose expectations could confirm or contradict this.
+//!
+//! Which is why this marker stays. Reading Baracuda's side alone would have
+//! recorded "Fuel confirms" about a party holding no opinion, because it holds no
+//! code.
+//!
+//! **Where it gets pinned: KISS, not bilaterally.** `KISC` is KISS-Contract
+//! §2.8/§6.11 vocabulary, and KISS-owned vocabulary is imported from KISS rather
+//! than re-invented downstream. A spelling agreed between Unpopped and Fuel would
+//! be a *third* spelling of a frame neither owns. The proposal to take there is
+//! the field list plus the `0xCBF43926` ("123456789") CRC-32 validation vector.
 //!
 //! ```text
 //! KISC kiss-contract 1 len=<N> crc32=<8 lowercase hex>\n<body of N bytes>

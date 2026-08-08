@@ -9,16 +9,38 @@
 //! of a Fuel-private name. An op whose node has no confirmed KISS-Ops name yet is an
 //! **honest miss**: [`semantics_dag`] returns `None` rather than fabricate a token.
 //!
-//! # Format — PROVISIONAL
+//! # Format — CO-PINNED with Fuel (2026-07-16)
 //!
 //! The Semantics text is a compact functional op-DAG — `op(arg, arg, …)`, with the
 //! `Bind` leaf `in<i>` (kernel input) and the source-op leaves `const(<v>)`,
 //! `iota(<axis>)`, `runtime_scalar(<slot>)` (attr in the parens) — e.g. a fused
-//! `relu_add` is `add(relu(in0), in1)`. Fuel confirmed this functional text is a
-//! valid **surface** the importer parses; Fuel flattens it to the §6.4-0009
-//! `Op{op_name,op_attrs,child_edges} | Bind(input_index)` flat table and
-//! canonicalizes on ingest (`docs/fuel-reply-recipe-{grammar,schema}-2026-07-15.md`).
-//! The literal grammar is still a co-pin strawman, isolated here.
+//! `relu_add` is `add(relu(in0), in1)`. Fuel parses this functional text as the
+//! **surface**, flattens it to the §6.4-0009
+//! `Op{op_name,op_attrs,child_edges} | Bind(input_index)` flat table, and
+//! canonicalizes on ingest — so this side emits valid-but-not-necessarily-canonical
+//! and Fuel canonicalizes, by agreement.
+//!
+//! Confirmed by Fuel: `runtime_scalar{slot_index}` (sole attr is the slot index, a
+//! distinct leaf from a baked `const`); `iota{axis}`; `const{bits}`; `Reduced(i)`
+//! as a **child edge** rather than a leaf; empty `op_attrs` as a zero-length
+//! length-prefixed blob (one canonical byte form); `PatternNode` restricted to
+//! `Op | Bind` **is** the §6.4-0009 schema (`Any`/`SeeThrough` are matcher-only and
+//! have no place in a closed Semantics schema); and the scan flat-table
+//! serialization. The `matmul` contraction attrs are the **per-axis role vectors**
+//! over `{Batch, FreeM, FreeN, ContractedK}`, verbatim to `ContractionAxes` —
+//! chosen over a narrow `{batched: bool}` because role vectors extend to
+//! transposed / multi-batch / general contraction without a grammar migration.
+//!
+//! This module previously said the grammar was "still a co-pin strawman", which
+//! was **stale by three weeks**. That is not a harmless over-caution: a marker
+//! saying *not settled yet* stops people building on something already agreed,
+//! the same way an over-cautious scope note elsewhere in this crate would have
+//! suppressed a test that already worked.
+//!
+//! **What remains open is conformance, not the pin.** The grammar is agreed;
+//! whether any given implementation currently matches it is a separate question.
+//! If a golden vector here disagrees with Fuel's emitter, that is a conformance
+//! bug against a pinned grammar — not a reopened pin.
 //!
 //! # Scope
 //!
