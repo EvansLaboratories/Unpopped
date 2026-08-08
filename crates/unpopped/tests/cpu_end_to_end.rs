@@ -520,8 +520,8 @@ fn s16_arithmetic_wraps_identically_in_the_emitter_and_the_oracle() {
     let b: Vec<i16> = vec![20000, -20000, 5, -4, 0, 1, -1];
     let n = a.len() as i64;
 
-    let add = OpDef::elementwise("addi16", 2, &[ElementKind::S16], input(0) + input(1));
-    let d = OperandDesc::new(1, &[n], &[1], ElementKind::S16, 256);
+    let add = OpDef::elementwise("addi16", 2, &[ElementKind::I16], input(0) + input(1));
+    let d = OperandDesc::new(1, &[n], &[1], ElementKind::I16, 256);
     let operands = vec![d; 3];
     let key = structure_key(OpCategory::BinaryElementwise, &operands, ArchSku::Sm89);
 

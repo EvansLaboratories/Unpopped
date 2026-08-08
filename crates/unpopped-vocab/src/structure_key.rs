@@ -60,7 +60,7 @@ pub const MAX_OPERANDS: usize = 8;
 /// the FP8 spellings go variant-explicit (`e4m3` → `e4m3fn`; `e5m2` is already
 /// variant-explicit and unchanged; the AMD `e4m3fnuz`/`e5m2fnuz` spellings are
 /// reserved, unused). Non-gem cells change only the version prefix.
-pub const STRUCTURE_KEY_VERSION: u16 = 3;
+pub const STRUCTURE_KEY_VERSION: u16 = 4;
 
 // ===========================================================================
 // Predicate axes
@@ -686,11 +686,9 @@ const fn canonical_dtype(dt: ElementKind) -> ElementKind {
 const fn contraction_acc(primary: ElementKind) -> ElementKind {
     match primary {
         ElementKind::F64 => ElementKind::F64,
-        ElementKind::S8
-        | ElementKind::U8
-        | ElementKind::S4
-        | ElementKind::U4
-        | ElementKind::Bin => ElementKind::I32,
+        ElementKind::I8 | ElementKind::U8 | ElementKind::I4 | ElementKind::U4 | ElementKind::B1 => {
+            ElementKind::I32
+        }
         _ => ElementKind::F32,
     }
 }
@@ -943,7 +941,7 @@ fn derive_reduce_axes(op: OpCategory, operands: &[OperandDesc]) -> AxisMask {
 /// // a [128, 256] row-major f32 (in, in, out) triple for a binary elementwise add.
 /// let a = OperandDesc::new(2, &[128, 256], &[256, 1], ElementKind::F32, 256);
 /// let token = structure_key_token(OpCategory::BinaryElementwise, &[a, a, a], ArchSku::Sm89);
-/// assert!(token.starts_with("sk3|bin|f32|cuda:sm89|"));
+/// assert!(token.starts_with("sk4|bin|f32|cuda:sm89|"));
 /// ```
 #[must_use]
 pub fn structure_key_token(op: OpCategory, operands: &[OperandDesc], arch: ArchSku) -> String {
@@ -1114,22 +1112,22 @@ fn frame_work_class(operands: &[OperandDesc]) -> WorkClass {
 /// are treated as non-vectorizable in v1).
 fn dtype_size_bytes(dt: ElementKind) -> Option<u32> {
     use ElementKind::{
-        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E4M3FNUZ,
-        Fp8E5M2, Fp8E5M2FNUZ, I32, I64, S4, S8, S16, U4, U8, U16, U32, U64,
+        B1, Bf16, Bool, Complex64, Complex128, F8E6M2, F8E8M0, F16, F32, F32Strict, F64, Fp8E4M3FN,
+        Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4, U8, U16, U32, U64,
     };
     Some(match dt {
         // The `fnuz` FP8 variants are RESERVED (no computation semantics at this
         // schema version) but their *storage* width is pinned by §6.1 all the
         // same — a reserved dtype is still a known dtype, and answering "how wide
         // is it" is not the same as agreeing to compute with it.
-        S8 | U8 | Bool | Fp8E4M3 | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ => 1,
-        F16 | Bf16 | S16 | U16 => 2,
+        I8 | U8 | Bool | Fp8E4M3FN | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 => 1,
+        F16 | Bf16 | I16 | U16 => 2,
         // U32: 4-byte index dtype (the `indices` operand's vec-width side-channel;
         // never a compute operand). Same width class as I32.
         F32 | F32Strict | I32 | U32 => 4,
-        F64 | I64 | U64 | Complex32 => 8,
-        Complex64 => 16,
-        S4 | U4 | Bin => return None,
+        F64 | I64 | U64 | Complex64 => 8,
+        Complex128 => 16,
+        I4 | U4 | B1 => return None,
     })
 }
 
@@ -1694,7 +1692,7 @@ mod contraction_key_tests {
 
     #[test]
     fn from_token_declines_reordered_and_duplicated_layout_order_components() {
-        let base = "sk3|gem|f32|cuda:sm89|ix32|grid|r2|\
+        let base = "sk4|gem|f32|cuda:sm89|ix32|grid|r2|\
                     co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
         // `/or...` before `/ol...` violates the fixed emission order (batch,
         // then lhs_order, then rhs_order) the position-driven parser walks —
@@ -1720,7 +1718,7 @@ mod contraction_key_tests {
         // contraction's `0..rank`. `from_token` parses an untrusted wire token, so
         // malformed digits must decline rather than build an inconsistent key that
         // panics when the emitter indexes `perm()[d]`.
-        let r2 = "sk3|gem|f32|cuda:sm89|ix32|grid|r2|\
+        let r2 = "sk4|gem|f32|cuda:sm89|ix32|grid|r2|\
                   co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
         // out-of-range digit (7 >= rank 2)
         assert_eq!(
@@ -1743,7 +1741,7 @@ mod contraction_key_tests {
         // A rank-3 (batched) cell with a rank-2 (2-digit) order — the `/bt/ol10`
         // case: a rank-2 LayoutOrder inside a rank-3 contraction would later panic
         // at `perm()[2]`. Must decline on the digit-count/rank mismatch.
-        let r3 = "sk3|gem|f32|cuda:sm89|ix32|grid|r3|\
+        let r3 = "sk4|gem|f32|cuda:sm89|ix32|grid|r3|\
                   co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
         assert_eq!(
             StructureKey::from_token(&format!("{r3}|ctll/d16/bt/ol10/f32/f32/f32/rm")),
@@ -2004,7 +2002,7 @@ mod contraction_key_tests {
         let (st_tok, rm_tok) = (strict.to_token(), tf32.to_token());
         assert!(!st_tok.contains("f32s"), "no f32s spelling: {st_tok}");
         assert!(
-            st_tok.starts_with("sk3|gem|f32|"),
+            st_tok.starts_with("sk4|gem|f32|"),
             "strict cell spells the canonical f32 dtype: {st_tok}"
         );
         assert!(
@@ -2039,7 +2037,7 @@ mod contraction_key_tests {
         let mixed = structure_key(
             OpCategory::Gemm,
             &[
-                lhs(ElementKind::Fp8E4M3),
+                lhs(ElementKind::Fp8E4M3FN),
                 rhs(ElementKind::Fp8E5M2),
                 out(ElementKind::F32),
             ],
@@ -2048,20 +2046,23 @@ mod contraction_key_tests {
         let homog = structure_key(
             OpCategory::Gemm,
             &[
-                lhs(ElementKind::Fp8E4M3),
-                rhs(ElementKind::Fp8E4M3),
+                lhs(ElementKind::Fp8E4M3FN),
+                rhs(ElementKind::Fp8E4M3FN),
                 out(ElementKind::F16),
             ],
             ArchSku::Sm89,
         );
         let (mt, ht) = (mixed.to_token(), homog.to_token());
-        assert!(mt.starts_with("sk3|gem|e4m3fn|"), "variant-explicit: {mt}");
         assert!(
-            mt.ends_with("|ctll/d16/e5m2/f32/f32/st"),
+            mt.starts_with("sk4|gem|f8e4m3fn|"),
+            "variant-explicit: {mt}"
+        );
+        assert!(
+            mt.ends_with("|ctll/d16/f8e5m2/f32/f32/st"),
             "mixed cell spells its e5m2 weight + f32 out: {mt}"
         );
         assert!(
-            ht.ends_with("|ctll/d16/e4m3fn/f32/f16/st"),
+            ht.ends_with("|ctll/d16/f8e4m3fn/f32/f16/st"),
             "homogeneous cell spells its e4m3fn weight + f16 out: {ht}"
         );
         assert_ne!(mt, ht, "the sk2 FP8 collision is fixed by <wdt>/<out>");
@@ -2071,7 +2072,7 @@ mod contraction_key_tests {
 
     #[test]
     fn from_token_declines_sk2_shaped_and_malformed_gem_precision_groups() {
-        let base = "sk3|gem|f32|cuda:sm89|ix32|grid|r2|\
+        let base = "sk4|gem|f32|cuda:sm89|ix32|grid|r2|\
                     co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
         // The precision group is REQUIRED for an sk3 gem cell: the sk2 shapes
         // (`c<mnk>/<kdiv>` and `c<mnk>/<kdiv>/b<class>`) are typed declines.
@@ -2101,7 +2102,7 @@ mod contraction_key_tests {
             None
         );
         // The `f32s` retirement also holds at the token's DTYPE field.
-        let f32s_dtype = "sk3|gem|f32s|cuda:sm89|ix32|grid|r2|\
+        let f32s_dtype = "sk4|gem|f32s|cuda:sm89|ix32|grid|r2|\
                           co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-|ctll/d16/f32/f32/f32/st";
         assert_eq!(StructureKey::from_token(f32s_dtype), None);
     }
@@ -2446,8 +2447,8 @@ pub const fn dtype_token(v: ElementKind) -> &'static str {
 
 const fn dtype_code(v: ElementKind) -> &'static str {
     use ElementKind::{
-        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E4M3FNUZ,
-        Fp8E5M2, Fp8E5M2FNUZ, I32, I64, S4, S8, S16, U4, U8, U16, U32, U64,
+        B1, Bf16, Bool, Complex64, Complex128, F8E6M2, F8E8M0, F16, F32, F32Strict, F64, Fp8E4M3FN,
+        Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4, U8, U16, U32, U64,
     };
     match v {
         F16 => "f16",
@@ -2460,7 +2461,7 @@ const fn dtype_code(v: ElementKind) -> &'static str {
         // canonical `f32`, and the strict axis rides the gem `<mp>` coordinate.
         F32Strict => "f32",
         F64 => "f64",
-        S8 => "s8",
+        I8 => "i8",
         U8 => "u8",
         I32 => "i32",
         I64 => "i64",
@@ -2471,23 +2472,26 @@ const fn dtype_code(v: ElementKind) -> &'static str {
         // sk3 D4: variant-explicit FP8. `e4m3fn` (OCP, SATFINITE, no-inf, max
         // 448) renames the bare `e4m3`; `e5m2` is ALREADY the variant-explicit
         // IEEE-style spelling (inf/NaN, max 57344) and stays.
-        Fp8E4M3 => "e4m3fn",
-        Fp8E5M2 => "e5m2",
+        Fp8E4M3FN => "f8e4m3fn",
+        Fp8E5M2 => "f8e5m2",
         // The AMD `fnuz` variants are RESERVED by §6.1-0001: part of the closed
         // vocabulary, no computation semantics at this schema version. They
         // spell so a reader can RECOGNIZE them and tell them apart from an
         // unknown token — the clause requires exactly that distinction. Using
         // one in a dtype position is a typed decline, not a parse failure.
-        Fp8E4M3FNUZ => "e4m3fnuz",
-        Fp8E5M2FNUZ => "e5m2fnuz",
-        S16 => "s16",
+        Fp8E4M3FNUZ => "f8e4m3fnuz",
+        // MX shared block SCALES — active at sk4, not reserved.
+        F8E8M0 => "f8e8m0",
+        F8E6M2 => "f8e6m2",
+        Fp8E5M2FNUZ => "f8e5m2fnuz",
+        I16 => "i16",
         U16 => "u16",
         U64 => "u64",
-        S4 => "s4",
+        I4 => "i4",
         U4 => "u4",
-        Bin => "b1",
-        Complex32 => "c32",
+        B1 => "b1",
         Complex64 => "c64",
+        Complex128 => "c128",
     }
 }
 
@@ -2525,8 +2529,8 @@ fn reject_reserved(dt: ElementKind) -> Option<ElementKind> {
 
 fn dtype_from_code(s: &str) -> Option<ElementKind> {
     use ElementKind::{
-        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F64, Fp8E4M3, Fp8E4M3FNUZ, Fp8E5M2,
-        Fp8E5M2FNUZ, I32, I64, S4, S8, S16, U4, U8, U16, U32, U64,
+        B1, Bf16, Bool, Complex64, Complex128, F8E6M2, F8E8M0, F16, F32, F64, Fp8E4M3FN,
+        Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4, U8, U16, U32, U64,
     };
     Some(match s {
         "f16" => F16,
@@ -2542,24 +2546,26 @@ fn dtype_from_code(s: &str) -> Option<ElementKind> {
         // reserved member of the shared vocabulary from a token it has never
         // heard of. Recognizing is not accepting: they still decline at use.
         "f64" => F64,
-        "s8" => S8,
-        "s16" => S16,
+        "i8" => I8,
+        "i16" => I16,
         "u8" => U8,
         "u16" => U16,
         "u64" => U64,
-        "e4m3fnuz" => Fp8E4M3FNUZ,
-        "e5m2fnuz" => Fp8E5M2FNUZ,
+        "f8e4m3fnuz" => Fp8E4M3FNUZ,
+        "f8e8m0" => F8E8M0,
+        "f8e6m2" => F8E6M2,
+        "f8e5m2fnuz" => Fp8E5M2FNUZ,
         "i32" => I32,
         "i64" => I64,
         "u32" => U32,
         "bool" => Bool,
-        "e4m3fn" => Fp8E4M3,
-        "e5m2" => Fp8E5M2,
-        "s4" => S4,
+        "f8e4m3fn" => Fp8E4M3FN,
+        "f8e5m2" => Fp8E5M2,
+        "i4" => I4,
         "u4" => U4,
-        "b1" => Bin,
-        "c32" => Complex32,
+        "b1" => B1,
         "c64" => Complex64,
+        "c128" => Complex128,
         _ => return None,
     })
 }
@@ -2752,7 +2758,7 @@ mod tests {
         let parsed = StructureKey::from_token(&token).expect("round-trip parse");
         assert_eq!(k, parsed);
         // Token is human-greppable.
-        assert!(token.starts_with("sk3|bin|f32|cuda:sm89|"));
+        assert!(token.starts_with("sk4|bin|f32|cuda:sm89|"));
     }
 
     #[test]
@@ -2766,7 +2772,7 @@ mod tests {
         let too_many = std::iter::repeat_n(op, MAX_OPERANDS + 1)
             .collect::<Vec<_>>()
             .join(";");
-        let token = format!("sk3|bin|f32|cuda:sm89|ix32|grid|r2|{too_many}|-");
+        let token = format!("sk4|bin|f32|cuda:sm89|ix32|grid|r2|{too_many}|-");
         assert_eq!(
             StructureKey::from_token(&token),
             None,
@@ -2780,7 +2786,7 @@ mod tests {
         // malformed and MUST be a typed decline, not silently accepted (downstream
         // consumers index MAX_RANK-sized arrays with it).
         let token = format!(
-            "sk3|bin|f32|cuda:sm89|ix32|grid|r{}|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
+            "sk4|bin|f32|cuda:sm89|ix32|grid|r{}|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
             MAX_RANK + 1
         );
         assert_eq!(
@@ -2825,19 +2831,19 @@ mod tests {
         // The ElementKind::U32 addition (Model-A gather/scatter contract wiring)
         // is codec-additive: the token codec is spelling-keyed, not
         // discriminant-keyed, so adding a dtype shifts no existing dtype's code.
-        // (The schema version is 3 for an UNRELATED reason — the sk3 gem
-        // precision coordinates; the U32 addition itself required no bump.)
-        // Pin the canonical f32 token verbatim so a future reshuffle that perturbs
-        // it is caught. Non-gem cells change ONLY the version prefix at sk3.
+        // (The schema version moves for UNRELATED reasons — sk3's gem precision
+        // coordinates, then sk4's respell + `(acc+mp)`; the U32 addition itself
+        // required no bump.) Pin the canonical f32 token verbatim so a future
+        // reshuffle that perturbs it is caught.
         assert_eq!(
-            STRUCTURE_KEY_VERSION, 3,
-            "codec sits at the KISS-aligned schema version 3 (sk3 RFC)"
+            STRUCTURE_KEY_VERSION, 4,
+            "codec sits at the KISS-aligned schema version 4 (sk4 schema event)"
         );
         let a = od(&[128, 256], &[256, 1], ElementKind::F32, 256);
         let k = structure_key(OpCategory::BinaryElementwise, &[a, a, a], ArchSku::Sm89);
         assert_eq!(
             k.to_token(),
-            "sk3|bin|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
+            "sk4|bin|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
             "the canonical f32 cell serializes to the KISS-aligned sk3 token"
         );
     }
@@ -2860,7 +2866,7 @@ mod tests {
         );
         let token = k.to_token();
         assert!(
-            token.starts_with("sk3|une|u32|"),
+            token.starts_with("sk4|une|u32|"),
             "the token spells u32: {token}"
         );
         let parsed = StructureKey::from_token(&token).expect("u32 token round-trips");
@@ -2900,7 +2906,7 @@ mod tests {
         // §6.7-0005: Baracuda emits `x<hex>` and never these, but a reader MUST ACCEPT
         // a conformant peer's rank-relative `rall` (all axes) / `rlast` (trailing axis)
         // sentinels rather than decline the whole token. They resolve against `rank`.
-        let base = "sk3|bin|f32|cuda:sm89|ix32|grid|r3|\
+        let base = "sk4|bin|f32|cuda:sm89|ix32|grid|r3|\
                     co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f";
         // `rall` @ rank 3 => all three axis bits => 0b111.
         let k_all = StructureKey::from_token(&format!("{base}|rall")).expect("rall accepted");
@@ -2912,7 +2918,7 @@ mod tests {
         let k_last = StructureKey::from_token(&format!("{base}|rlast")).expect("rlast accepted");
         assert_eq!(k_last.reduce_axes, AxisMask(0b100));
         // `rlast` on a rank-0 space is malformed (no trailing axis) => decline.
-        let r0 = "sk3|une|f32|cuda:sm89|ix32|grid|r0|co/00/v1/d16/f;co/00/v1/d16/f";
+        let r0 = "sk4|une|f32|cuda:sm89|ix32|grid|r0|co/00/v1/d16/f;co/00/v1/d16/f";
         assert_eq!(StructureKey::from_token(&format!("{r0}|rlast")), None);
     }
 
@@ -3060,13 +3066,13 @@ mod tests {
         let _ = StructureKey::from_token(&"a".repeat(200_000));
         // Over-MAX_RANK rank — declines at the rank guard (never reaches operands).
         let _ = StructureKey::from_token(&format!(
-            "sk3|bin|f32|cuda:sm89|ix32|grid|r250|{}|-",
+            "sk4|bin|f32|cuda:sm89|ix32|grid|r250|{}|-",
             "co/00/v4/d16/f;".repeat(50)
         ));
         // In-range rank + over-MAX_OPERANDS operand list — MUST reach parse_operand,
         // then decline gracefully.
         let _ = StructureKey::from_token(&format!(
-            "sk3|bin|f32|cuda:sm89|ix32|grid|r2|{}|-",
+            "sk4|bin|f32|cuda:sm89|ix32|grid|r2|{}|-",
             "co/00/v1/d16/f;".repeat(50)
         ));
         // A valid gemm base with only its 10th (contraction) field corrupted —

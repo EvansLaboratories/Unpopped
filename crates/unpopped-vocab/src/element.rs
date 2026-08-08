@@ -16,15 +16,15 @@
 //! - [`Element`] — the **plan-shaped** family that participates in the
 //!   `<T: Element>`-parameterized elementwise plans
 //!   (`UnaryPlan<T, N>`, `BinaryPlan<T, N>`, …). Today: `f16`, `bf16`,
-//!   `f32`, [`F32Strict`], `f64`, `i32`, `i64`, [`Bool`], [`Complex32`],
-//!   [`Complex64`]. Adds a `type Scalar: ScalarType` projection for the
+//!   `f32`, [`F32Strict`], `f64`, `i32`, `i64`, [`Bool`], [`Complex64`],
+//!   [`Complex128`]. Adds a `type Scalar: ScalarType` projection for the
 //!   kernel's α/β scalar type.
 //! - [`IntElement`] — sub-byte / byte-packed integer GEMM operand types
 //!   ([`S8`], [`U8`], [`S4`], [`U4`]). Distinct trait because the
 //!   int-GEMM kernels use an int32 accumulator with float α/β, a
 //!   programming model that doesn't share kernel shape with the
 //!   elementwise plans.
-//! - [`FpElement`] — 8-bit floating-point GEMM operands ([`Fp8E4M3`],
+//! - [`FpElement`] — 8-bit floating-point GEMM operands ([`Fp8E4M3FN`],
 //!   [`Fp8E5M2`]). sm_89+ only.
 //! - [`BinElement`] — 1-bit packed-byte binary GEMM operands ([`Bin`]).
 //!   Distinct programming model (`mma.sync ... .b1.b1.s32.xor.popc`).
@@ -109,7 +109,7 @@ mod index_output_sealed {
 ///
 /// `KernelDtype` is **wider** than [`Element`]: it covers the
 /// sub-byte / FP8 / packed-bit newtypes (`S4`, `U4`, `S8`, `U8`,
-/// `Fp8E4M3`, `Fp8E5M2`, `Bin`) that have their own kernel families
+/// `Fp8E4M3FN`, `Fp8E5M2`, `Bin`) that have their own kernel families
 /// and don't fit the `<T: Element>` plan shape. Every [`Element`],
 /// [`IntElement`], [`FpElement`], and [`BinElement`] type also
 /// implements `KernelDtype` (the sibling traits all use it as a
@@ -327,21 +327,21 @@ impl Element for Bool {
     type Scalar = f32;
 }
 
-impl sealed::Sealed for Complex32 {}
 impl sealed::Sealed for Complex64 {}
+impl sealed::Sealed for Complex128 {}
 
 /// Single-precision complex (interleaved real/imag pair of `f32`) as an
 /// elementwise kernel input element. Used by the FFT family (`fft`,
 /// `ifft`, `rfft` output / `irfft` input, etc.) for spectrum-domain
 /// tensors. The `Scalar` projection is `f32` (matches the real width).
-impl Element for Complex32 {
+impl Element for Complex64 {
     type Scalar = f32;
 }
 
 /// Double-precision complex (interleaved real/imag pair of `f64`) as an
-/// elementwise kernel input element. Sibling to [`Complex32`]; the
+/// elementwise kernel input element. Sibling to [`Complex64`]; the
 /// `Scalar` projection is `f64`.
-impl Element for Complex64 {
+impl Element for Complex128 {
     type Scalar = f64;
 }
 
@@ -401,26 +401,26 @@ unsafe impl DeviceRepr for Bool {}
 /// Used by the FFT op family (Milestone 6.4) as the element type for
 /// spectrum-domain tensors. Complex arithmetic is not a kernel concern
 /// at this layer — Rust callers build / inspect complex values via the
-/// `re` / `im` fields and pass `DeviceBuffer<Complex32>` directly to
+/// `re` / `im` fields and pass `DeviceBuffer<Complex64>` directly to
 /// the FFT plans, which reinterpret them as `cufftComplex` over the
 /// FFI boundary.
 ///
-/// Layout invariant: `Complex32 { re, im }` and `cufftComplex { x, y }`
+/// Layout invariant: `Complex64 { re, im }` and `cufftComplex { x, y }`
 /// share identical byte storage on every platform CUDA supports
 /// (`(f32, f32)` is 8-byte aligned, naturally padded). A
-/// `DeviceBuffer<Complex32>` can be reinterpreted as a
+/// `DeviceBuffer<Complex64>` can be reinterpreted as a
 /// `DeviceBuffer<cufftComplex>` via `view_as` without copying.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
-pub struct Complex32 {
+pub struct Complex64 {
     /// Real component.
     pub re: f32,
     /// Imaginary component.
     pub im: f32,
 }
 
-impl Complex32 {
-    /// Build a `Complex32` from real and imaginary `f32` parts.
+impl Complex64 {
+    /// Build a `Complex64` from real and imaginary `f32` parts.
     #[inline]
     pub const fn new(re: f32, im: f32) -> Self {
         Self { re, im }
@@ -430,30 +430,30 @@ impl Complex32 {
 /// Double-precision complex element. `#[repr(C)]` struct of two `f64`
 /// fields — ABI-compatible with cuFFT's `cufftDoubleComplex`, NumPy's
 /// `complex128`, and PyTorch's `torch.complex128`. Sibling to
-/// [`Complex32`].
+/// [`Complex64`].
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
-pub struct Complex64 {
+pub struct Complex128 {
     /// Real component.
     pub re: f64,
     /// Imaginary component.
     pub im: f64,
 }
 
-impl Complex64 {
-    /// Build a `Complex64` from real and imaginary `f64` parts.
+impl Complex128 {
+    /// Build a `Complex128` from real and imaginary `f64` parts.
     #[inline]
     pub const fn new(re: f64, im: f64) -> Self {
         Self { re, im }
     }
 }
 
-// SAFETY: Complex32 / Complex64 are #[repr(C)] structs of two FP fields
+// SAFETY: Complex64 / Complex128 are #[repr(C)] structs of two FP fields
 // each, with no padding (8-byte and 16-byte natural alignment), so they
 // satisfy DeviceRepr's invariants (no uninitialized bytes, no host-side
 // resource handles, byte-for-byte transferable between host and device).
-unsafe impl DeviceRepr for Complex32 {}
 unsafe impl DeviceRepr for Complex64 {}
+unsafe impl DeviceRepr for Complex128 {}
 
 // ============================================================================
 // Integer element family — sibling to Element
@@ -615,7 +615,7 @@ impl IntElement for U4 {}
 /// `#[repr(transparent)]` around `u8` storage — bit-compatible with
 /// `__nv_fp8_storage_t` on the CUDA side and with `float8::F8E4M3` on the
 /// host side. A `DeviceBuffer<u8>` (byte substrate) can be reinterpreted
-/// as `DeviceBuffer<Fp8E4M3>` via `view_as` without copying.
+/// as `DeviceBuffer<Fp8E4M3FN>` via `view_as` without copying.
 ///
 /// Numerical range: ±448 (max finite). One NaN encoding only
 /// (`S.1111.111`); E4M3 has **no infinities**. The conversion path
@@ -628,9 +628,9 @@ impl IntElement for U4 {}
 /// baracuda-kernels Phase 2.
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Fp8E4M3(pub u8);
+pub struct Fp8E4M3FN(pub u8);
 
-impl Fp8E4M3 {
+impl Fp8E4M3FN {
     /// Convert from `f32` using NVIDIA's `SATFINITE` semantics
     /// (round-half-to-even, clamp `|x|` to the E4M3 max-finite `448.0`).
     #[inline]
@@ -646,9 +646,9 @@ impl Fp8E4M3 {
     }
 }
 
-// SAFETY: Fp8E4M3 is #[repr(transparent)] over u8, which is DeviceRepr.
+// SAFETY: Fp8E4M3FN is #[repr(transparent)] over u8, which is DeviceRepr.
 // Same ABI, same Copy + 'static bounds.
-unsafe impl DeviceRepr for Fp8E4M3 {}
+unsafe impl DeviceRepr for Fp8E4M3FN {}
 
 /// 8-bit floating-point, E5M2 encoding (1 sign + 5 exponent + 2 mantissa,
 /// exponent bias 15).
@@ -659,7 +659,7 @@ unsafe impl DeviceRepr for Fp8E4M3 {}
 /// as `DeviceBuffer<Fp8E5M2>` via `view_as` without copying.
 ///
 /// Numerical range: ±57344 (max finite). IEEE-style infinity and NaN
-/// encodings (unlike [`Fp8E4M3`], which has neither). The conversion
+/// encodings (unlike [`Fp8E4M3FN`], which has neither). The conversion
 /// path matches NVIDIA's
 /// `__nv_cvt_float_to_fp8(x, __NV_SATFINITE, __NV_E5M2)`:
 /// round-half-to-even, saturating-to-max-finite on overflow.
@@ -708,10 +708,10 @@ unsafe impl DeviceRepr for Fp8E5M2 {}
 /// or `<T as KernelDtype>::KIND`.
 pub trait FpElement: KernelDtype + fp_sealed::Sealed {}
 
-impl fp_sealed::Sealed for Fp8E4M3 {}
+impl fp_sealed::Sealed for Fp8E4M3FN {}
 impl fp_sealed::Sealed for Fp8E5M2 {}
 
-impl FpElement for Fp8E4M3 {}
+impl FpElement for Fp8E4M3FN {}
 impl FpElement for Fp8E5M2 {}
 
 // ============================================================================
@@ -991,18 +991,18 @@ impl_kerneldtype! {
     i32        => I32,
     i64        => I64,
     Bool       => Bool,
-    Complex32  => Complex32,
     Complex64  => Complex64,
+    Complex128  => Complex128,
     // IntElement family (GEMM operand newtypes)
-    S8         => S8,
+    S8         => I8,
     U8         => U8,
-    S4         => S4,
+    S4         => I4,
     U4         => U4,
     // FpElement family (FP8)
-    Fp8E4M3    => Fp8E4M3,
+    Fp8E4M3FN    => Fp8E4M3FN,
     Fp8E5M2    => Fp8E5M2,
     // BinElement family
-    Bin        => Bin,
+    Bin        => B1,
 }
 
 /// Runtime tag for an [`Element`] or [`IntElement`].
@@ -1036,7 +1036,7 @@ pub enum ElementKind {
     /// through Ampere int8 tensor cores (`mma.sync m16n8k32` integer
     /// variant) with int32 accumulation; float `alpha` / `beta` let
     /// the kernel act as a dequantize-in-epilogue.
-    S8,
+    I8,
     /// Signed 16-bit integer, two's-complement (KISS-Classify §6.1).
     ///
     /// Storage-only in this crate today: no wrapper type and no tensor-core
@@ -1044,7 +1044,7 @@ pub enum ElementKind {
     /// set at exactly twenty-two tokens and forbids omitting any of them — a
     /// party that cannot lower a dtype must still **name** it, so it can
     /// decline it as a known dtype rather than as an unknown token.
-    S16,
+    I16,
     /// Unsigned 8-bit integer. Maps to the [`U8`] wrapper type. Same
     /// kernel family as [`S8`] with unsigned operands.
     U8,
@@ -1074,9 +1074,9 @@ pub enum ElementKind {
     Bool,
     /// 8-bit floating-point, E4M3 encoding (1 sign + 4 exponent + 3
     /// mantissa, bias 7, max-finite 448, no infinities). Maps to the
-    /// [`Fp8E4M3`] wrapper type. Routed through Ada / Hopper FP8 tensor
+    /// [`Fp8E4M3FN`] wrapper type. Routed through Ada / Hopper FP8 tensor
     /// cores (`mma.sync m16n8k32` FP8 variant) with F32 accumulation.
-    Fp8E4M3,
+    Fp8E4M3FN,
     /// FP8 E4M3, AMD `fnuz` variant (bias 8, no −0, no infinities) —
     /// **RESERVED**, token `e4m3fnuz`.
     ///
@@ -1092,7 +1092,7 @@ pub enum ElementKind {
     /// able to tell "you are newer than me" from "we agree, and this is
     /// parked".
     ///
-    /// It is byte-incompatible with [`Fp8E4M3`](Self::Fp8E4M3) — same width,
+    /// It is byte-incompatible with [`Fp8E4M3FN`](Self::Fp8E4M3) — same width,
     /// different bias and no infinities — so the two MUST NOT share a token
     /// and MUST NOT be substituted for one another.
     ///
@@ -1101,9 +1101,24 @@ pub enum ElementKind {
     /// 8-bit floating-point, E5M2 encoding (1 sign + 5 exponent + 2
     /// mantissa, bias 15, IEEE-754-compatible inf / NaN). Maps to the
     /// [`Fp8E5M2`] wrapper type. Same FP8 tensor-core path as
-    /// [`Fp8E4M3`] with the alternate operand tag
+    /// [`Fp8E4M3FN`] with the alternate operand tag
     /// (`.e5m2.e5m2.f32`).
     Fp8E5M2,
+    /// MX shared block **scale**, E8M0 — 8-bit, all exponent, no mantissa, and
+    /// **unsigned**: a scale carries no sign bit, so its width self-check is
+    /// `exp + mantissa = 8 + 0`, not the signed-float `1 + e + m`.
+    ///
+    /// A scale is an ordinary §6.1 dtype because it is an ordinary 8-bit value.
+    /// The MX *element* formats it scales (`f6e2m3`, `f6e3m2`, `f4`) are **not**
+    /// §6.1 rows — they are block-scoped element formats living in the
+    /// MX-encoding vocabulary, so they are deliberately absent from this enum
+    /// (maintainer ruling, 2026-08-08). Putting them here would let a bare
+    /// `structure_key` dtype position name `f4`, which is not a thing.
+    F8E8M0,
+    /// MX shared block **scale**, E6M2 — a finer-granularity sibling of
+    /// [`F8E8M0`](Self::F8E8M0): +2 mantissa, −2 exponent, so less dynamic range.
+    /// Also unsigned (`6 + 2 = 8`).
+    F8E6M2,
     /// FP8 E5M2, AMD `fnuz` variant (bias 16, no −0, no infinities) —
     /// **RESERVED**, token `e5m2fnuz`. Same terms as
     /// [`Fp8E4M3FNUZ`](Self::Fp8E4M3FNUZ): recognized, distinguished from
@@ -1115,7 +1130,7 @@ pub enum ElementKind {
     /// with int32 accumulation; float `alpha` / `beta` let the kernel
     /// act as a dequantize-in-epilogue (same convention as the int8
     /// family).
-    S4,
+    I4,
     /// Unsigned 4-bit integer — packed-pair storage. Maps to the [`U4`]
     /// wrapper type. Same kernel family as [`S4`] with the alternate
     /// operand tag (`.u4.u4.s32`).
@@ -1126,18 +1141,18 @@ pub enum ElementKind {
     /// (`mma.sync.aligned.m16n8k256.row.col.s32.b1.b1.s32.xor.popc`).
     /// Distinct programming model: the output is the raw popcount
     /// accumulator (s32), not a re-quantized b1.
-    Bin,
+    B1,
     /// Single-precision complex — interleaved real/imag pair of `f32`
-    /// (`#[repr(C)]`). Maps to the [`Complex32`] wrapper type. Used by
+    /// (`#[repr(C)]`). Maps to the [`Complex64`] wrapper type. Used by
     /// the FFT op family (Milestone 6.4) for spectrum-domain tensors.
     /// ABI-compatible with cuFFT's `cufftComplex`, NumPy's `complex64`,
     /// and PyTorch's `torch.complex64`.
-    Complex32,
+    Complex64,
     /// Double-precision complex — interleaved real/imag pair of `f64`.
-    /// Maps to the [`Complex64`] wrapper type. ABI-compatible with
+    /// Maps to the [`Complex128`] wrapper type. ABI-compatible with
     /// cuFFT's `cufftDoubleComplex`, NumPy's `complex128`, and
     /// PyTorch's `torch.complex128`.
-    Complex64,
+    Complex128,
     /// Unsigned 32-bit integer — an **index / address dtype only**, NOT a
     /// compute dtype. Added for the Model-A gather/scatter contract wiring:
     /// Fuel keys the `indices` operand of `gather` / `index_select` /
@@ -1213,9 +1228,9 @@ pub enum MathPrecision {
     /// FP8 E4M3 multiply-add (`mma.sync m16n8k32` FP8 variant) with F32
     /// accumulation. Inputs are E4M3 (8-bit), the accumulator is F32,
     /// and the epilogue cast saturates to the E4M3 max-finite (±448).
-    Fp8E4M3,
+    Fp8E4M3FN,
     /// FP8 E5M2 multiply-add. Same instruction family as
-    /// [`Fp8E4M3`](Self::Fp8E4M3) but with the E5M2 encoding (wider
+    /// [`Fp8E4M3FN`](Self::Fp8E4M3) but with the E5M2 encoding (wider
     /// exponent, narrower mantissa).
     Fp8E5M2,
     /// 4-bit integer multiply-add (`mma.sync m16n8k64` int4 variant)

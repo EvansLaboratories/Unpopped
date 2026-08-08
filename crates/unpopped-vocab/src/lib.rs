@@ -8,7 +8,7 @@
 //! - The [`KernelDtype`] umbrella trait + the [`Element`] / [`IntElement`] /
 //!   [`FpElement`] / [`BinElement`] / [`BiasElement`] hierarchy and the dtype
 //!   wrapper types ([`S8`], [`U8`], [`S4`], [`U4`], [`Bin`], [`F32Strict`],
-//!   [`Fp8E4M3`], [`Fp8E5M2`]).
+//!   [`Fp8E4M3FN`], [`Fp8E5M2`]).
 //! - Tag enums ([`ElementKind`], [`MathPrecision`], [`ArchSku`], [`LayoutSku`],
 //!   [`EpilogueKind`], [`ActivationKind`], [`OpCategory`], [`BackendKind`], the
 //!   op-family discriminants in [`ops`], …).
@@ -75,8 +75,8 @@ pub use dispatch::{
     Provenance, ReportedCandidate, merge, reported_entry, seed_winner, winner_of,
 };
 pub use element::{
-    BiasElement, BiasElementKind, Bin, BinElement, Bool, Complex32, Complex64, Element,
-    ElementKind, F32Strict, Fp8E4M3, Fp8E5M2, FpElement, IndexElement, IndexElementKind,
+    BiasElement, BiasElementKind, Bin, BinElement, Bool, Complex64, Complex128, Element,
+    ElementKind, F32Strict, Fp8E4M3FN, Fp8E5M2, FpElement, IndexElement, IndexElementKind,
     IndexOutputElement, IndexOutputKind, IntElement, KernelDtype, MathPrecision, S4, S8,
     ScalarType, U4, U8,
 };

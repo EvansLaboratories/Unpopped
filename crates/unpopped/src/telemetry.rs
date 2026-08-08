@@ -841,11 +841,11 @@ mod tests {
             // unparseable JSON
             r#"{"schema":1,"chosen":"#.to_string(),
             // wrong |-count token (too few fields) on a miss
-            r#"{"schema":1,"wanted":"sk3|bin","fallback":{"backend":"gen"},"count":1}"#.to_string(),
+            r#"{"schema":1,"wanted":"sk4|bin","fallback":{"backend":"gen"},"count":1}"#.to_string(),
             // empty JSON object (no chosen/wanted)
             "{}".to_string(),
             // non-ascii garbage token on a dispatch
-            r#"{"schema":1,"structure_key":"sk3|café","chosen":{"backend":"gen"}}"#.to_string(),
+            r#"{"schema":1,"structure_key":"sk4|café","chosen":{"backend":"gen"}}"#.to_string(),
             // schema over the max
             format!(r#"{{"schema":999,"structure_key":"{tok}","chosen":{{"backend":"gen"}}}}"#),
             // two concatenated objects on one line (no-concatenation guard)
@@ -891,11 +891,16 @@ mod tests {
 
     #[test]
     fn ingest_version_gate_skips_future_structure_key() {
-        // A syntactically valid future `sk4|…` token (one past the current v3):
-        // from_token would parse the version field, so ONLY the explicit version
-        // check (`key.version == STRUCTURE_KEY_VERSION`) rejects it.
-        let future = ew_token().replacen("sk3|", "sk4|", 1);
-        assert!(future.starts_with("sk4|"));
+        // A syntactically valid FUTURE token — one past the current schema. The
+        // version must be a real other version, not this one: an earlier revision
+        // of this test built it by rewriting the prefix to the then-current
+        // version, and the sk3->sk4 pass turned that into a no-op, so the fixture
+        // silently stopped constructing a future token at all.
+        let future = ew_token().replacen("sk4|", "sk5|", 1);
+        assert!(
+            future.starts_with("sk5|"),
+            "fixture must carry a FUTURE version"
+        );
         let line = format!(
             r#"{{"schema":1,"wanted":"{future}","fallback":{{"backend":"gen","op":"","dtypes":[],"kernel_source":"","kernel_revision_hash":""}},"count":1}}"#
         );

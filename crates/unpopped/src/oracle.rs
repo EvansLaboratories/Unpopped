@@ -205,7 +205,7 @@ impl TypedBuffer {
     #[must_use]
     pub fn from_i8(shape: &[i64], data: &[i8]) -> Self {
         let bytes: Vec<u8> = data.iter().map(|&v| v as u8).collect();
-        Self::new(ElementKind::S8, shape.to_vec(), dense_strides(shape), bytes)
+        Self::new(ElementKind::I8, shape.to_vec(), dense_strides(shape), bytes)
     }
 
     /// Dense buffer of `i16` (`S16`) values, little-endian.
@@ -213,7 +213,7 @@ impl TypedBuffer {
     pub fn from_i16(shape: &[i64], data: &[i16]) -> Self {
         let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_le_bytes()).collect();
         Self::new(
-            ElementKind::S16,
+            ElementKind::I16,
             shape.to_vec(),
             dense_strides(shape),
             bytes,
@@ -306,10 +306,10 @@ fn dense_strides(shape: &[i64]) -> Vec<i64> {
 /// Element byte size for the v1-supported dtypes.
 fn elem_size(dt: ElementKind) -> usize {
     match dt {
-        ElementKind::F16 | ElementKind::Bf16 | ElementKind::S16 | ElementKind::U16 => 2,
+        ElementKind::F16 | ElementKind::Bf16 | ElementKind::I16 | ElementKind::U16 => 2,
         ElementKind::F32 | ElementKind::F32Strict | ElementKind::I32 => 4,
         ElementKind::F64 | ElementKind::I64 => 8,
-        ElementKind::S8 | ElementKind::U8 | ElementKind::Bool => 1,
+        ElementKind::I8 | ElementKind::U8 | ElementKind::Bool => 1,
         other => panic!("oracle: unsupported dtype {other:?} (v1)"),
     }
 }
@@ -320,9 +320,9 @@ fn is_int(dt: ElementKind) -> bool {
         dt,
         ElementKind::I32
             | ElementKind::I64
-            | ElementKind::S8
+            | ElementKind::I8
             | ElementKind::U8
-            | ElementKind::S16
+            | ElementKind::I16
             | ElementKind::U16
             | ElementKind::Bool
     )
@@ -365,14 +365,14 @@ fn int_extreme(dt: ElementKind, most_negative: bool) -> i128 {
                 i128::from(i64::MAX)
             }
         }
-        ElementKind::S8 => {
+        ElementKind::I8 => {
             if most_negative {
                 -128
             } else {
                 127
             }
         }
-        ElementKind::S16 => {
+        ElementKind::I16 => {
             if most_negative {
                 i128::from(i16::MIN)
             } else {
@@ -523,8 +523,8 @@ fn raw_to_i128(bits: u64, dt: ElementKind) -> i128 {
     match dt {
         ElementKind::I32 => i128::from(bits as u32 as i32),
         ElementKind::I64 => i128::from(bits as i64),
-        ElementKind::S8 => i128::from(bits as u8 as i8),
-        ElementKind::S16 => i128::from(bits as u16 as i16),
+        ElementKind::I8 => i128::from(bits as u8 as i8),
+        ElementKind::I16 => i128::from(bits as u16 as i16),
         ElementKind::U8 | ElementKind::Bool => i128::from(bits as u8),
         ElementKind::U16 => i128::from(bits as u16),
         other => panic!("oracle: raw_to_i128 on non-int dtype {other:?}"),
@@ -540,8 +540,8 @@ fn raw_to_f64(bits: u64, dt: ElementKind) -> f64 {
         ElementKind::F64 => f64::from_bits(bits),
         ElementKind::I32
         | ElementKind::I64
-        | ElementKind::S8
-        | ElementKind::S16
+        | ElementKind::I8
+        | ElementKind::I16
         | ElementKind::U8
         | ElementKind::U16
         | ElementKind::Bool => raw_to_i128(bits, dt) as f64,
@@ -1014,8 +1014,8 @@ fn encode_float(f: f64, out: ElementKind) -> u64 {
         ElementKind::U8 | ElementKind::Bool => u64::from(f as u8),
         ElementKind::I64 => (f as i64) as u64,
         ElementKind::I32 => u64::from((f as i32) as u32),
-        ElementKind::S8 => u64::from((f as i8) as u8),
-        ElementKind::S16 => u64::from((f as i16) as u16),
+        ElementKind::I8 => u64::from((f as i8) as u8),
+        ElementKind::I16 => u64::from((f as i16) as u16),
         ElementKind::U16 => u64::from(f as u16),
         other => panic!("oracle: encode_float to unsupported dtype {other:?}"),
     }
@@ -1026,8 +1026,8 @@ fn encode_int(i: i128, out: ElementKind) -> u64 {
     match out {
         ElementKind::I32 => u64::from((i as i32) as u32),
         ElementKind::I64 => (i as i64) as u64,
-        ElementKind::S8 => u64::from((i as i8) as u8),
-        ElementKind::S16 => u64::from((i as i16) as u16),
+        ElementKind::I8 => u64::from((i as i8) as u8),
+        ElementKind::I16 => u64::from((i as i16) as u16),
         ElementKind::U8 | ElementKind::Bool => u64::from(i as u8),
         ElementKind::U16 => u64::from(i as u16),
         other => panic!("oracle: encode_int to unsupported dtype {other:?}"),
@@ -2261,8 +2261,8 @@ mod tests {
     // KILL-test: i8 (S8) add wraps at 127 (mod-2^8 store truncation).
     #[test]
     fn int8_add_wraps() {
-        let op = OpDef::elementwise("add8", 2, &[ElementKind::S8], input(0) + input(1));
-        let a = desc(&[2], &[1], ElementKind::S8);
+        let op = OpDef::elementwise("add8", 2, &[ElementKind::I8], input(0) + input(1));
+        let a = desc(&[2], &[1], ElementKind::I8);
         let k = key(OpCategory::BinaryElementwise, &[a, a, a]);
         let plan = build_plan(&op, &k);
         let ops = [a, a, a];

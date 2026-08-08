@@ -54,8 +54,8 @@ pub fn op_from_text(s: &str) -> Result<OpDef, String> {
 /// forces an update here (compile error), which is the intended coupling.
 fn ek_to_str(k: unpopped_vocab::ElementKind) -> &'static str {
     use unpopped_vocab::ElementKind::{
-        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E4M3FNUZ,
-        Fp8E5M2, Fp8E5M2FNUZ, I32, I64, S4, S8, S16, U4, U8, U16, U32, U64,
+        B1, Bf16, Bool, Complex64, Complex128, F8E6M2, F8E8M0, F16, F32, F32Strict, F64, Fp8E4M3FN,
+        Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4, U8, U16, U32, U64,
     };
     match k {
         F16 => "F16",
@@ -63,23 +63,25 @@ fn ek_to_str(k: unpopped_vocab::ElementKind) -> &'static str {
         F32 => "F32",
         F32Strict => "F32Strict",
         F64 => "F64",
-        S8 => "S8",
+        I8 => "I8",
         U8 => "U8",
         I32 => "I32",
         I64 => "I64",
         Bool => "Bool",
-        Fp8E4M3 => "Fp8E4M3",
+        Fp8E4M3FN => "Fp8E4M3FN",
         Fp8E5M2 => "Fp8E5M2",
         Fp8E4M3FNUZ => "Fp8E4M3FNUZ",
         Fp8E5M2FNUZ => "Fp8E5M2FNUZ",
-        S16 => "S16",
+        F8E8M0 => "F8E8M0",
+        F8E6M2 => "F8E6M2",
+        I16 => "I16",
         U16 => "U16",
         U64 => "U64",
-        S4 => "S4",
+        I4 => "I4",
         U4 => "U4",
-        Bin => "Bin",
-        Complex32 => "Complex32",
+        B1 => "B1",
         Complex64 => "Complex64",
+        Complex128 => "Complex128",
         U32 => "U32",
     }
 }
@@ -87,8 +89,8 @@ fn ek_to_str(k: unpopped_vocab::ElementKind) -> &'static str {
 /// Inverse of [`ek_to_str`].
 fn ek_from_str(s: &str) -> Result<unpopped_vocab::ElementKind, String> {
     use unpopped_vocab::ElementKind::{
-        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E4M3FNUZ,
-        Fp8E5M2, Fp8E5M2FNUZ, I32, I64, S4, S8, S16, U4, U8, U16, U32, U64,
+        B1, Bf16, Bool, Complex64, Complex128, F8E6M2, F8E8M0, F16, F32, F32Strict, F64, Fp8E4M3FN,
+        Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4, U8, U16, U32, U64,
     };
     Ok(match s {
         "F16" => F16,
@@ -96,23 +98,25 @@ fn ek_from_str(s: &str) -> Result<unpopped_vocab::ElementKind, String> {
         "F32" => F32,
         "F32Strict" => F32Strict,
         "F64" => F64,
-        "S8" => S8,
-        "S16" => S16,
+        "I8" => I8,
+        "I16" => I16,
         "U8" => U8,
         "U16" => U16,
         "U64" => U64,
         "Fp8E4M3FNUZ" => Fp8E4M3FNUZ,
         "Fp8E5M2FNUZ" => Fp8E5M2FNUZ,
+        "F8E8M0" => F8E8M0,
+        "F8E6M2" => F8E6M2,
         "I32" => I32,
         "I64" => I64,
         "Bool" => Bool,
-        "Fp8E4M3" => Fp8E4M3,
+        "Fp8E4M3FN" => Fp8E4M3FN,
         "Fp8E5M2" => Fp8E5M2,
-        "S4" => S4,
+        "I4" => I4,
         "U4" => U4,
-        "Bin" => Bin,
-        "Complex32" => Complex32,
+        "B1" => B1,
         "Complex64" => Complex64,
+        "Complex128" => Complex128,
         "U32" => U32,
         other => return Err(format!("unknown ElementKind `{other}`")),
     })

@@ -41,7 +41,7 @@ fn key_token(d: OperandDesc) -> String {
 #[test]
 fn quant_facts_do_not_reach_the_key_known_gap() {
     let mk = |q| {
-        let mut d = OperandDesc::new(1, &[1024], &[1], ElementKind::S4, 256);
+        let mut d = OperandDesc::new(1, &[1024], &[1], ElementKind::I4, 256);
         d.quant = q;
         d
     };

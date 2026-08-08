@@ -1727,9 +1727,9 @@ pub fn is_int_dtype(dt: ElementKind) -> bool {
         dt,
         ElementKind::I32
             | ElementKind::I64
-            | ElementKind::S8
+            | ElementKind::I8
             | ElementKind::U8
-            | ElementKind::S16
+            | ElementKind::I16
             | ElementKind::U16
     )
 }
@@ -1917,7 +1917,7 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
                     // the 8-bit worked example one width up.
                     if matches!(
                         dtype,
-                        ElementKind::U8 | ElementKind::S8 | ElementKind::S16 | ElementKind::U16
+                        ElementKind::U8 | ElementKind::I8 | ElementKind::I16 | ElementKind::U16
                     ) {
                         for (side, operand) in [("lhs", &**a), ("rhs", &**b)] {
                             if !(matches!(operand, ScalarExpr::Input(_))) {
@@ -2178,12 +2178,12 @@ mod int_reduction_predicate_gate_validate {
         let mut op = OpDef::reduction(
             "count_s8",
             1,
-            &[ElementKind::S8],
+            &[ElementKind::I8],
             input(0).binary(BinaryOp::CmpNe, konst(0.0)),
             ReduceOp::Sum,
         );
         op.out_dtype = Some(ElementKind::I64);
-        assert_int_op_admissibility(&op, ElementKind::S8); // must not panic
+        assert_int_op_admissibility(&op, ElementKind::I8); // must not panic
     }
 
     // Positive case, the other authored shape: `any` — a Max fold over a
@@ -2214,11 +2214,11 @@ mod int_reduction_predicate_gate_validate {
         let op = OpDef::reduction(
             "bad_threshold_s8",
             1,
-            &[ElementKind::S8],
+            &[ElementKind::I8],
             input(0).binary(BinaryOp::CmpGt, konst(5.0)),
             ReduceOp::Sum,
         );
-        let r = std::panic::catch_unwind(|| assert_int_op_admissibility(&op, ElementKind::S8));
+        let r = std::panic::catch_unwind(|| assert_int_op_admissibility(&op, ElementKind::I8));
         assert!(
             r.is_err(),
             "a non-0/1 Const threshold must still decline — the leaf-or-{{0,1}} \
@@ -2234,11 +2234,11 @@ mod int_reduction_predicate_gate_validate {
         let op = OpDef::reduction(
             "composed_operand_s8",
             1,
-            &[ElementKind::S8],
+            &[ElementKind::I8],
             (input(0) + input(0)).binary(BinaryOp::CmpNe, konst(0.0)),
             ReduceOp::Sum,
         );
-        let r = std::panic::catch_unwind(|| assert_int_op_admissibility(&op, ElementKind::S8));
+        let r = std::panic::catch_unwind(|| assert_int_op_admissibility(&op, ElementKind::I8));
         assert!(
             r.is_err(),
             "a composed Cmp* operand must still decline in the reduction \
@@ -2263,12 +2263,12 @@ mod int_reduction_predicate_gate_validate {
         let op = OpDef::reduction(
             "composed_predicate_s8",
             1,
-            &[ElementKind::S8],
+            &[ElementKind::I8],
             input(0).binary(BinaryOp::CmpNe, konst(0.0))
                 + input(0).binary(BinaryOp::CmpNe, konst(0.0)),
             ReduceOp::Sum,
         );
-        let r = std::panic::catch_unwind(|| assert_int_op_admissibility(&op, ElementKind::S8));
+        let r = std::panic::catch_unwind(|| assert_int_op_admissibility(&op, ElementKind::I8));
         assert!(
             r.is_err(),
             "a Cmp* reached as a sub-node of Add/Sub/Mul (not the reduction \
@@ -5571,8 +5571,8 @@ mod sort_gate_validate {
     #[should_panic(expected = "out of the v1 set")]
     fn s8_dtype_rejected() {
         // S8 is a v1 de-scope (the bespoke argsort covers small ints).
-        let sc = OpDef::row_sort("sort", ElementKind::S8, SortOrder::Asc);
-        let _ = build_plan(&sc, &sort_key(ElementKind::S8));
+        let sc = OpDef::row_sort("sort", ElementKind::I8, SortOrder::Asc);
+        let _ = build_plan(&sc, &sort_key(ElementKind::I8));
     }
 
     #[test]

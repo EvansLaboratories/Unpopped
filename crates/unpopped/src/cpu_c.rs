@@ -244,7 +244,7 @@ fn cpu_binary(op: BinaryOp, a: String, b: String, dtype: ElementKind) -> String 
     match dtype {
         ElementKind::F32 | ElementKind::F32Strict => binary_f32(op, a, b),
         ElementKind::F64 => binary_f64(op, a, b),
-        ElementKind::I32 | ElementKind::I64 | ElementKind::S8 | ElementKind::U8 => {
+        ElementKind::I32 | ElementKind::I64 | ElementKind::I8 | ElementKind::U8 => {
             binary_int(op, a, b, dtype)
         }
         other => panic!(
@@ -405,7 +405,7 @@ mod tests {
             ElementKind::F64,
             ElementKind::I32,
             ElementKind::I64,
-            ElementKind::S8,
+            ElementKind::I8,
             ElementKind::U8,
         ] {
             assert!(CpuC.supports_dtype(dt), "{dt:?} should be supported");

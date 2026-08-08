@@ -980,8 +980,8 @@ pub enum FillMode {
 /// Dtype coverage: `f32` (single precision) and `f64` (double
 /// precision) only. cuFFT's main API does not expose `f16` / `bf16`
 /// for native transforms. Callers needing reduced precision must cast
-/// on either side. Spectrum-domain tensors use [`crate::Complex32`] /
-/// [`crate::Complex64`] for the interleaved real/imag pairs.
+/// on either side. Spectrum-domain tensors use [`crate::Complex64`] /
+/// [`crate::Complex128`] for the interleaved real/imag pairs.
 ///
 /// Normalization: forward transforms are unnormalized; inverse
 /// transforms are normalized by `1/N` to match PyTorch's

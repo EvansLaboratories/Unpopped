@@ -938,7 +938,7 @@ mod tests {
         for dt in [
             ElementKind::I32,
             ElementKind::I64,
-            ElementKind::S8,
+            ElementKind::I8,
             ElementKind::U8,
         ] {
             assert!(dtype_compatible(&band, dt), "BitAnd legal at {dt:?}");
@@ -961,7 +961,7 @@ mod tests {
         for dt in [
             ElementKind::I32,
             ElementKind::I64,
-            ElementKind::S8,
+            ElementKind::I8,
             ElementKind::F32,
         ] {
             assert!(!dtype_compatible(&land, dt), "LogicalAnd illegal at {dt:?}");
@@ -973,14 +973,14 @@ mod tests {
         for dt in [
             ElementKind::I32,
             ElementKind::I64,
-            ElementKind::S8,
+            ElementKind::I8,
             ElementKind::U8,
         ] {
             assert!(!dtype_compatible(&div, dt), "Div illegal at {dt:?}");
         }
         let add = (input(0) + input(1)).0;
         assert!(dtype_compatible(&add, ElementKind::U8));
-        assert!(dtype_compatible(&add, ElementKind::S8));
+        assert!(dtype_compatible(&add, ElementKind::I8));
         let addk = (input(0) + crate::ir::konst(2.0)).0;
         assert!(dtype_compatible(&addk, ElementKind::F32));
         assert!(
@@ -1055,7 +1055,7 @@ mod tests {
         for dt in [
             ElementKind::I32,
             ElementKind::I64,
-            ElementKind::S8,
+            ElementKind::I8,
             ElementKind::U8,
         ] {
             assert!(!dtype_compatible(&body, dt), "select illegal at {dt:?}");

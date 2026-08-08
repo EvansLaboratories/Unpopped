@@ -1648,22 +1648,24 @@ fn blurb(op: &OpDef, key: &StructureKey, dtype: &str, is_fusion: bool) -> String
 /// Reconciled to FKC rev-4 §5 (review item E5): `Bool` → `U8` (Fuel has no Bool
 /// dtype — masks are U8), signed-8 → `I8`, `F32Strict` rides as `F32` (a
 /// precision mode, not a wire dtype). Packed sub-byte / quant payloads
-/// (`S4`/`U4`/`Bin`) ride the **FDX sidecar**, not a base dtype, so carry no
+/// (`I4`/`U4`/`B1`) ride the **FDX sidecar**, not a base dtype, so carry no
 /// token here; `Fp8E5M2` and complex have no §5 slot yet — all return `None`.
 fn fkc_dtype(dt: ElementKind) -> Option<&'static str> {
     use ElementKind::{
-        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E4M3FNUZ,
-        Fp8E5M2, Fp8E5M2FNUZ, I32, I64, S4, S8, S16, U4, U8, U16, U32, U64,
+        B1, Bf16, Bool, Complex64, Complex128, F8E6M2, F8E8M0, F16, F32, F32Strict, F64, Fp8E4M3FN,
+        Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4, U8, U16, U32, U64,
     };
     Some(match dt {
         F32 | F32Strict => "F32",
-        S16 => "S16",
+        I16 => "I16",
         U16 => "U16",
         U64 => "U64",
         // RESERVED (§6.1-0001): no computation semantics at this schema version,
         // so there is nothing to declare in a contract. `None` is a decline, not
         // an "unknown dtype" — the token is recognized, it simply cannot be used.
         Fp8E4M3FNUZ | Fp8E5M2FNUZ => return None,
+        // MX shared block scales: active §6.1 dtypes, but no FKC spelling yet.
+        F8E8M0 | F8E6M2 => return None,
         F16 => "F16",
         Bf16 => "BF16",
         F64 => "F64",
@@ -1674,44 +1676,46 @@ fn fkc_dtype(dt: ElementKind) -> Option<&'static str> {
         // DType::U32`). Emitted on the index slot of a gather/index_select
         // accept block so Fuel assembles the key `[T, U32, T]`.
         U32 => "U32",
-        S8 => "I8",        // §5: signed-8 spells I8
+        I8 => "I8",        // §5: signed-8 spells I8
         U8 | Bool => "U8", // §5 (B5/E5): Fuel has no Bool — masks are U8
-        Fp8E4M3 => "F8E4M3",
+        Fp8E4M3FN => "F8E4M3",
         // No §5 base-dtype slot: FDX-sidecar payloads + unlisted fp8 / complex.
-        Fp8E5M2 | S4 | U4 | Bin | Complex32 | Complex64 => return None,
+        Fp8E5M2 | I4 | U4 | B1 | Complex64 | Complex128 => return None,
     })
 }
 
 fn dtype_short(dt: ElementKind) -> &'static str {
     use ElementKind::{
-        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E4M3FNUZ,
-        Fp8E5M2, Fp8E5M2FNUZ, I32, I64, S4, S8, S16, U4, U8, U16, U32, U64,
+        B1, Bf16, Bool, Complex64, Complex128, F8E6M2, F8E8M0, F16, F32, F32Strict, F64, Fp8E4M3FN,
+        Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4, U8, U16, U32, U64,
     };
     match dt {
         F32 | F32Strict => "f32",
-        S16 => "s16",
+        I16 => "i16",
         U16 => "u16",
         U64 => "u64",
         // Spelled, not usable: this is a display/wire spelling and a reserved
         // dtype still HAS one (§6.1). Refusal happens where it is used.
-        Fp8E4M3FNUZ => "e4m3fnuz",
-        Fp8E5M2FNUZ => "e5m2fnuz",
+        Fp8E4M3FNUZ => "f8e4m3fnuz",
+        Fp8E5M2FNUZ => "f8e5m2fnuz",
+        F8E8M0 => "f8e8m0",
+        F8E6M2 => "f8e6m2",
         F16 => "f16",
         Bf16 => "bf16",
         F64 => "f64",
         I32 => "i32",
         I64 => "i64",
         U32 => "u32",
-        S8 => "s8",
+        I8 => "i8",
         U8 => "u8",
         Bool => "bool",
-        Fp8E4M3 => "e4m3",
+        Fp8E4M3FN => "e4m3",
         Fp8E5M2 => "e5m2",
-        S4 => "s4",
+        I4 => "s4",
         U4 => "u4",
-        Bin => "b1",
-        Complex32 => "c32",
-        Complex64 => "c64",
+        B1 => "b1",
+        Complex64 => "c32",
+        Complex128 => "c64",
     }
 }
 
@@ -1735,16 +1739,16 @@ fn vec_short(v: VecWidth) -> &'static str {
 
 fn dtype_size(dt: ElementKind) -> u32 {
     use ElementKind::{
-        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E4M3FNUZ,
-        Fp8E5M2, Fp8E5M2FNUZ, I32, I64, S4, S8, S16, U4, U8, U16, U32, U64,
+        B1, Bf16, Bool, Complex64, Complex128, F8E6M2, F8E8M0, F16, F32, F32Strict, F64, Fp8E4M3FN,
+        Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4, U8, U16, U32, U64,
     };
     match dt {
-        S4 | U4 | Bin => 1, // sub-byte: round up to a byte for the declared estimate
-        S8 | U8 | Bool | Fp8E4M3 | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ => 1,
-        F16 | Bf16 | S16 | U16 => 2,
+        I4 | U4 | B1 => 1, // sub-byte: round up to a byte for the declared estimate
+        I8 | U8 | Bool | Fp8E4M3FN | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 => 1,
+        F16 | Bf16 | I16 | U16 => 2,
         F32 | F32Strict | I32 | U32 => 4, // U32: 4-byte index dtype
-        F64 | I64 | U64 | Complex32 => 8,
-        Complex64 => 16,
+        F64 | I64 | U64 | Complex64 => 8,
+        Complex128 => 16,
     }
 }
 
@@ -1962,8 +1966,8 @@ mod tests {
 
     #[test]
     fn bundle_kisc_frames_each_admitted_contract_and_drops_the_heading() {
-        let c1 = "kernel: relu\nop_kind: ReluElementwise\naccept: sk3|une|f32\n".to_string();
-        let c2 = "kernel: add\nop_kind: AddElementwise\naccept: sk3|bin|f32\n".to_string();
+        let c1 = "kernel: relu\nop_kind: ReluElementwise\naccept: sk4|une|f32\n".to_string();
+        let c2 = "kernel: add\nop_kind: AddElementwise\naccept: sk4|bin|f32\n".to_string();
         let b = bundle_kisc("baracuda", "cuda", "rev0", &[c1.clone(), c2.clone()], false);
         // Provider front-matter still leads the file.
         assert!(b.starts_with("---\n"), "front matter leads: {b}");

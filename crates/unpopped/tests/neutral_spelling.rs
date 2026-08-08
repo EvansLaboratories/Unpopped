@@ -88,7 +88,7 @@ fn expected(dt: ElementKind) -> Spelling {
     match dt {
         // `short` / `unsigned short` are exact, portable C spellings with no
         // vendor intrinsic and no packing — genuinely neutral, unlike the halves.
-        F32 | F32Strict | F64 | I32 | I64 | S8 | U8 | U32 | S16 | U16 => Spelling::PortableC,
+        F32 | F32Strict | F64 | I32 | I64 | I8 | U8 | U32 | I16 | U16 => Spelling::PortableC,
 
         // THE GAP. Correct for CUDA, wrong for a module that calls itself neutral.
         // When the spelling seam lands these become `Declined` and the backend
@@ -100,15 +100,18 @@ fn expected(dt: ElementKind) -> Spelling {
         //     §6.1-0001 — recognized, distinguished from unknown, and never
         //     computed with at this schema version. Declining is REQUIRED here,
         //     not a gap.
-        //   * `S4`/`U4`/`Bin` are sub-byte packed; `Fp8E4M3`/`Fp8E5M2` need a
-        //     software codec; `Complex32`/`Complex64` need a struct ABI. All
+        //   * `I4`/`U4`/`B1` are sub-byte packed; `Fp8E4M3FN`/`Fp8E5M2` need a
+        //     software codec; `Complex64`/`Complex128` need a struct ABI. All
         //     are unimplemented rather than impossible.
         //   * `U64` is held back deliberately: `unsigned long long` is a fine C
         //     spelling, but the oracle's wrap is two's-complement SIGNED and f64
         //     cannot represent every u64, so claiming it before that audit would
         //     produce a silent wrong answer rather than a refusal.
-        Bool | Fp8E4M3 | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ | S4 | U4 | Bin | U64 | Complex32
-        | Complex64 => Spelling::Declined,
+        //   * `F8E8M0`/`F8E6M2` are the MX shared block SCALES — active §6.1
+        //     dtypes at sk4, but 8-bit floats with no portable C type, so the
+        //     neutral module declines them like the other FP8 rows.
+        Bool | Fp8E4M3FN | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 | I4 | U4 | B1
+        | U64 | Complex64 | Complex128 => Spelling::Declined,
     }
 }
 
@@ -143,14 +146,14 @@ fn names_a_vendor(s: &str) -> bool {
 /// everything with a portable ctype, minus `U32`, which is an index/address
 /// dtype rather than a compute dtype).
 const NEUTRAL_COMPUTE_DTYPES: &[ElementKind] = &[
-    ElementKind::S16,
+    ElementKind::I16,
     ElementKind::U16,
     ElementKind::F32,
     ElementKind::F32Strict,
     ElementKind::F64,
     ElementKind::I32,
     ElementKind::I64,
-    ElementKind::S8,
+    ElementKind::I8,
     ElementKind::U8,
 ];
 
@@ -170,22 +173,24 @@ fn scalar_ctype_spells_portable_c_except_the_two_known_half_arms() {
         ElementKind::Bf16,
         ElementKind::I32,
         ElementKind::I64,
-        ElementKind::S8,
-        ElementKind::S16,
+        ElementKind::I8,
+        ElementKind::I16,
         ElementKind::U8,
         ElementKind::U16,
         ElementKind::U32,
         ElementKind::U64,
         ElementKind::Fp8E4M3FNUZ,
         ElementKind::Fp8E5M2FNUZ,
+        ElementKind::F8E8M0,
+        ElementKind::F8E6M2,
         ElementKind::Bool,
-        ElementKind::Fp8E4M3,
+        ElementKind::Fp8E4M3FN,
         ElementKind::Fp8E5M2,
-        ElementKind::S4,
+        ElementKind::I4,
         ElementKind::U4,
-        ElementKind::Bin,
-        ElementKind::Complex32,
+        ElementKind::B1,
         ElementKind::Complex64,
+        ElementKind::Complex128,
     ];
 
     let mut vendor_spelled = Vec::new();
