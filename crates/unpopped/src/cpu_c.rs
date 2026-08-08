@@ -8,7 +8,7 @@
 //! launch harness. It is a third independent leg of the correctness triangle
 //! (CUDA emitter ↔ CPU-C emitter ↔ Rust oracle).
 //!
-//! ## What is reused vs. new (per `docs/backend-agnostic-emission-design.md`)
+//! ## What is reused vs. new (per `baracuda:docs/backend-agnostic-emission-design.md`)
 //!
 //! The expression seam is already the correct factoring: the body math lowers
 //! through the SAME language-neutral [`lower_dag`] the CUDA scalar path uses,

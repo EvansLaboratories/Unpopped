@@ -10,7 +10,7 @@
 //! (*Kernel-Seam Interop* §4.3) and the `ImplId` five-field tuple (FKC §4.11:
 //! `backend`, op, `dtypes`, `kernel_source`, `kernel_revision_hash` — five
 //! separable wire fields, never a hash). The admissibility predicate **is** the
-//! structure key (per `docs/design/kernel-specialization.md`), so each contract
+//! structure key (per `baracuda:docs/design/kernel-specialization.md`), so each contract
 //! carries its [`StructureKey::to_token`] verbatim under `accept` — the planner's
 //! miss signal stays honest by construction.
 //!
@@ -97,7 +97,7 @@ pub fn front_matter(provider: &str, backend_name: &str, revision_base: &str) -> 
 /// proofs) shares, so no caller can reintroduce that hazard by hand.
 ///
 /// The heading title is the contract's own `kernel:` name (matching Fuel's
-/// corpus, docs/kernel-contracts/cpu/elementwise-binary.fkc.md, where each
+/// corpus, baracuda:docs/kernel-contracts/cpu/elementwise-binary.fkc.md, where each
 /// `## <section>` names its kernel). The title is diagnostic only — the true
 /// kernel identity is the `kernel:`/`entry_point:` fields inside the block — so
 /// the exact heading text is not parsed; it need only exist and start `## `.
@@ -1518,7 +1518,7 @@ fn layout_token(key: &StructureKey, i: usize) -> &'static str {
 
 /// The five-flag `LayoutSpec` (Fuel `fkc/schema.rs` `LayoutSpec`, §4.1) for
 /// operand `i`, rendered as the inline-map form Fuel's corpus uses (verified
-/// against docs/kernel-contracts/cpu/elementwise-binary.fkc.md line 90). Fuel's
+/// against baracuda:docs/kernel-contracts/cpu/elementwise-binary.fkc.md line 90). Fuel's
 /// `TensorDesc.layout` is `Option<LayoutSpec>` (a struct of optional
 /// `required`/`accepted`/`rejected` string tri-states), so the pre-reconcile
 /// bare `layout: contiguous` string was a serde type error at import.

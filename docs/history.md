@@ -66,3 +66,20 @@ SHAs the same way.
 
 **Consequence:** never cross-reference between the two repositories by SHA.
 Refer to commits by message and date, which are stable across the carve.
+
+## Doc references the carve left behind
+
+Source comments cite design correspondence written before the split — recipe and
+KISC co-pin exchanges with Fuel, the IR-translation-hub and kernel-specialization
+designs, and the shape-oracle spec. **The code crossed; those documents did not.**
+They are Baracuda's records and stayed there.
+
+They are spelled `baracuda:docs/<name>.md` in this repo — a marker, not a path.
+Read them in the Baracuda working copy.
+
+This was found by resolving every `docs/*.md` reference in the source: 11 of 13
+pointed at nothing. A dangling reference is worse than an absent one, because it
+reads as "the rationale is written down somewhere" and sends the next person
+looking for a file that was never here. Two of the eleven turned out to hold the
+co-pin state for formats this crate still marks PROVISIONAL, so the cost was not
+hypothetical — it was the exact question being asked when they were found.

@@ -1,6 +1,6 @@
 //! The **dispatch table** — the measured routing oracle for a cell.
 //!
-//! `docs/design/kernel-specialization.md` §7 ("Excluding vendor-owned cells")
+//! `baracuda:docs/design/kernel-specialization.md` §7 ("Excluding vendor-owned cells")
 //! makes *measurement*, not a hand-blocklist, the durable rule for which
 //! implementation serves a given `(op, structure-key, dtype, arch)` cell. This
 //! module is the schema + pure decision logic for that rule:

@@ -1,5 +1,5 @@
 //! CUDA → IR frontend (Phase 4 spike) — the source-language side of the
-//! translation hub (`docs/design/ir-translation-hub.md`).
+//! translation hub (`baracuda:docs/design/ir-translation-hub.md`).
 //!
 //! Recognizes a **grid-stride elementwise** CUDA kernel and lifts its per-element
 //! body expression into the neutral IR (an [`OpDef`]), so an existing

@@ -7,7 +7,7 @@
 //! shape-side companion — a function from operand shapes to the output shape,
 //! exactly the §6.20-0001 formulation.
 //!
-//! See `docs/superpowers/specs/2026-07-23-shape-oracle-design.md`.
+//! See `baracuda:docs/superpowers/specs/2026-07-23-shape-oracle-design.md`.
 
 use crate::ir::{Access, AxisRole, OpDef, ReadIndex, SortLimit, WriteIndex};
 use unpopped_vocab::{Axis, DimExpr, MAX_RANK, ShapeExpr};

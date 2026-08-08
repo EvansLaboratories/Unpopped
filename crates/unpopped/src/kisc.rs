@@ -13,7 +13,7 @@
 //! KISS §6.11 pins the header's *fields* (magic `KISC`, `kiss-contract` kind, a
 //! version, `len=<N>`, `crc32=<…>`) but not yet the exact literal bytes. The
 //! spelling below is a concrete **strawman** proposed to Fuel for co-pinning
-//! (`docs/fuel-reply-kisc-framing-2026-07-15.md`) and to KISS §6.11 as a golden
+//! (`baracuda:docs/fuel-reply-kisc-framing-2026-07-15.md`) and to KISS §6.11 as a golden
 //! vector. It is isolated in [`kisc_frame`]/[`kisc_unframe`] so pinning the final
 //! form is a localized change.
 //!

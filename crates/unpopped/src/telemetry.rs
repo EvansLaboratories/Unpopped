@@ -10,7 +10,7 @@
 //!
 //! # Wire shape (the ratified 2026-07-03 FINAL, not the 08-doc §5.2 sketch)
 //!
-//! The record types match `docs/fuel-reply-dispatch-records-variants-2026-07-03.md`:
+//! The record types match `baracuda:docs/fuel-reply-dispatch-records-variants-2026-07-03.md`:
 //! `schema` is `u32`; the chosen/fallback implementation is a nested [`ImplId`]
 //! object (five **separable** fields — never concatenate or hash them);
 //! candidates carry a per-entry `latency_ns`; `count` is the aggregation count

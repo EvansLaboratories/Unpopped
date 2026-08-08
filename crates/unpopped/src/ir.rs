@@ -1178,7 +1178,7 @@ pub enum Access {
     /// node's growth axes.
     Contraction {
         /// Per-operand axis roles (the AxisRole vocabulary, wired here per the
-        /// item-10 spike / `docs/design/axis-role-vocabulary.md`).
+        /// item-10 spike / `baracuda:docs/design/axis-role-vocabulary.md`).
         axes: ContractionAxes,
         /// K-accumulation policy.
         accum: AccumSpec,

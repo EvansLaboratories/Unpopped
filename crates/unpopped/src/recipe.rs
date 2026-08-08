@@ -72,7 +72,7 @@ pub fn semantics_dag(op: &OpDef) -> Option<String> {
         // bias/activation composes as ordinary elementwise nodes over it (the bias
         // rides `in2` = Bind(2)). Roles come from the op's `ContractionAxes` — no
         // rank/key dependency. `matmul` attr surface is a co-pin strawman
-        // (docs/fuel-ask-recipe-copin-2026-07-16.md).
+        // (baracuda:docs/fuel-ask-recipe-copin-2026-07-16.md).
         Access::Contraction { axes, epilogue, .. } => {
             let node = format!("matmul[{}](in0, in1)", contraction_roles(axes));
             expr_to_recipe(epilogue, &[node])
@@ -603,7 +603,7 @@ mod tests {
 
     #[test]
     fn coord_and_param_map_to_the_resolved_source_ops() {
-        // Fuel co-pin (docs/fuel-reply-recipe-schema-2026-07-15.md): coord → the
+        // Fuel co-pin (baracuda:docs/fuel-reply-recipe-schema-2026-07-15.md): coord → the
         // KISS-Ops `iota{axis}` source op, param → `runtime_scalar{slot}` — both
         // keep the node schema closed to Op|Bind (the attr rides the parens, as
         // `const(v)` already does). Previously honest misses.
@@ -756,7 +756,7 @@ mod tests {
         // Mean = a `sum` fold + a `div`-by-extent finalize (Fuel's `MeanDim`
         // decomposes exactly this way). The divisor is the shape-derived reduced-axis
         // extent — the `reduced_count(<axes>)` source-op leaf CONFIRMED by Fuel
-        // (docs/fuel-reply-reduce-extent-2026-07-18.md), NOT a literal `const`
+        // (baracuda:docs/fuel-reply-reduce-extent-2026-07-18.md), NOT a literal `const`
         // (`StructureKey` carries size *classes*, not literal extents). The extent
         // leaf carries the SAME reduced-axis token as the fold node (byte-identical
         // axis field per Fuel's refinement).

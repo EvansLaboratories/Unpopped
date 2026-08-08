@@ -2,7 +2,7 @@
 //!
 //! A [`StructureKey`] is the canonical identity of an *input/output layout
 //! class* — the join token shared across three consumers (per the Baracuda↔Fuel
-//! boundary contract in `docs/design/kernel-specialization.md`):
+//! boundary contract in `baracuda:docs/design/kernel-specialization.md`):
 //!
 //! 1. **runtime dispatch** — pick the specialized kernel registered for a key;
 //! 2. **FKC predicate generation** — a generated kernel contract's admissibility
@@ -903,7 +903,7 @@ fn derive_contraction(op: OpCategory, operands: &[OperandDesc]) -> Option<Contra
 /// whose output == input shape leaves no size-1 trace) stay `EMPTY`; those carry
 /// the reduced axis explicitly at the seam (item 05). `EMPTY` is thus reserved for
 /// "non-reduction / undetermined", never overloaded as a "last-axis" sentinel.
-/// See `docs/design/axis-role-vocabulary.md` — this is the `{Reduced}` projection.
+/// See `baracuda:docs/design/axis-role-vocabulary.md` — this is the `{Reduced}` projection.
 fn derive_reduce_axes(op: OpCategory, operands: &[OperandDesc]) -> AxisMask {
     if op != OpCategory::Reduction || operands.len() < 2 {
         return AxisMask::EMPTY;
