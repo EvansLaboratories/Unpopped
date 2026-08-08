@@ -23,6 +23,7 @@ use unpopped_vocab::ElementKind;
 /// [`LiftError::refusal`]); the string on the two residue variants names the
 /// construct so the un-lifted remainder stays honest.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LiftError {
     /// No `__global__` kernel in the source. (not-a-kernel)
     NotAKernel,
@@ -37,6 +38,24 @@ pub enum LiftError {
     /// language (shared memory, atomics, sync, library calls, inline asm, warp
     /// shuffles). (inexpressible-residue)
     Inexpressible(String),
+    /// The body lifted cleanly, but a dtype the CALLER declared cannot honour it.
+    ///
+    /// Distinct from [`Inexpressible`](Self::Inexpressible) on purpose, and the
+    /// distinction is actionable: `Inexpressible` means *keep this in the source
+    /// language*, while this means *your dtype declaration is wrong — drop the
+    /// dtype and retry*. The lift itself succeeded.
+    ///
+    /// `name` and `dtypes` are caller-supplied at intake, so the declared set is
+    /// an unvalidated input. Checking it here rather than at generation matters
+    /// for a catalog: an op is stored once and generated on demand, so an
+    /// unhonourable declaration would otherwise be a broken entry discovered by
+    /// whoever first requests that cell.
+    DtypeNotAdmissible {
+        /// The declared dtype the body cannot honour.
+        dtype: ElementKind,
+        /// The admissibility gate's own reason.
+        detail: String,
+    },
 }
 
 /// The KISS-Consume refusal category of a [`LiftError`] — machine-actionable, so a
@@ -64,6 +83,19 @@ impl LiftError {
             LiftError::NotElementwise => ConsumeRefusal::WrongOpClass,
             LiftError::Unrecognized(_) => ConsumeRefusal::UnrecognizedButExpressible,
             LiftError::Inexpressible(_) => ConsumeRefusal::InexpressibleResidue,
+            // Dtype-SCOPED inexpressibility. At the declared dtype the body
+            // genuinely has no neutral-IR representation — the plan gate rejects
+            // every `UnaryOp`, float binary fn and `Cmp*` at an integer dtype —
+            // so this is the honest category even though the same body is
+            // perfectly expressible at another dtype.
+            //
+            // Worth noting rather than papering over: KISS-Consume's four
+            // categories cannot distinguish "this construct is inexpressible"
+            // from "this construct is fine, your declared dtype is wrong". The
+            // second is actionable by the caller (drop the dtype, retry) and the
+            // first is not. That is a vocabulary observation for KISS, not a
+            // licence to mint a fifth category here.
+            LiftError::DtypeNotAdmissible { .. } => ConsumeRefusal::InexpressibleResidue,
         }
     }
 }
@@ -111,6 +143,23 @@ pub fn lift_elementwise(
     p.expect_end()?;
     let n_inputs = p.max_input.map_or(0, |m| m + 1);
     let op = OpDef::elementwise(name, n_inputs, dtypes, Expr(body));
+    // Validate the CALLER's dtype declaration against the body that was actually
+    // lifted. Both admissibility gates, the same pair `try_build_plan` runs —
+    // calling one of two is how a second, drifting copy of a rule begins.
+    for &dt in dtypes {
+        if let Err(e) = crate::plan::check_no_half_nextafter(&op, dt) {
+            return Err(LiftError::DtypeNotAdmissible {
+                dtype: dt,
+                detail: e.to_string(),
+            });
+        }
+        if let Err(e) = crate::plan::check_int_op_admissibility(&op, dt) {
+            return Err(LiftError::DtypeNotAdmissible {
+                dtype: dt,
+                detail: e.to_string(),
+            });
+        }
+    }
     Ok(Lifted { op, n_inputs })
 }
 
