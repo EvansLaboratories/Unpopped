@@ -24,6 +24,27 @@
 //! (it reads the same `build_plan` output the emitter does). It complements — does
 //! not replace — the hand/bespoke oracles and the `build_plan`-direct gate tests.
 //!
+//! ## Which of this module's rules a BACKEND must reproduce
+//!
+//! Much of what follows is phrased as "the emitter's inner loop order",
+//! "mirroring the emitter", "the emitter tests `((float)(c)) != 0.0f`". That was
+//! sufficient while CUDA was the only backend — "what it does" and "what is
+//! required" were the same sentence. They are not any more, and the two kinds of
+//! statement look identical in this source.
+//!
+//! `docs/conformance.md` separates them: which rules are NORMATIVE (a backend
+//! that differs produces output the oracle rejects), which are INCIDENTAL
+//! (mirrored from CUDA, absorbed by the tolerant comparator, free to differ), and
+//! which are OPEN. Two worth knowing before writing a backend:
+//!
+//! - **Discontinuities decide in the COMPUTE dtype**, never in wider precision.
+//!   A tolerance cannot absorb a discontinuity — deciding `x > 0` in f64 where
+//!   the kernel decides in f32 selects the other branch, not a nearby value.
+//! - **`Max`/`Min` propagate NaN**, which is *not* C `fmax` / IEEE `maxNum`
+//!   semantics and *not* GLSL `max`. Every C-family target offers a convenient
+//!   built-in with the opposite behavior, and the difference is invisible on all
+//!   NaN-free input.
+//!
 //! ## Precision posture
 //!
 //! Correctness/precision over speed: arithmetic accumulates in `f64` (never the
