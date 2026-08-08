@@ -25,12 +25,12 @@
 //! inward e-graph optimizer (§5.1 permits it), per-operand dtypes, and the
 //! telemetry trigger are the growth path.
 
+use crate::Backend;
 use crate::contract::contract;
 use crate::ir::{Access, BinaryOp, OpDef, ScalarExpr, UnaryOp};
 use crate::link::{LinkEntry, link_entry};
 use crate::optimize::optimize;
 use crate::pattern::{PatternError, PatternNode, derive_pattern, to_fkc};
-use crate::{Backend, generate};
 use unpopped_vocab::{ArchSku, ElementKind, MAX_OPERANDS, OpCategory, OperandDesc, structure_key};
 
 /// A JIT synthesis request from Fuel (the strategist).
@@ -135,6 +135,17 @@ pub struct Recipe {
 pub enum JitError {
     /// A region op name outside the increment-1 IR vocabulary.
     UnsupportedOp(String),
+    /// The backend refused to lower the plan, and said why.
+    ///
+    /// This is the decline that used to be a **panic across the trust boundary**.
+    /// The pre-screen below (`supports_dtype` + the former `dtype_compatible`)
+    /// covered dtype and op legality but never *schedule* legality, so an
+    /// ordinary request whose cell the planner vectorized past what the backend
+    /// emits unwound into the caller's process instead of declining. Carrying
+    /// [`crate::backend::LowerError`] verbatim keeps the specificity this enum's
+    /// doc calls load-bearing — the caller learns it was the schedule, not the
+    /// dtype, and can re-request a different cell.
+    BackendDeclined(crate::backend::LowerError),
     /// Wrong tensor-operand arity for a region op.
     Arity {
         /// The op.
@@ -325,7 +336,11 @@ fn synthesize_op(
         body: optimize(&op.body),
         ..op.clone()
     };
-    let kernel = generate(&kernel_op, &key, backend);
+    // `try_generate`, NOT `generate`. This is the trust boundary: a backend that
+    // cannot lower the cell must come back as a typed decline, and `generate`
+    // turns that refusal into a panic. Pinned by `tests/jit_never_unwinds.rs`.
+    let kernel =
+        crate::try_generate(&kernel_op, &key, backend).map_err(JitError::BackendDeclined)?;
 
     let artifact = compiler
         .compile(&kernel.source, &kernel.name, max_compile_ms)

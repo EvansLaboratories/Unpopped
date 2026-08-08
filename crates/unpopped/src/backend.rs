@@ -259,6 +259,80 @@ impl Variant {
     }
 }
 
+/// Why a [`Backend`] declined to lower a plan.
+///
+/// # Why lowering refuses in-band rather than panicking
+///
+/// A backend's legality surface is **its own**, and it is the only thing that
+/// knows it. Before this existed, `lower` panicked, and the JIT kept the
+/// `Synthesizer` boundary safe by pre-screening requests against
+/// `jit::dtype_compatible` — a mirror of the neutral AOT plan gate, maintained
+/// so a plan-gate `assert!` could not unwind into the caller.
+///
+/// That mirror covered *dtype and op* legality. It did not cover **schedule**
+/// legality, because nothing in it asked whether the backend could emit the cell
+/// the planner chose. A `u8` `Add` over 256 aligned elements plans to
+/// `Vectorized { width: 8 }`, which the CpuC v1 emitter does not serve — so the
+/// simplest region anyone would write panicked straight through `synthesize`.
+/// Pinned by `tests/jit_never_unwinds.rs`.
+///
+/// The lesson is about *dimension*, not about vendors: a pre-screen can only
+/// cover the axes someone thought to enumerate, whereas the backend refusing
+/// in-band covers every axis by construction, because it is the thing that would
+/// otherwise have failed.
+///
+/// The variants are **derived from the refusals that already existed** in
+/// `cpu_c` and `slang` rather than invented, so every previous panic has a
+/// natural home.
+///
+/// `detail` carries the human-readable reason the panic used to carry; it is for
+/// diagnostics, never for matching. Callers that need to branch match the
+/// variant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LowerError {
+    /// No scalar spelling for this dtype at all (`cpu_c` declining f16/bf16).
+    UnsupportedDtype {
+        /// The dtype the backend cannot spell.
+        dtype: ElementKind,
+        /// Why, in the backend's own words.
+        detail: String,
+    },
+    /// The backend cannot emit this schedule (a scalar-only emitter handed a
+    /// `Vectorized`/`Strided` cell).
+    UnsupportedSchedule {
+        /// Why, in the backend's own words.
+        detail: String,
+    },
+    /// No spelling for an operation or expression node — an op with no intrinsic
+    /// on this target, or one used at a dtype it has no lowering for.
+    UnsupportedOp {
+        /// Why, in the backend's own words.
+        detail: String,
+    },
+    /// The plan's *shape* is outside what this backend emits — multi-output, a
+    /// runtime scalar param, a hetero output dtype.
+    UnsupportedPlanShape {
+        /// Why, in the backend's own words.
+        detail: String,
+    },
+}
+
+impl std::fmt::Display for LowerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedDtype { dtype, detail } => {
+                write!(f, "unsupported dtype {dtype:?}: {detail}")
+            }
+            Self::UnsupportedSchedule { detail } => write!(f, "unsupported schedule: {detail}"),
+            Self::UnsupportedOp { detail } => write!(f, "unsupported op: {detail}"),
+            Self::UnsupportedPlanShape { detail } => write!(f, "unsupported plan shape: {detail}"),
+        }
+    }
+}
+
+impl std::error::Error for LowerError {}
+
 /// Lowers a neutral [`crate::plan::KernelPlan`] to concrete kernel source.
 pub trait Backend {
     /// Short backend identifier / target language (e.g. `"cuda"`, `"cpu_c"`,
@@ -274,8 +348,20 @@ pub trait Backend {
     /// backend returns `"baracuda"`; the generator's own in-tree reference backends
     /// (CpuC / Slang) return the generator's name.
     fn provider(&self) -> &str;
-    /// Lower a kernel plan to source.
-    fn lower(&self, plan: &crate::plan::KernelPlan<'_>) -> GeneratedKernel;
+    /// Lower a kernel plan to source, or say why it cannot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LowerError`] when this backend has no lowering for the plan —
+    /// an unspellable dtype, a schedule it does not emit, an op with no
+    /// intrinsic on this target, or a plan shape outside its scope.
+    ///
+    /// **Refuse rather than approximate.** A backend that cannot spell something
+    /// exactly must return `Err`, never fall through to a default that compiles
+    /// but computes something else. That trades a visible refusal for a silent
+    /// numerical bug, which is strictly worse — see the "decline, do not fall
+    /// through" note in `tests/neutral_spelling.rs`.
+    fn lower(&self, plan: &crate::plan::KernelPlan<'_>) -> Result<GeneratedKernel, LowerError>;
     /// Whether the backend can lower `dtype` to a scalar type at all. The JIT
     /// trust boundary checks this *before* [`Backend::lower`] so an unlowerable
     /// dtype is a typed decline, not a lowering panic. (AOT op authoring is
@@ -296,8 +382,17 @@ pub trait Backend {
     /// pass the same validation gate as the default (nvrtc/nvcc compile +
     /// numeric oracle + sanitizer where the schedule warrants) before it is
     /// shipped or ranked by the bench gate.
-    fn lower_variants(&self, _plan: &crate::plan::KernelPlan<'_>) -> Vec<Variant> {
-        Vec::new()
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LowerError`] on the same terms as [`Backend::lower`]. Note that
+    /// a backend with no variants returns `Ok(vec![])` — an empty variant set is
+    /// a valid answer, not a refusal.
+    fn lower_variants(
+        &self,
+        _plan: &crate::plan::KernelPlan<'_>,
+    ) -> Result<Vec<Variant>, LowerError> {
+        Ok(Vec::new())
     }
 }
 

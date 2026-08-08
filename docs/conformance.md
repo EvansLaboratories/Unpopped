@@ -92,15 +92,36 @@ does not get to choose: naga 29.0.1 lowers float `max` to `GlslStd450Op::FMax`
 (`src/back/spv/subgroup.rs:82`). So a WGSL/GLSL → naga → SPIR-V path violates
 this rule today regardless of what the backend author writes.
 
-**(b) Emitting the longhand ternary at source level may not survive.** The rule
-is implemented by writing the ternary and assuming no compiler in the chain
-contracts it back into a max instruction. That assumption is unverified **on
-every target, including CUDA** — there the chain is nvcc → ptxas → driver JIT,
-and PTX `max.f32` is NaN-suppressing without the `.NaN` modifier. Every golden in
-this repo compares *source text*, which is exactly the layer at which the ternary
-is still present, so nothing currently tests it. `tests/cpu_end_to_end.rs`
-compiles and runs a `max` kernel with NaN input specifically to settle this for
-the portable-C path; any new target needs the equivalent.
+**(b) Emitting the longhand ternary at source level may not survive — now
+measured on both reference targets, not assumed.** The rule is implemented by
+writing the ternary and assuming no compiler in the chain contracts it back into
+a max instruction. Every golden in this repo compares *source text*, which is
+exactly the layer at which the ternary is still present, so the goldens are
+structurally blind to the assumption they rest on.
+
+Both reference targets have now been checked by compiling and running:
+
+| target | chain | result |
+|---|---|---|
+| portable C | host `cl` at `/O2` | NaN propagates — `tests/cpu_end_to_end.rs` |
+| CUDA | nvrtc → PTX → driver JIT at `-O3` | NaN propagates — verified on RTX 4070, 2026-08-08 |
+
+The CUDA leg matters because PTX `max.f32` *is* NaN-suppressing without the
+`.NaN` modifier, so the contraction was a live possibility rather than a
+theoretical one. It does not occur. Baracuda holds that check as a standing
+guard (`baracuda-kernels-bench/tests/max_nan_propagation.rs`), and it migrates
+into the `unpopped-cuda` suite with the emitter.
+
+**Any new target needs its own.** This is not a property that transfers: it is a
+statement about one toolchain's optimizer, and it must be re-measured per target
+rather than inherited. A source-text golden cannot carry it.
+
+Two harness notes worth reusing, one from each leg. The never-wrote sentinel
+**must be finite** when NaN is the expected output — NaN cannot serve as both the
+answer and the not-written marker (CUDA leg used `-777.0`; the C leg instead
+mixes NaN and finite lanes in one kernel). And assert the emitted source contains
+no `fmaxf` *first*, so the run is known to be testing the ternary rather than the
+intrinsic.
 
 **Achievability is target-conditional — see OPEN-4.** On Vulkan this rule may be
 unsatisfiable *by any lowering*, so it is a requirement a backend must meet where

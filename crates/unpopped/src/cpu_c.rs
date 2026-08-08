@@ -40,7 +40,7 @@
 //!   scatter/offset/coord-free Elementwise cell, accepting only it inherently
 //!   excludes every complex case.
 
-use crate::backend::{Backend, GeneratedKernel, Lowering, const_lit, lower_dag};
+use crate::backend::{Backend, GeneratedKernel, LowerError, Lowering, const_lit, lower_dag};
 use crate::cfamily::{
     assert_no_int_div_or_const, binary_f32, binary_f64, binary_int, dtype_tag, out_ctype_of,
     param_args, param_ctype, scalar_ctype, select_f32, select_f64, store_expr_of, unary_f32,
@@ -78,28 +78,32 @@ impl Backend for CpuC {
         ) && scalar_ctype(dtype).is_some()
     }
 
-    fn lower(&self, plan: &KernelPlan<'_>) -> GeneratedKernel {
-        // Dtype guard — the AOT emitter backstop beside the JIT `supports_dtype`
-        // trust boundary (a declined dtype is a typed decline there; this catches
-        // a direct AOT `lower` on an unlowerable dtype). F16/Bf16/U32 miss here.
-        assert!(
-            self.supports_dtype(plan.dtype),
-            "cpu_c backend v1: unsupported dtype {:?} — f16/bf16 are declined (no CPU half \
-             codec yet); f32/f64 + integer compute dtypes only",
-            plan.dtype
-        );
+    fn lower(&self, plan: &KernelPlan<'_>) -> Result<GeneratedKernel, LowerError> {
+        // Dtype guard. This is now the ONE place the cpu_c legality surface is
+        // stated — the JIT no longer keeps its own copy (it used to pre-check
+        // against a CUDA-derived table applied to every backend).
+        if !self.supports_dtype(plan.dtype) {
+            return Err(LowerError::UnsupportedDtype {
+                dtype: plan.dtype,
+                detail: "cpu_c backend v1: f16/bf16 are declined (no CPU half codec yet); \
+                         f32/f64 + integer compute dtypes only"
+                    .to_string(),
+            });
+        }
         let ctype =
             scalar_ctype(plan.dtype).expect("supports_dtype gate guarantees a scalar ctype");
         // v1 mirrors the single-store `emit_scalar`. A MULTI-output elementwise op
         // can also key `Schedule::Scalar` (the CUDA `emit_scalar_multi` path); the
         // N-store CPU emitter is a follow-up, so reject it honestly here.
-        assert!(
-            plan.n_outputs == 1,
-            "cpu_c backend v1: single-output only (the N-store multi-output emitter is a \
-             follow-up); op '{}' has {} outputs",
-            plan.op_name,
-            plan.n_outputs
-        );
+        if plan.n_outputs != 1 {
+            return Err(LowerError::UnsupportedPlanShape {
+                detail: format!(
+                    "cpu_c backend v1: single-output only (the N-store multi-output emitter \
+                     is a follow-up); op '{}' has {} outputs",
+                    plan.op_name, plan.n_outputs
+                ),
+            });
+        }
         // Independent int Div/Const backstop, REUSED from the CUDA emitter (same
         // dtype-blind hazard: a `Const` is spelled as an f64 literal, infix `Div`
         // is `/` — both device/host dangerous at an integer dtype). The plan gate
@@ -114,14 +118,16 @@ impl Backend for CpuC {
             assert_no_int_div_or_const(plan.body, plan.dtype, false, false);
         }
         match plan.schedule {
-            Schedule::Scalar => emit_scalar_cpu(plan, ctype),
-            other => panic!(
-                "cpu_c backend v1: Elementwise (the scalar contiguous path) ONLY — got \
-                 schedule {other:?}. Vectorized / Strided / Reduction / RowReduce / \
-                 Contraction / Scan / Window / RowSort / Im2Col are follow-ups; the scalar \
-                 schedule is chosen precisely for the contiguous, single-output, non-strided \
-                 Elementwise cell this v1 serves."
-            ),
+            Schedule::Scalar => Ok(emit_scalar_cpu(plan, ctype)),
+            other => Err(LowerError::UnsupportedSchedule {
+                detail: format!(
+                    "cpu_c backend v1: Elementwise (the scalar contiguous path) ONLY — got \
+                     schedule {other:?}. Vectorized / Strided / Reduction / RowReduce / \
+                     Contraction / Scan / Window / RowSort / Im2Col are follow-ups; the \
+                     scalar schedule is chosen precisely for the contiguous, single-output, \
+                     non-strided Elementwise cell this v1 serves."
+                ),
+            }),
         }
     }
 }

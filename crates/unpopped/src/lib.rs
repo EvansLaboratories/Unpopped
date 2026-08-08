@@ -130,9 +130,32 @@ fn provenance_for(key: &StructureKey, backend: &dyn Backend) -> backend::Provena
 /// directly does not. Anything that caches or ships a kernel should require it.
 #[must_use]
 pub fn generate(op: &OpDef, key: &StructureKey, backend: &dyn Backend) -> GeneratedKernel {
-    let mut k = backend.lower(&build_plan(op, key));
+    try_generate(op, key, backend)
+        .unwrap_or_else(|e| panic!("{} backend declined to lower: {e}", backend.name()))
+}
+
+/// [`generate`], but returns the backend's refusal instead of panicking.
+///
+/// This is the form a JIT or any untrusted-input caller wants: a backend that
+/// cannot lower the plan says so in-band, and nothing unwinds across the caller's
+/// boundary. [`generate`] is the trusted-AOT convenience over it — op authoring
+/// is trusted, so a refusal there is a program error worth panicking on.
+///
+/// # Errors
+///
+/// Returns [`backend::LowerError`] when the backend has no lowering for this
+/// plan. Note this does **not** cover plan construction: an op/dtype combination
+/// the plan gate rejects panics inside [`build_plan`]. Use
+/// [`plan::try_build_plan`] with [`Backend::lower`] directly when both refusals
+/// must be typed.
+pub fn try_generate(
+    op: &OpDef,
+    key: &StructureKey,
+    backend: &dyn Backend,
+) -> Result<GeneratedKernel, backend::LowerError> {
+    let mut k = backend.lower(&build_plan(op, key))?;
     k.stamp(provenance_for(key, backend));
-    k
+    Ok(k)
 }
 
 /// Generate the full **variant set** for a cell: the default lowering (tag
@@ -161,13 +184,20 @@ pub fn generate_variants(op: &OpDef, key: &StructureKey, backend: &dyn Backend) 
     } else {
         String::new()
     };
+    let base = backend
+        .lower(&plan)
+        .unwrap_or_else(|e| panic!("{} backend declined to lower: {e}", backend.name()));
     let mut vs = vec![Variant {
         tag: "base",
-        kernels: vec![backend.lower(&plan)],
+        kernels: vec![base],
         fidelity: VariantFidelity::BitIdentical,
         launch_note,
     }];
-    vs.extend(backend.lower_variants(&plan));
+    vs.extend(
+        backend
+            .lower_variants(&plan)
+            .unwrap_or_else(|e| panic!("{} backend declined a variant: {e}", backend.name())),
+    );
     // Stamp EVERY kernel, including those a backend produced via `lower_variants`.
     // A split-K pair ships two kernels under one cell; both are cacheable
     // artifacts and both need to name what they were baked against, or the
