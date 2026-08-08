@@ -1153,6 +1153,21 @@ pub enum TokenDecline {
     /// The token is not one this schema version can honour — an unknown
     /// spelling, a retired one, or a malformed field.
     Unrecognized,
+    /// A **well-formed** token from a schema version this build does not accept.
+    ///
+    /// Distinct from [`BadVersionPrefix`](Self::BadVersionPrefix) on purpose, and
+    /// distinct from every other decline: this is a *recognized* token, correctly
+    /// spelled, that simply belongs to another vocabulary. The caller's move is to
+    /// **re-derive** it from the request that produced it — not to reach for a
+    /// compatibility path. Carries the version so the diagnosis names it.
+    UnsupportedSchemaVersion {
+        /// The canonical version the token declared.
+        version: u16,
+    },
+    /// The version field is **malformed** — no `sk` prefix, a non-numeric
+    /// remainder, or a non-canonical spelling such as a leading zero (`sk04`) or a
+    /// sign (`sk+4`). Not a token at all, as opposed to a token from elsewhere.
+    BadVersionPrefix,
 }
 
 impl StructureKey {
@@ -1272,6 +1287,18 @@ impl StructureKey {
     /// spelling; [`TokenDecline::Unrecognized`] for anything else this schema
     /// version cannot honour.
     pub fn parse_token(token: &str) -> Result<StructureKey, TokenDecline> {
+        // Version verdicts first, and in this order: a malformed field is "not a
+        // token" (a wall), while a canonical field from another schema is a
+        // recognized token that must be RE-DERIVED (a signpost). Collapsing them
+        // would leave a consumer unable to tell "you sent me garbage" from "you
+        // sent me sk3 and I speak sk4".
+        match parse_canonical_version(token.split('|').next().unwrap_or("")) {
+            Err(()) => return Err(TokenDecline::BadVersionPrefix),
+            Ok(v) if v != STRUCTURE_KEY_VERSION => {
+                return Err(TokenDecline::UnsupportedSchemaVersion { version: v });
+            }
+            Ok(_) => {}
+        }
         // Scan atoms rather than positions: the reserved spellings are not
         // legitimate anywhere in a token, so finding one as a whole atom is
         // sufficient and cannot false-positive on a substring (`e4m3fn` is a
@@ -1296,7 +1323,15 @@ impl StructureKey {
         if parts.len() != 9 && parts.len() != 10 {
             return None;
         }
-        let version: u16 = parts[0].strip_prefix("sk")?.parse().ok()?;
+        // Canonical form first, then the ACCEPTED-version check. Before this,
+        // the codec accepted any version at all — an `sk4` token decoded happily
+        // under the sk3 vocabulary, where `c64` means a pair of f64 rather than a
+        // pair of f32. That is the silent cross-vocabulary misdecode
+        // §6.7-0014 names, and it was live.
+        let version = parse_canonical_version(parts[0]).ok()?;
+        if version != STRUCTURE_KEY_VERSION {
+            return None;
+        }
         let op = op_from_code(parts[1])?;
         let dtype = dtype_from_code(parts[2])?;
         // KISS-Classify §6.1-0001: a RESERVED dtype in ANY dtype position is a
@@ -2454,6 +2489,28 @@ const fn dtype_code(v: ElementKind) -> &'static str {
         Complex32 => "c32",
         Complex64 => "c64",
     }
+}
+
+/// Parse the `sk<N>` version field under the canonical-form rule.
+///
+/// `Ok(v)` for a canonical decimal (`0` or `[1-9][0-9]*`); `Err(())` for anything
+/// malformed.
+///
+/// **The canonical check runs before the numeric parse, and that ordering is the
+/// whole point** (KISS-CLASSIFY-6.7-0015). A bare `parse::<u16>()` accepts both
+/// `sk04` and `sk+4` as `4` — Rust's integer parser tolerates leading zeros and a
+/// leading sign. Both spellings were accepted by this codec before this guard,
+/// which is a wall that was not there.
+fn parse_canonical_version(field: &str) -> Result<u16, ()> {
+    let digits = field.strip_prefix("sk").ok_or(())?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(());
+    }
+    // Canonical: "0", or no leading zero.
+    if digits.len() > 1 && digits.starts_with('0') {
+        return Err(());
+    }
+    digits.parse::<u16>().map_err(|_| ())
 }
 
 /// `None` for a dtype that is RESERVED at this schema version, else the dtype.
