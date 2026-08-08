@@ -96,7 +96,7 @@ pub fn semantics_dag(op: &OpDef) -> Option<String> {
             let axes_code = reduce_axes_code(axes);
             let kd = if *keepdim { "kd" } else { "nokd" };
             let node = if matches!(rop, ReduceOp::Mean) {
-                if matches!(op.dtypes.first(), Some(ElementKind::I32 | ElementKind::I64)) {
+                if declared_int_acc(op)? {
                     return None;
                 }
                 // The extent leaf carries the SAME axes token as the fold node
@@ -147,7 +147,7 @@ pub fn semantics_dag(op: &OpDef) -> Option<String> {
         // arm (RowReduce always folds the last axis, so `last`), which is exactly what
         // RmsNorm/LayerNorm internal means need. INTEGER Mean stays an honest miss.
         Access::RowReduce { stages, epilogue } => {
-            let int_acc = matches!(op.dtypes.first(), Some(ElementKind::I32 | ElementKind::I64));
+            let int_acc = declared_int_acc(op)?;
             let mut stage_strs: Vec<String> = Vec::with_capacity(stages.len());
             for st in stages {
                 let pre = expr_to_recipe(&st.pre, &stage_strs)?;
@@ -221,6 +221,42 @@ fn contraction_roles(axes: &ContractionAxes) -> String {
 /// Fuel's pinned `gather{…, index_dtype}` set) or a FUSED gather body: v1 covers the
 /// identity read `data[index]` only — an elementwise-over-gather (e.g. `relu(gather)`)
 /// is a follow-up, so a non-identity body is withheld rather than mis-described.
+/// Whether this op's declared dtypes are integer, or `None` if the list mixes
+/// integer and float.
+///
+/// A recipe is **op-level**, not cell-level: it describes the op generally, so it
+/// has no `StructureKey` and cannot ask what dtype a particular kernel is being
+/// generated at. The int-vs-float distinction still matters — integer `Mean` is an
+/// honest miss — so this reads the op's declared list.
+///
+/// The two call sites used to read `op.dtypes.first()`. That is a **proxy**, and
+/// it silently answers for the whole list: an op declaring `[F32, I32]` would
+/// report "float" and emit a `Mean` recipe that is wrong at its `I32`
+/// instantiation. No op mixes float and int today — the only multi-dtype
+/// declaration in the tree is `[F32, F64]` — so the proxy has never been wrong.
+/// That is correct by accident of the current data, not by construction.
+///
+/// So a mixed list now yields `None`, which callers turn into "no recipe" — an
+/// honest miss. If the question cannot be answered for the op as a whole, the
+/// answer is not to guess from the first entry.
+fn declared_int_acc(op: &OpDef) -> Option<bool> {
+    let mut any_int = false;
+    let mut any_float = false;
+    for d in &op.dtypes {
+        if matches!(d, ElementKind::I32 | ElementKind::I64) {
+            any_int = true;
+        } else {
+            any_float = true;
+        }
+    }
+    match (any_int, any_float) {
+        (true, false) => Some(true),
+        (false, _) => Some(false),
+        // Mixed: unanswerable at op level. Decline rather than pick one.
+        (true, true) => None,
+    }
+}
+
 fn gather_recipe(op: &OpDef) -> Option<String> {
     // The one `Indexed` input is the gathered DATA operand (`data`); its role names
     // which operand supplies the index and along which axis. (v1 gathers a single
@@ -478,6 +514,38 @@ fn binary_kiss_name(op: BinaryOp) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    /// A dtype list mixing int and float is unanswerable at op level, so the
+    /// recipe declines instead of guessing from the first entry.
+    ///
+    /// Latent rather than live when found: no op in the tree mixes float and int
+    /// (the only multi-dtype declaration is `[F32, F64]`), so `dtypes.first()`
+    /// had never yet returned a wrong answer. This pins the behaviour before
+    /// some future op makes it live, at which point the failure would have been
+    /// a silently wrong `Mean` recipe at the integer instantiation.
+    #[test]
+    fn a_mixed_int_float_dtype_list_declines_rather_than_guessing() {
+        use crate::ir::ReduceOp;
+        let mean = |dtypes: &[ElementKind]| {
+            OpDef::reduction("meanprobe", 1, dtypes, input(0), ReduceOp::Mean)
+        };
+
+        // Positive control: a homogeneous FLOAT list still produces a recipe.
+        // Without this the test passes for a helper that declines everything.
+        assert!(
+            semantics_dag(&mean(&[ElementKind::F32])).is_some(),
+            "float Mean must still have a recipe — otherwise this test proves nothing"
+        );
+        // Homogeneous INT declines, as it always did (integer Mean is an honest miss).
+        assert!(semantics_dag(&mean(&[ElementKind::I32])).is_none());
+        // The new behaviour: MIXED is unanswerable, so it declines rather than
+        // reading "float" off the first entry and emitting a recipe that is wrong
+        // at the I32 instantiation.
+        assert!(
+            semantics_dag(&mean(&[ElementKind::F32, ElementKind::I32])).is_none(),
+            "a mixed int/float dtype list must decline — `first()` would have said              float and emitted a recipe wrong for the int cell"
+        );
+    }
+
     use super::*;
     use crate::ir::{BinaryOp, Expr, OpDef, ScalarExpr, UnaryOp, input, konst, param, reduced};
     use unpopped_vocab::ElementKind::F32;
