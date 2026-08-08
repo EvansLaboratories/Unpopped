@@ -96,6 +96,13 @@ rather than a cleanup commit.
 
 ## D. Ordinary engineering — unblocked, just not done
 
+- **The catalog / server mode** — designed in [`catalog.md`](catalog.md), not
+  built. Phase 1 is the library (op registry, emitter registry, `resolve`);
+  phase 2 is a server over it, deliberately sequenced after the PROVISIONAL wire
+  formats are co-pinned. The design names one gap that must be closed *in* the
+  build rather than after it: a catalog entry is baked against caller-supplied op
+  logic, which no current validity field names (§7).
+
 - **Dtype lowering coverage.** 22/22 named, 12 with a scalar type, CpuC lowers 9,
   Slang 5. Roughly by cost: `Bool` (u8 storage, cheap) · `u64` (needs an
   unsigned-wrap audit — `wrap_bits` is two's-complement *signed* and f64 cannot
