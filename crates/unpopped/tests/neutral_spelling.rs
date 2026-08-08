@@ -86,14 +86,29 @@ enum Spelling {
 fn expected(dt: ElementKind) -> Spelling {
     use ElementKind::*;
     match dt {
-        F32 | F32Strict | F64 | I32 | I64 | S8 | U8 | U32 => Spelling::PortableC,
+        // `short` / `unsigned short` are exact, portable C spellings with no
+        // vendor intrinsic and no packing — genuinely neutral, unlike the halves.
+        F32 | F32Strict | F64 | I32 | I64 | S8 | U8 | U32 | S16 | U16 => Spelling::PortableC,
 
         // THE GAP. Correct for CUDA, wrong for a module that calls itself neutral.
         // When the spelling seam lands these become `Declined` and the backend
         // supplies the name.
         F16 | Bf16 => Spelling::Vendor,
 
-        Bool | Fp8E4M3 | Fp8E5M2 | S4 | U4 | Bin | Complex32 | Complex64 => Spelling::Declined,
+        // Declined for three different reasons, worth keeping distinct:
+        //   * `Fp8E4M3FNUZ`/`Fp8E5M2FNUZ` are RESERVED by KISS-Classify
+        //     §6.1-0001 — recognized, distinguished from unknown, and never
+        //     computed with at this schema version. Declining is REQUIRED here,
+        //     not a gap.
+        //   * `S4`/`U4`/`Bin` are sub-byte packed; `Fp8E4M3`/`Fp8E5M2` need a
+        //     software codec; `Complex32`/`Complex64` need a struct ABI. All
+        //     are unimplemented rather than impossible.
+        //   * `U64` is held back deliberately: `unsigned long long` is a fine C
+        //     spelling, but the oracle's wrap is two's-complement SIGNED and f64
+        //     cannot represent every u64, so claiming it before that audit would
+        //     produce a silent wrong answer rather than a refusal.
+        Bool | Fp8E4M3 | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ | S4 | U4 | Bin | U64 | Complex32
+        | Complex64 => Spelling::Declined,
     }
 }
 
@@ -106,6 +121,8 @@ const PORTABLE_C_TYPES: &[&str] = &[
     "signed char",
     "unsigned char",
     "unsigned int",
+    "short",
+    "unsigned short",
 ];
 
 /// Substrings that identify a spelling as CUDA's.
@@ -126,6 +143,8 @@ fn names_a_vendor(s: &str) -> bool {
 /// everything with a portable ctype, minus `U32`, which is an index/address
 /// dtype rather than a compute dtype).
 const NEUTRAL_COMPUTE_DTYPES: &[ElementKind] = &[
+    ElementKind::S16,
+    ElementKind::U16,
     ElementKind::F32,
     ElementKind::F32Strict,
     ElementKind::F64,
@@ -152,8 +171,13 @@ fn scalar_ctype_spells_portable_c_except_the_two_known_half_arms() {
         ElementKind::I32,
         ElementKind::I64,
         ElementKind::S8,
+        ElementKind::S16,
         ElementKind::U8,
+        ElementKind::U16,
         ElementKind::U32,
+        ElementKind::U64,
+        ElementKind::Fp8E4M3FNUZ,
+        ElementKind::Fp8E5M2FNUZ,
         ElementKind::Bool,
         ElementKind::Fp8E4M3,
         ElementKind::Fp8E5M2,

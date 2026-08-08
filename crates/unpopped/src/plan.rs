@@ -1644,7 +1644,12 @@ fn assert_no_half_nextafter(op: &OpDef, dtype: ElementKind) {
 pub fn is_int_dtype(dt: ElementKind) -> bool {
     matches!(
         dt,
-        ElementKind::I32 | ElementKind::I64 | ElementKind::S8 | ElementKind::U8
+        ElementKind::I32
+            | ElementKind::I64
+            | ElementKind::S8
+            | ElementKind::U8
+            | ElementKind::S16
+            | ElementKind::U16
     )
 }
 
@@ -1812,7 +1817,16 @@ fn assert_int_op_admissibility(op: &OpDef, dtype: ElementKind) {
                     // promoted-int) and hoisted (8-bit tmp, truncated) spellings,
                     // so admitting it would make the result depend on DAG
                     // sharing. See the doc comment above for the full rationale.
-                    if matches!(dtype, ElementKind::U8 | ElementKind::S8) {
+                    // The pin is about SUB-`int` widths, not about 8 bits: C
+                    // promotes `short` to `int` exactly as it promotes `char`,
+                    // so a 16-bit composed operand observes the same
+                    // un-truncated promoted value. `(a+b)>>c` at s16 with
+                    // (30000, 30000, 1) is 30000 inlined and -2768 hoisted —
+                    // the 8-bit worked example one width up.
+                    if matches!(
+                        dtype,
+                        ElementKind::U8 | ElementKind::S8 | ElementKind::S16 | ElementKind::U16
+                    ) {
                         for (side, operand) in [("lhs", &**a), ("rhs", &**b)] {
                             assert!(
                                 matches!(operand, ScalarExpr::Input(_)),

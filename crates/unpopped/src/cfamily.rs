@@ -75,6 +75,11 @@ pub fn scalar_ctype(dt: ElementKind) -> Option<&'static str> {
         ElementKind::I64 => "long long",
         ElementKind::S8 => "signed char",
         ElementKind::U8 => "unsigned char",
+        // KISS-Classify §6.1 widths that have exact, portable C spellings. No
+        // vendor intrinsic and no packing is involved, so unlike the f16/bf16
+        // arms above these are genuinely neutral.
+        ElementKind::S16 => "short",
+        ElementKind::U16 => "unsigned short",
         // U32 is the gather/scatter INDEX-operand ctype (`unsigned int`) — a
         // 4-byte address dtype used ONLY for the index-load pointer type (the
         // Model-A u32-index path), never a compute operand. It has no `Element`
@@ -97,7 +102,9 @@ pub fn dtype_tag(dt: ElementKind) -> &'static str {
         ElementKind::I32 => "i32",
         ElementKind::I64 => "i64",
         ElementKind::S8 => "i8",
+        ElementKind::S16 => "i16",
         ElementKind::U8 => "u8",
+        ElementKind::U16 => "u16",
         // U32 index-dtype infix: `gather_f32_u32` (the Fuel-facing u32-index
         // variant's entry_point symbol).
         ElementKind::U32 => "u32",

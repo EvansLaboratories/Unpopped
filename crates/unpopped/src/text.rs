@@ -54,8 +54,8 @@ pub fn op_from_text(s: &str) -> Result<OpDef, String> {
 /// forces an update here (compile error), which is the intended coupling.
 fn ek_to_str(k: unpopped_vocab::ElementKind) -> &'static str {
     use unpopped_vocab::ElementKind::{
-        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E5M2, I32,
-        I64, S4, S8, U4, U8, U32,
+        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E4M3FNUZ,
+        Fp8E5M2, Fp8E5M2FNUZ, I32, I64, S4, S8, S16, U4, U8, U16, U32, U64,
     };
     match k {
         F16 => "F16",
@@ -70,6 +70,11 @@ fn ek_to_str(k: unpopped_vocab::ElementKind) -> &'static str {
         Bool => "Bool",
         Fp8E4M3 => "Fp8E4M3",
         Fp8E5M2 => "Fp8E5M2",
+        Fp8E4M3FNUZ => "Fp8E4M3FNUZ",
+        Fp8E5M2FNUZ => "Fp8E5M2FNUZ",
+        S16 => "S16",
+        U16 => "U16",
+        U64 => "U64",
         S4 => "S4",
         U4 => "U4",
         Bin => "Bin",
@@ -82,8 +87,8 @@ fn ek_to_str(k: unpopped_vocab::ElementKind) -> &'static str {
 /// Inverse of [`ek_to_str`].
 fn ek_from_str(s: &str) -> Result<unpopped_vocab::ElementKind, String> {
     use unpopped_vocab::ElementKind::{
-        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E5M2, I32,
-        I64, S4, S8, U4, U8, U32,
+        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E4M3FNUZ,
+        Fp8E5M2, Fp8E5M2FNUZ, I32, I64, S4, S8, S16, U4, U8, U16, U32, U64,
     };
     Ok(match s {
         "F16" => F16,
@@ -92,7 +97,12 @@ fn ek_from_str(s: &str) -> Result<unpopped_vocab::ElementKind, String> {
         "F32Strict" => F32Strict,
         "F64" => F64,
         "S8" => S8,
+        "S16" => S16,
         "U8" => U8,
+        "U16" => U16,
+        "U64" => U64,
+        "Fp8E4M3FNUZ" => Fp8E4M3FNUZ,
+        "Fp8E5M2FNUZ" => Fp8E5M2FNUZ,
         "I32" => I32,
         "I64" => I64,
         "Bool" => Bool,

@@ -97,6 +97,6 @@ pub use sku::{BackendKind, KernelSku, OpCategory};
 pub use structure_key::{
     AxisMask, Contiguity, ContractionKey, DivBucket, IdxWidth, MAX_OPERANDS, MAX_RANK, MpCode,
     OperandDesc, OperandKey, QuantFacts, QuantFamily, STRUCTURE_KEY_VERSION, ScalePlacement,
-    SizeClass, StructureKey, SymExtent, SymKind, VecWidth, WorkClass, dtype_token, structure_key,
-    structure_key_token,
+    SizeClass, StructureKey, SymExtent, SymKind, TokenDecline, VecWidth, WorkClass, dtype_token,
+    structure_key, structure_key_token,
 };

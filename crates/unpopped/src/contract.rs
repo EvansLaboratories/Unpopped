@@ -1652,11 +1652,18 @@ fn blurb(op: &OpDef, key: &StructureKey, dtype: &str, is_fusion: bool) -> String
 /// token here; `Fp8E5M2` and complex have no §5 slot yet — all return `None`.
 fn fkc_dtype(dt: ElementKind) -> Option<&'static str> {
     use ElementKind::{
-        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E5M2, I32,
-        I64, S4, S8, U4, U8, U32,
+        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E4M3FNUZ,
+        Fp8E5M2, Fp8E5M2FNUZ, I32, I64, S4, S8, S16, U4, U8, U16, U32, U64,
     };
     Some(match dt {
         F32 | F32Strict => "F32",
+        S16 => "S16",
+        U16 => "U16",
+        U64 => "U64",
+        // RESERVED (§6.1-0001): no computation semantics at this schema version,
+        // so there is nothing to declare in a contract. `None` is a decline, not
+        // an "unknown dtype" — the token is recognized, it simply cannot be used.
+        Fp8E4M3FNUZ | Fp8E5M2FNUZ => return None,
         F16 => "F16",
         Bf16 => "BF16",
         F64 => "F64",
@@ -1677,11 +1684,18 @@ fn fkc_dtype(dt: ElementKind) -> Option<&'static str> {
 
 fn dtype_short(dt: ElementKind) -> &'static str {
     use ElementKind::{
-        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E5M2, I32,
-        I64, S4, S8, U4, U8, U32,
+        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E4M3FNUZ,
+        Fp8E5M2, Fp8E5M2FNUZ, I32, I64, S4, S8, S16, U4, U8, U16, U32, U64,
     };
     match dt {
         F32 | F32Strict => "f32",
+        S16 => "s16",
+        U16 => "u16",
+        U64 => "u64",
+        // Spelled, not usable: this is a display/wire spelling and a reserved
+        // dtype still HAS one (§6.1). Refusal happens where it is used.
+        Fp8E4M3FNUZ => "e4m3fnuz",
+        Fp8E5M2FNUZ => "e5m2fnuz",
         F16 => "f16",
         Bf16 => "bf16",
         F64 => "f64",
@@ -1721,15 +1735,15 @@ fn vec_short(v: VecWidth) -> &'static str {
 
 fn dtype_size(dt: ElementKind) -> u32 {
     use ElementKind::{
-        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E5M2, I32,
-        I64, S4, S8, U4, U8, U32,
+        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E4M3FNUZ,
+        Fp8E5M2, Fp8E5M2FNUZ, I32, I64, S4, S8, S16, U4, U8, U16, U32, U64,
     };
     match dt {
         S4 | U4 | Bin => 1, // sub-byte: round up to a byte for the declared estimate
-        S8 | U8 | Bool | Fp8E4M3 | Fp8E5M2 => 1,
-        F16 | Bf16 => 2,
+        S8 | U8 | Bool | Fp8E4M3 | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ => 1,
+        F16 | Bf16 | S16 | U16 => 2,
         F32 | F32Strict | I32 | U32 => 4, // U32: 4-byte index dtype
-        F64 | I64 | Complex32 => 8,
+        F64 | I64 | U64 | Complex32 => 8,
         Complex64 => 16,
     }
 }

@@ -191,6 +191,30 @@ impl TypedBuffer {
         Self::new(ElementKind::S8, shape.to_vec(), dense_strides(shape), bytes)
     }
 
+    /// Dense buffer of `i16` (`S16`) values, little-endian.
+    #[must_use]
+    pub fn from_i16(shape: &[i64], data: &[i16]) -> Self {
+        let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_le_bytes()).collect();
+        Self::new(
+            ElementKind::S16,
+            shape.to_vec(),
+            dense_strides(shape),
+            bytes,
+        )
+    }
+
+    /// Dense buffer of `u16` (`U16`) values, little-endian.
+    #[must_use]
+    pub fn from_u16(shape: &[i64], data: &[u16]) -> Self {
+        let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_le_bytes()).collect();
+        Self::new(
+            ElementKind::U16,
+            shape.to_vec(),
+            dense_strides(shape),
+            bytes,
+        )
+    }
+
     /// Dense buffer of `u8` values.
     #[must_use]
     pub fn from_u8(shape: &[i64], data: &[u8]) -> Self {
@@ -265,7 +289,7 @@ fn dense_strides(shape: &[i64]) -> Vec<i64> {
 /// Element byte size for the v1-supported dtypes.
 fn elem_size(dt: ElementKind) -> usize {
     match dt {
-        ElementKind::F16 | ElementKind::Bf16 => 2,
+        ElementKind::F16 | ElementKind::Bf16 | ElementKind::S16 | ElementKind::U16 => 2,
         ElementKind::F32 | ElementKind::F32Strict | ElementKind::I32 => 4,
         ElementKind::F64 | ElementKind::I64 => 8,
         ElementKind::S8 | ElementKind::U8 | ElementKind::Bool => 1,
@@ -277,7 +301,13 @@ fn elem_size(dt: ElementKind) -> usize {
 fn is_int(dt: ElementKind) -> bool {
     matches!(
         dt,
-        ElementKind::I32 | ElementKind::I64 | ElementKind::S8 | ElementKind::U8 | ElementKind::Bool
+        ElementKind::I32
+            | ElementKind::I64
+            | ElementKind::S8
+            | ElementKind::U8
+            | ElementKind::S16
+            | ElementKind::U16
+            | ElementKind::Bool
     )
 }
 
@@ -323,6 +353,20 @@ fn int_extreme(dt: ElementKind, most_negative: bool) -> i128 {
                 -128
             } else {
                 127
+            }
+        }
+        ElementKind::S16 => {
+            if most_negative {
+                i128::from(i16::MIN)
+            } else {
+                i128::from(i16::MAX)
+            }
+        }
+        ElementKind::U16 => {
+            if most_negative {
+                0
+            } else {
+                i128::from(u16::MAX)
             }
         }
         ElementKind::U8 | ElementKind::Bool => {
@@ -463,7 +507,9 @@ fn raw_to_i128(bits: u64, dt: ElementKind) -> i128 {
         ElementKind::I32 => i128::from(bits as u32 as i32),
         ElementKind::I64 => i128::from(bits as i64),
         ElementKind::S8 => i128::from(bits as u8 as i8),
+        ElementKind::S16 => i128::from(bits as u16 as i16),
         ElementKind::U8 | ElementKind::Bool => i128::from(bits as u8),
+        ElementKind::U16 => i128::from(bits as u16),
         other => panic!("oracle: raw_to_i128 on non-int dtype {other:?}"),
     }
 }
@@ -478,7 +524,9 @@ fn raw_to_f64(bits: u64, dt: ElementKind) -> f64 {
         ElementKind::I32
         | ElementKind::I64
         | ElementKind::S8
+        | ElementKind::S16
         | ElementKind::U8
+        | ElementKind::U16
         | ElementKind::Bool => raw_to_i128(bits, dt) as f64,
         other => panic!("oracle: raw_to_f64 on unsupported dtype {other:?}"),
     }
@@ -950,6 +998,8 @@ fn encode_float(f: f64, out: ElementKind) -> u64 {
         ElementKind::I64 => (f as i64) as u64,
         ElementKind::I32 => u64::from((f as i32) as u32),
         ElementKind::S8 => u64::from((f as i8) as u8),
+        ElementKind::S16 => u64::from((f as i16) as u16),
+        ElementKind::U16 => u64::from(f as u16),
         other => panic!("oracle: encode_float to unsupported dtype {other:?}"),
     }
 }
@@ -960,7 +1010,9 @@ fn encode_int(i: i128, out: ElementKind) -> u64 {
         ElementKind::I32 => u64::from((i as i32) as u32),
         ElementKind::I64 => (i as i64) as u64,
         ElementKind::S8 => u64::from((i as i8) as u8),
+        ElementKind::S16 => u64::from((i as i16) as u16),
         ElementKind::U8 | ElementKind::Bool => u64::from(i as u8),
+        ElementKind::U16 => u64::from(i as u16),
         other => panic!("oracle: encode_int to unsupported dtype {other:?}"),
     }
 }

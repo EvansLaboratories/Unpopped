@@ -1037,9 +1037,20 @@ pub enum ElementKind {
     /// variant) with int32 accumulation; float `alpha` / `beta` let
     /// the kernel act as a dequantize-in-epilogue.
     S8,
+    /// Signed 16-bit integer, two's-complement (KISS-Classify §6.1).
+    ///
+    /// Storage-only in this crate today: no wrapper type and no tensor-core
+    /// path. It is in the vocabulary because §6.1-0001 pins the scalar dtype
+    /// set at exactly twenty-two tokens and forbids omitting any of them — a
+    /// party that cannot lower a dtype must still **name** it, so it can
+    /// decline it as a known dtype rather than as an unknown token.
+    S16,
     /// Unsigned 8-bit integer. Maps to the [`U8`] wrapper type. Same
     /// kernel family as [`S8`] with unsigned operands.
     U8,
+    /// Unsigned 16-bit integer (KISS-Classify §6.1). Storage-only here, on the
+    /// same terms as [`S16`](Self::S16).
+    U16,
     /// Signed 32-bit integer. Maps to the `i32` Rust type via the
     /// [`Element`] impl. Two roles:
     /// 1. **Accumulator marker** for integer GEMM SKUs (reported by
@@ -1066,12 +1077,38 @@ pub enum ElementKind {
     /// [`Fp8E4M3`] wrapper type. Routed through Ada / Hopper FP8 tensor
     /// cores (`mma.sync m16n8k32` FP8 variant) with F32 accumulation.
     Fp8E4M3,
+    /// FP8 E4M3, AMD `fnuz` variant (bias 8, no −0, no infinities) —
+    /// **RESERVED**, token `e4m3fnuz`.
+    ///
+    /// # Reserved means recognized, not usable
+    ///
+    /// KISS-Classify §6.1-0001 puts this in the closed set with **no
+    /// computation semantics at this schema version**, and requires that a
+    /// reader "MUST recognize it and distinguish it from an unknown token".
+    /// Those are different obligations and the distinction is the whole point:
+    /// an *unknown* token means the producer is speaking a vocabulary this
+    /// reader does not have, while a *reserved* token means the vocabulary is
+    /// shared and this member simply has no semantics yet. A consumer must be
+    /// able to tell "you are newer than me" from "we agree, and this is
+    /// parked".
+    ///
+    /// It is byte-incompatible with [`Fp8E4M3`](Self::Fp8E4M3) — same width,
+    /// different bias and no infinities — so the two MUST NOT share a token
+    /// and MUST NOT be substituted for one another.
+    ///
+    /// Every use in a `structure_key` dtype position is a **typed decline**.
+    Fp8E4M3FNUZ,
     /// 8-bit floating-point, E5M2 encoding (1 sign + 5 exponent + 2
     /// mantissa, bias 15, IEEE-754-compatible inf / NaN). Maps to the
     /// [`Fp8E5M2`] wrapper type. Same FP8 tensor-core path as
     /// [`Fp8E4M3`] with the alternate operand tag
     /// (`.e5m2.e5m2.f32`).
     Fp8E5M2,
+    /// FP8 E5M2, AMD `fnuz` variant (bias 16, no −0, no infinities) —
+    /// **RESERVED**, token `e5m2fnuz`. Same terms as
+    /// [`Fp8E4M3FNUZ`](Self::Fp8E4M3FNUZ): recognized, distinguished from
+    /// unknown, and declined.
+    Fp8E5M2FNUZ,
     /// Signed 4-bit integer — packed-pair storage. Maps to the [`S4`]
     /// wrapper type. Routed through Ada Lovelace int4 tensor cores
     /// (`mma.sync.aligned.m16n8k64.row.col.satfinite.s32.s4.s4.s32`)
@@ -1119,6 +1156,31 @@ pub enum ElementKind {
     /// uses u32, so every pre-existing token stays byte-identical — the codec
     /// is spelling-keyed, not discriminant-keyed).
     U32,
+    /// Unsigned 64-bit integer (KISS-Classify §6.1). Storage-only here, on the
+    /// same terms as [`S16`](Self::S16) — named so it can be declined as a
+    /// known dtype rather than as an unknown token.
+    U64,
+}
+
+impl ElementKind {
+    /// Whether this dtype is **reserved** by KISS-Classify §6.1-0001: part of
+    /// the closed vocabulary, with **no computation semantics** at this schema
+    /// version.
+    ///
+    /// A reserved dtype is recognized on parse and MUST be distinguishable from
+    /// an unknown token — those mean different things. *Unknown* says the peer
+    /// is speaking a vocabulary this reader does not have; *reserved* says the
+    /// vocabulary is shared and this member is parked. A consumer needs to tell
+    /// "you are newer than me" from "we agree, and this is not usable yet",
+    /// because only the first is a version problem.
+    ///
+    /// Using one in any dtype position of a `structure_key` is a typed decline
+    /// (§6.7-0009), distinct from the unknown-token decline. Activating a
+    /// reserved spelling is a future additive schema event.
+    #[must_use]
+    pub const fn is_reserved(self) -> bool {
+        matches!(self, Self::Fp8E4M3FNUZ | Self::Fp8E5M2FNUZ)
+    }
 }
 
 /// Math precision used by the FMA / tensor-core instruction.

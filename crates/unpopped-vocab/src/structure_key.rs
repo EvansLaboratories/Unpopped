@@ -1114,16 +1114,20 @@ fn frame_work_class(operands: &[OperandDesc]) -> WorkClass {
 /// are treated as non-vectorizable in v1).
 fn dtype_size_bytes(dt: ElementKind) -> Option<u32> {
     use ElementKind::{
-        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E5M2, I32,
-        I64, S4, S8, U4, U8, U32,
+        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E4M3FNUZ,
+        Fp8E5M2, Fp8E5M2FNUZ, I32, I64, S4, S8, S16, U4, U8, U16, U32, U64,
     };
     Some(match dt {
-        S8 | U8 | Bool | Fp8E4M3 | Fp8E5M2 => 1,
-        F16 | Bf16 => 2,
+        // The `fnuz` FP8 variants are RESERVED (no computation semantics at this
+        // schema version) but their *storage* width is pinned by §6.1 all the
+        // same — a reserved dtype is still a known dtype, and answering "how wide
+        // is it" is not the same as agreeing to compute with it.
+        S8 | U8 | Bool | Fp8E4M3 | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ => 1,
+        F16 | Bf16 | S16 | U16 => 2,
         // U32: 4-byte index dtype (the `indices` operand's vec-width side-channel;
         // never a compute operand). Same width class as I32.
         F32 | F32Strict | I32 | U32 => 4,
-        F64 | I64 | Complex32 => 8,
+        F64 | I64 | U64 | Complex32 => 8,
         Complex64 => 16,
         S4 | U4 | Bin => return None,
     })
@@ -1132,6 +1136,24 @@ fn dtype_size_bytes(dt: ElementKind) -> Option<u32> {
 // ===========================================================================
 // Token codec
 // ===========================================================================
+
+/// Why a `structure_key` token was not honoured.
+///
+/// Exists because §6.1-0001 requires the reserved-dtype decline to be *distinct*
+/// from the unknown-token decline — see [`StructureKey::parse_token`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TokenDecline {
+    /// A dtype position named a spelling that is in the closed vocabulary but
+    /// has no computation semantics at this schema version (§6.1-0001).
+    ReservedDtype {
+        /// The reserved spelling as it appeared in the token.
+        spelling: String,
+    },
+    /// The token is not one this schema version can honour — an unknown
+    /// spelling, a retired one, or a malformed field.
+    Unrecognized,
+}
 
 impl StructureKey {
     /// Encode as the stable string token carried on the telemetry wire.
@@ -1228,6 +1250,42 @@ impl StructureKey {
         token
     }
 
+    /// Parse a token, distinguishing a **reserved** decline from an
+    /// **unrecognized** one.
+    ///
+    /// KISS-Classify §6.1-0001 requires that a `structure_key` using a reserved
+    /// dtype be "answered with a typed decline (§6.7-0009) **distinct from the
+    /// unknown-token decline**". [`StructureKey::from_token`] returns `Option`,
+    /// which by construction cannot express that distinction — both declines
+    /// collapse to `None`. This is the conformant surface.
+    ///
+    /// The distinction carries real information for a consumer. *Unrecognized*
+    /// means the peer is speaking a vocabulary this reader does not have, so the
+    /// reader may be out of date and upgrading could help. *Reserved* means the
+    /// vocabulary is shared and agreed, and this member simply has no semantics
+    /// at this schema version — upgrading will not help, and the correct response
+    /// is to route around the dtype rather than to suspect a version skew.
+    ///
+    /// # Errors
+    ///
+    /// [`TokenDecline::ReservedDtype`] if any dtype position names a reserved
+    /// spelling; [`TokenDecline::Unrecognized`] for anything else this schema
+    /// version cannot honour.
+    pub fn parse_token(token: &str) -> Result<StructureKey, TokenDecline> {
+        // Scan atoms rather than positions: the reserved spellings are not
+        // legitimate anywhere in a token, so finding one as a whole atom is
+        // sufficient and cannot false-positive on a substring (`e4m3fn` is a
+        // different atom from `e4m3fnuz`, and atom equality keeps them apart).
+        for atom in token.split(['|', '/']) {
+            if dtype_from_code(atom).is_some_and(ElementKind::is_reserved) {
+                return Err(TokenDecline::ReservedDtype {
+                    spelling: atom.to_string(),
+                });
+            }
+        }
+        Self::from_token(token).ok_or(TokenDecline::Unrecognized)
+    }
+
     /// Parse a token produced by [`StructureKey::to_token`]. Returns `None` on
     /// any malformed field or an unknown op short-code (a future op category
     /// with no token code assigned).
@@ -1241,6 +1299,15 @@ impl StructureKey {
         let version: u16 = parts[0].strip_prefix("sk")?.parse().ok()?;
         let op = op_from_code(parts[1])?;
         let dtype = dtype_from_code(parts[2])?;
+        // KISS-Classify §6.1-0001: a RESERVED dtype in ANY dtype position is a
+        // typed decline. Recognizing the spelling (above) and refusing the key
+        // (here) are two different obligations, and both are required — the
+        // spelling must be distinguishable from an unknown token, and the key
+        // must not be honoured. See [`StructureKey::parse_token`], which is how
+        // a caller tells those two declines apart.
+        if dtype.is_reserved() {
+            return None;
+        }
         let arch = arch_from_code(parts[3])?;
         let idx = match parts[4] {
             // `ix32`/`ix64` (§6.7-0003), not the `i32`/`i64` dtype spellings.
@@ -1383,9 +1450,13 @@ impl StructureKey {
                     batch,
                     lhs_order,
                     rhs_order,
-                    wdt: dtype_from_code(prec[0])?,
-                    acc: dtype_from_code(prec[1])?,
-                    out: dtype_from_code(prec[2])?,
+                    // §6.1-0001 applies to EVERY dtype position, so the
+                    // contraction precision group is guarded exactly like the
+                    // top-level dtype: a reserved spelling is recognized by
+                    // `dtype_from_code` and refused here.
+                    wdt: reject_reserved(dtype_from_code(prec[0])?)?,
+                    acc: reject_reserved(dtype_from_code(prec[1])?)?,
+                    out: reject_reserved(dtype_from_code(prec[2])?)?,
                     mp: mp_from_code(prec[3])?,
                 })
             }
@@ -2340,8 +2411,8 @@ pub const fn dtype_token(v: ElementKind) -> &'static str {
 
 const fn dtype_code(v: ElementKind) -> &'static str {
     use ElementKind::{
-        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E5M2, I32,
-        I64, S4, S8, U4, U8, U32,
+        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F32Strict, F64, Fp8E4M3, Fp8E4M3FNUZ,
+        Fp8E5M2, Fp8E5M2FNUZ, I32, I64, S4, S8, S16, U4, U8, U16, U32, U64,
     };
     match v {
         F16 => "f16",
@@ -2364,11 +2435,19 @@ const fn dtype_code(v: ElementKind) -> &'static str {
         Bool => "bool",
         // sk3 D4: variant-explicit FP8. `e4m3fn` (OCP, SATFINITE, no-inf, max
         // 448) renames the bare `e4m3`; `e5m2` is ALREADY the variant-explicit
-        // IEEE-style spelling (inf/NaN, max 57344) and stays. The AMD
-        // `e4m3fnuz`/`e5m2fnuz` spellings are reserved in the closed set,
-        // unused by Baracuda (no ElementKind — an unknown-spelling decline).
+        // IEEE-style spelling (inf/NaN, max 57344) and stays.
         Fp8E4M3 => "e4m3fn",
         Fp8E5M2 => "e5m2",
+        // The AMD `fnuz` variants are RESERVED by §6.1-0001: part of the closed
+        // vocabulary, no computation semantics at this schema version. They
+        // spell so a reader can RECOGNIZE them and tell them apart from an
+        // unknown token — the clause requires exactly that distinction. Using
+        // one in a dtype position is a typed decline, not a parse failure.
+        Fp8E4M3FNUZ => "e4m3fnuz",
+        Fp8E5M2FNUZ => "e5m2fnuz",
+        S16 => "s16",
+        U16 => "u16",
+        U64 => "u64",
         S4 => "s4",
         U4 => "u4",
         Bin => "b1",
@@ -2377,10 +2456,20 @@ const fn dtype_code(v: ElementKind) -> &'static str {
     }
 }
 
+/// `None` for a dtype that is RESERVED at this schema version, else the dtype.
+///
+/// The gate for "recognized but not usable" (KISS-Classify §6.1-0001). Separate
+/// from [`dtype_from_code`] on purpose: recognizing a spelling and honouring a
+/// key that uses it are different obligations, and the clause requires the first
+/// while forbidding the second.
+fn reject_reserved(dt: ElementKind) -> Option<ElementKind> {
+    if dt.is_reserved() { None } else { Some(dt) }
+}
+
 fn dtype_from_code(s: &str) -> Option<ElementKind> {
     use ElementKind::{
-        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F64, Fp8E4M3, Fp8E5M2, I32, I64, S4, S8,
-        U4, U8, U32,
+        Bf16, Bin, Bool, Complex32, Complex64, F16, F32, F64, Fp8E4M3, Fp8E4M3FNUZ, Fp8E5M2,
+        Fp8E5M2FNUZ, I32, I64, S4, S8, S16, U4, U8, U16, U32, U64,
     };
     Some(match s {
         "f16" => F16,
@@ -2388,10 +2477,21 @@ fn dtype_from_code(s: &str) -> Option<ElementKind> {
         "f32" => F32,
         // `"f32s"` deliberately ABSENT (sk3 D4 retirement) — a peer token still
         // spelling it is a typed decline. Likewise the bare `"e4m3"` (renamed
-        // `e4m3fn`) and the reserved-but-unused `"e4m3fnuz"`/`"e5m2fnuz"`.
+        // `e4m3fn`).
+        //
+        // The reserved `"e4m3fnuz"`/`"e5m2fnuz"` ARE recognized below. They were
+        // absent before, which made them parse as UNKNOWN — the one thing
+        // §6.1-0001 forbids, since it requires a reader to distinguish a
+        // reserved member of the shared vocabulary from a token it has never
+        // heard of. Recognizing is not accepting: they still decline at use.
         "f64" => F64,
         "s8" => S8,
+        "s16" => S16,
         "u8" => U8,
+        "u16" => U16,
+        "u64" => U64,
+        "e4m3fnuz" => Fp8E4M3FNUZ,
+        "e5m2fnuz" => Fp8E5M2FNUZ,
         "i32" => I32,
         "i64" => I64,
         "u32" => U32,

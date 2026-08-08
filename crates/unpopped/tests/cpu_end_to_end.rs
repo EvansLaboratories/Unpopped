@@ -486,3 +486,126 @@ fn max_propagates_nan_through_a_real_compiler() {
         );
     }
 }
+
+/// **16-bit integer wrapping agrees between the emitted C and the oracle.**
+///
+/// `S16`/`U16` were added to the vocabulary to close a KISS §6.1 conformance gap,
+/// and then wired through the *lowering* path — `scalar_ctype` spells `short`,
+/// `is_int_dtype` admits them, and the oracle models their arithmetic. That last
+/// part is where a dtype gets silently wrong: C promotes `short` to `int`, does
+/// the arithmetic at 32 bits, and truncates on the store, so the observable
+/// result of an overflowing `add` is a *wrapped* 16-bit value. Wire the ctype
+/// without teaching the oracle that, and the emitter wraps while the oracle
+/// computes in `f64` — the two disagree only on overflow, which no
+/// small-value test would ever reach.
+///
+/// So the inputs are chosen to overflow. `20000 + 20000 = 40000` is not
+/// representable in `i16`; the correct answer is `-25536`. If the oracle were
+/// still on the float path it would say `40000` and this test would fail — which
+/// is exactly the check that makes adding the dtype meaningful rather than
+/// merely declared.
+#[test]
+fn s16_arithmetic_wraps_identically_in_the_emitter_and_the_oracle() {
+    let Some(cc) = find_compiler() else {
+        eprintln!(
+            "SKIP s16_arithmetic_wraps_identically_in_the_emitter_and_the_oracle: no host              C compiler. This compiles and RUNS an s16 kernel to check 16-bit wrapping."
+        );
+        return;
+    };
+    let dir: PathBuf = std::env::temp_dir().join("unpopped-e2e");
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    //                       overflow  underflow   plain   identity
+    let a: Vec<i16> = vec![20000, -20000, 7, -3, 0, 32767, 1];
+    let b: Vec<i16> = vec![20000, -20000, 5, -4, 0, 1, -1];
+    let n = a.len() as i64;
+
+    let add = OpDef::elementwise("addi16", 2, &[ElementKind::S16], input(0) + input(1));
+    let d = OperandDesc::new(1, &[n], &[1], ElementKind::S16, 256);
+    let operands = vec![d; 3];
+    let key = structure_key(OpCategory::BinaryElementwise, &operands, ArchSku::Sm89);
+
+    let kernel = generate(&add, &key, &CpuC);
+    assert!(
+        kernel.source.contains("short"),
+        "the s16 kernel must be spelled in `short`, got:
+{}",
+        kernel.source
+    );
+
+    // A `short`-typed harness: the f32 one would defeat the point by widening.
+    let lit = |v: &[i16]| {
+        v.iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let src = format!(
+        "{}
+#include <stdio.h>
+
+int main(void) {{
+             const short in0[{n}] = {{{}}};
+             const short in1[{n}] = {{{}}};
+             short out[{n}];
+             for (int i = 0; i < {n}; ++i) out[i] = -333;
+             {}(in0, in1, out, {n});
+             for (int i = 0; i < {n}; ++i) printf(\"%d\\n\", (int)out[i]);
+             return 0;
+}}
+",
+        kernel.source,
+        lit(&a),
+        lit(&b),
+        kernel.name
+    );
+
+    let c_file = dir.join("s16_add.c");
+    let exe = dir.join("s16_add.exe");
+    std::fs::write(&c_file, &src).expect("write");
+    cc.compile(&c_file, &exe, false)
+        .expect("compile s16 kernel");
+    let out = std::process::Command::new(&exe).output().expect("run");
+    assert!(out.status.success(), "s16 kernel exited {:?}", out.status);
+    let actual: Vec<i32> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            l.trim()
+                .parse::<i32>()
+                .expect("s16 kernel printed a non-integer")
+        })
+        .collect();
+
+    // The oracle leg — an independent evaluator that shares no lowering code.
+    let plan = build_plan(&add, &key);
+    let bufs = vec![
+        TypedBuffer::from_i16(&[n], &a),
+        TypedBuffer::from_i16(&[n], &b),
+    ];
+    let expected = evaluate(&plan, &operands, &bufs, &[]);
+    let want = expected.into_iter().next().unwrap().to_f64_vec();
+
+    assert_eq!(actual.len(), a.len(), "printed {actual:?}");
+    for (i, (&got, &wanted)) in actual.iter().zip(want.iter()).enumerate() {
+        assert!(
+            (got as f64 - wanted).abs() < 0.5,
+            "lane {i}: emitted C gave {got}, oracle expected {wanted}.              a={} b={}. A mismatch on the OVERFLOWING lanes means the oracle is              not modelling 16-bit wrapping (it would say 40000 where C says              -25536); a mismatch elsewhere means the s16 lowering is wrong.",
+            a[i],
+            b[i]
+        );
+        assert_ne!(got, -333, "lane {i} was never written");
+    }
+
+    // Pin the wrap explicitly, so the test states the property rather than only
+    // asserting agreement — two components could agree and both be wrong.
+    assert_eq!(
+        actual[0], -25536,
+        "20000 + 20000 must wrap to -25536 at i16"
+    );
+    assert_eq!(
+        actual[1], 25536,
+        "-20000 + -20000 must wrap to 25536 at i16"
+    );
+    assert_eq!(actual[5], -32768, "32767 + 1 must wrap to i16::MIN");
+}
