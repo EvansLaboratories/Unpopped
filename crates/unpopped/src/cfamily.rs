@@ -17,19 +17,42 @@
 //! `scalar_ctype`'s `F16`/`Bf16` arms return the NVIDIA type spellings `__half`
 //! / `__nv_bfloat16`, and the half load/store tail (`half_load_intrinsic`,
 //! `half_store_intrinsic`, `promote_load_f32`, `demote_store_f32`, and
-//! `cast_scalar`'s half arms) emits `__half2float`-class CUDA intrinsics. Once
-//! the CUDA backend is carved out, these arms are reachable ONLY from the CUDA
-//! backend — CpuC declines f16/bf16 (`supports_dtype`) and Slang never calls
-//! them — so no neutral backend exercises or tests them. That makes them a
-//! **silent-wrong-output hazard**: the first non-CUDA backend that supports f16
-//! (e.g. a Vulkan/SPIR-V backend) would call a neutral-looking API and silently
-//! get `__half` spelled into its output, with no test able to catch it.
+//! `cast_scalar`'s half arms) emits `__half2float`-class CUDA intrinsics. No
+//! neutral backend exercises them — CpuC declines f16/bf16 (`supports_dtype`)
+//! and Slang never calls them — so nothing here is tested by a neutral golden.
+//! That makes them a **silent-wrong-output hazard**: the first non-CUDA backend
+//! that supports f16 (Vulkane's SPIR-V backend is the live case) calls a
+//! neutral-looking API and gets `__half` spelled into its output.
+//!
+//! **Reachability, stated precisely** (this doc previously said "reachable ONLY
+//! from the CUDA backend", which is true of the plan-driven paths and understates
+//! the rest):
+//!
+//! - The **plan-driven** paths ([`out_ctype_of`], [`store_expr_of`],
+//!   [`param_ctype`]) genuinely are gated. `supports_dtype` rejects f16/bf16 for
+//!   `plan.dtype`, and `plan.out_dtype_of(j)` cannot smuggle one in either —
+//!   `plan::assert_valid_out_dtype` admits only `U8`/`I32`/`I64` as hetero output
+//!   dtypes, so a divergent output dtype is never a half.
+//! - The **free functions are ungated public API**. [`scalar_ctype`],
+//!   [`cast_scalar`], [`promote_load_f32`], [`demote_store_f32`] and both
+//!   `half_*_intrinsic` take a bare `ElementKind` with no plan and no backend to
+//!   gate them. This crate publishes to crates.io, so "reachable" means reachable
+//!   by any third party who reads the word "neutral" above and believes it.
 //!
 //! **FOLLOW-UP (deliberately deferred out of the byte-identity-critical
 //! extraction move): abstract the f16/bf16 ctype and the half load/store
 //! intrinsics behind the `Backend` trait**, so a non-CUDA f16 backend supplies
 //! its own spelling and cfamily's neutral core declines f16 rather than
-//! mis-spelling it.
+//! mis-spelling it. This is a breaking signature change on spellers the CUDA
+//! backend calls at ~66 sites, so it belongs in the 0.2 batch alongside the other
+//! `Backend` trait changes, and lands with the `unpopped-cuda` carve that gives
+//! the removed spellings a home.
+//!
+//! `tests/neutral_spelling.rs` holds the tripwires: gap pins that fail when the
+//! seam lands (so the fix must acknowledge itself), a live guard that fails if a
+//! *new* vendor spelling enters this module, and — important for the implementer
+//! — the reason the seam must **decline** rather than fall through to a default
+//! arm, which would trade this visible leak for a silent numerical bug.
 //!
 
 use crate::ir::{BinaryOp, ScalarExpr, UnaryOp, is_admissible_int_reduction_operand};
