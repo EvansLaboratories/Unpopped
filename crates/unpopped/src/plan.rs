@@ -306,6 +306,71 @@ impl KernelPlan<'_> {
     }
 }
 
+/// Why a plan could not be built for an op/cell pair.
+///
+/// # Why this exists alongside the panicking gates
+///
+/// `build_plan`'s gates are `assert!`s, and that is right for AOT authoring: an
+/// op an author wrote by hand that violates an IR rule is a program error, and
+/// panicking names it loudly at the call site.
+///
+/// It is wrong at a **trust boundary**. `jit::synthesize` builds a plan from a
+/// region another process chose, and `jit.rs` requires that the Synthesizer never
+/// unwind into its caller. Historically that was held by pre-screening with a
+/// second predicate (`dtype_compatible`) that mirrored these gates — two
+/// implementations of one rule, which is a drift hazard by construction. The
+/// mirror had already lost the 8-bit composition pin.
+///
+/// So the rules live once, in the gate, and are reachable in two shapes:
+/// [`try_build_plan`] returns this, and [`build_plan`] panics with its `Display`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PlanError {
+    /// The op's body uses a construct that has no admissible lowering at this
+    /// dtype — an integer body reaching a float-only op, a `Const` at an integer
+    /// dtype (spelled as an `f64` literal), a half `Nextafter`, and the rest of
+    /// the §6 admissibility rules.
+    InadmissibleOpAtDtype {
+        /// The compute dtype the op was keyed at.
+        dtype: ElementKind,
+        /// The gate's own explanation, verbatim — for diagnostics, never matching.
+        detail: String,
+    },
+}
+
+impl std::fmt::Display for PlanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InadmissibleOpAtDtype { detail, .. } => write!(f, "{detail}"),
+        }
+    }
+}
+
+impl std::error::Error for PlanError {}
+
+/// [`build_plan`], but returns the gate's refusal instead of panicking.
+///
+/// # Errors
+///
+/// [`PlanError`] when an admissibility gate rejects the op/dtype pair.
+///
+/// # Honest scope
+///
+/// This types the **op/dtype admissibility** gates — the ones a caller can trip
+/// by requesting a cell, and the ones the JIT's old pre-screen mirrored. The
+/// remaining `build_plan` gates are *structural* invariants about how an `OpDef`
+/// was constructed (operand arity, view validity, multi-output shape), and those
+/// still panic on purpose: the JIT builds its `OpDef` itself via `region_to_op`,
+/// which already validates the region and returns `Result`, so reaching one of
+/// those means a bug in the construction rather than an unserveable request.
+pub fn try_build_plan<'a>(
+    op: &'a OpDef,
+    key: &'a StructureKey,
+) -> Result<KernelPlan<'a>, PlanError> {
+    check_no_half_nextafter(op, key.dtype)?;
+    Ok(build_plan(op, key))
+}
+
 /// Choose the schedule for `op` at structure cell `key` and return a neutral
 /// [`KernelPlan`].
 ///
@@ -1563,10 +1628,10 @@ fn assert_valid_offsets(op: &OpDef, _key: &StructureKey) {
     );
 }
 
-fn assert_no_half_nextafter(op: &OpDef, dtype: ElementKind) {
+fn check_no_half_nextafter(op: &OpDef, dtype: ElementKind) -> Result<(), PlanError> {
     use crate::ir::BinaryOp;
     if !matches!(dtype, ElementKind::F16 | ElementKind::Bf16) {
-        return;
+        return Ok(());
     }
     fn walk(e: &ScalarExpr) -> bool {
         match e {
@@ -1629,13 +1694,28 @@ fn assert_no_half_nextafter(op: &OpDef, dtype: ElementKind) {
         Access::Elementwise => exprs.extend(op.extra_out_bodies.iter()),
     }
     for e in exprs {
-        assert!(
-            !walk(e),
-            "Nextafter has no half-precision lowering (IR contract: f32/f64 only; \
-             the promote-to-f32 path silently no-ops after the demote) — op '{}' \
-             at {dtype:?} must miss honestly",
-            op.name
-        );
+        if walk(e) {
+            return Err(PlanError::InadmissibleOpAtDtype {
+                dtype,
+                detail: format!(
+                    "Nextafter has no half-precision lowering (IR contract: f32/f64 only; \
+                     the promote-to-f32 path silently no-ops after the demote) — op '{}' \
+                     at {dtype:?} must miss honestly",
+                    op.name
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Panicking form of [`check_no_half_nextafter`] — the AOT gate.
+///
+/// The rule lives once, in the checking form; this is the shape `build_plan`
+/// uses, where a violation is an authoring error worth failing loudly on.
+fn assert_no_half_nextafter(op: &OpDef, dtype: ElementKind) {
+    if let Err(e) = check_no_half_nextafter(op, dtype) {
+        panic!("{e}");
     }
 }
 
