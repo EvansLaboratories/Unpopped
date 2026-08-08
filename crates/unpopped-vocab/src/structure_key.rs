@@ -454,8 +454,35 @@ pub enum ScalePlacement {
 }
 
 /// Quantization facts for a quant operand. Carried so Fuel can bind the
-/// interface; **v1 [`structure_key`] does not yet key on these** (quant
-/// operands are out of scope until the quant pilot).
+/// interface; **[`structure_key`] does not key on these** — verified by
+/// `tests/operand_facts_reach_the_key.rs`, not merely believed.
+///
+/// # Do not build on this shape — it is superseded, not merely un-keyed
+///
+/// The wording here used to read as though the *shape* were right and only the
+/// keying were deferred to a later pilot. It is the other way round. sk4 §3.2
+/// settles the model: the **element dtype** and the **block structure** are
+/// separate axes, and a block's shared scale is a **sibling operand** — its own
+/// entry in the operand list — not a field hanging off the operand it scales.
+///
+/// That distinction is what closes the key collision, and it needs no schema
+/// event, because operands already reach the key. Under the sibling model an
+/// unquantized `i4` operand and a Q4 operand differ in the operand list itself
+/// (one carries a scale sibling, the other does not), so they cannot derive
+/// byte-identical tokens. Expressed as a field, they can and do.
+///
+/// The residual the sibling model does **not** close is block granularity:
+/// blk32 and blk128 both contribute one scale sibling of the same rank, so they
+/// still collide. That part is a genuine sk5 item and is tracked as such — it is
+/// not something this type can fix.
+///
+/// **Why this is still here.** Removing the field is a breaking change, and per
+/// sk4 §6 the hardening/removal fixes ride the coordinated schema cut rather
+/// than preceding it — a separate major beforehand would cost downstream two
+/// breaking releases instead of one. So the field stays until that cut, and this
+/// doc is the guard in the meantime: a consumer reached for `quant` as a
+/// precedent for extending [`OperandDesc`] once already, on the assumption it
+/// was load-bearing. It is not.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct QuantFacts {
     /// Quant family.
