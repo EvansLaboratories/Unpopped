@@ -60,14 +60,31 @@
 //! `ScalarExpr` vocabulary + layout math (contiguous / strided / broadcast /
 //! flipped / permuted / base-offset) + multi-output / hetero.
 //!
-//! ### v2 deferrals (TODO)
+//! ### Not covered
 //!
-//! - `Access::Contraction` / MatMul (its own axis-role plumbing).
-//! - `Access::RowSort` (the NaN-greatest `key_lt` / stable-index-tie / TopK
-//!   comparator).
-//! - gather / scatter (`ReadIndex`/`WriteIndex` OOB policies + FP-`atomicAdd`
-//!   nondeterminism — only an order-independent invariant is checkable there).
-//! - Differential fuzzing against the device side.
+//! Stated as scope rather than as a TODO list, because this list had gone stale
+//! in the direction that matters: it claimed `Access::Contraction` was deferred
+//! long after [`eval_contraction`] shipped and `evaluate` began dispatching it.
+//! A reader trusting it would conclude matmul results were unvalidated and skip
+//! writing the differential test that already works. An over-cautious scope note
+//! is not harmless — it suppresses testing.
+//!
+//! - `Access::RowSort` — the NaN-greatest `key_lt`, stable index ties, and the
+//!   TopK comparator. Genuinely not implemented.
+//! - gather / scatter — `ReadIndex`/`WriteIndex` OOB policies plus FP-`atomicAdd`
+//!   nondeterminism. Note this one is not merely unimplemented: under a
+//!   nondeterministic accumulation order only an **order-independent invariant**
+//!   is checkable at all, so it needs a different notion of "correct" rather
+//!   than more of this module.
+//!
+//! **`Access::Contraction` IS covered** ([`eval_contraction`], dispatched by
+//! [`evaluate`]) — rank-2 and batched rank-3, transposed / permuted / broadcast
+//! operands, the `Reduced(0)` epilogue and the fused per-column bias.
+//!
+//! **Device-side differential fuzzing is not deferred, it is elsewhere**: the
+//! cross-backend IR fuzzer moved to `baracuda-cuda-emit`'s integration tests
+//! during the carve, because it drives a device backend. It is not something
+//! this crate can host.
 //!
 //! ### Transcendental accuracy
 //!
@@ -2139,6 +2156,52 @@ pub fn compare(
 // ===========================================================================
 #[cfg(test)]
 mod tests {
+    /// Pins the module doc's coverage list to the code.
+    ///
+    /// The doc previously claimed `Access::Contraction` was deferred for a long
+    /// time after `evaluate` began dispatching it. A stale scope note is the one
+    /// defect an ordinary test cannot catch: every implementation test passed,
+    /// because the implementation was fine — it was the *claim about* the
+    /// implementation that had rotted, and a reader trusting it would skip
+    /// writing a differential test that already worked.
+    ///
+    /// This closes that by construction. The `match` is exhaustive over
+    /// [`Access`], so a new access pattern breaks the build here and whoever adds
+    /// it must classify it — next to the doc that has to agree. It needs no
+    /// constructed values: exhaustiveness is checked at compile time.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Coverage {
+        /// `evaluate` dispatches it to a real evaluator.
+        Evaluated,
+        /// `evaluate` panics — genuinely not implemented.
+        Deferred,
+    }
+
+    #[allow(dead_code)]
+    fn coverage(a: &Access) -> Coverage {
+        match a {
+            Access::Elementwise
+            | Access::Reduction { .. }
+            | Access::RowReduce { .. }
+            | Access::Scan { .. }
+            | Access::Window { .. }
+            | Access::Im2Col { .. }
+            // Covered since `eval_contraction` shipped. The module doc said
+            // otherwise for long enough that it is worth naming here.
+            | Access::Contraction { .. } => Coverage::Evaluated,
+            // The NaN-greatest `key_lt` / stable-index-tie / TopK comparator.
+            Access::RowSort { .. } => Coverage::Deferred,
+        }
+    }
+
+    #[test]
+    fn the_documented_coverage_matches_what_evaluate_dispatches() {
+        // The real work is the exhaustive `match` above, enforced at compile
+        // time. This asserts the one variant that is cheap to name, so the
+        // classifier cannot be deleted without a test failing too.
+        assert_eq!(coverage(&Access::Elementwise), Coverage::Evaluated);
+    }
+
     use super::*;
     use crate::ir::{BinaryOp, OpDef, ReduceOp, input, konst};
     use crate::plan::build_plan;

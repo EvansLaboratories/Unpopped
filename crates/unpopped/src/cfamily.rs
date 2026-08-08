@@ -249,9 +249,36 @@ pub fn cast_scalar(from: ElementKind, to: ElementKind, expr: &str) -> String {
 
 /// Spell a [`UnaryOp`] applied to an already-lowered f32 inner expression.
 /// Inner strings are atomic or parenthesized, so the function-call forms need no
-/// extra wrapping; the operator forms wrap themselves. (`Sigmoid`/`Gelu`/`Silu`
-/// reference the inner twice — fine for an atomic load; a temp-binding pass to
-/// avoid recompute on compound inners is a follow-up.)
+/// extra wrapping; the operator forms wrap themselves.
+///
+/// # Operand recompute, and why the temp-binding pass is deferred rather than
+/// forgotten
+///
+/// Several spellings reference their operand more than once — `Sqr`/`Relu` twice,
+/// `Gelu`/`Silu`/`Sign` three times, and `Max`/`Min` in [`binary_f32`] four times
+/// each. On an atomic load that is free; on a compound inner it is a recompute.
+/// Binding the inner to a temp first would remove it.
+///
+/// **It is a pure optimization here, and that is a property of the op set rather
+/// than of temp-binding.** Every op above is float-only: the plan gate
+/// (`assert_int_op_admissibility` rule 2) rejects *every* `UnaryOp`, the float
+/// binary fns, and `Cmp*` at an integer dtype. At a float compute dtype a temp
+/// has the same type as the expression it holds, so the round-trip is exact and
+/// the emitted values cannot move.
+///
+/// **That safety argument does not survive the op set changing**, which is the
+/// part worth writing down. At a sub-`int` dtype, hoisting is *not*
+/// value-preserving: C promotes `char`/`short` to `int`, so an inlined compound
+/// operand is observed un-truncated while a hoisted one is truncated by the
+/// store to its temp. `(in0+in1)>>in2` at `u8` with `(200,100,1)` is `150`
+/// inlined and `22` hoisted. That is precisely why the composition pin exists —
+/// see rule 3 in `plan::check_int_op_admissibility`. So anyone extending these
+/// ops to 8- or 16-bit dtypes must settle truncation *before* adding the
+/// temp-binding pass, or the pass silently changes results.
+///
+/// Deferred rather than done because it rewrites emitted text, which moves every
+/// byte-identity golden — including Baracuda's physical CUDA corpus. It belongs
+/// with a coordinated golden regen, not with a quiet cleanup.
 pub fn unary_f32(op: UnaryOp, x: String) -> String {
     match op {
         UnaryOp::Neg => format!("(-{x})"),
@@ -370,7 +397,9 @@ pub fn binary_f32(op: BinaryOp, a: String, b: String) -> String {
         }
         BinaryOp::Pow => format!("powf({a}, {b})"),
         // Floored remainder (torch.remainder, sign-of-divisor — Fuel's Op::Rem),
-        // not C fmodf (sign-of-dividend). Operands appear twice (temp-binding TODO).
+        // not C fmodf (sign-of-dividend). Operands appear twice — see the
+        // operand-recompute note on `unary_f32` for why the temp-binding pass is
+        // deferred and what must be settled before anyone writes it.
         BinaryOp::Rem => format!("({a} - floorf({a} / {b}) * {b})"),
         // increment-0a scalar fns. FmaxIeee/FminIeee are the deliberate
         // NaN-SUPPRESSING fmaxf/fminf — the separate op the house reserves them
