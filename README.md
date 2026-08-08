@@ -83,3 +83,7 @@ at your option.
 Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
 dual licensed as above, without any additional terms or conditions.
+
+## Deferred work
+
+[`docs/deferred.md`](docs/deferred.md) is the register of everything knowingly left undone — with the reasoning and the unblocking trigger for each. Several entries are deferred *because doing them naively is worse than not doing them*; that reasoning is not recoverable from the code.

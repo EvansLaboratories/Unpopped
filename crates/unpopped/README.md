@@ -73,3 +73,7 @@ Dual-licensed under either of
 - MIT license ([LICENSE-MIT](LICENSE-MIT))
 
 at your option.
+
+## Deferred work
+
+[`docs/deferred.md`](../../docs/deferred.md) is the register of everything knowingly left undone — with the reasoning and the unblocking trigger for each. Several entries are deferred *because doing them naively is worse than not doing them*; that reasoning is not recoverable from the code.

@@ -1,8 +1,16 @@
 //! In-tree Baracuda ↔ kiss-ref differential converter + comparators — the
 //! oracle→kiss-ref consolidation's test machinery. Ported verbatim (converter +
 //! comparators) from the standalone `tools/kiss-ref-diff` harness, which is the
-//! tested reference. The device legs (`device_*`, JIT-on-GPU) stay in that tool
-//! — CI has no GPU; this module is the CPU converter + `eval_recipe` leg only.
+//! tested reference. The device legs (`device_*`, JIT-on-GPU) stay in that tool;
+//! this module is the CPU converter + `eval_recipe` leg only.
+//!
+//! **The reason is the crate boundary, not the hardware** — an earlier version of
+//! this note said "CI has no GPU", which is wrong: the box that gates every PR
+//! merge has GPU hardware. What this crate lacks is a *device backend*. The CUDA
+//! emitter lives out of tree (`baracuda-cuda-emit`, becoming `unpopped-cuda`), so
+//! there is nothing here to launch. The device leg belongs wherever the emitter
+//! is, and it becomes runnable in-repo when that sub-crate lands — see
+//! `docs/conformance.md` on per-target checks that cannot be inherited.
 //!
 //! ```text
 //! OpDef ──semantics_dag──▶ "reduce[sum,last,nokd](in0)" ──parse──▶ FlatDag
