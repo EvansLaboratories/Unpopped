@@ -357,6 +357,84 @@ pub struct ContractionKey {
     pub mp: MpCode,
 }
 
+/// The sk4 non-contraction precision coordinate: `<acc>/<mp>`
+/// (KISS-CLASSIFY-6.7-0013).
+///
+/// The gem-symmetric twin of [`ContractionKey`]'s `acc`/`mp` pair, for cells
+/// that are not contractions. It occupies the **same** optional-trailing token
+/// slot the contraction group occupies for `gem`, and a cell carries **at most
+/// one** precision field — the two never coexist. That is what makes the
+/// nine-or-ten-field decode unambiguous: the tenth field is resolved by the
+/// op-family code, never by counting fields. See [`carries_contraction_field`].
+///
+/// # Why this exists
+///
+/// Before sk4, a non-gem cell had nowhere to say "this reduction accumulates
+/// wider than it computes". An `f16` trailing-axis reduction accumulating in
+/// `f32` and one accumulating in `f16` derived byte-identical tokens, so a
+/// dispatch table could not hold both and a cache could hand one cell's kernel
+/// to the other. This field is the coordinate that separates them, and it
+/// extends the strict-vs-reduced-mantissa axis (§6.7-0006) to reductions and
+/// scans, where it previously collapsed.
+///
+/// It **declares** the accumulator/precision coordinate for identity. It does
+/// not pin bit-level determinism — float accumulation may still be
+/// order-invariant-nondeterministic (§6.17-0007).
+///
+/// # Construction
+///
+/// Prefer [`AccMp::new`], which returns `None` for a non-deviating pair. Rule
+/// (d) makes the all-default spelling *invalid on the wire*, so a redundant
+/// `AccMp` is a value that cannot be legally encoded; `new` refuses to build one
+/// rather than deferring the problem to the encoder.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct AccMp {
+    /// Accumulator dtype. A §6.1 member, never reserved, never `F32Strict`
+    /// (the strict axis rides [`AccMp::mp`], exactly as it does on a gem cell).
+    pub acc: ElementKind,
+    /// Math-precision coordinate — the same code set as the gem group's `<mp>`.
+    pub mp: MpCode,
+}
+
+impl AccMp {
+    /// The field as it must be spelled for a cell computing in `compute`, or
+    /// `None` when neither coordinate deviates and the field must be **omitted**.
+    ///
+    /// This is rules (a), (c) and (d) of KISS-CLASSIFY-6.7-0013 expressed as a
+    /// constructor: emitted iff the accumulator differs from the compute dtype
+    /// **or** the math-precision differs from the default `st`; omitted entirely
+    /// otherwise (not `-`, not empty); and never emitted all-default, which is a
+    /// forbidden redundant emission that a decoder MUST reject.
+    ///
+    /// `compute` is folded through [`canonical_dtype`] first, so an `F32Strict`
+    /// compute dtype compares against the `F32` its token actually spells — an
+    /// `f32` accumulator on an `F32Strict` cell is *not* a deviation, and
+    /// claiming otherwise would emit a field that says nothing.
+    #[must_use]
+    pub fn new(compute: ElementKind, acc: ElementKind, mp: MpCode) -> Option<Self> {
+        let acc = canonical_dtype(acc);
+        if acc == canonical_dtype(compute) && mp == MpCode::St {
+            return None;
+        }
+        Some(Self { acc, mp })
+    }
+}
+
+/// Whether a cell of this op family carries the **contraction** group in the
+/// optional-trailing token slot (`gem`), as opposed to the non-contraction
+/// `(acc + mp)` field (everything else).
+///
+/// The single source of truth for the tenth-field dispatch, deliberately shared
+/// by the encoder and the decoder. KISS-CLASSIFY-6.7-0013 resolves the
+/// nine-or-ten-field ambiguity "by the op-family code" — **not** by field count,
+/// and not by sniffing the payload's shape. A decoder that splits positionally
+/// on a fixed count breaks silently the moment a cell widens from nine fields to
+/// ten, and one that sniffs the payload would accept a contraction group on a
+/// `red` cell instead of declining it.
+const fn carries_contraction_field(op: OpCategory) -> bool {
+    matches!(op, OpCategory::Gemm)
+}
+
 // ===========================================================================
 // The key
 // ===========================================================================
@@ -418,6 +496,16 @@ pub struct StructureKey {
     /// non-contraction cell — in which case the token is byte-identical to the
     /// pre-contraction codec.
     pub contraction: Option<ContractionKey>,
+    /// The sk4 non-contraction precision coordinate ([`AccMp`]);
+    /// `None` on a `gem` cell (which carries [`StructureKey::contraction`]
+    /// instead) and on any cell whose accumulator and math-precision both sit at
+    /// their defaults. The two precision fields never coexist — see
+    /// [`carries_contraction_field`].
+    ///
+    /// A `None` here serializes byte-identically to the pre-sk4 codec (modulo
+    /// the §6.1 dtype renames), so the sk4 regen diff is exactly the cells whose
+    /// accumulator or precision actually deviates (§6.7-0013 byte-stability).
+    pub acc_mp: Option<AccMp>,
 }
 
 // ===========================================================================
@@ -661,7 +749,39 @@ pub fn structure_key(op: OpCategory, operands: &[OperandDesc], arch: ArchSku) ->
         operands: keys,
         reduce_axes: derive_reduce_axes(op, operands),
         contraction: derive_contraction(op, operands),
+        acc_mp: derive_acc_mp(op, dtype),
     }
+}
+
+/// The non-contraction `(acc + mp)` coordinate for a derived cell
+/// (KISS-CLASSIFY-6.7-0013).
+///
+/// §6.7-0013 does not impose a normative accumulator lattice on non-contraction
+/// cells the way §6.7-0006 does for `gem`. The field **declares** what the
+/// producer's cell actually does, so the derivation is this producer's policy —
+/// and a wrong declaration is worse than none, because it separates keys that
+/// should collide and collides keys that should separate.
+///
+/// **This generator's policy is: accumulate at the compute dtype, bit-stable.**
+/// Not an assumption — every schedule it can currently lower is elementwise.
+/// Both shipping emitters decline `Reduction`/`RowReduce`/`Scan`/`Contraction`
+/// outright, so there is no cell in which an accumulator could differ from its
+/// compute dtype, and no path that reduces a mantissa before computing.
+///
+/// It is written as a policy fed through [`AccMp::new`] rather than as a bare
+/// `None` on purpose: the day a reduction emitter lands with an `f32`
+/// accumulator over `f16` data, the change belongs *here*, and the field starts
+/// being emitted without anyone having to remember that this coordinate exists.
+/// A bare `None` would silently keep declaring "accumulates at compute dtype"
+/// after that stopped being true — and that declaration would be a lie the
+/// dispatch table acts on.
+fn derive_acc_mp(op: OpCategory, dtype: ElementKind) -> Option<AccMp> {
+    if carries_contraction_field(op) {
+        // A gem cell's precision facts ride the contraction group; the two
+        // fields never coexist, and they share one token slot.
+        return None;
+    }
+    AccMp::new(dtype, dtype, MpCode::St)
 }
 
 /// The key's canonical dtype: `F32Strict` folds to `F32` (sk3 D4 — the `f32s`
@@ -1166,6 +1286,27 @@ pub enum TokenDecline {
     /// remainder, or a non-canonical spelling such as a leading zero (`sk04`) or a
     /// sign (`sk+4`). Not a token at all, as opposed to a token from elsewhere.
     BadVersionPrefix,
+    /// The non-contraction `(acc + mp)` field (§6.7-0013) is **malformed** — not
+    /// exactly two `/`-parts, or an unrecognized `<mp>` code.
+    ///
+    /// A contraction-shaped payload on a non-`gem` cell lands here, and that is
+    /// the intended verdict rather than a near-miss: at sk4 the tenth slot on a
+    /// non-`gem` cell **is** the `(acc + mp)` field, so `ctll/d16/f32/f32/f32/st`
+    /// there is a six-part spelling of a two-part field, not a contraction group
+    /// that wandered. Declining it as malformed is what stops a positional
+    /// decoder from silently reinterpreting one cell's precision facts as
+    /// another's geometry.
+    BadAccMpField,
+    /// The `(acc + mp)` field was spelled with **both slots at their defaults**
+    /// (accumulator == compute dtype and `<mp>` == `st`).
+    ///
+    /// Rule (d) of §6.7-0013: a canonical producer omits the field entirely in
+    /// that case (rule (c)), so its presence at default is invalid — the same
+    /// token would otherwise have two legal spellings, and two spellings of one
+    /// cell is a byte-match failure waiting to happen. Distinct from
+    /// [`BadAccMpField`](Self::BadAccMpField): this field is *well-formed*, it
+    /// just says nothing, and a producer emitting it has a real bug.
+    RedundantAccMpField,
 }
 
 impl StructureKey {
@@ -1202,11 +1343,7 @@ impl StructureKey {
                 if o.flipped { 'r' } else { 'f' },
             ));
         }
-        let reduce = if self.reduce_axes.is_empty() {
-            "-".to_string()
-        } else {
-            format!("x{:02x}", self.reduce_axes.0)
-        };
+        let reduce = reduce_field_code(self.reduce_axes, self.rank);
         let mut token = format!(
             "sk{}|{}|{}|{}|{}|{}|r{}|{}|{}",
             self.version,
@@ -1219,6 +1356,25 @@ impl StructureKey {
             ops,
             reduce,
         );
+        // The OPTIONAL trailing slot. Which field lives here is decided by the
+        // OP FAMILY, never by which struct field happens to be populated —
+        // encoder and decoder must agree on that question or a ten-field token
+        // round-trips into a different key than it came from. §6.7-0013.
+        if !carries_contraction_field(self.op) {
+            // Non-gem: the `(acc + mp)` field. Re-derived through `AccMp::new`
+            // rather than trusted from the struct, so a caller who hand-built a
+            // redundant all-default value cannot make us emit a token that our
+            // own decoder is required to reject (rule (d)). Rules (b)/(c): both
+            // slots spelled when emitted, nothing at all when not — no `-`, no
+            // trailing `|`.
+            if let Some(a) = self
+                .acc_mp
+                .and_then(|a| AccMp::new(self.dtype, a.acc, a.mp))
+            {
+                token.push_str(&format!("|{}/{}", dtype_code(a.acc), mp_code(a.mp)));
+            }
+            return token;
+        }
         // Contraction facts ride as an OPTIONAL trailing field, emitted only
         // when present — every non-contraction token stays byte-identical to
         // the pre-contraction codec (and the wire stays opaque to Fuel).
@@ -1308,6 +1464,26 @@ impl StructureKey {
                 });
             }
         }
+        // The §6.7-0013 field's own verdicts, which `from_token` cannot express
+        // — it returns `Option`, so "malformed", "redundant" and "unknown op
+        // code" all collapse to `None`. Reached through the SAME `parse_acc_mp`
+        // the strict decode uses, so the reason reported here is by construction
+        // the reason the decode actually failed.
+        //
+        // Dispatch is by op family, as everywhere else. An unparseable op or
+        // dtype code falls through untouched: those are `Unrecognized`, and
+        // diagnosing the tenth field of a token whose second field is already
+        // gibberish would name a symptom instead of the cause.
+        let parts: Vec<&str> = token.split('|').collect();
+        if let (10, Some(op), Some(dt)) = (
+            parts.len(),
+            parts.get(1).and_then(|s| op_from_code(s)),
+            parts.get(2).and_then(|s| dtype_from_code(s)),
+        ) {
+            if !carries_contraction_field(op) {
+                parse_acc_mp(parts[9], dt)?;
+            }
+        }
         Self::from_token(token).ok_or(TokenDecline::Unrecognized)
     }
 
@@ -1379,14 +1555,18 @@ impl StructureKey {
 
         let reduce_axes = match parts[8] {
             "-" => AxisMask::EMPTY,
-            // §6.7-0005 rank-relative sentinels. Baracuda EMITS `x<hex>` (an explicit
-            // mask) and never these, but a conformant peer MAY emit `rall` (all axes) /
-            // `rlast` (trailing axis); a reader MUST accept them rather than decline the
-            // whole token. They resolve against the token's `rank` — the widest-operand /
-            // input-axis space the reduce mask indexes (see `structure_key`, `rank` =
-            // `max operand rank`). Accept-only: re-emitting yields `x<hex>`, which is
-            // byte-different but semantically identical (`rall`@rank-3 ≡ `x07`).
-            "rall" => AxisMask(((1u16 << rank) - 1) as u8),
+            // §6.7-0005 rank-relative sentinels, resolved against the token's
+            // `rank` — the widest-operand / input-axis space the reduce mask
+            // indexes (see `structure_key`, `rank` = `max operand rank`).
+            //
+            // These are no longer accept-only. This codec now EMITS them too
+            // (see `reduce_field_code`): §6.7-0005 makes `rall`/`rlast` a
+            // producer MUST for the all-axes and lone-trailing-axis cases, and
+            // emitting the equivalent `x<hex>` there — which is what this crate
+            // did, and what the comment here used to excuse as "byte-different
+            // but semantically identical" — is a byte divergence from every
+            // other conforming deriver on every reduction cell.
+            "rall" => AxisMask(all_axes_mask(rank)),
             "rlast" => {
                 if rank == 0 {
                     // No trailing axis exists in a rank-0 space — malformed.
@@ -1397,7 +1577,16 @@ impl StructureKey {
             s => AxisMask(u8::from_str_radix(s.strip_prefix('x')?, 16).ok()?),
         };
 
-        let contraction = match parts.get(9) {
+        // The tenth field, dispatched by OP FAMILY (§6.7-0013) — mirroring
+        // `to_token`. A non-gem cell's tenth field is the `(acc + mp)` field and
+        // is never read as a contraction group, so a contraction-shaped payload
+        // there declines instead of decoding into geometry facts the cell does
+        // not have.
+        let acc_mp = match parts.get(9) {
+            Some(f) if !carries_contraction_field(op) => Some(parse_acc_mp(f, dtype).ok()?),
+            _ => None,
+        };
+        let contraction = match parts.get(9).filter(|_| carries_contraction_field(op)) {
             None => None,
             Some(f) => {
                 // sk3 grammar: `c<m><n><k>/<kdiv>[/b<class>][/ol<digits>]
@@ -1507,6 +1696,7 @@ impl StructureKey {
             operands,
             reduce_axes,
             contraction,
+            acc_mp,
         })
     }
 }
@@ -2527,6 +2717,97 @@ fn reject_reserved(dt: ElementKind) -> Option<ElementKind> {
     if dt.is_reserved() { None } else { Some(dt) }
 }
 
+/// The all-axes mask for a `rank`-dimensional iteration frame.
+///
+/// Truncating to `u8` mirrors [`AxisMask`]'s width exactly, so the encoder and
+/// the decoder agree on the saturating case at `rank >= 8` instead of disagreeing
+/// about a token neither can represent.
+const fn all_axes_mask(rank: u8) -> u8 {
+    ((1u16 << rank) - 1) as u8
+}
+
+/// Spell field 8, the reduce spec — KISS-CLASSIFY-6.6-0009 / §6.7-0005.
+///
+/// Four **distinctly-encoded** values, and the clause forbids overloading one
+/// sentinel across two of them: `-` (not a reduction), `rall` (every
+/// iteration-frame axis), `rlast` (exactly the lone innermost axis), and
+/// `x<hh>` (any other reduced set).
+///
+/// # This is a producer MUST, and it was previously violated
+///
+/// This codec used to emit `x<hh>` for *every* non-empty mask, including the two
+/// cases §6.7-0005 requires be spelled `rall`/`rlast` — "byte-different but
+/// semantically identical", as the decoder's comment put it. Semantically
+/// identical is not the standard the reduce field is held to: §6.6-0009 says the
+/// `x<hh>` form MUST NOT be used for those two cases, precisely so that two
+/// conforming implementations produce the same bytes for the same cell. A
+/// reduction cell keyed by this crate and the same cell keyed by KISS would have
+/// differed on every all-axes and every trailing-axis reduction.
+///
+/// # The rank-1 tie-break
+///
+/// A rank-1 reduction reduces a set that is *simultaneously* all axes and the
+/// lone innermost axis. §6.6-0009 pins `rall` as the winner — checked first
+/// here — "so two conforming implementations never disagree on the rank-1
+/// encoding". Ordering these two branches the other way is a silent byte
+/// divergence on the single most common reduction shape there is.
+fn reduce_field_code(axes: AxisMask, rank: u8) -> String {
+    if axes.is_empty() {
+        return "-".to_string();
+    }
+    if rank > 0 {
+        // `rall` BEFORE `rlast` — the §6.6-0009 precedence, load-bearing at rank 1.
+        if axes.0 == all_axes_mask(rank) {
+            return "rall".to_string();
+        }
+        if axes.0 == 1u8 << (rank - 1) {
+            return "rlast".to_string();
+        }
+    }
+    format!("x{:02x}", axes.0)
+}
+
+/// Decode the non-contraction `(acc + mp)` field (§6.7-0013) for a cell whose
+/// compute dtype is `compute`.
+///
+/// The **single** implementation of this field's rules, deliberately: it is
+/// called by [`StructureKey::from_token`] (which discards the reason) and by
+/// [`StructureKey::parse_token`] (which reports it). Two copies would be two
+/// opportunities for the strict path and the typed path to disagree about what
+/// is legal, and a consumer would then get a decline reason describing a
+/// different verdict than the one that was actually reached.
+///
+/// # Errors
+///
+/// - [`TokenDecline::BadAccMpField`] — not exactly two `/`-parts, or an
+///   unrecognized `<mp>` code.
+/// - [`TokenDecline::ReservedDtype`] — an accumulator that is a recognized but
+///   reserved §6.1 member. Distinct from an unknown spelling, per §6.1-0001;
+///   every dtype position is governed by that clause, and the accumulator slot
+///   is a dtype position.
+/// - [`TokenDecline::Unrecognized`] — an accumulator outside the closed set.
+/// - [`TokenDecline::RedundantAccMpField`] — well-formed but all-default
+///   (rule (d)).
+fn parse_acc_mp(field: &str, compute: ElementKind) -> Result<AccMp, TokenDecline> {
+    let parts: Vec<&str> = field.split('/').collect();
+    // Exactly two. A contraction group (six parts) fails here, which is the
+    // point: on a non-gem cell this slot is not the contraction group's.
+    let [acc_code, mp_str] = parts[..] else {
+        return Err(TokenDecline::BadAccMpField);
+    };
+    let acc = dtype_from_code(acc_code).ok_or(TokenDecline::Unrecognized)?;
+    if acc.is_reserved() {
+        return Err(TokenDecline::ReservedDtype {
+            spelling: acc_code.to_string(),
+        });
+    }
+    let mp = mp_from_code(mp_str).ok_or(TokenDecline::BadAccMpField)?;
+    // Rule (d). `AccMp::new` is the rule; asking it is how the encoder's notion
+    // of "worth emitting" and the decoder's notion of "legal to have emitted"
+    // stay the same notion.
+    AccMp::new(compute, acc, mp).ok_or(TokenDecline::RedundantAccMpField)
+}
+
 fn dtype_from_code(s: &str) -> Option<ElementKind> {
     use ElementKind::{
         B1, Bf16, Bool, Complex64, Complex128, F8E6M2, F8E8M0, F16, F32, F64, Fp8E4M3FN,
@@ -2654,6 +2935,52 @@ fn op_from_code(s: &str) -> Option<OpCategory> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `parse_acc_mp` guards the accumulator slot against a RESERVED dtype on its
+    /// own, independently of [`StructureKey::parse_token`]'s atom scan.
+    ///
+    /// # Why this test is a unit test and not an integration one
+    ///
+    /// It cannot be reached from either public entry point. `parse_token` scans
+    /// every atom for a reserved spelling *before* it looks at the tenth field,
+    /// so it answers first; `from_token` discards the reason entirely. A seeded
+    /// mutation collapsing this branch into the unknown-token decline therefore
+    /// survived the whole integration suite — the observable behaviour is
+    /// identical, because the atom scan is what produces it.
+    ///
+    /// The branch stays because the two guards answer different questions: the
+    /// atom scan is a coarse net over the whole token, this is the positional
+    /// guard for one slot. Narrow the scan to dtype positions later — a
+    /// reasonable thing to want — and this becomes the live enforcement of
+    /// §6.1-0001 for the accumulator. Untested defence-in-depth is just untested
+    /// code that looks reassuring, so it is tested here at the only level where
+    /// it is observable.
+    #[test]
+    fn the_accumulator_slot_declines_a_reserved_dtype_on_its_own() {
+        for spelling in ["f8e4m3fnuz", "f8e5m2fnuz"] {
+            assert_eq!(
+                parse_acc_mp(&format!("{spelling}/rm"), ElementKind::F32),
+                Err(TokenDecline::ReservedDtype {
+                    spelling: spelling.to_string()
+                }),
+                "a reserved accumulator must be recognized-and-declined, never unknown"
+            );
+        }
+        // Distinctness is the clause's actual requirement (§6.1-0001), so pin the
+        // other verdict too: an unknown spelling must NOT report as reserved.
+        assert_eq!(
+            parse_acc_mp("f99/rm", ElementKind::F32),
+            Err(TokenDecline::Unrecognized)
+        );
+        // Positive control — every assertion above is a refusal.
+        assert_eq!(
+            parse_acc_mp("f64/rm", ElementKind::F32),
+            Ok(AccMp {
+                acc: ElementKind::F64,
+                mp: MpCode::Rm
+            })
+        );
+    }
 
     /// spec/namespaces/cuda.md §4 — BACKS the "a `cuda:` capability-set is a single
     /// scalar, no variable-length list" claim (which makes the §6.8-0007 digest
