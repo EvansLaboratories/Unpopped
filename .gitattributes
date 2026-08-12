@@ -12,3 +12,18 @@
 # Match every .cu in the workspace instead of one directory, so a future
 # relocation cannot quietly drop the guarantee again.
 *.cu text eol=lf
+
+# Vendored KISS artifacts are copied VERBATIM from the KISS repository and their
+# whole value is that `diff` against the source is meaningful — that is the only
+# thing separating a vendored file from a retyped one. With autocrlf=true a
+# fresh checkout would materialize them as CRLF while KISS's originals are LF,
+# so every line would differ and the refresh procedure in kiss/README.md would
+# report a change on a byte-identical file.
+#
+# A verifier that cries wolf is worse than no verifier: it teaches the operator
+# to skip the diff, and the next real divergence goes through.
+#
+# Matched by directory rather than by file, per the lesson recorded above — a
+# rule naming one path stops protecting anything the moment the file moves, and
+# does so silently.
+crates/unpopped-vocab/kiss/** text eol=lf
