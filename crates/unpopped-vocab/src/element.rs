@@ -1041,7 +1041,7 @@ pub enum ElementKind {
     ///
     /// Storage-only in this crate today: no wrapper type and no tensor-core
     /// path. It is in the vocabulary because §6.1-0001 pins the scalar dtype
-    /// set at exactly twenty-two tokens and forbids omitting any of them — a
+    /// set at exactly twenty-four tokens and forbids omitting any of them — a
     /// party that cannot lower a dtype must still **name** it, so it can
     /// decline it as a known dtype rather than as an unknown token.
     I16,
@@ -1049,7 +1049,7 @@ pub enum ElementKind {
     /// kernel family as [`S8`] with unsigned operands.
     U8,
     /// Unsigned 16-bit integer (KISS-Classify §6.1). Storage-only here, on the
-    /// same terms as [`S16`](Self::S16).
+    /// same terms as [`I16`](Self::I16).
     U16,
     /// Signed 32-bit integer. Maps to the `i32` Rust type via the
     /// [`Element`] impl. Two roles:
@@ -1172,12 +1172,67 @@ pub enum ElementKind {
     /// is spelling-keyed, not discriminant-keyed).
     U32,
     /// Unsigned 64-bit integer (KISS-Classify §6.1). Storage-only here, on the
-    /// same terms as [`S16`](Self::S16) — named so it can be declined as a
+    /// same terms as [`I16`](Self::I16) — named so it can be declined as a
     /// known dtype rather than as an unknown token.
     U64,
 }
 
 impl ElementKind {
+    /// Every variant, in declaration order.
+    ///
+    /// `ElementKind` is a **closed** set — KISS-Classify §6.1-0001 pins the
+    /// vocabulary and forbids omitting a member — so being able to enumerate it
+    /// is part of what the type is for. Conformance checking in particular needs
+    /// it: comparing this crate's dtype vocabulary against KISS's manifest means
+    /// enumerating both sides, and a comparison that can only walk one of them
+    /// checks half the property (a *missing* token and an *extra* one are
+    /// different bugs).
+    ///
+    /// # This is 25 entries against a 24-token vocabulary
+    ///
+    /// Not a discrepancy. [`F32Strict`](Self::F32Strict) is a derivation input
+    /// on the operand channel, not a key dtype: it folds to
+    /// [`F32`](Self::F32) and spells the same `f32` token (sk3 D4 retired
+    /// `f32s`; §6.1-0005 forbids a strict-precision dtype token). So 25 variants
+    /// produce 24 distinct tokens, and **the token image is the thing to compare
+    /// across implementations** — comparing variant counts manufactures
+    /// divergence that isn't on the wire.
+    ///
+    /// # Keeping it complete
+    ///
+    /// Adding a variant here is already a deliberate workspace-wide event: the
+    /// enum is intentionally exhaustive, so a new variant breaks the build at
+    /// every match site including the token codec. If a new variant carries a
+    /// §6.1 token but is missed here, `tests/kiss_dtype_manifest.rs` fails — the
+    /// vendored manifest would list a token this list cannot produce.
+    pub const ALL: [Self; 25] = [
+        Self::F16,
+        Self::Bf16,
+        Self::F32,
+        Self::F32Strict,
+        Self::F64,
+        Self::I8,
+        Self::I16,
+        Self::U8,
+        Self::U16,
+        Self::I32,
+        Self::I64,
+        Self::Bool,
+        Self::Fp8E4M3FN,
+        Self::Fp8E4M3FNUZ,
+        Self::Fp8E5M2,
+        Self::F8E8M0,
+        Self::F8E6M2,
+        Self::Fp8E5M2FNUZ,
+        Self::I4,
+        Self::U4,
+        Self::B1,
+        Self::Complex64,
+        Self::Complex128,
+        Self::U32,
+        Self::U64,
+    ];
+
     /// Whether this dtype is **reserved** by KISS-Classify §6.1-0001: part of
     /// the closed vocabulary, with **no computation semantics** at this schema
     /// version.

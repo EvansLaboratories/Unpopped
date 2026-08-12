@@ -1307,6 +1307,23 @@ pub enum TokenDecline {
     /// [`BadAccMpField`](Self::BadAccMpField): this field is *well-formed*, it
     /// just says nothing, and a producer emitting it has a real bug.
     RedundantAccMpField,
+    /// Field 8 spelled a reduced-axis set with the **wrong one** of the four
+    /// distinct encodings — an `x<hh>` bitmask naming a set that has a sentinel
+    /// (`rall` / `rlast`), or `x00` naming the empty set that is `-`.
+    ///
+    /// Not pedantry about style. §6.6-0009's `x<hh>` form is **domain-restricted**
+    /// to "any reduced-axis set that is neither all-axes nor the lone trailing
+    /// axis", so such a spelling is not an instance of the fourth value — it is
+    /// outside all four, and §6.7-0005 requires a reader to reject any other
+    /// field-8 spelling with a typed decline. The clause's "MUST NOT overload a
+    /// single sentinel across two of them" binds the reader that accepts it, not
+    /// only the producer that emits it.
+    ///
+    /// Accepting-and-normalizing instead would make `from_token` → `to_token`
+    /// byte-unstable for these tokens, and **a key with two spellings for one
+    /// meaning is not an identity** — which is the entire basis for using a
+    /// `structure_key` as a cache key. (Ruled by the KISS architect, KISS #160.)
+    NonCanonicalReduceField,
 }
 
 impl StructureKey {
@@ -1475,6 +1492,31 @@ impl StructureKey {
         // diagnosing the tenth field of a token whose second field is already
         // gibberish would name a symptom instead of the cause.
         let parts: Vec<&str> = token.split('|').collect();
+
+        // Field 8's own verdict, for the same reason: a non-canonical `x<hh>` is
+        // a *specific* refusal (§6.6-0009 / §6.7-0005), and collapsing it into
+        // `Unrecognized` would tell a producer "I don't know this token" when
+        // the truth is "you spelled a set I understand with the wrong one of
+        // four encodings" — actionable versus not.
+        if let (Some(field), Some(rank)) = (
+            parts.get(8),
+            parts
+                .get(6)
+                .and_then(|s| s.strip_prefix('r')?.parse::<u8>().ok()),
+        ) {
+            parse_reduce_field(field, rank)?;
+        }
+
+        // The §6.7-0013 field's own verdicts, which `from_token` cannot express
+        // — it returns `Option`, so "malformed", "redundant" and "unknown op
+        // code" all collapse to `None`. Reached through the SAME `parse_acc_mp`
+        // the strict decode uses, so the reason reported here is by construction
+        // the reason the decode actually failed.
+        //
+        // Dispatch is by op family, as everywhere else. An unparseable op or
+        // dtype code falls through untouched: those are `Unrecognized`, and
+        // diagnosing the tenth field of a token whose second field is already
+        // gibberish would name a symptom instead of the cause.
         if let (10, Some(op), Some(dt)) = (
             parts.len(),
             parts.get(1).and_then(|s| op_from_code(s)),
@@ -1553,29 +1595,7 @@ impl StructureKey {
             }
         }
 
-        let reduce_axes = match parts[8] {
-            "-" => AxisMask::EMPTY,
-            // §6.7-0005 rank-relative sentinels, resolved against the token's
-            // `rank` — the widest-operand / input-axis space the reduce mask
-            // indexes (see `structure_key`, `rank` = `max operand rank`).
-            //
-            // These are no longer accept-only. This codec now EMITS them too
-            // (see `reduce_field_code`): §6.7-0005 makes `rall`/`rlast` a
-            // producer MUST for the all-axes and lone-trailing-axis cases, and
-            // emitting the equivalent `x<hex>` there — which is what this crate
-            // did, and what the comment here used to excuse as "byte-different
-            // but semantically identical" — is a byte divergence from every
-            // other conforming deriver on every reduction cell.
-            "rall" => AxisMask(all_axes_mask(rank)),
-            "rlast" => {
-                if rank == 0 {
-                    // No trailing axis exists in a rank-0 space — malformed.
-                    return None;
-                }
-                AxisMask(1u8 << (rank - 1))
-            }
-            s => AxisMask(u8::from_str_radix(s.strip_prefix('x')?, 16).ok()?),
-        };
+        let reduce_axes = parse_reduce_field(parts[8], rank).ok()?;
 
         // The tenth field, dispatched by OP FAMILY (§6.7-0013) — mirroring
         // `to_token`. A non-gem cell's tenth field is the `(acc + mp)` field and
@@ -2767,6 +2787,66 @@ fn reduce_field_code(axes: AxisMask, rank: u8) -> String {
     format!("x{:02x}", axes.0)
 }
 
+/// Decode field 8, the reduce spec — the reader half of [`reduce_field_code`].
+///
+/// The four §6.6-0009 encodings, and **only** the four. The sentinels resolve
+/// against the token's `rank`: the widest-operand / input-axis space the mask
+/// indexes (see [`structure_key`], `rank` = max operand rank).
+///
+/// # Rejecting a non-canonical spelling is required of the READER
+///
+/// §6.6-0009's fourth value is domain-restricted — it is an explicit bitmask
+/// "for any reduced-axis set that is **neither all-axes nor the lone trailing
+/// axis**". An `x03` at rank 2, whose bits are all axes, is therefore not an
+/// instance of that value; it is outside all four, and §6.7-0005 says a reader
+/// "MUST reject any other field-8 spelling with a typed decline". The clause's
+/// prohibition on overloading one sentinel across two values binds the reader
+/// that accepts such a token, not only the producer that emits it.
+///
+/// This codec accepted them until now, on the reasoning that declining was a
+/// stronger claim than the clause made. It isn't, and the cost of the lenient
+/// reading is concrete: normalizing on read makes `from_token` → `to_token`
+/// byte-unstable, and **a key admitting two spellings for one meaning is not an
+/// identity** — which is the entire basis for using a `structure_key` as a cache
+/// key. §6.7-0008's round-trip byte-identity is scoped to keys whose fields
+/// satisfy the §6.5–§6.6 domains, which these do not. (KISS architect ruling,
+/// KISS #160.)
+///
+/// `x00` is rejected on the same footing: the empty set is `-`, and spelling it
+/// as a bitmask is the same overload pointing at the first value instead of the
+/// second or third.
+///
+/// # Errors
+///
+/// [`TokenDecline::NonCanonicalReduceField`] for a well-formed spelling of a set
+/// that has a different canonical encoding; [`TokenDecline::Unrecognized`] for a
+/// field that is not one of the four forms at all (including `rlast` in a rank-0
+/// space, which has no trailing axis, and `rall` there, which would name the
+/// empty set that `-` already owns).
+fn parse_reduce_field(field: &str, rank: u8) -> Result<AxisMask, TokenDecline> {
+    match field {
+        "-" => Ok(AxisMask::EMPTY),
+        "rall" if rank > 0 => Ok(AxisMask(all_axes_mask(rank))),
+        "rlast" if rank > 0 => Ok(AxisMask(1u8 << (rank - 1))),
+        // rank 0: neither sentinel has a referent. `rlast` has no trailing axis,
+        // and `rall` would denote the empty set — which is `-`'s value, so
+        // accepting it would be the overload §6.6-0009 forbids.
+        "rall" | "rlast" => Err(TokenDecline::Unrecognized),
+        s => {
+            let hex = s.strip_prefix('x').ok_or(TokenDecline::Unrecognized)?;
+            let mask = u8::from_str_radix(hex, 16).map_err(|_| TokenDecline::Unrecognized)?;
+            // Well-formed, but is this set's canonical spelling one of the
+            // sentinels (or `-`)? If so the token is outside all four values.
+            let canonical_is_elsewhere = mask == 0
+                || (rank > 0 && (mask == all_axes_mask(rank) || mask == 1u8 << (rank - 1)));
+            if canonical_is_elsewhere {
+                return Err(TokenDecline::NonCanonicalReduceField);
+            }
+            Ok(AxisMask(mask))
+        }
+    }
+}
+
 /// Decode the non-contraction `(acc + mp)` field (§6.7-0013) for a cell whose
 /// compute dtype is `compute`.
 ///
@@ -3228,25 +3308,62 @@ mod tests {
         assert_eq!(k_ax0, parsed);
     }
 
+    /// Field 8 admits **exactly one** spelling per reduced-axis set.
+    ///
+    /// This test previously asserted the opposite for the bitmask cases — that
+    /// `x07` at rank 3 was accepted alongside `rall`, "semantically identical to
+    /// the explicit mask Baracuda itself emits". That leniency is now a decline,
+    /// per the KISS architect's ruling (KISS #160): §6.6-0009's `x<hh>` value is
+    /// domain-restricted to sets that are *neither* all-axes *nor* the lone
+    /// trailing axis, so `x07`-at-rank-3 is not an instance of it, and §6.7-0005
+    /// requires a reader to reject any other field-8 spelling.
+    ///
+    /// The old assertion was not merely permissive, it was self-defeating: two
+    /// accepted spellings for one set makes `from_token` → `to_token`
+    /// byte-unstable, and a key with two spellings for one meaning is not an
+    /// identity — which is the only reason to have a `structure_key` at all.
     #[test]
-    fn from_token_accepts_rall_rlast_rank_relative_sentinels() {
-        // §6.7-0005: Baracuda emits `x<hex>` and never these, but a reader MUST ACCEPT
-        // a conformant peer's rank-relative `rall` (all axes) / `rlast` (trailing axis)
-        // sentinels rather than decline the whole token. They resolve against `rank`.
+    fn field_8_admits_exactly_one_spelling_per_reduced_set() {
         let base = "sk4|bin|f32|cuda:sm89|ix32|grid|r3|\
                     co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f";
-        // `rall` @ rank 3 => all three axis bits => 0b111.
+
+        // The two sentinels resolve against `rank`.
         let k_all = StructureKey::from_token(&format!("{base}|rall")).expect("rall accepted");
         assert_eq!(k_all.reduce_axes, AxisMask(0b111));
-        // Semantically identical to the explicit `x07` mask Baracuda itself emits.
-        let k_hex = StructureKey::from_token(&format!("{base}|x07")).expect("x07 accepted");
-        assert_eq!(k_all.reduce_axes, k_hex.reduce_axes);
-        // `rlast` @ rank 3 => the trailing axis bit only => 0b100.
         let k_last = StructureKey::from_token(&format!("{base}|rlast")).expect("rlast accepted");
         assert_eq!(k_last.reduce_axes, AxisMask(0b100));
-        // `rlast` on a rank-0 space is malformed (no trailing axis) => decline.
+
+        // And their bitmask equivalents are now REFUSED, with a verdict that
+        // says which of the four encodings was owed rather than "unknown token".
+        for (field, set) in [("x07", "all axes"), ("x04", "the lone trailing axis")] {
+            assert_eq!(
+                StructureKey::parse_token(&format!("{base}|{field}")),
+                Err(TokenDecline::NonCanonicalReduceField),
+                "`{field}` at rank 3 spells {set}, whose canonical encoding is a sentinel"
+            );
+        }
+        // `x00` is the same overload aimed at `-`.
+        assert_eq!(
+            StructureKey::parse_token(&format!("{base}|x00")),
+            Err(TokenDecline::NonCanonicalReduceField)
+        );
+
+        // Positive control: a set with NO sentinel keeps the bitmask form, so
+        // the assertions above are about canonicalization and not about `x<hh>`
+        // having been refused wholesale.
+        let k_mid = StructureKey::from_token(&format!("{base}|x03")).expect("x03 accepted");
+        assert_eq!(k_mid.reduce_axes, AxisMask(0b011));
+        assert_eq!(k_mid.to_token(), format!("{base}|x03"), "round-trip stable");
+
+        // Neither sentinel has a referent in a rank-0 space: `rlast` has no
+        // trailing axis, and `rall` would name the empty set that `-` owns.
         let r0 = "sk4|une|f32|cuda:sm89|ix32|grid|r0|co/00/v1/d16/f;co/00/v1/d16/f";
         assert_eq!(StructureKey::from_token(&format!("{r0}|rlast")), None);
+        assert_eq!(StructureKey::from_token(&format!("{r0}|rall")), None);
+        assert!(
+            StructureKey::from_token(&format!("{r0}|-")).is_some(),
+            "control: a rank-0 cell is spelled `-`"
+        );
     }
 
     #[test]
