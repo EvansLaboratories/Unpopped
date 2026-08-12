@@ -25,8 +25,8 @@ Nothing to do but be ready. Each names its trigger.
 
 | Item | Trigger |
 |---|---|
-| **sk4 regen** of `unpopped-vocab` — renames, MX scale dtypes, `(acc+mp)` coordinate, `STRUCTURE_KEY_VERSION` 3→4 | KISS Phase-0 PR-1 landing. Execution basis is `docs/dtype-spelling-delta.md`. Then a four-way byte-match, then a coordinated semver-major. **Unpopped is on the critical path** — Baracuda re-points at `unpopped-vocab@sk4`, so publish and then name the exact version to them. |
-| **Vendor the KISS dtype manifest** + assert token-set equality both ways in CI | KISS PR #129 (adds `structure_key_schema_version` / `token_prefix`). Do **not** vendor before it: a version-less vendored manifest is itself the clause-D violation — persisted, indexed dtype tokens detached from their schema version — and `c64` changes meaning at sk4, so a stale pin is silently wrong rather than loudly wrong. |
+| ~~**sk4 regen** of `unpopped-vocab`~~ — **code DONE, publication held** (`7d2c5d7`, `9bbd71d`, `4d72bcb`) | KISS #131 merged (`19c3ad7`). Renames, MX scale dtypes, `(acc+mp)`, version 3→4 all landed and verified against the merged artifact. **Remaining trigger: the four-way byte-match, then Eric's push + the 0.1.0→0.2.0 publish.** Sequencing was inverted mid-flight and the new order is right: **push → byte-match → publish.** crates.io versions are immutable, so publishing an unverified token set makes a divergence permanent and a third version the only remedy. **Unpopped is on the critical path** — Baracuda resolves from the registry with no path override and is hard-blocked until the push. |
+| ~~**Vendor the KISS dtype manifest**~~ — **DONE** (`4d72bcb`) | Unblocked by KISS #131: `conformance/corpus/dtype_manifest.json` carries `structure_key_schema_version` / `token_prefix`. Vendored verbatim at `19c3ad7` under `crates/unpopped-vocab/kiss/`, with equality asserted **both ways** plus a schema-version assertion, so a copy taken from a newer schema fails loudly instead of quietly widening the set. |
 | **`unpopped-cuda` sub-crate**: CUDA emitter donated by Baracuda, plus the `convert.rs` CUDA parser moving out of neutral core | The 0.2 trait freeze. The crate has **two** inbound streams — IR→`.cu` (Baracuda's donation) and `.cu`→IR (our parser) — so it must not be designed emit-only. |
 | **Make the target namespace pluggable**; move the `cuda:` vocabulary out of `unpopped-vocab` | Same carve. `ArchSku` stays Baracuda-owned content sourced from KISS's SSOT, generated-and-committed, never `build.rs`. |
 
@@ -91,6 +91,17 @@ rather than a cleanup commit.
 - **The KISS cost model** (#125) — vector-authoritative vs optional sibling. Our
   position is recorded: we already emit a two-axis vector with provenance, and a
   generator can only ever say `declared`.
+- ~~**Whether a reader must decline a non-canonical `x<hh>` reduce field**~~ —
+  **RULED, and implemented** (`4d72bcb`). I read §6.6-0009/§6.7-0005 as silent on
+  the reader and shipped accept-and-normalize. It is not silent: the `x<hh>`
+  value is *domain-restricted* to sets that are neither all-axes nor the lone
+  trailing axis, so such a spelling is outside all four values and §6.7-0005's
+  "reject any other field-8 spelling" applies. Worth keeping as a record of the
+  reasoning: **the lenient reading was self-defeating on its own terms** — two
+  accepted spellings for one set make `from_token` → `to_token` byte-unstable,
+  and a key with two spellings for one meaning is not an identity. When a clause
+  looks silent, check whether an adjacent value's *domain* already answers it.
+  (KISS #160.)
 
 ---
 
