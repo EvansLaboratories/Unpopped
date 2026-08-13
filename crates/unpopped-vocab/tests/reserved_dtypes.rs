@@ -104,12 +104,24 @@ fn a_reserved_dtype_declines_distinctly_from_an_unknown_token() {
         ),
     }
 
-    // The contrast that gives the assertion above its meaning.
+    // The contrast that gives the assertion above its meaning. §6.1-0001's
+    // requirement is DISTINCTNESS, not a particular catch-all: an unknown
+    // spelling now reports as `UnknownDtype` rather than the general
+    // `Unrecognized`, which is strictly more precise and still not
+    // `ReservedDtype`. Asserting the exact variant here would make this test a
+    // pin on how coarse our diagnosis happens to be, when the property it
+    // exists to protect is that these two verdicts never collapse into one.
     let unknown_tok = good.replacen("|f32|", "|f13|", 1);
+    let unknown = StructureKey::parse_token(&unknown_tok);
     assert_eq!(
-        StructureKey::parse_token(&unknown_tok),
-        Err(TokenDecline::Unrecognized),
-        "a genuinely unknown spelling must NOT report as reserved"
+        unknown,
+        Err(TokenDecline::UnknownDtype),
+        "an unknown spelling declines as unknown"
+    );
+    assert!(
+        !matches!(unknown, Err(TokenDecline::ReservedDtype { .. })),
+        "a genuinely unknown spelling must NOT report as reserved — the §6.1-0001 \
+         obligation is that these two are distinguishable"
     );
 
     // Obligation 3 via the legacy surface: it still refuses, it just cannot say why.

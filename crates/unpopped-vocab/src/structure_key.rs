@@ -1324,6 +1324,29 @@ pub enum TokenDecline {
     /// meaning is not an identity** — which is the entire basis for using a
     /// `structure_key` as a cache key. (Ruled by the KISS architect, KISS #160.)
     NonCanonicalReduceField,
+    /// The dtype field named a spelling outside the closed §6.1 set.
+    ///
+    /// Distinct from [`ReservedDtype`](Self::ReservedDtype) — that is the
+    /// §6.1-0001 obligation — and now also distinct from the general
+    /// [`Unrecognized`](Self::Unrecognized), because "your dtype vocabulary and
+    /// mine differ" and "I could not parse this token" call for different
+    /// responses from the sender.
+    UnknownDtype,
+    /// The op-family field named a category this schema version has no code for.
+    ///
+    /// Split from [`Unrecognized`](Self::Unrecognized) for the same reason and
+    /// with a sharper consequence: the op family is what **decides which field
+    /// the tenth slot is** (§6.7-0013), so failing to recognize it means the
+    /// token cannot be interpreted at all rather than merely being unsupported.
+    UnknownOpFamily,
+    /// The `gem` contraction group is malformed — a bad math-precision code, a
+    /// dtype slot outside the closed set, or too few components.
+    ///
+    /// The gem-side counterpart of [`BadAccMpField`](Self::BadAccMpField). The
+    /// two occupy the same token slot and are told apart by op family, so
+    /// reporting them under one name would undo the distinction the dispatch
+    /// exists to make.
+    BadContractionField,
 }
 
 impl StructureKey {
@@ -1517,13 +1540,30 @@ impl StructureKey {
         // dtype code falls through untouched: those are `Unrecognized`, and
         // diagnosing the tenth field of a token whose second field is already
         // gibberish would name a symptom instead of the cause.
-        if let (10, Some(op), Some(dt)) = (
-            parts.len(),
-            parts.get(1).and_then(|s| op_from_code(s)),
-            parts.get(2).and_then(|s| dtype_from_code(s)),
-        ) {
-            if !carries_contraction_field(op) {
-                parse_acc_mp(parts[9], dt)?;
+        //
+        // The op family and the primary dtype get their own verdicts first,
+        // because they are the two fields whose failure explains everything
+        // downstream: the op family decides WHICH field the tenth slot is, so an
+        // unrecognized one means the token cannot be interpreted at all rather
+        // than merely being unsupported. Only checked once the field count is
+        // plausible, so a shapeless string is "not a token" rather than "your op
+        // vocabulary differs from mine".
+        if parts.len() == 9 || parts.len() == 10 {
+            let op = parts
+                .get(1)
+                .and_then(|s| op_from_code(s))
+                .ok_or(TokenDecline::UnknownOpFamily)?;
+            let dt = parts
+                .get(2)
+                .and_then(|s| dtype_from_code(s))
+                .ok_or(TokenDecline::UnknownDtype)?;
+
+            if let Some(tenth) = parts.get(10 - 1).filter(|_| parts.len() == 10) {
+                if carries_contraction_field(op) {
+                    attribute_bad_contraction(tenth)?;
+                } else {
+                    parse_acc_mp(tenth, dt)?;
+                }
             }
         }
         Self::from_token(token).ok_or(TokenDecline::Unrecognized)
@@ -2633,6 +2673,7 @@ const fn arch_code(v: ArchSku) -> &'static str {
     match v {
         ArchSku::Sm80 => "cuda:sm80",
         ArchSku::Sm89 => "cuda:sm89",
+        ArchSku::Sm90 => "cuda:sm90",
         ArchSku::Sm90a => "cuda:sm90a",
     }
 }
@@ -2641,6 +2682,11 @@ fn arch_from_code(s: &str) -> Option<ArchSku> {
     Some(match s {
         "cuda:sm80" => ArchSku::Sm80,
         "cuda:sm89" => ArchSku::Sm89,
+        // `sm90` before `sm90a` reads naturally but is not a prefix hazard: these
+        // are whole-string matches, not prefix tests. §6.8-0002 matches the
+        // capability byte-exact, which is what keeps two adjacent spellings for
+        // two genuinely different compilation targets from collapsing.
+        "cuda:sm90" => ArchSku::Sm90,
         "cuda:sm90a" => ArchSku::Sm90a,
         _ => return None,
     })
@@ -2845,6 +2891,52 @@ fn parse_reduce_field(field: &str, rank: u8) -> Result<AxisMask, TokenDecline> {
             Ok(AxisMask(mask))
         }
     }
+}
+
+/// Report a *definitely* malformed `gem` contraction group.
+///
+/// A **sufficient** condition for badness, never a claim of goodness: everything
+/// it rejects, [`StructureKey::from_token`]'s full contraction parse also
+/// rejects, and a field that passes here may still fail there (geometry
+/// components, size codes, layout orders) and fall through to the general
+/// decline. That asymmetry is deliberate — the job is to *attribute* a failure
+/// this codec has already decided on, not to become a second parser that could
+/// disagree with the first.
+///
+/// Checks the trailing precision group `<wdt>/<acc>/<out>/<mp>`, which is
+/// required on every gem cell (§6.7-0006) and is where the malformations that
+/// are worth naming actually live.
+///
+/// # Errors
+///
+/// [`TokenDecline::ReservedDtype`] for a reserved dtype in any of the three
+/// dtype slots — §6.1-0001 governs every dtype position, and these are dtype
+/// positions; [`TokenDecline::BadContractionField`] for a malformed shape or an
+/// unrecognized `<mp>` code.
+fn attribute_bad_contraction(field: &str) -> Result<(), TokenDecline> {
+    let Some(rest) = field.strip_prefix('c') else {
+        return Err(TokenDecline::BadContractionField);
+    };
+    let comps: Vec<&str> = rest.split('/').collect();
+    if comps.len() < 6 {
+        return Err(TokenDecline::BadContractionField);
+    }
+    let prec = &comps[comps.len() - 4..];
+    for code in &prec[..3] {
+        match dtype_from_code(code) {
+            None => return Err(TokenDecline::BadContractionField),
+            Some(dt) if dt.is_reserved() => {
+                return Err(TokenDecline::ReservedDtype {
+                    spelling: (*code).to_string(),
+                });
+            }
+            Some(_) => {}
+        }
+    }
+    if mp_from_code(prec[3]).is_none() {
+        return Err(TokenDecline::BadContractionField);
+    }
+    Ok(())
 }
 
 /// Decode the non-contraction `(acc + mp)` field (§6.7-0013) for a cell whose

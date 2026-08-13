@@ -46,6 +46,17 @@ pub enum ArchSku {
     /// Ada Lovelace specializations (FP8 tensor cores). Requires `sm89`
     /// feature in the consuming kernel crate.
     Sm89,
+    /// Hopper, **portable** baseline (`-arch=sm_90`). Distinct target from
+    /// [`Sm90a`](Self::Sm90a): code built for `sm_90` stays forward-compatible,
+    /// code built for `sm_90a` does not, and the two are not interchangeable in
+    /// a cache key even on the same physical device.
+    ///
+    /// Added because KISS names `cuda:sm90` in its §6.7 reference vectors. This
+    /// crate must be able to **decode** every arch token a conforming peer can
+    /// emit, independently of which SKU its own device probe elects — those are
+    /// different questions, and conflating them is how a reader ends up refusing
+    /// a token that is perfectly well-formed.
+    Sm90,
     /// Hopper-specialized (requires `sm90a` feature in the consuming
     /// kernel crate).
     Sm90a,
