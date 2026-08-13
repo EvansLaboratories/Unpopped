@@ -94,6 +94,9 @@ pub fn scalar_ctype(dt: ElementKind) -> Option<&'static str> {
         // is the storage type; the normalization lives in the logical spellers,
         // which already emit `... ? 1 : 0`.
         ElementKind::Bool => "unsigned char",
+        // Sub-byte dtypes spell their CONTAINER: several elements share a byte,
+        // and the packing lives in `sub_byte_helpers`, not in the type name.
+        ElementKind::I4 | ElementKind::U4 | ElementKind::B1 => "unsigned char",
         ElementKind::U32 => "unsigned int",
         ElementKind::U64 => "unsigned long long",
         _ => return None,
@@ -119,6 +122,9 @@ pub fn dtype_tag(dt: ElementKind) -> &'static str {
         ElementKind::Fp8E4M3FN => "f8e4m3fn",
         ElementKind::Fp8E5M2 => "f8e5m2",
         ElementKind::Bool => "bool",
+        ElementKind::I4 => "i4",
+        ElementKind::U4 => "u4",
+        ElementKind::B1 => "b1",
         // U32 index-dtype infix: `gather_f32_u32` (the Fuel-facing u32-index
         // variant's entry_point symbol).
         ElementKind::U32 => "u32",
@@ -311,6 +317,98 @@ static unsigned char unpopped_f8e5m2_store(float x) {
 }
 ",
         ),
+        _ => None,
+    }
+}
+
+/// Portable-C helpers for a **sub-byte** dtype's packed load and store, or
+/// `None` for a dtype stored one-per-byte or wider.
+///
+/// The packing is KISS's, not a choice made here (§6.1, normative per §6.0-0001):
+/// `i4`/`u4` pack two per byte with the LOW nibble at the even index, `b1` packs
+/// eight with the LSB at the lowest logical index. `i4` sign-extends on read;
+/// `u4` and `b1` zero-extend. Both halves of that — the order and the extension —
+/// produce a plausible wrong answer rather than a crash when guessed.
+///
+/// # The store is a read-modify-write, and that bounds which backends may use it
+///
+/// Two logical elements share a byte, so writing one must preserve its
+/// neighbour. In this backend's **serial** `for` loop that is simply correct. In
+/// a parallel kernel two threads would read-modify-write the same byte and race.
+/// So this helper is safe for the scalar reference emitter and **must not be
+/// copied into a threaded backend unchanged** — a GPU emitter needs either a
+/// byte-per-thread decomposition or an atomic, and should decline until it has
+/// one. Recorded here rather than in a follow-up note because the code that
+/// looks copyable is exactly the code that gets copied.
+pub fn sub_byte_helpers(kind: ElementKind) -> Option<&'static str> {
+    match kind {
+        ElementKind::I4 => Some(
+            r"
+/* i4: two per byte, LOW nibble = even index (KISS-CLASSIFY 6.1); SIGN-extended. */
+static int unpopped_i4_load(const unsigned char* p, long long i) {
+    unsigned char nib = (i & 1) ? (p[i >> 1] >> 4) : (p[i >> 1] & 0x0F);
+    return (nib & 0x08) ? (int)nib - 16 : (int)nib;
+}
+
+static void unpopped_i4_store(unsigned char* p, long long i, int v) {
+    unsigned char nib = (unsigned char)(v & 0x0F);
+    unsigned char* b = &p[i >> 1];
+    /* Read-modify-write: the other nibble of this byte belongs to a neighbour. */
+    *b = (i & 1) ? (unsigned char)((*b & 0x0F) | (nib << 4))
+                 : (unsigned char)((*b & 0xF0) | nib);
+}
+",
+        ),
+        ElementKind::U4 => Some(
+            r"
+/* u4: packing identical to i4; ZERO-extended on read. */
+static int unpopped_u4_load(const unsigned char* p, long long i) {
+    return (int)((i & 1) ? (p[i >> 1] >> 4) : (p[i >> 1] & 0x0F));
+}
+
+static void unpopped_u4_store(unsigned char* p, long long i, int v) {
+    unsigned char nib = (unsigned char)(v & 0x0F);
+    unsigned char* b = &p[i >> 1];
+    *b = (i & 1) ? (unsigned char)((*b & 0x0F) | (nib << 4))
+                 : (unsigned char)((*b & 0xF0) | nib);
+}
+",
+        ),
+        ElementKind::B1 => Some(
+            r"
+/* b1: eight per byte, LSB = LOWEST logical index (KISS-CLASSIFY 6.1). */
+static int unpopped_b1_load(const unsigned char* p, long long i) {
+    return (int)((p[i >> 3] >> (i & 7)) & 1);
+}
+
+static void unpopped_b1_store(unsigned char* p, long long i, int v) {
+    unsigned char mask = (unsigned char)(1u << (i & 7));
+    unsigned char* b = &p[i >> 3];
+    *b = (v & 1) ? (unsigned char)(*b | mask) : (unsigned char)(*b & ~mask);
+}
+",
+        ),
+        _ => None,
+    }
+}
+
+/// The packed-load function name for a sub-byte dtype.
+pub fn sub_byte_load_fn(kind: ElementKind) -> Option<&'static str> {
+    match kind {
+        ElementKind::I4 => Some("unpopped_i4_load"),
+        ElementKind::U4 => Some("unpopped_u4_load"),
+        ElementKind::B1 => Some("unpopped_b1_load"),
+        _ => None,
+    }
+}
+
+/// The packed-store function name for a sub-byte dtype. Counterpart of
+/// [`sub_byte_load_fn`].
+pub fn sub_byte_store_fn(kind: ElementKind) -> Option<&'static str> {
+    match kind {
+        ElementKind::I4 => Some("unpopped_i4_store"),
+        ElementKind::U4 => Some("unpopped_u4_store"),
+        ElementKind::B1 => Some("unpopped_b1_store"),
         _ => None,
     }
 }

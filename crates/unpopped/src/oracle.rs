@@ -394,6 +394,15 @@ impl TypedBuffer {
         Self::new(dt, shape.to_vec(), dense_strides(shape), bytes)
     }
 
+    /// A buffer over already-packed sub-byte STORAGE bytes.
+    ///
+    /// The counterpart of [`TypedBuffer::from_sub_byte`], which packs values.
+    /// This wraps bytes that are already packed — the shape a kernel wrote.
+    #[must_use]
+    pub fn from_packed_bytes(dt: ElementKind, shape: &[i64], bytes: &[u8]) -> Self {
+        Self::new(dt, shape.to_vec(), dense_strides(shape), bytes.to_vec())
+    }
+
     /// Dense buffer of raw FP8 bit patterns for `dt`.
     ///
     /// Takes bits rather than values because an 8-bit float's whole domain is

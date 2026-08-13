@@ -44,7 +44,8 @@ use crate::backend::{Backend, GeneratedKernel, LowerError, Lowering, const_lit, 
 use crate::cfamily::{
     assert_no_int_div_or_const, binary_f32, binary_f64, binary_int, dtype_tag, fp8_helpers,
     narrow_load_fn, out_ctype_of, param_args, param_ctype, promote_load_f32, scalar_ctype,
-    select_f32, select_f64, store_expr_of, unary_f32, unary_f64,
+    select_f32, select_f64, store_expr_of, sub_byte_helpers, sub_byte_load_fn, sub_byte_store_fn,
+    unary_f32, unary_f64,
 };
 use crate::ir::{BinaryOp, ExprDag, UnaryOp};
 use crate::plan::{KernelPlan, Schedule};
@@ -159,6 +160,14 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
         s.push_str(helpers);
         s.push('\n');
     }
+    // A SUB-BYTE cell's elements share a byte, so its pack/unpack travels with
+    // the kernel too. See `sub_byte_helpers` for why the store is safe HERE and
+    // must not be copied into a threaded backend: it is a read-modify-write and
+    // this backend's loop is serial.
+    if let Some(helpers) = sub_byte_helpers(plan.dtype) {
+        s.push_str(helpers);
+        s.push('\n');
+    }
     s.push_str(&format!("void {name}(\n"));
     for i in 0..n {
         s.push_str(&format!("    const {ctype}* in{i},\n"));
@@ -173,8 +182,21 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
     // type. `promote_load_f32` returns its argument unchanged for dtypes that
     // need no detour, so the two cases share one expression.
     let narrow = narrow_load_fn(plan.dtype).is_some();
-    let body_ctype = if narrow { "float" } else { ctype };
-    let acc = |idx: u8| promote_load_f32(plan.dtype, &format!("in{idx}[i]"));
+    // A sub-byte element is not addressable, so its leaf is a helper CALL that
+    // unpacks it, and the body computes at `int` — the width C promotes a nibble
+    // or a bit to anyway.
+    let packed = sub_byte_load_fn(plan.dtype);
+    let body_ctype = if narrow {
+        "float"
+    } else if packed.is_some() {
+        "int"
+    } else {
+        ctype
+    };
+    let acc = |idx: u8| match packed {
+        Some(f) => format!("{f}(in{idx}, i)"),
+        None => promote_load_f32(plan.dtype, &format!("in{idx}[i]")),
+    };
     let (prelude, root) = lower_dag(
         &ExprDag::from_expr(plan.body),
         body_ctype,
@@ -195,10 +217,18 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
         },
     );
     let store = store_expr_of(plan, 0, root);
+    // A packed store is a STATEMENT, not an assignment: several elements share a
+    // byte, so there is no per-element lvalue to assign to. Writing `out[i] = ..`
+    // for a sub-byte dtype silently treats the packed buffer as one byte per
+    // element — it compiles, it runs, and it scrambles every lane past the first.
+    // Everything else keeps the plain form byte-identically.
+    let store_line = |indent: &str| match sub_byte_store_fn(plan.dtype) {
+        Some(f) => format!("{indent}{f}(out, i, {store});\n"),
+        None => format!("{indent}out[i] = {store};\n"),
+    };
     if prelude.is_empty() {
-        s.push_str(&format!(
-            "    for (long long i = 0; i < n; ++i) out[i] = {store};\n"
-        ));
+        s.push_str("    for (long long i = 0; i < n; ++i)");
+        s.push_str(&store_line(" "));
     } else {
         // Shared interiors: hoist the `tmp` block inside the loop (its RHS reads
         // the per-`i` inputs), so a shared value is computed once per element —
@@ -207,7 +237,8 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
         for decl in &prelude {
             s.push_str(&format!("        {decl}\n"));
         }
-        s.push_str(&format!("        out[i] = {store};\n    }}\n"));
+        s.push_str(&store_line("        "));
+        s.push_str("    }\n");
     }
     s.push_str("}\n");
     GeneratedKernel::new(name, s)
@@ -284,7 +315,10 @@ fn cpu_binary(op: BinaryOp, a: String, b: String, dtype: ElementKind) -> String 
         | ElementKind::U16
         | ElementKind::U32
         | ElementKind::U64
-        | ElementKind::Bool => binary_int(op, a, b, dtype),
+        | ElementKind::Bool
+        | ElementKind::I4
+        | ElementKind::U4
+        | ElementKind::B1 => binary_int(op, a, b, dtype),
         other => panic!(
             "cpu_c backend: no binary math for dtype {other:?} — f16/bf16 are declined in v1"
         ),

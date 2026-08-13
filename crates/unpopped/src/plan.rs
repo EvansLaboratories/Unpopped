@@ -1737,6 +1737,9 @@ pub fn is_int_dtype(dt: ElementKind) -> bool {
             | ElementKind::U16
             | ElementKind::U32
             | ElementKind::U64
+            | ElementKind::I4
+            | ElementKind::U4
+            | ElementKind::B1
     )
 }
 

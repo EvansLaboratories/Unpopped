@@ -165,9 +165,9 @@ const COVERAGE: &[(&str, ElementKind, Status, Status)] = &[
         ByDesign(MX_SCALE),
         ByDesign(MX_SCALE),
     ),
-    ("i4", ElementKind::I4, NotYet, NotYet),
-    ("u4", ElementKind::U4, NotYet, NotYet),
-    ("b1", ElementKind::B1, NotYet, NotYet),
+    ("i4", ElementKind::I4, Lowers, NotYet),
+    ("u4", ElementKind::U4, Lowers, NotYet),
+    ("b1", ElementKind::B1, Lowers, NotYet),
     ("c64", ElementKind::Complex64, NotYet, NotYet),
     ("c128", ElementKind::Complex128, NotYet, NotYet),
 ];

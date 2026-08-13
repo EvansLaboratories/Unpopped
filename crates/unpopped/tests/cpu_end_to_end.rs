@@ -1013,3 +1013,153 @@ int main(void) {{
         }
     }
 }
+
+/// **Sub-byte kernels round-trip through a real C compiler, packing intact.**
+///
+/// The emitted kernel packs and unpacks per KISS-CLASSIFY §6.1 in C; the oracle
+/// does the same in Rust; neither was derived from the other. This is where a
+/// packing disagreement would show as a wrong *value* rather than a wrong byte
+/// count — the failure a round-trip inside one implementation cannot see.
+///
+/// # The store is a read-modify-write, and that is why `n` is odd here
+///
+/// Two `i4` elements share a byte, so writing one must preserve its neighbour.
+/// An odd element count also forces a partial trailing byte, which is the
+/// off-by-one an `n / 2` allocation gets wrong. `b1` uses a count that is not a
+/// multiple of 8 for the same reason.
+///
+/// This works because `cpu_c`'s loop is **serial**. In a threaded backend two
+/// lanes would read-modify-write the same byte and race — noted on
+/// `cfamily::sub_byte_helpers`, because the code that looks copyable is the code
+/// that gets copied.
+#[test]
+fn sub_byte_kernels_preserve_packing_through_a_real_compiler() {
+    let Some(cc) = find_compiler() else {
+        eprintln!("SKIP sub_byte_kernels_preserve_packing_through_a_real_compiler: no C compiler.");
+        return;
+    };
+    let dir: PathBuf = std::env::temp_dir().join("unpopped-e2e");
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    // (tag, dtype, a, b) — `a + b` stays in range for every lane, so any
+    // mismatch is packing rather than overflow.
+    let cases: Vec<(&str, ElementKind, Vec<i8>, Vec<i8>)> = vec![
+        // 7 elements: odd, so the last byte is half-used.
+        (
+            "i4",
+            ElementKind::I4,
+            vec![-8, -1, 0, 1, 7, 3, -4],
+            vec![0, 1, 0, 2, 0, -3, 4],
+        ),
+        (
+            "u4",
+            ElementKind::U4,
+            vec![0, 1, 15, 7, 8, 2, 9],
+            vec![0, 2, 0, 8, 7, 13, 6],
+        ),
+        // 9 elements: not a multiple of 8.
+        (
+            "b1",
+            ElementKind::B1,
+            vec![1, 0, 1, 1, 0, 0, 1, 0, 1],
+            vec![0, 0, 1, 0, 1, 0, 1, 1, 0],
+        ),
+    ];
+
+    for (tag, dt, a, b) in cases {
+        let n = a.len() as i64;
+        // `b1` is a 1-bit operand and `+` would overflow it. `BitXor` is both
+        // admissible and the semantically right choice: KISS-CLASSIFY §6.1
+        // describes b1 as the binary-GEMM operand with "xor+popcount
+        // accumulation", so xor IS its arithmetic.
+        let op = if dt == ElementKind::B1 {
+            OpDef::elementwise(
+                "sbop",
+                2,
+                &[dt],
+                input(0).binary(unpopped::ir::BinaryOp::BitXor, input(1)),
+            )
+        } else {
+            OpDef::elementwise("sbop", 2, &[dt], input(0) + input(1))
+        };
+        let d = OperandDesc::new(1, &[n], &[1], dt, 1);
+        let operands = vec![d; 3];
+        let key = structure_key(OpCategory::BinaryElementwise, &operands, ArchSku::Sm89);
+        let kernel = generate(&op, &key, &CpuC);
+
+        let bufs = vec![
+            TypedBuffer::from_sub_byte(dt, &[n], &a),
+            TypedBuffer::from_sub_byte(dt, &[n], &b),
+        ];
+        let lit = |v: &[u8]| {
+            v.iter()
+                .map(|x| format!("{x}u"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let (pa, pb) = (bufs[0].raw_bytes(), bufs[1].raw_bytes());
+        let out_bytes = pa.len();
+        let src = format!(
+            "{}
+#include <stdio.h>
+
+int main(void) {{
+    const unsigned char in0[{}] = {{{}}};
+    const unsigned char in1[{}] = {{{}}};
+    unsigned char out[{out_bytes}];
+    for (int i = 0; i < {out_bytes}; ++i) out[i] = 0x5Au;
+    {}(in0, in1, out, {n});
+    for (int i = 0; i < {out_bytes}; ++i) printf(\"%u\\n\", (unsigned)out[i]);
+    return 0;
+}}
+",
+            kernel.source,
+            pa.len(),
+            lit(pa),
+            pb.len(),
+            lit(pb),
+            kernel.name
+        );
+
+        let c_file = dir.join(format!("sb_{tag}.c"));
+        let exe = dir.join(format!("sb_{tag}.exe"));
+        std::fs::write(&c_file, &src).expect("write");
+        cc.compile(&c_file, &exe, false)
+            .unwrap_or_else(|e| panic!("{tag}: compile: {e}"));
+        let out = std::process::Command::new(&exe).output().expect("run");
+        assert!(out.status.success(), "{tag}: exited {:?}", out.status);
+        let got_bytes: Vec<u8> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.trim().parse::<u8>().expect("non-integer"))
+            .collect();
+
+        let plan = build_plan(&op, &key);
+        let want = evaluate(&plan, &operands, &bufs, &[])
+            .into_iter()
+            .next()
+            .unwrap();
+
+        // Compare the DECODED values — a byte comparison would also pass if both
+        // sides packed the same way but decoded wrongly.
+        let got = TypedBuffer::from_sub_byte(dt, &[n], &vec![0i8; a.len()]);
+        let _ = got; // shape only; the real decode is below.
+        let decoded: Vec<i128> = {
+            let mut tb = TypedBuffer::from_sub_byte(dt, &[n], &vec![0i8; a.len()]);
+            let _ = &mut tb;
+            // Rebuild a buffer over the kernel's actual bytes.
+            TypedBuffer::from_packed_bytes(dt, &[n], &got_bytes).to_i128_vec()
+        };
+        assert_eq!(
+            decoded,
+            want.to_i128_vec(),
+            "{tag}: kernel and oracle disagree. Equal-length byte arrays with \
+             different values means the PACKING diverged, not the arithmetic."
+        );
+        assert_ne!(
+            got_bytes,
+            vec![0x5Au8; out_bytes],
+            "{tag}: every byte still holds the fill — the kernel never ran"
+        );
+    }
+}
