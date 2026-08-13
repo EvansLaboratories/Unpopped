@@ -369,6 +369,7 @@ pub fn try_build_plan<'a>(
 ) -> Result<KernelPlan<'a>, PlanError> {
     check_no_half_nextafter(op, key.dtype)?;
     check_int_op_admissibility(op, key.dtype)?;
+    check_complex_op_admissibility(op, key.dtype)?;
     Ok(build_plan(op, key))
 }
 
@@ -385,6 +386,7 @@ pub fn build_plan<'a>(op: &'a OpDef, key: &'a StructureKey) -> KernelPlan<'a> {
     assert_valid_multi_output(op, key);
     assert_no_half_nextafter(op, key.dtype);
     assert_int_op_admissibility(op, key.dtype);
+    assert_complex_op_admissibility(op, key.dtype);
     assert_coord_admissibility(op, key);
     assert_valid_reduction_post(op);
     assert_valid_views(op, key);
@@ -2139,6 +2141,108 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
 /// Panicking form of [`check_int_op_admissibility`] — the AOT gate.
 ///
 /// The admissibility rules live once, in the checking form. This is the shape
+/// Which ops may appear in a body at a **complex** dtype.
+///
+/// Complex is a third compute domain, and most of the IR's vocabulary is simply
+/// not defined on it:
+///
+/// * **Ordered ops** — `Max`/`Min`/`Cmp*` — have no meaning at all. The complex
+///   numbers are not an ordered field; there is no total order compatible with
+///   the arithmetic. This is not "unimplemented", it is undefined, and a future
+///   version should not quietly add it.
+/// * **Transcendentals** (`Unary`) and `Div` **are** mathematically defined for
+///   complex, and are rejected here as *unimplemented* — the oracle carries
+///   complex rules for `Add`/`Sub`/`Mul` only. Different reason, same verdict,
+///   and the message says which so the next reader does not have to guess.
+/// * **Int-only ops** never reach here: they are already refused by
+///   [`check_int_op_admissibility`], because a complex dtype is not an int dtype.
+///
+/// # Why this gate has to exist rather than letting the oracle refuse
+///
+/// Without it a `Max` at a complex dtype builds a plan, reaches the evaluator,
+/// and **panics** — `Val::f64()` on a complex is deliberately fatal, since
+/// silently taking the real part would drop the imaginary half and return a
+/// wrong answer that looks right. A panic is the correct behaviour *there* and
+/// the wrong behaviour *here*: this is the trust boundary, and an unserveable
+/// request must come back as a typed decline rather than unwind into the caller.
+/// Measured before writing this: `Max` and `CmpLt` at `Complex128` both panicked.
+pub(crate) fn check_complex_op_admissibility(
+    op: &OpDef,
+    dtype: ElementKind,
+) -> Result<(), PlanError> {
+    if !is_complex_dtype(dtype) {
+        return Ok(());
+    }
+    fn walk(e: &ScalarExpr, op_name: &str, dtype: ElementKind) -> Result<(), PlanError> {
+        let reject = |what: &str, why: &str| {
+            Err(PlanError::InadmissibleOpAtDtype {
+                dtype,
+                detail: format!("op '{op_name}': {what} at {dtype:?} — {why}"),
+            })
+        };
+        match e {
+            ScalarExpr::Input(_) | ScalarExpr::Const(_) => Ok(()),
+            ScalarExpr::Add(a, b) | ScalarExpr::Sub(a, b) | ScalarExpr::Mul(a, b) => {
+                walk(a, op_name, dtype)?;
+                walk(b, op_name, dtype)
+            }
+            ScalarExpr::Div(_, _) => reject(
+                "Div",
+                "complex division is DEFINED but not implemented — the oracle carries \
+                 complex rules for Add/Sub/Mul only",
+            ),
+            // `Max`/`Min` belong with `Cmp*`, not with the unimplemented rest:
+            // all four are *ordering* ops, and ordering is what complex does not
+            // have. Lumping them together would tell an author their `Max` might
+            // arrive later, which is the one thing that must not happen here.
+            ScalarExpr::Binary(bop, _, _)
+                if bop.is_cmp()
+                    || matches!(bop, crate::ir::BinaryOp::Max | crate::ir::BinaryOp::Min) =>
+            {
+                reject(
+                    &format!("{bop:?}"),
+                    "the complex numbers are NOT ORDERED — no total order is compatible \
+                     with the arithmetic, so this is undefined rather than unimplemented, \
+                     and no future version should add it",
+                )
+            }
+            ScalarExpr::Binary(bop, _, _) => reject(
+                &format!("{bop:?}"),
+                "no complex lowering — defined for complex but unimplemented",
+            ),
+            ScalarExpr::Unary(uop, _) => reject(
+                &format!("{uop:?}"),
+                "complex transcendentals are defined but not implemented",
+            ),
+            ScalarExpr::Select(_, _, _) => reject(
+                "Select",
+                "its predicate would have to be an ordered comparison, which complex \
+                 does not have",
+            ),
+            ScalarExpr::Param(_) => reject("Param", "scalar params are f32-only"),
+            ScalarExpr::Reduced(_) | ScalarExpr::Coord(_) => reject(
+                "Reduced/Coord",
+                "no complex reduction or coordinate path exists",
+            ),
+        }
+    }
+    walk(&op.body, &op.name, dtype)
+}
+
+/// `true` for the complex dtypes — the third compute domain alongside int and
+/// float.
+pub fn is_complex_dtype(dt: ElementKind) -> bool {
+    matches!(dt, ElementKind::Complex64 | ElementKind::Complex128)
+}
+
+/// Panicking wrapper for [`check_complex_op_admissibility`], for the AOT
+/// [`build_plan`] path where a violation is an authoring error.
+fn assert_complex_op_admissibility(op: &OpDef, dtype: ElementKind) {
+    if let Err(e) = check_complex_op_admissibility(op, dtype) {
+        panic!("{e}");
+    }
+}
+
 /// `build_plan` uses, where a violation is an authoring error worth failing
 /// loudly on rather than a request that cannot be served.
 fn assert_int_op_admissibility(op: &OpDef, dtype: ElementKind) {
