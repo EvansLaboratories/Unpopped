@@ -244,11 +244,24 @@ fn cpu_binary(op: BinaryOp, a: String, b: String, dtype: ElementKind) -> String 
     match dtype {
         ElementKind::F32 | ElementKind::F32Strict => binary_f32(op, a, b),
         ElementKind::F64 => binary_f64(op, a, b),
-        ElementKind::I32 | ElementKind::I64 | ElementKind::I8 | ElementKind::U8 => {
-            binary_int(op, a, b, dtype)
-        }
+        // Every integer dtype this backend admits routes to the raw-C operator
+        // speller. `I16`/`U16` were missing here while `supports_dtype` accepted
+        // them, so a NON-INFIX int op (`Shr`, `BitAnd`, …) panicked at a dtype
+        // whose `Add` lowered fine — infix arithmetic never reaches this
+        // function, so nothing that only exercises `+` can see the gap.
+        //
+        // `U32` needs no special spelling: `unsigned int >> unsigned int` is
+        // already a logical shift in C, which is exactly the semantics the
+        // oracle models.
+        ElementKind::I32
+        | ElementKind::I64
+        | ElementKind::I8
+        | ElementKind::U8
+        | ElementKind::I16
+        | ElementKind::U16
+        | ElementKind::U32 => binary_int(op, a, b, dtype),
         other => panic!(
-            "cpu_c backend: no binary math for dtype {other:?} — f16/bf16/u32 are declined in v1"
+            "cpu_c backend: no binary math for dtype {other:?} — f16/bf16 are declined in v1"
         ),
     }
 }

@@ -17,11 +17,22 @@
 //! separately from a wrong-value failure. (Borrowed from Baracuda's on-device
 //! `alpha78_relu_add_ondevice` harness — the trick is theirs.)
 //!
-//! # Skipping
+//! # Finding a compiler, and why the skip was dangerous
 //!
-//! This needs a host C compiler. Where none is found the test **skips loudly**
-//! rather than failing: it is a real-execution test, and a machine without a
-//! toolchain cannot run one. It must never silently pass, so the skip prints why.
+//! This needs a host C compiler. On Windows that normally means Visual Studio,
+//! which the installer deliberately does NOT put on `PATH` — `vcvars64.bat` is
+//! the supported way in. `find_compiler` therefore falls back to locating the
+//! install with `vswhere.exe` and driving `cl` through that script.
+//!
+//! Until it did, this entire file was silently vacuous on such a machine: no
+//! compiler found, every test printed `SKIP` and reported `ok`, and the suite
+//! was green while compiling nothing — on a box with a working toolchain in
+//! Program Files. **A loud skip is still a pass**, and four real-execution tests
+//! passing without executing anything is exactly the failure this file exists to
+//! prevent in generated kernels.
+//!
+//! Where there genuinely is no toolchain the tests still skip loudly rather than
+//! failing, and the skip prints why.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -51,14 +62,24 @@ struct CCompiler {
     /// a hard `lld-link: could not open 'm.lib'`. So ask the driver what it
     /// targets instead of assuming from its name.
     needs_libm: bool,
+    /// A `vcvars64.bat` to `call` before the compiler, for the normal Windows
+    /// case where Visual Studio is installed but deliberately not on `PATH`.
+    vcvars: Option<PathBuf>,
 }
 
 /// Locate a host C compiler, or `None`.
 ///
-/// MSVC is deliberately handled by *not* trying to configure it here: bare
-/// `cl.exe` fails with "no include path set" unless a `vcvars` environment is
-/// present, so we only accept it when it is already on `PATH` (i.e. the caller
-/// is in a developer shell). Everything else is a plain PATH lookup.
+/// A plain `PATH` lookup first, then — on Windows — a **Visual Studio install
+/// that is not on `PATH`**, which is the normal state of a Windows box rather
+/// than an unusual one: the installer does not modify the global environment,
+/// and `vcvars64.bat` is the supported way in.
+///
+/// Skipping that fallback is what made this whole file silently vacuous here.
+/// `find_compiler` returned `None`, every e2e test printed `SKIP` and passed,
+/// and the suite reported green while compiling nothing — on a machine with a
+/// perfectly good toolchain sitting in Program Files. A test that cannot run
+/// where it is written is not a test there, and one that says `ok` while doing
+/// so is worse than one that fails.
 fn find_compiler() -> Option<CCompiler> {
     for (cmd, msvc) in [
         ("cc", false),
@@ -74,6 +95,7 @@ fn find_compiler() -> Option<CCompiler> {
                     cmd,
                     msvc,
                     needs_libm: false,
+                    vcvars: None,
                 });
             }
             continue;
@@ -95,9 +117,15 @@ fn find_compiler() -> Option<CCompiler> {
             cmd,
             msvc,
             needs_libm,
+            vcvars: None,
         });
     }
-    None
+    find_vs_install().map(|vcvars| CCompiler {
+        cmd: "cl",
+        msvc: true,
+        needs_libm: false,
+        vcvars: Some(vcvars),
+    })
 }
 
 impl CCompiler {
@@ -111,6 +139,40 @@ impl CCompiler {
     /// do the contracting. The value-correctness tests stay unoptimized so a
     /// failure there is unambiguously the emitter's rather than the compiler's.
     fn compile(&self, src: &Path, exe: &Path, optimize: bool) -> Result<(), String> {
+        // A `vcvars` install has to be entered through `cmd`, because the batch
+        // file's whole job is to mutate the environment of the process that
+        // calls it. Spawning `cl` directly after running it in a *different*
+        // process would inherit nothing.
+        if let Some(vcvars) = &self.vcvars {
+            let opt = if optimize { "/O2" } else { "/Od" };
+            // Driven through a generated .bat rather than `cmd /C "<line>"`.
+            // Rust escapes arguments for `CreateProcess`, `cmd` then applies its
+            // own quoting rules to what arrives, and a command line carrying
+            // three quoted Windows paths does not survive both. The failure mode
+            // is silent: `cmd` exits non-zero having printed nothing at all, so
+            // the compile looks like it failed rather than like it never ran.
+            // A batch file has exactly one quoting layer.
+            let bat = src.with_extension("build.bat");
+            let script = format!(
+                "@echo off\r\ncall \"{}\" >nul 2>&1\r\ncl /nologo {opt} \"{}\" /Fe:\"{}\"\r\n",
+                vcvars.display(),
+                src.display(),
+                exe.display()
+            );
+            std::fs::write(&bat, script).map_err(|e| format!("write build script: {e}"))?;
+            let out = Command::new(&bat)
+                .current_dir(src.parent().unwrap_or(Path::new(".")))
+                .output()
+                .map_err(|e| format!("spawn build script failed: {e}"))?;
+            if out.status.success() {
+                return Ok(());
+            }
+            return Err(format!(
+                "compile failed (via vcvars)\n--- stdout ---\n{}\n--- stderr ---\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
         let mut c = Command::new(self.cmd);
         if self.msvc {
             c.arg("-nologo")
@@ -136,6 +198,55 @@ impl CCompiler {
             String::from_utf8_lossy(&out.stderr)
         ))
     }
+}
+
+/// The `vcvars64.bat` of the newest Visual Studio install carrying the C/C++
+/// tools, or `None`.
+///
+/// `vswhere.exe` is Microsoft's supported discovery mechanism and ships at a
+/// fixed location, which is what makes this a lookup rather than a guess at
+/// version-numbered directory names.
+#[cfg(windows)]
+fn find_vs_install() -> Option<PathBuf> {
+    let pf86 = std::env::var("ProgramFiles(x86)")
+        .unwrap_or_else(|_| r"C:\Program Files (x86)".to_string());
+    let vswhere = PathBuf::from(pf86)
+        .join("Microsoft Visual Studio")
+        .join("Installer")
+        .join("vswhere.exe");
+    if !vswhere.exists() {
+        return None;
+    }
+    let out = Command::new(&vswhere)
+        .args([
+            "-latest",
+            "-products",
+            "*",
+            "-requires",
+            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            "-property",
+            "installationPath",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if root.is_empty() {
+        return None;
+    }
+    let bat = PathBuf::from(root)
+        .join("VC")
+        .join("Auxiliary")
+        .join("Build")
+        .join("vcvars64.bat");
+    bat.exists().then_some(bat)
+}
+
+#[cfg(not(windows))]
+fn find_vs_install() -> Option<PathBuf> {
+    None
 }
 
 /// A C float literal for `v`.
@@ -705,7 +816,7 @@ int main(void) {{
     unsigned int out[{n}];
     for (int i = 0; i < {n}; ++i) out[i] = 123u;
     {}(in0, in1, out, {n});
-    for (int i = 0; i < {n}; ++i) printf(\"%u\n\", out[i]);
+    for (int i = 0; i < {n}; ++i) printf(\"%u\\n\", out[i]);
     return 0;
 }}
 ",
