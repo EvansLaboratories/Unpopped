@@ -116,6 +116,49 @@ rather than a cleanup commit.
   digest form. An annex format is the same shape — KISS pins the envelope, the
   maintainer fills it.
 
+  **Filed as KISS #171**, architect ruling: KISS's venue, strawman adopted, and
+  `kind` MUST be an **open** set — an unrecognized `kind` typed-declines rather
+  than guessing, because a union whose cases came from exactly two examples is a
+  closed list built from n=2. **Cannot be Accepted without Baracuda and Vulkane
+  cosigning**, since a convention imposed on a maintainer's annex by a consumer
+  is not a convention.
+
+  Three refinements from the round, each better than what was proposed:
+
+  - **Vulkane — the strawman was missing a question, and it is the load-bearing
+    one.** Not just *recognize* and *enumerate* but **"can I produce the
+    canonical token?"** §6.8-0002 is byte-exact with no implication logic, so a
+    schema answering only recognition lets a consumer believe it is
+    interoperable while emitting non-matching tokens: green on both sides, cache
+    never hits, no error anywhere. So `generated` must carry **canonicalization**
+    — sort orders, dedup, digest algorithm, threshold, and *which string* is
+    hashed. Their blocker: `<coop>`'s third form is chosen by a **length-
+    conditional switch** (>512 bytes → FNV-1a digest), which no alphabet or
+    regex decides — §6.8-0007's own digest mechanism is the thing a grammar-only
+    schema cannot express. And the manifest must be **generated from the owner's
+    crate and byte-compared**, never authored: half of `kiss-vulkan-vocab` is
+    structural code, so a hand-written file would transcribe the hard half and
+    reproduce the defect it removes.
+  - **Fuel — `vocabulary_version` must be ASSERTED, not merely present** ("a
+    field a consumer reads is a field; one the consumer asserts is a gate"), and
+    **injectivity is mandatory only where the output is an IDENTITY**, optional
+    where it is a classification — a blanket rule would force implementations to
+    invent distinctions their hardware lacks. Also the line the RFC should be
+    drawn on: **byte-exact matching covers the token; it does not cover
+    producing one. A consumer that only compares tokens can be opaque; one that
+    also emits them cannot.**
+  - **Both, independently: `generated` entries need worked examples plus
+    negatives.** Vulkane because interop failures live in canonicalization, not
+    recognition; Fuel because a consumer will treat `generated` as
+    validate-only and never test it — "two implementations that agree by never
+    disagreeing."
+
+  **Explicit non-goal** (Vulkane): do not bind `vulkan:` component types to
+  `dtype_manifest.json`. Different vocabularies, different axes, one derives no
+  `structure_key` at all — importing would manufacture exactly the false
+  divergence the 25-variants-against-24-tokens case warns about. **The format
+  composes namespaces; it does not unify them.**
+
   **Blocks the open target model** below: whether we import a table, a grammar,
   or both changes what `ArchSku`'s replacement has to hold.
 - **The KISS cost model** (#125) — vector-authoritative vs optional sibling. Our
