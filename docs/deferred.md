@@ -136,11 +136,20 @@ rather than a cleanup commit.
   *shape*, not the right shape un-keyed — removing it is breaking, so it rides
   the sk4 cut. Residual it does **not** close: blk32 vs blk128 both contribute
   one same-rank scale sibling and still collide. That part is a genuine sk5 item.
-- **Constructors for `ContractionKey`/`OperandKey`/`QuantFacts`/`SymExtent`,
-  then `#[non_exhaustive]`.** Ordering matters: marking them reserved *first*
-  breaks cross-crate struct literals with no constructor to fall back on — that
-  is why the earlier attempt was backed out and only `StructureKey`/`OperandDesc`
-  kept it.
+- ~~**Constructors for `ContractionKey`/`OperandKey`/`QuantFacts`, then
+  `#[non_exhaustive]`**~~ — **DONE in 0.2.0** (`a0c8207`), plus `AccMp`.
+  Constructors and the reservation landed in one commit, which is the ordering
+  the earlier backed-out attempt got wrong: reserved-first breaks cross-crate
+  struct literals with no constructor to fall back on.
+  **`SymExtent` was in that list and I missed it — it is still unreserved, and
+  0.2.0 has shipped.** The cost is exactly what the item exists to prevent:
+  reserving it now is a breaking change. It should ride the **next** cut rather
+  than justify a 0.3.0 of its own, and the natural home is the quant/scale-sibling
+  rework below, which touches the same two vestigial `OperandDesc` fields
+  (`quant`, `symbolic`). Cheap when it happens — one construction site, in this
+  crate's own tests. Recorded here because the whole argument for doing this
+  before a cut was that the window closes when the *next* break is designed, and
+  this is now waiting on one.
 - **Per-target N2 verification.** NaN-propagation surviving the toolchain is a
   property of *one optimizer*, re-measured per target, never inherited. Verified
   on portable C (`/O2`) and CUDA (nvrtc→PTX→driver JIT, RTX 4070). Any new target
