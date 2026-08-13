@@ -323,7 +323,24 @@ impl LayoutOrder {
 /// values via [`classify_mat_layout`] — a packed transpose/permutation of
 /// lhs/rhs is accepted (sub-spec A); a genuinely non-packed operand still
 /// declines the whole cell to `None` (sub-spec D).
+/// # Reserved for growth
+///
+/// `#[non_exhaustive]`, and the constructor below exists so that reservation
+/// costs a caller nothing. This is not speculative: `StructureKey` gained
+/// `acc_mp` at sk4 and `ContractionKey` gained `batch`, then `lhs_order` /
+/// `rhs_order`, then the whole `wdt`/`acc`/`out`/`mp` precision group across
+/// three schema revisions. Every one of those was a source-breaking change for
+/// anyone constructing the struct literally, on top of the wire change that was
+/// the actual point. **Reserving the type converts the next one into an ordinary
+/// additive release** — the schema still moves, but downstream code does not
+/// have to be edited to keep compiling.
+///
+/// Measured rather than asserted: seeding a new field on this struct and fixing
+/// only the in-crate construction sites leaves the downstream `unpopped` crate
+/// compiling with **zero** errors. Before the reservation, adding `acc_mp` to
+/// [`StructureKey`] broke every literal construction downstream.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct ContractionKey {
     /// Size class of M (lhs rows / out rows).
     pub m: SizeClass,
@@ -357,6 +374,78 @@ pub struct ContractionKey {
     pub mp: MpCode,
 }
 
+impl ContractionKey {
+    /// The canonical **rank-2, row-major, non-batched** dense cell.
+    ///
+    /// The three additive coordinates default to their identity — no batch,
+    /// identity layout orders — which is exactly the shape that serializes
+    /// byte-identically to the pre-batch, pre-order codec. Add them with
+    /// [`with_batch`](Self::with_batch), [`with_lhs_order`](Self::with_lhs_order)
+    /// and [`with_rhs_order`](Self::with_rhs_order); each is a real deviation
+    /// from canonical and each adds a token component, so each is opt-in rather
+    /// than a parameter every caller has to pass `None` for.
+    ///
+    /// `m`, `n` and `k` are all [`SizeClass`], so the compiler cannot catch a
+    /// transposition between them — pass them in the order the cell is written,
+    /// `lhs [M,K] · rhs [K,N] → out [M,N]`.
+    #[must_use]
+    pub fn new(
+        m: SizeClass,
+        n: SizeClass,
+        k: SizeClass,
+        k_div: DivBucket,
+        wdt: ElementKind,
+        acc: ElementKind,
+        out: ElementKind,
+        mp: MpCode,
+    ) -> Self {
+        Self {
+            m,
+            n,
+            k,
+            k_div,
+            batch: None,
+            lhs_order: LayoutOrder::identity(2),
+            rhs_order: LayoutOrder::identity(2),
+            wdt,
+            acc,
+            out,
+            mp,
+        }
+    }
+
+    /// Make this a batched (rank-3) cell: `[B,M,K]·[B,K,N] → [B,M,N]`.
+    ///
+    /// Also re-seats any identity layout orders at rank 3, since a batched cell's
+    /// identity is a different permutation from a rank-2 one — leaving a rank-2
+    /// identity on a batched cell would encode an order the cell does not have.
+    #[must_use]
+    pub fn with_batch(mut self, batch: SizeClass) -> Self {
+        self.batch = Some(batch);
+        if self.lhs_order.is_identity() {
+            self.lhs_order = LayoutOrder::identity(3);
+        }
+        if self.rhs_order.is_identity() {
+            self.rhs_order = LayoutOrder::identity(3);
+        }
+        self
+    }
+
+    /// Set the lhs storage order (identity = canonical row-major).
+    #[must_use]
+    pub const fn with_lhs_order(mut self, order: LayoutOrder) -> Self {
+        self.lhs_order = order;
+        self
+    }
+
+    /// Set the rhs storage order (identity = canonical row-major).
+    #[must_use]
+    pub const fn with_rhs_order(mut self, order: LayoutOrder) -> Self {
+        self.rhs_order = order;
+        self
+    }
+}
+
 /// The sk4 non-contraction precision coordinate: `<acc>/<mp>`
 /// (KISS-CLASSIFY-6.7-0013).
 ///
@@ -387,7 +476,16 @@ pub struct ContractionKey {
 /// (d) makes the all-default spelling *invalid on the wire*, so a redundant
 /// `AccMp` is a value that cannot be legally encoded; `new` refuses to build one
 /// rather than deferring the problem to the encoder.
+/// # Reserved, and that reservation carries a rule
+///
+/// `#[non_exhaustive]`, so [`AccMp::new`] is the only way to build one from
+/// outside this crate — which makes rule (d) **structurally** unbreakable rather
+/// than merely checked. A redundant all-default pair is not a value a consumer
+/// can hold, so it is not a token a consumer can ask us to emit. Reserving the
+/// type for a future precision coordinate and enforcing the clause turn out to
+/// be the same edit.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct AccMp {
     /// Accumulator dtype. A §6.1 member, never reserved, never `F32Strict`
     /// (the strict axis rides [`AccMp::mp`], exactly as it does on a gem cell).
@@ -441,7 +539,13 @@ const fn carries_contraction_field(op: OpCategory) -> bool {
 
 /// Per-operand predicate sub-key. One of these is carried for every input and
 /// the output.
+///
+/// Build with [`OperandKey::new`] or [`Default::default`]; the struct is
+/// `#[non_exhaustive]` so a future axis can be added without a breaking release.
+/// See the note on [`ContractionKey`] for why that reservation is worth the
+/// constructor.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct OperandKey {
     /// Memory-layout class.
     pub contig: Contiguity,
@@ -453,6 +557,26 @@ pub struct OperandKey {
     pub inner_div: DivBucket,
     /// `true` if any axis has a negative stride (a flipped / reversed view).
     pub flipped: bool,
+}
+
+impl OperandKey {
+    /// An operand sub-key from its four classified axes plus the flip flag.
+    #[must_use]
+    pub const fn new(
+        contig: Contiguity,
+        bcast: AxisMask,
+        vec_width: VecWidth,
+        inner_div: DivBucket,
+        flipped: bool,
+    ) -> Self {
+        Self {
+            contig,
+            bcast,
+            vec_width,
+            inner_div,
+            flipped,
+        }
+    }
 }
 
 /// The canonical identity of an input/output layout class.
@@ -572,6 +696,7 @@ pub enum ScalePlacement {
 /// precedent for extending [`OperandDesc`] once already, on the assumption it
 /// was load-bearing. It is not.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct QuantFacts {
     /// Quant family.
     pub family: QuantFamily,
@@ -581,6 +706,28 @@ pub struct QuantFacts {
     pub block_elems: u16,
     /// Scale placement.
     pub scale: ScalePlacement,
+}
+
+impl QuantFacts {
+    /// Quant facts for one operand.
+    ///
+    /// `sub_byte_bits = 0` means "not sub-byte" and `block_elems = 0` means "not
+    /// block-quantized"; both are the sentinel the field docs describe rather
+    /// than a magic value chosen here.
+    #[must_use]
+    pub const fn new(
+        family: QuantFamily,
+        sub_byte_bits: u8,
+        block_elems: u16,
+        scale: ScalePlacement,
+    ) -> Self {
+        Self {
+            family,
+            sub_byte_bits,
+            block_elems,
+            scale,
+        }
+    }
 }
 
 /// Kind of a symbolic (live-vs-capacity) extent, mirroring FDX `FDXExtent.kind`.
@@ -3213,6 +3360,48 @@ mod tests {
             ],
             "wire names are a contract with the KISS conformance artifact"
         );
+    }
+
+    /// Handed a redundant `(acc + mp)` internally, the encoder **omits** it
+    /// rather than emitting a token its own decoder must reject (rule (d)).
+    ///
+    /// # Why this is a unit test
+    ///
+    /// `AccMp` is `#[non_exhaustive]`, so from outside this crate the only way in
+    /// is `AccMp::new`, which refuses a non-deviating pair — the redundant value
+    /// simply cannot be built, which is a stronger guarantee than any test. That
+    /// leaves this defence reachable only in-crate, so it is tested in-crate.
+    ///
+    /// The alternative was to delete it as unreachable. It stays because
+    /// `to_token` re-deriving through `AccMp::new` is what keeps the encoder's
+    /// notion of "worth emitting" and the decoder's notion of "legal to have
+    /// emitted" the *same* notion, and this crate builds `StructureKey` values by
+    /// hand in dozens of places. Same lesson as the reserved-accumulator guard:
+    /// an assertion written where the value cannot be constructed passes without
+    /// exercising the code it names.
+    #[test]
+    fn redundant_acc_mp_is_omitted_not_emitted() {
+        let g = "sk4|red|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
+        let mut key = StructureKey::from_token(g).unwrap();
+
+        // In-crate, the struct literal is permitted — so a redundant value can
+        // exist here exactly as it can in this crate's own derivation code.
+        key.acc_mp = Some(AccMp {
+            acc: ElementKind::F32,
+            mp: MpCode::St,
+        });
+        assert_eq!(
+            key.to_token(),
+            g,
+            "the encoder must omit a redundant field, not emit an invalid token"
+        );
+
+        // Positive control: a deviating value on the same key does emit.
+        key.acc_mp = Some(AccMp {
+            acc: ElementKind::F64,
+            mp: MpCode::St,
+        });
+        assert_eq!(key.to_token(), format!("{g}|f64/st"));
     }
 
     /// `parse_acc_mp` guards the accumulator slot against a RESERVED dtype on its

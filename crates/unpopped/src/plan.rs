@@ -3895,13 +3895,13 @@ mod rowreduce_role_validate {
     // A minimal OperandKey carrying only the broadcast mask + flip (all rr_role /
     // validate read for classification); contig is irrelevant to the role.
     fn opkey(bcast: u8, flipped: bool) -> OperandKey {
-        OperandKey {
-            contig: Contiguity::Broadcast,
-            bcast: AxisMask(bcast),
-            vec_width: VecWidth::Scalar,
-            inner_div: DivBucket::Any,
+        OperandKey::new(
+            Contiguity::Broadcast,
+            AxisMask(bcast),
+            VecWidth::Scalar,
+            DivBucket::Any,
             flipped,
-        }
+        )
     }
 
     #[test]

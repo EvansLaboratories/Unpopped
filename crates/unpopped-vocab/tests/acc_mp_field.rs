@@ -95,10 +95,7 @@ fn a_deviating_accumulator_emits_both_slots() {
     let key = StructureKey::from_token(g).expect("golden must decode");
     assert_eq!(
         key.acc_mp,
-        Some(AccMp {
-            acc: ElementKind::F32,
-            mp: MpCode::St
-        })
+        AccMp::new(ElementKind::F16, ElementKind::F32, MpCode::St)
     );
     assert_eq!(key.to_token(), g);
 }
@@ -117,10 +114,7 @@ fn a_deviating_math_precision_alone_emits_the_field() {
     let key = StructureKey::from_token(g).expect("golden must decode");
     assert_eq!(
         key.acc_mp,
-        Some(AccMp {
-            acc: ElementKind::F32,
-            mp: MpCode::Rm
-        })
+        AccMp::new(ElementKind::F32, ElementKind::F32, MpCode::Rm)
     );
     assert_eq!(key.to_token(), g);
 }
@@ -200,34 +194,35 @@ fn the_all_default_spelling_is_rejected_as_redundant() {
 /// its own decoder is required to reject — the kind of self-inconsistency that
 /// only ever surfaces as someone else's parse failure.
 #[test]
-fn the_encoder_cannot_emit_the_forbidden_redundant_field() {
+fn a_redundant_field_is_unconstructible_from_outside_the_crate() {
     assert_eq!(
         AccMp::new(ElementKind::F32, ElementKind::F32, MpCode::St),
         None,
         "the constructor is rule (a)/(c)/(d): a non-deviating pair is not a field"
     );
 
+    // `AccMp` is `#[non_exhaustive]`, so `AccMp { acc, mp }` does not compile
+    // here — `new` is the only way in from outside the crate, and it refuses.
+    // Rule (d) is therefore not merely checked, it is unrepresentable: a
+    // consumer cannot hold a redundant pair, so cannot ask us to emit one.
+    //
+    // The encoder ALSO omits a redundant field if handed one internally, which
+    // is a defence only reachable in-crate now. It is tested where it is
+    // reachable, as `redundant_acc_mp_is_omitted_not_emitted` in
+    // `structure_key`'s unit tests — same reason the reserved-accumulator guard
+    // moved: an assertion written where the value cannot be built would pass
+    // without exercising the code it names.
+
     let g = "sk4|red|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
     let mut key = StructureKey::from_token(g).unwrap();
-    // Force the redundant value past the constructor, the way a caller building
-    // the struct by hand could.
-    key.acc_mp = Some(AccMp {
-        acc: ElementKind::F32,
-        mp: MpCode::St,
-    });
-    assert_eq!(
-        key.to_token(),
-        g,
-        "the encoder must omit a redundant field rather than emit an invalid token"
-    );
 
-    // Positive control: a genuinely deviating value on the same key DOES emit,
-    // so the assertion above is about redundancy and not about `acc_mp` being
-    // ignored on the encode path.
-    key.acc_mp = Some(AccMp {
-        acc: ElementKind::F64,
-        mp: MpCode::St,
-    });
+    // Positive control: a genuinely deviating value DOES emit, so the refusal
+    // above is about redundancy and not about `acc_mp` being ignored on encode.
+    key.acc_mp = AccMp::new(key.dtype, ElementKind::F64, MpCode::St);
+    assert!(
+        key.acc_mp.is_some(),
+        "f64 accumulator on an f32 cell deviates"
+    );
     assert_eq!(key.to_token(), format!("{g}|f64/st"));
 }
 

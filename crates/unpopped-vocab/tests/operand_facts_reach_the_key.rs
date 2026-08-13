@@ -46,12 +46,12 @@ fn quant_facts_do_not_reach_the_key_known_gap() {
         d
     };
     let blocked = |elems| {
-        Some(QuantFacts {
-            family: QuantFamily::AffineBlock,
-            sub_byte_bits: 4,
-            block_elems: elems,
-            scale: ScalePlacement::SeparateBuffer,
-        })
+        Some(QuantFacts::new(
+            QuantFamily::AffineBlock,
+            4,
+            elems,
+            ScalePlacement::SeparateBuffer,
+        ))
     };
 
     let plain = key_token(mk(None));
