@@ -18,7 +18,7 @@ categories = ["compilers", "development-tools", "science"]
 
 [workspace.dependencies]
 # Unpopped's own crates — path + version so they can be published independently.
-unpopped-vocab = { path = "crates/unpopped-vocab", version = "0.1.0" }
+unpopped-vocab = { path = "crates/unpopped-vocab", version = "0.2.0" }
 # Dtype primitives. Versions match the Baracuda workspace the vocabulary was
 # carved from, so the extracted crate resolves identically on either side of the
 # split until it is published.
