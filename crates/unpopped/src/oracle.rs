@@ -298,10 +298,9 @@ impl TypedBuffer {
             "to_complex_vec on non-complex dtype {:?}",
             self.dtype
         );
-        let sz = elem_size(self.dtype);
-        let n = self.bytes.len() / sz;
+        let n = self.elem_count();
         (0..n)
-            .map(|i| raw_to_complex(read_le(&self.bytes, i * sz, sz), self.dtype))
+            .map(|i| raw_to_complex(read_elem(&self.bytes, i, self.dtype), self.dtype))
             .collect()
     }
 
@@ -350,6 +349,47 @@ impl TypedBuffer {
         let mut bytes = vec![0u8; data.len() * sz];
         for (i, &v) in data.iter().enumerate() {
             write_le(&mut bytes, i * sz, sz, encode_float(v, dt));
+        }
+        Self::new(dt, shape.to_vec(), dense_strides(shape), bytes)
+    }
+
+    /// Dense buffer of sub-byte values, packed per KISS-CLASSIFY §6.1.
+    ///
+    /// Takes the logical element values (not bytes) and packs them:
+    /// * `i4`/`u4` — two per byte, **low nibble = even index, high nibble = odd**.
+    /// * `b1` — eight per byte, **LSB = lowest logical index**.
+    ///
+    /// The packing is normative (§6.0-0001 makes it part of what the dtype *is*),
+    /// which is why it is spelled here rather than left to a caller: a buffer
+    /// packed the other way round would round-trip through this crate perfectly
+    /// and disagree with every other implementation.
+    ///
+    /// # Panics
+    ///
+    /// If `dt` is not a sub-byte dtype, or a value does not fit its width.
+    #[must_use]
+    pub fn from_sub_byte(dt: ElementKind, shape: &[i64], data: &[i8]) -> Self {
+        assert!(
+            is_sub_byte(dt),
+            "from_sub_byte on {dt:?}, which is not sub-byte"
+        );
+        let mut bytes = vec![0u8; packed_bytes(dt, data.len())];
+        for (i, &v) in data.iter().enumerate() {
+            let bits = match dt {
+                ElementKind::I4 => {
+                    assert!((-8..=7).contains(&v), "i4 value {v} outside [-8, 7]");
+                    u128::from((v as u8) & 0x0f)
+                }
+                ElementKind::U4 => {
+                    assert!((0..=15).contains(&v), "u4 value {v} outside [0, 15]");
+                    u128::from(v as u8 & 0x0f)
+                }
+                _ => {
+                    assert!((0..=1).contains(&v), "b1 value {v} outside [0, 1]");
+                    u128::from(v as u8 & 1)
+                }
+            };
+            write_elem(&mut bytes, i, dt, bits);
         }
         Self::new(dt, shape.to_vec(), dense_strides(shape), bytes)
     }
@@ -406,10 +446,9 @@ impl TypedBuffer {
     /// Decode every stored element to `f64` in linear byte order.
     #[must_use]
     pub fn to_f64_vec(&self) -> Vec<f64> {
-        let sz = elem_size(self.dtype);
-        let n = self.bytes.len() / sz;
+        let n = self.elem_count();
         (0..n)
-            .map(|i| raw_to_f64(read_le(&self.bytes, i * sz, sz), self.dtype))
+            .map(|i| raw_to_f64(read_elem(&self.bytes, i, self.dtype), self.dtype))
             .collect()
     }
 
@@ -432,18 +471,38 @@ impl TypedBuffer {
             "to_i128_vec on non-integer dtype {:?}",
             self.dtype
         );
-        let sz = elem_size(self.dtype);
-        let n = self.bytes.len() / sz;
+        let n = self.elem_count();
         (0..n)
-            .map(|i| raw_to_i128(read_le(&self.bytes, i * sz, sz), self.dtype))
+            .map(|i| raw_to_i128(read_elem(&self.bytes, i, self.dtype), self.dtype))
             .collect()
     }
 
     /// The raw storage bits of element `i` in linear byte order.
     #[must_use]
     pub fn bits_at(&self, i: usize) -> u128 {
-        let sz = elem_size(self.dtype);
-        read_le(&self.bytes, i * sz, sz)
+        read_elem(&self.bytes, i, self.dtype)
+    }
+
+    /// The raw storage bytes, for tests that must assert a PACKING rather than a
+    /// round-trip.
+    #[must_use]
+    pub fn raw_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// How many elements the buffer holds.
+    ///
+    /// Derived from the SHAPE for a sub-byte dtype rather than from the byte
+    /// length: `bytes.len() / elem_size` would report 2x too few `i4` elements
+    /// and 8x too few `b1` ones, since several share a byte. For whole-byte
+    /// dtypes the two agree.
+    #[must_use]
+    pub fn elem_count(&self) -> usize {
+        if is_sub_byte(self.dtype) {
+            self.shape.iter().product::<i64>().max(0) as usize
+        } else {
+            self.bytes.len() / elem_size(self.dtype)
+        }
     }
 }
 
@@ -463,6 +522,82 @@ fn dense_strides(shape: &[i64]) -> Vec<i64> {
 // ===========================================================================
 
 /// Element byte size for the v1-supported dtypes.
+/// Storage width in **bits**, which is the only width that describes every §6.1
+/// dtype.
+///
+/// `elem_size` is bytes and cannot express `i4`/`u4` (4 bits) or `b1` (1 bit).
+/// Those are not stored one-per-byte: KISS-CLASSIFY §6.1 pins their packing
+/// normatively, and packing is part of what a dtype *is* there (§6.0-0001 makes
+/// the packing convention normative alongside the token and the width).
+fn elem_bits(dt: ElementKind) -> usize {
+    match dt {
+        ElementKind::I4 | ElementKind::U4 => 4,
+        ElementKind::B1 => 1,
+        other => elem_size(other) * 8,
+    }
+}
+
+/// `true` for the dtypes stored more than one to a byte.
+fn is_sub_byte(dt: ElementKind) -> bool {
+    elem_bits(dt) < 8
+}
+
+/// Bytes needed to hold `n` elements of `dt`, rounding a partial trailing byte up.
+fn packed_bytes(dt: ElementKind, n: usize) -> usize {
+    (n * elem_bits(dt)).div_ceil(8)
+}
+
+/// Read element `i`'s raw storage bits, sub-byte packing included.
+///
+/// The packing is KISS's, not a choice made here:
+/// * `i4`/`u4` — packed pair, **low nibble = even index, high nibble = odd**.
+/// * `b1` — 8 per byte, **LSB = lowest logical index**.
+///
+/// Getting either backwards produces a buffer that round-trips through itself
+/// perfectly and disagrees with every other implementation, which is the failure
+/// mode a normative packing convention exists to prevent.
+fn read_elem(bytes: &[u8], i: usize, dt: ElementKind) -> u128 {
+    match elem_bits(dt) {
+        4 => {
+            let b = bytes[i / 2];
+            u128::from(if i % 2 == 0 { b & 0x0f } else { b >> 4 })
+        }
+        1 => u128::from((bytes[i / 8] >> (i % 8)) & 1),
+        _ => {
+            let sz = elem_size(dt);
+            read_le(bytes, i * sz, sz)
+        }
+    }
+}
+
+/// Write element `i`'s raw storage bits, sub-byte packing included.
+///
+/// Read-modify-write for the sub-byte cases, since a nibble or a bit shares its
+/// byte with neighbours that must not be disturbed.
+fn write_elem(bytes: &mut [u8], i: usize, dt: ElementKind, bits: u128) {
+    match elem_bits(dt) {
+        4 => {
+            let v = (bits as u8) & 0x0f;
+            let b = &mut bytes[i / 2];
+            if i % 2 == 0 {
+                *b = (*b & 0xf0) | v;
+            } else {
+                *b = (*b & 0x0f) | (v << 4);
+            }
+        }
+        1 => {
+            let v = (bits as u8) & 1;
+            let b = &mut bytes[i / 8];
+            let mask = 1u8 << (i % 8);
+            *b = (*b & !mask) | (v << (i % 8));
+        }
+        _ => {
+            let sz = elem_size(dt);
+            write_le(bytes, i * sz, sz, bits);
+        }
+    }
+}
+
 fn elem_size(dt: ElementKind) -> usize {
     match dt {
         ElementKind::F16 | ElementKind::Bf16 | ElementKind::I16 | ElementKind::U16 => 2,
@@ -477,6 +612,10 @@ fn elem_size(dt: ElementKind) -> usize {
         // §6.1 token names the total width, so the name already says this.
         ElementKind::Complex64 => 8,
         ElementKind::Complex128 => 16,
+        // Sub-byte dtypes share a byte. `elem_size` is the CONTAINER width here,
+        // not the element width — use `elem_bits` for the latter and
+        // `packed_bytes` for allocation.
+        ElementKind::I4 | ElementKind::U4 | ElementKind::B1 => 1,
         other => panic!("oracle: unsupported dtype {other:?} (v1)"),
     }
 }
@@ -493,6 +632,9 @@ fn is_int(dt: ElementKind) -> bool {
             | ElementKind::U16
             | ElementKind::U32
             | ElementKind::U64
+            | ElementKind::I4
+            | ElementKind::U4
+            | ElementKind::B1
             | ElementKind::Bool
     )
 }
@@ -882,6 +1024,17 @@ fn raw_to_i128(bits: u128, dt: ElementKind) -> i128 {
         // Zero-extended like `u32`, and for the same reason: `unsigned long
         // long` has rank >= `int`, so it does not integer-promote to signed.
         ElementKind::U64 => i128::from(bits as u64),
+        // §6.1: `i4` is SIGN-extended on read, `u4` and `b1` zero-extended.
+        ElementKind::I4 => {
+            let v = (bits as u8) & 0x0f;
+            if v & 0x08 != 0 {
+                i128::from(v) - 16
+            } else {
+                i128::from(v)
+            }
+        }
+        ElementKind::U4 => i128::from((bits as u8) & 0x0f),
+        ElementKind::B1 => i128::from((bits as u8) & 1),
         other => panic!("oracle: raw_to_i128 on non-int dtype {other:?}"),
     }
 }
@@ -937,6 +1090,9 @@ fn raw_to_f64(bits: u128, dt: ElementKind) -> f64 {
         | ElementKind::U16
         | ElementKind::U32
         | ElementKind::U64
+        | ElementKind::I4
+        | ElementKind::U4
+        | ElementKind::B1
         | ElementKind::Bool => raw_to_i128(bits, dt) as f64,
         other => panic!("oracle: raw_to_f64 on unsupported dtype {other:?}"),
     }
@@ -1449,7 +1605,6 @@ fn eval_binary(op: BinaryOp, a: &ScalarExpr, b: &ScalarExpr, ev: &Eval<'_>) -> V
 /// value whose source dtype equals `out` moves VERBATIM (bit-preserving); a float
 /// rounds to `out` (RNE for the halves), an integer wraps to `out`'s width.
 fn store_val(v: Val, out: ElementKind, buf: &mut [u8], off: usize) {
-    let sz = elem_size(out);
     let bits = match v {
         Val::Raw(b, dt) if dt == out => b,
         Val::Raw(b, dt) => {
@@ -1465,7 +1620,7 @@ fn store_val(v: Val, out: ElementKind, buf: &mut [u8], off: usize) {
         Val::Int(i) => encode_int(i, out),
         Val::Complex(re, im) => encode_complex(re, im, out),
     };
-    write_le(buf, off * sz, sz, bits);
+    write_elem(buf, off, out, bits);
 }
 
 /// Encode an `f64` compute value to `out` (RNE halves; U8 narrows a 0/1
@@ -1486,6 +1641,8 @@ fn encode_float(f: f64, out: ElementKind) -> u128 {
         ElementKind::U16 => u128::from(f as u16),
         ElementKind::U32 => u128::from(f as u32),
         ElementKind::U64 => u128::from(f as u64),
+        ElementKind::I4 | ElementKind::U4 => u128::from((f as i8 as u8) & 0x0f),
+        ElementKind::B1 => u128::from(u8::from(f != 0.0)),
         other => panic!("oracle: encode_float to unsupported dtype {other:?}"),
     }
 }
@@ -1501,6 +1658,8 @@ fn encode_int(i: i128, out: ElementKind) -> u128 {
         ElementKind::U16 => u128::from(i as u16),
         ElementKind::U32 => u128::from(i as u32),
         ElementKind::U64 => u128::from(i as u64),
+        ElementKind::I4 | ElementKind::U4 => u128::from((i as u8) & 0x0f),
+        ElementKind::B1 => u128::from((i as u8) & 1),
         other => panic!("oracle: encode_int to unsupported dtype {other:?}"),
     }
 }
@@ -1553,12 +1712,11 @@ fn read_strided(
         let si = perm.map_or(d, |p| p[d] as usize);
         off += c * od.strides[si];
     }
-    let sz = elem_size(od.dtype);
     assert!(
         off >= 0,
         "oracle: negative element offset {off} on operand {i}"
     );
-    Val::Raw(read_le(&tb.bytes, off as usize * sz, sz), od.dtype)
+    Val::Raw(read_elem(&tb.bytes, off as usize, od.dtype), od.dtype)
 }
 
 /// Read input operand `i` at FLAT element index `idx` (the RowReduce/Scan/Window
@@ -1566,13 +1724,12 @@ fn read_strided(
 fn read_flat(inputs: &[TypedBuffer], operands: &[OperandDesc], i: usize, idx: i64) -> Val {
     let od = &operands[i];
     let tb = &inputs[i];
-    let sz = elem_size(od.dtype);
     let off = tb.base_offset + idx;
     assert!(
         off >= 0,
         "oracle: negative flat offset {off} on operand {i}"
     );
-    Val::Raw(read_le(&tb.bytes, off as usize * sz, sz), od.dtype)
+    Val::Raw(read_elem(&tb.bytes, off as usize, od.dtype), od.dtype)
 }
 
 /// The role-based flat index for RowReduce/Scan/Window operand `i` at `(row, j)`,
@@ -1599,7 +1756,7 @@ fn alloc_output(
     let strides: Vec<i64> = od.strides[..rank].to_vec();
     let odt = plan.out_dtype_of(j);
     let size = prod(&shape).max(0) as usize;
-    TypedBuffer::new(odt, shape, strides, vec![0u8; size * elem_size(odt)])
+    TypedBuffer::new(odt, shape, strides, vec![0u8; packed_bytes(odt, size)])
 }
 
 // ===========================================================================
