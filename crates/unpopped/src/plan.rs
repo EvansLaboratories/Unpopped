@@ -370,6 +370,7 @@ pub fn try_build_plan<'a>(
     check_no_half_nextafter(op, key.dtype)?;
     check_int_op_admissibility(op, key.dtype)?;
     check_complex_op_admissibility(op, key.dtype)?;
+    check_bool_op_admissibility(op, key.dtype)?;
     Ok(build_plan(op, key))
 }
 
@@ -387,6 +388,7 @@ pub fn build_plan<'a>(op: &'a OpDef, key: &'a StructureKey) -> KernelPlan<'a> {
     assert_no_half_nextafter(op, key.dtype);
     assert_int_op_admissibility(op, key.dtype);
     assert_complex_op_admissibility(op, key.dtype);
+    assert_bool_op_admissibility(op, key.dtype);
     assert_coord_admissibility(op, key);
     assert_valid_reduction_post(op);
     assert_valid_views(op, key);
@@ -1893,18 +1895,28 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
                          spellers, which have no integer arms"
                         ));
                     }
-                    if !(int_dt) {
+                    // `Bool` is admitted for the LOGICAL ops specifically. It is
+                    // not an int dtype (§6.2-0001 makes it its own numeric kind)
+                    // but it IS the dtype the bespoke logical surface exists for.
+                    // Treating it as a float — which this branch used to do,
+                    // reporting "float dtype Bool" — refused the one op family
+                    // `bool` is actually for, while `Add` (meaningless on a truth
+                    // value) sailed through. `check_bool_op_admissibility` owns
+                    // the rest of that surface.
+                    let bool_logical = bop.is_logical() && dtype == ElementKind::Bool;
+                    if !(int_dt || bool_logical) {
                         return Err(format!(
-                            "op '{op_name}': {bop:?} is int-only (I32/I64/S8/U8) — float \
-                         dtype {dtype:?} must miss honestly (the bespoke bitwise/\
-                         logical kernels have no float instantiation)"
+                            "op '{op_name}': {bop:?} is int-only (I32/I64/S8/U8), or `Bool` \
+                         for the logical ops — dtype {dtype:?} must miss honestly (the \
+                         bespoke bitwise/logical kernels have no instantiation for it)"
                         ));
                     }
-                    if !(!bop.is_logical() || dtype == ElementKind::U8) {
+                    if !(!bop.is_logical() || matches!(dtype, ElementKind::U8 | ElementKind::Bool))
+                    {
                         return Err(format!(
-                            "op '{op_name}': {bop:?} is U8 (Bool)-only — the bespoke \
-                         binary_logical_*_bool.cu surface instantiates exactly \
-                         uint8_t, so {dtype:?} must miss honestly"
+                            "op '{op_name}': {bop:?} is the bespoke BOOL surface — `Bool` \
+                         itself or its `U8` representation, which instantiates exactly \
+                         uint8_t; so {dtype:?} must miss honestly"
                         ));
                     }
                     // Rule 3 (8-bit composition pin, v1): every operand of an
@@ -2227,6 +2239,76 @@ pub(crate) fn check_complex_op_admissibility(
         }
     }
     walk(&op.body, &op.name, dtype)
+}
+
+/// Which ops may appear in a body at the **`bool`** dtype.
+///
+/// KISS-CLASSIFY §6.1 defines `bool` as a 1-byte truth value where `0` is false,
+/// any non-zero byte is true, and **ops normalize to 0/1**. §6.2-0001 makes
+/// `bool` its own numeric *kind*, not a spelling of `u8` — same storage width,
+/// different semantics.
+///
+/// So the admissible surface is the **logical** ops, whose results are already
+/// normalized (`(a != 0 && b != 0) ? 1 : 0`). Arithmetic is refused: `true +
+/// true` is `2`, which is not a value of the dtype, and silently normalizing it
+/// would make `+` mean `or` — a coincidence at 1 that stops being one the moment
+/// anyone adds three.
+///
+/// # This gate replaces an inversion
+///
+/// Measured before writing it: `Add` at `Bool` **built a plan**, while
+/// `LogicalAnd` was **refused** with the message "LogicalAnd is int-only
+/// (I32/I64/S8/U8) — float dtype Bool must miss honestly". Exactly backwards on
+/// both counts, and the message called `bool` a float because the int gate
+/// treats every non-int dtype as one. The bespoke logical surface was pinned to
+/// `U8` — the representation — while `Bool`, the dtype that surface exists for,
+/// fell through to the wrong branch.
+pub(crate) fn check_bool_op_admissibility(op: &OpDef, dtype: ElementKind) -> Result<(), PlanError> {
+    if dtype != ElementKind::Bool {
+        return Ok(());
+    }
+    fn walk(e: &ScalarExpr, op_name: &str) -> Result<(), PlanError> {
+        let reject = |what: &str, why: &str| {
+            Err(PlanError::InadmissibleOpAtDtype {
+                dtype: ElementKind::Bool,
+                detail: format!("op '{op_name}': {what} at Bool — {why}"),
+            })
+        };
+        match e {
+            ScalarExpr::Input(_) | ScalarExpr::Const(_) => Ok(()),
+            ScalarExpr::Binary(bop, a, b) if bop.is_logical() => {
+                walk(a, op_name)?;
+                walk(b, op_name)
+            }
+            ScalarExpr::Add(_, _)
+            | ScalarExpr::Sub(_, _)
+            | ScalarExpr::Mul(_, _)
+            | ScalarExpr::Div(_, _) => reject(
+                "arithmetic",
+                "`bool` is a truth value and its ops normalize to 0/1 (§6.1);                  `true + true` is 2, which is not a value of the dtype. Use the                  logical ops, whose results are normalized by construction",
+            ),
+            ScalarExpr::Binary(bop, _, _) => reject(
+                &format!("{bop:?}"),
+                "only the logical ops (LogicalAnd/LogicalOr/LogicalXor) are the                  bespoke `bool` surface",
+            ),
+            ScalarExpr::Unary(uop, _) => {
+                reject(&format!("{uop:?}"), "no unary math on a truth value")
+            }
+            ScalarExpr::Select(_, _, _) => reject("Select", "no bool select lowering"),
+            ScalarExpr::Param(_) => reject("Param", "scalar params are f32-only"),
+            ScalarExpr::Reduced(_) | ScalarExpr::Coord(_) => {
+                reject("Reduced/Coord", "no bool reduction or coordinate path")
+            }
+        }
+    }
+    walk(&op.body, &op.name)
+}
+
+/// Panicking wrapper for [`check_bool_op_admissibility`].
+fn assert_bool_op_admissibility(op: &OpDef, dtype: ElementKind) {
+    if let Err(e) = check_bool_op_admissibility(op, dtype) {
+        panic!("{e}");
+    }
 }
 
 /// `true` for the complex dtypes — the third compute domain alongside int and

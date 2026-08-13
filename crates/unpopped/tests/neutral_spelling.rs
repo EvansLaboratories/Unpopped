@@ -97,6 +97,11 @@ fn expected(dt: ElementKind) -> Spelling {
         // it first because it had no existing goldens to rewrite.
         Fp8E4M3FN | Fp8E5M2 => Spelling::PortableC,
 
+        // `bool` spells `unsigned char` — its storage width equals `u8`'s (§6.1).
+        // The normalization that makes it a different DTYPE lives in the logical
+        // spellers, not in the type name.
+        Bool => Spelling::PortableC,
+
         // THE GAP. Correct for CUDA, wrong for a module that calls itself neutral.
         // When the spelling seam lands these become `Declined` and the backend
         // supplies the name.
@@ -115,8 +120,9 @@ fn expected(dt: ElementKind) -> Spelling {
         //   * `F8E8M0`/`F8E6M2` are the MX shared block SCALES — active §6.1
         //     dtypes at sk4, but 8-bit floats with no portable C type, so the
         //     neutral module declines them like the other FP8 rows.
-        Bool | Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 | I4 | U4 | B1 | Complex64
-        | Complex128 => Spelling::Declined,
+        Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 | I4 | U4 | B1 | Complex64 | Complex128 => {
+            Spelling::Declined
+        }
     }
 }
 

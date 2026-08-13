@@ -150,7 +150,7 @@ const COVERAGE: &[(&str, ElementKind, Status, Status)] = &[
     ("i64", ElementKind::I64, Lowers, Lowers),
     ("u32", ElementKind::U32, Lowers, Blocked(SLANG_U32)),
     ("u64", ElementKind::U64, Lowers, Blocked(SLANG_U32)),
-    ("bool", ElementKind::Bool, NotYet, NotYet),
+    ("bool", ElementKind::Bool, Lowers, NotYet),
     ("f8e4m3fn", ElementKind::Fp8E4M3FN, Lowers, NotYet),
     ("f8e5m2", ElementKind::Fp8E5M2, Lowers, NotYet),
     (
@@ -186,7 +186,22 @@ fn scalar_shape(dt: ElementKind) -> OperandDesc {
 }
 
 fn lowers(dt: ElementKind, slang: bool) -> bool {
-    let op = OpDef::elementwise("add", 2, &[dt], input(0) + input(1));
+    // The probe op has to be one the dtype ADMITS, or the table measures the
+    // admissibility gate instead of the backend. `bool` is the case that forced
+    // this: its ops normalize to 0/1 (§6.1), so `Add` is refused — `true + true`
+    // is 2, not a value of the dtype — and the meaningful surface is the logical
+    // ops. Probing every dtype with `Add` reported `bool` as unlowerable when
+    // what it actually cannot do is arithmetic.
+    let op = if dt == ElementKind::Bool {
+        OpDef::elementwise(
+            "and",
+            2,
+            &[dt],
+            input(0).binary(unpopped::ir::BinaryOp::LogicalAnd, input(1)),
+        )
+    } else {
+        OpDef::elementwise("add", 2, &[dt], input(0) + input(1))
+    };
     let d = scalar_shape(dt);
     let key = structure_key(OpCategory::BinaryElementwise, &[d, d, d], ArchSku::Sm89);
     // A plan-gate rejection is a panic on this path; a backend decline is an

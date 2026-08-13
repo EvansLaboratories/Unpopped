@@ -89,6 +89,11 @@ pub fn scalar_ctype(dt: ElementKind) -> Option<&'static str> {
         // and does not need one: the codec is a pair of emitted helpers
         // (`fp8_helpers`), not a language feature.
         ElementKind::Fp8E4M3FN | ElementKind::Fp8E5M2 => "unsigned char",
+        // `bool` is a 1-byte truth value (§6.1) with the same storage width as
+        // `u8` and different semantics: its ops normalize to 0/1. The C spelling
+        // is the storage type; the normalization lives in the logical spellers,
+        // which already emit `... ? 1 : 0`.
+        ElementKind::Bool => "unsigned char",
         ElementKind::U32 => "unsigned int",
         ElementKind::U64 => "unsigned long long",
         _ => return None,
@@ -113,6 +118,7 @@ pub fn dtype_tag(dt: ElementKind) -> &'static str {
         ElementKind::U64 => "u64",
         ElementKind::Fp8E4M3FN => "f8e4m3fn",
         ElementKind::Fp8E5M2 => "f8e5m2",
+        ElementKind::Bool => "bool",
         // U32 index-dtype infix: `gather_f32_u32` (the Fuel-facing u32-index
         // variant's entry_point symbol).
         ElementKind::U32 => "u32",
@@ -686,10 +692,13 @@ pub fn binary_f64(op: BinaryOp, a: String, b: String) -> String {
 /// int dtype) panics rather than emitting C that happens to compile.
 pub fn binary_int(op: BinaryOp, a: String, b: String, dtype: ElementKind) -> String {
     if op.is_logical() {
+        // `Bool` itself, or the `U8` that represents it. Both spell `unsigned
+        // char` and both normalize to 0/1 through the spellers below — the
+        // distinction is which dtype the CELL is keyed by, not what the C says.
         assert!(
-            dtype == ElementKind::U8,
-            "c-family lowering: {op:?} is U8 (Bool)-only — the bespoke logical surface \
-             instantiates exactly uint8_t; got {dtype:?}"
+            matches!(dtype, ElementKind::U8 | ElementKind::Bool),
+            "c-family lowering: {op:?} is the bespoke BOOL surface — `Bool` or its `U8` \
+             representation, both instantiating uint8_t; got {dtype:?}"
         );
     }
     match op {
