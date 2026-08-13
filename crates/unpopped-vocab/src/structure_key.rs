@@ -1349,6 +1349,55 @@ pub enum TokenDecline {
     BadContractionField,
 }
 
+impl TokenDecline {
+    /// This verdict's spelling in the **shared KISS decline vocabulary** — the
+    /// name a cross-implementation conformance artifact carries, as opposed to
+    /// this enum's Rust identifier.
+    ///
+    /// # Why this is a method and not a table in a test
+    ///
+    /// A byte-match leg has to state its verdicts in the reference artifact's
+    /// vocabulary, which means *some* mapping from this enum to those names
+    /// exists. Written as a lookup table in a test, that mapping is the one part
+    /// of the whole apparatus nothing protects: KISS's generator is guarded by an
+    /// exhaustive match, so a new decline variant there is `error[E0004]` before
+    /// a wrong artifact can be produced — but a new variant *here* would simply
+    /// fall through a table's catch-all and be silently reported under the wrong
+    /// name, in a leg report whose numbers would look fine.
+    ///
+    /// So the mapping lives in the crate that owns the enum, where the match can
+    /// be **exhaustive**. Adding a variant to [`TokenDecline`] is a build failure
+    /// at this function. `#[non_exhaustive]` blocks an exhaustive match from
+    /// outside the crate but not from inside it, which is precisely why a test in
+    /// `tests/` could not carry this guarantee and this cannot lose it.
+    ///
+    /// Deliberately no catch-all arm. Adding one to silence a future build error
+    /// would restore exactly the rot this exists to prevent.
+    ///
+    /// Payloads stay on the variants: [`UnsupportedSchemaVersion`] carries the
+    /// version it read, [`ReservedDtype`] the spelling it saw. A wire form that
+    /// folded those into the name would be unparseable by the consumer that most
+    /// needs them.
+    ///
+    /// [`UnsupportedSchemaVersion`]: Self::UnsupportedSchemaVersion
+    /// [`ReservedDtype`]: Self::ReservedDtype
+    #[must_use]
+    pub const fn wire_name(&self) -> &'static str {
+        match self {
+            Self::ReservedDtype { .. } => "ReservedDtype",
+            Self::Unrecognized => "Unrecognized",
+            Self::UnsupportedSchemaVersion { .. } => "UnsupportedSchemaVersion",
+            Self::BadVersionPrefix => "BadVersionPrefix",
+            Self::BadAccMpField => "BadAccMpField",
+            Self::RedundantAccMpField => "RedundantAccMpField",
+            Self::NonCanonicalReduceField => "NonCanonicalReduceField",
+            Self::UnknownDtype => "UnknownDtype",
+            Self::UnknownOpFamily => "UnknownOpFamily",
+            Self::BadContractionField => "BadContractionField",
+        }
+    }
+}
+
 impl StructureKey {
     /// Encode as the stable string token carried on the telemetry wire.
     /// Round-trips through [`StructureKey::from_token`] for every CANONICAL
@@ -3107,6 +3156,64 @@ fn op_from_code(s: &str) -> Option<OpCategory> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every [`TokenDecline`] maps to a **distinct** wire name.
+    ///
+    /// `wire_name`'s exhaustive match stops a *new* variant from silently
+    /// inheriting a catch-all (proven: adding one is `error[E0004]` there). It
+    /// cannot stop two variants from being given the *same* string, which fails
+    /// in a nastier way — the build is green, the leg report is full, and two
+    /// verdicts are quietly reported as one. A conformance run comparing
+    /// verdicts would then agree with the reference for the wrong reason.
+    ///
+    /// The spellings are also pinned literally, because they are a contract with
+    /// the KISS artifact rather than an implementation detail: a rename here
+    /// compiles fine and misreports the leg.
+    #[test]
+    fn decline_wire_names_are_distinct_and_pinned() {
+        let all = [
+            TokenDecline::ReservedDtype {
+                spelling: "f8e4m3fnuz".to_string(),
+            },
+            TokenDecline::Unrecognized,
+            TokenDecline::UnsupportedSchemaVersion { version: 3 },
+            TokenDecline::BadVersionPrefix,
+            TokenDecline::BadAccMpField,
+            TokenDecline::RedundantAccMpField,
+            TokenDecline::NonCanonicalReduceField,
+            TokenDecline::UnknownDtype,
+            TokenDecline::UnknownOpFamily,
+            TokenDecline::BadContractionField,
+        ];
+        let names: Vec<&str> = all.iter().map(TokenDecline::wire_name).collect();
+
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        let before = sorted.len();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            before,
+            "two declines share a wire name — they would be reported as one: {names:?}"
+        );
+
+        assert_eq!(
+            names,
+            [
+                "ReservedDtype",
+                "Unrecognized",
+                "UnsupportedSchemaVersion",
+                "BadVersionPrefix",
+                "BadAccMpField",
+                "RedundantAccMpField",
+                "NonCanonicalReduceField",
+                "UnknownDtype",
+                "UnknownOpFamily",
+                "BadContractionField",
+            ],
+            "wire names are a contract with the KISS conformance artifact"
+        );
+    }
 
     /// `parse_acc_mp` guards the accumulator slot against a RESERVED dtype on its
     /// own, independently of [`StructureKey::parse_token`]'s atom scan.
