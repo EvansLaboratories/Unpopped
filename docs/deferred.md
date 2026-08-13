@@ -140,9 +140,13 @@ rather than a cleanup commit.
   (software codec — and the oracle needs an *independent* one or it stops being a
   differential) · `c64`/`c128` (struct ABI + complex arithmetic in the IR).
 
-  Slang lags CpuC on `i8`/`i16`/`u8`/`u16`, which CpuC already lowers. Cheap
-  *only if* Slang's narrow integer types are portable across its targets rather
-  than capability-gated — check before assuming it is a four-line mapping.
+  **Slang's `i8`/`i16`/`u8`/`u16` are NOT a gap — checked, and the answer is
+  they should stay declined.** Slang's own conformance docs: *"Only
+  `int`/`int32_t` and `uint`/`uint32_t` are universally supported; the others
+  depend on target + capabilities."* A portable Slang emitter cannot spell them
+  unconditionally, so the decline is conformant. Recorded in the coverage test as
+  `ByDesign` rather than as an unimplemented row, because a settled decision left
+  on a worklist gets re-litigated by whoever reads the list next.
 
   The reserved `fnuz` pair must **never** be lowered at this schema version, and
   that is asserted separately from the table: "forbidden" and "not done yet" are

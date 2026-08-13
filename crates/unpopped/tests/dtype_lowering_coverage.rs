@@ -32,37 +32,75 @@ use unpopped::slang::Slang;
 use unpopped::try_generate;
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_key};
 
+/// What a backend does with a dtype, and **why**.
+///
+/// The distinction between the two non-lowering states is the point of this
+/// enum. A single `false` column would put "nobody has written this yet" and
+/// "this is decided and correct" in the same cell, and the first is a worklist
+/// item while the second is a conclusion. Collapsing them means either the
+/// worklist silently grows entries that will never be done, or a settled
+/// decision gets re-litigated by the next person who reads the table as a TODO
+/// list.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Status {
+    /// Lowers today.
+    Lowers,
+    /// Not implemented yet — a genuine worklist entry.
+    NotYet,
+    /// **Deliberately** declined, permanently, for the recorded reason. A
+    /// typed decline here is conformant behaviour, not a gap.
+    ByDesign(&'static str),
+}
+use Status::{ByDesign, Lowers, NotYet};
+
+/// Slang's own conformance docs: *"Only `int`/`int32_t` and `uint`/`uint32_t`
+/// are universally supported; the others depend on target + capabilities."*
+/// 8- and 16-bit integers are capability-gated per target, so a portable Slang
+/// emitter cannot spell them unconditionally.
+const SLANG_NARROW: &str = "Slang: 8/16-bit ints are target+capability gated, not base-profile";
+
+/// `U32` is this generator's index/address dtype — the gather/scatter index
+/// operand pointer type — never a compute operand. No constructor builds a
+/// compute cell keyed `U32`, so declining it as a compute dtype is the design,
+/// not an omission. (Slang universally supports `uint32_t`; the decline here is
+/// ours, not the target's.)
+const U32_INDEX: &str = "U32 is the index/address dtype, never a compute operand";
+
 /// Every §6.1 dtype, with what each backend does with a plain elementwise `Add`.
 ///
-/// `true` = lowers. Reserved dtypes are absent entirely: `f8e4m3fnuz` and
-/// `f8e5m2fnuz` have no computation semantics at this schema version and must
-/// never lower, which is asserted separately below rather than encoded as
-/// `false` alongside merely-unimplemented ones. **"Forbidden" and "not done yet"
-/// are different facts and should not share a column.**
-const COVERAGE: &[(&str, ElementKind, bool, bool)] = &[
+/// The two RESERVED dtypes are absent entirely rather than listed as declines:
+/// `f8e4m3fnuz` / `f8e5m2fnuz` have no computation semantics at this schema
+/// version and lowering them would be a conformance violation. That is a third
+/// kind of fact again, and it is asserted separately below.
+const COVERAGE: &[(&str, ElementKind, Status, Status)] = &[
     // name          dtype                      CpuC   Slang
-    ("f16", ElementKind::F16, false, false),
-    ("bf16", ElementKind::Bf16, false, false),
-    ("f32", ElementKind::F32, true, true),
-    ("f64", ElementKind::F64, true, true),
-    ("i8", ElementKind::I8, true, false),
-    ("i16", ElementKind::I16, true, false),
-    ("u8", ElementKind::U8, true, false),
-    ("u16", ElementKind::U16, true, false),
-    ("i32", ElementKind::I32, true, true),
-    ("i64", ElementKind::I64, true, true),
-    ("u32", ElementKind::U32, false, false),
-    ("u64", ElementKind::U64, false, false),
-    ("bool", ElementKind::Bool, false, false),
-    ("f8e4m3fn", ElementKind::Fp8E4M3FN, false, false),
-    ("f8e5m2", ElementKind::Fp8E5M2, false, false),
-    ("f8e8m0", ElementKind::F8E8M0, false, false),
-    ("f8e6m2", ElementKind::F8E6M2, false, false),
-    ("i4", ElementKind::I4, false, false),
-    ("u4", ElementKind::U4, false, false),
-    ("b1", ElementKind::B1, false, false),
-    ("c64", ElementKind::Complex64, false, false),
-    ("c128", ElementKind::Complex128, false, false),
+    ("f16", ElementKind::F16, NotYet, NotYet),
+    ("bf16", ElementKind::Bf16, NotYet, NotYet),
+    ("f32", ElementKind::F32, Lowers, Lowers),
+    ("f64", ElementKind::F64, Lowers, Lowers),
+    ("i8", ElementKind::I8, Lowers, ByDesign(SLANG_NARROW)),
+    ("i16", ElementKind::I16, Lowers, ByDesign(SLANG_NARROW)),
+    ("u8", ElementKind::U8, Lowers, ByDesign(SLANG_NARROW)),
+    ("u16", ElementKind::U16, Lowers, ByDesign(SLANG_NARROW)),
+    ("i32", ElementKind::I32, Lowers, Lowers),
+    ("i64", ElementKind::I64, Lowers, Lowers),
+    (
+        "u32",
+        ElementKind::U32,
+        ByDesign(U32_INDEX),
+        ByDesign(U32_INDEX),
+    ),
+    ("u64", ElementKind::U64, NotYet, NotYet),
+    ("bool", ElementKind::Bool, NotYet, NotYet),
+    ("f8e4m3fn", ElementKind::Fp8E4M3FN, NotYet, NotYet),
+    ("f8e5m2", ElementKind::Fp8E5M2, NotYet, NotYet),
+    ("f8e8m0", ElementKind::F8E8M0, NotYet, NotYet),
+    ("f8e6m2", ElementKind::F8E6M2, NotYet, NotYet),
+    ("i4", ElementKind::I4, NotYet, NotYet),
+    ("u4", ElementKind::U4, NotYet, NotYet),
+    ("b1", ElementKind::B1, NotYet, NotYet),
+    ("c64", ElementKind::Complex64, NotYet, NotYet),
+    ("c128", ElementKind::Complex128, NotYet, NotYet),
 ];
 
 /// An extent and alignment that select the **scalar** schedule.
@@ -100,22 +138,16 @@ fn the_coverage_table_matches_what_the_backends_actually_do() {
     let mut wrong = Vec::new();
     let (mut c_n, mut s_n) = (0, 0);
     for &(name, dt, want_c, want_s) in COVERAGE {
-        let (got_c, got_s) = (lowers(dt, false), lowers(dt, true));
-        if got_c {
-            c_n += 1;
-        }
-        if got_s {
-            s_n += 1;
-        }
-        if got_c != want_c {
-            wrong.push(format!(
-                "{name}: CpuC table says {want_c}, actually {got_c}"
-            ));
-        }
-        if got_s != want_s {
-            wrong.push(format!(
-                "{name}: Slang table says {want_s}, actually {got_s}"
-            ));
+        for (backend, slang, want) in [("CpuC", false, want_c), ("Slang", true, want_s)] {
+            let got = lowers(dt, slang);
+            if got {
+                if slang { s_n += 1 } else { c_n += 1 }
+            }
+            if got != (want == Lowers) {
+                wrong.push(format!(
+                    "{name}: {backend} table says {want:?}, actually lowers={got}"
+                ));
+            }
         }
     }
     println!("\nmeasured lowering coverage — CpuC {c_n}/22, Slang {s_n}/22");
@@ -127,6 +159,44 @@ fn the_coverage_table_matches_what_the_backends_actually_do() {
         "{} entr(ies) stale. If you ADDED a dtype this is the reminder to \
          update the table; if you removed one, say why here.",
         wrong.len()
+    );
+}
+
+/// Every deliberate decline carries a reason, and the reasons are real.
+///
+/// `ByDesign` is the entry that can rot worst: it looks settled, so nobody
+/// re-checks it, and an empty or vague justification is indistinguishable from
+/// a `NotYet` somebody wanted off the worklist. Each one is a claim about a
+/// target or about this generator's design, and it should read as one.
+#[test]
+fn every_deliberate_decline_states_why() {
+    let mut n = 0;
+    for &(name, _, c, s) in COVERAGE {
+        for st in [c, s] {
+            if let ByDesign(why) = st {
+                // Substance, not format. An earlier version of this also
+                // demanded a colon, which failed a perfectly good reason for
+                // being punctuated differently — the assertion was encoding my
+                // habits rather than the property.
+                assert!(
+                    why.len() > 20,
+                    "{name}: a ByDesign decline needs a real reason, got {why:?}"
+                );
+                assert!(
+                    !why.to_lowercase().contains("todo") && !why.to_lowercase().contains("later"),
+                    "{name}: {why:?} describes deferral, not a decision — that is `NotYet`"
+                );
+                n += 1;
+            }
+        }
+    }
+    assert!(
+        n > 0,
+        "no deliberate declines — has the enum stopped being used?"
+    );
+    println!(
+        "
+{n} deliberate decline(s), each with a stated reason"
     );
 }
 
@@ -185,19 +255,31 @@ fn recognition_exceeds_lowering_and_the_gap_is_named() {
         "the table covers every usable dtype"
     );
 
-    let c = COVERAGE.iter().filter(|e| e.2).count();
-    let s = COVERAGE.iter().filter(|e| e.3).count();
+    let c = COVERAGE.iter().filter(|e| e.2 == Lowers).count();
+    let s = COVERAGE.iter().filter(|e| e.3 == Lowers).count();
     assert!(
         c < usable && s < usable,
         "lowering now covers every usable dtype — good news; invert this test"
     );
+
+    // The worklist is `NotYet` only. A `ByDesign` decline is a conclusion, and
+    // counting it as outstanding work would keep it on the list forever.
+    let todo: Vec<&str> = COVERAGE
+        .iter()
+        .filter(|e| e.2 == NotYet)
+        .map(|e| e.0)
+        .collect();
+    let settled: Vec<&str> = COVERAGE
+        .iter()
+        .filter(|e| matches!(e.2, ByDesign(_)))
+        .map(|e| e.0)
+        .collect();
+
     println!(
         "\nrecognized {recognized} · usable {usable} · CpuC lowers {c} · Slang lowers {s}\n\
-         not lowered by CpuC: {:?}",
-        COVERAGE
-            .iter()
-            .filter(|e| !e.2)
-            .map(|e| e.0)
-            .collect::<Vec<_>>()
+         CpuC worklist ({}): {todo:?}\n\
+         CpuC settled declines ({}): {settled:?}",
+        todo.len(),
+        settled.len()
     );
 }
