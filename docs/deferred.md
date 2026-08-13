@@ -134,11 +134,19 @@ rather than a cleanup commit.
   path or whether `ElementKind::Bool` is deliberately not a plan dtype. Decide
   that before writing code; it is a naming question wearing a coverage question's
   clothes.
-  Then: `u64` (needs an unsigned-wrap audit — `wrap_bits` is two's-complement
-  *signed* and f64 cannot represent every u64, which is why it is named but
-  deliberately not lowered) · `i4`/`u4`/`b1` (sub-byte pack/unpack) · both FP8s
-  (software codec — and the oracle needs an *independent* one or it stops being a
-  differential) · `c64`/`c128` (struct ABI + complex arithmetic in the IR).
+  Then **`u32` and `u64` together**, which share one blocker and it is sharper
+  than "unsigned-wrap audit" suggests: C's integer promotions lift `unsigned
+  char`/`unsigned short` to **signed** `int`, so `u8`/`u16` genuinely compute at
+  32-bit signed width — which is what the oracle's `op_width` (32) and
+  sign-extending `wrap_bits` model, and why those two are correct today.
+  `unsigned int` has the same rank as `int` and does **not** promote, so `u32`
+  arithmetic is unsigned modulo 2³² and the current model would read
+  `3_000_000_000u32` as negative. Both need an unsigned width/wrap path in the
+  oracle and the emitter. (`u32`'s index/address role is additive and was
+  previously — wrongly — recorded as the reason it cannot compute.)
+  Then: `i4`/`u4`/`b1` (sub-byte pack/unpack) · both FP8s (software codec — and
+  the oracle needs an *independent* one or it stops being a differential) ·
+  `c64`/`c128` (struct ABI + complex arithmetic in the IR).
 
   **Slang's `i8`/`i16`/`u8`/`u16` are blocked on a missing mechanism, not on
   Slang.** Slang's conformance docs say *"Only `int`/`int32_t` and

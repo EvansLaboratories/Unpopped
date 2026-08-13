@@ -57,6 +57,18 @@ enum Status {
     Blocked(&'static str),
     /// **Deliberately** declined, permanently, for the recorded reason. A
     /// typed decline here is conformant behaviour, not a gap.
+    ///
+    /// **Currently unused, and that is the finding.** Three entries were
+    /// labelled `ByDesign` and all three were wrong: Slang's narrow integers
+    /// (Slang supports them on capable targets — the gap is our capability-blind
+    /// gate), and `u32`/`u64` (whose stated reason, "never a compute operand",
+    /// was circular — the real blocker is that they do not integer-promote to
+    /// signed `int` the way `u8`/`u16` do). Nothing in this generator is
+    /// permanently declined by design.
+    ///
+    /// The variant stays because the category is real and the next genuine
+    /// member needs somewhere to live. Its emptiness is the useful signal: a
+    /// `ByDesign` entry should be rare enough to be suspicious.
     ByDesign(&'static str),
 }
 use Status::{Blocked, ByDesign, Lowers, NotYet};
@@ -88,12 +100,25 @@ use Status::{Blocked, ByDesign, Lowers, NotYet};
 /// one piece of work, not two.
 const SLANG_NARROW: &str = "Slang supports these on capable targets; supports_dtype has      no target parameter, so the only sound unconditional answer is no";
 
-/// `U32` is this generator's index/address dtype — the gather/scatter index
-/// operand pointer type — never a compute operand. No constructor builds a
-/// compute cell keyed `U32`, so declining it as a compute dtype is the design,
-/// not an omission. (Slang universally supports `uint32_t`; the decline here is
-/// ours, not the target's.)
-const U32_INDEX: &str = "U32 is the index/address dtype, never a compute operand";
+/// `U32` is this generator's index/address dtype. That role is real, but it is
+/// **additive** — it is not a reason the dtype cannot also compute, and an
+/// earlier version of this file recorded it as one. The in-code justification is
+/// circular on inspection: "no compute op keys `U32` because no constructor
+/// builds one."
+///
+/// The **actual** blocker is arithmetic modelling, and it is the same one `u64`
+/// has. C's integer promotions lift `unsigned char` and `unsigned short` to
+/// *signed* `int`, so `u8`/`u16` compute at 32-bit signed width — which is
+/// exactly what the oracle's `op_width` (32) and sign-extending `wrap_bits`
+/// model, and why those two lower correctly today. `unsigned int` has the same
+/// rank as `int`, so it does **not** promote: `u32` arithmetic is genuinely
+/// unsigned, modulo 2³², and `wrap_bits`' arithmetic shift would model
+/// `3_000_000_000u32` as negative.
+///
+/// So `u32` and `u64` need an unsigned width/wrap path in the oracle and the
+/// emitter before they can compute. Solvable, ordinary work — not a decision
+/// that they never should.
+const U32_UNSIGNED: &str = "u32/u64 do not integer-promote to signed int like u8/u16 do;      needs an unsigned wrap model in the oracle and emitter";
 
 /// Every §6.1 dtype, with what each backend does with a plain elementwise `Add`.
 ///
@@ -116,10 +141,15 @@ const COVERAGE: &[(&str, ElementKind, Status, Status)] = &[
     (
         "u32",
         ElementKind::U32,
-        ByDesign(U32_INDEX),
-        ByDesign(U32_INDEX),
+        Blocked(U32_UNSIGNED),
+        Blocked(U32_UNSIGNED),
     ),
-    ("u64", ElementKind::U64, NotYet, NotYet),
+    (
+        "u64",
+        ElementKind::U64,
+        Blocked(U32_UNSIGNED),
+        Blocked(U32_UNSIGNED),
+    ),
     ("bool", ElementKind::Bool, NotYet, NotYet),
     ("f8e4m3fn", ElementKind::Fp8E4M3FN, NotYet, NotYet),
     ("f8e5m2", ElementKind::Fp8E5M2, NotYet, NotYet),
