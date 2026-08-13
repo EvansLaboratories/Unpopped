@@ -333,6 +333,49 @@ impl TypedBuffer {
         )
     }
 
+    /// Dense buffer holding `data` **encoded into `dt`'s storage format**.
+    ///
+    /// The counterpart of [`TypedBuffer::to_f64_vec`]: that projects storage into
+    /// `f64`, this rounds `f64` into storage. Together they are the round-trip a
+    /// codec has to satisfy, and having both as public constructors is what lets
+    /// a test walk every representable pattern of a narrow dtype and check it
+    /// survives the journey.
+    ///
+    /// # Panics
+    ///
+    /// If `dt` is not a float dtype with an encoder.
+    #[must_use]
+    pub fn from_f64_as(dt: ElementKind, shape: &[i64], data: &[f64]) -> Self {
+        let sz = elem_size(dt);
+        let mut bytes = vec![0u8; data.len() * sz];
+        for (i, &v) in data.iter().enumerate() {
+            write_le(&mut bytes, i * sz, sz, encode_float(v, dt));
+        }
+        Self::new(dt, shape.to_vec(), dense_strides(shape), bytes)
+    }
+
+    /// Dense buffer of raw FP8 bit patterns for `dt`.
+    ///
+    /// Takes bits rather than values because an 8-bit float's whole domain is
+    /// 256 patterns — small enough to enumerate exhaustively, which is the only
+    /// dtype family where "supports every possible value" can be *proved*
+    /// rather than sampled.
+    ///
+    /// # Panics
+    ///
+    /// If `dt` is not one of the two computable FP8 dtypes. The MX scales
+    /// (`f8e8m0`/`f8e6m2`) are deliberately excluded: KISS-CLASSIFY §6.1-0013
+    /// makes them per-block **scale** types carried as sibling operands, never
+    /// element value dtypes.
+    #[must_use]
+    pub fn from_fp8_bits(dt: ElementKind, shape: &[i64], data: &[u8]) -> Self {
+        assert!(
+            matches!(dt, ElementKind::Fp8E4M3FN | ElementKind::Fp8E5M2),
+            "from_fp8_bits on {dt:?}, which is not a computable FP8 dtype"
+        );
+        Self::new(dt, shape.to_vec(), dense_strides(shape), data.to_vec())
+    }
+
     /// Dense buffer of raw `f16` bit patterns.
     #[must_use]
     pub fn from_f16_bits(shape: &[i64], data: &[u16]) -> Self {
@@ -425,7 +468,11 @@ fn elem_size(dt: ElementKind) -> usize {
         ElementKind::F16 | ElementKind::Bf16 | ElementKind::I16 | ElementKind::U16 => 2,
         ElementKind::F32 | ElementKind::F32Strict | ElementKind::I32 | ElementKind::U32 => 4,
         ElementKind::F64 | ElementKind::I64 | ElementKind::U64 => 8,
-        ElementKind::I8 | ElementKind::U8 | ElementKind::Bool => 1,
+        ElementKind::I8
+        | ElementKind::U8
+        | ElementKind::Bool
+        | ElementKind::Fp8E4M3FN
+        | ElementKind::Fp8E5M2 => 1,
         // A complex element is a PAIR: c64 is two f32, c128 is two f64. The
         // §6.1 token names the total width, so the name already says this.
         ElementKind::Complex64 => 8,
@@ -592,6 +639,121 @@ fn f16_to_f64(bits: u16) -> f64 {
         (1.0 + f64::from(mant) / 1024.0) * 2f64.powi(i32::from(exp) - 15)
     };
     sign * mag
+}
+
+/// Decode an OCP FP8 **E4M3** (`f8e4m3fn`) bit pattern to `f64`.
+///
+/// KISS-CLASSIFY §6.1-0010: 1 sign, 4 exponent, 3 mantissa, bias 7; maximum
+/// finite magnitude 448; **no infinity encodings**; a **single** NaN encoding.
+///
+/// The `fn` in the token is "finite": the pattern that would be infinity in an
+/// IEEE-shaped format is a finite value here, and only `S.1111.111` is NaN. That
+/// is the one place a reader who assumes IEEE gets a wrong *number* rather than a
+/// wrong classification — `0x7E` is 448, not infinity.
+///
+/// This decoder is written from the format definition rather than shared with any
+/// emitter's. A differential oracle that reuses the implementation it checks is
+/// not a differential.
+fn fp8_e4m3fn_to_f64(bits: u8) -> f64 {
+    let sign = if bits & 0x80 != 0 { -1.0 } else { 1.0 };
+    let exp = (bits >> 3) & 0x0f;
+    let mant = bits & 0x07;
+    // The sole NaN: exponent all-ones AND mantissa all-ones. Every other
+    // all-ones-exponent pattern is an ordinary finite value.
+    if exp == 0x0f && mant == 0x07 {
+        return f64::NAN;
+    }
+    let mag = if exp == 0 {
+        // Subnormal / zero: value = mant * 2^(1-bias) / 8 = mant * 2^-9.
+        f64::from(mant) * 2f64.powi(-9)
+    } else {
+        (1.0 + f64::from(mant) / 8.0) * 2f64.powi(i32::from(exp) - 7)
+    };
+    sign * mag
+}
+
+/// Decode an OCP FP8 **E5M2** (`f8e5m2`) bit pattern to `f64`.
+///
+/// KISS-CLASSIFY §6.1-0011: 1 sign, 5 exponent, 2 mantissa, bias 15; maximum
+/// finite magnitude 57344; **IEEE-style** infinities and NaN — so unlike E4M3
+/// the all-ones exponent behaves the way an IEEE reader expects.
+fn fp8_e5m2_to_f64(bits: u8) -> f64 {
+    let sign = if bits & 0x80 != 0 { -1.0 } else { 1.0 };
+    let exp = (bits >> 2) & 0x1f;
+    let mant = bits & 0x03;
+    let mag = if exp == 0 {
+        // Subnormal / zero: value = mant * 2^(1-bias) / 4 = mant * 2^-16.
+        f64::from(mant) * 2f64.powi(-16)
+    } else if exp == 0x1f {
+        if mant == 0 { f64::INFINITY } else { f64::NAN }
+    } else {
+        (1.0 + f64::from(mant) / 4.0) * 2f64.powi(i32::from(exp) - 15)
+    };
+    sign * mag
+}
+
+/// Round an `f64` to an OCP FP8 **E4M3** bit pattern (round-to-nearest, ties-to-even).
+///
+/// Overflow **saturates to the maximum finite magnitude** rather than producing
+/// an infinity, because E4M3 has none — the format's whole point. A codec that
+/// returned an "infinity" pattern here would be emitting NaN or 448 by accident
+/// depending on which pattern it chose.
+fn f64_to_fp8_e4m3fn_bits(x: f64) -> u8 {
+    if x.is_nan() {
+        return 0x7f;
+    }
+    let sign: u8 = if x.is_sign_negative() { 0x80 } else { 0 };
+    let a = x.abs();
+    const MAX_FINITE: f64 = 448.0;
+    if a.is_infinite() || a > MAX_FINITE {
+        return sign | 0x7e; // largest finite: exp 1111, mant 110
+    }
+    // Search the 127 non-NaN magnitude patterns for the nearest, ties-to-even.
+    // Exhaustive rather than clever: 127 candidates is nothing, and a bit-twiddling
+    // rounder is exactly where an independent codec would reproduce the bug it is
+    // supposed to catch.
+    let mut best: u8 = 0;
+    let mut best_err = f64::INFINITY;
+    for pat in 0u8..=0x7e {
+        let v = fp8_e4m3fn_to_f64(pat);
+        let err = (v - a).abs();
+        if err < best_err || (err == best_err && pat % 2 == 0) {
+            best = pat;
+            best_err = err;
+        }
+    }
+    sign | best
+}
+
+/// Round an `f64` to an OCP FP8 **E5M2** bit pattern (round-to-nearest, ties-to-even).
+///
+/// E5M2 *does* have infinities, so overflow produces one rather than saturating.
+fn f64_to_fp8_e5m2_bits(x: f64) -> u8 {
+    if x.is_nan() {
+        return 0x7f;
+    }
+    let sign: u8 = if x.is_sign_negative() { 0x80 } else { 0 };
+    let a = x.abs();
+    const MAX_FINITE: f64 = 57344.0;
+    if a.is_infinite() {
+        return sign | 0x7c;
+    }
+    // Halfway between max-finite and the next power up rounds to infinity, as
+    // IEEE requires; anything larger overflows to infinity too.
+    if a > MAX_FINITE + 2f64.powi(12) {
+        return sign | 0x7c;
+    }
+    let mut best: u8 = 0;
+    let mut best_err = f64::INFINITY;
+    for pat in 0u8..=0x7b {
+        let v = fp8_e5m2_to_f64(pat);
+        let err = (v - a).abs();
+        if err < best_err || (err == best_err && pat % 2 == 0) {
+            best = pat;
+            best_err = err;
+        }
+    }
+    sign | best
 }
 
 /// Decode a brain-float16 bit pattern to `f64` (bf16 = the top 16 bits of f32).
@@ -761,6 +923,8 @@ fn encode_complex(re: f64, im: f64, out: ElementKind) -> u128 {
 /// Decode a raw storage pattern to `f64` (independent half decode for f16/bf16).
 fn raw_to_f64(bits: u128, dt: ElementKind) -> f64 {
     match dt {
+        ElementKind::Fp8E4M3FN => fp8_e4m3fn_to_f64(bits as u8),
+        ElementKind::Fp8E5M2 => fp8_e5m2_to_f64(bits as u8),
         ElementKind::F16 => f16_to_f64(bits as u16),
         ElementKind::Bf16 => bf16_to_f64(bits as u16),
         ElementKind::F32 | ElementKind::F32Strict => f64::from(f32::from_bits(bits as u32)),
@@ -1310,6 +1474,8 @@ fn encode_float(f: f64, out: ElementKind) -> u128 {
     match out {
         ElementKind::F64 => u128::from(f.to_bits()),
         ElementKind::F32 | ElementKind::F32Strict => u128::from((f as f32).to_bits()),
+        ElementKind::Fp8E4M3FN => u128::from(f64_to_fp8_e4m3fn_bits(f)),
+        ElementKind::Fp8E5M2 => u128::from(f64_to_fp8_e5m2_bits(f)),
         ElementKind::F16 => u128::from(f32_to_f16_bits(f as f32)),
         ElementKind::Bf16 => u128::from(f32_to_bf16_bits(f as f32)),
         ElementKind::U8 | ElementKind::Bool => u128::from(f as u8),

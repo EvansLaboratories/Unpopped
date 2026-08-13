@@ -58,23 +58,20 @@ enum Status {
     /// **Deliberately** declined, permanently, for the recorded reason. A
     /// typed decline here is conformant behaviour, not a gap.
     ///
-    /// **Currently unused, and that is the finding.** Three entries were
-    /// labelled `ByDesign` and all three were wrong: Slang's narrow integers
-    /// (Slang supports them on capable targets — the gap is our capability-blind
-    /// gate), and `u32`/`u64` (whose stated reason, "never a compute operand",
-    /// was circular — the real blocker is that they do not integer-promote to
-    /// signed `int` the way `u8`/`u16` do). Nothing in this generator is
-    /// permanently declined by design.
+    /// **Its only members are the two MX scales, and it took three wrong
+    /// attempts to get one right.** Slang's narrow integers were labelled
+    /// `ByDesign` on a misreading of "depends on target + capabilities" as
+    /// "cannot"; `u32` and `u64` on a circular reason ("never a compute
+    /// operand") that described the implementation rather than a decision. All
+    /// three were really `Blocked`, and all three now lower or are scheduled.
     ///
-    /// The variant stays because the category is real and the next genuine
-    /// member needs somewhere to live. Its emptiness is the useful signal: a
-    /// `ByDesign` entry should be rare enough to be suspicious.
-    //
-    // `dead_code` is expected and is the point: the variant has no members
-    // today. Deleting it to silence the lint would delete the category, and the
-    // next permanent decline would then land in `Blocked` or `NotYet` — where it
-    // would sit on a worklist forever waiting for work nobody should do.
-    #[allow(dead_code, reason = "no permanent declines today; see the doc above")]
+    /// `f8e8m0`/`f8e6m2` are different in kind: KISS-CLASSIFY §6.1-0013 makes
+    /// them sibling-operand **scales**, never element value dtypes. That is a
+    /// statement about what the dtype IS, not about what we have built.
+    ///
+    /// A `ByDesign` entry should stay rare enough to be suspicious. The test
+    /// below refuses one whose reason mentions deferral, which is the shape the
+    /// three wrong ones had.
     ByDesign(&'static str),
 }
 use Status::{Blocked, ByDesign, Lowers, NotYet};
@@ -114,6 +111,25 @@ const SLANG_NARROW: &str = "Slang supports these on capable targets; supports_dt
 const SLANG_U32: &str = "Slang lowering for the unsigned types is unwritten; the types \
      themselves are supported, so this is ours to add";
 
+/// `f8e8m0` and `f8e6m2` are the OCP Microscaling **scale** dtypes, and
+/// KISS-CLASSIFY §6.1-0013 is explicit about what that means: each is "the
+/// per-block shared scale of an MX-encoded value operand, carried as a **sibling
+/// operand**, **never an element value dtype**." §6.2-0002 confirms it from the
+/// other side — its float special-value pinning lists `f8e4m3fn`/`f8e5m2` and
+/// their `fnuz` siblings, and omits these two.
+///
+/// So lowering them as a compute dtype would be a category error rather than
+/// progress: a kernel does not compute *in* a scale, it uses one to dequantize
+/// the block that scale belongs to. That work is the quant/scale-sibling model,
+/// on a different axis entirely.
+///
+/// These are the first genuine `ByDesign` entries. The variant's doc says such
+/// an entry should be rare enough to be suspicious — so: the claim is not "we
+/// haven't got to it", it is that the §6.1 row exists to be *named and carried*,
+/// not computed with, and a future version should not quietly change that.
+const MX_SCALE: &str = "MX shared-exponent scale (KISS-CLASSIFY 6.1-0013): a sibling operand \
+     that scales a block, never an element value dtype a kernel computes in";
+
 /// Every §6.1 dtype, with what each backend does with a plain elementwise `Add`.
 ///
 /// The two RESERVED dtypes are absent entirely rather than listed as declines:
@@ -137,8 +153,18 @@ const COVERAGE: &[(&str, ElementKind, Status, Status)] = &[
     ("bool", ElementKind::Bool, NotYet, NotYet),
     ("f8e4m3fn", ElementKind::Fp8E4M3FN, NotYet, NotYet),
     ("f8e5m2", ElementKind::Fp8E5M2, NotYet, NotYet),
-    ("f8e8m0", ElementKind::F8E8M0, NotYet, NotYet),
-    ("f8e6m2", ElementKind::F8E6M2, NotYet, NotYet),
+    (
+        "f8e8m0",
+        ElementKind::F8E8M0,
+        ByDesign(MX_SCALE),
+        ByDesign(MX_SCALE),
+    ),
+    (
+        "f8e6m2",
+        ElementKind::F8E6M2,
+        ByDesign(MX_SCALE),
+        ByDesign(MX_SCALE),
+    ),
     ("i4", ElementKind::I4, NotYet, NotYet),
     ("u4", ElementKind::U4, NotYet, NotYet),
     ("b1", ElementKind::B1, NotYet, NotYet),
