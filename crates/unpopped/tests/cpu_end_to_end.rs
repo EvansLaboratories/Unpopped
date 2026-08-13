@@ -869,3 +869,147 @@ int main(void) {{
         }
     }
 }
+
+/// **FP8 round-trips through a real C compiler, against an independently-written
+/// codec.**
+///
+/// This is the strongest differential in the suite, and it is worth naming why.
+/// The emitted kernel carries a software FP8 codec written in C
+/// (`cfamily::fp8_helpers`); the oracle carries one written in Rust
+/// (`oracle::fp8_e4m3fn_to_f64` and friends). Neither was derived from the other
+/// — both were written from KISS-CLASSIFY §6.1-0010/-0011 and the OCP OFP8
+/// definitions. So agreement here is two independent readings of a format
+/// producing the same bytes, which is what a differential is supposed to mean and
+/// what a shared decode table would quietly destroy.
+///
+/// # Why FP8 got a lowering before f16/bf16, which have been "ready" longer
+///
+/// The f16/bf16 arms spell `__half2float` — a CUDA name emitted from the module
+/// that calls itself neutral, tripwired in `tests/neutral_spelling.rs`. Fixing
+/// that means replacing a vendor intrinsic with an emitted software codec, which
+/// **rewrites every existing f16 golden including Baracuda's physical CUDA
+/// corpus**, so it is gated on a coordinated regen.
+///
+/// FP8 needs the same mechanism and has **no existing goldens to break**. So it
+/// goes first, and the seam it proves — `narrow_load_fn`/`narrow_store_fn`, one
+/// name over two strategies — is what the f16 arms move onto at the regen, with
+/// callers unchanged.
+#[test]
+fn fp8_kernels_round_trip_against_the_oracles_independent_codec() {
+    let Some(cc) = find_compiler() else {
+        eprintln!(
+            "SKIP fp8_kernels_round_trip_against_the_oracles_independent_codec: \
+             no host C compiler."
+        );
+        return;
+    };
+    let dir: PathBuf = std::env::temp_dir().join("unpopped-e2e");
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    for (tag, dt) in [
+        ("e4m3fn", ElementKind::Fp8E4M3FN),
+        ("e5m2", ElementKind::Fp8E5M2),
+    ] {
+        // Every finite non-NaN pattern of each sign. The whole domain is 256
+        // values, so "works for all inputs" is enumerable rather than sampled.
+        let pats: Vec<u8> = (0u8..=255).collect();
+        let n = pats.len() as i64;
+
+        let op = OpDef::elementwise("addfp8", 2, &[dt], input(0) + input(1));
+        let d = OperandDesc::new(1, &[n], &[1], dt, 1);
+        let operands = vec![d; 3];
+        let key = structure_key(OpCategory::BinaryElementwise, &operands, ArchSku::Sm89);
+        let kernel = generate(&op, &key, &CpuC);
+        assert!(
+            kernel.source.contains("unsigned char"),
+            "{tag}: FP8 must be stored as a byte:\n{}",
+            kernel.source
+        );
+        assert!(
+            !kernel.source.contains("__half") && !kernel.source.contains("__nv_"),
+            "{tag}: the FP8 codec must be portable C, with no vendor intrinsic:\n{}",
+            kernel.source
+        );
+
+        // Second operand is +0 (0x00), so `a + 0` must reproduce `a` exactly for
+        // every finite pattern — an identity that isolates the CODEC from the
+        // arithmetic. A codec that rounds wrongly fails here even though the add
+        // is trivially right.
+        let zeros: Vec<u8> = vec![0u8; pats.len()];
+        let lit = |v: &[u8]| {
+            v.iter()
+                .map(|x| format!("{x}u"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let src = format!(
+            "{}
+#include <stdio.h>
+
+int main(void) {{
+    const unsigned char in0[{n}] = {{{}}};
+    const unsigned char in1[{n}] = {{{}}};
+    unsigned char out[{n}];
+    for (int i = 0; i < {n}; ++i) out[i] = 0xAAu;
+    {}(in0, in1, out, {n});
+    for (int i = 0; i < {n}; ++i) printf(\"%u\\n\", (unsigned)out[i]);
+    return 0;
+}}
+",
+            kernel.source,
+            lit(&pats),
+            lit(&zeros),
+            kernel.name
+        );
+
+        let c_file = dir.join(format!("fp8_{tag}.c"));
+        let exe = dir.join(format!("fp8_{tag}.exe"));
+        std::fs::write(&c_file, &src).expect("write");
+        cc.compile(&c_file, &exe, false)
+            .unwrap_or_else(|e| panic!("{tag}: compile FP8 kernel: {e}"));
+        let out = std::process::Command::new(&exe).output().expect("run");
+        assert!(out.status.success(), "{tag}: exited {:?}", out.status);
+        let actual: Vec<u8> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.trim().parse::<u8>().expect("non-integer"))
+            .collect();
+        assert_eq!(
+            actual.len(),
+            pats.len(),
+            "{tag}: printed {} lines",
+            actual.len()
+        );
+
+        // The oracle leg, through its own codec.
+        let plan = build_plan(&op, &key);
+        let bufs = vec![
+            TypedBuffer::from_fp8_bits(dt, &[n], &pats),
+            TypedBuffer::from_fp8_bits(dt, &[n], &zeros),
+        ];
+        let want = evaluate(&plan, &operands, &bufs, &[])
+            .into_iter()
+            .next()
+            .unwrap()
+            .to_f64_vec();
+        let got_vals = TypedBuffer::from_fp8_bits(dt, &[n], &actual).to_f64_vec();
+
+        for (i, (&g, &w)) in got_vals.iter().zip(want.iter()).enumerate() {
+            if w.is_nan() {
+                assert!(
+                    g.is_nan(),
+                    "{tag} pattern {:#04x}: oracle says NaN, kernel produced {g}",
+                    pats[i]
+                );
+                continue;
+            }
+            assert_eq!(
+                g, w,
+                "{tag} pattern {:#04x}: kernel produced {g}, oracle expected {w}. \
+                 The two FP8 codecs — emitted C and oracle Rust — disagree, which is \
+                 exactly what this test exists to detect.",
+                pats[i]
+            );
+        }
+    }
+}

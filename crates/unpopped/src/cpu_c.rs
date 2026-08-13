@@ -42,9 +42,9 @@
 
 use crate::backend::{Backend, GeneratedKernel, LowerError, Lowering, const_lit, lower_dag};
 use crate::cfamily::{
-    assert_no_int_div_or_const, binary_f32, binary_f64, binary_int, dtype_tag, out_ctype_of,
-    param_args, param_ctype, scalar_ctype, select_f32, select_f64, store_expr_of, unary_f32,
-    unary_f64,
+    assert_no_int_div_or_const, binary_f32, binary_f64, binary_int, dtype_tag, fp8_helpers,
+    narrow_load_fn, out_ctype_of, param_args, param_ctype, promote_load_f32, scalar_ctype,
+    select_f32, select_f64, store_expr_of, unary_f32, unary_f64,
 };
 use crate::ir::{BinaryOp, ExprDag, UnaryOp};
 use crate::plan::{KernelPlan, Schedule};
@@ -151,6 +151,14 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
     // Portable C99: `<math.h>` supplies the transcendental atoms (expf/sqrtf/…),
     // the `Cmp`/`Rem` helpers, and the `NAN`/`INFINITY` macros `const_lit` emits.
     s.push_str("#include <math.h>\n\n");
+    // A NARROW FLOAT cell stores bytes and computes at f32, so its codec has to
+    // travel with the kernel. EMITTED rather than intrinsic-named: that is the
+    // whole difference between this and the f16/bf16 arms, which still spell
+    // `__half2float` from a module that calls itself neutral.
+    if let Some(helpers) = fp8_helpers(plan.dtype) {
+        s.push_str(helpers);
+        s.push('\n');
+    }
     s.push_str(&format!("void {name}(\n"));
     for i in 0..n {
         s.push_str(&format!("    const {ctype}* in{i},\n"));
@@ -160,10 +168,16 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
         "    long long n{})\n{{\n",
         param_args(plan.body, param_ctype(plan))
     ));
-    let acc = |idx: u8| format!("in{idx}[i]");
+    // For a narrow float the LEAF promotes and the BODY is float-typed; for
+    // everything else the leaf is the raw element and the body is the storage
+    // type. `promote_load_f32` returns its argument unchanged for dtypes that
+    // need no detour, so the two cases share one expression.
+    let narrow = narrow_load_fn(plan.dtype).is_some();
+    let body_ctype = if narrow { "float" } else { ctype };
+    let acc = |idx: u8| promote_load_f32(plan.dtype, &format!("in{idx}[i]"));
     let (prelude, root) = lower_dag(
         &ExprDag::from_expr(plan.body),
-        ctype,
+        body_ctype,
         &Lowering {
             leaf: &acc,
             reduced: &|i| unreachable!("no Reduced leaf outside RowReduce: red{i}"),
@@ -206,7 +220,11 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
 /// is the emitter backstop.
 fn cpu_unary(op: UnaryOp, x: String, dtype: ElementKind) -> String {
     match dtype {
-        ElementKind::F32 | ElementKind::F32Strict => unary_f32_cpu(op, x),
+        // Promoted to `float` at the leaf, so unary math is f32 math.
+        ElementKind::F32
+        | ElementKind::F32Strict
+        | ElementKind::Fp8E4M3FN
+        | ElementKind::Fp8E5M2 => unary_f32_cpu(op, x),
         ElementKind::F64 => unary_f64_cpu(op, x),
         other => panic!(
             "cpu_c backend: no unary math for dtype {other:?} — v1 lowers unary for f32/f64 \
@@ -242,7 +260,12 @@ fn unary_f64_cpu(op: UnaryOp, x: String) -> String {
 /// `cuda_binary` minus the f16/bf16 promote arms (declined in v1).
 fn cpu_binary(op: BinaryOp, a: String, b: String, dtype: ElementKind) -> String {
     match dtype {
-        ElementKind::F32 | ElementKind::F32Strict => binary_f32(op, a, b),
+        // A narrow float has already been promoted to `float` by the leaf, so
+        // its arithmetic IS f32 arithmetic.
+        ElementKind::F32
+        | ElementKind::F32Strict
+        | ElementKind::Fp8E4M3FN
+        | ElementKind::Fp8E5M2 => binary_f32(op, a, b),
         ElementKind::F64 => binary_f64(op, a, b),
         // Every integer dtype this backend admits routes to the raw-C operator
         // speller. `I16`/`U16` were missing here while `supports_dtype` accepted

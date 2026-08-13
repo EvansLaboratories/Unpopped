@@ -151,8 +151,8 @@ const COVERAGE: &[(&str, ElementKind, Status, Status)] = &[
     ("u32", ElementKind::U32, Lowers, Blocked(SLANG_U32)),
     ("u64", ElementKind::U64, Lowers, Blocked(SLANG_U32)),
     ("bool", ElementKind::Bool, NotYet, NotYet),
-    ("f8e4m3fn", ElementKind::Fp8E4M3FN, NotYet, NotYet),
-    ("f8e5m2", ElementKind::Fp8E5M2, NotYet, NotYet),
+    ("f8e4m3fn", ElementKind::Fp8E4M3FN, Lowers, NotYet),
+    ("f8e5m2", ElementKind::Fp8E5M2, Lowers, NotYet),
     (
         "f8e8m0",
         ElementKind::F8E8M0,

@@ -85,6 +85,10 @@ pub fn scalar_ctype(dt: ElementKind) -> Option<&'static str> {
         // Model-A u32-index path), never a compute operand. It has no `Element`
         // impl and no vector/packed path; a compute op never keys `plan.dtype =
         // U32` (no constructor builds one), so this arm serves the index load.
+        // FP8 is STORED as a byte and COMPUTED as a float. C has no FP8 type,
+        // and does not need one: the codec is a pair of emitted helpers
+        // (`fp8_helpers`), not a language feature.
+        ElementKind::Fp8E4M3FN | ElementKind::Fp8E5M2 => "unsigned char",
         ElementKind::U32 => "unsigned int",
         ElementKind::U64 => "unsigned long long",
         _ => return None,
@@ -107,6 +111,8 @@ pub fn dtype_tag(dt: ElementKind) -> &'static str {
         ElementKind::U8 => "u8",
         ElementKind::U16 => "u16",
         ElementKind::U64 => "u64",
+        ElementKind::Fp8E4M3FN => "f8e4m3fn",
+        ElementKind::Fp8E5M2 => "f8e5m2",
         // U32 index-dtype infix: `gather_f32_u32` (the Fuel-facing u32-index
         // variant's entry_point symbol).
         ElementKind::U32 => "u32",
@@ -147,7 +153,16 @@ pub fn out_ctype_of<'c>(plan: &KernelPlan<'_>, j: usize, ctype: &'c str) -> &'c 
 pub fn store_expr_of(plan: &KernelPlan<'_>, j: usize, root: String) -> String {
     let d = plan.out_dtype_of(j);
     if d == plan.dtype {
-        return root;
+        // A UNIFORM cell still needs a store conversion when the dtype is a
+        // NARROW FLOAT: its body was lowered at `float` (the leaf promoted), so
+        // the root is an f32 expression and the destination is the packed
+        // storage type. Returning it unchanged would let C's implicit
+        // float->unsigned char conversion TRUNCATE the value instead of encoding
+        // it — `1.5f` stored as `1`, silently, with no diagnostic.
+        //
+        // `demote_store_f32` is the identity for every dtype that needs no
+        // detour, so this stays byte-identical for f32/f64/integer cells.
+        return demote_store_f32(d, &root);
     }
     // The hetero elementwise store is exactly the U8 keep-mask (a `Cmp*`
     // predicate, pinned by `assert_valid_out_dtype`; the bincount-I32 scatter
@@ -184,10 +199,145 @@ pub fn half_store_intrinsic(kind: ElementKind) -> Option<&'static str> {
     }
 }
 
+/// Portable-C source for the FP8 codec helpers a kernel needs, or `None` for a
+/// dtype that needs none.
+///
+/// # Why this exists rather than a scalar type
+///
+/// C has no FP8 type, and that is not the obstacle it sounds like. An FP8 value
+/// is **stored** as a byte and **computed** as a float; what a kernel needs is
+/// not a native type but a decode on load and an encode on store. These helpers
+/// are that, in portable C99 with no vendor intrinsic anywhere.
+///
+/// # This is the neutral seam the f16/bf16 arms still need
+///
+/// `half_load_intrinsic` spells `__half2float` — a CUDA name emitted from a
+/// module that calls itself neutral, tripwired in `tests/neutral_spelling.rs`.
+/// The fix for that is exactly this shape: emit a software codec instead of
+/// naming a vendor's. FP8 gets it first because it has **no existing goldens to
+/// break**, so the pattern can be proven here and then applied to f16/bf16 at the
+/// coordinated regen event that arm is gated on.
+///
+/// # Correctness over cleverness in the encoder
+///
+/// The encoder searches the 127 non-NaN magnitude patterns for the nearest,
+/// ties-to-even, rather than manipulating exponent bits. Bit-twiddling rounders
+/// are where FP8 conversion bugs live, and this is the *reference* backend — the
+/// one an independent implementation is checked against. A reader can verify a
+/// search by inspection; they cannot verify a shift-and-mask rounder that way.
+/// A performance-shaped emitter should do better and prove it against this.
+pub fn fp8_helpers(kind: ElementKind) -> Option<&'static str> {
+    match kind {
+        ElementKind::Fp8E4M3FN => Some(
+            r"
+/* OCP FP8 E4M3 (KISS-CLASSIFY 6.1-0010): 1 sign, 4 exp (bias 7), 3 mantissa.
+   Max finite 448. NO infinities. A SINGLE NaN encoding, S.1111.111 — every
+   other all-ones-exponent pattern is an ordinary finite value, which is where a
+   reader assuming IEEE shape gets a wrong number rather than a wrong class. */
+static float unpopped_f8e4m3fn_load(unsigned char b) {
+    int   sign = (b >> 7) & 1;
+    int   exp  = (b >> 3) & 0xF;
+    int   mant = b & 0x7;
+    float mag;
+    if (exp == 0xF && mant == 0x7) {
+        mag = NAN;
+    } else if (exp == 0) {
+        mag = (float)mant * 0.001953125f;  /* 2^-9 */
+    } else {
+        mag = (1.0f + (float)mant / 8.0f) * ldexpf(1.0f, exp - 7);
+    }
+    return sign ? -mag : mag;
+}
+
+static unsigned char unpopped_f8e4m3fn_store(float x) {
+    unsigned char sign, best;
+    float a, best_err;
+    int p;
+    if (x != x) { return 0x7F; }                 /* NaN */
+    sign = (x < 0.0f || (x == 0.0f && 1.0f / x < 0.0f)) ? 0x80 : 0x00;
+    a = x < 0.0f ? -x : x;
+    if (a > 448.0f) { return sign | 0x7E; }      /* saturate: E4M3 has no inf */
+    best = 0; best_err = INFINITY;
+    for (p = 0; p <= 0x7E; ++p) {
+        float v = unpopped_f8e4m3fn_load((unsigned char)p);
+        float e = v - a; if (e < 0.0f) e = -e;
+        if (e < best_err || (e == best_err && (p % 2) == 0)) { best = (unsigned char)p; best_err = e; }
+    }
+    return sign | best;
+}
+",
+        ),
+        ElementKind::Fp8E5M2 => Some(
+            r"
+/* OCP FP8 E5M2 (KISS-CLASSIFY 6.1-0011): 1 sign, 5 exp (bias 15), 2 mantissa.
+   Max finite 57344. IEEE-style infinities and NaN — unlike E4M3, the all-ones
+   exponent behaves the way an IEEE reader expects. */
+static float unpopped_f8e5m2_load(unsigned char b) {
+    int   sign = (b >> 7) & 1;
+    int   exp  = (b >> 2) & 0x1F;
+    int   mant = b & 0x3;
+    float mag;
+    if (exp == 0) {
+        mag = (float)mant * 0.0000152587890625f;  /* 2^-16 */
+    } else if (exp == 0x1F) {
+        mag = mant == 0 ? INFINITY : NAN;
+    } else {
+        mag = (1.0f + (float)mant / 4.0f) * ldexpf(1.0f, exp - 15);
+    }
+    return sign ? -mag : mag;
+}
+
+static unsigned char unpopped_f8e5m2_store(float x) {
+    unsigned char sign, best;
+    float a, best_err;
+    int p;
+    if (x != x) { return 0x7F; }
+    sign = (x < 0.0f || (x == 0.0f && 1.0f / x < 0.0f)) ? 0x80 : 0x00;
+    a = x < 0.0f ? -x : x;
+    if (a > 61440.0f) { return sign | 0x7C; }    /* overflow to inf (E5M2 has one) */
+    best = 0; best_err = INFINITY;
+    for (p = 0; p <= 0x7B; ++p) {
+        float v = unpopped_f8e5m2_load((unsigned char)p);
+        float e = v - a; if (e < 0.0f) e = -e;
+        if (e < best_err || (e == best_err && (p % 2) == 0)) { best = (unsigned char)p; best_err = e; }
+    }
+    return sign | best;
+}
+",
+        ),
+        _ => None,
+    }
+}
+
+/// The load-side widening function for a NARROW FLOAT dtype: a vendor intrinsic
+/// for f16/bf16, an emitted software helper for FP8, `None` for everything else.
+///
+/// The two strategies sit behind one name deliberately. A narrow float is a
+/// narrow float — stored small, computed at f32 — and how the conversion is
+/// spelled is a property of the dtype, not of the call site. That is what lets
+/// the f16/bf16 arms move from intrinsic to emitted helper later without any
+/// caller changing.
+pub fn narrow_load_fn(kind: ElementKind) -> Option<&'static str> {
+    match kind {
+        ElementKind::Fp8E4M3FN => Some("unpopped_f8e4m3fn_load"),
+        ElementKind::Fp8E5M2 => Some("unpopped_f8e5m2_load"),
+        _ => half_load_intrinsic(kind),
+    }
+}
+
+/// The store-side narrowing function. Counterpart of [`narrow_load_fn`].
+pub fn narrow_store_fn(kind: ElementKind) -> Option<&'static str> {
+    match kind {
+        ElementKind::Fp8E4M3FN => Some("unpopped_f8e4m3fn_store"),
+        ElementKind::Fp8E5M2 => Some("unpopped_f8e5m2_store"),
+        _ => half_store_intrinsic(kind),
+    }
+}
+
 /// Widen a loaded `inner` expression to `float`: the half/bf16 intrinsic, else
 /// the value unchanged (already ≥ f32, or an integer loaded natively).
 pub fn promote_load_f32(kind: ElementKind, inner: &str) -> String {
-    match half_load_intrinsic(kind) {
+    match narrow_load_fn(kind) {
         Some(f) => format!("{f}({inner})"),
         None => inner.to_string(),
     }
@@ -196,7 +346,7 @@ pub fn promote_load_f32(kind: ElementKind, inner: &str) -> String {
 /// Narrow a `float`-valued `inner` expression to the storage dtype: the
 /// half/bf16 intrinsic, else the value unchanged (the caller adds any cast).
 pub fn demote_store_f32(kind: ElementKind, inner: &str) -> String {
-    match half_store_intrinsic(kind) {
+    match narrow_store_fn(kind) {
         Some(f) => format!("{f}({inner})"),
         None => inner.to_string(),
     }
@@ -222,8 +372,8 @@ pub fn cast_scalar(from: ElementKind, to: ElementKind, expr: &str) -> String {
         return expr.to_string();
     }
     match (
-        half_load_intrinsic(from).is_some(),
-        half_store_intrinsic(to).is_some(),
+        narrow_load_fn(from).is_some(),
+        narrow_store_fn(to).is_some(),
     ) {
         // f16/bf16 -> f16/bf16 (cross): widen to f32, then narrow.
         (true, true) => demote_store_f32(to, &promote_load_f32(from, expr)),

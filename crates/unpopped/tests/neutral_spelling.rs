@@ -90,6 +90,13 @@ fn expected(dt: ElementKind) -> Spelling {
         // vendor intrinsic and no packing — genuinely neutral, unlike the halves.
         F32 | F32Strict | F64 | I32 | I64 | I8 | U8 | U32 | U64 | I16 | U16 => Spelling::PortableC,
 
+        // THE SEAM, WORKING. `f8e4m3fn`/`f8e5m2` spell `unsigned char` — the
+        // STORAGE type — and their conversions are software helpers emitted into
+        // the kernel (`cfamily::fp8_helpers`), not vendor intrinsics. That is
+        // precisely the shape the `F16`/`Bf16` arms below still need, and FP8 got
+        // it first because it had no existing goldens to rewrite.
+        Fp8E4M3FN | Fp8E5M2 => Spelling::PortableC,
+
         // THE GAP. Correct for CUDA, wrong for a module that calls itself neutral.
         // When the spelling seam lands these become `Declined` and the backend
         // supplies the name.
@@ -100,14 +107,16 @@ fn expected(dt: ElementKind) -> Spelling {
         //     §6.1-0001 — recognized, distinguished from unknown, and never
         //     computed with at this schema version. Declining is REQUIRED here,
         //     not a gap.
-        //   * `I4`/`U4`/`B1` are sub-byte packed; `Fp8E4M3FN`/`Fp8E5M2` need a
-        //     software codec; `Complex64`/`Complex128` need a struct ABI. All
-        //     are unimplemented rather than impossible.
+        //   * `I4`/`U4`/`B1` are sub-byte packed and `Complex64`/`Complex128`
+        //     need a struct ABI — unimplemented rather than impossible.
+        //     (`Fp8E4M3FN`/`Fp8E5M2` used to sit here needing "a software
+        //     codec". They have one now, emitted rather than intrinsic-named,
+        //     and moved up to `PortableC`.)
         //   * `F8E8M0`/`F8E6M2` are the MX shared block SCALES — active §6.1
         //     dtypes at sk4, but 8-bit floats with no portable C type, so the
         //     neutral module declines them like the other FP8 rows.
-        Bool | Fp8E4M3FN | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 | I4 | U4 | B1
-        | Complex64 | Complex128 => Spelling::Declined,
+        Bool | Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 | I4 | U4 | B1 | Complex64
+        | Complex128 => Spelling::Declined,
     }
 }
 
