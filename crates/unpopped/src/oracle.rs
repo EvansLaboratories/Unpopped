@@ -305,6 +305,23 @@ impl TypedBuffer {
             .collect()
     }
 
+    /// Dense buffer of `u64` (`U64`) values, little-endian.
+    ///
+    /// Note the projection asymmetry these expose: `to_i128_vec` is exact for
+    /// every value, while `to_f64_vec` is not above 2^53. That is why the
+    /// tolerant comparator routes integers through `i128` — see
+    /// `tests/wide_integer_comparison.rs`.
+    #[must_use]
+    pub fn from_u64(shape: &[i64], data: &[u64]) -> Self {
+        let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_le_bytes()).collect();
+        Self::new(
+            ElementKind::U64,
+            shape.to_vec(),
+            dense_strides(shape),
+            bytes,
+        )
+    }
+
     /// Dense buffer of `u8` values.
     #[must_use]
     pub fn from_u8(shape: &[i64], data: &[u8]) -> Self {
@@ -407,7 +424,7 @@ fn elem_size(dt: ElementKind) -> usize {
     match dt {
         ElementKind::F16 | ElementKind::Bf16 | ElementKind::I16 | ElementKind::U16 => 2,
         ElementKind::F32 | ElementKind::F32Strict | ElementKind::I32 | ElementKind::U32 => 4,
-        ElementKind::F64 | ElementKind::I64 => 8,
+        ElementKind::F64 | ElementKind::I64 | ElementKind::U64 => 8,
         ElementKind::I8 | ElementKind::U8 | ElementKind::Bool => 1,
         // A complex element is a PAIR: c64 is two f32, c128 is two f64. The
         // §6.1 token names the total width, so the name already says this.
@@ -428,6 +445,7 @@ fn is_int(dt: ElementKind) -> bool {
             | ElementKind::I16
             | ElementKind::U16
             | ElementKind::U32
+            | ElementKind::U64
             | ElementKind::Bool
     )
 }
@@ -536,6 +554,13 @@ fn int_extreme(dt: ElementKind, most_negative: bool) -> i128 {
                 0
             } else {
                 i128::from(u32::MAX)
+            }
+        }
+        ElementKind::U64 => {
+            if most_negative {
+                0
+            } else {
+                i128::from(u64::MAX)
             }
         }
         ElementKind::U8 | ElementKind::Bool => {
@@ -692,6 +717,9 @@ fn raw_to_i128(bits: u128, dt: ElementKind) -> i128 {
         ElementKind::U16 => i128::from(bits as u16),
         // Zero-extended: `u32` does NOT promote to signed `int`.
         ElementKind::U32 => i128::from(bits as u32),
+        // Zero-extended like `u32`, and for the same reason: `unsigned long
+        // long` has rank >= `int`, so it does not integer-promote to signed.
+        ElementKind::U64 => i128::from(bits as u64),
         other => panic!("oracle: raw_to_i128 on non-int dtype {other:?}"),
     }
 }
@@ -744,6 +772,7 @@ fn raw_to_f64(bits: u128, dt: ElementKind) -> f64 {
         | ElementKind::U8
         | ElementKind::U16
         | ElementKind::U32
+        | ElementKind::U64
         | ElementKind::Bool => raw_to_i128(bits, dt) as f64,
         other => panic!("oracle: raw_to_f64 on unsupported dtype {other:?}"),
     }
@@ -1290,6 +1319,7 @@ fn encode_float(f: f64, out: ElementKind) -> u128 {
         ElementKind::I16 => u128::from((f as i16) as u16),
         ElementKind::U16 => u128::from(f as u16),
         ElementKind::U32 => u128::from(f as u32),
+        ElementKind::U64 => u128::from(f as u64),
         other => panic!("oracle: encode_float to unsupported dtype {other:?}"),
     }
 }
@@ -1304,6 +1334,7 @@ fn encode_int(i: i128, out: ElementKind) -> u128 {
         ElementKind::U8 | ElementKind::Bool => u128::from(i as u8),
         ElementKind::U16 => u128::from(i as u16),
         ElementKind::U32 => u128::from(i as u32),
+        ElementKind::U64 => u128::from(i as u64),
         other => panic!("oracle: encode_int to unsupported dtype {other:?}"),
     }
 }

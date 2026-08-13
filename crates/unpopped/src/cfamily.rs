@@ -86,6 +86,7 @@ pub fn scalar_ctype(dt: ElementKind) -> Option<&'static str> {
         // impl and no vector/packed path; a compute op never keys `plan.dtype =
         // U32` (no constructor builds one), so this arm serves the index load.
         ElementKind::U32 => "unsigned int",
+        ElementKind::U64 => "unsigned long long",
         _ => return None,
     })
 }
@@ -105,6 +106,7 @@ pub fn dtype_tag(dt: ElementKind) -> &'static str {
         ElementKind::I16 => "i16",
         ElementKind::U8 => "u8",
         ElementKind::U16 => "u16",
+        ElementKind::U64 => "u64",
         // U32 index-dtype infix: `gather_f32_u32` (the Fuel-facing u32-index
         // variant's entry_point symbol).
         ElementKind::U32 => "u32",

@@ -115,3 +115,39 @@ fn the_i64_extremes_project_exactly() {
         "f64 cannot represent i64::MAX; if it could, this whole file is unnecessary"
     );
 }
+
+/// `u64` above `i64::MAX` stays positive and stays distinguishable.
+///
+/// This is the widest value the §6.1 set contains, and the one that breaks two
+/// naive models at once: read as *signed* it is negative, and projected through
+/// `f64` it is indistinguishable from its neighbours. `i128` is exact for both
+/// concerns, which is why the integer projection is `i128` and not `i64`.
+#[test]
+fn u64_above_i64_max_is_exact_and_positive() {
+    let big = u64::MAX; // 18_446_744_073_709_551_615
+    let next = u64::MAX - 1;
+    let a = TypedBuffer::from_u64(&[1], &[big]);
+    let b = TypedBuffer::from_u64(&[1], &[next]);
+
+    assert_eq!(a.to_i128_vec(), vec![i128::from(u64::MAX)]);
+    assert!(
+        a.to_i128_vec()[0] > 0,
+        "u64::MAX read as signed would be -1; it must stay positive"
+    );
+
+    // The f64 projection cannot separate the two — asserted, so the test states
+    // the hazard rather than implying it.
+    assert_eq!(
+        a.to_f64_vec(),
+        b.to_f64_vec(),
+        "precondition: f64 collapses these, or this test proves nothing"
+    );
+    assert!(
+        compare(&a, &b, Fidelity::Tolerant { rel: 0.0, abs: 0.0 }).is_err(),
+        "two distinct u64 values must not compare equal"
+    );
+    assert!(
+        compare(&a, &b, Fidelity::Tolerant { rel: 0.0, abs: 1.0 }).is_ok(),
+        "control: a distance of 1 is inside abs=1"
+    );
+}

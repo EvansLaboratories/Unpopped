@@ -88,7 +88,7 @@ fn expected(dt: ElementKind) -> Spelling {
     match dt {
         // `short` / `unsigned short` are exact, portable C spellings with no
         // vendor intrinsic and no packing — genuinely neutral, unlike the halves.
-        F32 | F32Strict | F64 | I32 | I64 | I8 | U8 | U32 | I16 | U16 => Spelling::PortableC,
+        F32 | F32Strict | F64 | I32 | I64 | I8 | U8 | U32 | U64 | I16 | U16 => Spelling::PortableC,
 
         // THE GAP. Correct for CUDA, wrong for a module that calls itself neutral.
         // When the spelling seam lands these become `Declined` and the backend
@@ -103,15 +103,11 @@ fn expected(dt: ElementKind) -> Spelling {
         //   * `I4`/`U4`/`B1` are sub-byte packed; `Fp8E4M3FN`/`Fp8E5M2` need a
         //     software codec; `Complex64`/`Complex128` need a struct ABI. All
         //     are unimplemented rather than impossible.
-        //   * `U64` is held back deliberately: `unsigned long long` is a fine C
-        //     spelling, but the oracle's wrap is two's-complement SIGNED and f64
-        //     cannot represent every u64, so claiming it before that audit would
-        //     produce a silent wrong answer rather than a refusal.
         //   * `F8E8M0`/`F8E6M2` are the MX shared block SCALES — active §6.1
         //     dtypes at sk4, but 8-bit floats with no portable C type, so the
         //     neutral module declines them like the other FP8 rows.
         Bool | Fp8E4M3FN | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 | I4 | U4 | B1
-        | U64 | Complex64 | Complex128 => Spelling::Declined,
+        | Complex64 | Complex128 => Spelling::Declined,
     }
 }
 
@@ -124,6 +120,14 @@ const PORTABLE_C_TYPES: &[&str] = &[
     "signed char",
     "unsigned char",
     "unsigned int",
+    // `U64` was held back here until the audit its old note demanded: the wrap
+    // was two's-complement SIGNED and the comparison projected through f64,
+    // which cannot represent every u64. Both are fixed — `is_unsigned_arith`
+    // covers it and the tolerant comparator routes integers through `i128` — so
+    // the spelling is claimed rather than declined. The note is deleted rather
+    // than amended, because a hold-back whose reason has lapsed is exactly the
+    // stale marker this suite keeps finding.
+    "unsigned long long",
     "short",
     "unsigned short",
 ];

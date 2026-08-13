@@ -259,7 +259,8 @@ fn cpu_binary(op: BinaryOp, a: String, b: String, dtype: ElementKind) -> String 
         | ElementKind::U8
         | ElementKind::I16
         | ElementKind::U16
-        | ElementKind::U32 => binary_int(op, a, b, dtype),
+        | ElementKind::U32
+        | ElementKind::U64 => binary_int(op, a, b, dtype),
         other => panic!(
             "cpu_c backend: no binary math for dtype {other:?} — f16/bf16 are declined in v1"
         ),

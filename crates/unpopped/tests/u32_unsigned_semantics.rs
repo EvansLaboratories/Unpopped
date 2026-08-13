@@ -235,3 +235,63 @@ fn the_emitted_kernel_is_spelled_unsigned() {
         "u32 kernel must not spell a bare signed `int` operand:\n{src}"
     );
 }
+
+/// The same property at 64 bits — `u64` wraps and shifts unsigned.
+///
+/// `u64` shares the unsigned model with `u32` but at a different `op_width`
+/// (64 rather than 32), so it is a genuinely separate arm rather than the same
+/// code with a bigger number. The sum straddles 2⁶³, the point a signed model
+/// turns negative — and the `>>` that follows is where that becomes a wrong
+/// answer rather than a differently-spelled one.
+///
+/// Placed here beside the `u32` case rather than in the wide-integer comparison
+/// file, because that file tests *decoding* (which zero-extends regardless of
+/// the arithmetic model) and cannot see this. Seeding "model u64 as signed" left
+/// it green.
+#[test]
+fn u64_shr_of_a_composed_sum_is_logical_not_arithmetic() {
+    // Every (a + b) lands at or above 2^63.
+    let a: Vec<u64> = vec![
+        9_223_372_036_854_775_807,  // i64::MAX
+        18_446_744_073_709_551_615, // u64::MAX
+        9_223_372_036_854_775_808,  // 2^63
+        10_000_000_000_000_000_000,
+    ];
+    let b: Vec<u64> = vec![1, 0, 0, 8_446_744_073_709_551_615];
+    let c: Vec<u64> = vec![1, 63, 1, 2];
+
+    let n = a.len() as i64;
+    let d = OperandDesc::new(1, &[n], &[1], ElementKind::U64, 8);
+    let operands = vec![d; 4];
+    let key = structure_key(OpCategory::BinaryElementwise, &operands, ArchSku::Sm89);
+    let op = OpDef::elementwise(
+        "shr_sum_u64",
+        3,
+        &[ElementKind::U64],
+        (input(0) + input(1)).binary(BinaryOp::Shr, input(2)),
+    );
+    let plan = build_plan(&op, &key);
+    let bufs = vec![
+        TypedBuffer::from_u64(&[n], &a),
+        TypedBuffer::from_u64(&[n], &b),
+        TypedBuffer::from_u64(&[n], &c),
+    ];
+    // `to_i128_vec` rather than `to_f64_vec`: these values are far above 2^53,
+    // so the float projection could not report them faithfully even if the
+    // arithmetic were right.
+    let got = evaluate(&plan, &operands, &bufs, &[])
+        .into_iter()
+        .next()
+        .expect("one output")
+        .to_i128_vec();
+
+    for (i, &g) in got.iter().enumerate() {
+        let want = i128::from(a[i].wrapping_add(b[i]) >> c[i]);
+        assert_eq!(
+            g, want,
+            "lane {i}: ({} + {}) >> {} — oracle {g}, Rust u64 {want}. A negative or              halved result means the intermediate sum was sign-extended and the shift              propagated the sign: u64 modelled as SIGNED.",
+            a[i], b[i], c[i]
+        );
+        assert!(g >= 0, "lane {i}: a u64 result must not be negative");
+    }
+}
