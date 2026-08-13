@@ -28,6 +28,7 @@ Nothing to do but be ready. Each names its trigger.
 | ~~**sk4 regen** of `unpopped-vocab`~~ — **DONE and PUBLISHED as 0.2.0** (`4cefb6a`, tag `unpopped-vocab-v0.2.0`, checksum `4c66b4a9f48b888f…`) | Closed. Verification preceded publication throughout: the byte-match leg ran and passed against merged KISS `a43a96f` (spec `19c3ad7`) **before** the version existed. That ordering — push → byte-match → publish — cost one round-trip and bought a version number that is permanently correct; publishing first would have made a divergence unrecoverable, since crates.io versions are immutable. `unpopped` (the generator) stays at 0.1.0 and is explicitly NOT gated on this cut. |
 | ~~**Final byte-match leg**~~ — **DONE** (`6bc8bea`), committed as a permanent test | Ran against merged KISS `a43a96f` (spec `19c3ad7`): **19/19 claimed positives byte-exact + 1 earned capability exclusion (vulkan namespace), 10/10 declines with exact verdict and payload.** Skips are earned by substituting an implemented target and requiring a byte-exact round-trip, so an exclusion cannot hide a divergence. **Known bound, recorded in code as `this_leg_is_not_dtype_coverage`:** the vectors exercise 3 dtypes in the dtype position and 5 anywhere, against 22 usable — a dtype-spelling divergence on the other 17 is invisible here and is caught by `kiss_dtype_manifest.rs` instead. The two tests are complementary; neither is sufficient alone. |
 | ~~**Vendor the KISS dtype manifest**~~ — **DONE** (`4d72bcb`) | Unblocked by KISS #131: `conformance/corpus/dtype_manifest.json` carries `structure_key_schema_version` / `token_prefix`. Vendored verbatim at `19c3ad7` under `crates/unpopped-vocab/kiss/`, with equality asserted **both ways** plus a schema-version assertion, so a copy taken from a newer schema fails loudly instead of quietly widening the set. |
+| **`cuda.md` SSOT appendix needs an `Sm90` row** — ours to flag, Baracuda's to edit | We wired `ArchSku::Sm90` in 0.2.0 to close five `cuda:sm90` byte-match vectors. `spec/namespaces/cuda.md`'s appendix says a row is added "when the emitter wires that arch", and lists only Sm80/Sm89/Sm90a — so the SSOT and its own named reference implementation (`unpopped-vocab`) are out of sync now. Row sent to Baracuda; the annex is maintainer-owned so we do not edit it. **Nothing but a human reading the annex noticed** — which is the live evidence for the manifest proposal in section C. |
 | **`unpopped-cuda` sub-crate**: CUDA emitter donated by Baracuda, plus the `convert.rs` CUDA parser moving out of neutral core | The 0.2 trait freeze. The crate has **two** inbound streams — IR→`.cu` (Baracuda's donation) and `.cu`→IR (our parser) — so it must not be designed emit-only. |
 | **Make the target namespace pluggable**; move the `cuda:` vocabulary out of `unpopped-vocab` | Same carve. `ArchSku` stays Baracuda-owned content sourced from KISS's SSOT, generated-and-committed, never `build.rs`. |
 
@@ -93,6 +94,30 @@ rather than a cleanup commit.
   `shaderSignedZeroInfNanPreserveFloat32` is a `returnedonly` **property**, not a
   feature you enable. Either gate on the capability and declare non-advertising
   devices out of conformance, or weaken the rule. (OPEN-4.)
+- **A standard machine-readable form for §6.8-0004 namespace vocabularies** —
+  proposed to the KISS architect with Vulkane, Baracuda and Fuel holding it
+  (2026-08-13). The two registered namespaces publish in incompatible shapes:
+  `cuda`'s annex ends with a TSV `Appendix: machine-readable capability set (SSOT
+  seed)`; `vulkan`'s has no machine-readable form at all, its four-field grammar
+  living in prose. A consumer supporting both transcribes one and hand-parses the
+  other — **the same structure as the §6.1 dtype problem that hid a 22-vs-24 set
+  mismatch here for weeks with a green suite on both sides.**
+
+  The design crux is that the vocabularies differ **in kind**, not merely in
+  format: `cuda`'s is a closed enumeration, `vulkan`'s is generated over an open
+  product space and can only be validated, never listed. Strawman is therefore
+  discriminated (`kind: enumerated` with members, or `kind: generated` with a
+  field spec), on the claim that a consumer only ever asks *can I recognize a
+  well-formed token?* and *can I enumerate what exists, if anything?*
+
+  Legitimate for KISS to pin despite §6.8-0004 delegating vocabulary *content*,
+  because KISS already owns this axis's meta-level: §6.8-0001 grammar, -0002
+  byte-exact matching, -0005 charset, -0006 fixed-width juxtaposition, -0007 the
+  digest form. An annex format is the same shape — KISS pins the envelope, the
+  maintainer fills it.
+
+  **Blocks the open target model** below: whether we import a table, a grammar,
+  or both changes what `ArchSku`'s replacement has to hold.
 - **The KISS cost model** (#125) — vector-authoritative vs optional sibling. Our
   position is recorded: we already emit a two-axis vector with provenance, and a
   generator can only ever say `declared`.
