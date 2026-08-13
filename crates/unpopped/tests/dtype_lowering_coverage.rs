@@ -34,30 +34,59 @@ use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_ke
 
 /// What a backend does with a dtype, and **why**.
 ///
-/// The distinction between the two non-lowering states is the point of this
-/// enum. A single `false` column would put "nobody has written this yet" and
-/// "this is decided and correct" in the same cell, and the first is a worklist
-/// item while the second is a conclusion. Collapsing them means either the
-/// worklist silently grows entries that will never be done, or a settled
-/// decision gets re-litigated by the next person who reads the table as a TODO
-/// list.
+/// The distinctions among the non-lowering states are the point of this enum. A
+/// single `false` column puts "nobody has written this yet", "this needs
+/// something else first", and "this is decided and correct" in one cell — and
+/// they call for completely different responses. Collapsed, the worklist
+/// silently grows entries that will never be done, settled decisions get
+/// re-litigated by whoever reads the table as a TODO list, and work that is
+/// merely *ordered* looks impossible.
+///
+/// The `Blocked` variant exists because of a mistake this file made: Slang's
+/// narrow integers were labelled `ByDesign` — permanently declined — on a
+/// misreading of "depends on target + capabilities" as "cannot". They are
+/// ordinary work behind one missing mechanism.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Status {
     /// Lowers today.
     Lowers,
-    /// Not implemented yet — a genuine worklist entry.
+    /// Not implemented yet — a genuine worklist entry, nothing in the way.
     NotYet,
+    /// Worklist, but a **prerequisite** has to land first. Still work, and the
+    /// named blocker is what makes it schedulable in the right order.
+    Blocked(&'static str),
     /// **Deliberately** declined, permanently, for the recorded reason. A
     /// typed decline here is conformant behaviour, not a gap.
     ByDesign(&'static str),
 }
-use Status::{ByDesign, Lowers, NotYet};
+use Status::{Blocked, ByDesign, Lowers, NotYet};
 
 /// Slang's own conformance docs: *"Only `int`/`int32_t` and `uint`/`uint32_t`
 /// are universally supported; the others depend on target + capabilities."*
-/// 8- and 16-bit integers are capability-gated per target, so a portable Slang
-/// emitter cannot spell them unconditionally.
-const SLANG_NARROW: &str = "Slang: 8/16-bit ints are target+capability gated, not base-profile";
+///
+/// **Read carefully, that says Slang CAN spell these — on a target whose
+/// capabilities allow it.** So this is not a limitation of Slang, and labelling
+/// it one (as an earlier version of this file did) blames the target for a gap
+/// that is ours.
+///
+/// The gap is that [`Backend::supports_dtype`] takes only a dtype:
+/// `fn supports_dtype(&self, dtype: ElementKind) -> bool`. It has no target
+/// parameter, so a backend can answer "always" or "never" and nothing in
+/// between. Faced with a conditionally-available type the only *sound* answer is
+/// "never" — claiming support unconditionally would emit `int8_t` for a target
+/// that cannot compile it, which is the "decline, do not fall through" rule the
+/// whole backend contract is built on.
+///
+/// The information is already there: `KernelPlan.key` carries the
+/// `StructureKey`, and KISS's §6.8 target tokens encode capabilities directly —
+/// `vulkan:sg64.ops-abr.arith-f16.cm-none` literally names an `arith-f16`
+/// capability. The admissibility gate just cannot see it.
+///
+/// **Same root cause as the one vulkan vector excluded from the byte-match**:
+/// `ArchSku` is a closed CUDA-only enum that cannot represent a `vulkan:` target
+/// at all. Capability-aware dtype admission and a pluggable target namespace are
+/// one piece of work, not two.
+const SLANG_NARROW: &str = "Slang supports these on capable targets; supports_dtype has      no target parameter, so the only sound unconditional answer is no";
 
 /// `U32` is this generator's index/address dtype — the gather/scatter index
 /// operand pointer type — never a compute operand. No constructor builds a
@@ -78,10 +107,10 @@ const COVERAGE: &[(&str, ElementKind, Status, Status)] = &[
     ("bf16", ElementKind::Bf16, NotYet, NotYet),
     ("f32", ElementKind::F32, Lowers, Lowers),
     ("f64", ElementKind::F64, Lowers, Lowers),
-    ("i8", ElementKind::I8, Lowers, ByDesign(SLANG_NARROW)),
-    ("i16", ElementKind::I16, Lowers, ByDesign(SLANG_NARROW)),
-    ("u8", ElementKind::U8, Lowers, ByDesign(SLANG_NARROW)),
-    ("u16", ElementKind::U16, Lowers, ByDesign(SLANG_NARROW)),
+    ("i8", ElementKind::I8, Lowers, Blocked(SLANG_NARROW)),
+    ("i16", ElementKind::I16, Lowers, Blocked(SLANG_NARROW)),
+    ("u8", ElementKind::U8, Lowers, Blocked(SLANG_NARROW)),
+    ("u16", ElementKind::U16, Lowers, Blocked(SLANG_NARROW)),
     ("i32", ElementKind::I32, Lowers, Lowers),
     ("i64", ElementKind::I64, Lowers, Lowers),
     (
@@ -173,7 +202,7 @@ fn every_deliberate_decline_states_why() {
     let mut n = 0;
     for &(name, _, c, s) in COVERAGE {
         for st in [c, s] {
-            if let ByDesign(why) = st {
+            if let ByDesign(why) | Blocked(why) = st {
                 // Substance, not format. An earlier version of this also
                 // demanded a colon, which failed a perfectly good reason for
                 // being punctuated differently — the assertion was encoding my
@@ -264,9 +293,11 @@ fn recognition_exceeds_lowering_and_the_gap_is_named() {
 
     // The worklist is `NotYet` only. A `ByDesign` decline is a conclusion, and
     // counting it as outstanding work would keep it on the list forever.
+    // `Blocked` is still work — it is scheduled behind a prerequisite, not
+    // excluded. Only `ByDesign` leaves the worklist.
     let todo: Vec<&str> = COVERAGE
         .iter()
-        .filter(|e| e.2 == NotYet)
+        .filter(|e| matches!(e.2, NotYet | Blocked(_)))
         .map(|e| e.0)
         .collect();
     let settled: Vec<&str> = COVERAGE

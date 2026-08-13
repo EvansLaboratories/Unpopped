@@ -140,13 +140,26 @@ rather than a cleanup commit.
   (software codec — and the oracle needs an *independent* one or it stops being a
   differential) · `c64`/`c128` (struct ABI + complex arithmetic in the IR).
 
-  **Slang's `i8`/`i16`/`u8`/`u16` are NOT a gap — checked, and the answer is
-  they should stay declined.** Slang's own conformance docs: *"Only
-  `int`/`int32_t` and `uint`/`uint32_t` are universally supported; the others
-  depend on target + capabilities."* A portable Slang emitter cannot spell them
-  unconditionally, so the decline is conformant. Recorded in the coverage test as
-  `ByDesign` rather than as an unimplemented row, because a settled decision left
-  on a worklist gets re-litigated by whoever reads the list next.
+  **Slang's `i8`/`i16`/`u8`/`u16` are blocked on a missing mechanism, not on
+  Slang.** Slang's conformance docs say *"Only `int`/`int32_t` and
+  `uint`/`uint32_t` are universally supported; the others depend on target +
+  capabilities"* — which means Slang **can** spell them on a capable target. The
+  gap is ours: `Backend::supports_dtype(&self, dtype) -> bool` has no target
+  parameter, so a backend can only answer "always" or "never", and for a
+  conditionally-available type the sole *sound* unconditional answer is "never"
+  (claiming it would emit `int8_t` for a target that cannot compile it — the
+  fall-through the backend contract forbids).
+
+  The capability data already exists: `KernelPlan.key` carries the
+  `StructureKey`, and KISS §6.8 target tokens encode capabilities directly —
+  `vulkan:sg64.ops-abr.arith-f16.cm-none` names an `arith-f16` capability. Only
+  the admissibility gate cannot see it.
+
+  **This is the same root cause as the one vulkan vector excluded from the
+  byte-match**, where `ArchSku` — a closed CUDA-only enum — cannot represent a
+  `vulkan:` target at all. Capability-aware dtype admission and the pluggable
+  target namespace are one piece of work, not two, and doing them together turns
+  19/19-plus-an-exclusion into 20/20 *and* unlocks these four dtypes.
 
   The reserved `fnuz` pair must **never** be lowered at this schema version, and
   that is asserted separately from the table: "forbidden" and "not done yet" are
