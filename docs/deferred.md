@@ -119,14 +119,34 @@ rather than a cleanup commit.
   build rather than after it: a catalog entry is baked against caller-supplied op
   logic, which no current validity field names (§7).
 
-- **Dtype lowering coverage.** 22/22 named, 12 with a scalar type, CpuC lowers 9,
-  Slang 5. Roughly by cost: `Bool` (u8 storage, cheap) · `u64` (needs an
-  unsigned-wrap audit — `wrap_bits` is two's-complement *signed* and f64 cannot
-  represent every u64, which is why it is named but deliberately not lowered) ·
-  `S4`/`U4`/`Bin` (sub-byte pack/unpack) · both FP8s (software codec — and the
-  oracle needs an *independent* one or it stops being a differential) ·
-  `Complex32`/`64` (struct ABI + complex arithmetic in the IR).
-  The reserved `fnuz` pair must **never** be lowered at this schema version.
+- **Dtype lowering coverage.** The numbers are no longer here: they are
+  **measured** by `crates/unpopped/tests/dtype_lowering_coverage.rs`, which
+  carries the per-dtype × per-backend table and fails when it goes stale. The
+  prose figures this entry used to give ("CpuC 9, Slang 5") were **wrong** — the
+  measurement is **CpuC 8/22, Slang 4/22** — which is the whole argument for
+  moving them: a coverage claim decays silently, because nothing about adding a
+  dtype arm forces the sentence describing it to change.
+
+  Remaining work, roughly by cost. `bool` is listed first but **is not simply a
+  missing arm** — read `plan.rs`'s admissibility doc first: the logical ops
+  already narrow to `U8`, which *is* the bespoke Bool surface, so the open
+  question is whether a `Bool`-keyed cell should route to that same `uint8_t`
+  path or whether `ElementKind::Bool` is deliberately not a plan dtype. Decide
+  that before writing code; it is a naming question wearing a coverage question's
+  clothes.
+  Then: `u64` (needs an unsigned-wrap audit — `wrap_bits` is two's-complement
+  *signed* and f64 cannot represent every u64, which is why it is named but
+  deliberately not lowered) · `i4`/`u4`/`b1` (sub-byte pack/unpack) · both FP8s
+  (software codec — and the oracle needs an *independent* one or it stops being a
+  differential) · `c64`/`c128` (struct ABI + complex arithmetic in the IR).
+
+  Slang lags CpuC on `i8`/`i16`/`u8`/`u16`, which CpuC already lowers. Cheap
+  *only if* Slang's narrow integer types are portable across its targets rather
+  than capability-gated — check before assuming it is a four-line mapping.
+
+  The reserved `fnuz` pair must **never** be lowered at this schema version, and
+  that is asserted separately from the table: "forbidden" and "not done yet" are
+  different facts and should not share a column of `false`s.
 - **Oracle coverage**: `RowSort` (NaN-greatest `key_lt`, stable ties, TopK), and
   gather/scatter — the latter needs a *different notion of correct*, since under
   nondeterministic FP `atomicAdd` only an order-independent invariant is
