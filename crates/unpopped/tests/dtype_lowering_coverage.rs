@@ -69,6 +69,12 @@ enum Status {
     /// The variant stays because the category is real and the next genuine
     /// member needs somewhere to live. Its emptiness is the useful signal: a
     /// `ByDesign` entry should be rare enough to be suspicious.
+    //
+    // `dead_code` is expected and is the point: the variant has no members
+    // today. Deleting it to silence the lint would delete the category, and the
+    // next permanent decline would then land in `Blocked` or `NotYet` — where it
+    // would sit on a worklist forever waiting for work nobody should do.
+    #[allow(dead_code, reason = "no permanent declines today; see the doc above")]
     ByDesign(&'static str),
 }
 use Status::{Blocked, ByDesign, Lowers, NotYet};
