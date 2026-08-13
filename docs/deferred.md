@@ -31,10 +31,14 @@ Nothing to do but be ready. Each names its trigger.
 | **`unpopped-cuda` sub-crate**: CUDA emitter donated by Baracuda, plus the `convert.rs` CUDA parser moving out of neutral core | The 0.2 trait freeze. The crate has **two** inbound streams — IR→`.cu` (Baracuda's donation) and `.cu`→IR (our parser) — so it must not be designed emit-only. |
 | **Make the target namespace pluggable**; move the `cuda:` vocabulary out of `unpopped-vocab` | Same carve. `ArchSku` stays Baracuda-owned content sourced from KISS's SSOT, generated-and-committed, never `build.rs`. |
 
-**Publication is held** on `unpopped-vocab` generally: per sk4 §6 (Eric-ratified)
-that clause binds the *token-deriving* crate, so its breaking changes ride the
-coordinated cut. The generator (`unpopped`) is explicitly **not** gated and ships
-on its own schedule.
+**Publication is no longer held.** `unpopped-vocab` shipped 0.2.0 on the sk4 cut.
+The rule that produced the hold still stands for the next schema event: per sk4
+§6 (Eric-ratified) that clause binds the *token-deriving* crate, so its breaking
+changes ride the coordinated cut — and the ordering within a cut is **push →
+byte-match → publish**, because a registry version is immutable and cannot be
+un-published if the match then finds a divergence. The generator (`unpopped`) is
+explicitly **not** gated and ships on its own schedule; it remains at 0.1.0 with
+its own breaking batch pending.
 
 ---
 
