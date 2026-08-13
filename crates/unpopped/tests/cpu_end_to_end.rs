@@ -609,3 +609,152 @@ int main(void) {{
     );
     assert_eq!(actual[5], -32768, "32767 + 1 must wrap to i16::MIN");
 }
+
+/// `u32` computes as genuinely **unsigned**, verified against a real C compiler
+/// on the two cases where signed and unsigned actually diverge.
+///
+/// # Why this dtype needed its own test
+///
+/// `u8` and `u16` have unsigned storage but *signed* arithmetic: C's integer
+/// promotions lift any type of rank below `int` to signed `int`, so they compute
+/// at 32-bit signed width and the store truncates back. `unsigned int` has the
+/// same rank as `int` and does **not** promote — its arithmetic is unsigned
+/// modulo 2³². Modelling it the way `u8` is modelled would read
+/// `3_000_000_000u32` as negative.
+///
+/// The divergence is invisible for `+`, `-`, `*` and the bitwise ops (identical
+/// bit patterns under two's complement) and shows up in exactly two places, both
+/// exercised here:
+///
+/// 1. the **value** produced above `i32::MAX`, and
+/// 2. `>>`, which C performs as a *logical* shift on an unsigned operand and an
+///    *arithmetic* one on a signed operand.
+///
+/// Lane 1 is the load-bearing case: `3_000_000_000 >> 1` is `1_500_000_000`
+/// unsigned, but `-1_294_967_296 >> 1` = `-647_483_648` signed — a wrong answer
+/// that a signed model produces silently and confidently.
+#[test]
+fn u32_arithmetic_is_unsigned_in_the_emitter_and_the_oracle() {
+    let Some(cc) = find_compiler() else {
+        eprintln!(
+            "SKIP u32_arithmetic_is_unsigned_in_the_emitter_and_the_oracle: no host \
+             C compiler. This compiles and RUNS a u32 kernel to check unsigned wrap + shift."
+        );
+        return;
+    };
+    let dir: PathBuf = std::env::temp_dir().join("unpopped-e2e");
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    //                 above i32::MAX   wraps 2^32   plain   max      identity
+    let a: Vec<u32> = vec![3_000_000_000, 4_000_000_000, 7, u32::MAX, 1, 2_147_483_648];
+    let b: Vec<u32> = vec![1, 1_000_000_000, 5, 1, 0, 1];
+    let n = a.len() as i64;
+
+    let d = OperandDesc::new(1, &[n], &[1], ElementKind::U32, 4);
+    let operands = vec![d; 3];
+    let key = structure_key(OpCategory::BinaryElementwise, &operands, ArchSku::Sm89);
+
+    let lit = |v: &[u32]| {
+        v.iter()
+            .map(|x| format!("{x}u"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    // Two ops: Add exercises unsigned WRAP; Shr exercises the logical-vs-
+    // arithmetic shift, which is where a signed model gives a wrong answer
+    // rather than merely a differently-spelled one.
+    for (tag, op, shifts) in [
+        (
+            "add",
+            OpDef::elementwise("addu32", 2, &[ElementKind::U32], input(0) + input(1)),
+            false,
+        ),
+        (
+            "shr",
+            OpDef::elementwise(
+                "shru32",
+                2,
+                &[ElementKind::U32],
+                input(0).binary(unpopped::ir::BinaryOp::Shr, input(1)),
+            ),
+            true,
+        ),
+    ] {
+        // Shift amounts must be in range for every lane.
+        let b_used: Vec<u32> = if shifts {
+            vec![1, 3, 2, 31, 0, 1]
+        } else {
+            b.clone()
+        };
+
+        let kernel = generate(&op, &key, &CpuC);
+        assert!(
+            kernel.source.contains("unsigned int"),
+            "{tag}: the u32 kernel must be spelled `unsigned int`, got:\n{}",
+            kernel.source
+        );
+
+        let src = format!(
+            "{}
+#include <stdio.h>
+
+int main(void) {{
+    const unsigned int in0[{n}] = {{{}}};
+    const unsigned int in1[{n}] = {{{}}};
+    unsigned int out[{n}];
+    for (int i = 0; i < {n}; ++i) out[i] = 123u;
+    {}(in0, in1, out, {n});
+    for (int i = 0; i < {n}; ++i) printf(\"%u\n\", out[i]);
+    return 0;
+}}
+",
+            kernel.source,
+            lit(&a),
+            lit(&b_used),
+            kernel.name
+        );
+
+        let c_file = dir.join(format!("u32_{tag}.c"));
+        let exe = dir.join(format!("u32_{tag}.exe"));
+        std::fs::write(&c_file, &src).expect("write");
+        cc.compile(&c_file, &exe, true)
+            .unwrap_or_else(|e| panic!("{tag}: compile u32 kernel: {e}"));
+        let out = std::process::Command::new(&exe).output().expect("run");
+        assert!(
+            out.status.success(),
+            "{tag}: kernel exited {:?}",
+            out.status
+        );
+        let actual: Vec<u32> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.trim().parse::<u32>().expect("non-integer"))
+            .collect();
+
+        // The oracle leg — an independent evaluator sharing no lowering code.
+        let plan = build_plan(&op, &key);
+        let bufs = vec![
+            TypedBuffer::from_u32(&[n], &a),
+            TypedBuffer::from_u32(&[n], &b_used),
+        ];
+        let want = evaluate(&plan, &operands, &bufs, &[])
+            .into_iter()
+            .next()
+            .unwrap()
+            .to_f64_vec();
+
+        assert_eq!(actual.len(), a.len(), "{tag}: printed {actual:?}");
+        for (i, (&got, &wanted)) in actual.iter().zip(want.iter()).enumerate() {
+            assert!(
+                (f64::from(got) - wanted).abs() < 0.5,
+                "{tag} lane {i}: emitted C gave {got}, oracle expected {wanted}. \
+                 a={} b={}. A negative expectation here means the oracle is modelling \
+                 u32 as SIGNED — the exact bug this dtype's admission had to rule out.",
+                a[i],
+                b_used[i]
+            );
+            assert_ne!(got, 123, "{tag} lane {i} was never written");
+        }
+    }
+}

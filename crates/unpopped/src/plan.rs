@@ -1731,6 +1731,7 @@ pub fn is_int_dtype(dt: ElementKind) -> bool {
             | ElementKind::U8
             | ElementKind::I16
             | ElementKind::U16
+            | ElementKind::U32
     )
 }
 
@@ -1915,6 +1916,14 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
                     // un-truncated promoted value. `(a+b)>>c` at s16 with
                     // (30000, 30000, 1) is 30000 inlined and -2768 hoisted —
                     // the 8-bit worked example one width up.
+                    //
+                    // `U32` is deliberately ABSENT, and the reason is the same
+                    // rule read the other way: `unsigned int` has the same rank
+                    // as `int`, so it does not promote, so a composed operand
+                    // observes the *same* value inlined or hoisted. u32 is safe
+                    // for composition precisely because of what makes its
+                    // arithmetic unsigned. Adding it here would forbid a legal
+                    // and useful shape for no reason.
                     if matches!(
                         dtype,
                         ElementKind::U8 | ElementKind::I8 | ElementKind::I16 | ElementKind::U16

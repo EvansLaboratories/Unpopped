@@ -65,17 +65,17 @@ impl Backend for CpuC {
     }
 
     fn supports_dtype(&self, dtype: ElementKind) -> bool {
-        // Portable C has a real scalar type for every compute dtype the CUDA
+        // Portable C has a real scalar type for every compute dtype this
         // backend spells EXCEPT the halves: `F16`/`Bf16` are declined in v1 (no
-        // CPU half codec yet). `U32` is an index/address dtype only (never a
-        // value/key dtype — mirror the `Cuda` exclusion so a U32 elementwise add
-        // cannot silently lower to an `unsigned int` kernel). Everything else
-        // (`F32`/`F32Strict`/`F64`/`I32`/`I64`/`S8`/`U8`) has a plain C scalar
-        // type and lowers through the portable spellers.
-        !matches!(
-            dtype,
-            ElementKind::U32 | ElementKind::F16 | ElementKind::Bf16
-        ) && scalar_ctype(dtype).is_some()
+        // CPU half codec yet).
+        //
+        // `U32` used to be excluded here as "an index/address dtype only". That
+        // was inherited from the CUDA backend and the justification was
+        // circular — nothing keyed a U32 compute cell because nothing admitted
+        // one. It computes now: `unsigned int` is a plain C scalar type, and the
+        // oracle models its arithmetic as genuinely unsigned (it does not
+        // integer-promote to signed `int` the way `u8`/`u16` do).
+        !matches!(dtype, ElementKind::F16 | ElementKind::Bf16) && scalar_ctype(dtype).is_some()
     }
 
     fn lower(&self, plan: &KernelPlan<'_>) -> Result<GeneratedKernel, LowerError> {
@@ -397,9 +397,9 @@ mod tests {
         // The documented v1 decline: no CPU half codec yet.
         assert!(!CpuC.supports_dtype(ElementKind::F16));
         assert!(!CpuC.supports_dtype(ElementKind::Bf16));
-        // U32 is an index/address dtype only (mirror Cuda).
-        assert!(!CpuC.supports_dtype(ElementKind::U32));
-        // The real compute dtypes are supported.
+        // The real compute dtypes are supported. `U32` is among them now: it
+        // was previously excluded as "index/address only", a restriction
+        // inherited from the CUDA backend on circular reasoning.
         for dt in [
             ElementKind::F32,
             ElementKind::F64,
@@ -407,6 +407,7 @@ mod tests {
             ElementKind::I64,
             ElementKind::I8,
             ElementKind::U8,
+            ElementKind::U32,
         ] {
             assert!(CpuC.supports_dtype(dt), "{dt:?} should be supported");
         }

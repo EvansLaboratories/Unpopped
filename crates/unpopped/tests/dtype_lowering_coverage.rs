@@ -124,6 +124,8 @@ const SLANG_NARROW: &str = "Slang supports these on capable targets; supports_dt
 /// So `u32` and `u64` need an unsigned width/wrap path in the oracle and the
 /// emitter before they can compute. Solvable, ordinary work — not a decision
 /// that they never should.
+const SLANG_U32: &str = "Slang lowering for uint is unwritten; the type itself is      universally supported, so this is ours to add";
+
 const U32_UNSIGNED: &str = "u32/u64 do not integer-promote to signed int like u8/u16 do;      needs an unsigned wrap model in the oracle and emitter";
 
 /// Every §6.1 dtype, with what each backend does with a plain elementwise `Add`.
@@ -144,12 +146,7 @@ const COVERAGE: &[(&str, ElementKind, Status, Status)] = &[
     ("u16", ElementKind::U16, Lowers, Blocked(SLANG_NARROW)),
     ("i32", ElementKind::I32, Lowers, Lowers),
     ("i64", ElementKind::I64, Lowers, Lowers),
-    (
-        "u32",
-        ElementKind::U32,
-        Blocked(U32_UNSIGNED),
-        Blocked(U32_UNSIGNED),
-    ),
+    ("u32", ElementKind::U32, Lowers, Blocked(SLANG_U32)),
     (
         "u64",
         ElementKind::U64,

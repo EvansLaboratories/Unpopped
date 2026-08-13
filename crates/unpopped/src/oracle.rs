@@ -232,6 +232,22 @@ impl TypedBuffer {
         )
     }
 
+    /// Dense buffer of `u32` (`U32`) values, little-endian.
+    ///
+    /// The arithmetic these feed is genuinely **unsigned**: unlike `u8`/`u16`,
+    /// `u32` does not integer-promote to signed `int`, so a value above
+    /// `i32::MAX` stays positive through the whole evaluation.
+    #[must_use]
+    pub fn from_u32(shape: &[i64], data: &[u32]) -> Self {
+        let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_le_bytes()).collect();
+        Self::new(
+            ElementKind::U32,
+            shape.to_vec(),
+            dense_strides(shape),
+            bytes,
+        )
+    }
+
     /// Dense buffer of `u8` values.
     #[must_use]
     pub fn from_u8(shape: &[i64], data: &[u8]) -> Self {
@@ -307,7 +323,7 @@ fn dense_strides(shape: &[i64]) -> Vec<i64> {
 fn elem_size(dt: ElementKind) -> usize {
     match dt {
         ElementKind::F16 | ElementKind::Bf16 | ElementKind::I16 | ElementKind::U16 => 2,
-        ElementKind::F32 | ElementKind::F32Strict | ElementKind::I32 => 4,
+        ElementKind::F32 | ElementKind::F32Strict | ElementKind::I32 | ElementKind::U32 => 4,
         ElementKind::F64 | ElementKind::I64 => 8,
         ElementKind::I8 | ElementKind::U8 | ElementKind::Bool => 1,
         other => panic!("oracle: unsupported dtype {other:?} (v1)"),
@@ -324,8 +340,26 @@ fn is_int(dt: ElementKind) -> bool {
             | ElementKind::U8
             | ElementKind::I16
             | ElementKind::U16
+            | ElementKind::U32
             | ElementKind::Bool
     )
+}
+
+/// `true` when `dt`'s C arithmetic is **unsigned**.
+///
+/// This is not "is the storage unsigned" — `u8` and `u16` have unsigned storage
+/// but *signed* arithmetic, because C's integer promotions lift any type of rank
+/// below `int` to signed `int`. `unsigned int` has the same rank as `int`, so it
+/// does not promote and its arithmetic really is unsigned modulo 2^32.
+///
+/// The distinction is invisible for `+`, `-`, `*` and the bitwise ops (identical
+/// bit patterns under two's complement) and shows up in exactly two places: the
+/// **value** a wrap produces (zero- vs sign-extension) and `>>` (logical vs
+/// arithmetic shift). Both fall out of keeping unsigned values non-negative in
+/// the wide accumulator — an `i128` right-shift of a non-negative value *is* a
+/// logical shift.
+fn is_unsigned_arith(dt: ElementKind) -> bool {
+    matches!(dt, ElementKind::U32 | ElementKind::U64)
 }
 
 /// The bit width the emitter's C arithmetic wraps at for `dt`: `I64` = 64;
@@ -333,9 +367,24 @@ fn is_int(dt: ElementKind) -> bool {
 /// during arithmetic, the store truncates back) = 32.
 fn op_width(dt: ElementKind) -> u32 {
     match dt {
-        ElementKind::I64 => 64,
+        ElementKind::I64 | ElementKind::U64 => 64,
         _ => 32,
     }
+}
+
+/// Wrap `x` to its low `bits` bits, sign- or zero-extending per `dt`.
+///
+/// The single place the signed/unsigned split is applied. Zero-extension keeps
+/// an unsigned value non-negative in the wide accumulator, which is what makes a
+/// later `>>` behave as the logical shift C performs on an unsigned operand.
+fn wrap_for(x: i128, bits: u32, dt: ElementKind) -> i128 {
+    if is_unsigned_arith(dt) {
+        if bits >= 128 {
+            return x;
+        }
+        return x & ((1i128 << bits) - 1);
+    }
+    wrap_bits(x, bits)
 }
 
 /// Sign-extend / truncate `x` to its low `bits` bits (two's-complement wrap).
@@ -384,6 +433,13 @@ fn int_extreme(dt: ElementKind, most_negative: bool) -> i128 {
                 0
             } else {
                 i128::from(u16::MAX)
+            }
+        }
+        ElementKind::U32 => {
+            if most_negative {
+                0
+            } else {
+                i128::from(u32::MAX)
             }
         }
         ElementKind::U8 | ElementKind::Bool => {
@@ -527,6 +583,8 @@ fn raw_to_i128(bits: u64, dt: ElementKind) -> i128 {
         ElementKind::I16 => i128::from(bits as u16 as i16),
         ElementKind::U8 | ElementKind::Bool => i128::from(bits as u8),
         ElementKind::U16 => i128::from(bits as u16),
+        // Zero-extended: `u32` does NOT promote to signed `int`.
+        ElementKind::U32 => i128::from(bits as u32),
         other => panic!("oracle: raw_to_i128 on non-int dtype {other:?}"),
     }
 }
@@ -544,6 +602,7 @@ fn raw_to_f64(bits: u64, dt: ElementKind) -> f64 {
         | ElementKind::I16
         | ElementKind::U8
         | ElementKind::U16
+        | ElementKind::U32
         | ElementKind::Bool => raw_to_i128(bits, dt) as f64,
         other => panic!("oracle: raw_to_f64 on unsupported dtype {other:?}"),
     }
@@ -745,23 +804,27 @@ fn binary_op_f64(op: BinaryOp, a: f64, b: f64) -> f64 {
 fn binary_op_int(op: BinaryOp, a: i128, b: i128, dt: ElementKind) -> i128 {
     let w = op_width(dt);
     match op {
-        BinaryOp::BitAnd => wrap_bits(a & b, w),
-        BinaryOp::BitOr => wrap_bits(a | b, w),
-        BinaryOp::BitXor => wrap_bits(a ^ b, w),
+        BinaryOp::BitAnd => wrap_for(a & b, w, dt),
+        BinaryOp::BitOr => wrap_for(a | b, w, dt),
+        BinaryOp::BitXor => wrap_for(a ^ b, w, dt),
         BinaryOp::Shl => {
             // Out-of-range shift amounts are architecture-inherited UB; clamp to
             // keep the interpreter total (never exercised by valid inputs).
             if (0..i128::from(w)).contains(&b) {
-                wrap_bits(a << (b as u32), w)
+                wrap_for(a << (b as u32), w, dt)
             } else {
                 0
             }
         }
         BinaryOp::Shr => {
-            // Arithmetic shift on i128 (sign-propagating); for U8/positive values
-            // this equals a logical shift.
+            // C's `>>` is ARITHMETIC on a signed operand and LOGICAL on an
+            // unsigned one. Both fall out of one expression: `wrap_for` keeps an
+            // unsigned dtype non-negative in the wide accumulator, and an `i128`
+            // shift of a non-negative value is already logical. The `a < 0` tail
+            // is therefore unreachable for an unsigned dtype, which is what makes
+            // `u32 >> k` correct rather than sign-propagating.
             if (0..i128::from(w)).contains(&b) {
-                wrap_bits(a >> (b as u32), w)
+                wrap_for(a >> (b as u32), w, dt)
             } else if a < 0 {
                 -1
             } else {
@@ -936,7 +999,10 @@ fn arith(
 ) -> Val {
     if is_int(ev.dtype) {
         let r = fi(eval(a, ev).i128(), eval(b, ev).i128());
-        Val::Int(wrap_bits(r, op_width(ev.dtype)))
+        // `+`/`-`/`*` produce identical BIT patterns signed or unsigned, but the
+        // wrapped VALUE differs — `wrap_for` zero-extends an unsigned dtype so
+        // `3_000_000_000u32` stays positive instead of reading as negative.
+        Val::Int(wrap_for(r, op_width(ev.dtype), ev.dtype))
     } else {
         Val::Float(ff(eval(a, ev).f64(), eval(b, ev).f64()))
     }
@@ -1017,6 +1083,7 @@ fn encode_float(f: f64, out: ElementKind) -> u64 {
         ElementKind::I8 => u64::from((f as i8) as u8),
         ElementKind::I16 => u64::from((f as i16) as u16),
         ElementKind::U16 => u64::from(f as u16),
+        ElementKind::U32 => u64::from(f as u32),
         other => panic!("oracle: encode_float to unsupported dtype {other:?}"),
     }
 }
@@ -1030,6 +1097,7 @@ fn encode_int(i: i128, out: ElementKind) -> u64 {
         ElementKind::I16 => u64::from((i as i16) as u16),
         ElementKind::U8 | ElementKind::Bool => u64::from(i as u8),
         ElementKind::U16 => u64::from(i as u16),
+        ElementKind::U32 => u64::from(i as u32),
         other => panic!("oracle: encode_int to unsupported dtype {other:?}"),
     }
 }
