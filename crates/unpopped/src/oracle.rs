@@ -296,6 +296,32 @@ impl TypedBuffer {
             .collect()
     }
 
+    /// Every element as an exact wide integer.
+    ///
+    /// The integer counterpart of [`TypedBuffer::to_f64_vec`], and the reason it
+    /// exists: `f64` has a 53-bit significand, so the `f64` projection **cannot
+    /// distinguish** two `i64`/`u64` values that differ above 2^53. `2^53` and
+    /// `2^53 + 1` both land on `9007199254740992.0`. Every integer dtype in the
+    /// §6.1 set fits in `i128` exactly, so this projection is lossless for all of
+    /// them.
+    ///
+    /// # Panics
+    ///
+    /// If the buffer's dtype is not an integer dtype.
+    #[must_use]
+    pub fn to_i128_vec(&self) -> Vec<i128> {
+        assert!(
+            is_int(self.dtype),
+            "to_i128_vec on non-integer dtype {:?}",
+            self.dtype
+        );
+        let sz = elem_size(self.dtype);
+        let n = self.bytes.len() / sz;
+        (0..n)
+            .map(|i| raw_to_i128(read_le(&self.bytes, i * sz, sz), self.dtype))
+            .collect()
+    }
+
     /// The raw storage bits of element `i` in linear byte order.
     #[must_use]
     pub fn bits_at(&self, i: usize) -> u64 {
@@ -2180,6 +2206,42 @@ pub fn compare(
                     }
                 }
                 return Err("byte-length mismatch".to_string());
+            }
+            Ok(())
+        }
+        // An INTEGER dtype is compared exactly, in `i128`, whatever tolerance was
+        // requested. Not a special case for tidiness: routing integers through
+        // the `f64` projection means `Tolerant { rel: 0.0, abs: 0.0 }` reports
+        // `2^53` and `2^53 + 1` as EQUAL, because both round to the same `f64`.
+        // A comparator that cannot distinguish two distinct values of the dtype
+        // it was handed is not a comparator, and it fails in the silent
+        // direction — agreeing rather than complaining.
+        //
+        // The tolerance is still honoured, in integer units: integer arithmetic
+        // has no rounding, so `abs` here means a genuine allowed distance rather
+        // than an accumulated-error band, and `rel` scales against the larger
+        // magnitude exactly as it does for floats.
+        Fidelity::Tolerant { rel, abs } if is_int(expected.dtype) && is_int(actual.dtype) => {
+            let ea = expected.to_i128_vec();
+            let ac = actual.to_i128_vec();
+            if ea.len() != ac.len() {
+                return Err(format!("length mismatch: {} vs {}", ea.len(), ac.len()));
+            }
+            for (i, (&e, &a)) in ea.iter().zip(ac.iter()).enumerate() {
+                if e == a {
+                    continue;
+                }
+                let diff = (e - a).unsigned_abs();
+                let band = abs + rel * (e.unsigned_abs().max(a.unsigned_abs()) as f64);
+                // `band` is computed in f64 only as a WIDTH, never as a value —
+                // a lossy width still rejects a mismatch far outside it, whereas
+                // a lossy value silently equates distinct ones.
+                if band.is_finite() && (diff as f64) <= band {
+                    continue;
+                }
+                return Err(format!(
+                    "tolerance mismatch at element {i}: expected {e}, got {a} (|Δ|={diff})"
+                ));
             }
             Ok(())
         }
