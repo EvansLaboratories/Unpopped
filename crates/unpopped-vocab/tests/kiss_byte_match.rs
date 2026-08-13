@@ -1,0 +1,478 @@
+//! The KISS `structure_key` byte-match leg — KISS-CLASSIFY-6.7.
+//!
+//! This crate is one of three independent token-tier derivers (KISS's reference,
+//! Fuel's seam, and this codec). What that independence is worth is decided
+//! here: every vector below is KISS's, vendored verbatim, and compared as
+//! **decode → re-encode → compare bytes**. Nothing is transcribed, and nothing
+//! is asserted field-by-field — a test checking `key.dtype == F32` would pass
+//! against a codec that spells the token differently, which is the only failure
+//! a byte-match exists to find.
+//!
+//! # Skips have to be earned
+//!
+//! A consumer implementing only some target namespaces scopes the rest as
+//! capability **exclusions** (§6.8), not mismatches. The risk is obvious: a skip
+//! list is where a real divergence goes to hide, because "we don't support that
+//! target" is indistinguishable from "we get that one wrong" if nobody checks.
+//!
+//! So a skip is never taken on the artifact's say-so. For each vector this codec
+//! declines, the harness substitutes a target it *does* implement, holding every
+//! other byte identical. Only if the substituted token round-trips **byte-exact**
+//! is the exclusion accepted — which demonstrates that every field under test is
+//! correct and the target alone is unimplemented. A vector that still fails
+//! after substitution is a real divergence and fails the leg.
+//!
+//! That control is not hypothetical: on the provisional run it turned six
+//! failures into one unimplemented namespace plus one missing arch variant, and
+//! ruled out contraction handling, which a bare count would have left everyone
+//! suspecting.
+
+use unpopped_vocab::{STRUCTURE_KEY_VERSION, StructureKey, TokenDecline};
+
+const VECTORS: &str = include_str!("../kiss/structure_key_vectors.json");
+
+/// A target this codec implements, used to prove a decline is target-only.
+/// Must be one `arch_from_code` accepts, or the control proves nothing.
+const SUBSTITUTE_TARGET: &str = "cuda:sm89";
+
+// ---------------------------------------------------------------------------
+// Provenance
+// ---------------------------------------------------------------------------
+
+/// The vendored artifact is the one this leg claims to have run against.
+///
+/// Two commits with two meanings, both pinned: the file was copied from KISS
+/// `main` at `a43a96f` (recorded in `kiss/README.md`), while its own
+/// `source_commit` is the *spec* provenance it was generated against. A report
+/// citing one without the other is not falsifiable, so both are asserted rather
+/// than described.
+#[test]
+fn the_artifact_is_the_one_this_leg_claims() {
+    for (key, want) in [
+        ("\"schema\"", "kiss-structure-key-vectors-v1"),
+        ("\"source_commit\"", "19c3ad7"),
+        ("\"token_prefix\"", "sk4"),
+        ("\"clause\"", "KISS-CLASSIFY-6.7"),
+    ] {
+        assert_eq!(
+            scalar(VECTORS, key).as_deref(),
+            Some(want),
+            "vendored artifact's {key} is not what this leg was written against"
+        );
+    }
+    assert_eq!(
+        scalar(VECTORS, "\"structure_key_schema_version\"").and_then(|v| v.parse::<u16>().ok()),
+        Some(STRUCTURE_KEY_VERSION),
+        "artifact is from a different schema version than this build implements"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The leg
+// ---------------------------------------------------------------------------
+
+#[test]
+fn positive_vectors_round_trip_byte_exact() {
+    let vectors = positives();
+    assert_eq!(vectors.len(), 20, "artifact positive-vector count changed");
+
+    let mut matched = Vec::new();
+    let mut skipped = Vec::new();
+    let mut failed = Vec::new();
+
+    for v in &vectors {
+        match StructureKey::parse_token(&v.token) {
+            Ok(k) if k.to_token() == v.token => matched.push(v),
+            Ok(k) => failed.push(format!(
+                "{}: re-encoded to different bytes\n    want {}\n    got  {}",
+                v.name,
+                v.token,
+                k.to_token()
+            )),
+            Err(e) => match earn_skip(v) {
+                // Every other field is correct; the target alone is unimplemented.
+                Ok(()) => skipped.push(v),
+                Err(why) => failed.push(format!(
+                    "{}: declined ({e:?}) and NOT attributable to the target — {why}\n    {}",
+                    v.name, v.token
+                )),
+            },
+        }
+    }
+
+    println!("\n=== KISS byte-match leg — positives ===");
+    println!(
+        "claimed and byte-exact : {}/{}",
+        matched.len(),
+        vectors.len()
+    );
+    println!("capability exclusions  : {}", skipped.len());
+    for v in &skipped {
+        println!("   SKIP {} — target {} ({})", v.name, v.target, v.namespace);
+    }
+    for f in &failed {
+        println!("   FAIL {f}");
+    }
+
+    assert!(failed.is_empty(), "{} real divergence(s)", failed.len());
+
+    // Non-vacuity: a leg that skipped everything would report zero failures.
+    assert!(
+        matched.len() >= vectors.len() - skipped.len(),
+        "accounting error"
+    );
+    assert!(
+        matched.len() > vectors.len() / 2,
+        "most vectors must be CLAIMED, not skipped — {} skipped of {}",
+        skipped.len(),
+        vectors.len()
+    );
+}
+
+/// Every skipped vector names a target outside what this codec implements, and
+/// every claimed one names a target inside it.
+///
+/// The skip list is the soft spot in any conformance leg, so it gets its own
+/// assertion rather than riding along inside the pass above: a skip must
+/// correlate with the target axis, not with which vectors happen to be hard.
+#[test]
+fn skips_fall_only_on_unimplemented_targets() {
+    let mut claimed_targets = Vec::new();
+    let mut skipped_targets = Vec::new();
+    for v in &positives() {
+        match StructureKey::parse_token(&v.token) {
+            Ok(_) => claimed_targets.push(v.target.clone()),
+            Err(_) => skipped_targets.push(v.target.clone()),
+        }
+    }
+    for t in &skipped_targets {
+        assert!(
+            !claimed_targets.contains(t),
+            "target `{t}` is both claimed and skipped — the skip is hiding something \
+             that is not a capability exclusion"
+        );
+    }
+    println!("\nclaimed targets: {claimed_targets:?}");
+    println!("skipped targets: {skipped_targets:?}");
+}
+
+#[test]
+fn decline_vectors_produce_the_same_verdict() {
+    let vectors = declines();
+    assert_eq!(vectors.len(), 10, "artifact decline-vector count changed");
+
+    let mut exact = 0;
+    let mut failed = Vec::new();
+    for v in &vectors {
+        match StructureKey::parse_token(&v.token) {
+            Ok(_) => failed.push(format!(
+                "{}: ACCEPTED a token that must decline as {}\n    {}",
+                v.name, v.decline, v.token
+            )),
+            Err(e) => {
+                // `wire_name` is an exhaustive match inside the vocab crate, so a
+                // decline variant added later is a build failure there rather
+                // than a silent misreport here. That guard cannot live in this
+                // file: `TokenDecline` is `#[non_exhaustive]`, so a match written
+                // out here would need a catch-all and would rot invisibly.
+                let name = e.wire_name();
+                let payload_ok = match (&e, v.got) {
+                    (TokenDecline::UnsupportedSchemaVersion { version }, Some(g)) => {
+                        i64::from(*version) == g
+                    }
+                    (TokenDecline::UnsupportedSchemaVersion { .. }, None) => false,
+                    (_, Some(_)) => false,
+                    (_, None) => true,
+                };
+                if name == v.decline && payload_ok {
+                    exact += 1;
+                } else {
+                    failed.push(format!(
+                        "{}: want {}{}, got {}{}\n    {}",
+                        v.name,
+                        v.decline,
+                        v.got.map(|g| format!(" got={g}")).unwrap_or_default(),
+                        name,
+                        match &e {
+                            TokenDecline::UnsupportedSchemaVersion { version } =>
+                                format!(" got={version}"),
+                            _ => String::new(),
+                        },
+                        v.token
+                    ));
+                }
+            }
+        }
+    }
+
+    println!("\n=== KISS byte-match leg — declines ===");
+    println!("exact verdict match: {exact}/{}", vectors.len());
+    for f in &failed {
+        println!("   FAIL {f}");
+    }
+    assert!(failed.is_empty(), "{} verdict mismatch(es)", failed.len());
+    assert_eq!(exact, vectors.len(), "every decline must match exactly");
+}
+
+/// The artifact's `mapping_guard_note` is heeded, not merely present.
+///
+/// KISS's note says its `E0004` guard protects only the KISS side and a consumer
+/// must guard its own mapping. Ours is
+/// [`TokenDecline::wire_name`](unpopped_vocab::TokenDecline::wire_name) — an
+/// exhaustive match in the crate that owns the enum, with distinctness pinned by
+/// its own unit test. This asserts the note still says what we responded to: if
+/// KISS changes the contract, this fails rather than silently leaving us
+/// compliant with a superseded one.
+#[test]
+fn the_mapping_guard_note_is_still_the_one_we_answered() {
+    assert!(
+        VECTORS.contains("\"mapping_guard_note\""),
+        "artifact no longer carries the mapping-guard contract"
+    );
+    assert!(
+        VECTORS.contains("MUST guard the mapping itself"),
+        "the mapping-guard note's requirement changed — re-check `wire_name`"
+    );
+}
+
+/// **This leg does not cover the dtype axis, and saying so is the point.**
+///
+/// Found by mutation: misspelling `c128` as `c127` in the dtype codec leaves
+/// every assertion in this file green. The 20 positive vectors exercise exactly
+/// three dtypes in the dtype position (`f32`, `f16`, `f8e4m3fn`) and five
+/// anywhere at all, against a usable set of 22 — so a spelling divergence on any
+/// of the other 17 is invisible here.
+///
+/// That is not a defect in the vectors. A byte-match is a *token-grammar*
+/// instrument: it proves two implementations agree on field order, optional-field
+/// presence, sentinel spellings and decline verdicts, and it would take 22×
+/// the vectors to also make it a vocabulary instrument. The vocabulary is covered
+/// by `kiss_dtype_manifest.rs`, which compares the full token image against
+/// KISS's generated manifest in both directions — and which *does* fail on that
+/// same mutation, naming `c128` exactly.
+///
+/// Recorded as an executable note because "the byte-match passed" is the kind of
+/// sentence that gets quoted as though it meant more than it does. The two tests
+/// are complementary, and neither is sufficient alone.
+#[test]
+fn this_leg_is_not_dtype_coverage() {
+    let usable = VECTORS
+        .split_once("\"usable_count\": ")
+        .and_then(|(_, r)| {
+            r.split(|c: char| !c.is_ascii_digit())
+                .next()?
+                .parse::<usize>()
+                .ok()
+        })
+        .expect("usable_count");
+
+    let mut in_dtype_position: Vec<String> = positives()
+        .iter()
+        .filter_map(|p| p.token.split('|').nth(2).map(str::to_string))
+        .collect();
+    in_dtype_position.sort();
+    in_dtype_position.dedup();
+
+    println!("\ndtype position coverage: {in_dtype_position:?} of {usable} usable");
+    assert!(
+        in_dtype_position.len() < usable,
+        "the vector set now exercises every usable dtype in the dtype position — \
+         good news, and this note plus its caveat in the module docs can be relaxed"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Earning a skip
+// ---------------------------------------------------------------------------
+
+/// `Ok(())` if this vector's decline is attributable to its target ALONE.
+///
+/// Substitutes a target this codec implements, holding every other byte
+/// identical. Round-tripping byte-exact after substitution proves the remaining
+/// fields are all correct — so the exclusion is a capability boundary and not a
+/// divergence wearing one as a disguise.
+fn earn_skip(v: &Positive) -> Result<(), String> {
+    let mut parts: Vec<&str> = v.token.split('|').collect();
+    if parts.len() < 4 {
+        return Err("token has no target field".to_string());
+    }
+    if parts[3] == SUBSTITUTE_TARGET {
+        return Err(format!(
+            "target is already `{SUBSTITUTE_TARGET}`, which this codec implements — \
+             the decline is not a target exclusion"
+        ));
+    }
+    parts[3] = SUBSTITUTE_TARGET;
+    let substituted = parts.join("|");
+    match StructureKey::parse_token(&substituted) {
+        Ok(k) if k.to_token() == substituted => Ok(()),
+        Ok(k) => Err(format!(
+            "with the target substituted it still re-encodes differently: got {}",
+            k.to_token()
+        )),
+        Err(e) => Err(format!(
+            "with the target substituted it still declines: {e:?}"
+        )),
+    }
+}
+
+/// The substitution control is only meaningful if the substituted target is one
+/// this codec actually implements, and if substitution is capable of *failing*.
+#[test]
+fn the_skip_control_can_fail() {
+    // The substitute must itself be implemented.
+    let real = "sk4|bin|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f|-";
+    assert!(
+        StructureKey::parse_token(real).is_ok(),
+        "control target `{SUBSTITUTE_TARGET}` must be implemented, or every skip is free"
+    );
+
+    // A vector broken in a NON-target field must NOT earn a skip, even though
+    // its target is unimplemented. This is the case the control exists for.
+    let poisoned = Positive {
+        name: "poisoned".into(),
+        target: "vulkan:whatever".into(),
+        namespace: "vulkan".into(),
+        // `zz` is not a valid `<mp>` code — broken independently of the target.
+        token: "sk4|gem|f32|vulkan:whatever|ix32|grid|r2|\
+                co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-|ctll/d16/f32/f32/f32/zz"
+            .into(),
+    };
+    assert!(
+        earn_skip(&poisoned).is_err(),
+        "a vector broken outside the target field must not be skippable — \
+         that is exactly how a divergence would hide in the skip list"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Artifact scanning. Deliberately dependency-free; positive-controlled below.
+// ---------------------------------------------------------------------------
+
+struct Positive {
+    name: String,
+    target: String,
+    namespace: String,
+    token: String,
+}
+
+struct Decline {
+    name: String,
+    token: String,
+    decline: String,
+    got: Option<i64>,
+}
+
+fn scalar(src: &str, quoted_key: &str) -> Option<String> {
+    let (_, rest) = src.split_once(&format!("{quoted_key}: "))?;
+    let rest = rest.trim_start();
+    if let Some(s) = rest.strip_prefix('"') {
+        return Some(s.split('"').next()?.to_string());
+    }
+    let end = rest.find(|c: char| !c.is_ascii_digit())?;
+    Some(rest[..end].to_string())
+}
+
+fn field(line: &str, key: &str) -> Option<String> {
+    let v = line.trim().strip_prefix(&format!("\"{key}\": "))?;
+    Some(v.trim_end_matches(',').trim_matches('"').to_string())
+}
+
+fn section(start_key: &str, end_key: Option<&str>) -> &'static str {
+    let s = VECTORS.find(start_key).expect("section present");
+    let e = end_key
+        .and_then(|k| VECTORS.find(k))
+        .filter(|e| *e > s)
+        .unwrap_or(VECTORS.len());
+    &VECTORS[s..e]
+}
+
+fn positives() -> Vec<Positive> {
+    let sec = section("\"positive_vectors\"", Some("\"decline_vectors\""));
+    let mut out = Vec::new();
+    let (mut name, mut target, mut ns, mut token) = (None, None, None, None);
+    for line in sec.lines() {
+        name = field(line, "name").or(name);
+        target = field(line, "target").or(target);
+        ns = field(line, "target_namespace").or(ns);
+        token = field(line, "token").or(token);
+        if line.trim().starts_with('}') {
+            if let (Some(n), Some(t), Some(s), Some(k)) =
+                (name.take(), target.take(), ns.take(), token.take())
+            {
+                out.push(Positive {
+                    name: n,
+                    target: t,
+                    namespace: s,
+                    token: k,
+                });
+            }
+            (name, target, ns, token) = (None, None, None, None);
+        }
+    }
+    out
+}
+
+fn declines() -> Vec<Decline> {
+    let sec = section("\"decline_vectors\"", None);
+    let mut out = Vec::new();
+    let (mut name, mut token, mut dec, mut got) = (None, None, None, None);
+    for line in sec.lines() {
+        name = field(line, "name").or(name);
+        token = field(line, "token").or(token);
+        dec = field(line, "decline").or(dec);
+        got = field(line, "got").and_then(|g| g.parse().ok()).or(got);
+        if line.trim().starts_with('}') {
+            if let (Some(n), Some(k), Some(d)) = (name.take(), token.take(), dec.take()) {
+                out.push(Decline {
+                    name: n,
+                    token: k,
+                    decline: d,
+                    got: got.take(),
+                });
+            }
+            (name, token, dec, got) = (None, None, None, None);
+        }
+    }
+    out
+}
+
+/// Positive control on the scanner.
+///
+/// Every count and comparison above comes from these two functions. A scanner
+/// that silently returned nothing would make the whole leg pass while testing
+/// nothing at all — the exact vacuous-green this file exists to prevent
+/// elsewhere.
+#[test]
+fn the_artifact_scanner_actually_reads_the_vectors() {
+    let pos = positives();
+    let dec = declines();
+    assert_eq!(pos.len(), 20);
+    assert_eq!(dec.len(), 10);
+
+    // Namespaces are tagged and split the way the artifact says.
+    let vulkan = pos.iter().filter(|p| p.namespace == "vulkan").count();
+    let cuda = pos.iter().filter(|p| p.namespace == "cuda").count();
+    assert_eq!((cuda, vulkan), (19, 1), "namespace split changed");
+
+    // Tokens and targets are non-empty and internally consistent: the tag must
+    // agree with the token's own field 3, or the skip axis is being read from a
+    // label rather than from the data.
+    for p in &pos {
+        assert!(p.token.starts_with("sk4|"), "{}: token malformed", p.name);
+        let field3 = p.token.split('|').nth(3).expect("target field");
+        assert_eq!(field3, p.target, "{}: tag disagrees with token", p.name);
+        assert!(
+            p.target.starts_with(&format!("{}:", p.namespace)),
+            "{}: namespace tag does not prefix the target",
+            p.name
+        );
+    }
+
+    // The payload-carrying declines are present and parsed as numbers.
+    let with_payload: Vec<_> = dec.iter().filter(|d| d.got.is_some()).collect();
+    assert_eq!(with_payload.len(), 2, "expected two versioned declines");
+    let mut versions: Vec<i64> = with_payload.iter().filter_map(|d| d.got).collect();
+    versions.sort_unstable();
+    assert_eq!(versions, [3, 9]);
+}

@@ -8,6 +8,19 @@ vendoring better than retyping.
 | File | Source path in KISS | Vendored from commit |
 |---|---|---|
 | `dtype_manifest.json` | `conformance/corpus/dtype_manifest.json` | `19c3ad7f6924161e7b0fd8c7a5b88d9e194b5db7` |
+| `structure_key_vectors.json` | `conformance/corpus/structure_key_vectors.json` | `a43a96f8973d1ffa9bba37d3034cfc290ea4af08` |
+
+### Two commits, two meanings
+
+`structure_key_vectors.json` carries its own `source_commit: 19c3ad7`, which is
+**not** the commit above and is **not** staleness. The table records where the
+*artifact* was copied from (KISS `main`); `source_commit` records the *spec*
+provenance the artifact was generated against. They differ because the artifact
+landed after the spec anchor and `spec/` has not moved since.
+
+`tests/kiss_byte_match.rs` asserts the `source_commit` value, so citing one
+without the other is caught rather than merely discouraged — a report naming
+only one of the two is not falsifiable.
 
 ## Why these are here
 
