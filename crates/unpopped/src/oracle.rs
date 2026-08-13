@@ -248,6 +248,63 @@ impl TypedBuffer {
         )
     }
 
+    /// Dense buffer of `c64` values — pairs of `f32`, real component first.
+    #[must_use]
+    pub fn from_complex64(shape: &[i64], data: &[(f32, f32)]) -> Self {
+        let bytes: Vec<u8> = data
+            .iter()
+            .flat_map(|(re, im)| {
+                let mut v = re.to_le_bytes().to_vec();
+                v.extend_from_slice(&im.to_le_bytes());
+                v
+            })
+            .collect();
+        Self::new(
+            ElementKind::Complex64,
+            shape.to_vec(),
+            dense_strides(shape),
+            bytes,
+        )
+    }
+
+    /// Dense buffer of `c128` values — pairs of `f64`, real component first.
+    #[must_use]
+    pub fn from_complex128(shape: &[i64], data: &[(f64, f64)]) -> Self {
+        let bytes: Vec<u8> = data
+            .iter()
+            .flat_map(|(re, im)| {
+                let mut v = re.to_le_bytes().to_vec();
+                v.extend_from_slice(&im.to_le_bytes());
+                v
+            })
+            .collect();
+        Self::new(
+            ElementKind::Complex128,
+            shape.to_vec(),
+            dense_strides(shape),
+            bytes,
+        )
+    }
+
+    /// Every element as an exact `(re, im)` pair.
+    ///
+    /// # Panics
+    ///
+    /// If the buffer's dtype is not a complex dtype.
+    #[must_use]
+    pub fn to_complex_vec(&self) -> Vec<(f64, f64)> {
+        assert!(
+            is_complex(self.dtype),
+            "to_complex_vec on non-complex dtype {:?}",
+            self.dtype
+        );
+        let sz = elem_size(self.dtype);
+        let n = self.bytes.len() / sz;
+        (0..n)
+            .map(|i| raw_to_complex(read_le(&self.bytes, i * sz, sz), self.dtype))
+            .collect()
+    }
+
     /// Dense buffer of `u8` values.
     #[must_use]
     pub fn from_u8(shape: &[i64], data: &[u8]) -> Self {
@@ -324,7 +381,7 @@ impl TypedBuffer {
 
     /// The raw storage bits of element `i` in linear byte order.
     #[must_use]
-    pub fn bits_at(&self, i: usize) -> u64 {
+    pub fn bits_at(&self, i: usize) -> u128 {
         let sz = elem_size(self.dtype);
         read_le(&self.bytes, i * sz, sz)
     }
@@ -352,6 +409,10 @@ fn elem_size(dt: ElementKind) -> usize {
         ElementKind::F32 | ElementKind::F32Strict | ElementKind::I32 | ElementKind::U32 => 4,
         ElementKind::F64 | ElementKind::I64 => 8,
         ElementKind::I8 | ElementKind::U8 | ElementKind::Bool => 1,
+        // A complex element is a PAIR: c64 is two f32, c128 is two f64. The
+        // §6.1 token names the total width, so the name already says this.
+        ElementKind::Complex64 => 8,
+        ElementKind::Complex128 => 16,
         other => panic!("oracle: unsupported dtype {other:?} (v1)"),
     }
 }
@@ -369,6 +430,15 @@ fn is_int(dt: ElementKind) -> bool {
             | ElementKind::U32
             | ElementKind::Bool
     )
+}
+
+/// `true` for the complex dtypes.
+///
+/// Complex is a third compute domain alongside int and float, not a flavour of
+/// either: it has no ordering (so no `Max`/`Min`/`Cmp*`), and its `Mul` mixes
+/// components rather than acting elementwise.
+fn is_complex(dt: ElementKind) -> bool {
+    matches!(dt, ElementKind::Complex64 | ElementKind::Complex128)
 }
 
 /// `true` when `dt`'s C arithmetic is **unsigned**.
@@ -572,14 +642,14 @@ fn f32_to_bf16_bits(x: f32) -> u16 {
 // ===========================================================================
 
 /// Read `sz` little-endian bytes from `bytes` at `byte_off`, zero-extended to u64.
-fn read_le(bytes: &[u8], byte_off: usize, sz: usize) -> u64 {
-    let mut b = [0u8; 8];
+fn read_le(bytes: &[u8], byte_off: usize, sz: usize) -> u128 {
+    let mut b = [0u8; 16];
     b[..sz].copy_from_slice(&bytes[byte_off..byte_off + sz]);
-    u64::from_le_bytes(b)
+    u128::from_le_bytes(b)
 }
 
 /// Write the low `sz` little-endian bytes of `bits` into `bytes` at `byte_off`.
-fn write_le(bytes: &mut [u8], byte_off: usize, sz: usize, bits: u64) {
+fn write_le(bytes: &mut [u8], byte_off: usize, sz: usize, bits: u128) {
     let b = bits.to_le_bytes();
     bytes[byte_off..byte_off + sz].copy_from_slice(&b[..sz]);
 }
@@ -596,12 +666,23 @@ fn write_le(bytes: &mut [u8], byte_off: usize, sz: usize, bits: u64) {
 enum Val {
     Float(f64),
     Int(i128),
-    Raw(u64, ElementKind),
+    /// A complex value, carried as an exact `(re, im)` pair of `f64`.
+    ///
+    /// First-class rather than modelled as two reals threaded through the float
+    /// path. The float path would have had to grow a "which half am I" parameter
+    /// at every node, and the operations that make complex complex — `Mul`
+    /// mixing both components, the absence of an ordering — would have lived as
+    /// special cases in code whose type says it is handling one real number.
+    ///
+    /// `f64` components are exact for BOTH complex dtypes: `c64` is a pair of
+    /// `f32` (every value of which is an exact `f64`) and `c128` a pair of `f64`.
+    Complex(f64, f64),
+    Raw(u128, ElementKind),
 }
 
 /// Decode a raw integer storage pattern to a signed wide integer (S8 sign-,
 /// U8 zero-extended — C integer promotion).
-fn raw_to_i128(bits: u64, dt: ElementKind) -> i128 {
+fn raw_to_i128(bits: u128, dt: ElementKind) -> i128 {
     match dt {
         ElementKind::I32 => i128::from(bits as u32 as i32),
         ElementKind::I64 => i128::from(bits as i64),
@@ -615,13 +696,47 @@ fn raw_to_i128(bits: u64, dt: ElementKind) -> i128 {
     }
 }
 
+/// Decode a raw storage pattern to a complex `(re, im)` pair.
+///
+/// Little-endian, real component first — the layout every C and Rust complex
+/// type uses, and the one a `[T; 2]` would produce.
+fn raw_to_complex(bits: u128, dt: ElementKind) -> (f64, f64) {
+    match dt {
+        ElementKind::Complex64 => (
+            f64::from(f32::from_bits(bits as u32)),
+            f64::from(f32::from_bits((bits >> 32) as u32)),
+        ),
+        ElementKind::Complex128 => (
+            f64::from_bits(bits as u64),
+            f64::from_bits((bits >> 64) as u64),
+        ),
+        other => panic!("oracle: raw_to_complex on non-complex dtype {other:?}"),
+    }
+}
+
+/// Widen an integer into a complex storage pattern (`(i, 0)`).
+fn encode_int_as_complex(i: i128, out: ElementKind) -> u128 {
+    encode_complex(i as f64, 0.0, out)
+}
+
+/// Encode a complex `(re, im)` pair into its storage pattern.
+fn encode_complex(re: f64, im: f64, out: ElementKind) -> u128 {
+    match out {
+        ElementKind::Complex64 => {
+            u128::from((re as f32).to_bits()) | (u128::from((im as f32).to_bits()) << 32)
+        }
+        ElementKind::Complex128 => u128::from(re.to_bits()) | (u128::from(im.to_bits()) << 64),
+        other => panic!("oracle: encode_complex to non-complex dtype {other:?}"),
+    }
+}
+
 /// Decode a raw storage pattern to `f64` (independent half decode for f16/bf16).
-fn raw_to_f64(bits: u64, dt: ElementKind) -> f64 {
+fn raw_to_f64(bits: u128, dt: ElementKind) -> f64 {
     match dt {
         ElementKind::F16 => f16_to_f64(bits as u16),
         ElementKind::Bf16 => bf16_to_f64(bits as u16),
         ElementKind::F32 | ElementKind::F32Strict => f64::from(f32::from_bits(bits as u32)),
-        ElementKind::F64 => f64::from_bits(bits),
+        ElementKind::F64 => f64::from_bits(bits as u64),
         ElementKind::I32
         | ElementKind::I64
         | ElementKind::I8
@@ -641,6 +756,31 @@ impl Val {
             Val::Float(f) => f,
             Val::Int(i) => i as f64,
             Val::Raw(b, dt) => raw_to_f64(b, dt),
+            // Deliberately fatal rather than returning the real part. A complex
+            // value silently becoming its real component is a wrong answer that
+            // looks like a right one — the imaginary half vanishes with no
+            // diagnostic anywhere. Reaching here means an op routed a complex
+            // operand into the float evaluator, which is a routing bug to fix,
+            // not a value to coerce.
+            Val::Complex(re, im) => {
+                panic!("oracle: complex value ({re}, {im}) projected into the float domain")
+            }
+        }
+    }
+
+    /// Project into the complex compute domain.
+    ///
+    /// A real widens to `(x, 0)` — the standard embedding, and the one that makes
+    /// a real literal usable in a complex expression. The reverse does not hold,
+    /// which is why [`Val::f64`] refuses instead.
+    fn complex(self) -> (f64, f64) {
+        match self {
+            Val::Complex(re, im) => (re, im),
+            Val::Float(f) => (f, 0.0),
+            Val::Int(i) => (i as f64, 0.0),
+            Val::Raw(b, dt) if is_complex(dt) => raw_to_complex(b, dt),
+            Val::Raw(b, dt) if is_int(dt) => (raw_to_i128(b, dt) as f64, 0.0),
+            Val::Raw(b, dt) => (raw_to_f64(b, dt), 0.0),
         }
     }
 
@@ -650,6 +790,9 @@ impl Val {
             Val::Int(i) => i,
             Val::Raw(b, dt) => raw_to_i128(b, dt),
             Val::Float(f) => f as i128,
+            Val::Complex(re, im) => {
+                panic!("oracle: complex value ({re}, {im}) projected into the integer domain")
+            }
         }
     }
 }
@@ -979,9 +1122,31 @@ fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
         ScalarExpr::Param(i) => Val::Float(ev.params[*i as usize]),
         ScalarExpr::Reduced(i) => (ev.reduced)(*i),
         ScalarExpr::Coord(d) => (ev.coord)(*d),
-        ScalarExpr::Add(a, b) => arith(ev, a, b, |x, y| x + y, i128::wrapping_add),
-        ScalarExpr::Sub(a, b) => arith(ev, a, b, |x, y| x - y, i128::wrapping_sub),
-        ScalarExpr::Mul(a, b) => arith(ev, a, b, |x, y| x * y, i128::wrapping_mul),
+        ScalarExpr::Add(a, b) => arith(
+            ev,
+            a,
+            b,
+            |x, y| x + y,
+            i128::wrapping_add,
+            |(ar, ai), (br, bi)| (ar + br, ai + bi),
+        ),
+        ScalarExpr::Sub(a, b) => arith(
+            ev,
+            a,
+            b,
+            |x, y| x - y,
+            i128::wrapping_sub,
+            |(ar, ai), (br, bi)| (ar - br, ai - bi),
+        ),
+        // The one that is NOT component-wise.
+        ScalarExpr::Mul(a, b) => arith(
+            ev,
+            a,
+            b,
+            |x, y| x * y,
+            i128::wrapping_mul,
+            |(ar, ai), (br, bi)| (ar * br - ai * bi, ar * bi + ai * br),
+        ),
         // Div is float-only (int Div is rejected at the plan gate).
         ScalarExpr::Div(a, b) => Val::Float(eval(a, ev).f64() / eval(b, ev).f64()),
         ScalarExpr::Unary(op, x) => {
@@ -1022,7 +1187,19 @@ fn arith(
     b: &ScalarExpr,
     ff: impl Fn(f64, f64) -> f64,
     fi: impl Fn(i128, i128) -> i128,
+    // The complex rule is passed EXPLICITLY rather than derived from `ff`.
+    // Component-wise application of the real rule is correct for `+` and `-`
+    // and WRONG for `*`: complex multiplication mixes components
+    // (`ac - bd, ad + bc`), and no inspection of a closure can recover which
+    // operation it represents. Three closures is the price of not guessing.
+    fc: impl Fn((f64, f64), (f64, f64)) -> (f64, f64),
 ) -> Val {
+    if is_complex(ev.dtype) {
+        let (ar, ai) = eval(a, ev).complex();
+        let (br, bi) = eval(b, ev).complex();
+        let (re, im) = fc((ar, ai), (br, bi));
+        return Val::Complex(re, im);
+    }
     if is_int(ev.dtype) {
         let r = fi(eval(a, ev).i128(), eval(b, ev).i128());
         // `+`/`-`/`*` produce identical BIT patterns signed or unsigned, but the
@@ -1089,41 +1266,44 @@ fn store_val(v: Val, out: ElementKind, buf: &mut [u8], off: usize) {
                 encode_float(raw_to_f64(b, dt), out)
             }
         }
+        Val::Float(f) if is_complex(out) => encode_complex(f, 0.0, out),
         Val::Float(f) => encode_float(f, out),
+        Val::Int(i) if is_complex(out) => encode_int_as_complex(i, out),
         Val::Int(i) => encode_int(i, out),
+        Val::Complex(re, im) => encode_complex(re, im, out),
     };
     write_le(buf, off * sz, sz, bits);
 }
 
 /// Encode an `f64` compute value to `out` (RNE halves; U8 narrows a 0/1
 /// predicate; I64 widens a count).
-fn encode_float(f: f64, out: ElementKind) -> u64 {
+fn encode_float(f: f64, out: ElementKind) -> u128 {
     match out {
-        ElementKind::F64 => f.to_bits(),
-        ElementKind::F32 | ElementKind::F32Strict => u64::from((f as f32).to_bits()),
-        ElementKind::F16 => u64::from(f32_to_f16_bits(f as f32)),
-        ElementKind::Bf16 => u64::from(f32_to_bf16_bits(f as f32)),
-        ElementKind::U8 | ElementKind::Bool => u64::from(f as u8),
-        ElementKind::I64 => (f as i64) as u64,
-        ElementKind::I32 => u64::from((f as i32) as u32),
-        ElementKind::I8 => u64::from((f as i8) as u8),
-        ElementKind::I16 => u64::from((f as i16) as u16),
-        ElementKind::U16 => u64::from(f as u16),
-        ElementKind::U32 => u64::from(f as u32),
+        ElementKind::F64 => u128::from(f.to_bits()),
+        ElementKind::F32 | ElementKind::F32Strict => u128::from((f as f32).to_bits()),
+        ElementKind::F16 => u128::from(f32_to_f16_bits(f as f32)),
+        ElementKind::Bf16 => u128::from(f32_to_bf16_bits(f as f32)),
+        ElementKind::U8 | ElementKind::Bool => u128::from(f as u8),
+        ElementKind::I64 => (f as i64) as u128,
+        ElementKind::I32 => u128::from((f as i32) as u32),
+        ElementKind::I8 => u128::from((f as i8) as u8),
+        ElementKind::I16 => u128::from((f as i16) as u16),
+        ElementKind::U16 => u128::from(f as u16),
+        ElementKind::U32 => u128::from(f as u32),
         other => panic!("oracle: encode_float to unsupported dtype {other:?}"),
     }
 }
 
 /// Encode a wide integer to `out`, truncating (two's-complement wrap) to width.
-fn encode_int(i: i128, out: ElementKind) -> u64 {
+fn encode_int(i: i128, out: ElementKind) -> u128 {
     match out {
-        ElementKind::I32 => u64::from((i as i32) as u32),
-        ElementKind::I64 => (i as i64) as u64,
-        ElementKind::I8 => u64::from((i as i8) as u8),
-        ElementKind::I16 => u64::from((i as i16) as u16),
-        ElementKind::U8 | ElementKind::Bool => u64::from(i as u8),
-        ElementKind::U16 => u64::from(i as u16),
-        ElementKind::U32 => u64::from(i as u32),
+        ElementKind::I32 => u128::from((i as i32) as u32),
+        ElementKind::I64 => (i as i64) as u128,
+        ElementKind::I8 => u128::from((i as i8) as u8),
+        ElementKind::I16 => u128::from((i as i16) as u16),
+        ElementKind::U8 | ElementKind::Bool => u128::from(i as u8),
+        ElementKind::U16 => u128::from(i as u16),
+        ElementKind::U32 => u128::from(i as u32),
         other => panic!("oracle: encode_int to unsupported dtype {other:?}"),
     }
 }
@@ -2221,6 +2401,39 @@ pub fn compare(
         // has no rounding, so `abs` here means a genuine allowed distance rather
         // than an accumulated-error band, and `rel` scales against the larger
         // magnitude exactly as it does for floats.
+        // Complex compares COMPONENT-WISE. A single magnitude tolerance would
+        // pass `(0, 5)` against `(5, 0)` — equal magnitude, orthogonal values —
+        // and complex has no ordering to fall back on, so magnitude is the only
+        // scalar available and it is not enough.
+        Fidelity::Tolerant { rel, abs }
+            if is_complex(expected.dtype) && is_complex(actual.dtype) =>
+        {
+            let ea = expected.to_complex_vec();
+            let ac = actual.to_complex_vec();
+            if ea.len() != ac.len() {
+                return Err(format!("length mismatch: {} vs {}", ea.len(), ac.len()));
+            }
+            for (i, (&(er, ei), &(ar, ai))) in ea.iter().zip(ac.iter()).enumerate() {
+                for (part, e, a) in [("re", er, ar), ("im", ei, ai)] {
+                    if e == a || (e.is_nan() && a.is_nan()) {
+                        continue;
+                    }
+                    if e.is_infinite() || a.is_infinite() {
+                        return Err(format!(
+                            "infinity mismatch at element {i} ({part}): expected {e}, got {a}"
+                        ));
+                    }
+                    let diff = (e - a).abs();
+                    if diff <= abs + rel * e.abs().max(a.abs()) {
+                        continue;
+                    }
+                    return Err(format!(
+                        "tolerance mismatch at element {i} ({part}):                          expected {e}, got {a} (|Δ|={diff})"
+                    ));
+                }
+            }
+            Ok(())
+        }
         Fidelity::Tolerant { rel, abs } if is_int(expected.dtype) && is_int(actual.dtype) => {
             let ea = expected.to_i128_vec();
             let ac = actual.to_i128_vec();
@@ -2284,6 +2497,130 @@ pub fn compare(
 // ===========================================================================
 // §6 Bootstrap-trust tests (GPU-free): the oracle must prove ITSELF first.
 // ===========================================================================
+#[cfg(test)]
+mod complex_arithmetic_tests {
+    use super::*;
+    use crate::ir::ScalarExpr;
+
+    /// Evaluate `expr` at a complex dtype with two complex inputs.
+    ///
+    /// Goes through the real `eval` path rather than calling the arithmetic
+    /// closures directly, so the routing (`is_complex` before the int/float
+    /// split) is exercised too.
+    fn eval_complex(expr: &ScalarExpr, a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+        let leaf = |i: u8| {
+            let (re, im) = if i == 0 { a } else { b };
+            Val::Complex(re, im)
+        };
+        let never = |_: u8| -> Val { panic!("not used") };
+        let ev = Eval {
+            dtype: ElementKind::Complex128,
+            params: &[],
+            leaf: &leaf,
+            reduced: &never,
+            coord: &never,
+        };
+        eval(expr, &ev).complex()
+    }
+
+    /// **`Mul` is not component-wise, and this is the only test that can see it.**
+    ///
+    /// Complex multiplication is `(ac − bd, ad + bc)`. Applying the real rule
+    /// component-wise gives `(ac, bd)` — which agrees with the correct answer
+    /// whenever either operand is purely real or purely imaginary, so a
+    /// carelessly-chosen input pair cannot tell them apart. `(1+2i)(3+4i)` is
+    /// `-5 + 10i` correctly and `3 + 8i` component-wise: different in both
+    /// components, so neither half can be right by accident.
+    ///
+    /// # Why this is a unit test
+    ///
+    /// Complex is not plan-admissible yet, so complex arithmetic is unreachable
+    /// through `build_plan`/`evaluate` — the integration tests in
+    /// `tests/complex_domain.rs` exercise buffers, sizes and comparison, and
+    /// **cannot reach the arithmetic at all**. Seeding the component-wise rule
+    /// left every one of them green. Tested here because here is where it is
+    /// reachable; when the plan gate admits complex, this belongs end-to-end too.
+    #[test]
+    fn complex_mul_mixes_components() {
+        let got = eval_complex(
+            &ScalarExpr::Mul(
+                Box::new(ScalarExpr::Input(0)),
+                Box::new(ScalarExpr::Input(1)),
+            ),
+            (1.0, 2.0),
+            (3.0, 4.0),
+        );
+        assert_eq!(got, (-5.0, 10.0), "(1+2i)(3+4i) = -5+10i");
+        assert_ne!(
+            got,
+            (3.0, 8.0),
+            "component-wise multiplication is the classic wrong rule"
+        );
+
+        // i * i = -1: the identity that defines the domain.
+        let i_squared = eval_complex(
+            &ScalarExpr::Mul(
+                Box::new(ScalarExpr::Input(0)),
+                Box::new(ScalarExpr::Input(1)),
+            ),
+            (0.0, 1.0),
+            (0.0, 1.0),
+        );
+        assert_eq!(i_squared, (-1.0, 0.0), "i^2 must be -1");
+    }
+
+    /// `Add`/`Sub` ARE component-wise — the contrast that makes `Mul` a rule
+    /// rather than an accident.
+    #[test]
+    fn complex_add_and_sub_are_component_wise() {
+        assert_eq!(
+            eval_complex(
+                &ScalarExpr::Add(
+                    Box::new(ScalarExpr::Input(0)),
+                    Box::new(ScalarExpr::Input(1)),
+                ),
+                (1.0, 2.0),
+                (3.0, 4.0)
+            ),
+            (4.0, 6.0)
+        );
+        assert_eq!(
+            eval_complex(
+                &ScalarExpr::Sub(
+                    Box::new(ScalarExpr::Input(0)),
+                    Box::new(ScalarExpr::Input(1)),
+                ),
+                (1.0, 2.0),
+                (3.0, 4.0)
+            ),
+            (-2.0, -2.0)
+        );
+    }
+
+    /// A real operand embeds as `(x, 0)`, so a real literal is usable in a
+    /// complex expression — and `Val::f64` refuses the reverse rather than
+    /// silently dropping the imaginary half.
+    #[test]
+    fn reals_widen_into_the_complex_domain_but_not_back() {
+        let leaf = |_: u8| Val::Float(3.0);
+        let never = |_: u8| -> Val { panic!("not used") };
+        let ev = Eval {
+            dtype: ElementKind::Complex128,
+            params: &[],
+            leaf: &leaf,
+            reduced: &never,
+            coord: &never,
+        };
+        assert_eq!(eval(&ScalarExpr::Input(0), &ev).complex(), (3.0, 0.0));
+
+        let r = std::panic::catch_unwind(|| Val::Complex(1.0, 2.0).f64());
+        assert!(
+            r.is_err(),
+            "projecting a complex into the float domain must be fatal, not the              real part — a vanished imaginary half is a wrong answer that looks right"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// Pins the module doc's coverage list to the code.
