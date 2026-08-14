@@ -2743,6 +2743,149 @@ pub enum Fidelity {
     },
 }
 
+/// What comparison band a cell is **entitled to** — derived from the plan and
+/// its operands, not chosen by hand at the call site.
+///
+/// # The gap this closes
+///
+/// Every caller of [`compare`] picked a [`Fidelity`] by hand. Nothing said what
+/// a given cell was owed, so the choice was a judgement re-made per test, with
+/// no way to tell a tolerance that reflects the kernel's real error from one
+/// that was widened until the test passed. Those look identical in a diff.
+///
+/// # Derived from the SAME number the contract declares
+///
+/// The approximate-op term comes from [`crate::contract::ulp_bound`] — the
+/// function that feeds the emitted contract's `max_ulp`. Two independently
+/// chosen accuracy figures would drift, silently and in both directions: a
+/// validator looser than the contract passes kernels the contract promises are
+/// tighter, and a tighter one fails kernels that honour it.
+///
+/// # What the band is made of
+///
+/// `rel = (steps + 2·ulp_bound) · u`, where `u` is the compute dtype's unit
+/// roundoff (`2⁻²⁴` for `f32`, `2⁻⁵³` for `f64`).
+///
+/// * **`steps`** — the roundings the DEVICE performs that the oracle does not.
+///   The oracle accumulates in `f64` on purpose ("a tolerance referee, not a
+///   bit-for-bit device mirror"), so each arithmetic node in the body, plus the
+///   reduction length where the cell reduces, is one rounding the reference
+///   skipped. Each contributes at most `u` relative error; summing them is the
+///   standard forward bound `n·u/(1−n·u) ≈ n·u`.
+/// * **`2·ulp_bound`** — the vendor-approximate ops' declared error. One ULP is
+///   `2u` relative at the top of a binade, so a `k`-ULP op contributes `2k·u`.
+///
+/// # `abs` is zero, and that is a stated limit rather than an omission
+///
+/// A relative band collapses at zero, so a body whose result **cancels** to near
+/// zero from larger intermediates needs an absolute floor — and the size of that
+/// floor depends on the intermediate magnitudes, which a plan does not know and
+/// cannot know without the input values. Returning a fabricated `abs` would be a
+/// number with no derivation behind it, which is worse than none: it would look
+/// like a bound. Callers whose cells cancel must widen `abs` themselves and say
+/// why.
+///
+/// # Returns `None` when no bound is derivable
+///
+/// A body containing floored `Rem` has no finite result-ULP bound — its
+/// quotient-boundary flip is a discontinuity, not an error term, and
+/// [`crate::contract::precision_of`] correctly declares `approximate` with **no**
+/// `max_ulp` rather than an understated number. `None` says the same thing here:
+/// the caller must decide, and cannot be handed a bound that does not exist.
+#[must_use]
+pub fn required_fidelity(plan: &KernelPlan<'_>, operands: &[OperandDesc]) -> Option<Fidelity> {
+    // Integer, bool and sub-byte cells are EXACT on both sides: the emitter's
+    // arithmetic wraps at the C width and the oracle models that wrapping in
+    // `i128`, so there is no rounding for a tolerance to absorb. Bit-exact is
+    // not a tight choice here, it is the only correct one — a tolerant compare
+    // would accept a genuinely wrong integer.
+    if is_int(plan.dtype) && is_int(plan.out_dtype) {
+        return Some(Fidelity::BitExact);
+    }
+
+    let ulp = crate::contract::ulp_bound(plan.body);
+    if !ulp.is_finite() {
+        return None;
+    }
+
+    // A body that only MOVES values rounds nothing: an identity passthrough, a
+    // Select picking between arms, a gather. The `Fidelity` doc already names
+    // this class as bit-exact; this derives it instead of trusting the caller to
+    // recognise it.
+    let steps = arith_steps(plan.body) + reduction_len(plan, operands);
+    if steps == 0 && ulp == 0.0 {
+        return Some(Fidelity::BitExact);
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    let rel = (steps as f64 + 2.0 * ulp) * unit_roundoff(plan.dtype);
+    Some(Fidelity::Tolerant { rel, abs: 0.0 })
+}
+
+/// The compute dtype's unit roundoff — the largest relative error a single
+/// correctly-rounded operation can introduce.
+///
+/// Keyed to the precision the DEVICE computes at, which for every narrow float
+/// is `f32`: the emitters promote an `f16`/`bf16`/FP8 load to `float` and
+/// compute there (`cfamily`'s narrow-float seam). Using the storage precision
+/// would produce a band far looser than the kernel's real error.
+fn unit_roundoff(dt: ElementKind) -> f64 {
+    match dt {
+        ElementKind::F64 | ElementKind::Complex128 => f64::EPSILON / 2.0,
+        _ => f64::from(f32::EPSILON) / 2.0,
+    }
+}
+
+/// Count the arithmetic nodes whose rounding the device performs and the
+/// `f64` oracle does not.
+///
+/// Leaves and `Select` contribute nothing: a leaf is a load and a `Select`
+/// picks an arm without arithmetic (the same call `contract::ulp_bound` makes,
+/// for the same reason).
+fn arith_steps(e: &ScalarExpr) -> u32 {
+    match e {
+        ScalarExpr::Input(_)
+        | ScalarExpr::Const(_)
+        | ScalarExpr::Param(_)
+        | ScalarExpr::Reduced(_)
+        | ScalarExpr::Coord(_) => 0,
+        ScalarExpr::Add(a, b)
+        | ScalarExpr::Sub(a, b)
+        | ScalarExpr::Mul(a, b)
+        | ScalarExpr::Div(a, b) => 1 + arith_steps(a) + arith_steps(b),
+        ScalarExpr::Binary(_, a, b) => 1 + arith_steps(a) + arith_steps(b),
+        ScalarExpr::Unary(_, x) => 1 + arith_steps(x),
+        // A Select rounds nothing itself; its subexpressions still count.
+        ScalarExpr::Select(c, a, b) => arith_steps(c) + arith_steps(a) + arith_steps(b),
+    }
+}
+
+/// How many accumulation steps a reducing cell performs, or `0` if it does not
+/// reduce.
+///
+/// A K-long sequential sum accumulates one rounding per element, and the oracle
+/// sums the same series in `f64`, so the whole length is error the band must
+/// cover. This is the term that makes a large reduction's band legitimately wide
+/// — and hiding it would be exactly the hand-widening this function replaces.
+fn reduction_len(plan: &KernelPlan<'_>, operands: &[OperandDesc]) -> u32 {
+    let reduced = matches!(
+        plan.schedule,
+        Schedule::Reduction { .. } | Schedule::RowReduce { .. } | Schedule::Contraction
+    );
+    if !reduced {
+        return 0;
+    }
+    // The reduced extent is the largest input extent — an upper bound that does
+    // not require knowing which axis the schedule folds. Over-stating widens the
+    // band, which is safe; under-stating would reject a correct kernel.
+    let n = operands
+        .iter()
+        .flat_map(|o| o.shape[..usize::from(o.rank)].iter().copied())
+        .max()
+        .unwrap_or(1);
+    u32::try_from(n.max(1)).unwrap_or(u32::MAX)
+}
+
 /// Compare `expected` against `actual` under `fidelity`. `Ok(())` if they match;
 /// `Err(msg)` naming the first mismatch otherwise.
 ///

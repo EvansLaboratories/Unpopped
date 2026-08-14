@@ -1257,7 +1257,14 @@ fn count_flops(e: &ScalarExpr) -> u32 {
 /// `Recip`/`Relu`/`Floor`/`Ceil`/`Round`/`Sign`/`Step`, `Max`/`Min`/`Rem`)
 /// contribute 0, so a body with none is `correctly_rounded`. Over-stating is safe
 /// (the planner won't admit into a too-tight slot); under-stating is not.
-fn ulp_bound(e: &ScalarExpr) -> f64 {
+/// Public because [`crate::oracle::required_fidelity`] derives its comparison
+/// band from the SAME number this function feeds into the emitted contract's
+/// `max_ulp`. Two independently-chosen accuracy figures — one validating the
+/// kernel, one declared to consumers — would be free to drift apart, and the
+/// drift would be silent in both directions: a validator looser than the
+/// contract passes kernels the contract promises are tighter, and a tighter one
+/// fails kernels that honour it.
+pub fn ulp_bound(e: &ScalarExpr) -> f64 {
     match e {
         // Coord rates 0 like the other leaves: the long-long → float/double
         // cast is exact under the documented caller precondition (axis extent
