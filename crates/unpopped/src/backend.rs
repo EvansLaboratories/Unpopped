@@ -650,12 +650,29 @@ impl std::fmt::Debug for LoweringBuilder<'_> {
 /// Spell an `f64` constant as a valid C literal. `{v:?}` emits `inf`/`NaN`, which
 /// aren't valid C literals; map the non-finite cases to the standard macros.
 ///
-/// The f32 `f`-suffix vs double-promotion question is dtype-dependent and tracked
-/// as a follow-up — but it is **not** purely a perf concern: the optimizer's
-/// bit-preservation contract (e.g. the `x/2^k -> x*2^-k` rule) and the packed
-/// path's const gate are proven against the current double-promoted,
-/// correctly-rounded semantics. Changing the const spelling (or compiling with
-/// `--use_fast_math`) invalidates those proofs; re-verify the rule set first.
+/// # The f-suffix question is now a codegen concern, not a correctness one
+///
+/// This used to warn that the `f32` `f`-suffix vs double-promotion question was
+/// "**not** purely a perf concern", because the optimizer's bit-preservation
+/// contract was proven against double-promoted semantics. That reasoning has
+/// been overtaken, in the right direction, by a fix one layer up.
+///
+/// [`crate::optimize::optimize`] now rounds every constant to the kernel's
+/// **compute precision** — at ingest and after every fold (see
+/// `optimize::Compute`, and the 1-ULP divergence it closes). So the value
+/// reaching this function from an `f32` kernel is already `f32`-representable,
+/// and `(float)(double)v == v` exactly for such a value. Emitting it as a plain
+/// decimal that the C compiler converts to `float` is therefore lossless, with
+/// or without the suffix.
+///
+/// What that leaves is a genuine codegen question — whether the emitted
+/// arithmetic happens at `float` or gets double-promoted by C's usual
+/// conversions — which affects instruction selection and speed, not the bits of
+/// the constant itself.
+///
+/// The `--use_fast_math` warning still stands unchanged: that changes the
+/// *arithmetic*, not the literal, and it invalidates the rule-set proofs
+/// regardless of how constants are spelled.
 #[must_use]
 pub fn const_lit(v: f64) -> String {
     if v.is_nan() {
