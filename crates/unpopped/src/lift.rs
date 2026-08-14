@@ -25,7 +25,15 @@ use unpopped_vocab::ElementKind;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LiftError {
-    /// No `__global__` kernel in the source. (not-a-kernel)
+    /// The source carries no kernel marker for the frontend that was asked to
+    /// read it. (not-a-kernel)
+    ///
+    /// Which marker that is belongs to the frontend, not to this enum:
+    /// [`crate::convert::Frontend::kernel_marker`] carries it (`__global__` for
+    /// CUDA, `numthreads` for Slang, whatever a caller's own frontend declares).
+    /// This doc named `__global__` outright, which put one vendor's spelling in
+    /// a neutral public API and became simply wrong once the marker moved into
+    /// the frontend descriptor.
     NotAKernel,
     /// A kernel, but not the `out[i] = <expr>;` elementwise op class this
     /// recognizer targets. (wrong-op-class — the recognized-op-class miss.)
