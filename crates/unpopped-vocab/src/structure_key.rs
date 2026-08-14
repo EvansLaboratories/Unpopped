@@ -34,7 +34,7 @@
 //!   merge feeds the effective rank; legality-aware axis *reordering*
 //!   to maximize cell-merging is a follow-up).
 
-use crate::{ArchSku, ElementKind, OpCategory};
+use crate::{ElementKind, OpCategory, TargetId};
 
 /// Maximum tensor rank the structure key supports — matches the rank ceiling
 /// of every strided baracuda kernel (`baracuda::coord` `MAX_RANK`).
@@ -597,8 +597,15 @@ pub struct StructureKey {
     /// Primary dtype (operand 0). Mixed-dtype ops fold per-operand dtype in a
     /// follow-up; v1 assumes a uniform operand dtype.
     pub dtype: ElementKind,
-    /// Compute capability the specialized kernel targets.
-    pub arch: ArchSku,
+    /// The `target_capability` the specialized kernel targets
+    /// (KISS-CLASSIFY §6.8) — an interned `<namespace>:<capability-set>` token.
+    ///
+    /// Was `ArchSku`, a closed four-variant CUDA enum, which could not spell a
+    /// `vulkan:`/`rocm:`/`metal:` target at all — so a conforming `vulkan:`
+    /// reference vector had to be *excluded* from the cross-project byte-match
+    /// rather than matched. [`TargetId`] is a `u16` handle, so the key stays
+    /// `Copy` and heap-free while the set of targets becomes open.
+    pub target: TargetId,
     /// Offset-arithmetic width.
     pub idx: IdxWidth,
     /// Total-work size class.
@@ -859,7 +866,12 @@ impl OperandDesc {
 /// reimplementing the derivation, so telemetry and the build matrix join on the
 /// same token.
 #[must_use]
-pub fn structure_key(op: OpCategory, operands: &[OperandDesc], arch: ArchSku) -> StructureKey {
+pub fn structure_key(
+    op: OpCategory,
+    operands: &[OperandDesc],
+    target: impl Into<TargetId>,
+) -> StructureKey {
+    let target = target.into();
     let n = operands.len().min(MAX_OPERANDS);
     let mut keys = [OperandKey::default(); MAX_OPERANDS];
     let mut max_off: i64 = 0;
@@ -888,7 +900,7 @@ pub fn structure_key(op: OpCategory, operands: &[OperandDesc], arch: ArchSku) ->
         version: STRUCTURE_KEY_VERSION,
         op,
         dtype,
-        arch,
+        target,
         idx,
         work,
         rank,
@@ -1211,8 +1223,12 @@ fn derive_reduce_axes(op: OpCategory, operands: &[OperandDesc]) -> AxisMask {
 /// assert!(token.starts_with("sk4|bin|f32|cuda:sm89|"));
 /// ```
 #[must_use]
-pub fn structure_key_token(op: OpCategory, operands: &[OperandDesc], arch: ArchSku) -> String {
-    structure_key(op, operands, arch).to_token()
+pub fn structure_key_token(
+    op: OpCategory,
+    operands: &[OperandDesc],
+    target: impl Into<TargetId>,
+) -> String {
+    structure_key(op, operands, target).to_token()
 }
 
 /// Innermost non-unit axis of an operand, or `None` if the operand is all
@@ -1585,7 +1601,7 @@ impl StructureKey {
             self.version,
             op_code(self.op),
             dtype_code(self.dtype),
-            arch_code(self.arch),
+            self.target.as_str(),
             idx_code(self.idx),
             work_code(self.work),
             self.rank,
@@ -1795,7 +1811,7 @@ impl StructureKey {
         if dtype.is_reserved() {
             return None;
         }
-        let arch = arch_from_code(parts[3])?;
+        let target = TargetId::parse(parts[3]).ok()?;
         let idx = match parts[4] {
             // `ix32`/`ix64` (§6.7-0003), not the `i32`/`i64` dtype spellings.
             "ix32" => IdxWidth::Idx32,
@@ -1944,7 +1960,7 @@ impl StructureKey {
             version,
             op,
             dtype,
-            arch,
+            target,
             idx,
             work,
             rank,
@@ -2861,33 +2877,6 @@ const fn div_code(v: DivBucket) -> &'static str {
     }
 }
 
-const fn arch_code(v: ArchSku) -> &'static str {
-    // Namespaced `target_capability` per KISS-CLASSIFY-6.8 (`<namespace>:<cap>`,
-    // matched byte-exact, §6.8-0002). `ArchSku` stays a CUDA-only enum internally;
-    // only its token gains the `cuda:` namespace, so a future cpu:/vulkan: backend
-    // slots in without perturbing these CUDA tokens.
-    match v {
-        ArchSku::Sm80 => "cuda:sm80",
-        ArchSku::Sm89 => "cuda:sm89",
-        ArchSku::Sm90 => "cuda:sm90",
-        ArchSku::Sm90a => "cuda:sm90a",
-    }
-}
-
-fn arch_from_code(s: &str) -> Option<ArchSku> {
-    Some(match s {
-        "cuda:sm80" => ArchSku::Sm80,
-        "cuda:sm89" => ArchSku::Sm89,
-        // `sm90` before `sm90a` reads naturally but is not a prefix hazard: these
-        // are whole-string matches, not prefix tests. §6.8-0002 matches the
-        // capability byte-exact, which is what keeps two adjacent spellings for
-        // two genuinely different compilation targets from collapsing.
-        "cuda:sm90" => ArchSku::Sm90,
-        "cuda:sm90a" => ArchSku::Sm90a,
-        _ => return None,
-    })
-}
-
 /// The KISS-Classify closed-set dtype token spelling (§6.1). Public because the
 /// KISS-Contract §6.8 `accumulation_type` field MUST use the SAME spelling as
 /// the key's `<acc>` coordinate (one dtype, two surfaces — the sk3 RFC §4.2
@@ -3303,6 +3292,7 @@ fn op_from_code(s: &str) -> Option<OpCategory> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ArchSku;
 
     /// Every [`TokenDecline`] maps to a **distinct** wire name.
     ///
@@ -3450,15 +3440,34 @@ mod tests {
         );
     }
 
-    /// spec/namespaces/cuda.md §4 — BACKS the "a `cuda:` capability-set is a single
-    /// scalar, no variable-length list" claim (which makes the §6.8-0007 digest
-    /// structurally unreachable) with a test rather than prose: every emitted token is a
-    /// single scalar, and a list-shaped token does not parse. A future range/list token
-    /// fails HERE rather than silently falsifying the annex.
+    /// spec/namespaces/cuda.md §4 — BACKS the "a `cuda:` capability-set is a
+    /// single scalar, no variable-length list" claim (which makes the §6.8-0007
+    /// digest structurally unreachable) with a test rather than prose: every
+    /// token this crate emits for a CUDA SKU is a single scalar.
+    ///
+    /// # What this test STOPPED checking when the target model opened, and why
+    ///
+    /// It used to also assert `arch_from_code("cuda:sm80+sm90a").is_none()` —
+    /// that a list-shaped `cuda:` token does not parse. It no longer can, and
+    /// that is correct rather than a regression.
+    ///
+    /// `TargetId::parse` enforces the KISS §6.8 **grammar** (§6.8-0001 shape,
+    /// §6.8-0005 charset) and nothing else, because §6.8-0004 puts each
+    /// namespace's capability-set vocabulary in **its maintainer's** hands. `+`
+    /// is not a byte §6.8-0005 forbids, so `cuda:sm80+sm90a` is a well-formed
+    /// token about which this crate has no opinion. Rejecting it here would be
+    /// this crate legislating the `cuda:` vocabulary — exactly the coupling the
+    /// open target model exists to remove.
+    ///
+    /// So the annex claim is still backed for what this crate **produces**, and
+    /// enforcement for what it **consumes** now belongs to the namespace owner.
+    /// That is a real narrowing of scope and it is recorded here rather than
+    /// deleted, because a future reader will otherwise find the annex asserting
+    /// something no test covers and assume the test was lost.
     #[test]
-    fn cuda_tokens_are_single_scalar() {
-        for v in [ArchSku::Sm80, ArchSku::Sm89, ArchSku::Sm90a] {
-            let t = arch_code(v);
+    fn the_cuda_tokens_this_crate_emits_are_single_scalars() {
+        for v in [ArchSku::Sm80, ArchSku::Sm89, ArchSku::Sm90, ArchSku::Sm90a] {
+            let t = TargetId::from(v).as_str();
             let body = t
                 .strip_prefix("cuda:sm")
                 .unwrap_or_else(|| panic!("token {t} must start with `cuda:sm`"));
@@ -3473,9 +3482,6 @@ mod tests {
                 "token {t} carries a list/range separator; cuda: sets are single scalars (annex §4)"
             );
         }
-        // A list-shaped token must not parse — there is no multi-arch cuda: token.
-        assert!(arch_from_code("cuda:sm80+sm90a").is_none());
-        assert!(arch_from_code("cuda:sm80,sm90a").is_none());
     }
 
     fn od(shape: &[i64], strides: &[i64], dtype: ElementKind, align: u32) -> OperandDesc {

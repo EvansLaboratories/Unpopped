@@ -68,6 +68,7 @@ pub mod plan;
 pub mod shape_expr;
 pub mod sku;
 pub mod structure_key;
+pub mod target;
 
 pub use device_repr::DeviceRepr;
 pub use dispatch::{
@@ -100,3 +101,4 @@ pub use structure_key::{
     ScalePlacement, SizeClass, StructureKey, SymExtent, SymKind, TokenDecline, VecWidth, WorkClass,
     dtype_token, structure_key, structure_key_token,
 };
+pub use target::{TargetError, TargetId};

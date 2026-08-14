@@ -607,9 +607,13 @@ pub fn merge_reports(ingest: &Ingest, captured_unix_s: u64, table: &mut Dispatch
             continue;
         };
         let stamp = HwStamp {
-            arch,
+            // `arch_sku_of` reads a CUDA compute capability, so this path is
+            // CUDA-specific by construction and the conversion is exact. A
+            // non-CUDA telemetry source would build its own `TargetId` from its
+            // own probe rather than routing through a compute capability.
+            target: arch.into(),
             device_name: hw.hardware_sku.clone().unwrap_or_default(),
-            cuda_version: hw.driver_version.clone().unwrap_or_default(),
+            runtime_version: hw.driver_version.clone().unwrap_or_default(),
             captured_unix_s,
         };
         // The chosen's latency is whichever candidate carries its ImplId.
@@ -999,9 +1003,9 @@ mod tests {
 
         // Hand-built through the frozen seams directly.
         let stamp = HwStamp {
-            arch: ArchSku::Sm89,
+            target: ArchSku::Sm89.into(),
             device_name: "RTX 4070".to_string(),
-            cuda_version: "13.3".to_string(),
+            runtime_version: "13.3".to_string(),
             captured_unix_s: 40,
         };
         let rc = |src: &str, ns: Option<u64>| ReportedCandidate {
@@ -1055,9 +1059,9 @@ mod tests {
             ranked: Vec::new(),
             provenance: Provenance::Measured,
             measured_on: Some(HwStamp {
-                arch: ArchSku::Sm89,
+                target: ArchSku::Sm89.into(),
                 device_name: "RTX 4070".to_string(),
-                cuda_version: "13.3".to_string(),
+                runtime_version: "13.3".to_string(),
                 captured_unix_s: 10,
             }),
         }]);

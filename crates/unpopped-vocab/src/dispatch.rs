@@ -31,8 +31,8 @@
 //! lives on the in-memory [`DispatchEntry`] and in the bench CSV — it drives
 //! [`merge`]'s "newer wins" and arch-gate decisions but never churns the diff.
 
-use crate::ArchSku;
 use crate::structure_key::StructureKey;
+use crate::target::TargetId;
 
 /// The minimum `second_best / winner` ratio at which a freshly observed win is
 /// allowed to **flip** an existing decision to a *different* winner.
@@ -149,21 +149,35 @@ impl Provenance {
 /// stale or foreign measurement visible, never silently trusted.
 ///
 /// Mirrors the bench crate's `PytorchBaselineMetadata`: a measurement is only
-/// applicable to a query whose [`ArchSku`] matches, and the device name / CUDA
-/// version make a cross-device row auditable. `captured_unix_s` orders
-/// same-arch measurements ("newer wins") — it lives here, **not** in the
+/// applicable to a query whose [`TargetId`] matches, and the device name /
+/// runtime version make a cross-device row auditable. `captured_unix_s` orders
+/// same-target measurements ("newer wins") — it lives here, **not** in the
 /// committed artifact, so the artifact stays byte-stable.
+///
+/// # This struct used to be CUDA-shaped in two places
+///
+/// `arch: ArchSku` could not name a non-CUDA device, so a measurement taken on
+/// a Vulkan or ROCm device had no way to say where it came from — and the
+/// foreign-target guard in [`merge`] would have had nothing to compare. And
+/// `cuda_version` named one vendor's runtime in a struct that is supposed to
+/// describe any of them. Both are now namespace-neutral: the target is an
+/// interned §6.8 token, and the runtime version is a free string whose *meaning*
+/// belongs to whichever namespace the target names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HwStamp {
-    /// Compute-capability class the measurement was taken on.
-    pub arch: ArchSku,
+    /// The `target_capability` the measurement was taken on (§6.8).
+    pub target: TargetId,
     /// Device product name (e.g. `"NVIDIA GeForce RTX 4070 Laptop GPU"`).
     pub device_name: String,
-    /// CUDA runtime/driver version string the measurement used.
-    pub cuda_version: String,
-    /// Unix seconds at capture — orders same-arch measurements. Injected by the
-    /// caller (the bench gate), never read from a wall clock here, so tests and
-    /// the artifact are deterministic.
+    /// The runtime/driver version the measurement used, as that namespace
+    /// spells it — a CUDA toolkit version, a Vulkan API version, a ROCm
+    /// release. Opaque here: this crate records it for auditability and never
+    /// parses or compares it, because the format is the namespace owner's
+    /// (§6.8-0004).
+    pub runtime_version: String,
+    /// Unix seconds at capture — orders same-target measurements. Injected by
+    /// the caller (the bench gate), never read from a wall clock here, so tests
+    /// and the artifact are deterministic.
     pub captured_unix_s: u64,
 }
 
@@ -231,11 +245,11 @@ impl DispatchEntry {
         self.measured_on.as_ref().map_or(0, |h| h.captured_unix_s)
     }
 
-    /// The arch this row's measurement was taken on, if observed. `None` for a
-    /// seed (a seed is arch-agnostic; the token still pins the target arch).
+    /// The target this row's measurement was taken on, if observed. `None` for
+    /// a seed (a seed is target-agnostic; the token still pins the target).
     #[must_use]
-    fn measured_arch(&self) -> Option<ArchSku> {
-        self.measured_on.as_ref().map(|h| h.arch)
+    fn measured_target(&self) -> Option<TargetId> {
+        self.measured_on.as_ref().map(|h| h.target)
     }
 }
 
@@ -489,12 +503,15 @@ pub fn merge(table: &mut DispatchTable, incoming: &[DispatchEntry]) {
         if !inc.margin.is_finite() {
             continue;
         }
-        // A Reported row must have been observed on the arch it claims to route.
+        // A Reported row must have been observed on the target it claims to
+        // route. Comparison is `TargetId` equality, which by construction is the
+        // byte-exact match §6.8-0002 requires — equal tokens intern to equal
+        // ids, and nothing here applies prefix or feature-implication logic.
         if inc.provenance == Provenance::Reported {
-            let token_arch = StructureKey::from_token(&inc.structure_key).map(|k| k.arch);
-            match (token_arch, inc.measured_arch()) {
+            let token_target = StructureKey::from_token(&inc.structure_key).map(|k| k.target);
+            match (token_target, inc.measured_target()) {
                 (Some(t), Some(m)) if t == m => {}
-                _ => continue, // foreign-arch or unparseable → reject
+                _ => continue, // foreign-target or unparseable → reject
             }
         }
 
@@ -554,11 +571,11 @@ mod tests {
         }
     }
 
-    fn stamp(arch: ArchSku, t: u64) -> HwStamp {
+    fn stamp(target: impl Into<TargetId>, t: u64) -> HwStamp {
         HwStamp {
-            arch,
+            target: target.into(),
             device_name: "NVIDIA GeForce RTX 4070 Laptop GPU".to_string(),
-            cuda_version: "13.3".to_string(),
+            runtime_version: "13.3".to_string(),
             captured_unix_s: t,
         }
     }
