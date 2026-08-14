@@ -643,100 +643,6 @@ pub struct StructureKey {
 // Operand description (the minimal projection the key reads)
 // ===========================================================================
 
-/// Quant family, mirroring the FDX `FDXQuant.family` codes (FDX is the
-/// normative owner; this is the Baracuda-side projection).
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-#[non_exhaustive]
-pub enum QuantFamily {
-    /// GGUF block layout, scale baked inline.
-    Ggml,
-    /// OCP microscaling (per-block F8E8M0 scale).
-    Mx,
-    /// Dynamic per-tensor/token/channel affine integer.
-    AffineInt,
-    /// Dynamic per-tensor/token/channel affine float.
-    AffineFloat,
-    /// NF4/QLoRA — low-bit data plus a separate per-block absmax scale.
-    AffineBlock,
-}
-
-/// Where a quant scale lives, mirroring FDX `FDXScalePlacement`.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-#[non_exhaustive]
-pub enum ScalePlacement {
-    /// Scale baked inline with the data block.
-    Inline,
-    /// Scale in a separate buffer.
-    SeparateBuffer,
-    /// Scale broadcast per axis.
-    BroadcastPerAxis,
-}
-
-/// Quantization facts for a quant operand. Carried so Fuel can bind the
-/// interface; **[`structure_key`] does not key on these** — verified by
-/// `tests/operand_facts_reach_the_key.rs`, not merely believed.
-///
-/// # Do not build on this shape — it is superseded, not merely un-keyed
-///
-/// The wording here used to read as though the *shape* were right and only the
-/// keying were deferred to a later pilot. It is the other way round. sk4 §3.2
-/// settles the model: the **element dtype** and the **block structure** are
-/// separate axes, and a block's shared scale is a **sibling operand** — its own
-/// entry in the operand list — not a field hanging off the operand it scales.
-///
-/// That distinction is what closes the key collision, and it needs no schema
-/// event, because operands already reach the key. Under the sibling model an
-/// unquantized `i4` operand and a Q4 operand differ in the operand list itself
-/// (one carries a scale sibling, the other does not), so they cannot derive
-/// byte-identical tokens. Expressed as a field, they can and do.
-///
-/// The residual the sibling model does **not** close is block granularity:
-/// blk32 and blk128 both contribute one scale sibling of the same rank, so they
-/// still collide. That part is a genuine sk5 item and is tracked as such — it is
-/// not something this type can fix.
-///
-/// **Why this is still here.** Removing the field is a breaking change, and per
-/// sk4 §6 the hardening/removal fixes ride the coordinated schema cut rather
-/// than preceding it — a separate major beforehand would cost downstream two
-/// breaking releases instead of one. So the field stays until that cut, and this
-/// doc is the guard in the meantime: a consumer reached for `quant` as a
-/// precedent for extending [`OperandDesc`] once already, on the assumption it
-/// was load-bearing. It is not.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-#[non_exhaustive]
-pub struct QuantFacts {
-    /// Quant family.
-    pub family: QuantFamily,
-    /// Sub-byte bit width (e.g. 4 for Q4), or 0 if not sub-byte.
-    pub sub_byte_bits: u8,
-    /// Block extent in logical elements, or 0 if not block-quantized.
-    pub block_elems: u16,
-    /// Scale placement.
-    pub scale: ScalePlacement,
-}
-
-impl QuantFacts {
-    /// Quant facts for one operand.
-    ///
-    /// `sub_byte_bits = 0` means "not sub-byte" and `block_elems = 0` means "not
-    /// block-quantized"; both are the sentinel the field docs describe rather
-    /// than a magic value chosen here.
-    #[must_use]
-    pub const fn new(
-        family: QuantFamily,
-        sub_byte_bits: u8,
-        block_elems: u16,
-        scale: ScalePlacement,
-    ) -> Self {
-        Self {
-            family,
-            sub_byte_bits,
-            block_elems,
-            scale,
-        }
-    }
-}
-
 /// Kind of a symbolic (live-vs-capacity) extent, mirroring FDX `FDXExtent.kind`.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum SymKind {
@@ -752,7 +658,15 @@ pub enum SymKind {
 /// [`OperandDesc::shape`] entry (which keys strides and index width); this flags
 /// that the live length is dynamic, which is itself a specialization axis for
 /// attention-class ops (static `k_len == capacity` vs dynamic).
+///
+/// `#[non_exhaustive]` — reserved here rather than later. This type was on the
+/// list of key types to reserve before 0.2.0 and was **missed**, which meant
+/// adding a field to it would have been a breaking change of its own. It rides
+/// this cut, which is the cut it should have ridden: reserving costs nothing
+/// while the type is young and costs a major version once it is not. Construct
+/// via [`SymExtent::new`].
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct SymExtent {
     /// Which axis is symbolic.
     pub axis: u8,
@@ -760,16 +674,66 @@ pub struct SymExtent {
     pub kind: SymKind,
 }
 
+impl SymExtent {
+    /// A symbolic extent on `axis`.
+    #[must_use]
+    pub const fn new(axis: u8, kind: SymKind) -> Self {
+        Self { axis, kind }
+    }
+}
+
 /// The per-operand description [`structure_key`] is given.
 ///
-/// NOT all of it reaches the key. `quant` and `symbolic` are carried here but
-/// are **not encoded into the token** and are read by nothing in this workspace —
-/// two operands differing only in quantization block size, or only in which axis
-/// is symbolic, produce byte-identical keys. Under KISS-CLASSIFY-6.8-0002 (byte-
-/// exact matching, subset/implication logic forbidden) that collision does not
-/// degrade gracefully, so do not populate these fields expecting the key to
-/// distinguish them. Pinned by `tests/operand_facts_reach_the_key.rs`; closing the
-/// gap changes the token grammar and is a schema event, not a patch.
+/// # Quantization is expressed as a SIBLING OPERAND, not a field here
+///
+/// This struct used to carry a `quant: Option<QuantFacts>` bundle describing a
+/// block's shared scale. sk4 §3.2 settles the model the other way: the **element
+/// dtype** and the **block structure** are separate axes, and a block's shared
+/// scale is **its own entry in the operand list** — a sibling — not a field
+/// hanging off the operand it scales.
+///
+/// So a Q4 weight is two operands (the packed data, and its scale), while a bare
+/// `i4` tensor is one. They differ in the operand list itself, so they cannot
+/// derive byte-identical tokens — which is what closes the collision, and it
+/// needs no schema event because operands already reach the key. Expressed as a
+/// field, they collided: the field was never encoded into the token.
+///
+/// The field is **removed** rather than deprecated. Keeping a public field that
+/// encodes a superseded model is worse than deleting it: a consumer could
+/// populate it, get no error, and reasonably believe the key distinguished what
+/// they described. Under KISS-CLASSIFY-6.8-0002 (byte-exact matching, subset and
+/// implication logic forbidden) that collision does not degrade into a slower
+/// correct match — the consumer serves whichever kernel it holds under that
+/// token, and two operands with different scale groupings are different math.
+/// Proven by `tests/scale_sibling_model.rs`.
+///
+/// **What it does NOT close — measured, and larger than the design description
+/// suggests.** Two residuals, both sk5 items, both pinned in that test as
+/// deliberate equalities:
+///
+/// * **Scale dtype.** The per-operand sub-key carries contiguity, vector width
+///   and a divisibility bucket — *not* the operand's dtype. Only operand 0's
+///   dtype reaches the token. So an `f8e8m0` MX block scale and an `f16` absmax
+///   scale are byte-identical cells despite being different dequant arithmetic.
+/// * **Block granularity.** Both buckets that could distinguish the scale's
+///   extent saturate — divisibility at `d16`, vector width at `v8` — so any two
+///   block counts ≥ 16 collide. That covers every realistic granularity (32, 64,
+///   128, 256).
+///
+/// So the sibling model closes **quantized-vs-bare**, which the field model
+/// could not close at all, and leaves the two above. That is a real improvement
+/// and less than "most of the collision" — the honest framing, since the first
+/// draft of the tests asserted the optimistic reading and failed.
+///
+/// # `symbolic` is a different situation and stays
+///
+/// [`SymExtent`] has no superseding model — it is a real future specialization
+/// axis (static `k_len == capacity` vs dynamic) with no decided design, and it
+/// is still **not encoded into the token**. Two operands differing only in which
+/// axis is symbolic produce byte-identical keys, so do not populate it expecting
+/// the key to distinguish them. Pinned by
+/// `tests/operand_facts_reach_the_key.rs`; closing that gap changes the token
+/// grammar and is a schema event, not a patch.
 ///
 /// Owning and `Copy` (inline `[i64; MAX_RANK]` arrays, no lifetimes) so every
 /// consumer constructs it by value from whatever tensor or buffer view its own
@@ -787,8 +751,6 @@ pub struct OperandDesc {
     pub dtype: ElementKind,
     /// Base-pointer alignment in bytes (drives vector width).
     pub align_bytes: u32,
-    /// Quantization facts, if this is a quant operand.
-    pub quant: Option<QuantFacts>,
     /// Symbolic-extent facts, if any axis is live-vs-capacity.
     pub symbolic: Option<SymExtent>,
 }
@@ -839,7 +801,6 @@ impl OperandDesc {
             strides: st,
             dtype,
             align_bytes,
-            quant: None,
             symbolic: None,
         })
     }

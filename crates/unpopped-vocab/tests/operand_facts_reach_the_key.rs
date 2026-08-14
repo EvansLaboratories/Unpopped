@@ -1,9 +1,17 @@
 //! Tripwire: which [`OperandDesc`] fields actually reach the structure key.
 //!
-//! `OperandDesc` carries two optional fact bundles — `quant` and `symbolic` —
-//! that **nothing in this workspace reads**, and that the key codec does not
-//! encode. They are set to `None` by `OperandDesc::new`, no constructor sets
-//! them, and a workspace-wide grep for `.quant` / `.symbolic` returns no reads.
+//! `OperandDesc` carries one optional fact bundle — `symbolic` — that **nothing
+//! in this workspace reads**, and that the key codec does not encode. It is set
+//! to `None` by `OperandDesc::new`, no constructor sets it, and a workspace-wide
+//! grep for `.symbolic` returns no reads.
+//!
+//! There used to be a second, `quant`, tested here the same way. It is **gone**:
+//! sk4 §3.2 settled that a block's shared scale is a sibling operand rather than
+//! a field, so the field was not merely un-keyed but the wrong shape. The
+//! correct model needs no schema event and is proven in
+//! `tests/scale_sibling_model.rs`. `symbolic` has no such successor — no decided
+//! design exists for keying a live-vs-capacity axis — so it stays, and stays
+//! tripwired.
 //!
 //! That makes them a trap rather than dead weight. The fields are public and
 //! documented as part of "the minimal per-operand description `structure_key`
@@ -25,47 +33,11 @@
 //! visible and tripwired instead of discovered by a consumer in production.
 
 use unpopped_vocab::{
-    ArchSku, ElementKind, OpCategory, OperandDesc, QuantFacts, QuantFamily, ScalePlacement,
-    SymExtent, SymKind, structure_key,
+    ArchSku, ElementKind, OpCategory, OperandDesc, SymExtent, SymKind, structure_key,
 };
 
 fn key_token(d: OperandDesc) -> String {
     structure_key(OpCategory::UnaryElementwise, &[d, d], ArchSku::Sm89).to_token()
-}
-
-/// Quantization facts do NOT reach the key — a known gap, pending a schema event.
-///
-/// All three of these describe genuinely different kernels: an unquantized S4
-/// buffer, a Q4 buffer with 32-element scale blocks, and a Q4 buffer with
-/// 128-element scale blocks. They share one token.
-#[test]
-fn quant_facts_do_not_reach_the_key_known_gap() {
-    let mk = |q| {
-        let mut d = OperandDesc::new(1, &[1024], &[1], ElementKind::I4, 256);
-        d.quant = q;
-        d
-    };
-    let blocked = |elems| {
-        Some(QuantFacts::new(
-            QuantFamily::AffineBlock,
-            4,
-            elems,
-            ScalePlacement::SeparateBuffer,
-        ))
-    };
-
-    let plain = key_token(mk(None));
-    let blk32 = key_token(mk(blocked(32)));
-    let blk128 = key_token(mk(blocked(128)));
-
-    assert_eq!(
-        plain, blk32,
-        "KNOWN GAP: unquantized and Q4/block-32 must eventually differ"
-    );
-    assert_eq!(
-        blk32, blk128,
-        "KNOWN GAP: two block sizes are different math and must eventually differ"
-    );
 }
 
 /// Symbolic-extent facts do NOT reach the key — the same known gap.
@@ -81,10 +53,7 @@ fn symbolic_extent_does_not_reach_the_key_known_gap() {
     };
 
     let dense = key_token(mk(None));
-    let sym_axis0 = key_token(mk(Some(SymExtent {
-        axis: 0,
-        kind: SymKind::Range,
-    })));
+    let sym_axis0 = key_token(mk(Some(SymExtent::new(0, SymKind::Range))));
 
     assert_eq!(
         dense, sym_axis0,
