@@ -41,11 +41,16 @@ const SUBSTITUTE_TARGET: &str = "cuda:sm89";
 
 /// The vendored artifact is the one this leg claims to have run against.
 ///
-/// Two commits with two meanings, both pinned: the file was copied from KISS
-/// `main` at `a43a96f` (recorded in `kiss/README.md`), while its own
-/// `source_commit` is the *spec* provenance it was generated against. A report
-/// citing one without the other is not falsifiable, so both are asserted rather
-/// than described.
+/// Two commits with two meanings: the file was copied from a KISS `main` commit
+/// (recorded in `kiss/README.md`), while its own `source_commit` is the *spec*
+/// provenance it was generated against.
+///
+/// **This is not a currency check and must not be read as one.** `source_commit`
+/// has never moved — `19c3ad7` across every revision of the artifact — because
+/// it names the spec commit and the changes have all been generator changes. It
+/// therefore cannot fail when the artifact is regenerated. What identifies the
+/// revision is the content hash in
+/// `the_vendored_artifacts_are_the_revisions_this_leg_was_written_against`.
 #[test]
 fn the_artifact_is_the_one_this_leg_claims() {
     for (key, want) in [
@@ -65,6 +70,85 @@ fn the_artifact_is_the_one_this_leg_claims() {
         Some(STRUCTURE_KEY_VERSION),
         "artifact is from a different schema version than this build implements"
     );
+}
+
+/// **Which REVISION of the artifact this leg holds**, pinned as a content hash.
+///
+/// # `source_commit` cannot do this job, and I was treating it as though it did
+///
+/// `the_artifact_is_the_one_this_leg_claims` asserts `source_commit == 19c3ad7`.
+/// The KISS maintainer reports that value has **never moved** — the same across
+/// all six revisions of this artifact, through decline counts of 10 → 15 → 17
+/// and the `vulkan:` respell — because it records the **spec** commit and every
+/// change has been a *generator* change. It even names a commit at which the
+/// current artifact does not exist.
+///
+/// So that assertion cannot fail on a re-vendor, which means it was never a
+/// currency check. Fuel's framing: *the stamp tells you which thing you bound
+/// to, not whether that thing moved.*
+///
+/// What actually identified the revision lived in `kiss/README.md` as prose — a
+/// blob sha and a sha256 that no test read. A stale vendored copy would have
+/// passed this entire leg. That is the same can't-fire shape as the
+/// absence-assertion this file already carries a post-mortem for, and it went
+/// unnoticed for the same reason: a pin that is *present* reads like a pin that
+/// *works*.
+///
+/// # Why FNV-1a and not sha256
+///
+/// This detects "the file changed", not tampering by an adversary. FNV-1a-64 is
+/// dependency-free — adding a crypto crate to a driver-free vocabulary crate to
+/// hash a test fixture would be a real cost for no security property this needs.
+/// The sha256 in `kiss/README.md` remains the figure to cite when comparing
+/// against KISS; this is the figure that FAILS A BUILD when the two drift.
+#[test]
+fn the_vendored_artifacts_are_the_revisions_this_leg_was_written_against() {
+    // FNV-1a-64, the same construction `unpopped`'s kernel revision hash uses.
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x100_0000_01b3);
+        }
+        h
+    }
+    const MANIFEST: &str = include_str!("../kiss/dtype_manifest.json");
+
+    for (name, text, want_len, want_hash) in [
+        (
+            "structure_key_vectors.json",
+            VECTORS,
+            16_458_usize,
+            0x0279_76ca_a2ee_ca73_u64,
+        ),
+        (
+            "dtype_manifest.json",
+            MANIFEST,
+            3_183_usize,
+            0x2401_3977_364a_8de2_u64,
+        ),
+    ] {
+        assert_eq!(
+            text.len(),
+            want_len,
+            "{name}: vendored length changed — re-verify against KISS and update              BOTH this pin and kiss/README.md, naming the commit you took it from"
+        );
+        assert_eq!(
+            fnv1a64(text.as_bytes()),
+            want_hash,
+            "{name}: vendored CONTENT changed. This is the check `source_commit`              cannot perform, because that field records the spec commit and does              not move when the artifact is regenerated."
+        );
+        // CR-free, asserted rather than assumed. Two sibling KISS artifacts were
+        // being written LF to file and CRLF to stdout by the same generator, so
+        // "which output path did this come through" was a real question. Taking
+        // the vendor with `git cat-file blob > dest` avoids the translation; this
+        // proves it stayed avoided.
+        assert!(
+            !text.as_bytes().contains(&13u8), // 13 = CR, written numerically
+            //     because the escape keeps collapsing through tooling layers
+            "{name}: carries CR bytes — it was checked out rather than blob-copied,              and a translated copy cannot be diffed against its source"
+        );
+    }
 }
 
 /// **The per-namespace vocabulary versions are ASSERTED**, not merely read.
