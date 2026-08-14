@@ -49,7 +49,7 @@ use crate::cfamily::{
 };
 use crate::ir::{BinaryOp, ExprDag, UnaryOp};
 use crate::plan::{KernelPlan, Schedule};
-use unpopped_vocab::ElementKind;
+use unpopped_vocab::{ElementKind, TargetId};
 
 /// The portable-C CPU backend. Lowers a [`KernelPlan`] to `.c` source.
 #[derive(Copy, Clone, Debug, Default)]
@@ -65,7 +65,15 @@ impl Backend for CpuC {
         "unpopped"
     }
 
-    fn supports_dtype(&self, dtype: ElementKind) -> bool {
+    fn supports_dtype(&self, dtype: ElementKind, _target: TargetId) -> bool {
+        // `_target` is deliberately unused, and that is this backend's honest
+        // answer rather than a stub. CpuC emits portable C99: what it can spell
+        // is a property of the C standard, not of the machine the result runs
+        // on, so a target-conditional answer here would be inventing a
+        // distinction that does not exist. A backend with vendor intrinsics
+        // (where `f16` needs `arith-f16` on the device) is where the parameter
+        // earns its keep.
+        //
         // Portable C has a real scalar type for every compute dtype this
         // backend spells EXCEPT the halves: `F16`/`Bf16` are declined in v1 (no
         // CPU half codec yet).
@@ -83,7 +91,7 @@ impl Backend for CpuC {
         // Dtype guard. This is now the ONE place the cpu_c legality surface is
         // stated — the JIT no longer keeps its own copy (it used to pre-check
         // against a CUDA-derived table applied to every backend).
-        if !self.supports_dtype(plan.dtype) {
+        if !self.supports_dtype(plan.dtype, plan.key.target) {
             return Err(LowerError::UnsupportedDtype {
                 dtype: plan.dtype,
                 detail: "cpu_c backend v1: f16/bf16 are declined (no CPU half codec yet); \
@@ -480,8 +488,8 @@ mod tests {
     #[test]
     fn declines_f16_via_supports_dtype() {
         // The documented v1 decline: no CPU half codec yet.
-        assert!(!CpuC.supports_dtype(ElementKind::F16));
-        assert!(!CpuC.supports_dtype(ElementKind::Bf16));
+        assert!(!CpuC.supports_dtype(ElementKind::F16, ArchSku::Sm89.into()));
+        assert!(!CpuC.supports_dtype(ElementKind::Bf16, ArchSku::Sm89.into()));
         // The real compute dtypes are supported. `U32` is among them now: it
         // was previously excluded as "index/address only", a restriction
         // inherited from the CUDA backend on circular reasoning.
@@ -494,7 +502,10 @@ mod tests {
             ElementKind::U8,
             ElementKind::U32,
         ] {
-            assert!(CpuC.supports_dtype(dt), "{dt:?} should be supported");
+            assert!(
+                CpuC.supports_dtype(dt, ArchSku::Sm89.into()),
+                "{dt:?} should be supported"
+            );
         }
     }
 

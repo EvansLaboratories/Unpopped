@@ -9,7 +9,7 @@
 //! Baracuda) without a rewrite.
 
 use crate::ir::{ArithOp, BinaryOp, DagNode, ExprDag, NodeId, ScalarExpr, UnaryOp};
-use unpopped_vocab::ElementKind;
+use unpopped_vocab::{ElementKind, TargetId};
 
 /// What a generated kernel was baked against — its validity key.
 ///
@@ -362,11 +362,40 @@ pub trait Backend {
     /// numerical bug, which is strictly worse — see the "decline, do not fall
     /// through" note in `tests/neutral_spelling.rs`.
     fn lower(&self, plan: &crate::plan::KernelPlan<'_>) -> Result<GeneratedKernel, LowerError>;
-    /// Whether the backend can lower `dtype` to a scalar type at all. The JIT
-    /// trust boundary checks this *before* [`Backend::lower`] so an unlowerable
-    /// dtype is a typed decline, not a lowering panic. (AOT op authoring is
-    /// trusted, so `lower` itself may still panic on a dtype it can't spell.)
-    fn supports_dtype(&self, dtype: ElementKind) -> bool;
+    /// Whether the backend can lower `dtype` **on `target`**. The JIT trust
+    /// boundary checks this *before* [`Backend::lower`] so an unlowerable dtype
+    /// is a typed decline, not a lowering panic. (AOT op authoring is trusted,
+    /// so `lower` itself may still panic on a dtype it can't spell.)
+    ///
+    /// # Why `target` is here
+    ///
+    /// This used to be `fn supports_dtype(&self, dtype) -> bool` — no target —
+    /// so a backend could only answer **always** or **never**. For a dtype whose
+    /// availability is target-conditional the sole *sound* unconditional answer
+    /// is "never", because claiming it would emit a type the target cannot
+    /// compile, which the "decline, do not fall through" rule forbids.
+    ///
+    /// That cost real coverage. Slang's own conformance docs say only
+    /// `int`/`uint` (32-bit) are universally supported and *"the others depend on
+    /// target + capabilities"* — so Slang **can** spell `i8`/`i16`/`u8`/`u16` on a
+    /// capable target, and this crate was refusing them everywhere for want of a
+    /// parameter.
+    ///
+    /// # Two blockers, and only one of them was ours
+    ///
+    /// Adding the parameter removes the **API** blocker. It does not by itself
+    /// close the Slang gap, and saying otherwise would be the kind of claim this
+    /// codebase measures rather than asserts: a backend still needs to know what
+    /// a given `target` is *capable of*, and that vocabulary belongs to the
+    /// namespace's maintainer (KISS-CLASSIFY §6.8-0004), not to us. Reading
+    /// `vulkan:` capability sets by transcribing what we think they mean is
+    /// exactly the coupling KISS #171 (a machine-readable per-namespace
+    /// capability manifest) exists to remove.
+    ///
+    /// So: the mechanism is here now; a backend that has capability data may
+    /// condition on it today, and the remaining declines are honest ones about
+    /// missing *data* rather than a missing *parameter*.
+    fn supports_dtype(&self, dtype: ElementKind, target: TargetId) -> bool;
     /// The count-unit width the backend's emitter actually builds for `plan`:
     /// `1` means the kernel's `n` argument counts **elements** (a scalar
     /// lowering); `w > 1` means it counts `w`-element **vectors** (a vectorized

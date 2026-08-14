@@ -322,18 +322,24 @@ fn synthesize_op(
     compiler: &dyn Compiler,
 ) -> Result<JitResponse, JitError> {
     let dtype = operands.first().map_or(ElementKind::F32, |o| o.dtype);
+    // The schedule cell is keyed from Fuel's operand projection — never re-derived.
+    //
+    // Built BEFORE the dtype gate because the gate now needs the target, and the
+    // key is where the target is canonical. Asking the backend about a target
+    // derived separately from the one the kernel is keyed to would be two
+    // sources for one fact.
+    let key = structure_key(op_category, operands, arch);
+
     // Trust boundary, gate 1: the backend must be able to spell this dtype as a
-    // scalar type at all. `dtype_compatible` (gate 2) only checks unary/binary-fn
-    // float-ness and f32-only params, so it lets a PURE-INFIX body (Add/Sub/Mul/Div
-    // over binds, no fn/param) through for ANY dtype — a Bool/S8/Complex Add region
-    // would then panic in `scalar_ctype` during `generate`. Decline it here instead
-    // (the Synthesizer trait must never unwind across the boundary).
-    if !backend.supports_dtype(dtype) {
+    // scalar type ON THIS TARGET. `dtype_compatible` (gate 2) only checks
+    // unary/binary-fn float-ness and f32-only params, so it lets a PURE-INFIX
+    // body (Add/Sub/Mul/Div over binds, no fn/param) through for ANY dtype — a
+    // Bool/S8/Complex Add region would then panic in `scalar_ctype` during
+    // `generate`. Decline it here instead (the Synthesizer trait must never
+    // unwind across the boundary).
+    if !backend.supports_dtype(dtype, key.target) {
         return Err(JitError::UnsupportedDtype);
     }
-
-    // The schedule cell is keyed from Fuel's operand projection — never re-derived.
-    let key = structure_key(op_category, operands, arch);
     let kernel_op = OpDef {
         body: optimize(&op.body),
         ..op.clone()

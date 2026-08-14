@@ -84,25 +84,31 @@ use Status::{Blocked, ByDesign, Lowers, NotYet};
 /// it one (as an earlier version of this file did) blames the target for a gap
 /// that is ours.
 ///
-/// The gap is that [`Backend::supports_dtype`] takes only a dtype:
-/// `fn supports_dtype(&self, dtype: ElementKind) -> bool`. It has no target
-/// parameter, so a backend can answer "always" or "never" and nothing in
-/// between. Faced with a conditionally-available type the only *sound* answer is
-/// "never" — claiming support unconditionally would emit `int8_t` for a target
-/// that cannot compile it, which is the "decline, do not fall through" rule the
-/// whole backend contract is built on.
+/// There were **two** blockers here and only one of them was ours. That one is
+/// now fixed, so this reason is rewritten rather than left implying the old
+/// state.
 ///
-/// The information is already there: `KernelPlan.key` carries the
-/// `StructureKey`, and KISS's §6.8 target tokens encode capabilities directly —
-/// `vulkan:sg64.ops-abr.arith-f16.cm-none` literally names an `arith-f16`
-/// capability. The admissibility gate just cannot see it.
+/// **Gone — the API blocker.** `supports_dtype` used to take only a dtype, so a
+/// backend could answer "always" or "never" and nothing between. Faced with a
+/// conditionally-available type the only *sound* answer was "never", since
+/// claiming support unconditionally emits `int8_t` for a target that cannot
+/// compile it — the "decline, do not fall through" rule the whole backend
+/// contract rests on. It now takes a `TargetId`. (The same closed-enum root
+/// cause also excluded a `vulkan:` vector from the cross-project byte-match;
+/// that leg now reports 20/20 with zero capability exclusions.)
 ///
-/// **Same root cause as the one vulkan vector excluded from the byte-match**:
-/// `ArchSku` is a closed CUDA-only enum that cannot represent a `vulkan:` target
-/// at all. Capability-aware dtype admission and a pluggable target namespace are
-/// one piece of work, not two.
-const SLANG_NARROW: &str = "Slang supports these on capable targets; supports_dtype has no \
-     target parameter, so the only sound unconditional answer is no";
+/// **Remaining — the DATA blocker, which is not ours.** A backend can now be
+/// *asked* about a target, but answering still means knowing whether a given
+/// `vulkan:` capability set implies `shaderInt8`/`shaderInt16`. That vocabulary
+/// belongs to the Vulkan namespace's maintainer (KISS-CLASSIFY §6.8-0004), and
+/// transcribing our guess at it is the exact coupling KISS #171's
+/// machine-readable capability manifest exists to remove. A wrong guess is not
+/// cosmetic: it emits a type the target cannot compile.
+///
+/// So these four stay `Blocked` — but on a fact about the world rather than a
+/// hole in our own API. When the manifest lands, this becomes a lookup.
+const SLANG_NARROW: &str = "Slang supports these on capable targets; supports_dtype now takes a \
+     target, but no machine-readable capability manifest exists to answer from (KISS #171)";
 
 /// `uint`/`uint32_t` and `uint64_t` are Slang types this backend simply has not
 /// written a lowering for. Unlike [`SLANG_NARROW`] there is no capability
