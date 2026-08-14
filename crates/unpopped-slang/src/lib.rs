@@ -90,17 +90,48 @@ impl Backend for Slang {
         // capabilities"*. So `i8`/`i16`/`u8`/`u16` are spellable on a capable
         // target, and declining them everywhere is over-refusal.
         //
-        // What is missing is no longer the parameter — it is the **data**.
-        // Answering differently means reading a `vulkan:` capability set and
-        // knowing whether it implies `shaderInt8`/`shaderInt16`, and that
-        // vocabulary belongs to the Vulkan namespace's maintainer
-        // (KISS-CLASSIFY §6.8-0004). Transcribing our guess at it here is the
-        // exact coupling KISS #171's machine-readable capability manifest
-        // exists to remove, and a wrong guess emits a type the target cannot
-        // compile — the fall-through the backend contract forbids.
+        // # The reason is NOT "no capability data", and it differs per width
         //
-        // So this still declines, but for a reason that is now true: no
-        // capability data. When the manifest lands this becomes a lookup.
+        // This comment used to say the blocker was a missing machine-readable
+        // manifest (KISS #171). Vulkane — who **owns** the `vulkan:` capability
+        // vocabulary under §6.8-0004 — answered directly, and the truth is
+        // asymmetric:
+        //
+        // * **`i8`/`u8`: a token already answers this.** The `<arith>` field
+        //   carries `i8`, which names `shaderInt8` — 8-bit integer *arithmetic*.
+        //   A target whose arith set contains `i8` does 8-bit integer math.
+        //   Declining these is genuine over-refusal, answerable today with no
+        //   manifest and no new API.
+        // * **`i16`/`u16`: the vocabulary cannot express it.** The published
+        //   `<arith>` names are exactly `dot8`, `f16`, `i8`, `st16`, `st8` —
+        //   **`shaderInt16` is not among them**. No `vulkan:` token asserts
+        //   16-bit integer arithmetic, so no consumer can derive it. Vulkane's
+        //   phrasing, which is the right line for this code: *the vocabulary
+        //   names `shaderInt8` and does not name `shaderInt16`; absence here is
+        //   silence, not denial.* They record it as their gap, and naming it
+        //   later bumps the vocabulary version rather than being additive.
+        //
+        // # NEVER infer 16-bit arithmetic from `st16`
+        //
+        // `st16` is `storageBuffer16BitAccess` — a **storage** capability. The
+        // vulkan vocabulary §2.3 keeps compute precision and storage precision
+        // as separate members precisely because they are separate: a device may
+        // accept 16-bit data in a buffer and perform the arithmetic in `f32`.
+        // Reading `st16` as permission to emit 16-bit integer math is a
+        // **silently wrong lowering on conformant hardware**, and the token
+        // would not be at fault. Verified absent from this crate today; written
+        // down because it is exactly the inference a future reader would think
+        // was an obvious win.
+        //
+        // # Why this still returns a bare `bool`, for now
+        //
+        // The honest answer has THREE states — supported, unsupported, and *not
+        // expressible in this vocabulary version* — and `bool` collapses the
+        // last two. "The device lacks it" and "the vocabulary cannot say" call
+        // for different responses (wait for hardware vs wait for a spec), which
+        // is Vulkane's point and a real API question rather than a comment's.
+        // Raised with Eric; not decided unilaterally, since `Backend` is a
+        // peer-implemented trait.
         slang_ctype(dtype).is_some()
     }
 

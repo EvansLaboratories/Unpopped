@@ -97,18 +97,32 @@ use Status::{Blocked, ByDesign, Lowers, NotYet};
 /// cause also excluded a `vulkan:` vector from the cross-project byte-match;
 /// that leg now reports 20/20 with zero capability exclusions.)
 ///
-/// **Remaining — the DATA blocker, which is not ours.** A backend can now be
-/// *asked* about a target, but answering still means knowing whether a given
-/// `vulkan:` capability set implies `shaderInt8`/`shaderInt16`. That vocabulary
-/// belongs to the Vulkan namespace's maintainer (KISS-CLASSIFY §6.8-0004), and
-/// transcribing our guess at it is the exact coupling KISS #171's
-/// machine-readable capability manifest exists to remove. A wrong guess is not
-/// cosmetic: it emits a type the target cannot compile.
+/// **Remaining — and it is NOT "no capability data". Asked the owner.**
 ///
-/// So these four stay `Blocked` — but on a fact about the world rather than a
-/// hole in our own API. When the manifest lands, this becomes a lookup.
-const SLANG_NARROW: &str = "Slang supports these on capable targets; supports_dtype now takes a \
-     target, but no machine-readable capability manifest exists to answer from (KISS #171)";
+/// This used to say the blocker was a missing machine-readable manifest (KISS
+/// #171). Vulkane, who owns the `vulkan:` vocabulary under §6.8-0004, answered
+/// directly and the real state is **asymmetric**:
+///
+/// * `i8`/`u8` — **answerable today.** The `<arith>` field carries `i8`, naming
+///   `shaderInt8`. Declining these is over-refusal, and no manifest is needed.
+/// * `i16`/`u16` — **the vocabulary cannot express it.** The published `<arith>`
+///   names are exactly `dot8`, `f16`, `i8`, `st16`, `st8`; `shaderInt16` is not
+///   among them. Vulkane records it as their gap; naming it later bumps the
+///   vocabulary version rather than being additive.
+///
+/// And the trap they flagged hardest, recorded because it is the inference a
+/// future reader would think obvious: **never derive 16-bit arithmetic from
+/// `st16`.** That is `storageBuffer16BitAccess` — *storage*, not compute. A
+/// device may take 16-bit data in a buffer and do the math in `f32`, so reading
+/// it as permission to emit 16-bit integer arithmetic is a silently wrong
+/// lowering on conformant hardware.
+///
+/// So the four stay `Blocked`, but for two different reasons, and the 8-bit
+/// pair is unblocked work rather than a wait. Splitting them needs a third
+/// `supports_dtype` state — supported / unsupported / *not expressible in this
+/// vocabulary version* — which is a peer-implemented-trait change and is with
+/// Eric.
+const SLANG_NARROW: &str = "asymmetric: i8/u8 are answerable from the vulkan <arith> field today      (over-refusal); i16/u16 are not expressible — the vocabulary does not name shaderInt16";
 
 /// `uint`/`uint32_t` and `uint64_t` are Slang types this backend simply has not
 /// written a lowering for. Unlike [`SLANG_NARROW`] there is no capability

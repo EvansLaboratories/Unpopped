@@ -67,24 +67,19 @@ rather than a cleanup commit.
   `int`, so an inlined compound operand is un-truncated while a hoisted one is
   truncated by its temp: `(in0+in1)>>in2` at u8 is `150` inlined, `22` hoisted.
   Anyone extending these ops to 8/16-bit must settle truncation **first**.
-- **`const_lit` dtype-correctness**, welded to threading dtype into the
-  optimizer. These must land together: `exact_pow2_recip` reasons in f64
-  normality and never sees the kernel dtype, so the `x / 2^k → x * 2^-k` rule is
-  sound *only because* `const_lit` emits a bare double and C promotes. Measured:
-  of 2045 constants the f64 predicate accepts, **44 are wrong under f32**; an
-  f32-aware guard admits 253 with 0 wrong. Pinned by
-  `optimize::pow2_rule_soundness_is_coupled_to_double_promotion`.
 
 ---
 
 ## C. Needs a ruling — not ours to decide alone
 
-- **`required_fidelity(plan)`** — nothing derives which fidelity a cell is
-  *entitled* to; `Fidelity` is picked by whoever calls `compare`, so the standard
-  can only say "passed at a tolerance someone chose". Note for whoever takes it:
-  **existing usage cannot seed the table** — there are six construction sites and
-  five are the oracle testing its own comparator, so it must be derived from the
-  numerics. Plausibly KISS-Conform's rather than ours. (`conformance.md` OPEN-1.)
+- **Whether `required_fidelity` belongs to us at all.** The function now exists
+  (`oracle::required_fidelity`, derived from unit roundoff + rounding steps +
+  `contract::ulp_bound`, so validation and the declared `max_ulp` cannot drift).
+  What is NOT settled is ownership: the original note said "plausibly
+  KISS-Conform's rather than ours", and **Fuel already checks kernel contracts at
+  runtime**. Asked them 2026-08-14 whether this duplicates machinery they hold —
+  if so, ours belongs behind theirs rather than beside it. Answer pending.
+  (`conformance.md` OPEN-1.)
 - **What `VariantFidelity::BitIdentical` means across backends** — bit-identical
   to *what*? Local-to-this-backend is real but says nothing cross-backend; to a
   normative reference makes accumulation order normative, contradicting the
@@ -180,12 +175,18 @@ rather than a cleanup commit.
 
 ## D. Ordinary engineering — unblocked, just not done
 
-- **The catalog / server mode** — designed in [`catalog.md`](catalog.md), not
-  built. Phase 1 is the library (op registry, emitter registry, `resolve`);
-  phase 2 is a server over it, deliberately sequenced after the PROVISIONAL wire
-  formats are co-pinned. The design names one gap that must be closed *in* the
-  build rather than after it: a catalog entry is baked against caller-supplied op
-  logic, which no current validity field names (§7).
+- **The catalog / server mode — RETIRED, not deferred.** It had no consumer.
+  Measured 2026-08-14: [`catalog.md`](catalog.md) never named a requesting party
+  ("a consumer", abstractly, throughout), `unpopped` has exactly one code
+  consumer (Baracuda, 6 crates; Fuel zero, Lightbulb zero at any depth), and
+  Baracuda holds both halves already — routing as the `DispatchTable` they
+  populate *from this repo's own `unpopped-vocab::dispatch` types*, inventory as
+  their emitter's cell enumeration, with Fuel doing runtime selection on top.
+  The dispatch **types** stay in `unpopped-vocab` as shared vocabulary; the
+  populated registry was never core's to hold. See the retirement banner in
+  `catalog.md` for the full reasoning — it is kept because several of its
+  findings about the *generator* survive the catalog being dropped.
+
 
 - **Dtype lowering coverage.** The numbers are no longer here: they are
   **measured** by `crates/unpopped/tests/dtype_lowering_coverage.rs`, which

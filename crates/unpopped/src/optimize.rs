@@ -1539,10 +1539,26 @@ mod tests {
     /// double**, and this measures exactly how much it depends on that.
     ///
     /// [`exact_pow2_recip`] asks "is this a normal power of two, and is its
-    /// reciprocal normal" **in f64**, and never sees the kernel's dtype. That is
-    /// the correct precondition for arithmetic performed in f64 — which is what
-    /// happens today, because [`crate::backend::const_lit`] emits a bare double
-    /// literal and C's usual arithmetic conversions promote the whole expression.
+    /// reciprocal normal" **in f64**, and never sees the kernel's dtype.
+    ///
+    /// # This test's premise HAS NOW CHANGED, and the test survives it
+    ///
+    /// It used to say the f64 predicate was correct "because `const_lit` emits a
+    /// bare double literal and C's usual arithmetic conversions promote the whole
+    /// expression". That is no longer the basis. Constants are now rounded to the
+    /// compute precision at INGEST (see [`Compute`]), and the `x / 2^k` rewrite
+    /// is separately gated on the reciprocal being exact at that precision. So
+    /// soundness comes from those two together, not from double promotion.
+    ///
+    /// Swept every binade to confirm the replacement holds: with ingest rounding
+    /// making `c` compute-representable and the gate making `r` compute-
+    /// representable, **zero** admitted constants diverge — pinned below in
+    /// `the_pow2_rewrite_is_sound_under_ingest_rounding`.
+    ///
+    /// The test is kept because the underlying measurement is still true and
+    /// still instructive: the raw f64 predicate accepts 2045 constants of which
+    /// 44 are wrong under f32 arithmetic. It documents why a dtype-blind
+    /// predicate cannot be trusted alone — which is exactly why the gate exists.
     ///
     /// Make constants dtype-correct (`2.0f` rather than `2.0`) and the arithmetic
     /// moves to f32, where the f64 predicate is the WRONG question. Of the 2045
@@ -1557,9 +1573,68 @@ mod tests {
     /// — which requires threading the kernel dtype into the optimizer, since
     /// [`optimize`] currently takes only a [`ScalarExpr`].
     ///
-    /// **The two changes are welded: whoever makes `const_lit` dtype-correct must
-    /// fix this predicate in the same change.** This test fails if the coupling is
-    /// ever silently broken in either direction.
+    /// **The two changes were welded and have now both landed**, which is why the
+    /// premise above moved. This test still fails if the raw predicate is ever
+    /// mistaken for a dtype-aware one.
+    /// **The `x / 2^k -> x * 2^-k` rewrite is sound at `f32` under the new
+    /// basis**, swept rather than argued.
+    ///
+    /// Soundness now rests on two things acting together, neither sufficient
+    /// alone:
+    ///
+    /// 1. **Ingest rounding** makes the divisor `c` a value the device can hold.
+    ///    Without it, a body carrying `2^149` would reach the rule as a normal
+    ///    `f64` while the device sees `inf` — and `x / inf` is `±0` where
+    ///    `x * 2^-149` is not.
+    /// 2. **The exactness gate** rejects a reciprocal the compute precision
+    ///    cannot represent, which is the `2^-149` -> `0` direction.
+    ///
+    /// This walks every `f64` binade, applies both, and checks the rewrite is
+    /// bit-identical over a value sweep including the specials that expose
+    /// inf/NaN divergence. Zero admitted constants diverge.
+    #[test]
+    fn the_pow2_rewrite_is_sound_under_ingest_rounding() {
+        let compute = Compute::F32;
+        let xs: [f64; 8] = [
+            1.0,
+            -1.0,
+            3.0,
+            1e-30,
+            1e30,
+            0.0,
+            -0.0,
+            f64::from(f32::from_bits(1)),
+        ];
+        let (mut admitted, mut divergent) = (0u32, 0u32);
+        for k in -1074i32..=1023 {
+            // Ingest rounding: the divisor is whatever the DEVICE would hold.
+            let c = compute.round((2.0f64).powi(k));
+            let Some(r) = exact_pow2_recip(c) else {
+                continue;
+            };
+            if compute.round(r) != r {
+                continue; // the gate rejects it
+            }
+            admitted += 1;
+            for &x in &xs {
+                let x = compute.round(x);
+                let by_div = compute.round(x / c);
+                let by_mul = compute.round(x * compute.round(r));
+                if by_div.to_bits() != by_mul.to_bits() {
+                    divergent += 1;
+                }
+            }
+        }
+        assert!(
+            admitted > 0,
+            "harness precondition: the gate must admit SOMETHING, or this test              proves only that rejecting everything is safe"
+        );
+        assert_eq!(
+            divergent, 0,
+            "{divergent} admitted constants diverge — the rewrite is not              bit-exact under the ingest-rounding + exactness-gate basis"
+        );
+    }
+
     #[test]
     fn pow2_rule_soundness_is_coupled_to_double_promotion() {
         fn normal_pow2_f32(v: f32) -> bool {

@@ -1,8 +1,43 @@
 # The Unpopped catalog
 
-**Status: design, not yet built.** Nothing here is implemented except the pieces
-explicitly marked *(exists today)*, which are load-bearing enough that the design
-is mostly assembly rather than invention.
+> ## ⛔ RETIRED 2026-08-14 — do not build this
+>
+> **The catalog has no consumer.** Measured, after Eric asked who it was for and
+> the honest answer turned out to be nobody:
+>
+> * This document **never named a requesting party**. It says "a consumer"
+>   abstractly throughout; the only project named is Fuel, cited about the
+>   provenance rule rather than as a requester. That is the architectural form of
+>   an assertion that cannot fail — no party exists who can say "that isn't what
+>   I need."
+> * `unpopped` has **one** code consumer: Baracuda (6 crates). Fuel has **zero**
+>   dependency on it; the direction is inverted (`unpopped` optionally depends on
+>   `fuel-kernel-seam-types`). Lightbulb confirmed zero at any depth, lock file
+>   included, with a positive control.
+> * Asked Baracuda directly. Their answer, with file references from their tree:
+>   the two things a catalog provides — **routing** and **inventory** — they
+>   already hold. Routing is the `DispatchTable` they populate at
+>   `baracuda-cuda-emit/src/bin/kernelgen.rs:621`, *built from the
+>   `unpopped-vocab::dispatch` types this repo already ships*; inventory is their
+>   emitter's own cell enumeration; Fuel holds runtime selection on top. A
+>   populated catalog in Unpopped core duplicates a table they already build.
+>
+> **What survives:** the dispatch **types** in `unpopped-vocab`
+> (`DispatchTable`/`merge`/`winner_of`) stay — those are shared vocabulary a
+> consumer really does use. It is the *populated registry* that is not core's to
+> hold.
+>
+> **Unpopped is a kernel generator.** Not a catalog, not a server. The pieces
+> below marked *(exists today)* are real and stay; the assembly on top of them is
+> not being built.
+>
+> Kept rather than deleted because the reasoning is worth reading — several
+> sections (the provision-by-identity vs region-synthesis contract split, the
+> caller-declared-identity hazard) are findings about the generator that remain
+> true independently of whether a catalog ever wraps them.
+
+**Original status: design, not yet built.** Nothing here was implemented except
+the pieces explicitly marked *(exists today)*.
 
 ---
 
