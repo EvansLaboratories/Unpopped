@@ -66,25 +66,72 @@ impl Backend for CpuC {
     }
 
     fn supports_dtype(&self, dtype: ElementKind, _target: TargetId) -> bool {
-        // `_target` is deliberately unused, and that is this backend's honest
-        // answer rather than a stub. CpuC emits portable C99: what it can spell
-        // is a property of the C standard, not of the machine the result runs
-        // on, so a target-conditional answer here would be inventing a
-        // distinction that does not exist. A backend with vendor intrinsics
-        // (where `f16` needs `arith-f16` on the device) is where the parameter
-        // earns its keep.
+        // # An ALLOWLIST of what this backend can COMPUTE — not a storage check
         //
-        // Portable C has a real scalar type for every compute dtype this
-        // backend spells EXCEPT the halves: `F16`/`Bf16` are declined in v1 (no
-        // CPU half codec yet).
+        // This used to be `!matches!(F16 | Bf16) && scalar_ctype(dtype).is_some()`:
+        // "has a C type spelling, minus two". That reads as a compute question
+        // and is a **storage** question. `scalar_ctype` returns the CARRIER —
+        // `unsigned char` for FP8, bool and the sub-byte dtypes, `__half` for
+        // `f16`. Those spell how a value is *stored*, not whether this emitter
+        // can do arithmetic on it.
         //
-        // `U32` used to be excluded here as "an index/address dtype only". That
-        // was inherited from the CUDA backend and the justification was
-        // circular — nothing keyed a U32 compute cell because nothing admitted
-        // one. It computes now: `unsigned int` is a plain C scalar type, and the
-        // oracle models its arithmetic as genuinely unsigned (it does not
-        // integer-promote to signed `int` the way `u8`/`u16` do).
-        !matches!(dtype, ElementKind::F16 | ElementKind::Bf16) && scalar_ctype(dtype).is_some()
+        // It happened to be correct, for a reason the predicate never stated:
+        // CpuC also emits software codecs (`fp8_helpers`, `sub_byte_helpers`,
+        // `complex_helpers`), so the carrier plus a codec really is compute
+        // support here. And the `F16`/`Bf16` exclusion was the patch over the
+        // gap — proof the inference had already broken once and been special-
+        // cased rather than fixed.
+        //
+        // The live hazard was a denylist over a growing set: give any new dtype
+        // a `scalar_ctype` spelling and CpuC would silently claim it computes,
+        // with nobody having written the codec. **Storage support and compute
+        // support are two distinct facts and one must never imply the other** —
+        // Vulkane's `st16` finding (`storageBuffer16BitAccess` is storage; a
+        // device may hold 16-bit data and do the math in f32), and Baracuda's
+        // CUDA mirror (fp8 lives in memory anywhere but computes only on Ada+;
+        // bf16 loads broadly while tensor-core math is arch-gated).
+        //
+        // So: an exhaustive match naming what this emitter actually computes.
+        // `ElementKind` is deliberately not `#[non_exhaustive]`, so a new dtype
+        // is a build error HERE and someone has to say whether CpuC computes it.
+        //
+        // `_target` is unused, and that is this backend's honest answer rather
+        // than a stub. CpuC emits portable C99: what it can spell is a property
+        // of the C standard, not of the machine the result runs on. A backend
+        // with vendor intrinsics is where the parameter earns its keep.
+        match dtype {
+            // Native C scalar arithmetic.
+            ElementKind::F32
+            | ElementKind::F32Strict
+            | ElementKind::F64
+            | ElementKind::I8
+            | ElementKind::U8
+            | ElementKind::I16
+            | ElementKind::U16
+            | ElementKind::I32
+            | ElementKind::U32
+            | ElementKind::I64
+            | ElementKind::U64
+            | ElementKind::Bool => true,
+            // Carrier + an emitted software codec, which is what makes the
+            // storage type sufficient for these and not for the halves.
+            ElementKind::Fp8E4M3FN
+            | ElementKind::Fp8E5M2
+            | ElementKind::I4
+            | ElementKind::U4
+            | ElementKind::B1
+            | ElementKind::Complex64
+            | ElementKind::Complex128 => true,
+            // Declined: no CPU half codec yet (v1 limit, not a design decision).
+            ElementKind::F16 | ElementKind::Bf16 => false,
+            // Declined BY DESIGN: the MX shared block scales are sibling
+            // operands (§6.1-0013), never an element compute dtype; and the
+            // reserved `fnuz` pair must never lower at this schema version.
+            ElementKind::F8E8M0
+            | ElementKind::F8E6M2
+            | ElementKind::Fp8E4M3FNUZ
+            | ElementKind::Fp8E5M2FNUZ => false,
+        }
     }
 
     fn lower(&self, plan: &KernelPlan<'_>) -> Result<GeneratedKernel, LowerError> {
