@@ -190,31 +190,41 @@ rather than a cleanup commit.
 - **Dtype lowering coverage.** The numbers are no longer here: they are
   **measured** by `crates/unpopped/tests/dtype_lowering_coverage.rs`, which
   carries the per-dtype × per-backend table and fails when it goes stale. The
-  prose figures this entry used to give ("CpuC 9, Slang 5") were **wrong** — the
-  measurement is **CpuC 8/22, Slang 4/22** — which is the whole argument for
-  moving them: a coverage claim decays silently, because nothing about adding a
-  dtype arm forces the sentence describing it to change.
+  prose figures this entry used to give were **wrong twice** — first "CpuC 9,
+  Slang 5" against a measured 8, then "CpuC 8/22" against a measured 18 once the
+  work below landed. Twice in the same entry, in both directions, is the whole
+  argument for moving them: a coverage claim decays silently, because nothing
+  about adding a dtype arm forces the sentence describing it to change. **Run the
+  test.** Any number written here is a number that will be wrong.
 
-  Remaining work, roughly by cost. `bool` is listed first but **is not simply a
-  missing arm** — read `plan.rs`'s admissibility doc first: the logical ops
-  already narrow to `U8`, which *is* the bespoke Bool surface, so the open
-  question is whether a `Bool`-keyed cell should route to that same `uint8_t`
-  path or whether `ElementKind::Bool` is deliberately not a plan dtype. Decide
-  that before writing code; it is a naming question wearing a coverage question's
-  clothes.
-  Then **`u32` and `u64` together**, which share one blocker and it is sharper
-  than "unsigned-wrap audit" suggests: C's integer promotions lift `unsigned
-  char`/`unsigned short` to **signed** `int`, so `u8`/`u16` genuinely compute at
-  32-bit signed width — which is what the oracle's `op_width` (32) and
-  sign-extending `wrap_bits` model, and why those two are correct today.
-  `unsigned int` has the same rank as `int` and does **not** promote, so `u32`
-  arithmetic is unsigned modulo 2³² and the current model would read
-  `3_000_000_000u32` as negative. Both need an unsigned width/wrap path in the
-  oracle and the emitter. (`u32`'s index/address role is additive and was
-  previously — wrongly — recorded as the reason it cannot compute.)
-  Then: `i4`/`u4`/`b1` (sub-byte pack/unpack) · both FP8s (software codec — and
-  the oracle needs an *independent* one or it stops being a differential) ·
-  `c64`/`c128` (struct ABI + complex arithmetic in the IR).
+  **The list below is done.** `bool`, `u32`, `u64`, both FP8s, `i4`/`u4`/`b1` and
+  `c64`/`c128` all lower and are differentially tested through a real C compiler.
+  It is kept rather than deleted because each entry records *why the dtype was
+  hard*, and those reasons outlived the work — the promotion rule below is still
+  the reason `u8`/`u16` are correct today, and someone will need it again.
+
+  `bool` was **not simply a missing arm** — the logical ops already narrow to
+  `U8`, which *is* the bespoke Bool surface, so the question was whether a
+  `Bool`-keyed cell routes to that same `uint8_t` path or whether
+  `ElementKind::Bool` is deliberately not a plan dtype. A naming question wearing
+  a coverage question's clothes. (Resolved: it routes there, and arithmetic on a
+  truth value is refused.)
+  **`u32` and `u64` together** shared one blocker, sharper than "unsigned-wrap
+  audit" suggests: C's integer promotions lift `unsigned char`/`unsigned short`
+  to **signed** `int`, so `u8`/`u16` genuinely compute at 32-bit signed width —
+  which is what the oracle's `op_width` (32) and sign-extending `wrap_bits`
+  model, and why those two were already correct. `unsigned int` has the same rank
+  as `int` and does **not** promote, so `u32` arithmetic is unsigned modulo
+  2³² and the old model read `3_000_000_000u32` as negative. Both needed an
+  unsigned width/wrap path in the oracle and the emitter. (`u32`'s index/address
+  role is additive and was previously — wrongly — recorded as the reason it
+  cannot compute.)
+  `i4`/`u4`/`b1` needed sub-byte pack/unpack — and the store is a
+  **read-modify-write**, safe only because `cpu_c`'s loop is serial; a threaded
+  backend copying it races. Both FP8s needed a software codec, with an
+  *independent* one in the oracle or it stops being a differential.
+  `c64`/`c128` needed a struct ABI and complex arithmetic in the IR — see the
+  MSVC finding under "worth knowing".
 
   **Slang's `i8`/`i16`/`u8`/`u16` are blocked on a missing mechanism, not on
   Slang.** Slang's conformance docs say *"Only `int`/`int32_t` and
@@ -275,3 +285,34 @@ rather than a cleanup commit.
 The PR-gating box **has GPU hardware**. This crate's tests are CPU-only because
 it holds no device backend, not because the hardware is absent — so the device
 legs become runnable in-repo the moment `unpopped-cuda` lands.
+
+**MSVC does not implement C99 `_Complex`.** Measured, not assumed: `float
+_Complex x = 1;` is `error C2440: cannot convert from 'int' to '_Fcomplex'`.
+Microsoft's `<complex.h>` ships opaque `_Fcomplex`/`_Dcomplex` structs
+constructed with `_FCbuild` and multiplied with `_FCmulcc` — a real API, but an
+MSVC-specific one that would need a `#if defined(_MSC_VER)` fork against the
+Clang/GCC spelling in every emitted kernel.
+
+So `c64`/`c128` lower as a struct this crate defines and emits
+(`cfamily::complex_helpers`), with arithmetic by call rather than by operator.
+No conditional compilation, no vendor's name in the output, identical on every C
+compiler. The same answer FP8 and the sub-byte dtypes reached, for the same
+reason.
+
+Two things follow that are easy to miss:
+
+- **Clang-on-Windows is not the fix.** It would compile `_Complex` happily,
+  which is precisely why it is the wrong test compiler: the portability
+  constraint belongs to the *emitted* C, not to our harness, and picking a more
+  permissive compiler hides the constraint rather than satisfying it. (nvcc and
+  Clang interoperate poorly anyway, so it was moot.) A genuinely useful variant
+  would be testing against *every* compiler found rather than the first —
+  unimplemented.
+- **The portable struct is a fallback, not the answer.** A backend whose target
+  has native complex would spell it its own way — the CUDA peer reports it would
+  use `cuFloatComplex` + `cuCaddf`/`cuCmulf` from `cuComplex.h`, not this
+  struct. That makes complex structurally identical to f16/bf16: a dtype whose
+  neutral spelling must be overridable per backend. Complex only *looked*
+  settled because its portable default already works. See `fp8_helpers` for what
+  that override has to carry — including arity, since a packed-pair override
+  reshapes the emit loop rather than renaming anything in it.
