@@ -67,6 +67,49 @@ fn the_artifact_is_the_one_this_leg_claims() {
     );
 }
 
+/// **The artifact records no per-namespace vocabulary version, and this asserts
+/// its ABSENCE so its arrival is loud.**
+///
+/// There are two independent version axes and the gate above only sees one.
+/// `structure_key_schema_version` is the *schema* — the `sk4` token grammar.
+/// A namespace's *vocabulary* version is separate and moves on its maintainer's
+/// cadence: `vulkan:` went v3 → v4 (`spec/namespaces/vulkan.md`, rule V-1, five
+/// fields instead of four) while the published artifact stayed at
+/// `source_commit 19c3ad7`, generated before the bump. Nothing in the artifact
+/// marks that transition, so no consumer can currently detect it. That gap is
+/// KISS #200.
+///
+/// This crate is not *harmed* by it — the target token is carried opaquely and
+/// compared whole (§6.8-0002), so a vocabulary bump changes bytes this crate
+/// faithfully reproduces and never interprets. But "immune" is not "conformant":
+/// KISS-CLASSIFY §6.8-0009 requires a consumer to **assert** a vocabulary
+/// version rather than merely read one, and a consumer that asserts nothing
+/// satisfies that by accident rather than by construction.
+///
+/// So this asserts the field is absent. When #200 lands and the artifact starts
+/// carrying one, this test fails — which is the point. The alternative is a gate
+/// that silently keeps passing while a field it should be checking appears
+/// beside it, which is exactly the failure mode the architect flagged: *"your
+/// gate proves the schema version is checked; nothing proves the namespace
+/// vocabulary version is."*
+#[test]
+fn no_namespace_vocabulary_version_exists_to_assert_yet() {
+    for probe in [
+        "\"vocabulary_version\"",
+        "\"namespace_vocabulary_version\"",
+        "\"vulkan_vocabulary_version\"",
+        "\"target_vocabulary_version\"",
+    ] {
+        assert!(
+            scalar(VECTORS, probe).is_none(),
+            "the artifact now carries {probe} — this leg must START ASSERTING it \
+             rather than deleting this test. Two version axes exist (schema and \
+             per-namespace vocabulary); the gate above covers only the first, and \
+             §6.8-0009 requires a consumer to assert, not read."
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The leg
 // ---------------------------------------------------------------------------

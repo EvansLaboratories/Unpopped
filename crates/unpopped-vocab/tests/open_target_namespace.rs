@@ -140,3 +140,58 @@ fn a_malformed_target_field_declines_rather_than_mis_parsing() {
         );
     }
 }
+
+/// **Forward-compatibility: a namespace changing its own field count is a
+/// non-event here.**
+///
+/// KISS's `vulkan:` vocabulary is going from four `.`-separated fields to five
+/// (`spec/namespaces/vulkan.md` v4, rule V-1, commit `ee2b730`), adding a
+/// `<coopvec>` field so every token gains `cv-none` or equivalent. The published
+/// reference vector will be regenerated to match.
+///
+/// This test runs both shapes through the whole key path and asserts nothing
+/// about either one's structure. It is the evidence for a claim I would
+/// otherwise be making on my own say-so — that a `vulkan:` vocabulary bump
+/// cannot break this crate, because §6.8-0004 puts the capability-set vocabulary
+/// in its maintainer's hands and this crate therefore validates the **grammar**
+/// (§6.8-0001, -0005) and never the vocabulary.
+///
+/// Two failure modes it forecloses:
+///
+/// * A hardcoded field count, or any splitting on `.`, would reject the
+///   five-field token. There is none, and this proves it rather than asserting
+///   it.
+/// * A consumer scoping a target by *literal string* rather than by namespace
+///   would silently stop recognizing the regenerated token. This crate scopes by
+///   nothing — it carries the token whole — so the regeneration is invisible.
+#[test]
+fn a_namespace_changing_its_field_count_is_invisible_here() {
+    let ops = operands(ElementKind::F16);
+    // The published four-field token, and its five-field successor.
+    for t in [
+        "vulkan:sg64.ops-abr.arith-f16.cm-none",
+        "vulkan:sg64.ops-abr.arith-f16.cm-none.cv-none",
+    ] {
+        let target = TargetId::parse(t).unwrap_or_else(|e| panic!("{t}: {e}"));
+        let key = structure_key(OpCategory::BinaryElementwise, &ops, target);
+        let token = key.to_token();
+        assert!(
+            token.contains(&format!("|{t}|")),
+            "{t} must appear verbatim as one field: {token}"
+        );
+        let back = StructureKey::from_token(&token).expect("round trip");
+        assert_eq!(back, key);
+        assert_eq!(back.target.as_str(), t, "the token must survive byte-exact");
+    }
+
+    // And the two are DIFFERENT cells, which is the correct reading: a device
+    // with cooperative-vector support is not the same target as one without, so
+    // a key that conflated them would serve the wrong kernel.
+    let four = TargetId::parse("vulkan:sg64.ops-abr.arith-f16.cm-none").unwrap();
+    let five = TargetId::parse("vulkan:sg64.ops-abr.arith-f16.cm-none.cv-none").unwrap();
+    assert_ne!(four, five);
+    assert_ne!(
+        structure_key(OpCategory::BinaryElementwise, &ops, four),
+        structure_key(OpCategory::BinaryElementwise, &ops, five)
+    );
+}
