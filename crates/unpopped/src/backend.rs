@@ -8,7 +8,7 @@
 //! this generator eventually target backends beyond CUDA (and move out of
 //! Baracuda) without a rewrite.
 
-use crate::ir::{BinaryOp, DagNode, ExprDag, NodeId, ScalarExpr, UnaryOp};
+use crate::ir::{ArithOp, BinaryOp, DagNode, ExprDag, NodeId, ScalarExpr, UnaryOp};
 use unpopped_vocab::ElementKind;
 
 /// What a generated kernel was baked against — its validity key.
@@ -431,6 +431,24 @@ pub struct Lowering<'a> {
     pub unary: &'a dyn Fn(UnaryOp, String) -> String,
     /// Binary-function-op spelling.
     pub binary: &'a dyn Fn(BinaryOp, String, String) -> String,
+    /// Spelling for the four **infix arithmetic** nodes.
+    ///
+    /// Defaults to the C operator (`(a + b)`), which is right for every scalar
+    /// dtype. A backend overrides it where the compute type is not something a C
+    /// operator applies to — a complex struct being the case that forced the seam
+    /// to exist.
+    ///
+    /// # Both walkers must honour it
+    ///
+    /// [`lower_expr`] and [`lower_node`] lower the same four nodes, and every
+    /// real emitter goes through `lower_node` (via [`lower_dag`]) — `lower_expr`
+    /// is the simple path. Wiring this seam into `lower_expr` alone left the
+    /// production path spelling `(a * b)` on a struct, which C rejects. Anything
+    /// added here must be added to both, and the differential end-to-end tests
+    /// are what notice when it is not: a unit test that greps the emitted source
+    /// for a helper NAME matches the helper's own definition and passes while the
+    /// body still says `*`.
+    pub arith: &'a dyn Fn(ArithOp, String, String) -> String,
     /// Ternary select spelling ([`ScalarExpr::Select`]) over the three
     /// already-lowered operand strings `(cond, a, b)`. Its own seam — the
     /// 2-operand `binary` closure cannot carry three operands, and the select
@@ -490,6 +508,14 @@ mod default_seam {
              expressible through the 2-operand `binary` seam. Supply `.select(..)`."
         )
     };
+    /// The C infix operator — right for every dtype whose compute type is a C
+    /// scalar, which is all of them except the complex structs. Unlike the other
+    /// defaults this is a working spelling rather than a panic, because "spell it
+    /// infix" is the correct answer almost everywhere and a backend should only
+    /// have to say so when it is not.
+    pub(super) static ARITH: fn(super::ArithOp, String, String) -> String =
+        |op, a, b| format!("({a} {} {b})", op.c_operator());
+
     pub(super) static CONSTANT: fn(f64) -> String = super::const_lit;
 }
 
@@ -519,6 +545,7 @@ impl<'a> Lowering<'a> {
                 coord: &default_seam::COORD,
                 unary,
                 binary,
+                arith: &default_seam::ARITH,
                 select: &default_seam::SELECT,
                 constant: &default_seam::CONSTANT,
             },
@@ -613,10 +640,10 @@ pub fn lower_expr(e: &ScalarExpr, lo: &Lowering<'_>) -> String {
         ScalarExpr::Select(c, a, b) => {
             (lo.select)(lower_expr(c, lo), lower_expr(a, lo), lower_expr(b, lo))
         }
-        ScalarExpr::Add(a, b) => format!("({} + {})", lower_expr(a, lo), lower_expr(b, lo)),
-        ScalarExpr::Sub(a, b) => format!("({} - {})", lower_expr(a, lo), lower_expr(b, lo)),
-        ScalarExpr::Mul(a, b) => format!("({} * {})", lower_expr(a, lo), lower_expr(b, lo)),
-        ScalarExpr::Div(a, b) => format!("({} / {})", lower_expr(a, lo), lower_expr(b, lo)),
+        ScalarExpr::Add(a, b) => (lo.arith)(ArithOp::Add, lower_expr(a, lo), lower_expr(b, lo)),
+        ScalarExpr::Sub(a, b) => (lo.arith)(ArithOp::Sub, lower_expr(a, lo), lower_expr(b, lo)),
+        ScalarExpr::Mul(a, b) => (lo.arith)(ArithOp::Mul, lower_expr(a, lo), lower_expr(b, lo)),
+        ScalarExpr::Div(a, b) => (lo.arith)(ArithOp::Div, lower_expr(a, lo), lower_expr(b, lo)),
     }
 }
 
@@ -775,22 +802,22 @@ fn lower_node(
         DagNode::Add(a, b) => {
             let a = lower_node(dag, a, ctype, lo, refs, prelude, policy);
             let b = lower_node(dag, b, ctype, lo, refs, prelude, policy);
-            format!("({a} + {b})")
+            (lo.arith)(ArithOp::Add, a, b)
         }
         DagNode::Sub(a, b) => {
             let a = lower_node(dag, a, ctype, lo, refs, prelude, policy);
             let b = lower_node(dag, b, ctype, lo, refs, prelude, policy);
-            format!("({a} - {b})")
+            (lo.arith)(ArithOp::Sub, a, b)
         }
         DagNode::Mul(a, b) => {
             let a = lower_node(dag, a, ctype, lo, refs, prelude, policy);
             let b = lower_node(dag, b, ctype, lo, refs, prelude, policy);
-            format!("({a} * {b})")
+            (lo.arith)(ArithOp::Mul, a, b)
         }
         DagNode::Div(a, b) => {
             let a = lower_node(dag, a, ctype, lo, refs, prelude, policy);
             let b = lower_node(dag, b, ctype, lo, refs, prelude, policy);
-            format!("({a} / {b})")
+            (lo.arith)(ArithOp::Div, a, b)
         }
     };
     // Hoisting decision:

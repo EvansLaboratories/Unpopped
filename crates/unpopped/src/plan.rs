@@ -2197,15 +2197,18 @@ pub(crate) fn check_complex_op_admissibility(
         };
         match e {
             ScalarExpr::Input(_) | ScalarExpr::Const(_) => Ok(()),
-            ScalarExpr::Add(a, b) | ScalarExpr::Sub(a, b) | ScalarExpr::Mul(a, b) => {
+            // All four field operations. `Div` joined them once both sides
+            // carried a rule: the oracle evaluates Smith's algorithm and
+            // `cfamily::complex_helpers` emits the same recurrence. It was
+            // refused here purely because it was unimplemented, which is a
+            // reason that expires rather than a reason that holds.
+            ScalarExpr::Add(a, b)
+            | ScalarExpr::Sub(a, b)
+            | ScalarExpr::Mul(a, b)
+            | ScalarExpr::Div(a, b) => {
                 walk(a, op_name, dtype)?;
                 walk(b, op_name, dtype)
             }
-            ScalarExpr::Div(_, _) => reject(
-                "Div",
-                "complex division is DEFINED but not implemented — the oracle carries \
-                 complex rules for Add/Sub/Mul only",
-            ),
             // `Max`/`Min` belong with `Cmp*`, not with the unimplemented rest:
             // all four are *ordering* ops, and ordering is what complex does not
             // have. Lumping them together would tell an author their `Max` might

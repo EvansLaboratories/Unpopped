@@ -1163,3 +1163,252 @@ int main(void) {{
         );
     }
 }
+
+/// Complex arithmetic agrees between the emitted struct helpers and the oracle.
+///
+/// # Why this test carries more weight than the other dtype differentials
+///
+/// For every other dtype the emitter and the oracle compute the *same operation*
+/// on different representations. For complex they compute a **different
+/// expression**: `(a + bi)(c + di) = (ac - bd) + (ad + bc)i` is four
+/// multiplies, a subtract and an add, spelled out by hand on both sides from the
+/// same algebra and shared by nothing. The C helper is text this crate emits; the
+/// oracle's is a Rust closure. A transcription slip in either — a `+` where a `-`
+/// belongs, `ad + bc` written `ac + bd` — is invisible to any round-trip and
+/// shows up only here.
+///
+/// The component-wise mistake `(ac, bd)` is the one to beat: it compiles, it
+/// preserves shape, it round-trips, and it is wrong. Every input below has a
+/// non-zero imaginary part on both operands, so component-wise multiplication
+/// disagrees on every single element rather than on a lucky one.
+///
+/// # And the negative space
+///
+/// This also proves the emitted C is *acceptable to a real compiler*. MSVC
+/// rejects C99 `_Complex` outright (`error C2440`), so a kernel that reached for
+/// the obvious spelling would fail here rather than in a downstream consumer's
+/// build. That the compiler under test is usually MSVC on this platform is the
+/// point, not an accident: it is the strictest of the three about this feature.
+#[test]
+fn complex_kernels_compute_the_mixing_product_a_real_compiler_accepts() {
+    let Some(cc) = find_compiler() else {
+        eprintln!("SKIP complex_kernels_...: no C compiler.");
+        return;
+    };
+    let dir: PathBuf = std::env::temp_dir().join("unpopped-e2e");
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    // Both operands carry a non-zero imaginary part everywhere, so `(ac, bd)`
+    // differs from the true product on every element. The last pair is a pure
+    // rotation: (0+1i)(0+1i) = -1, which component-wise renders as (0, 1) —
+    // a sign error a magnitude-only check would sail past.
+    let a: Vec<(f64, f64)> = vec![(3.0, 4.0), (-1.5, 2.25), (0.5, -0.75), (0.0, 1.0)];
+    let b: Vec<(f64, f64)> = vec![(1.0, -2.0), (2.0, 0.5), (-4.0, 1.5), (0.0, 1.0)];
+    let n = a.len() as i64;
+
+    for (tag, dt, ctype, bufs) in [
+        (
+            "c64",
+            ElementKind::Complex64,
+            "unpopped_c64",
+            vec![
+                TypedBuffer::from_complex64(
+                    &[n],
+                    &a.iter()
+                        .map(|&(r, i)| (r as f32, i as f32))
+                        .collect::<Vec<_>>(),
+                ),
+                TypedBuffer::from_complex64(
+                    &[n],
+                    &b.iter()
+                        .map(|&(r, i)| (r as f32, i as f32))
+                        .collect::<Vec<_>>(),
+                ),
+            ],
+        ),
+        (
+            "c128",
+            ElementKind::Complex128,
+            "unpopped_c128",
+            vec![
+                TypedBuffer::from_complex128(&[n], &a),
+                TypedBuffer::from_complex128(&[n], &b),
+            ],
+        ),
+    ] {
+        for body in [Body::Mul, Body::Div] {
+            // The round-trip `(a * b) / b == a` looks like the elegant test and is
+            // the WRONG one: a fully component-wise mul paired with a component-wise
+            // div satisfies it exactly. Any self-consistent pair of inverses does.
+            // So each operation is checked against its own independent reference
+            // instead, and `body` says which is under test.
+            let op = match body {
+                Body::Mul => OpDef::elementwise("cmul", 2, &[dt], input(0) * input(1)),
+                Body::Div => OpDef::elementwise("cdiv", 2, &[dt], input(0) / input(1)),
+            };
+            let width = if dt == ElementKind::Complex64 { 8 } else { 16 };
+            let d = OperandDesc::new(1, &[n], &[1], dt, width);
+            let operands = vec![d; 3];
+            let key = structure_key(OpCategory::BinaryElementwise, &operands, ArchSku::Sm89);
+            let kernel = generate(&op, &key, &CpuC);
+
+            let lit = |v: &[(f64, f64)]| {
+                v.iter()
+                    .map(|&(r, i)| format!("{{ {r:?}, {i:?} }}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            // The fill is a value the correct answer never produces, so "the kernel
+            // never ran" cannot masquerade as a pass.
+            let src = format!(
+                "{}
+#include <stdio.h>
+
+int main(void) {{
+    const {ctype} in0[{n}] = {{{}}};
+    const {ctype} in1[{n}] = {{{}}};
+    {ctype} out[{n}];
+    for (int i = 0; i < {n}; ++i) {{ out[i].re = -999.0; out[i].im = -999.0; }}
+    {}(in0, in1, out, {n});
+    for (int i = 0; i < {n}; ++i) printf(FMT, out[i].re, out[i].im);
+    return 0;
+}}
+",
+                kernel.source,
+                lit(&a),
+                lit(&b),
+                kernel.name
+            );
+            // Built from a char literal rather than written inline: a `\n` inside a
+            // Rust string that becomes C source has bitten this file repeatedly, and
+            // the failure mode is an unterminated C string literal 40 lines away.
+            let fmt = format!("\"%.17g %.17g{}n\"", '\\');
+            let src = src.replace("FMT", &fmt);
+
+            let bt = body.tag();
+            let c_file = dir.join(format!("cx_{tag}_{bt}.c"));
+            let exe = dir.join(format!("cx_{tag}_{bt}.exe"));
+            std::fs::write(&c_file, &src).expect("write");
+            cc.compile(&c_file, &exe, false)
+            .unwrap_or_else(|e| panic!("{tag}/{bt}: compile failed — if this is `_Complex`, the emitter regressed to a spelling MSVC rejects:\n{e}"));
+            let out = std::process::Command::new(&exe).output().expect("run");
+            assert!(out.status.success(), "{tag}/{bt}: exited {:?}", out.status);
+            let got: Vec<(f64, f64)> = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| {
+                    let mut p = l.split_whitespace();
+                    let r: f64 = p.next().unwrap().parse().expect("re");
+                    let i: f64 = p.next().unwrap().parse().expect("im");
+                    (r, i)
+                })
+                .collect();
+            assert_eq!(
+                got.len(),
+                a.len(),
+                "{tag}/{bt}: kernel printed {} rows",
+                got.len()
+            );
+
+            let plan = build_plan(&op, &key);
+            let want = evaluate(&plan, &operands, &bufs, &[])
+                .into_iter()
+                .next()
+                .unwrap()
+                .to_complex_vec();
+
+            // c64 computes at `float`, so exact equality is the wrong bar; c128 is
+            // f64 on both sides and the tolerance costs nothing there.
+            let tol = if dt == ElementKind::Complex64 {
+                1e-5
+            } else {
+                1e-12
+            };
+            for (k, (&(gr, gi), &(wr, wi))) in got.iter().zip(want.iter()).enumerate() {
+                assert!(
+                    (gr - wr).abs() <= tol && (gi - wi).abs() <= tol,
+                    "{tag}/{bt}[{k}]: kernel ({gr}, {gi}) vs oracle ({wr}, {wi}).\n\
+                 A real part that equals a*c and an imaginary that equals b*d \
+                 means the emitted arithmetic is component-wise, not complex."
+                );
+                assert_ne!((gr, gi), (-999.0, -999.0), "{tag}/{bt}[{k}]: fill survived");
+            }
+
+            // A THIRD formulation, written here and shared with neither side.
+            //
+            // The oracle's `Div` runs Smith's algorithm and so does the emitted C —
+            // deliberately, so the comparison above is not a tolerance negotiation
+            // between differently-conditioned formulas. But that also means a
+            // transcription error in Smith's recurrence would have to be caught by
+            // something that is not Smith's recurrence. The textbook quotient is
+            // that something: numerically worse in general, exact enough on these
+            // well-scaled inputs, and wrong in entirely different ways.
+            let independent: Vec<(f64, f64)> = a
+                .iter()
+                .zip(b.iter())
+                .map(|(&(ar, ai), &(br, bi))| match body {
+                    Body::Mul => (ar * br - ai * bi, ar * bi + ai * br),
+                    Body::Div => {
+                        let den = br * br + bi * bi;
+                        ((ar * br + ai * bi) / den, (ai * br - ar * bi) / den)
+                    }
+                })
+                .collect();
+            for (k, (&(ir, ii), &(wr, wi))) in independent.iter().zip(want.iter()).enumerate() {
+                assert!(
+                    (ir - wr).abs() <= tol && (ii - wi).abs() <= tol,
+                    "{tag}/{bt}[{k}]: oracle ({wr}, {wi}) disagrees with the textbook \
+                 formula ({ir}, {ii}) — one of the two rules is mistranscribed"
+                );
+            }
+
+            // Positive control on the test itself: the component-wise answer must
+            // actually DIFFER, or the comparisons above prove nothing.
+            let cw: Vec<(f64, f64)> = a
+                .iter()
+                .zip(b.iter())
+                .map(|(&(ar, ai), &(br, bi))| match body {
+                    Body::Mul => (ar * br, ai * bi),
+                    Body::Div => (ar / br, ai / bi),
+                })
+                .collect();
+            let distinguishing = cw
+                .iter()
+                .zip(want.iter())
+                .filter(|(c, w)| (c.0 - w.0).abs() > tol || (c.1 - w.1).abs() > tol)
+                .count();
+            // Not every lane can distinguish: component-wise division of an operand
+            // by ITSELF is `(1, 1)` and the true quotient is `1 + 0i`, which agree in
+            // the real part — and for `(0+1i)/(0+1i)` they agree entirely. Requiring
+            // a majority keeps the control honest without pretending otherwise.
+            assert!(
+                distinguishing * 2 > cw.len(),
+                "{tag}/{bt}: only {distinguishing}/{} lanes distinguish component-wise \
+             from complex — this input set barely tests the rule",
+                cw.len()
+            );
+        }
+    }
+}
+
+/// Which operation a pass of the complex differential is exercising.
+///
+/// Two separate bodies rather than the round-trip `(a * b) / b == a`, which
+/// reads as the elegant test and is the wrong one: a component-wise multiply
+/// paired with a component-wise divide satisfies it exactly, as does any
+/// self-consistent pair of inverses. An identity between two suspects cannot
+/// convict either.
+#[derive(Clone, Copy, PartialEq)]
+enum Body {
+    Mul,
+    Div,
+}
+
+impl Body {
+    fn tag(self) -> &'static str {
+        match self {
+            Body::Mul => "mul",
+            Body::Div => "div",
+        }
+    }
+}

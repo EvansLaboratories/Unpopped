@@ -112,9 +112,9 @@ fn signed_zero_is_preserved_per_component() {
 // Plan side: what a complex cell may compute, and what it must refuse.
 // ---------------------------------------------------------------------------
 
-use unpopped::ir::{BinaryOp, OpDef, input};
+use unpopped::ir::{BinaryOp, OpDef, UnaryOp, input};
 use unpopped::oracle::evaluate;
-use unpopped::plan::try_build_plan;
+use unpopped::plan::{build_plan, try_build_plan};
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_key};
 
 fn complex_cell(op: &OpDef) -> Result<Vec<(f64, f64)>, String> {
@@ -126,6 +126,23 @@ fn complex_cell(op: &OpDef) -> Result<Vec<(f64, f64)>, String> {
         TypedBuffer::from_complex128(&[2], &[(1.0, 2.0), (0.0, 1.0)]),
         TypedBuffer::from_complex128(&[2], &[(3.0, 4.0), (0.0, 1.0)]),
     ];
+    Ok(evaluate(&plan, &operands, &bufs, &[])
+        .into_iter()
+        .next()
+        .expect("one output")
+        .to_complex_vec())
+}
+
+/// The one-input counterpart of [`complex_cell`], for the unary refusals.
+fn complex_cell_unary(op: &OpDef) -> Result<Vec<(f64, f64)>, String> {
+    let d = OperandDesc::new(1, &[2], &[1], ElementKind::Complex128, 8);
+    let operands = vec![d; 2];
+    let key = structure_key(OpCategory::UnaryElementwise, &operands, ArchSku::Sm89);
+    let plan = try_build_plan(op, &key).map_err(|e| e.to_string())?;
+    let bufs = vec![TypedBuffer::from_complex128(
+        &[2],
+        &[(1.0, 2.0), (0.0, 1.0)],
+    )];
     Ok(evaluate(&plan, &operands, &bufs, &[])
         .into_iter()
         .next()
@@ -186,36 +203,136 @@ fn ordered_ops_are_undefined_on_complex_and_decline_rather_than_panic() {
 
 /// Ops that ARE defined for complex but unimplemented decline with a different
 /// reason — the distinction a future implementer needs.
+///
+/// This pointed at `Div` until `Div` was implemented. That it had to move is the
+/// evidence the distinction is real: "unimplemented" is a status that expires,
+/// "undefined" is one that does not, and the two must not share a message.
 #[test]
 fn unimplemented_complex_ops_say_so_distinctly() {
     let c = ElementKind::Complex128;
-    let div = OpDef::elementwise("d", 2, &[c], input(0) / input(1));
-    let err = complex_cell(&div).expect_err("complex Div is not implemented");
+    let exp = OpDef::elementwise("e", 1, &[c], input(0).unary(UnaryOp::Exp));
+    let err = complex_cell_unary(&exp).expect_err("complex Exp is not implemented");
     assert!(
-        err.contains("DEFINED but not implemented"),
-        "Div must be refused as unimplemented, not as undefined: {err}"
+        err.contains("defined but not implemented"),
+        "Exp must be refused as unimplemented, not as undefined: {err}"
     );
     assert!(
         !err.contains("NOT ORDERED"),
-        "Div has nothing to do with ordering: {err}"
+        "a transcendental has nothing to do with ordering: {err}"
     );
 }
 
-/// A complex cell still declines at the BACKEND — no emitter has a complex ABI.
+/// Complex `Div` is admitted — the refusal above used to cover it.
 ///
-/// Plan-admissibility and lowering are separate gates, and this pins that
-/// admitting complex to the plan did not accidentally claim an emitter can
-/// produce a kernel for it. The oracle can evaluate one; nothing can compile one.
+/// Kept as its own test rather than folded into the emitter test: this asserts
+/// the PLAN gate opened, which is a separate decision from whether any backend
+/// can lower it, and the two failed independently while this was being built.
 #[test]
-fn a_complex_cell_still_has_no_backend() {
+fn complex_div_is_admitted_now_that_both_sides_carry_a_rule() {
+    let c = ElementKind::Complex128;
+    let div = OpDef::elementwise("d", 2, &[c], input(0) / input(1));
+    complex_cell(&div).expect("complex Div is implemented on both sides");
+}
+
+/// Division agrees with multiplication: `(a * b) / b == a`.
+///
+/// An algebraic identity rather than a table of expected values, because it
+/// catches the failure a table cannot — a `div` that is self-consistently wrong
+/// in the same way the expected values were computed. `mul` is independently
+/// pinned by `complex_mul_mixes_components`, so composing them tests `div`
+/// against something already known-good.
+#[test]
+fn complex_div_inverts_complex_mul() {
+    let c = ElementKind::Complex128;
+    let a = [(3.0_f64, 4.0_f64), (-1.5, 2.25), (0.5, -0.75), (0.0, 1.0)];
+    let b = [(1.0_f64, -2.0_f64), (2.0, 0.5), (-4.0, 1.5), (0.0, 1.0)];
+    let n = a.len() as i64;
+
+    // (in0 * in1) / in1
+    let op = OpDef::elementwise("rt", 2, &[c], (input(0) * input(1)) / input(1));
+    let d = OperandDesc::new(1, &[n], &[1], c, 16);
+    let operands = vec![d; 3];
+    let key = structure_key(OpCategory::BinaryElementwise, &operands, ArchSku::Sm89);
+    let plan = build_plan(&op, &key);
+    let bufs = vec![
+        TypedBuffer::from_complex128(&[n], &a),
+        TypedBuffer::from_complex128(&[n], &b),
+    ];
+    let got = evaluate(&plan, &operands, &bufs, &[])
+        .into_iter()
+        .next()
+        .unwrap()
+        .to_complex_vec();
+
+    for (k, (&(gr, gi), &(wr, wi))) in got.iter().zip(a.iter()).enumerate() {
+        assert!(
+            (gr - wr).abs() < 1e-12 && (gi - wi).abs() < 1e-12,
+            "[{k}]: (a*b)/b gave ({gr}, {gi}), want a = ({wr}, {wi})"
+        );
+    }
+}
+
+/// A complex cell now LOWERS, as a struct with called arithmetic.
+///
+/// This test previously asserted the opposite — that admitting complex to the
+/// plan must not imply an emitter existed. It did its job: the emitter now
+/// exists, so the assertion inverts rather than being deleted, and the record of
+/// why it inverted stays.
+///
+/// # Why a struct and not C99 `_Complex`
+///
+/// **MSVC does not implement C99 complex.** Measured: `float _Complex` is
+/// `error C2440: cannot convert from 'int' to '_Fcomplex'`. Microsoft's
+/// `<complex.h>` ships opaque `_Fcomplex`/`_Dcomplex` structs built with
+/// `_FCbuild` and multiplied with `_FCmulcc` — a real API, but an MSVC-specific
+/// one that would need a `#if defined(_MSC_VER)` fork against the Clang/GCC
+/// spelling. A module whose claim is neutrality should not carry that fork.
+///
+/// A plain struct with our own arithmetic compiles identically on every C
+/// compiler with no conditional compilation and no vendor's name in the output —
+/// the same answer FP8 and the sub-byte dtypes reached.
+#[test]
+fn a_complex_cell_lowers_as_a_struct_with_called_arithmetic() {
     use unpopped::cpu_c::CpuC;
     use unpopped::try_generate;
     let c = ElementKind::Complex128;
-    let op = OpDef::elementwise("a", 2, &[c], input(0) + input(1));
+    let op = OpDef::elementwise("m", 2, &[c], input(0) * input(1));
     let d = OperandDesc::new(1, &[2], &[1], c, 8);
     let key = structure_key(OpCategory::BinaryElementwise, &[d, d, d], ArchSku::Sm89);
+    let src = try_generate(&op, &key, &CpuC)
+        .expect("complex now lowers")
+        .source;
+
     assert!(
-        try_generate(&op, &key, &CpuC).is_err(),
-        "no backend has a complex ABI yet — admitting the plan must not imply one"
+        src.contains("typedef struct") && src.contains("unpopped_c128"),
+        "complex must lower as a struct this kernel defines:
+{src}"
+    );
+    assert!(
+        !src.contains("_Complex") && !src.contains("_Dcomplex"),
+        "neither the C99 spelling MSVC rejects nor the MSVC-specific one:
+{src}"
+    );
+    // Match the CALL, not the definition. `contains("unpopped_c128_mul(")` also
+    // matches `static unpopped_c128 unpopped_c128_mul(...)`, so it passed while
+    // the kernel body still said `(in0[i] * in1[i])` — which MSVC rejects with
+    // `C2088: built-in operator '*' cannot be applied to ... unpopped_c128`. The
+    // store line is the only place the spelling is load-bearing.
+    let body = src
+        .lines()
+        .find(|l| l.contains("out[i] ="))
+        .expect("a store line");
+    assert!(
+        body.contains("unpopped_c128_mul(in0[i], in1[i])"),
+        "arithmetic on a struct must be a CALL — `a * b` on a struct is not C:
+{body}"
+    );
+    // The multiply mixes components. A component-wise emitted helper would still
+    // compile and would be wrong in exactly the way the oracle's own `Mul` test
+    // guards against on the Rust side.
+    assert!(
+        src.contains("a.re * b.re - a.im * b.im"),
+        "the emitted multiply must be (ac - bd, ad + bc), not component-wise:
+{src}"
     );
 }

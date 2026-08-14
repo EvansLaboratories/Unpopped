@@ -55,7 +55,7 @@
 //! arm, which would trade this visible leak for a silent numerical bug.
 //!
 
-use crate::ir::{BinaryOp, ScalarExpr, UnaryOp, is_admissible_int_reduction_operand};
+use crate::ir::{ArithOp, BinaryOp, ScalarExpr, UnaryOp, is_admissible_int_reduction_operand};
 use crate::plan::KernelPlan;
 use unpopped_vocab::ElementKind;
 
@@ -97,6 +97,10 @@ pub fn scalar_ctype(dt: ElementKind) -> Option<&'static str> {
         // Sub-byte dtypes spell their CONTAINER: several elements share a byte,
         // and the packing lives in `sub_byte_helpers`, not in the type name.
         ElementKind::I4 | ElementKind::U4 | ElementKind::B1 => "unsigned char",
+        // Complex is a STRUCT, emitted with the kernel (`complex_helpers`).
+        // C99 `_Complex` is not an option: MSVC does not implement it.
+        ElementKind::Complex64 => "unpopped_c64",
+        ElementKind::Complex128 => "unpopped_c128",
         ElementKind::U32 => "unsigned int",
         ElementKind::U64 => "unsigned long long",
         _ => return None,
@@ -125,6 +129,8 @@ pub fn dtype_tag(dt: ElementKind) -> &'static str {
         ElementKind::I4 => "i4",
         ElementKind::U4 => "u4",
         ElementKind::B1 => "b1",
+        ElementKind::Complex64 => "c64",
+        ElementKind::Complex128 => "c128",
         // U32 index-dtype infix: `gather_f32_u32` (the Fuel-facing u32-index
         // variant's entry_point symbol).
         ElementKind::U32 => "u32",
@@ -229,6 +235,33 @@ pub fn half_store_intrinsic(kind: ElementKind) -> Option<&'static str> {
 /// naming a vendor's. FP8 gets it first because it has **no existing goldens to
 /// break**, so the pattern can be proven here and then applied to f16/bf16 at the
 /// coordinated regen event that arm is gated on.
+///
+/// ## What the f16 gate actually is — measured, not assumed
+///
+/// The CUDA peer reports its emitter consumes `scalar_ctype` (taking
+/// `F16 → "__half"` as its kernel's scalar type) but **not**
+/// `half_load_intrinsic` — it spells `__half2float`/`__bfloat162float` itself.
+/// Confirmed from this side: `half_load_intrinsic`'s and
+/// `half_store_intrinsic`'s only non-test callers are the `_ =>` fallback arms
+/// of `narrow_load_fn`/`narrow_store_fn` below. So the coupling is one function:
+/// changing `scalar_ctype(F16)` to `unsigned short` is a **type** break for that
+/// consumer (`__half2float` will not accept it), not a byte-level diff.
+///
+/// ## And the override is a family, not a name
+///
+/// The same peer notes an intrinsic-carrying backend needs to substitute four
+/// things together — scalar ctype, load/promote, store/demote, and the packed
+/// pair type (`__half2`) — and that the fourth is not a fourth string: a packed
+/// pair processes two lanes per element, so it reshapes the emit loop rather
+/// than renaming anything in it. Any seam here that takes a set of names and
+/// not an arity will look correct and quietly fail to express that path.
+///
+/// The general form this points at is broader than the halves: *a backend may
+/// substitute the whole spelling family, and its arity, for any dtype whose
+/// target has a native one, with this module supplying the portable default.*
+/// Complex looks like a settled case only because its portable default already
+/// works — the same peer would spell it `cuFloatComplex` + `cuCmulf`, which is
+/// structurally the f16 situation with a working fallback underneath.
 ///
 /// # Correctness over cleverness in the encoder
 ///
@@ -390,6 +423,136 @@ static void unpopped_b1_store(unsigned char* p, long long i, int v) {
         ),
         _ => None,
     }
+}
+
+/// Portable-C helpers for a **complex** dtype: the struct type and its
+/// arithmetic, or `None` for a non-complex dtype.
+///
+/// # Why a struct rather than C99 `_Complex`
+///
+/// **MSVC does not implement C99 complex.** Its `<complex.h>` ships `_Fcomplex`
+/// / `_Dcomplex` — opaque structs constructed with `_FCbuild` and multiplied with
+/// `_FCmulcc` — and rejects `float _Complex` outright (measured: `error C2440:
+/// cannot convert from 'int' to '_Fcomplex'`). Clang and GCC do implement it. So
+/// `_Complex` is not portable C, it is *portable-except-MSVC* C, and using it
+/// would put a `#if defined(_MSC_VER)` fork in a module whose whole claim is
+/// neutrality.
+///
+/// A plain struct with our own arithmetic compiles identically everywhere, needs
+/// no conditional compilation, and carries no vendor's spelling. Same answer FP8
+/// and the sub-byte dtypes reached: emit the operation rather than name someone
+/// else's.
+///
+/// The multiply is the one to read carefully — `(ac - bd, ad + bc)`, not
+/// component-wise. The oracle's independently-written Rust rule is the check.
+pub fn complex_helpers(kind: ElementKind) -> Option<&'static str> {
+    match kind {
+        ElementKind::Complex64 => Some(
+            r"
+/* c64: a pair of f32, real component first (KISS-CLASSIFY 6.1: named by TOTAL
+   width). A struct rather than C99 `float _Complex`, which MSVC does not
+   implement — see `complex_helpers` for the measurement. */
+typedef struct { float re, im; } unpopped_c64;
+
+static unpopped_c64 unpopped_c64_add(unpopped_c64 a, unpopped_c64 b) {
+    unpopped_c64 r; r.re = a.re + b.re; r.im = a.im + b.im; return r;
+}
+static unpopped_c64 unpopped_c64_sub(unpopped_c64 a, unpopped_c64 b) {
+    unpopped_c64 r; r.re = a.re - b.re; r.im = a.im - b.im; return r;
+}
+static unpopped_c64 unpopped_c64_mul(unpopped_c64 a, unpopped_c64 b) {
+    /* (ac - bd, ad + bc) — NOT component-wise. */
+    unpopped_c64 r;
+    r.re = a.re * b.re - a.im * b.im;
+    r.im = a.re * b.im + a.im * b.re;
+    return r;
+}
+static unpopped_c64 unpopped_c64_div(unpopped_c64 a, unpopped_c64 b) {
+    /* Smith's algorithm. The textbook form ((ac+bd)/(cc+dd), (bc-ad)/(cc+dd))
+       squares the denominator components, so it overflows to inf — or flushes to
+       zero — for operands well inside the type's range, and then divides by it.
+       Scaling by the LARGER component keeps every intermediate near unity.
+       Robert L. Smith, CACM 5(8):435, 1962. */
+    unpopped_c64 r;
+    float ar = a.re, ai = a.im, br = b.re, bi = b.im;
+    if ((br < 0 ? -br : br) >= (bi < 0 ? -bi : bi)) {
+        float q = bi / br, den = br + bi * q;
+        r.re = (ar + ai * q) / den;
+        r.im = (ai - ar * q) / den;
+    } else {
+        float q = br / bi, den = br * q + bi;
+        r.re = (ar * q + ai) / den;
+        r.im = (ai * q - ar) / den;
+    }
+    return r;
+}
+",
+        ),
+        ElementKind::Complex128 => Some(
+            r"
+/* c128: a pair of f64, real component first. */
+typedef struct { double re, im; } unpopped_c128;
+
+static unpopped_c128 unpopped_c128_add(unpopped_c128 a, unpopped_c128 b) {
+    unpopped_c128 r; r.re = a.re + b.re; r.im = a.im + b.im; return r;
+}
+static unpopped_c128 unpopped_c128_sub(unpopped_c128 a, unpopped_c128 b) {
+    unpopped_c128 r; r.re = a.re - b.re; r.im = a.im - b.im; return r;
+}
+static unpopped_c128 unpopped_c128_mul(unpopped_c128 a, unpopped_c128 b) {
+    /* (ac - bd, ad + bc) — NOT component-wise. */
+    unpopped_c128 r;
+    r.re = a.re * b.re - a.im * b.im;
+    r.im = a.re * b.im + a.im * b.re;
+    return r;
+}
+static unpopped_c128 unpopped_c128_div(unpopped_c128 a, unpopped_c128 b) {
+    /* Smith's algorithm. The textbook form ((ac+bd)/(cc+dd), (bc-ad)/(cc+dd))
+       squares the denominator components, so it overflows to inf — or flushes to
+       zero — for operands well inside the type's range, and then divides by it.
+       Scaling by the LARGER component keeps every intermediate near unity.
+       Robert L. Smith, CACM 5(8):435, 1962. */
+    unpopped_c128 r;
+    double ar = a.re, ai = a.im, br = b.re, bi = b.im;
+    if ((br < 0 ? -br : br) >= (bi < 0 ? -bi : bi)) {
+        double q = bi / br, den = br + bi * q;
+        r.re = (ar + ai * q) / den;
+        r.im = (ai - ar * q) / den;
+    } else {
+        double q = br / bi, den = br * q + bi;
+        r.re = (ar * q + ai) / den;
+        r.im = (ai * q - ar) / den;
+    }
+    return r;
+}
+",
+        ),
+        _ => None,
+    }
+}
+
+/// The complex arithmetic spelling for [`crate::backend::Lowering::arith`], or
+/// `None` for a dtype whose arithmetic is a C operator.
+///
+/// `Div` is absent deliberately: the plan gate refuses it at a complex dtype as
+/// DEFINED-but-unimplemented, so reaching here would mean the gate was bypassed.
+pub fn complex_arith(kind: ElementKind, op: ArithOp, a: &str, b: &str) -> Option<String> {
+    let ty = match kind {
+        ElementKind::Complex64 => "unpopped_c64",
+        ElementKind::Complex128 => "unpopped_c128",
+        _ => return None,
+    };
+    let name = match op {
+        ArithOp::Add => "add",
+        ArithOp::Sub => "sub",
+        ArithOp::Mul => "mul",
+        ArithOp::Div => "div",
+        // No `_` arm ON PURPOSE. A catch-all here returns `None`, and `None`
+        // means "fall back to the C operator" — which for a struct is
+        // `error C2088`, invalid C emitted silently. A fifth `ArithOp` must
+        // break this build and be answered, not default into broken output.
+    };
+    Some(format!("{ty}_{name}({a}, {b})"))
 }
 
 /// The packed-load function name for a sub-byte dtype.

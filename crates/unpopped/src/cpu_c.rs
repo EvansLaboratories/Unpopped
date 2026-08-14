@@ -42,10 +42,10 @@
 
 use crate::backend::{Backend, GeneratedKernel, LowerError, Lowering, const_lit, lower_dag};
 use crate::cfamily::{
-    assert_no_int_div_or_const, binary_f32, binary_f64, binary_int, dtype_tag, fp8_helpers,
-    narrow_load_fn, out_ctype_of, param_args, param_ctype, promote_load_f32, scalar_ctype,
-    select_f32, select_f64, store_expr_of, sub_byte_helpers, sub_byte_load_fn, sub_byte_store_fn,
-    unary_f32, unary_f64,
+    assert_no_int_div_or_const, binary_f32, binary_f64, binary_int, complex_arith, complex_helpers,
+    dtype_tag, fp8_helpers, narrow_load_fn, out_ctype_of, param_args, param_ctype,
+    promote_load_f32, scalar_ctype, select_f32, select_f64, store_expr_of, sub_byte_helpers,
+    sub_byte_load_fn, sub_byte_store_fn, unary_f32, unary_f64,
 };
 use crate::ir::{BinaryOp, ExprDag, UnaryOp};
 use crate::plan::{KernelPlan, Schedule};
@@ -168,6 +168,13 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
         s.push_str(helpers);
         s.push('\n');
     }
+    // A COMPLEX cell's type is a struct this kernel defines, and its arithmetic
+    // is calls rather than operators — see `complex_helpers` for why C99
+    // `_Complex` is not an option on a module that claims to be neutral.
+    if let Some(helpers) = complex_helpers(plan.dtype) {
+        s.push_str(helpers);
+        s.push('\n');
+    }
     s.push_str(&format!("void {name}(\n"));
     for i in 0..n {
         s.push_str(&format!("    const {ctype}* in{i},\n"));
@@ -212,6 +219,12 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
             },
             unary: &|op, x| cpu_unary(op, x, plan.dtype),
             binary: &|op, a, b| cpu_binary(op, a, b, plan.dtype),
+            // Complex compute types are structs, so their arithmetic is a call.
+            // Every other dtype falls through to the C operator.
+            arith: &|op, a, b| {
+                complex_arith(plan.dtype, op, &a, &b)
+                    .unwrap_or_else(|| format!("({a} {} {b})", op.c_operator()))
+            },
             select: &|c, a, b| cpu_select(c, a, b, plan.dtype),
             constant: &const_lit,
         },

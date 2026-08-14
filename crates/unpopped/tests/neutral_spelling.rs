@@ -60,8 +60,8 @@
 //! `SELECT`), never fall through to a default arm.
 
 use unpopped::cfamily::{
-    cast_scalar, demote_store_f32, half_load_intrinsic, half_store_intrinsic, promote_load_f32,
-    scalar_ctype,
+    cast_scalar, complex_helpers, demote_store_f32, half_load_intrinsic, half_store_intrinsic,
+    promote_load_f32, scalar_ctype,
 };
 use unpopped_vocab::ElementKind;
 
@@ -70,6 +70,15 @@ use unpopped_vocab::ElementKind;
 enum Spelling {
     /// A type name in standard C — portable to every C-family target.
     PortableC,
+    /// A name this crate DEFINES and emits into the same translation unit.
+    ///
+    /// Neutral, but for a different reason than [`Spelling::PortableC`]: not
+    /// because every C compiler already knows the name, but because the kernel
+    /// carries its own definition and so depends on no header at all. The test
+    /// for this tier is therefore stronger — the emitted helper text must
+    /// actually contain the typedef, or the "neutral" spelling is simply an
+    /// undefined type that fails to compile.
+    SelfDefined,
     /// A vendor's type name. Must not come from a neutral module.
     Vendor,
     /// The neutral module declines to spell it (`scalar_ctype` returns `None`).
@@ -106,6 +115,13 @@ fn expected(dt: ElementKind) -> Spelling {
         // emitted helpers (`cfamily::sub_byte_helpers`), portable and vendor-free.
         I4 | U4 | B1 => Spelling::PortableC,
 
+        // Complex spells a STRUCT this crate defines and emits. C99 `_Complex`
+        // is not portable — MSVC does not implement it (`error C2440`) — so the
+        // struct is the neutral answer rather than a fallback. This is the only
+        // dtype in the set whose name is not already known to a C compiler,
+        // which is why the tier exists.
+        Complex64 | Complex128 => Spelling::SelfDefined,
+
         // THE GAP. Correct for CUDA, wrong for a module that calls itself neutral.
         // When the spelling seam lands these become `Declined` and the backend
         // supplies the name.
@@ -120,11 +136,13 @@ fn expected(dt: ElementKind) -> Spelling {
         //     need a struct ABI — unimplemented rather than impossible.
         //     (`Fp8E4M3FN`/`Fp8E5M2` used to sit here needing "a software
         //     codec". They have one now, emitted rather than intrinsic-named,
-        //     and moved up to `PortableC`.)
+        //     and moved up to `PortableC`. `Complex64`/`Complex128` sat here
+        //     for the same reason and moved up to `SelfDefined` — the struct
+        //     ABI they were waiting for is one this crate emits.)
         //   * `F8E8M0`/`F8E6M2` are the MX shared block SCALES — active §6.1
         //     dtypes at sk4, but 8-bit floats with no portable C type, so the
         //     neutral module declines them like the other FP8 rows.
-        Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 | Complex64 | Complex128 => Spelling::Declined,
+        Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 => Spelling::Declined,
     }
 }
 
@@ -215,6 +233,7 @@ fn scalar_ctype_spells_portable_c_except_the_two_known_half_arms() {
     ];
 
     let mut vendor_spelled = Vec::new();
+    let mut self_defined = Vec::new();
     for dt in all {
         let got = scalar_ctype(dt);
         match expected(dt) {
@@ -226,6 +245,25 @@ fn scalar_ctype_spells_portable_c_except_the_two_known_half_arms() {
                      module must not invent a type name"
                 );
                 assert!(!names_a_vendor(ct), "{dt:?} spells the vendor name {ct:?}");
+            }
+            Spelling::SelfDefined => {
+                let ct = got.unwrap_or_else(|| panic!("{dt:?} should have a ctype"));
+                assert!(
+                    !PORTABLE_C_TYPES.contains(&ct),
+                    "{dt:?} spells the builtin {ct:?} — classify it PortableC, not SelfDefined"
+                );
+                assert!(!names_a_vendor(ct), "{dt:?} spells the vendor name {ct:?}");
+                // The load-bearing half: the kernel must DEFINE what it names.
+                // Without this the tier degrades to "any invented string is
+                // neutral", which is how an undefined type name ships.
+                let helpers = complex_helpers(dt)
+                    .unwrap_or_else(|| panic!("{dt:?} names {ct:?} but emits no definition"));
+                assert!(
+                    helpers.contains(&format!("}} {ct};")),
+                    "{dt:?} names {ct:?}, but the emitted helpers do not typedef it:
+{helpers}"
+                );
+                self_defined.push(ct);
             }
             Spelling::Vendor => {
                 let ct = got.unwrap_or_else(|| panic!("{dt:?} is expected to spell (wrongly)"));
@@ -248,6 +286,15 @@ fn scalar_ctype_spells_portable_c_except_the_two_known_half_arms() {
         vendor_spelled,
         vec![ElementKind::F16, ElementKind::Bf16],
         "the vendor-spelled set must be exactly the two known half arms — it grew or shrank"
+    );
+    // Pinned for the same reason the vendor set is: a self-defined name is the
+    // weakest neutrality claim of the three, so the set that gets to make it does
+    // not grow without someone saying so. Every other dtype in this crate reaches
+    // a builtin C type, and that is the bar a new one should have to argue past.
+    assert_eq!(
+        self_defined,
+        vec!["unpopped_c64", "unpopped_c128"],
+        "the self-defined set must be exactly the two complex types"
     );
 }
 

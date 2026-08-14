@@ -11,6 +11,44 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use unpopped_vocab::{AxisMask, ElementKind};
 
+/// The four **infix arithmetic** nodes, named so a backend can spell them as
+/// something other than a C operator.
+///
+/// `Add`/`Sub`/`Mul`/`Div` are `ScalarExpr` variants rather than [`BinaryOp`]
+/// members, so until now they had no seam: `lower_expr` hardcoded `(a + b)`.
+/// That is correct for every scalar dtype and impossible for one whose C type is
+/// a **struct** — MSVC does not implement C99 `_Complex` at all (it ships
+/// `_Fcomplex` with `_FCbuild`/`_FCmulcc` library calls instead), so a portable
+/// complex lowering cannot use operators on any compiler and must call functions.
+///
+/// This enum is what lets a backend answer that without every other backend
+/// changing.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
+pub enum ArithOp {
+    /// `a + b`
+    Add,
+    /// `a - b`
+    Sub,
+    /// `a * b`
+    Mul,
+    /// `a / b`
+    Div,
+}
+
+impl ArithOp {
+    /// The C infix operator this arithmetic spells by default.
+    #[must_use]
+    pub const fn c_operator(self) -> &'static str {
+        match self {
+            Self::Add => "+",
+            Self::Sub => "-",
+            Self::Mul => "*",
+            Self::Div => "/",
+        }
+    }
+}
+
 /// A scalar compute expression — the per-output-coordinate math, as a typed DAG.
 ///
 /// Backend-agnostic: every emitter lowers it by walking the tree with per-backend

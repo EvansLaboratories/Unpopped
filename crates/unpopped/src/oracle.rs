@@ -1505,8 +1505,33 @@ fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
             i128::wrapping_mul,
             |(ar, ai), (br, bi)| (ar * br - ai * bi, ar * bi + ai * br),
         ),
-        // Div is float-only (int Div is rejected at the plan gate).
-        ScalarExpr::Div(a, b) => Val::Float(eval(a, ev).f64() / eval(b, ev).f64()),
+        // Div goes through `arith` like the other three. Reading `.f64()`
+        // directly — as this did — PANICS on a complex operand, because
+        // `Val::f64()` is deliberately fatal there. That was safe only for as
+        // long as the plan gate refused complex `Div`, i.e. a correctness
+        // property held at a distance by an unrelated file.
+        ScalarExpr::Div(a, b) => arith(
+            ev,
+            a,
+            b,
+            |x, y| x / y,
+            |_, _| unreachable!("integer Div is refused at the plan gate"),
+            // Smith's algorithm — scale by the larger denominator component so
+            // no intermediate squares. The emitted C runs the same recurrence;
+            // the textbook form would agree to rounding on well-conditioned
+            // inputs and disagree wildly where either overflows, so matching the
+            // algorithm is what makes the differential test meaningful rather
+            // than a tolerance negotiation.
+            |(ar, ai), (br, bi)| {
+                if br.abs() >= bi.abs() {
+                    let (q, den) = (bi / br, br + bi * (bi / br));
+                    ((ar + ai * q) / den, (ai - ar * q) / den)
+                } else {
+                    let (q, den) = (br / bi, br * (br / bi) + bi);
+                    ((ar * q + ai) / den, (ai * q - ar) / den)
+                }
+            },
+        ),
         ScalarExpr::Unary(op, x) => {
             let xv = eval(x, ev).f64();
             // Sign/Step are DISCONTINUOUS (a full ±1/0 flip): the emitter decides
