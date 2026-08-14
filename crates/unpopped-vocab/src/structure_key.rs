@@ -1448,6 +1448,29 @@ pub enum TokenDecline {
     /// meaning is not an identity** — which is the entire basis for using a
     /// `structure_key` as a cache key. (Ruled by the KISS architect, KISS #160.)
     NonCanonicalReduceField,
+    /// The reduce field named an axis set that **cannot exist** at this rank.
+    ///
+    /// §6.6-0009 splits the malformed reduce-field cases on a real axis: a set
+    /// that EXISTS but is spelled non-canonically is
+    /// [`NonCanonicalReduceField`](Self::NonCanonicalReduceField); a set that
+    /// cannot exist at all is this. The distinction is not cosmetic — the first
+    /// tells a producer to re-spell, the second tells it the cell is wrong.
+    ///
+    /// Two shapes reach it:
+    ///
+    /// * `rlast` at **rank 0** — there is no trailing axis to name. (Contrast
+    ///   `rall` at rank 0, which denotes the empty set: real, but canonically
+    ///   spelled `-`.)
+    /// * An explicit mask naming an axis beyond the rank, e.g. `x04` (axis 2) on
+    ///   a rank-2 cell.
+    ///
+    /// That second case was **accepted** by this codec until KISS's decline
+    /// corpus grew a vector for it, producing a well-formed key over a
+    /// nonexistent axis. Worth stating plainly because it is the worst shape a
+    /// conformance leg can find: not a wrong decline code, but a wrong *accept*,
+    /// which under §6.8-0002's byte-exact matching serves whatever kernel is
+    /// filed under that token.
+    BadReduceField,
     /// The dtype field named a spelling outside the closed §6.1 set.
     ///
     /// Distinct from [`ReservedDtype`](Self::ReservedDtype) — that is the
@@ -1515,6 +1538,7 @@ impl TokenDecline {
             Self::BadAccMpField => "BadAccMpField",
             Self::RedundantAccMpField => "RedundantAccMpField",
             Self::NonCanonicalReduceField => "NonCanonicalReduceField",
+            Self::BadReduceField => "BadReduceField",
             Self::UnknownDtype => "UnknownDtype",
             Self::UnknownOpFamily => "UnknownOpFamily",
             Self::BadContractionField => "BadContractionField",
@@ -3020,15 +3044,42 @@ fn parse_reduce_field(field: &str, rank: u8) -> Result<AxisMask, TokenDecline> {
         "-" => Ok(AxisMask::EMPTY),
         "rall" if rank > 0 => Ok(AxisMask(all_axes_mask(rank))),
         "rlast" if rank > 0 => Ok(AxisMask(1u8 << (rank - 1))),
-        // rank 0: neither sentinel has a referent. `rlast` has no trailing axis,
-        // and `rall` would denote the empty set — which is `-`'s value, so
-        // accepting it would be the overload §6.6-0009 forbids.
-        "rall" | "rlast" => Err(TokenDecline::Unrecognized),
+        // Rank 0 splits the two sentinels on §6.6-0009's real-set-vs-cannot-exist
+        // axis, and they land on DIFFERENT codes.
+        //
+        // `rall` at rank 0 denotes a set that genuinely exists — all of zero axes
+        // is the empty set — but whose canonical spelling is `-`. That is a
+        // non-canonical spelling of a real set.
+        //
+        // `rlast` at rank 0 denotes no set at all: there is no trailing axis to
+        // name. That is malformed, not merely mis-spelled.
+        //
+        // Both returned `Unrecognized` until KISS's decline corpus grew the two
+        // rank-0 vectors and caught it. The comment that used to sit here had the
+        // `rall` reasoning exactly right — "would denote the empty set, which is
+        // `-`'s value" — and then returned the wrong code anyway, which is worth
+        // noticing: prose agreeing with the spec does not make the code agree.
+        "rall" => Err(TokenDecline::NonCanonicalReduceField),
+        "rlast" => Err(TokenDecline::BadReduceField),
         s => {
             let hex = s.strip_prefix('x').ok_or(TokenDecline::Unrecognized)?;
             let mask = u8::from_str_radix(hex, 16).map_err(|_| TokenDecline::Unrecognized)?;
-            // Well-formed, but is this set's canonical spelling one of the
-            // sentinels (or `-`)? If so the token is outside all four values.
+            // Does the mask name an axis this cell HAS? `x04` is axis 2, which
+            // does not exist at rank 2 — and this codec used to **accept** it,
+            // producing a well-formed key over a nonexistent axis. That is the
+            // worst shape of bug this leg can find: not a wrong decline code, but
+            // a wrong ACCEPT, which under §6.8-0002's byte-exact matching serves
+            // whatever kernel is filed under that token.
+            //
+            // Checked before the canonical test because out-of-range is the more
+            // specific fact: a mask naming a missing axis is malformed regardless
+            // of whether some sentinel would have spelled it.
+            if mask & !all_axes_mask(rank) != 0 {
+                return Err(TokenDecline::BadReduceField);
+            }
+            // Well-formed and in range, but is this set's canonical spelling one
+            // of the sentinels (or `-`)? If so the token is outside all four
+            // values.
             let canonical_is_elsewhere = mask == 0
                 || (rank > 0 && (mask == all_axes_mask(rank) || mask == 1u8 << (rank - 1)));
             if canonical_is_elsewhere {

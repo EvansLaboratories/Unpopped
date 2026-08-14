@@ -8,7 +8,21 @@ vendoring better than retyping.
 | File | Source path in KISS | Vendored from commit |
 |---|---|---|
 | `dtype_manifest.json` | `conformance/corpus/dtype_manifest.json` | `19c3ad7f6924161e7b0fd8c7a5b88d9e194b5db7` |
-| `structure_key_vectors.json` | `conformance/corpus/structure_key_vectors.json` | `a43a96f8973d1ffa9bba37d3034cfc290ea4af08` |
+| `structure_key_vectors.json` | `conformance/corpus/structure_key_vectors.json` | `bea9416` (blob `c83b5b7faeca9638a396ba998de363e36b8bac98`) |
+
+### How this copy was taken
+
+Written with `git cat-file blob <commit>:<path> > <dest>`, **not** a checkout.
+A checkout on Windows can CRLF-translate, and the point of vendoring is that
+`diff` against the source is meaningful. Verified after writing:
+`sha256 = 619c834e563fb5bce565915b2d3f225cdf2e71ea803d04a6404ed1cedd29656e`,
+CRLF count 0 — both matching what the KISS maintainer cited.
+
+The artifact is LF-clean and `.gitattributes`-enforced upstream, so a raw hash is
+stable across platforms. Two sibling artifacts (`dtype_manifest.json`,
+`op_manifest.json`) were **not** — their generators wrote files LF and stdout
+CRLF-translated on Windows, i.e. the same generator producing different bytes by
+output path. That is being fixed upstream; do not re-vendor those until it lands.
 
 ### Two commits, two meanings
 

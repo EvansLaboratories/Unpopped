@@ -67,47 +67,123 @@ fn the_artifact_is_the_one_this_leg_claims() {
     );
 }
 
-/// **The artifact records no per-namespace vocabulary version, and this asserts
-/// its ABSENCE so its arrival is loud.**
+/// **The per-namespace vocabulary versions are ASSERTED**, not merely read.
 ///
-/// There are two independent version axes and the gate above only sees one.
-/// `structure_key_schema_version` is the *schema* — the `sk4` token grammar.
-/// A namespace's *vocabulary* version is separate and moves on its maintainer's
-/// cadence: `vulkan:` went v3 → v4 (`spec/namespaces/vulkan.md`, rule V-1, five
-/// fields instead of four) while the published artifact stayed at
-/// `source_commit 19c3ad7`, generated before the bump. Nothing in the artifact
-/// marks that transition, so no consumer can currently detect it. That gap is
-/// KISS #200.
+/// KISS-CLASSIFY §6.8-0009 requires a consumer to assert a vocabulary version.
+/// This crate carries the target token opaquely and compares it whole
+/// (§6.8-0002), so a vocabulary bump changes bytes it reproduces faithfully and
+/// never interprets — but *immune is not conformant*, and a consumer that
+/// asserts nothing satisfies the clause by accident.
 ///
-/// This crate is not *harmed* by it — the target token is carried opaquely and
-/// compared whole (§6.8-0002), so a vocabulary bump changes bytes this crate
-/// faithfully reproduces and never interprets. But "immune" is not "conformant":
-/// KISS-CLASSIFY §6.8-0009 requires a consumer to **assert** a vocabulary
-/// version rather than merely read one, and a consumer that asserts nothing
-/// satisfies that by accident rather than by construction.
+/// # This replaces an absence-assertion that FAILED TO FIRE
 ///
-/// So this asserts the field is absent. When #200 lands and the artifact starts
-/// carrying one, this test fails — which is the point. The alternative is a gate
-/// that silently keeps passing while a field it should be checking appears
-/// beside it, which is exactly the failure mode the architect flagged: *"your
-/// gate proves the schema version is checked; nothing proves the namespace
-/// vocabulary version is."*
+/// Before the field existed, this test asserted it was **absent** under four
+/// guessed names — `vocabulary_version`, `namespace_vocabulary_version`,
+/// `vulkan_vocabulary_version`, `target_vocabulary_version` — so that its
+/// arrival would be loud. The field arrived as **`namespace_vocabulary_versions`**
+/// (plural, and an *object* rather than a scalar) and the assertion **passed**,
+/// silently, exactly as it had every day before.
+///
+/// The lesson is general and cost nothing to learn only because a peer told me
+/// the field had landed: **an absence-assertion over enumerated names is worth
+/// no more than the enumeration.** The robust form does not guess. It pins the
+/// artifact's whole top-level key set, so *any* added or removed field breaks
+/// this test regardless of what it is called — which is what
+/// `the_artifact_shape_is_pinned_so_any_new_field_is_loud` below does.
 #[test]
-fn no_namespace_vocabulary_version_exists_to_assert_yet() {
-    for probe in [
-        "\"vocabulary_version\"",
-        "\"namespace_vocabulary_version\"",
-        "\"vulkan_vocabulary_version\"",
-        "\"target_vocabulary_version\"",
-    ] {
+fn the_namespace_vocabulary_versions_are_asserted() {
+    // Object-valued, so the scalar reader does not apply — match the whole
+    // block byte-exactly, which is also the strictest thing available.
+    for (ns, ver) in [("cuda", 1), ("vulkan", 4)] {
+        let needle = format!("\"{ns}\": {ver}");
         assert!(
-            scalar(VECTORS, probe).is_none(),
-            "the artifact now carries {probe} — this leg must START ASSERTING it \
-             rather than deleting this test. Two version axes exist (schema and \
-             per-namespace vocabulary); the gate above covers only the first, and \
-             §6.8-0009 requires a consumer to assert, not read."
+            VECTORS.contains(&needle),
+            "artifact must declare {ns} vocabulary version {ver}. If the version \
+             moved, RE-VERIFY this leg against the new vocabulary before bumping \
+             the number here — the point of asserting is that a bump is a \
+             decision, not a diff."
         );
     }
+}
+
+/// **Any change to the artifact's top-level shape is loud**, whatever it is
+/// called.
+///
+/// The predecessor of this test guessed four names for a field that had not
+/// landed yet and missed the one that did. Enumerating the keys that ARE present
+/// has no such failure mode: a field added under any name breaks this, and so
+/// does one removed.
+#[test]
+fn the_artifact_shape_is_pinned_so_any_new_field_is_loud() {
+    // Every top-level key, in the artifact's own order.
+    const EXPECTED: &[&str] = &[
+        "schema",
+        "generated_from",
+        "source_commit",
+        "clause",
+        "namespace_vocabulary_note",
+        "namespace_vocabulary_versions",
+        "structure_key_schema_version",
+        "token_prefix",
+        "dtype_axis_note",
+        "recognition_count",
+        "usable_count",
+        "dtype_recognition_set",
+        "dtype_usable_set",
+        "reserved_dtypes",
+        "target_axis_note",
+        "target_namespaces",
+        "mapping_guard_note",
+        "coverage_note",
+        "positive_vectors",
+        "decline_vectors",
+    ];
+    let found: Vec<&str> = EXPECTED
+        .iter()
+        .copied()
+        .filter(|k| VECTORS.contains(&format!("\"{k}\":")))
+        .collect();
+    assert_eq!(
+        found, EXPECTED,
+        "a pinned top-level key is missing from the artifact"
+    );
+
+    // And nothing BEYOND them: count the top-level keys by depth so an addition
+    // under an unguessed name cannot slip through the way one already did.
+    let mut depth = 0i32;
+    let mut top_level = 0usize;
+    let mut in_str = false;
+    let mut esc = false;
+    let b: Vec<char> = VECTORS.chars().collect();
+    for i in 0..b.len() {
+        let c = b[i];
+        if esc {
+            esc = false;
+            continue;
+        }
+        match c {
+            '\\' if in_str => esc = true,
+            '"' => {
+                in_str = !in_str;
+                // A key at depth 1 is one whose closing quote is followed by ':'.
+                if !in_str && depth == 1 {
+                    let rest = b[i + 1..].iter().take_while(|c| c.is_whitespace()).count();
+                    if b.get(i + 1 + rest) == Some(&':') {
+                        top_level += 1;
+                    }
+                }
+            }
+            '{' | '[' if !in_str => depth += 1,
+            '}' | ']' if !in_str => depth -= 1,
+            _ => {}
+        }
+    }
+    assert_eq!(
+        top_level,
+        EXPECTED.len(),
+        "the artifact has {top_level} top-level keys but this leg pins          {}. A field was added or removed — read it, decide whether this leg          must assert it, and update EXPECTED deliberately.",
+        EXPECTED.len()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +278,7 @@ fn skips_fall_only_on_unimplemented_targets() {
 #[test]
 fn decline_vectors_produce_the_same_verdict() {
     let vectors = declines();
-    assert_eq!(vectors.len(), 10, "artifact decline-vector count changed");
+    assert_eq!(vectors.len(), 17, "artifact decline-vector count changed");
 
     let mut exact = 0;
     let mut failed = Vec::new();
@@ -491,7 +567,7 @@ fn the_artifact_scanner_actually_reads_the_vectors() {
     let pos = positives();
     let dec = declines();
     assert_eq!(pos.len(), 20);
-    assert_eq!(dec.len(), 10);
+    assert_eq!(dec.len(), 17);
 
     // Namespaces are tagged and split the way the artifact says.
     let vulkan = pos.iter().filter(|p| p.namespace == "vulkan").count();
