@@ -33,9 +33,9 @@
 //! defect, which was both simpler and worse than the one being hunted.
 
 use unpopped::backend::LowerError;
-use unpopped::cpu_c::CpuC;
 use unpopped::jit::{JitBudget, JitError, JitRequest, StubCompiler, synthesize};
 use unpopped::pattern::PatternNode;
+use unpopped_cpu_c::CpuC;
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc};
 
 fn bind(i: u8) -> PatternNode {

@@ -14,14 +14,38 @@
 //! **alpha-fluid generator internals**: the `0.0.1-alpha.N` lockstep implies no
 //! cross-version API stability anywhere — pin exact versions.
 //!
-//! The crate is **language-agnostic except for the lowering backend**:
+//! The crate is **language-agnostic, and now holds no emitter at all**:
 //!
 //! - [`ir`] — the op IR (a [`ScalarExpr`] DAG). Backend-neutral.
 //! - [`plan`] — the schedule decision (`StructureKey` → [`KernelPlan`]). Neutral.
 //! - [`backend`] — the [`Backend`] trait + the neutral [`backend::lower_expr`].
-//! - The CUDA backend (`Cuda`) now lives in the sibling `baracuda-cuda-emit`
-//!   crate; Slang / SPIR-V / Metal / CPU backends are additional [`Backend`]
-//!   impls, no core changes.
+//! - [`cfamily`] — C-family spelling helpers and emitted software codecs, shared
+//!   by every C-shaped emitter so a per-op spelling cannot drift between them.
+//!
+//! # Where the emitters went
+//!
+//! Every reference emitter now lives in its own crate: `unpopped-cpu-c` (the
+//! portable-C99 one), `unpopped-slang`. The CUDA emitter has always been
+//! external, in `baracuda-cuda-emit`.
+//!
+//! This is the umbrella model — **Unpopped is a standard with a normative
+//! reference emitter per target**, and a standard that ships one target's
+//! spelling in its core is quietly privileging it. Consequences worth knowing:
+//!
+//! * A consumer wanting a working kernel needs two crates (`unpopped` plus an
+//!   emitter). That is the deliberate cost; the benefit is that no emitter is
+//!   the default by accident of location.
+//! * This crate's own tests use a **test double**, not a real backend — see
+//!   `tests/common/mod.rs`. A core property proven against a real emitter is
+//!   proven against two things at once, and blames the wrong one when it fails.
+//! * The split is load-bearing rather than cosmetic. It immediately surfaced a
+//!   [`backend::Lowering`] seam that had no builder setter, so it was
+//!   unreachable from outside this crate — invisible while the emitters lived
+//!   in here and wrote the struct literal directly.
+//!
+//! Cross-emitter evidence (the dtype coverage matrix) lives in
+//! `unpopped-conformance`, which depends on every emitter so that no emitter has
+//! to depend on its siblings.
 //!
 //! Op logic is described as IR rather than opaque CUDA precisely so the emitter
 //! can *see the dataflow* and transform it (vectorize, hoist, fuse) — and so the
@@ -43,7 +67,6 @@ pub mod cfamily;
 pub mod contract;
 #[cfg(feature = "convert")]
 pub mod convert;
-pub mod cpu_c;
 pub mod dispatch_artifact;
 pub mod ir;
 pub mod jit;
@@ -56,7 +79,6 @@ pub mod pattern;
 pub mod plan;
 pub mod recipe;
 pub mod shape;
-pub mod slang;
 pub mod telemetry;
 mod text;
 
@@ -72,7 +94,6 @@ mod kiss_ref_diff;
 
 pub use backend::{Backend, GeneratedKernel, Variant, VariantFidelity};
 pub use contract::{bundle, bundle_kisc, contract, front_matter};
-pub use cpu_c::CpuC;
 pub use dispatch_artifact::{emit_dispatch_table, parse_dispatch_table};
 pub use ir::{
     Access, AccumSpec, AxisRole, ContractionAxes, DagNode, Expr, ExprDag, NodeId, OpDef, ReduceOp,
@@ -93,7 +114,6 @@ pub use shape::{
     SYMBOLIC, ShapeError, ShapeRuleForm, output_shape, pooled_axis_dim_expr, shape_rule_form,
     windowed_extent,
 };
-pub use slang::Slang;
 pub use telemetry::{
     Candidate, DispatchRecord, HwFingerprint, ImplId, Ingest, MissRecord, RankedCell,
     TELEMETRY_SCHEMA_MAX, VariantVote, arch_sku_of, ingest_jsonl, merge_reports, rank_matrix,

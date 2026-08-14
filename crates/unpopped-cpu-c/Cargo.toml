@@ -1,0 +1,28 @@
+[package]
+name = "unpopped-cpu-c"
+version = "0.1.0"
+description = "The portable-C99 reference emitter for Unpopped: lowers a neutral `KernelPlan` to C source that compiles on any C compiler, with no vendor intrinsic, no conditional compilation, and no device. Ships the software codecs the narrow dtypes need (FP8 E4M3/E5M2, sub-byte i4/u4/b1, and a struct complex ABI), so `f8e4m3fn` and `c128` lower without naming anyone's toolchain. This is the normative reference emitter a new target is read against, and the one every differential test runs through."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["kernel", "codegen", "compiler", "c", "portable"]
+categories = ["compilers", "development-tools", "science"]
+# License texts are duplicated into this crate directory so they ship inside the
+# published tarball — Cargo cannot package files above the crate root. Same
+# reasoning as the `unpopped` crate; see its manifest.
+
+[dependencies]
+unpopped = { workspace = true }
+unpopped-vocab = { workspace = true }
+
+[dev-dependencies]
+# The oracle differential and the compile-and-run end-to-end suite live here now,
+# with the emitter they exercise. They were in `unpopped`'s test directory while
+# the emitter was in `unpopped`'s source.
+kiss-ref-core = "0.2.3"
+
+[lints]
+workspace = true

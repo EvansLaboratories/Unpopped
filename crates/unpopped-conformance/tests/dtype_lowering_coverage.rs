@@ -26,10 +26,10 @@
 //! dtype must still *name* it, so it can decline as a known dtype rather than as
 //! an unknown token. This file pins which is which.
 
-use unpopped::cpu_c::CpuC;
 use unpopped::ir::{OpDef, input};
-use unpopped::slang::Slang;
 use unpopped::try_generate;
+use unpopped_cpu_c::CpuC;
+use unpopped_slang::Slang;
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_key};
 
 /// What a backend does with a dtype, and **why**.

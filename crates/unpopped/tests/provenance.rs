@@ -10,7 +10,9 @@
 //! was passing vacuously. A cross-project conformance test with that defect
 //! certifies nothing while looking green.
 
-use unpopped::cpu_c::CpuC;
+mod common;
+use common::{OtherStub, StubBackend};
+use unpopped::backend::Backend;
 use unpopped::ir::{OpDef, input};
 use unpopped::{generate, generate_variants};
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_key};
@@ -27,18 +29,36 @@ fn key_for(n: i64, dtype: ElementKind) -> unpopped_vocab::StructureKey {
 #[test]
 fn generate_stamps_the_cell_it_was_asked_for() {
     let key = key_for(7, ElementKind::F32);
-    let k = generate(&add_op(), &key, &CpuC);
+    let k = generate(&add_op(), &key, &StubBackend);
 
     let p = k
         .provenance()
         .expect("a kernel from `generate` must carry its validity key");
     assert_eq!(p.structure_key, key.to_token());
-    assert_eq!(p.backend, "cpu_c");
     assert!(
         p.generator.starts_with("unpopped "),
         "generator must name the producer and its version, got {:?}",
         p.generator
     );
+
+    // The stamp names *whichever* backend produced it. This asserted the literal
+    // `"cpu_c"` while the emitter lived in core — which made a property of
+    // `generate` read as a fact about C, and would have been satisfied by a
+    // stamper that returned a constant. Two backends with different names is the
+    // control that distinguishes "reports the backend" from "reports a string".
+    assert_eq!(p.backend, StubBackend.name());
+    assert_eq!(p.provider, StubBackend.provider());
+
+    let other = generate(&add_op(), &key, &OtherStub);
+    let q = other.provenance().expect("stamped");
+    assert_eq!(q.backend, OtherStub.name());
+    assert_ne!(
+        p.backend, q.backend,
+        "two different backends must not stamp the same name"
+    );
+    // Same cell, different backend: the CELL half of the stamp must be identical
+    // and the BACKEND half different. A stamp that mixed them would fail here.
+    assert_eq!(p.structure_key, q.structure_key);
 }
 
 /// The negative control for the cell identity.
@@ -56,8 +76,8 @@ fn a_different_cell_gets_a_different_stamp() {
         "harness precondition: the two cells must actually differ"
     );
 
-    let a = generate(&op, &f32_key, &CpuC);
-    let b = generate(&op, &i32_key, &CpuC);
+    let a = generate(&op, &f32_key, &StubBackend);
+    let b = generate(&op, &i32_key, &StubBackend);
 
     assert_ne!(
         a.provenance().unwrap().structure_key,
@@ -89,7 +109,7 @@ fn a_backend_fragment_is_unstamped() {
 #[test]
 fn every_variant_kernel_is_stamped() {
     let key = key_for(7, ElementKind::F32);
-    let vs = generate_variants(&add_op(), &key, &CpuC);
+    let vs = generate_variants(&add_op(), &key, &StubBackend);
     assert!(
         !vs.is_empty(),
         "harness precondition: at least a base variant"

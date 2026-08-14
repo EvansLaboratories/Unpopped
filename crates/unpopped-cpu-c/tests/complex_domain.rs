@@ -293,8 +293,8 @@ fn complex_div_inverts_complex_mul() {
 /// the same answer FP8 and the sub-byte dtypes reached.
 #[test]
 fn a_complex_cell_lowers_as_a_struct_with_called_arithmetic() {
-    use unpopped::cpu_c::CpuC;
     use unpopped::try_generate;
+    use unpopped_cpu_c::CpuC;
     let c = ElementKind::Complex128;
     let op = OpDef::elementwise("m", 2, &[c], input(0) * input(1));
     let d = OperandDesc::new(1, &[2], &[1], c, 8);

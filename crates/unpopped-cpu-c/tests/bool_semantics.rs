@@ -17,10 +17,10 @@
 //! and `Bool`, the dtype that surface is named after, fell through the wrong
 //! branch.
 
-use unpopped::cpu_c::CpuC;
 use unpopped::ir::{BinaryOp, OpDef, input};
 use unpopped::plan::try_build_plan;
 use unpopped::try_generate;
+use unpopped_cpu_c::CpuC;
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_key};
 
 const B: ElementKind = ElementKind::Bool;

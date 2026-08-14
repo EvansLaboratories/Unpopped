@@ -318,6 +318,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "unpopped-conformance"
+version = "0.1.0"
+dependencies = [
+ "unpopped",
+ "unpopped-cpu-c",
+ "unpopped-slang",
+ "unpopped-vocab",
+]
+
+[[package]]
+name = "unpopped-cpu-c"
+version = "0.1.0"
+dependencies = [
+ "kiss-ref-core",
+ "unpopped",
+ "unpopped-vocab",
+]
+
+[[package]]
+name = "unpopped-slang"
+version = "0.1.0"
+dependencies = [
+ "unpopped",
+ "unpopped-vocab",
+]
+
+[[package]]
 name = "unpopped-vocab"
 version = "0.2.0"
 dependencies = [

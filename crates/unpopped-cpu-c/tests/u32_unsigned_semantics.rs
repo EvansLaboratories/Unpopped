@@ -39,10 +39,10 @@
 //! compiler agrees. The first is asserted below as a text property; the second
 //! needs the e2e leg and a compiler.
 
-use unpopped::cpu_c::CpuC;
 use unpopped::ir::{BinaryOp, OpDef, input};
 use unpopped::oracle::{TypedBuffer, evaluate};
 use unpopped::{build_plan, generate};
+use unpopped_cpu_c::CpuC;
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_key};
 
 /// Values chosen to straddle the signed/unsigned boundary. Anything at or above

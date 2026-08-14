@@ -1,0 +1,27 @@
+[package]
+name = "unpopped-conformance"
+version = "0.1.0"
+description = "Cross-emitter conformance evidence for Unpopped: tests that are about the STANDARD rather than about any one backend, and so cannot live in a backend's crate."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+# Never published: this crate has no library surface, only evidence. It exists so
+# a test that must see EVERY reference emitter has somewhere to live that does not
+# make one emitter depend on another — `unpopped-cpu-c` has no business
+# dev-depending on `unpopped-slang`, and a dtype-coverage matrix spanning both is
+# not a test of either.
+publish = false
+
+[dependencies]
+unpopped = { workspace = true }
+unpopped-vocab = { workspace = true }
+
+[dev-dependencies]
+unpopped-cpu-c = { workspace = true }
+unpopped-slang = { workspace = true }
+
+[lints]
+workspace = true

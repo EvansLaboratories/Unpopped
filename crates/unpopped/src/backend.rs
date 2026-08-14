@@ -601,6 +601,27 @@ impl<'a> LoweringBuilder<'a> {
         self.inner.select = f;
         self
     }
+    /// Infix-arithmetic spelling ([`Lowering::arith`]). Defaults to the C
+    /// operator, which is right for every dtype whose compute type is a C
+    /// scalar.
+    ///
+    /// # This setter was missing, and that made the seam unreachable
+    ///
+    /// `Lowering` gained `arith` so a backend could spell arithmetic on a
+    /// compute type no C operator applies to — a complex struct, where `a * b`
+    /// is `error C2088`. The field landed; this method did not. Since `Lowering`
+    /// is `#[non_exhaustive]`, the builder is *the only way* an out-of-crate
+    /// backend constructs one, so for that whole window the newest seam existed
+    /// and could not be reached from outside this crate.
+    ///
+    /// Nothing caught it because both in-tree emitters lived in this crate and
+    /// wrote the struct literal directly. It surfaced the moment they moved out —
+    /// as a compile error, immediately, which is the argument for the move.
+    #[must_use]
+    pub fn arith(mut self, f: &'a dyn Fn(ArithOp, String, String) -> String) -> Self {
+        self.inner.arith = f;
+        self
+    }
     /// Constant-literal spelling ([`ScalarExpr::Const`]). Defaults to [`const_lit`].
     #[must_use]
     pub fn constant(mut self, f: &'a dyn Fn(f64) -> String) -> Self {

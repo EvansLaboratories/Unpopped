@@ -22,8 +22,6 @@ The dependency only ever points one way. Vendor and device crates depend on
   the `Lowering` seams for the non-universal parts of the math.
 - **The `Compiler` trait** — the just-in-time compile seam, with `StubCompiler` for
   building and testing without a toolchain.
-- **`CpuC`** — a portable-C99 reference backend that compiles and runs GPU-free. It
-  is what lets this crate self-test with no device present.
 - **The CPU oracle** — an independent f64 evaluator that shares no lowering code
   with any emitter, so a bug cannot hide in both the kernel and its reference.
 - **Contracts and dispatch artifacts** — KISS-Contract derivation and the
@@ -36,13 +34,23 @@ Each backend is its own crate implementing `unpopped::Backend` for its target:
 | target | crate |
 |---|---|
 | CUDA | [`baracuda-cuda-emit`](https://github.com/ciresnave/baracuda) — the `Cuda` emitter, its NVRTC compiler, and the Fuel synthesizer |
-| CPU (C99) | in-tree (`CpuC`), relocating — the neutral reference backend |
-| Slang | in-tree, relocating |
+| CPU (C99) | `unpopped-cpu-c` — the portable reference emitter |
+| Slang | `unpopped-slang` |
 
-Unpopped is moving to hosting **a normative reference emitter per target**, each
-in its own crate outside the core. The in-tree emitters above are scheduled to
-relocate; a project that originates an emitter may keep owning it, as Baracuda
-owns the CUDA one.
+Unpopped hosts **a normative reference emitter per target**, each in its own
+crate outside the core. A project that originates an emitter may keep owning it,
+as Baracuda owns the CUDA one.
+
+**The core holds no emitter.** A consumer wanting a working kernel needs
+`unpopped` plus one emitter crate — the deliberate cost of not privileging any
+target by accident of where it lives. `unpopped`'s own tests run against a test
+double rather than a real backend, so a core property is never proven against
+two things at once.
+
+The split is not cosmetic. Moving the emitters out immediately surfaced a
+`Lowering` seam with no builder setter, which made it unreachable from outside
+the core — invisible for as long as the emitters lived inside it and could write
+the struct literal directly.
 
 Earlier revisions said the `unpopped-*` namespace was reserved for Unpopped's own
 crates so a third-party backend never had to ask permission for a name. That is

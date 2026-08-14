@@ -21,7 +21,7 @@
 //! ## Naming — round-trips through the Slang lifter
 //!
 //! Buffers are `output` / `input{K}` (not `out`/`in`, which are HLSL keywords),
-//! matching [`crate::convert::lift_elementwise_slang`]'s convention — so emitted
+//! matching [`unpopped::convert::lift_elementwise_slang`]'s convention — so emitted
 //! Slang re-lifts to the same IR (the residue-round-trip contract the "one IR, N
 //! languages" hub rests on; proven by `slang_emit_round_trips_through_the_lifter`).
 //!
@@ -42,7 +42,7 @@
 //!
 //! ## Known C-shaped seam assumption this backend surfaces
 //!
-//! [`crate::backend::const_lit`] spells non-finite constants as C's
+//! [`unpopped::backend::const_lit`] spells non-finite constants as C's
 //! `NAN`/`INFINITY` macros, which are not valid Slang — so a body carrying a
 //! NaN/Inf *constant* emits invalid Slang today. Finite-constant bodies (the vast
 //! majority: add/mul/relu/affine/…) are unaffected. This is exactly the kind of
@@ -50,10 +50,10 @@
 //! the emitter seam is frozen into a versioned ABI; a Slang-aware const spelling
 //! is the fix (tracked as a seam follow-up).
 
-use crate::backend::{Backend, GeneratedKernel, LowerError, Lowering, const_lit, lower_dag};
-use crate::cfamily::{assert_no_int_div_or_const, dtype_tag};
-use crate::ir::{BinaryOp, ExprDag, ScalarExpr, UnaryOp};
-use crate::plan::{KernelPlan, Schedule};
+use unpopped::backend::{Backend, GeneratedKernel, LowerError, Lowering, const_lit, lower_dag};
+use unpopped::cfamily::{assert_no_int_div_or_const, dtype_tag};
+use unpopped::ir::{BinaryOp, ExprDag, ScalarExpr, UnaryOp};
+use unpopped::plan::{KernelPlan, Schedule};
 use unpopped_vocab::{ElementKind, TargetId};
 
 /// The Slang compute-shader backend. Lowers a [`KernelPlan`] to `.slang` source.
@@ -149,7 +149,7 @@ impl Backend for Slang {
         // so reaching it means the plan gate was bypassed — a caller bug, not an
         // unsupported request. `try_build_plan` is where that becomes a typed
         // refusal; here it stays a backstop that should be unreachable.
-        if crate::plan::is_int_dtype(plan.dtype) {
+        if unpopped::plan::is_int_dtype(plan.dtype) {
             assert_no_int_div_or_const(plan.body, plan.dtype, false, false);
         }
         match plan.schedule {
@@ -190,23 +190,22 @@ fn emit_scalar_slang(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
     let (prelude, root) = lower_dag(
         &ExprDag::from_expr(plan.body),
         ctype,
-        &Lowering {
-            leaf: &acc,
-            reduced: &|i| unreachable!("no Reduced leaf outside RowReduce: red{i}"),
-            coord: &|d| {
-                panic!(
-                    "slang backend: Coord({d}) reached the scalar emitter — Coord bodies lower \
-                     via Strided only (the linear-index kernel has no per-axis coordinates)"
-                )
-            },
-            unary: &|op, x| slang_unary(op, x, plan.dtype),
-            binary: &|op, a, b| slang_binary(op, a, b, plan.dtype),
-            // Slang lowers no struct-typed dtype, so the C operator is always
-            // right here; the seam exists for backends that do.
-            arith: &|op, a, b| format!("({a} {} {b})", op.c_operator()),
-            select: &|c, a, b| slang_select(c, a, b, plan.dtype),
-            constant: &const_lit,
-        },
+        // Through the builder — the only route open to a backend outside the
+        // `unpopped` crate, which this one now is. See the same note in
+        // `unpopped-cpu-c`.
+        //
+        // No `.arith()`: Slang lowers no struct-typed dtype, so the C infix
+        // default is right for everything it spells. That is a real answer, not
+        // an omission — and it is why the default is a working spelling rather
+        // than a panic like `reduced`/`coord`.
+        &Lowering::builder(
+            &acc,
+            &|op, x| slang_unary(op, x, plan.dtype),
+            &|op, a, b| slang_binary(op, a, b, plan.dtype),
+        )
+        .select(&|c, a, b| slang_select(c, a, b, plan.dtype))
+        .constant(&const_lit)
+        .build(),
     );
     for decl in &prelude {
         s.push_str(&format!("    {decl}\n"));
@@ -397,8 +396,8 @@ fn slang_select(c: String, a: String, b: String, dtype: ElementKind) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::generate;
-    use crate::ir::{OpDef, input};
+    use unpopped::generate;
+    use unpopped::ir::{OpDef, input};
     use unpopped_vocab::{ArchSku, OpCategory, OperandDesc, structure_key};
 
     /// A binary Elementwise cell whose small `align` defeats vectorization, so
@@ -469,7 +468,7 @@ mod tests {
 
     #[test]
     fn unary_uses_overloaded_hlsl_intrinsics_not_c_suffixed() {
-        use crate::ir::UnaryOp;
+        use unpopped::ir::UnaryOp;
         let op = OpDef::elementwise("e", 1, &[ElementKind::F32], input(0).unary(UnaryOp::Exp));
         let k = generate(&op, &unary_scalar_key(ElementKind::F32, 4), &Slang);
         assert!(
@@ -486,7 +485,7 @@ mod tests {
 
     #[test]
     fn f64_uses_double_and_same_overloaded_intrinsics() {
-        use crate::ir::UnaryOp;
+        use unpopped::ir::UnaryOp;
         let op = OpDef::elementwise("s", 1, &[ElementKind::F64], input(0).unary(UnaryOp::Sqrt));
         let k = generate(&op, &unary_scalar_key(ElementKind::F64, 8), &Slang);
         assert!(
@@ -534,8 +533,8 @@ mod tests {
     #[cfg(feature = "convert")]
     #[test]
     fn slang_emit_round_trips_through_the_lifter() {
-        use crate::convert::{SLANG, lift_elementwise};
-        use crate::ir::ScalarExpr;
+        use unpopped::convert::{SLANG, lift_elementwise};
+        use unpopped::ir::ScalarExpr;
         let op = OpDef::elementwise("mul", 2, &[ElementKind::F32], input(0) * input(1));
         let k = generate(&op, &binary_scalar_key(ElementKind::F32, 4), &Slang);
         let lifted = lift_elementwise(&SLANG, &k.source, "mul", &[ElementKind::F32])
@@ -560,8 +559,8 @@ mod tests {
     #[test]
     #[ignore = "requires the slang compiler (slangc) on PATH"]
     fn emitted_slang_compiles_with_slangc() {
-        use crate::ir::{BinaryOp, UnaryOp};
         use std::process::Command;
+        use unpopped::ir::{BinaryOp, UnaryOp};
 
         let kernels = vec![
             generate(

@@ -1,5 +1,5 @@
 //! Portable-C CPU lowering — the second backend (v1), proving the neutral
-//! [`crate::plan::KernelPlan`] IR is genuinely backend-agnostic.
+//! [`unpopped::plan::KernelPlan`] IR is genuinely backend-agnostic.
 //!
 //! [`CpuC`] emits **portable C99** (compiles + runs GPU-free) for the scalar
 //! contiguous Elementwise path — a plain `void` function over a serial
@@ -14,14 +14,14 @@
 //! through the SAME language-neutral [`lower_dag`] the CUDA scalar path uses,
 //! against a CpuC [`Lowering`]. The per-op spellers CUDA injects are ~95%
 //! portable C99 (`powf`/`fmaxf`/`fmodf`/`atan2f`/the `Cmp*` operators/the ternary
-//! select), so this backend REUSES them verbatim — [`crate::cfamily::binary_f32`] /
-//! [`crate::cfamily::binary_f64`] / [`crate::cfamily::binary_int`] /
-//! [`crate::cfamily::select_f32`] / [`crate::cfamily::select_f64`], plus
-//! [`crate::backend::const_lit`] (`NAN`/`INFINITY`/decimal — already valid C, and
+//! select), so this backend REUSES them verbatim — [`unpopped::cfamily::binary_f32`] /
+//! [`unpopped::cfamily::binary_f64`] / [`unpopped::cfamily::binary_int`] /
+//! [`unpopped::cfamily::select_f32`] / [`unpopped::cfamily::select_f64`], plus
+//! [`unpopped::backend::const_lit`] (`NAN`/`INFINITY`/decimal — already valid C, and
 //! `<math.h>` supplies the two macros). The ONLY CUDA-specific unary atom is
 //! `rsqrt` (a CUDA intrinsic, `rsqrtf`/`rsqrt`); the CpuC unary twin
-//! ([`unary_f32_cpu`]/[`unary_f64_cpu`]) reuses [`crate::cfamily::unary_f32`] /
-//! [`crate::cfamily::unary_f64`] for EVERY other op and overrides only `Rsqrt` to
+//! ([`unary_f32_cpu`]/[`unary_f64_cpu`]) reuses [`unpopped::cfamily::unary_f32`] /
+//! [`unpopped::cfamily::unary_f64`] for EVERY other op and overrides only `Rsqrt` to
 //! `1.0f/sqrtf(x)` (f64: `1.0/sqrt(x)`). Because the reused CUDA fns are promoted
 //! `pub(crate)` with their bodies untouched, every CUDA golden stays
 //! byte-identical.
@@ -40,15 +40,15 @@
 //!   scatter/offset/coord-free Elementwise cell, accepting only it inherently
 //!   excludes every complex case.
 
-use crate::backend::{Backend, GeneratedKernel, LowerError, Lowering, const_lit, lower_dag};
-use crate::cfamily::{
+use unpopped::backend::{Backend, GeneratedKernel, LowerError, Lowering, const_lit, lower_dag};
+use unpopped::cfamily::{
     assert_no_int_div_or_const, binary_f32, binary_f64, binary_int, complex_arith, complex_helpers,
     dtype_tag, fp8_helpers, narrow_load_fn, out_ctype_of, param_args, param_ctype,
     promote_load_f32, scalar_ctype, select_f32, select_f64, store_expr_of, sub_byte_helpers,
     sub_byte_load_fn, sub_byte_store_fn, unary_f32, unary_f64,
 };
-use crate::ir::{BinaryOp, ExprDag, UnaryOp};
-use crate::plan::{KernelPlan, Schedule};
+use unpopped::ir::{BinaryOp, ExprDag, UnaryOp};
+use unpopped::plan::{KernelPlan, Schedule};
 use unpopped_vocab::{ElementKind, TargetId};
 
 /// The portable-C CPU backend. Lowers a [`KernelPlan`] to `.c` source.
@@ -118,7 +118,7 @@ impl Backend for CpuC {
         // is `/` — both device/host dangerous at an integer dtype). The plan gate
         // (`assert_int_op_admissibility`) rejects these upstream; this is the
         // gate-every-layer backstop, identical coverage to `Cuda::lower`.
-        if crate::plan::is_int_dtype(plan.dtype) {
+        if unpopped::plan::is_int_dtype(plan.dtype) {
             // v1 is Elementwise/Scalar-only (panics below on any other
             // schedule), so the reduction-predicate exemption never applies
             // here — always `false` for both flags (inert; `in_reduction`
@@ -215,27 +215,31 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
     let (prelude, root) = lower_dag(
         &ExprDag::from_expr(plan.body),
         body_ctype,
-        &Lowering {
-            leaf: &acc,
-            reduced: &|i| unreachable!("no Reduced leaf outside RowReduce: red{i}"),
-            coord: &|d| {
-                panic!(
-                    "cpu_c backend: Coord({d}) reached the scalar emitter — Coord bodies \
-                     lower via Strided only (the linear-index loop has no per-axis \
-                     coordinates)"
-                )
-            },
-            unary: &|op, x| cpu_unary(op, x, plan.dtype),
-            binary: &|op, a, b| cpu_binary(op, a, b, plan.dtype),
-            // Complex compute types are structs, so their arithmetic is a call.
-            // Every other dtype falls through to the C operator.
-            arith: &|op, a, b| {
-                complex_arith(plan.dtype, op, &a, &b)
-                    .unwrap_or_else(|| format!("({a} {} {b})", op.c_operator()))
-            },
-            select: &|c, a, b| cpu_select(c, a, b, plan.dtype),
-            constant: &const_lit,
-        },
+        // Built through the BUILDER, not a struct literal. `Lowering` is
+        // `#[non_exhaustive]`, so this is the only route available to a backend
+        // outside the `unpopped` crate — which this one now is. Writing the
+        // literal was possible only while the emitter lived in core, and doing so
+        // is what hid a missing `.arith()` setter: the seam existed on the struct
+        // and was unreachable through the builder every out-of-crate backend has
+        // to use.
+        //
+        // `reduced` and `coord` are omitted deliberately. Their builder defaults
+        // panic with a message naming the missing seam and what to do about it,
+        // which is strictly better than the hand-written panics that used to sit
+        // here — and omitting them means the defaults are exercised rather than
+        // shadowed by every emitter passing its own copy.
+        &Lowering::builder(&acc, &|op, x| cpu_unary(op, x, plan.dtype), &|op, a, b| {
+            cpu_binary(op, a, b, plan.dtype)
+        })
+        // Complex compute types are structs, so their arithmetic is a call.
+        // Every other dtype falls through to the C operator.
+        .arith(&|op, a, b| {
+            complex_arith(plan.dtype, op, &a, &b)
+                .unwrap_or_else(|| format!("({a} {} {b})", op.c_operator()))
+        })
+        .select(&|c, a, b| cpu_select(c, a, b, plan.dtype))
+        .constant(&const_lit)
+        .build(),
     );
     let store = store_expr_of(plan, 0, root);
     // A packed store is a STATEMENT, not an assignment: several elements share a
@@ -285,7 +289,7 @@ fn cpu_unary(op: UnaryOp, x: String, dtype: ElementKind) -> String {
     }
 }
 
-/// The f32 unary twin: identical to [`crate::cfamily::unary_f32`] for EVERY op
+/// The f32 unary twin: identical to [`unpopped::cfamily::unary_f32`] for EVERY op
 /// except `Rsqrt`, which the CUDA path spells as the intrinsic `rsqrtf(x)` — not
 /// portable C — so it is respelled `1.0f/sqrtf(x)` (the one genuinely new atom).
 /// Every other arm (`expf`/`sqrtf`/`fabsf`/`erff`/…) is a C99 `<math.h>` function
@@ -297,7 +301,7 @@ fn unary_f32_cpu(op: UnaryOp, x: String) -> String {
     }
 }
 
-/// The f64 unary twin: [`crate::cfamily::unary_f64`] for every op except `Rsqrt`,
+/// The f64 unary twin: [`unpopped::cfamily::unary_f64`] for every op except `Rsqrt`,
 /// respelled `1.0/sqrt(x)` (the CUDA intrinsic `rsqrt(x)` is not portable C).
 fn unary_f64_cpu(op: UnaryOp, x: String) -> String {
     match op {
@@ -363,8 +367,8 @@ fn cpu_select(c: String, a: String, b: String, dtype: ElementKind) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::generate;
-    use crate::ir::{OpDef, input};
+    use unpopped::generate;
+    use unpopped::ir::{OpDef, input};
     use unpopped_vocab::{ArchSku, OpCategory, OperandDesc, structure_key};
 
     /// A binary Elementwise cell whose small `align` defeats vectorization, so
@@ -437,7 +441,7 @@ mod tests {
 
     #[test]
     fn rsqrt_spells_portable_one_over_sqrt_not_the_cuda_intrinsic() {
-        use crate::ir::UnaryOp;
+        use unpopped::ir::UnaryOp;
         // f32: 1.0f/sqrtf, never rsqrtf.
         let op32 = OpDef::elementwise("rs", 1, &[ElementKind::F32], input(0).unary(UnaryOp::Rsqrt));
         let k32 = generate(&op32, &unary_scalar_key(ElementKind::F32, 4), &CpuC);
@@ -468,7 +472,7 @@ mod tests {
 
     #[test]
     fn reused_math_fn_stays_portable_c99() {
-        use crate::ir::BinaryOp;
+        use unpopped::ir::BinaryOp;
         // A reused speller (powf) rides straight through — proving the CUDA
         // spellers are portable C and are shared, not re-implemented.
         let op = OpDef::elementwise(

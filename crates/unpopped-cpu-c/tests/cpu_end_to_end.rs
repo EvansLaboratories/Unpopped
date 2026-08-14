@@ -37,10 +37,10 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use unpopped::cpu_c::CpuC;
 use unpopped::ir::{OpDef, input};
 use unpopped::oracle::{Fidelity, TypedBuffer, compare, evaluate};
 use unpopped::{build_plan, generate};
+use unpopped_cpu_c::CpuC;
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_key};
 
 /// `f32::NAN` shortened so the input tables below line up column-wise.
