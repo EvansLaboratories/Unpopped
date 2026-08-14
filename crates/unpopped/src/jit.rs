@@ -341,7 +341,10 @@ fn synthesize_op(
         return Err(JitError::UnsupportedDtype);
     }
     let kernel_op = OpDef {
-        body: optimize(&op.body),
+        // The optimizer folds constants at the DEVICE's precision, so it needs
+        // the cell's dtype — folding at f64 for an f32 kernel diverges by 1 ULP
+        // on a chained fold (see `optimize::Compute`).
+        body: optimize(&op.body, dtype),
         ..op.clone()
     };
     // The op/dtype admissibility gate, asked DIRECTLY rather than through a

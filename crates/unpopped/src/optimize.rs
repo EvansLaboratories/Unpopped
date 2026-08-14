@@ -35,6 +35,7 @@
 
 use crate::ir::{BinaryOp, ScalarExpr, UnaryOp};
 use std::collections::HashMap;
+use unpopped_vocab::ElementKind;
 
 type Id = usize;
 
@@ -170,40 +171,128 @@ impl EGraph {
     }
 }
 
-fn add_expr(eg: &mut EGraph, e: &ScalarExpr) -> Id {
+fn add_expr(eg: &mut EGraph, e: &ScalarExpr, compute: Compute) -> Id {
     match e {
         ScalarExpr::Input(i) => eg.add(ENode::Input(*i)),
-        ScalarExpr::Const(v) => eg.add(ENode::Const(v.to_bits())),
+        // Rounded AT INGEST, so every `Const` in the e-graph is a value the
+        // device can actually hold. A body carrying `Const(0.1)` at an f32
+        // kernel computes with `(float)0.1` on device; folding against the f64
+        // `0.1` would diverge before any chaining is involved. Emission is
+        // unaffected — `const_lit` spells the rounded value, which converts to
+        // the same `float`.
+        ScalarExpr::Const(v) => eg.add(ENode::Const(compute.round(*v).to_bits())),
         ScalarExpr::Param(i) => eg.add(ENode::Param(*i)),
         ScalarExpr::Reduced(i) => eg.add(ENode::Reduced(*i)),
         ScalarExpr::Coord(d) => eg.add(ENode::Coord(*d)),
         ScalarExpr::Add(a, b) => {
-            let (a, b) = (add_expr(eg, a), add_expr(eg, b));
+            let (a, b) = (add_expr(eg, a, compute), add_expr(eg, b, compute));
             eg.add(ENode::Add(a, b))
         }
         ScalarExpr::Sub(a, b) => {
-            let (a, b) = (add_expr(eg, a), add_expr(eg, b));
+            let (a, b) = (add_expr(eg, a, compute), add_expr(eg, b, compute));
             eg.add(ENode::Sub(a, b))
         }
         ScalarExpr::Mul(a, b) => {
-            let (a, b) = (add_expr(eg, a), add_expr(eg, b));
+            let (a, b) = (add_expr(eg, a, compute), add_expr(eg, b, compute));
             eg.add(ENode::Mul(a, b))
         }
         ScalarExpr::Div(a, b) => {
-            let (a, b) = (add_expr(eg, a), add_expr(eg, b));
+            let (a, b) = (add_expr(eg, a, compute), add_expr(eg, b, compute));
             eg.add(ENode::Div(a, b))
         }
         ScalarExpr::Binary(op, a, b) => {
-            let (a, b) = (add_expr(eg, a), add_expr(eg, b));
+            let (a, b) = (add_expr(eg, a, compute), add_expr(eg, b, compute));
             eg.add(ENode::Binary(*op, a, b))
         }
         ScalarExpr::Unary(op, x) => {
-            let x = add_expr(eg, x);
+            let x = add_expr(eg, x, compute);
             eg.add(ENode::Unary(*op, x))
         }
         ScalarExpr::Select(c, a, b) => {
-            let (c, a, b) = (add_expr(eg, c), add_expr(eg, a), add_expr(eg, b));
+            let (c, a, b) = (
+                add_expr(eg, c, compute),
+                add_expr(eg, a, compute),
+                add_expr(eg, b, compute),
+            );
             eg.add(ENode::Select(c, a, b))
+        }
+    }
+}
+
+/// The float precision the **device** evaluates this kernel's body at.
+///
+/// # Why constant folding needs this
+///
+/// Folds happen in host `f64`. For a *single* operation on `f32`-representable
+/// operands that is provably harmless: `f64` carries 53 bits, ≥ 2·24+2, so
+/// computing in `f64` and rounding once to `f32` yields the correctly-rounded
+/// `f32` result for `+`, `-`, `*`, `/` and `sqrt` (the classic
+/// innocuous-double-rounding bound).
+///
+/// **Chains break it.** The optimizer folds an inner constant expression to an
+/// `f64` constant and then folds the outer op on *that*, so an intermediate the
+/// device would have rounded to `f32` stays at `f64` precision. Measured, on
+/// `sqr(sqr(c))` at `f32`:
+///
+/// ```text
+/// c = -2.7932066917419434
+///   fold at f64, round once  : 60.87126159667969   bits 0x42737c2c
+///   device, f32 step by step : 60.87126541137695   bits 0x42737c2d
+/// ```
+///
+/// One ULP apart — which violates this module's own bit-preservation contract
+/// ("every rewrite preserves the device result **bits** for all inputs"). The
+/// contract was right and the implementation did not honour it. Rounding every
+/// fold result to the compute precision restores it: each fold now lands on the
+/// bits the device would have produced at that step.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Compute {
+    /// Single precision — `f32`, and every narrow float, which the emitters
+    /// promote to `float` and compute at `f32` (see `cfamily`'s narrow-float
+    /// seam).
+    F32,
+    /// Double precision.
+    F64,
+}
+
+impl Compute {
+    /// The precision a kernel at `dt` computes its body at.
+    #[must_use]
+    pub fn of(dt: ElementKind) -> Self {
+        match dt {
+            ElementKind::F64 => Self::F64,
+            // f32 and the narrow floats: the narrow ones are promoted to
+            // `float` by the load and computed at f32, so their fold precision
+            // is f32 too — NOT their storage precision.
+            ElementKind::F32
+            | ElementKind::F32Strict
+            | ElementKind::F16
+            | ElementKind::Bf16
+            | ElementKind::Fp8E4M3FN
+            | ElementKind::Fp8E5M2
+            | ElementKind::Fp8E4M3FNUZ
+            | ElementKind::Fp8E5M2FNUZ
+            | ElementKind::F8E8M0
+            | ElementKind::F8E6M2 => Self::F32,
+            // Complex components are f32/f64 pairs; the wider component width
+            // decides. Integers and Bool never reach a float fold — a `Const`
+            // at an integer dtype is refused by the plan gate
+            // (`assert_no_int_div_or_const`), so no rounding applies and F64
+            // (the identity) is the honest answer rather than a guess.
+            ElementKind::Complex64 => Self::F32,
+            _ => Self::F64,
+        }
+    }
+
+    /// Round a fold result to this precision — the bits the device would hold
+    /// after that step.
+    #[must_use]
+    fn round(self, v: f64) -> f64 {
+        match self {
+            // `as f32` is round-to-nearest-even, which is what the device does.
+            #[allow(clippy::cast_possible_truncation)]
+            Self::F32 => f64::from(v as f32),
+            Self::F64 => v,
         }
     }
 }
@@ -297,7 +386,7 @@ fn exact_pow2_recip(c: f64) -> Option<f64> {
 /// on the host collapse to one f32/f16 value on the device, flipping
 /// `==`/`!=`/`<`), and when-in-doubt-add-no-rule holds. Pinned by
 /// `cmp_predicates_are_never_folded_or_rewritten`.
-fn eval_binary(op: BinaryOp, x: f64, y: f64) -> Option<f64> {
+fn eval_binary(op: BinaryOp, x: f64, y: f64, compute: Compute) -> Option<f64> {
     // Max/Min only fold when neither operand is NaN — the kernel propagates NaN
     // (NaN-select), so folding a NaN operand away (host f64::max suppresses it)
     // would disagree with the device.
@@ -310,7 +399,17 @@ fn eval_binary(op: BinaryOp, x: f64, y: f64) -> Option<f64> {
         // and an overflowing (x/y).floor()*y can produce ±inf, whose `-INFINITY`
         // literal the headerless-nvrtc discipline forbids (see `ScalarExpr` docs).
         BinaryOp::Rem if x.is_finite() && y.is_finite() && y != 0.0 => {
-            let r = x - (x / y).floor() * y;
+            // Rounded at EVERY step, not merely on the result. Rem is the only
+            // composite fold formula here — four operations — and the device
+            // rounds after each of them. Rounding only the final value leaves
+            // f64 intermediates inside the formula, which is the same bug
+            // `Compute` exists to fix, one level down. Measured at f32:
+            //
+            //   x = -58.526611328125, y = 1.5263065099716187
+            //     f64 throughout, round once : 0.9993425607681274
+            //     device, rounding each step : 0.9993438720703125
+            let q = compute.round(x / y);
+            let r = compute.round(x - compute.round(compute.round(q.floor()) * y));
             if !r.is_finite() {
                 return None;
             }
@@ -322,7 +421,7 @@ fn eval_binary(op: BinaryOp, x: f64, y: f64) -> Option<f64> {
 
 /// One rewrite pass: recognize equivalent forms and `union` them in. Returns
 /// whether anything merged.
-fn rules(eg: &mut EGraph) -> bool {
+fn rules(eg: &mut EGraph, compute: Compute) -> bool {
     let snapshot: Vec<ENode> = eg.class_nodes.values().flatten().cloned().collect();
     let mut changed = false;
     for node in snapshot {
@@ -342,7 +441,7 @@ fn rules(eg: &mut EGraph) -> bool {
                 }
                 if let (Some(x), Some(y)) = (eg.class_const(a), eg.class_const(b)) {
                     if !x.is_nan() && !y.is_nan() {
-                        let c = eg.add(ENode::Const((x + y).to_bits()));
+                        let c = eg.add(ENode::Const(compute.round(x + y).to_bits()));
                         changed |= eg.union(nid, c);
                     }
                 }
@@ -356,7 +455,7 @@ fn rules(eg: &mut EGraph) -> bool {
                 }
                 if let (Some(x), Some(y)) = (eg.class_const(a), eg.class_const(b)) {
                     if !x.is_nan() && !y.is_nan() {
-                        let c = eg.add(ENode::Const((x - y).to_bits()));
+                        let c = eg.add(ENode::Const(compute.round(x - y).to_bits()));
                         changed |= eg.union(nid, c);
                     }
                 }
@@ -374,7 +473,7 @@ fn rules(eg: &mut EGraph) -> bool {
                 // Two-const products fold below (0*0 included, exactly).
                 if let (Some(x), Some(y)) = (eg.class_const(a), eg.class_const(b)) {
                     if !x.is_nan() && !y.is_nan() {
-                        let c = eg.add(ENode::Const((x * y).to_bits()));
+                        let c = eg.add(ENode::Const(compute.round(x * y).to_bits()));
                         changed |= eg.union(nid, c);
                     }
                 }
@@ -388,15 +487,25 @@ fn rules(eg: &mut EGraph) -> bool {
                 // both round identically — incl. NaN/Inf/±0 propagation), and
                 // device FDIV is ~4x an FMUL (weights 8 vs 2 drive extraction).
                 if let Some(c) = eg.class_const(b) {
+                    // Gated on the reciprocal being EXACT at the compute
+                    // precision, not rounded to it. This introduces a new
+                    // constant rather than folding an existing one, and
+                    // rounding could turn an exact reciprocal into something
+                    // else entirely: `2^-200` is exact in f64 and flushes to
+                    // zero in f32, which would rewrite `x / 2^200` into
+                    // `x * 0`. Skipping the rewrite where it is not exact costs
+                    // one division and cannot be wrong.
                     if let Some(r) = exact_pow2_recip(c) {
-                        let rc = eg.add(ENode::Const(r.to_bits()));
-                        let m = eg.add(ENode::Mul(a, rc));
-                        changed |= eg.union(nid, m);
+                        if compute.round(r) == r {
+                            let rc = eg.add(ENode::Const(r.to_bits()));
+                            let m = eg.add(ENode::Mul(a, rc));
+                            changed |= eg.union(nid, m);
+                        }
                     }
                 }
                 if let (Some(x), Some(y)) = (eg.class_const(a), eg.class_const(b)) {
                     if y != 0.0 && !x.is_nan() && !y.is_nan() {
-                        let c = eg.add(ENode::Const((x / y).to_bits()));
+                        let c = eg.add(ENode::Const(compute.round(x / y).to_bits()));
                         changed |= eg.union(nid, c);
                     }
                 }
@@ -415,7 +524,7 @@ fn rules(eg: &mut EGraph) -> bool {
                 }
                 if let Some(v) = eg.class_const(x) {
                     if !v.is_nan() {
-                        let c = eg.add(ENode::Const((-v).to_bits()));
+                        let c = eg.add(ENode::Const(compute.round(-v).to_bits()));
                         changed |= eg.union(nid, c);
                     }
                 }
@@ -441,7 +550,7 @@ fn rules(eg: &mut EGraph) -> bool {
                 }
                 if let Some(v) = eg.class_const(x) {
                     if let Some(r) = eval_unary(op, v) {
-                        let c = eg.add(ENode::Const(r.to_bits()));
+                        let c = eg.add(ENode::Const(compute.round(r).to_bits()));
                         changed |= eg.union(nid, c);
                     }
                 }
@@ -457,8 +566,8 @@ fn rules(eg: &mut EGraph) -> bool {
                     changed |= eg.union(nid, a);
                 }
                 if let (Some(x), Some(y)) = (eg.class_const(a), eg.class_const(b)) {
-                    if let Some(r) = eval_binary(op, x, y) {
-                        let c = eg.add(ENode::Const(r.to_bits()));
+                    if let Some(r) = eval_binary(op, x, y, compute) {
+                        let c = eg.add(ENode::Const(compute.round(r).to_bits()));
                         changed |= eg.union(nid, c);
                     }
                 }
@@ -466,7 +575,7 @@ fn rules(eg: &mut EGraph) -> bool {
             ENode::Unary(op, x) => {
                 if let Some(v) = eg.class_const(x) {
                     if let Some(r) = eval_unary(op, v) {
-                        let c = eg.add(ENode::Const(r.to_bits()));
+                        let c = eg.add(ENode::Const(compute.round(r).to_bits()));
                         changed |= eg.union(nid, c);
                     }
                 }
@@ -477,9 +586,9 @@ fn rules(eg: &mut EGraph) -> bool {
     changed
 }
 
-fn saturate(eg: &mut EGraph, max_iters: usize) {
+fn saturate(eg: &mut EGraph, max_iters: usize, compute: Compute) {
     for _ in 0..max_iters {
-        let changed = rules(eg);
+        let changed = rules(eg, compute);
         eg.rebuild_index();
         if !changed {
             break;
@@ -673,12 +782,21 @@ fn expr_cost(e: &ScalarExpr) -> u64 {
 
 /// Algebraically simplify an op body to the lowest-cost equivalent form via
 /// equality saturation. Semantics-preserving within the precision-safe rule set
-/// (see the module scope note). Pure: `optimize(optimize(e)) == optimize(e)`.
+/// (see the module scope note). Pure:
+/// `optimize(optimize(e, d), d) == optimize(e, d)`.
+///
+/// `dtype` is the kernel's compute dtype, and it is **required rather than
+/// defaulted**. Constant folding must land on the bits the device would produce,
+/// and that depends on the precision the device computes at — see [`Compute`]
+/// for the measured 1-ULP divergence this closes. A defaulted `f64` would
+/// silently reintroduce it for every `f32` kernel, which is exactly the bug,
+/// so the caller states the dtype.
 #[must_use]
-pub fn optimize(e: &ScalarExpr) -> ScalarExpr {
+pub fn optimize(e: &ScalarExpr, dtype: ElementKind) -> ScalarExpr {
+    let compute = Compute::of(dtype);
     let mut eg = EGraph::default();
-    let root = add_expr(&mut eg, e);
-    saturate(&mut eg, 32);
+    let root = add_expr(&mut eg, e, compute);
+    saturate(&mut eg, 32, compute);
     extract(&eg, root)
 }
 
@@ -897,18 +1015,23 @@ fn kbest_table(eg: &EGraph, k: usize) -> HashMap<Id, Vec<KCand>> {
 /// scalar is never cross-folded across forms — the same guarantee `optimize`
 /// carries. Termination is guaranteed by the k-best cycle guard.
 #[must_use]
-pub fn optimize_top_k(e: &ScalarExpr, k: usize) -> Vec<ScalarExpr> {
+pub fn optimize_top_k(e: &ScalarExpr, k: usize, dtype: ElementKind) -> Vec<ScalarExpr> {
     if k == 0 {
         return Vec::new();
     }
-    // form[0] IS optimize(e): the invariant is a construction, not a hope.
-    let head = optimize(e);
+    // form[0] IS optimize(e, dtype): the invariant is a construction, not a hope.
+    let head = optimize(e, dtype);
     if k == 1 {
         return vec![head];
     }
+    // The SAME compute precision as the head, necessarily: a k-best that
+    // ingested or folded at a different precision could return a `form[1..]`
+    // that is not bit-equivalent to `form[0]`, which is the one invariant this
+    // function exists to hold.
+    let compute = Compute::of(dtype);
     let mut eg = EGraph::default();
-    let root = add_expr(&mut eg, e);
-    saturate(&mut eg, 32);
+    let root = add_expr(&mut eg, e, compute);
+    saturate(&mut eg, 32, compute);
     let root = eg.find_imm(root);
     let table = kbest_table(&eg, k);
 
@@ -935,11 +1058,408 @@ pub fn optimize_top_k(e: &ScalarExpr, k: usize) -> Vec<ScalarExpr> {
 
 #[cfg(test)]
 mod tests {
+    use unpopped_vocab::ElementKind;
+    use unpopped_vocab::ElementKind::F32;
+
+    /// **A CHAINED fold lands on the device's bits, not the host's.**
+    ///
+    /// This is the bug that made `Compute` necessary, pinned with the constant
+    /// that exposed it. A single fold in `f64` is provably safe for
+    /// `f32` operands (53 bits ≥ 2·24+2, the innocuous-double-rounding bound),
+    /// so nothing shorter than a chain can catch this — which is why it survived.
+    ///
+    /// `sqr(sqr(c))` at `f32`, with `c = -2.7932066917419434`:
+    ///
+    /// ```text
+    /// fold at f64 throughout, round once : 60.87126159667969   bits 0x42737c2c
+    /// device, rounding after each step   : 60.87126541137695   bits 0x42737c2d
+    /// ```
+    ///
+    /// One ULP. The module's bit-preservation contract says every rewrite
+    /// preserves the device result **bits**; before this, folding violated its
+    /// own contract for any `f32` kernel whose body chained constant arithmetic.
+    #[test]
+    fn a_chained_fold_rounds_at_each_step_like_the_device() {
+        let c = -2.793_206_691_741_943_4_f64;
+        let sqr = |e| ScalarExpr::Unary(UnaryOp::Sqr, Box::new(e));
+        let body = sqr(sqr(ScalarExpr::Const(c)));
+
+        // What the device computes, written out step by step in f32.
+        #[allow(clippy::cast_possible_truncation)]
+        let inner = (c as f32) * (c as f32);
+        let device = f64::from(inner * inner);
+
+        let ScalarExpr::Const(got) = optimize(&body, F32) else {
+            panic!("a fully-constant body must fold to a Const");
+        };
+        assert_eq!(
+            got.to_bits(),
+            device.to_bits(),
+            "folded {got:?} (bits {:#018x}) but the device computes {device:?}              (bits {:#018x}) — the fold kept an f64 intermediate the device rounds",
+            got.to_bits(),
+            device.to_bits()
+        );
+
+        // The negative control: folding the SAME body at f64 must give the other
+        // answer. Without it, this test passes for a `Compute` that ignores its
+        // argument and rounds everything to f32 unconditionally.
+        let ScalarExpr::Const(at_f64) = optimize(&body, ElementKind::F64) else {
+            panic!("must fold");
+        };
+        assert_ne!(
+            at_f64.to_bits(),
+            got.to_bits(),
+            "f32 and f64 folding must differ on this body, or the dtype argument              is not reaching the fold"
+        );
+        assert_eq!(at_f64, (c * c) * (c * c), "f64 folding is unrounded");
+    }
+
+    /// **A chained ARITHMETIC fold rounds at each step too.**
+    ///
+    /// `Add`/`Sub`/`Mul`/`Div` fold in their own match arms, separate from the
+    /// `Unary`/`Binary` ones, and they were missed by the first pass of this
+    /// fix — I rounded three fold sites and there are seven. Mutation testing
+    /// found it: killing the rounding at one site left the suite green, which
+    /// said the site was untested, and chasing that turned up four more folds
+    /// with no rounding at all. These are the *most common* folds.
+    ///
+    /// `(a + b) + c` at `f32`, measured:
+    ///
+    /// ```text
+    /// a = -5.045434474945068, b = 0.190538227558136, c = 2.0781235694885254
+    ///   fold at f64 throughout  : -2.7767727375030518
+    ///   device, stepwise in f32 : -2.7767724990844727
+    /// ```
+    #[test]
+    fn a_chained_arithmetic_fold_rounds_at_each_step() {
+        let (a, b, c) = (
+            -5.045_434_474_945_068_f64,
+            0.190_538_227_558_136_f64,
+            2.078_123_569_488_525_4_f64,
+        );
+        let k = ScalarExpr::Const;
+        let body = ScalarExpr::Add(
+            Box::new(ScalarExpr::Add(Box::new(k(a)), Box::new(k(b)))),
+            Box::new(k(c)),
+        );
+
+        #[allow(clippy::cast_possible_truncation)]
+        let device = f64::from((a as f32 + b as f32) + c as f32);
+        let ScalarExpr::Const(got) = optimize(&body, F32) else {
+            panic!("a fully-constant body must fold");
+        };
+        assert_eq!(
+            got.to_bits(),
+            device.to_bits(),
+            "folded {got:?}, device computes {device:?}"
+        );
+    }
+
+    /// **Constants are rounded AT INGEST**, before any folding happens.
+    ///
+    /// A body carrying `Const(1.1)` at an `f32` kernel computes with
+    /// `(float)1.1` on device. Folding against the `f64` `1.1` diverges with no
+    /// chaining involved at all — one operation is enough, because the operands
+    /// themselves were never values the device could hold.
+    ///
+    /// ```text
+    /// 1.1 + 2.2 at f32:
+    ///   f64 operands, round result : 3.299999952316284
+    ///   f32 operands (the device)  : 3.3000001907348633
+    /// ```
+    ///
+    /// Emission is unaffected: `const_lit` spells the rounded value, which
+    /// converts to the same `float`.
+    #[test]
+    fn constants_are_rounded_at_ingest_not_only_at_fold() {
+        let (a, b) = (1.1_f64, 2.2_f64);
+        let body = ScalarExpr::Add(
+            Box::new(ScalarExpr::Const(a)),
+            Box::new(ScalarExpr::Const(b)),
+        );
+        #[allow(clippy::cast_possible_truncation)]
+        let device = f64::from(a as f32 + b as f32);
+        let ScalarExpr::Const(got) = optimize(&body, F32) else {
+            panic!("must fold");
+        };
+        assert_eq!(
+            got.to_bits(),
+            device.to_bits(),
+            "ingest rounding is missing"
+        );
+
+        // A single un-chained Const must round too, even with nothing to fold.
+        let ScalarExpr::Const(lone) = optimize(&ScalarExpr::Const(0.1), F32) else {
+            panic!("a Const stays a Const");
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let want = f64::from(0.1_f64 as f32);
+        assert_eq!(lone.to_bits(), want.to_bits());
+    }
+
+    /// **Every fold path lands on the device's bits** — one case per arm.
+    ///
+    /// # Why a table and not one test per op
+    ///
+    /// Mutation testing drove this. Neutralising the rounding at each
+    /// `compute.round` site individually showed **six of ten survived**: the
+    /// code was correct everywhere, but only four paths had a test that could
+    /// tell. Six near-identical one-off tests would fix the count and rot
+    /// independently; a table keeps the fold set and its coverage in one place,
+    /// so a rule added to `rules` without a row here is visibly missing one.
+    ///
+    /// Each row carries constants **searched for divergence** — values where
+    /// folding in `f64` and rounding once genuinely differs from rounding after
+    /// every step. A row whose two answers agreed would pass without testing
+    /// anything, so the control below asserts each case is discriminating.
+    #[test]
+    fn every_fold_path_rounds_like_the_device() {
+        let k = |v: f64| Box::new(ScalarExpr::Const(v));
+        let add = |a, b| ScalarExpr::Add(a, b);
+        let sub = |a, b| ScalarExpr::Sub(a, b);
+        let mul = |a, b| ScalarExpr::Mul(a, b);
+        let div = |a, b| ScalarExpr::Div(a, b);
+        let neg = |a| ScalarExpr::Unary(UnaryOp::Neg, a);
+        let sqr = |a| ScalarExpr::Unary(UnaryOp::Sqr, a);
+
+        #[allow(clippy::cast_possible_truncation)]
+        let g = |v: f64| v as f32;
+
+        // (name, body, the device's stepwise f32 answer)
+        let cases: Vec<(&str, ScalarExpr, f32)> = vec![
+            {
+                let (a, b, c) = (
+                    -5.045_434_474_945_068,
+                    0.190_538_227_558_136,
+                    2.078_123_569_488_525_4,
+                );
+                (
+                    "Add",
+                    add(Box::new(add(k(a), k(b))), k(c)),
+                    (g(a) + g(b)) + g(c),
+                )
+            },
+            {
+                // Chosen with f32-REPRESENTABLE inputs. My first attempt searched
+                // with raw f64 operands and did not discriminate: ingest rounds
+                // both sides to f32 before anything folds, so what has to differ
+                // is the INTERMEDIATE rounding, not the inputs.
+                let (a, b) = (-1.337_258_219_718_933, 2.801_646_947_860_717_8);
+                (
+                    "Sub",
+                    sub(Box::new(sub(k(a), k(b))), k(b)),
+                    (g(a) - g(b)) - g(b),
+                )
+            },
+            {
+                let (a, b) = (3.098_762_955_441_808, 1.093_194_995_175_810_6);
+                (
+                    "Mul",
+                    mul(Box::new(mul(k(a), k(b))), k(b)),
+                    (g(a) * g(b)) * g(b),
+                )
+            },
+            {
+                let (a, b) = (1.075_022_503_143_812_8, 1.536_825_565_028_883);
+                (
+                    "Div",
+                    div(Box::new(div(k(a), k(b))), k(b)),
+                    (g(a) / g(b)) / g(b),
+                )
+            },
+            {
+                // Neg's own rounding is UNOBSERVABLE and this row does not try
+                // to observe it: negation is exact in every precision, so
+                // `round(-v) == -round(v)` always. A search over 3M f32 pairs
+                // for a `-(a*b)` divergence found none, and could not — the
+                // only rounding this row can detect is the inner `Mul`'s.
+                // Kept because the composition is worth covering; not counted
+                // as proof of the Neg site.
+                let (a, b) = (3.479_583_740_234_375, 3.014_609_813_690_185_5);
+                (
+                    "Neg∘Mul",
+                    neg(Box::new(mul(Box::new(mul(k(a), k(b))), k(b)))),
+                    -((g(a) * g(b)) * g(b)),
+                )
+            },
+            {
+                let c = -2.793_206_691_741_943_4;
+                (
+                    "Sqr",
+                    sqr(Box::new(sqr(k(c)))),
+                    (g(c) * g(c)) * (g(c) * g(c)),
+                )
+            },
+        ];
+
+        for (name, body, device) in cases {
+            let ScalarExpr::Const(got) = optimize(&body, F32) else {
+                panic!("{name}: a fully-constant body must fold to a Const");
+            };
+            assert_eq!(
+                got.to_bits(),
+                f64::from(device).to_bits(),
+                "{name}: folded {got:?}, device computes {device:?}"
+            );
+
+            // Control: this case must actually DISCRIMINATE. Folding the same
+            // body at f64 has to give a different answer, or the row proves
+            // nothing about rounding and is dead weight that reads as coverage.
+            let ScalarExpr::Const(at_f64) = optimize(&body, ElementKind::F64) else {
+                panic!("{name}: must fold at f64 too");
+            };
+            assert_ne!(
+                f64::from(got as f32).to_bits(),
+                f64::from(at_f64 as f32).to_bits(),
+                "{name}: f32 and f64 folding agree on these constants — the row                  cannot detect a missing round and needs different values"
+            );
+        }
+    }
+
+    /// **The `x / 2^k -> x * 2^-k` rewrite is skipped when the reciprocal is not
+    /// exact at the compute precision.**
+    ///
+    /// The rewrite is bit-exact *only* because an exact power-of-two reciprocal
+    /// makes the true product equal the true quotient. At `f32` that stops being
+    /// true when the reciprocal underflows: `2^-200` is a fine `f64` and is
+    /// **0.0** as an `f32`, so the rewrite would turn `x / 2^200` into `x * 0`.
+    /// Gated on exactness rather than rounded — skipping costs one division and
+    /// cannot be wrong.
+    #[test]
+    fn the_pow2_reciprocal_rewrite_is_skipped_when_inexact_at_f32() {
+        let big = 2.0_f64.powi(200);
+        let body = ScalarExpr::Div(
+            Box::new(ScalarExpr::Input(0)),
+            Box::new(ScalarExpr::Const(big)),
+        );
+        // At f32 the divisor itself is +inf and the reciprocal is 0, so the
+        // rewrite must not fire — the body keeps its Div.
+        let got = optimize(&body, F32);
+        assert!(
+            matches!(got, ScalarExpr::Div(..)),
+            "at f32 the reciprocal underflows to 0; the rewrite must be skipped,              got {got:?}"
+        );
+
+        // Control: at f64 the reciprocal IS exact, so the rewrite fires. Without
+        // this the test passes for a rewrite that never fires at all.
+        let at_f64 = optimize(&body, ElementKind::F64);
+        assert!(
+            matches!(at_f64, ScalarExpr::Mul(..)),
+            "at f64 2^-200 is exact and the rewrite must fire, got {at_f64:?}"
+        );
+    }
+
+    /// The `Binary` fold arm rounds too — `Rem` is the arm's only rounding op.
+    ///
+    /// `Max`/`Min` return one of their operands unchanged, so their rounding is
+    /// unobservable. `Rem` is `x - (x/y).floor()*y`, which genuinely rounds.
+    #[test]
+    fn the_binary_fold_arm_rounds_via_rem() {
+        let (x, y) = (-58.526_611_328_125, 1.526_306_509_971_618_7);
+        let body = ScalarExpr::Binary(
+            BinaryOp::Rem,
+            Box::new(ScalarExpr::Const(x)),
+            Box::new(ScalarExpr::Const(y)),
+        );
+        let ScalarExpr::Const(got) = optimize(&body, F32) else {
+            panic!("a constant Rem must fold");
+        };
+        let ScalarExpr::Const(at_f64) = optimize(&body, ElementKind::F64) else {
+            panic!("must fold");
+        };
+        assert_ne!(
+            got.to_bits(),
+            at_f64.to_bits(),
+            "f32 and f64 Rem folding must differ here, or the case is not              discriminating"
+        );
+        #[allow(clippy::cast_possible_truncation)]
+        let rounded = f64::from(got as f32);
+        assert_eq!(
+            got.to_bits(),
+            rounded.to_bits(),
+            "the f32 fold result must be an f32-representable value"
+        );
+    }
+
+    /// **Some rounding sites are unobservable by construction; others are real
+    /// coverage debt. This test records which, and the count is dated.**
+    ///
+    /// Mutation testing neutralises each `compute.round` call individually.
+    /// Measured **2026-08-14: 7 of 14 sites caught.** That number is a
+    /// measurement, not a target — re-run the harness rather than quoting it,
+    /// because it moved three times while this fix was being written (3 sites,
+    /// then 10, then 14 as each round of mutation testing found folds the
+    /// previous round had missed).
+    ///
+    /// The survivors split into two kinds, and only one is debt:
+    ///
+    /// * **Unobservable** — the `Neg` fold and the involution arm (`Abs`/`Neg`).
+    ///   **No test could catch these**:
+    ///   negation and absolute value are exact in every floating-point
+    ///   precision, so `round(-v) == -round(v)` and `round(|v|) == |round(v)|`
+    ///   identically. A
+    ///   3-million-pair search for a `-(a*b)` divergence at `f32` found none.
+    ///   The rounding stays anyway — it costs nothing, and the rule "every fold
+    ///   result is rounded to the compute precision" then holds with no
+    ///   exception a future reader has to re-derive.
+    /// * **Debt** — several of `Rem`'s internal steps, and a unary fold arm.
+    ///   These *are* observable; the cases here simply do not discriminate them
+    ///   yet. Closing them means searching for constants that isolate one
+    ///   internal rounding at a time, the way the `Sub` row had to be re-searched
+    ///   once ingest rounding made the first attempt non-discriminating.
+    ///
+    /// Recorded rather than left implicit, because a survivor list with no
+    /// reasons reads as "7 bugs" to the next reader and as "all fine" to the one
+    /// after that.
+    #[test]
+    fn neg_and_abs_are_exact_so_their_rounding_cannot_be_observed() {
+        for v in [
+            0.1_f64,
+            -1.1,
+            core::f64::consts::PI,
+            1e-30,
+            -7.777_777_777_777_777,
+        ] {
+            #[allow(clippy::cast_possible_truncation)]
+            let r = f64::from(v as f32);
+            #[allow(clippy::cast_possible_truncation)]
+            let neg_then_round = f64::from((-v) as f32);
+            assert_eq!(neg_then_round.to_bits(), (-r).to_bits(), "neg is exact");
+            #[allow(clippy::cast_possible_truncation)]
+            let abs_then_round = f64::from(v.abs() as f32);
+            assert_eq!(abs_then_round.to_bits(), r.abs().to_bits(), "abs is exact");
+        }
+    }
+
+    /// Every narrow float folds at `f32`, because that is what the emitters
+    /// compute at — not at its own storage precision.
+    ///
+    /// `cfamily`'s narrow-float seam promotes an `f16`/`bf16`/FP8 load to
+    /// `float` and computes there. Folding at the storage precision would round
+    /// harder than the device does and produce a constant the kernel never
+    /// would.
+    #[test]
+    fn narrow_floats_fold_at_the_precision_they_compute_at() {
+        for dt in [
+            ElementKind::F16,
+            ElementKind::Bf16,
+            ElementKind::Fp8E4M3FN,
+            ElementKind::Fp8E5M2,
+        ] {
+            assert_eq!(
+                Compute::of(dt),
+                Compute::F32,
+                "{dt:?} is promoted to float and computed at f32"
+            );
+        }
+        assert_eq!(Compute::of(ElementKind::F64), Compute::F64);
+        assert_eq!(Compute::of(ElementKind::F32Strict), Compute::F32);
+    }
     use super::*;
     use crate::ir::{input, konst, reduced};
 
     fn opt(e: crate::ir::Expr) -> ScalarExpr {
-        optimize(&e.0)
+        optimize(&e.0, F32)
     }
 
     fn neg(e: ScalarExpr) -> ScalarExpr {
@@ -966,7 +1486,7 @@ mod tests {
     fn nan_constants_are_never_folded() {
         // Folding a host NaN would emit the positive canonical `NAN` literal,
         // dropping the sign/payload the runtime device op preserves.
-        let e = optimize(&neg(ScalarExpr::Const(f64::NAN)));
+        let e = optimize(&neg(ScalarExpr::Const(f64::NAN)), F32);
         assert!(
             matches!(e, ScalarExpr::Unary(UnaryOp::Neg, ref x) if matches!(**x, ScalarExpr::Const(v) if v.is_nan())),
             "neg(NaN) stays symbolic, got {e:?}"
@@ -1111,11 +1631,11 @@ mod tests {
         let abs = |e: ScalarExpr| ScalarExpr::Unary(UnaryOp::Abs, Box::new(e));
         let relu = |e: ScalarExpr| ScalarExpr::Unary(UnaryOp::Relu, Box::new(e));
         let x = ScalarExpr::Input(0);
-        assert_eq!(optimize(&abs(abs(x.clone()))), abs(x.clone()));
-        assert_eq!(optimize(&relu(relu(x.clone()))), relu(x.clone()));
+        assert_eq!(optimize(&abs(abs(x.clone())), F32), abs(x.clone()));
+        assert_eq!(optimize(&relu(relu(x.clone())), F32), relu(x.clone()));
         // |-y| == |y| bit-exactly (sign-bit op); relu(neg) is NOT rewritten.
-        assert_eq!(optimize(&abs(neg(x.clone()))), abs(x.clone()));
-        let rn = optimize(&relu(neg(x.clone())));
+        assert_eq!(optimize(&abs(neg(x.clone())), F32), abs(x.clone()));
+        let rn = optimize(&relu(neg(x.clone())), F32);
         assert!(
             matches!(&rn, ScalarExpr::Unary(UnaryOp::Relu, inner)
                 if matches!(**inner, ScalarExpr::Unary(UnaryOp::Neg, _))),
@@ -1132,7 +1652,7 @@ mod tests {
     #[test]
     fn neg_neg_cancels() {
         assert_eq!(
-            optimize(&neg(neg(ScalarExpr::Input(0)))),
+            optimize(&neg(neg(ScalarExpr::Input(0))), F32),
             ScalarExpr::Input(0)
         );
     }
@@ -1144,7 +1664,7 @@ mod tests {
         // cheapest form.
         let body = (input(0) * konst(1.0) + konst(-0.0)).relu();
         assert_eq!(
-            optimize(&body.0),
+            optimize(&body.0, F32),
             ScalarExpr::Unary(UnaryOp::Relu, Box::new(ScalarExpr::Input(0)))
         );
     }
@@ -1175,24 +1695,27 @@ mod tests {
             Box::new(ScalarExpr::Input(0)),
             Box::new(ScalarExpr::Input(0)),
         );
-        assert_eq!(optimize(&max_xx), ScalarExpr::Input(0));
+        assert_eq!(optimize(&max_xx, F32), ScalarExpr::Input(0));
         // Pow is not const-folded (host/device divergence) — stays symbolic.
         let pow = opt(konst(2.0).pow(konst(3.0)));
         assert!(matches!(pow, ScalarExpr::Binary(BinaryOp::Pow, _, _)));
         // Rem is FLOORED (torch.remainder): -3 rem 2 = 1 (sign-of-divisor), not -1.
-        let rem = optimize(&ScalarExpr::Binary(
-            BinaryOp::Rem,
-            Box::new(ScalarExpr::Const(-3.0)),
-            Box::new(ScalarExpr::Const(2.0)),
-        ));
+        let rem = optimize(
+            &ScalarExpr::Binary(
+                BinaryOp::Rem,
+                Box::new(ScalarExpr::Const(-3.0)),
+                Box::new(ScalarExpr::Const(2.0)),
+            ),
+            F32,
+        );
         assert_eq!(rem, ScalarExpr::Const(1.0));
     }
 
     #[test]
     fn idempotent() {
         let body = (input(0) * konst(1.0) + konst(0.0)).relu().0;
-        let once = optimize(&body);
-        assert_eq!(optimize(&once), once);
+        let once = optimize(&body, F32);
+        assert_eq!(optimize(&once, F32), once);
     }
 
     #[test]
@@ -1200,19 +1723,19 @@ mod tests {
         use crate::ir::UnaryOp;
         let trunc = |v: f64| ScalarExpr::Unary(UnaryOp::Trunc, Box::new(ScalarExpr::Const(v)));
         // Exact on finite values: fold (round toward zero, both signs).
-        assert_eq!(optimize(&trunc(-3.7)), ScalarExpr::Const(-3.0));
-        assert_eq!(optimize(&trunc(2.9)), ScalarExpr::Const(2.0));
+        assert_eq!(optimize(&trunc(-3.7), F32), ScalarExpr::Const(-3.0));
+        assert_eq!(optimize(&trunc(2.9), F32), ScalarExpr::Const(2.0));
         // Non-finite stays symbolic (house lesson: no non-finite const folds).
         assert!(matches!(
-            optimize(&trunc(f64::INFINITY)),
+            optimize(&trunc(f64::INFINITY), F32),
             ScalarExpr::Unary(UnaryOp::Trunc, _)
         ));
         assert!(matches!(
-            optimize(&trunc(f64::NEG_INFINITY)),
+            optimize(&trunc(f64::NEG_INFINITY), F32),
             ScalarExpr::Unary(UnaryOp::Trunc, _)
         ));
         assert!(matches!(
-            optimize(&trunc(f64::NAN)),
+            optimize(&trunc(f64::NAN), F32),
             ScalarExpr::Unary(UnaryOp::Trunc, _)
         ));
     }
@@ -1243,7 +1766,10 @@ mod tests {
             UnaryOp::Cbrt,
             UnaryOp::Lgamma,
         ] {
-            let e = optimize(&ScalarExpr::Unary(op, Box::new(ScalarExpr::Const(1.5))));
+            let e = optimize(
+                &ScalarExpr::Unary(op, Box::new(ScalarExpr::Const(1.5))),
+                F32,
+            );
             assert!(
                 matches!(e, ScalarExpr::Unary(o, _) if o == op),
                 "{op:?}(const) must stay symbolic, got {e:?}"
@@ -1259,11 +1785,14 @@ mod tests {
             BinaryOp::FminIeee,
             BinaryOp::RemTrunc,
         ] {
-            let e = optimize(&ScalarExpr::Binary(
-                op,
-                Box::new(ScalarExpr::Const(-3.0)),
-                Box::new(ScalarExpr::Const(2.0)),
-            ));
+            let e = optimize(
+                &ScalarExpr::Binary(
+                    op,
+                    Box::new(ScalarExpr::Const(-3.0)),
+                    Box::new(ScalarExpr::Const(2.0)),
+                ),
+                F32,
+            );
             assert!(
                 matches!(e, ScalarExpr::Binary(o, _, _) if o == op),
                 "{op:?}(const, const) must stay symbolic, got {e:?}"
@@ -1279,7 +1808,11 @@ mod tests {
                 Box::new(ScalarExpr::Input(0)),
                 Box::new(ScalarExpr::Input(0)),
             );
-            assert_eq!(optimize(&same), same, "{op:?}(x, x) must stay as authored");
+            assert_eq!(
+                optimize(&same, F32),
+                same,
+                "{op:?}(x, x) must stay as authored"
+            );
         }
     }
 
@@ -1306,7 +1839,7 @@ mod tests {
                     Box::new(ScalarExpr::Const(y)),
                 );
                 assert!(
-                    matches!(optimize(&e), ScalarExpr::Binary(o, _, _) if o == op),
+                    matches!(optimize(&e, F32), ScalarExpr::Binary(o, _, _) if o == op),
                     "{op:?}({x}, {y}) must stay symbolic"
                 );
             }
@@ -1322,7 +1855,11 @@ mod tests {
                 Box::new(ScalarExpr::Input(0)),
                 Box::new(ScalarExpr::Input(0)),
             );
-            assert_eq!(optimize(&same), same, "{op:?}(x, x) must stay as authored");
+            assert_eq!(
+                optimize(&same, F32),
+                same,
+                "{op:?}(x, x) must stay as authored"
+            );
         }
     }
 
@@ -1356,7 +1893,7 @@ mod tests {
                     Box::new(ScalarExpr::Const(y)),
                 );
                 assert!(
-                    matches!(optimize(&e), ScalarExpr::Binary(o, _, _) if o == op),
+                    matches!(optimize(&e, F32), ScalarExpr::Binary(o, _, _) if o == op),
                     "{op:?}({x}, {y}) must stay symbolic"
                 );
             }
@@ -1372,7 +1909,11 @@ mod tests {
                 Box::new(ScalarExpr::Input(0)),
                 Box::new(ScalarExpr::Input(0)),
             );
-            assert_eq!(optimize(&same), same, "{op:?}(x, x) must stay as authored");
+            assert_eq!(
+                optimize(&same, F32),
+                same,
+                "{op:?}(x, x) must stay as authored"
+            );
         }
         // Cost entries exist (compare-select tier) so extraction still ranks
         // bodies containing them — weight, not rules, is the only e-graph
@@ -1386,14 +1927,14 @@ mod tests {
     #[test]
     fn coord_is_an_opaque_leaf_with_no_rules() {
         use crate::ir::{BinaryOp, coord};
-        // Representative Coord bodies round-trip optimize() UNCHANGED — the
+        // Representative Coord bodies round-trip optimize(, F32) UNCHANGED — the
         // triu-mask predicate multiply and the alibi relative-position body.
         let triu = (input(0) * coord(1).binary(BinaryOp::CmpGe, coord(0) + konst(0.0))).0;
-        assert_eq!(optimize(&triu), triu, "triu-mask body must round-trip");
+        assert_eq!(optimize(&triu, F32), triu, "triu-mask body must round-trip");
         let alibi = ((coord(1) - coord(0)) * crate::ir::param(0)).0;
-        assert_eq!(optimize(&alibi), alibi, "alibi body must round-trip");
+        assert_eq!(optimize(&alibi, F32), alibi, "alibi body must round-trip");
         // A bare Coord leaf is already minimal.
-        assert_eq!(optimize(&coord(1).0), ScalarExpr::Coord(1));
+        assert_eq!(optimize(&coord(1).0, F32), ScalarExpr::Coord(1));
         // No rule equates Coord(i) with anything else: Coord(0) - Coord(0)
         // stays symbolic (no x-x rule exists, and none may be added for
         // Coord), and the reflexive compare stays as authored (the same
@@ -1403,7 +1944,7 @@ mod tests {
             Box::new(ScalarExpr::Coord(0)),
             Box::new(ScalarExpr::Coord(0)),
         );
-        assert_eq!(optimize(&sub_same), sub_same);
+        assert_eq!(optimize(&sub_same, F32), sub_same);
         for op in [
             BinaryOp::CmpEq,
             BinaryOp::CmpGe,
@@ -1415,11 +1956,11 @@ mod tests {
                 Box::new(ScalarExpr::Coord(0)),
                 Box::new(ScalarExpr::Coord(1)),
             );
-            assert_eq!(optimize(&e), e, "{op:?}(c0, c1) must stay as authored");
+            assert_eq!(optimize(&e, F32), e, "{op:?}(c0, c1) must stay as authored");
         }
         // Coord(0) and Coord(1) never merge (distinct axes = distinct values):
         // c0 + c1 keeps two distinct leaves.
-        let e = optimize(&(coord(0) + coord(1)).0);
+        let e = optimize(&(coord(0) + coord(1)).0, F32);
         assert!(
             matches!(&e, ScalarExpr::Add(a, b)
                 if matches!(**a, ScalarExpr::Coord(0)) && matches!(**b, ScalarExpr::Coord(1))),
@@ -1428,7 +1969,10 @@ mod tests {
         // The VALUE-GENERIC bit-exact identities still apply to a Coord
         // operand (they are proofs about every value, not about Coord):
         // c1 * 1.0 -> c1. This is hash-cons/extraction, not a Coord rule.
-        assert_eq!(optimize(&(coord(1) * konst(1.0)).0), ScalarExpr::Coord(1));
+        assert_eq!(
+            optimize(&(coord(1) * konst(1.0)).0, F32),
+            ScalarExpr::Coord(1)
+        );
     }
 
     #[test]
@@ -1447,7 +1991,7 @@ mod tests {
                 ScalarExpr::Input(0),
                 ScalarExpr::Input(1),
             );
-            let o = optimize(&e);
+            let o = optimize(&e, F32);
             assert!(
                 matches!(&o, ScalarExpr::Select(cc, _, _)
                     if matches!(**cc, ScalarExpr::Const(v) if v == c || (v.is_nan() && c.is_nan()))),
@@ -1462,7 +2006,7 @@ mod tests {
             ScalarExpr::Input(1),
         );
         assert_eq!(
-            optimize(&same),
+            optimize(&same, F32),
             same,
             "select(c, x, x) must stay as authored"
         );
@@ -1471,13 +2015,13 @@ mod tests {
         let cond = input(0).binary(BinaryOp::CmpGt, konst(0.0));
         let mask_mul = (input(1) * cond.clone()).0;
         assert!(
-            matches!(optimize(&mask_mul), ScalarExpr::Mul(_, _)),
+            matches!(optimize(&mask_mul, F32), ScalarExpr::Mul(_, _)),
             "x * cond must NEVER become a select"
         );
         // …and select(cond, x, 0) stays a Select (never a multiply).
         let sel_zero = cond.select(input(1), konst(0.0)).0;
         assert_eq!(
-            optimize(&sel_zero),
+            optimize(&sel_zero, F32),
             sel_zero,
             "select(cond, x, 0) must NEVER become a mask-multiply"
         );
@@ -1490,7 +2034,7 @@ mod tests {
                 ScalarExpr::Input(2),
             )),
         );
-        assert_eq!(optimize(&distributed), distributed);
+        assert_eq!(optimize(&distributed, F32), distributed);
         // (5) No cond simplification: a reflexive-compare cond stays symbolic
         // (CmpEq(x, x) is FALSE for NaN x — same honesty pin as the cmp set),
         // and a Coord cond round-trips (the triu authoring).
@@ -1503,13 +2047,13 @@ mod tests {
             ScalarExpr::Input(1),
             ScalarExpr::Input(2),
         );
-        assert_eq!(optimize(&refl), refl);
+        assert_eq!(optimize(&refl, F32), refl);
         let triu = coord(1)
             .binary(BinaryOp::CmpGe, coord(0) + konst(0.0))
             .select(input(0), konst(0.0))
             .0;
         assert_eq!(
-            optimize(&triu),
+            optimize(&triu, F32),
             triu,
             "the triu select body must round-trip"
         );
@@ -1522,7 +2066,7 @@ mod tests {
             ScalarExpr::Input(2),
         );
         assert_eq!(
-            optimize(&inner),
+            optimize(&inner, F32),
             sel(
                 ScalarExpr::Input(0),
                 ScalarExpr::Input(1),
@@ -1544,12 +2088,12 @@ mod tests {
             )
         };
         // The legitimate fold still fires…
-        assert_eq!(optimize(&rem(7.0, 2.0)), ScalarExpr::Const(1.0));
+        assert_eq!(optimize(&rem(7.0, 2.0), F32), ScalarExpr::Const(1.0));
         // …but NaN operands stay symbolic (a fold would canonicalize the
         // payload/sign the device op propagates)…
         for e in [rem(f64::NAN, 2.0), rem(5.0, f64::NAN)] {
             assert!(
-                matches!(optimize(&e), ScalarExpr::Binary(BinaryOp::Rem, _, _)),
+                matches!(optimize(&e, F32), ScalarExpr::Binary(BinaryOp::Rem, _, _)),
                 "NaN-operand Rem must stay symbolic"
             );
         }
@@ -1562,7 +2106,7 @@ mod tests {
             rem(1e308, 1e-308),
         ] {
             assert!(
-                matches!(optimize(&e), ScalarExpr::Binary(BinaryOp::Rem, _, _)),
+                matches!(optimize(&e, F32), ScalarExpr::Binary(BinaryOp::Rem, _, _)),
                 "non-finite-in or non-finite-out Rem must stay symbolic"
             );
         }
@@ -1595,7 +2139,7 @@ mod tests {
             .fold(weight(&node), |acc, k| acc.saturating_add(cost_of(k)))
     }
 
-    /// The #1 pin: `form[0] == optimize(e)` bit-identical, and `top_k(_, 1)` IS
+    /// The #1 pin: `form[0] == optimize(e, F32)` bit-identical, and `top_k(_, 1)` IS
     /// the shipped optimizer — across a spread of body shapes. A k-best that
     /// silently changed the k==1 winner would alter every JIT-selected form.
     #[test]
@@ -1611,14 +2155,14 @@ mod tests {
             (reduced(0) + konst(1e-5)).0,
         ];
         for body in bodies {
-            let opt = optimize(&body);
+            let opt = optimize(&body, F32);
             assert_eq!(
-                optimize_top_k(&body, 1),
+                optimize_top_k(&body, 1, F32),
                 vec![opt.clone()],
-                "k==1 must equal [optimize(e)]"
+                "k==1 must equal [optimize(e, F32)]"
             );
             for k in [2usize, 3, 5] {
-                let forms = optimize_top_k(&body, k);
+                let forms = optimize_top_k(&body, k, F32);
                 assert_eq!(forms[0], opt, "form[0] must be bit-identical to optimize");
             }
         }
@@ -1631,7 +2175,7 @@ mod tests {
     #[test]
     fn top_k_div_pow2_yields_mul_then_div() {
         let body = (input(0) / konst(2.0)).0;
-        let forms = optimize_top_k(&body, 2);
+        let forms = optimize_top_k(&body, 2, F32);
         assert_eq!(
             forms,
             vec![
@@ -1645,7 +2189,7 @@ mod tests {
                 ),
             ]
         );
-        assert_eq!(forms[0], optimize(&body));
+        assert_eq!(forms[0], optimize(&body, F32));
     }
 
     /// Forms are structurally distinct and cost-ascending (non-decreasing), and
@@ -1653,7 +2197,7 @@ mod tests {
     #[test]
     fn top_k_forms_distinct_and_cost_ascending() {
         let body = (input(0) / konst(2.0)).0;
-        let forms = optimize_top_k(&body, 5);
+        let forms = optimize_top_k(&body, 5, F32);
         // Only two equivalents exist for this cell.
         assert_eq!(forms.len(), 2);
         for w in forms.windows(2) {
@@ -1665,7 +2209,7 @@ mod tests {
         }
         // An irreducible body has exactly one form even at large k.
         let irr = (input(0) + input(1) * input(2)).0;
-        assert_eq!(optimize_top_k(&irr, 8), vec![irr]);
+        assert_eq!(optimize_top_k(&irr, 8, F32), vec![irr]);
     }
 
     /// The cycle guard terminates on self-referential classes: `neg(neg x)`
@@ -1675,7 +2219,7 @@ mod tests {
     #[test]
     fn top_k_cycle_guard_terminates() {
         let body = neg(neg(ScalarExpr::Input(0)));
-        let forms = optimize_top_k(&body, 3);
+        let forms = optimize_top_k(&body, 3, F32);
         assert_eq!(forms[0], ScalarExpr::Input(0), "form[0] == optimize == x");
         // A cyclic class does not blow the list up past k, and stays distinct.
         assert!(forms.len() <= 3);
@@ -1690,7 +2234,7 @@ mod tests {
         // k-best owns here: it returns a bounded, distinct, cost-ascending list
         // rather than spinning on the self-referential class.
         let deep = neg(neg(neg(neg(ScalarExpr::Input(0)))));
-        let deep_forms = optimize_top_k(&deep, 4);
+        let deep_forms = optimize_top_k(&deep, 4, F32);
         assert!(
             !deep_forms.is_empty() && deep_forms.len() <= 4,
             "bounded, non-empty"
@@ -1709,7 +2253,7 @@ mod tests {
         // reduced(0)/2 -> the pow2 rule still applies (value-generic), but the
         // reduced leaf itself is never folded into a constant or another leaf.
         let body = (reduced(0) / konst(2.0)).0;
-        let forms = optimize_top_k(&body, 4);
+        let forms = optimize_top_k(&body, 4, F32);
         assert_eq!(
             forms[0],
             ScalarExpr::Mul(
@@ -1726,7 +2270,7 @@ mod tests {
         }
         // A bare reduced leaf is already minimal — single form.
         assert_eq!(
-            optimize_top_k(&ScalarExpr::Reduced(1), 3),
+            optimize_top_k(&ScalarExpr::Reduced(1), 3, F32),
             vec![ScalarExpr::Reduced(1)]
         );
     }
@@ -1736,16 +2280,16 @@ mod tests {
     #[test]
     fn top_k_is_deterministic() {
         let body = (input(0) / konst(2.0) + input(1) * konst(1.0)).0;
-        let first = optimize_top_k(&body, 4);
+        let first = optimize_top_k(&body, 4, F32);
         for _ in 0..8 {
-            assert_eq!(optimize_top_k(&body, 4), first);
+            assert_eq!(optimize_top_k(&body, 4, F32), first);
         }
-        assert_eq!(first[0], optimize(&body));
+        assert_eq!(first[0], optimize(&body, F32));
     }
 
     /// k == 0 is the empty set (the invariant is vacuous, not a panic).
     #[test]
     fn top_k_zero_is_empty() {
-        assert!(optimize_top_k(&ScalarExpr::Input(0), 0).is_empty());
+        assert!(optimize_top_k(&ScalarExpr::Input(0), 0, F32).is_empty());
     }
 }
