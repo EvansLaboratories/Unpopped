@@ -31,7 +31,9 @@ use crate::ir::{Access, BinaryOp, OpDef, ScalarExpr, UnaryOp};
 use crate::link::{LinkEntry, link_entry};
 use crate::optimize::optimize;
 use crate::pattern::{PatternError, PatternNode, derive_pattern, to_fkc};
-use unpopped_vocab::{ArchSku, ElementKind, MAX_OPERANDS, OpCategory, OperandDesc, structure_key};
+use unpopped_vocab::{
+    ElementKind, MAX_OPERANDS, OpCategory, OperandDesc, TargetId, structure_key,
+};
 
 /// A JIT synthesis request from Fuel (the strategist).
 #[derive(Clone, Debug)]
@@ -51,11 +53,25 @@ pub struct JitRequest {
     /// projection, the input to [`structure_key`]. Increment 1 requires a single
     /// shared dtype across all operands.
     pub operands: Vec<OperandDesc>,
-    /// Target compute capability — keys the schedule. The finer device identity
-    /// (ordinal / exact SM / driver) that §5.2's `target.device` carries is
-    /// folded into `arch` here; the real on-demand compiler (increment 2) will
-    /// refine it where the artifact must be SM-specific.
-    pub arch: ArchSku,
+    /// The target this request is keyed to — a KISS §6.8
+    /// `<namespace>:<capability-set>` token. Keys the schedule. The finer device
+    /// identity (ordinal / exact SM / driver) that §5.2's `target.device` carries
+    /// is folded into it here; the real on-demand compiler (increment 2) will
+    /// refine it where the artifact must be target-specific.
+    ///
+    /// # This was `arch: ArchSku`, and that could not express a non-CUDA request
+    ///
+    /// [`ArchSku`](unpopped_vocab::ArchSku) is a closed four-variant CUDA enum. So
+    /// while the *derived key* has been target-neutral since `structure_key` began
+    /// taking a [`TargetId`], the **request path could not name a non-CUDA target
+    /// at all** — a Vulkane JIT request had nowhere to put one. That the artifact
+    /// identity was already correct is what made this an API-expressiveness gap
+    /// rather than a wire or cache-soundness one, and it is why it could be fixed
+    /// after `0.2.0` rather than in it.
+    ///
+    /// `ArchSku` still converts (`From<ArchSku> for TargetId`), so a CUDA caller
+    /// writes `ArchSku::Sm89.into()`.
+    pub target: TargetId,
     /// Stable identity to register the synthesized fused op under.
     pub fused_op_id: String,
     /// Compile/resource budget (Fuel sets it). Threaded into [`Compiler::compile`].
@@ -299,7 +315,7 @@ pub fn synthesize(
         derived,
         &req.operands,
         req.op_category,
-        req.arch,
+        req.target,
         req.budget.max_compile_ms,
         backend,
         compiler,
@@ -316,7 +332,7 @@ fn synthesize_op(
     derived: PatternNode,
     operands: &[OperandDesc],
     op_category: OpCategory,
-    arch: ArchSku,
+    target: TargetId,
     max_compile_ms: u32,
     backend: &dyn Backend,
     compiler: &dyn Compiler,
@@ -328,7 +344,7 @@ fn synthesize_op(
     // key is where the target is canonical. Asking the backend about a target
     // derived separately from the one the kernel is keyed to would be two
     // sources for one fact.
-    let key = structure_key(op_category, operands, arch);
+    let key = structure_key(op_category, operands, target);
 
     // Trust boundary, gate 1: the backend must be able to spell this dtype as a
     // scalar type ON THIS TARGET. `dtype_compatible` (gate 2) only checks
@@ -725,7 +741,7 @@ pub mod seam {
         region: &SeamNode,
         operands: &[OperandDesc],
         op_category: OpCategory,
-        arch: ArchSku,
+        target: impl Into<TargetId>,
         fused_op_id: &str,
         max_compile_ms: u32,
         backend: &dyn Backend,
@@ -753,7 +769,7 @@ pub mod seam {
             derived,
             operands,
             op_category,
-            arch,
+            target.into(),
             max_compile_ms,
             backend,
             compiler,

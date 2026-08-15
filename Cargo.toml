@@ -19,7 +19,7 @@ categories = ["compilers", "development-tools", "science"]
 [workspace.dependencies]
 # Unpopped's own crates — path + version so they can be published independently.
 unpopped-vocab = { path = "crates/unpopped-vocab", version = "0.3.0" }
-unpopped = { path = "crates/unpopped", version = "0.2.0" }
+unpopped = { path = "crates/unpopped", version = "0.3.0" }
 # The reference emitters. Each depends on `unpopped`, never the reverse — the
 # core holds the standard and the traits; a target holds its own spelling.
 unpopped-cpu-c = { path = "crates/unpopped-cpu-c", version = "0.1.0" }
