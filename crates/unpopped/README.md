@@ -60,11 +60,28 @@ no longer the intent — see the root README.
 
 Pre-1.0 and moving. Pin exact versions.
 
-The `Backend` trait in particular is expected to change: it does not yet carry a
-structured binding/ABI manifest, its artifact type is source text rather than an
-arbitrary word stream, and it takes no target descriptor — all of which a
-non-CUDA backend needs. Those are known and being worked; the trait is
-deliberately shipped pre-1.0 so they can land without a major bump.
+The `Backend` trait in particular is expected to change. Two gaps remain, both
+raised by the Vulkane review and both wanted by a SPIR-V backend rather than a
+source-emitting one:
+
+- no structured binding/ABI manifest (`Backend` review item #1);
+- the artifact type is source text — `GeneratedKernel::source` is a `String` —
+  rather than an arbitrary word stream such as SPIR-V `[u32]` (#2).
+
+A **third** item on this list — "takes no target descriptor" — has since landed
+and is no longer outstanding: `supports_dtype` takes a `TargetId`, and
+`structure_key` takes `impl Into<TargetId>` over an open, KISS §6.8-validated
+target namespace. Anything still describing the trait as target-blind is stale.
+
+One residual from that work is real and worth naming rather than leaving to be
+rediscovered: `JitRequest::arch` is still typed `ArchSku`, the closed CUDA enum
+(`src/jit.rs`). It converts to a `TargetId` before it reaches `structure_key`, so
+**the derived key and the on-disk artifact identity are target-neutral** — this is
+an API-expressiveness gap, not a wire-format or cache-soundness one. The effect
+is that a non-CUDA JIT request has nowhere to name its target.
+
+The trait is deliberately shipped pre-1.0 so all of this can land without a major
+bump; expect more than one breaking `0.x`.
 
 ## Provenance
 

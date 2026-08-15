@@ -49,18 +49,32 @@ touch rather than discover the change in a name collision.
 
 Pre-1.0 and moving. Pin exact versions.
 
-The `Backend` trait in particular is expected to change. It does not yet carry a
-structured binding/ABI manifest, its artifact type is source text rather than an
-arbitrary word stream, and it takes no target descriptor — all of which a
-non-CUDA backend needs. A `0.2` batching those breaking changes is in progress;
-they are deliberately being made pre-1.0 so they can land without a major bump.
+The `Backend` trait in particular is expected to change. Two gaps remain, both
+raised by the Vulkane review, and both wanted by a SPIR-V backend rather than by
+a source-emitting one: it carries no structured binding/ABI manifest, and its
+artifact type is source text rather than an arbitrary word stream. They are
+deliberately being made pre-1.0 so they can land without a major bump — expect
+more than one breaking `0.x`, not a single batch that must be complete before
+anything ships.
 
-One known defect worth stating plainly: `unpopped-vocab`'s `ArchSku` can only
-spell NVIDIA compute capabilities, and `structure_key` hardcodes a `cuda:`
-prefix. Every structure key the neutral vocabulary produces therefore claims a
-CUDA target — including keys for backends that have nothing to do with CUDA. It
-is schema-visible in the published `0.1.0` wire format. The fix is tracked and
-routes through the target-namespace work rather than a quiet patch.
+**The `cuda:`-prefix defect is fixed in-tree and ships in `0.2.0`.** Earlier
+revisions of this file described it as open; that is out of date and the
+correction matters, because it was being reported upward as a live blocker.
+`ArchSku` no longer determines the target: `structure_key` takes
+`impl Into<TargetId>` over an open target namespace validated per KISS §6.8
+(grammar and charset here; each namespace's capability vocabulary stays with its
+maintainer), and `Backend::supports_dtype` takes a `TargetId`.
+
+Two honest caveats on that:
+
+- **It is still true of published `0.1.0`.** Every structure key `0.1.0` produces
+  claims a CUDA target, and it is schema-visible in that wire format. If you are
+  pinned to `0.1.0` this still affects you; the fix arrives with `0.2.0`.
+- **One residual is real in-tree:** `JitRequest::arch` is still typed `ArchSku`,
+  the closed CUDA enum. It converts to a `TargetId` before reaching
+  `structure_key`, so the derived key and artifact identity are target-neutral —
+  this is an API-expressiveness gap, not a wire-format or cache-soundness one.
+  The effect is that a non-CUDA JIT request has nowhere to name its target.
 
 ## History
 
