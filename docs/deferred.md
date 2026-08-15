@@ -89,7 +89,9 @@ rather than a cleanup commit.
   `shaderSignedZeroInfNanPreserveFloat32` is a `returnedonly` **property**, not a
   feature you enable. Either gate on the capability and declare non-advertising
   devices out of conformance, or weaken the rule. (OPEN-4.)
-- **A standard machine-readable form for §6.8-0004 namespace vocabularies** —
+- ~~**A standard machine-readable form for §6.8-0004 namespace vocabularies**~~ —
+  **RULED AND MERGED; this entry was stale.** See the re-anchoring note at the
+  end of this item. Originally
   proposed to the KISS architect with Vulkane, Baracuda and Fuel holding it
   (2026-08-13). The two registered namespaces publish in incompatible shapes:
   `cuda`'s annex ends with a TSV `Appendix: machine-readable capability set (SSOT
@@ -117,6 +119,32 @@ rather than a cleanup commit.
   closed list built from n=2. **Cannot be Accepted without Baracuda and Vulkane
   cosigning**, since a convention imposed on a maintainer's annex by a consumer
   is not a convention.
+
+  **RESOLVED — and this entry pointed at the question instead of the answer.**
+  The ruling is merged as **`KISS-CLASSIFY-6.8-0008` … `-0013`** (verified at KISS
+  `efe111c`): schema `kiss-namespace-vocabulary-v1`, the required-field envelope,
+  a typed decline on a missing field or unrecognized `schema`, `kind` open exactly
+  as ruled, and mapped conformance tests. KISS pins the envelope; the maintainer
+  fills it — as proposed.
+
+  **How this sat here wrong, because the mechanism matters more than the entry.**
+  The trigger was an **issue number** (#171). An issue is a *question* identifier:
+  it stays open until a human closes it, and closing it is nobody's build step. A
+  clause is an *answer* identifier and cannot drift out from under you. So this
+  read "needs a ruling" long after the ruling shipped.
+
+  It is worse than a stale note, and the sharp part is the bit that should have
+  caught it: **this crate already consumes those clauses.** `unpopped-vocab`'s
+  `the_namespace_vocabulary_versions_are_asserted` is named after §6.8-0009's own
+  `test_namespace_vocabulary_version_is_asserted`. The implementation had moved on
+  and the register had not, with nothing connecting them — a green suite on one
+  side and a stale claim on the other, which is *precisely* the 22-vs-24 dtype
+  failure this very entry cites as its motivating example.
+
+  **Rule for this file going forward:** an unblocking trigger names the artifact
+  that will exist when it is met — a clause ID, a published version, a file — not
+  the issue where it was asked. Mechanism owed to kiss-ref, who found it in a
+  well-built guard of their own and passed it on via the portfolio PM.
 
   Three refinements from the round, each better than what was proposed:
 
@@ -154,8 +182,17 @@ rather than a cleanup commit.
   divergence the 25-variants-against-24-tokens case warns about. **The format
   composes namespaces; it does not unify them.**
 
-  **Blocks the open target model** below: whether we import a table, a grammar,
-  or both changes what `ArchSku`'s replacement has to hold.
+  ~~**Blocks the open target model** below: whether we import a table, a grammar,
+  or both changes what `ArchSku`'s replacement has to hold.~~ **It did not.** The
+  open target model landed first and independently: `TargetId` validates the §6.8
+  **grammar only** and holds no vocabulary, so what a manifest might carry never
+  constrained `ArchSku`'s replacement. Measured, not argued — Vulkane's v3→v4
+  four-to-five-field vocabulary bump cost **zero** changes here.
+
+  Kept rather than deleted because the prediction was reasonable and wrong in a
+  useful direction: **the coupling dissolved because the replacement declined to
+  hold vocabulary at all.** A dependency between two pieces of work is a claim
+  about a design that has not been made yet, and it expires when the design does.
 - **The KISS cost model** (#125) — vector-authoritative vs optional sibling. Our
   position is recorded: we already emit a two-axis vector with provenance, and a
   generator can only ever say `declared`.
