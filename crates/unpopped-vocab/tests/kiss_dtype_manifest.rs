@@ -229,3 +229,109 @@ fn quoted_strings(s: &str) -> Vec<String> {
     }
     out
 }
+
+/// **Every arm pinned by identity — because the set comparison above cannot see a
+/// swap.**
+///
+/// # The hole this closes
+///
+/// [`our_all_dtypes`] collects `dtype_token` over `ElementKind::ALL`, then
+/// **sorts and dedups**. That discards the mapping and keeps only the token
+/// *set*. So if `dtype_token(I32)` returned `"f32"` and `dtype_token(F32)`
+/// returned `"i32"` — a clean swap — the set is unchanged and
+/// `the_dtype_set_matches_kiss_exactly_in_both_directions` still passes. The
+/// same holds for any permutation of the table.
+///
+/// That is not a flaw in how that test was written; it is a property of
+/// comparing sets. Its own doc says *"the token image is the only thing that
+/// goes on the wire, so it is the only thing worth comparing"* — right about
+/// **what** to compare, wrong about **how**, because the wire carries a
+/// per-operand token derived from a specific `ElementKind`, not the set.
+///
+/// # Why the byte-match leg does not cover it either
+///
+/// `kiss_byte_match.rs` compares real tokens and would catch a swap — but only
+/// for the dtypes its vectors exercise, recorded there as **3 in the dtype
+/// position and 5 anywhere, against 22 usable**. That note says the remainder is
+/// "caught by `kiss_dtype_manifest.rs` instead". For *membership* it is; for
+/// *mapping* it was not, until this test. Two tests, each sound for its own
+/// purpose, composing to leave ~19 dtypes where a swap was invisible to both.
+///
+/// # Why it matters more here than in most tables
+///
+/// A dtype token on the wire is an **identity**, not a classification: a swap
+/// produces a well-formed, byte-stable token naming the wrong type, and a
+/// consumer reinterprets the bytes with nothing raised at any layer. Width does
+/// not help — this set clusters hard by width (`f16`/`bf16`/`i16`/`u16` at two
+/// bytes; `f32`/`i32`/`u32` at four), so a same-width mis-route changes no size
+/// anywhere.
+///
+/// And `baracuda-kernels-types` is `pub use unpopped_vocab::*` — it derives
+/// nothing and inherits this table entire. **There is no second opinion
+/// available downstream**, so a mis-route here cannot be caught anywhere else.
+///
+/// Rule and remedy owed to MLMF, who hit the same shape in a ggml type table
+/// where `{BF16, F16, I16}` share two bytes.
+#[test]
+fn every_dtype_arm_is_pinned_by_identity_not_by_set_membership() {
+    use ElementKind::*;
+
+    // The complete table, one line per variant. `F32` and `F32Strict`
+    // deliberately share `f32` — the strict axis rides the `<mp>` coordinate,
+    // not the dtype token — which is why the set comparison must dedup and why
+    // this pin, not that one, is the mapping's guard.
+    let pinned: &[(ElementKind, &str)] = &[
+        (F16, "f16"),
+        (Bf16, "bf16"),
+        (F32, "f32"),
+        (F32Strict, "f32"),
+        (F64, "f64"),
+        (I8, "i8"),
+        (U8, "u8"),
+        (I16, "i16"),
+        (U16, "u16"),
+        (I32, "i32"),
+        (U32, "u32"),
+        (I64, "i64"),
+        (U64, "u64"),
+        (Bool, "bool"),
+        (I4, "i4"),
+        (U4, "u4"),
+        (B1, "b1"),
+        (Fp8E4M3FN, "f8e4m3fn"),
+        (Fp8E5M2, "f8e5m2"),
+        (Fp8E4M3FNUZ, "f8e4m3fnuz"),
+        (Fp8E5M2FNUZ, "f8e5m2fnuz"),
+        (F8E8M0, "f8e8m0"),
+        (F8E6M2, "f8e6m2"),
+        (Complex64, "c64"),
+        (Complex128, "c128"),
+    ];
+
+    for (kind, token) in pinned {
+        assert_eq!(
+            dtype_token(*kind),
+            *token,
+            "{kind:?} must spell `{token}`. A same-width neighbour's token here \
+             is a well-formed wire token naming the wrong type, and every \
+             set-based and size-based check in this crate would stay green."
+        );
+    }
+
+    // Exhaustiveness: a new variant must be pinned here deliberately rather than
+    // inherit a spelling and slip past on set membership.
+    assert_eq!(
+        pinned.len(),
+        ElementKind::ALL.len(),
+        "ElementKind has {} variants but {} are pinned — add the new one above, \
+         with its token, rather than relying on the set comparison",
+        ElementKind::ALL.len(),
+        pinned.len()
+    );
+    for k in ElementKind::ALL {
+        assert!(
+            pinned.iter().any(|(p, _)| *p == k),
+            "{k:?} is in ElementKind::ALL but not pinned by identity here"
+        );
+    }
+}

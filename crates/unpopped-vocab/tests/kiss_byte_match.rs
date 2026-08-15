@@ -454,6 +454,25 @@ fn the_mapping_guard_note_is_still_the_one_we_answered() {
 /// KISS's generated manifest in both directions — and which *does* fail on that
 /// same mutation, naming `c128` exactly.
 ///
+/// # But "covered by the manifest test" was too broad, and the gap was total
+///
+/// The sentence above is true for a **misspelling** (`c127` is not in KISS's set,
+/// so a set comparison catches it) and false for a **swap**. Permuting two arms —
+/// `dtype_token(I32) -> "u32"` and `dtype_token(U32) -> "i32"` — leaves the token
+/// *set* identical, and `the_dtype_set_matches_kiss_exactly_in_both_directions`
+/// sorts and dedups, so it compares sets and cannot see it.
+///
+/// Measured, by seeding exactly that swap: the manifest set test passed, **and
+/// every one of the 11 tests in THIS file passed too** — `i32`/`u32` are not in
+/// the vector dtype positions. So a same-width dtype swap was invisible to the
+/// entire vocabulary suite, not merely to this leg. Two tests, each sound for its
+/// own purpose, composing to leave a hole neither's documentation admitted.
+///
+/// Closed by `every_dtype_arm_is_pinned_by_identity_not_by_set_membership`, which
+/// pins the mapping rather than the image and fails on that swap. The complement
+/// is now three-way and the division is: **this leg = grammar, the set test =
+/// membership, the identity pin = mapping.** Rule owed to MLMF.
+///
 /// Recorded as an executable note because "the byte-match passed" is the kind of
 /// sentence that gets quoted as though it meant more than it does. The two tests
 /// are complementary, and neither is sufficient alone.
