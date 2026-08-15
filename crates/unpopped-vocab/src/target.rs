@@ -72,6 +72,30 @@ use crate::layout::ArchSku;
 /// **appended** but never reordered or removed. (Ids are process-local by
 /// contract — see the module docs — so this is about keeping [`ArchSku`]'s
 /// mapping total and cheap, not about wire stability, which the strings carry.)
+///
+/// # SCHEDULED FOR REMOVAL — decided 2026-08-15 with the `cuda` maintainer
+///
+/// **These four strings are the last CUDA vocabulary in this neutral crate**, and
+/// they are here purely as an optimization: they let `From<ArchSku>` be a const
+/// index instead of a lookup. That is a poor trade for a crate whose claim is
+/// neutrality, and Baracuda (who owns the `cuda:` vocabulary under §6.8-0004)
+/// agreed to **drop the block** — the conversion goes through
+/// [`TargetId::parse`] instead, at registration time rather than on any hot
+/// path.
+///
+/// It has not happened yet because the eviction must **lock-step with a registry
+/// repoint**: KISS's `conformance/registry/namespaces.json` names
+/// `unpopped-vocab` as the `cuda` namespace's `reference_implementation`, so
+/// removing the tokens before that pointer moves to `baracuda-cuda-vocab` breaks
+/// a PR-gated file. Sequencing is Baracuda's; this crate's side is four sites
+/// and no codec work — the `structure_key` codec stopped baking `ArchSku`
+/// entirely when `TargetId` landed.
+///
+/// The one thing that changes here when it goes: `From<ArchSku>` stops being a
+/// const index, and `id_values_are_process_local`'s
+/// `TargetId::from(ArchSku::Sm80).0 == 0` assertion goes with it — which is
+/// fine, since that test's own doc says ids are registration handles rather than
+/// stable names.
 const RESERVED: &[&str] = &["cuda:sm80", "cuda:sm89", "cuda:sm90", "cuda:sm90a"];
 
 /// An interned `target_capability` token (KISS-CLASSIFY §6.8).
