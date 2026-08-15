@@ -256,10 +256,24 @@ rather than a cleanup commit.
   nondeterministic FP `atomicAdd` only an order-independent invariant is
   checkable at all. Pinned by the exhaustive `Coverage` classifier in
   `oracle.rs`'s tests.
-- **Quant: adopt the scale-sibling-operand model.** `QuantFacts` is the wrong
-  *shape*, not the right shape un-keyed — removing it is breaking, so it rides
-  the sk4 cut. Residual it does **not** close: blk32 vs blk128 both contribute
-  one same-rank scale sibling and still collide. That part is a genuine sk5 item.
+- ~~**Quant: adopt the scale-sibling-operand model.**~~ — **DONE**; `QuantFacts`
+  removed, the sibling model measured. The residual sentence that used to sit
+  here — *"blk32 vs blk128 both contribute one same-rank scale sibling and still
+  collide"* — was **wrong about the mechanism and is corrected in
+  `tests/scale_sibling_model.rs`.** It is bucket saturation, not rank:
+  divisibility saturates at `d16` and vector width at `v8`, so any two block
+  counts ≥ 16 collide while smaller ones genuinely differ. The stated reason
+  predicts collision at every granularity; the real one predicts it only above
+  saturation, and those imply different sk5 fixes.
+
+  **This sentence was mine, not KISS's** — I described it to the KISS architect
+  as sk4's own text and they filed it into #210 as a fact about the
+  specification. `git grep`/`git log -S` across all KISS refs finds it nowhere.
+  Two attribution failures in one hop: I mis-sourced my own note, they relayed
+  without measuring. Corrected on both sides; recorded here because the sentence
+  lived in a file and the correction lived in a conversation, which is how it
+  survived the first fix (`structure_key.rs` was corrected the same day and this
+  copy was missed).
 - ~~**Constructors for `ContractionKey`/`OperandKey`/`QuantFacts`, then
   `#[non_exhaustive]`**~~ — **DONE in 0.2.0** (`a0c8207`), plus `AccMp`.
   Constructors and the reservation landed in one commit, which is the ordering
