@@ -80,10 +80,39 @@ rather than a cleanup commit.
   runtime**. Asked them 2026-08-14 whether this duplicates machinery they hold —
   if so, ours belongs behind theirs rather than beside it. Answer pending.
   (`conformance.md` OPEN-1.)
-- **What `VariantFidelity::BitIdentical` means across backends** — bit-identical
-  to *what*? Local-to-this-backend is real but says nothing cross-backend; to a
-  normative reference makes accumulation order normative, contradicting the
-  incidental list. (OPEN-2.)
+- ~~**What `VariantFidelity::BitIdentical` means across backends**~~ — **ANSWERED
+  2026-08-15: bit-identical to the default lowering of the same cell, in the same
+  backend, at the same version.** The two horns were the right pair and the left
+  one is the answer: local-to-this-backend is the only referent that is both real
+  and non-normative, and "says nothing cross-backend" is a **feature** — the
+  moment the referent becomes a normative reference, accumulation order becomes
+  normative, which contradicts the incidental list. (OPEN-2.)
+
+  **The axis is ours, and KISS has no home for it — measured, not inferred.**
+  `git grep -iE "bit.identical|variant fidelity"` across `spec/` at KISS
+  `efe111c` returns seven hits and **every one is cross-language prose** (Slang
+  `tanh` vs CUDA `tanh`: `emit.md:252/:302/:816/:1143`, `consume.md:311/:831`,
+  `synth.md:306`). Not one is about two schedule variants of one cell in one
+  language. So there are two different axes:
+
+  - KISS-EMIT §6.6-0002 fidelity = determinism class + MathPrecision — the kernel
+    against **its own semantics**;
+  - `VariantFidelity` = a variant against **the default lowering of the same
+    cell**.
+
+  **§6.6-0005 therefore does not reach this field, and it MUST NOT be moved into
+  the contract's Guarantees section.** That clause forbids declaring the kernel's
+  fidelity (determinism class or MathPrecision) off-schema; this is neither.
+  Filing a variant-relative claim in a section whose other contents are absolute
+  would make the next reader take `BitIdentical` as a claim against the semantics
+  rather than against a sibling — strictly worse than leaving it where it is.
+  Confirmed with the KISS architect, who is filing the missing home as a
+  KISS-Emit category-(c) gap.
+
+  **Status of the KISS side is a filing, not a clause** — per this file's own
+  trigger rule, do not treat it as ruled until it lands as a clause ID. What is
+  settled and needs no clause is the local half: the referent is the same-cell
+  default lowering, and the field stays on `Variant`.
 - **Whether NaN propagation (rule N2) is universally required** — on Vulkan it
   may be unachievable *by any lowering*:
   `shaderSignedZeroInfNanPreserveFloat32` is a `returnedonly` **property**, not a
