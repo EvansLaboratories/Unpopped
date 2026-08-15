@@ -302,6 +302,20 @@ fn parse_out_elem(line: &str) -> f64 {
 /// that the emitted signature is what the caller believes it is — a mismatch is
 /// a compile error here rather than undefined behaviour at run time.
 fn harness(kernel_src: &str, name: &str, n_in: usize, inputs: &[Vec<f32>]) -> String {
+    // The kernel's trailing `n` argument is passed the ELEMENT count, which is
+    // only right when the emitter's count unit is elements
+    // (`Backend::effective_count_width == 1`). CpuC v1 takes the trait default
+    // of 1, so this holds today — but it is an assumption this harness makes and
+    // never states, and a vectorized emitter whose `n` counts vec4 groups would
+    // be driven 4x wrong here with no test going red.
+    //
+    // `the_harness_element_count_matches_the_emitter_count_unit` pins it, so the
+    // day CpuC gains a vectorized path this fails loudly instead of silently
+    // mis-driving the kernel. Distinguishing "wrote zeros" from "never wrote"
+    // (the NaN sentinel below) does not help if `n` itself is wrong: the kernel
+    // would correctly write the range it was told to, and the survivors would
+    // read as a never-wrote bug in the emitter rather than a wrong-`n` bug in
+    // the caller.
     let n = inputs[0].len();
     let mut s = String::new();
     s.push_str(kernel_src);
@@ -1410,5 +1424,57 @@ impl Body {
             Body::Mul => "mul",
             Body::Div => "div",
         }
+    }
+}
+
+/// **The harness passes an ELEMENT count as the kernel's `n`; pin that this is
+/// what the emitter actually means by `n`.**
+///
+/// `harness()` emits `kernel(in0, .., out, n)` with `n = inputs[0].len()`. That
+/// is only correct when the emitter's count unit is elements —
+/// [`Backend::effective_count_width`] `== 1`. CpuC v1 does not override the
+/// trait default of `1`, so it holds; nothing stated it.
+///
+/// # Why this is worth a test rather than a comment
+///
+/// The failure it guards is silent and misattributing. A vectorized emitter
+/// whose `n` counts vec4 groups would be handed 4x the count it expects. The
+/// NaN sentinel — this file's main safety net — does **not** catch it: the
+/// kernel would faithfully write the range it was told to write, and the
+/// surviving NaNs (or the overrun) would read as a *never-wrote* bug in the
+/// emitter rather than a *wrong-`n`* bug in the caller. The sentinel
+/// distinguishes "wrote zeros" from "never wrote"; it cannot distinguish either
+/// from "was asked for the wrong range".
+///
+/// So this is deliberately a test of an assumption that is TRUE today. It exists
+/// to fail on the day CpuC gains a vectorized path, at which point `harness()`
+/// must derive `n` from the count unit rather than from the input length.
+#[test]
+fn the_harness_element_count_matches_the_emitter_count_unit() {
+    use unpopped::backend::Backend;
+
+    let n: i64 = 8;
+    // The dtypes and categories this file actually drives through `harness()`.
+    let cases: [(ElementKind, OpCategory, &str); 3] = [
+        (ElementKind::F32, OpCategory::BinaryElementwise, "add"),
+        (ElementKind::F64, OpCategory::BinaryElementwise, "addf64"),
+        (ElementKind::I16, OpCategory::BinaryElementwise, "addi16"),
+    ];
+
+    for (dtype, cat, name) in cases {
+        let op = OpDef::elementwise(name, 2, &[dtype], input(0) + input(1));
+        let d = OperandDesc::new(1, &[n], &[1], dtype, 256);
+        let operands = vec![d; 3];
+        let key = structure_key(cat, &operands, ArchSku::Sm89);
+        let plan = build_plan(&op, &key);
+
+        assert_eq!(
+            CpuC.effective_count_width(&plan),
+            1,
+            "{name}/{dtype:?}: `harness()` passes an element count as the kernel's \
+             `n`. A count width other than 1 means `n` counts groups, and every \
+             end-to-end case in this file would be driving the kernel over the \
+             wrong range — see the comment in `harness()`."
+        );
     }
 }

@@ -426,15 +426,30 @@ pub trait Backend {
 }
 
 /// Backend-injected lowering closures for the **non-universal** parts of the
-/// math. Infix `+ - * /` and parenthesization are universal across
-/// CUDA/Slang/HLSL/Metal/GLSL and inlined directly; everything else is a seam:
+/// math. Parenthesization is universal and inlined directly; everything that
+/// renders a target-language surface is a seam:
 ///
 /// - `leaf` — how input operand `i`'s value is named (`in0[i]` scalar, `v0.x`
 ///   for a vector lane);
 /// - `unary` — spells a [`UnaryOp`] over an already-lowered inner string
 ///   (`expf(...)` is CUDA-specific);
 /// - `binary` — spells a non-infix [`BinaryOp`] over two operand strings
-///   (`fmaxf(a, b)`, `powf(a, b)`).
+///   (`fmaxf(a, b)`, `powf(a, b)`);
+/// - `arith` — spells the four **infix** arithmetic nodes.
+///
+/// # Infix is a seam because it is not universal
+///
+/// This doc used to say infix `+ - * /` was "universal across
+/// CUDA/Slang/HLSL/Metal/GLSL and inlined directly". That is **false**, and the
+/// counterexample is in this crate's own dtype set: for `c64`/`c128` the C
+/// carrier is a struct, and a C compiler rejects operators on structs (MSVC
+/// `C2088`; it rejects `_Complex` outright with `C2440`). `a + b` does not
+/// render. That is why `arith` exists, and the claim is corrected here rather
+/// than deleted because the sentence outlived the code that disproved it.
+///
+/// The universality of an operator is therefore a property of the operator
+/// **and the dtype**, not of the operator alone — a distinction worth keeping in
+/// view for anyone auditing which spellings may be driver-side.
 ///
 /// `#[non_exhaustive]`: the seam set grows as non-C-family backends land (SPIR-V
 /// needs no textual spelling for several of these, and per-storage-class access
