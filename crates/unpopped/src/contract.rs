@@ -1264,6 +1264,35 @@ fn count_flops(e: &ScalarExpr) -> u32 {
 /// drift would be silent in both directions: a validator looser than the
 /// contract passes kernels the contract promises are tighter, and a tighter one
 /// fails kernels that honour it.
+///
+/// # KNOWN LIMIT: these are CUDA's numbers, and this function is neutral
+///
+/// [`unary_ulp`] and [`binary_ulp`] are documented as *"Per-op **CUDA** f32 ULP
+/// error"*, and nothing in this chain takes a backend or a target — even though
+/// [`contract`] is handed a `&dyn Backend` and could ask. So every precision
+/// claim this crate makes is CUDA's, for every backend: the emitted contract's
+/// `max_ulp`, its `audited: true` (justified in-file as *"the bounds are
+/// declared against CUDA vendor ULP tiers"*), and
+/// [`crate::oracle::required_fidelity`]'s comparison band.
+///
+/// **It is right today for a reason it does not state** — CUDA is the only
+/// backend whose contracts anyone consumes. That is a property of the current
+/// consumer set, not of the design, and it is the same shape as three other
+/// defects found in this crate this week: a claim that is correct by a
+/// coincidence nothing records.
+///
+/// **The direction of the error matters.** This file's rule is *over-stating is
+/// safe, under-stating is not* — but that rule is about the bound versus the
+/// kernel, and this is a different axis. Vulkan's spec-guaranteed accuracy for
+/// several transcendentals is **looser** than CUDA's (`exp` is 3 ULP against
+/// CUDA `expf`'s 2), so on a Vulkan target CUDA's tier is an **over-claim of
+/// precision** — the contract promises tighter than the target guarantees, and
+/// `required_fidelity` compares against a band too tight to be met. Both fail in
+/// the unsafe direction.
+///
+/// Closing it needs a per-target accuracy seam, which is a `Backend`-surface
+/// change and therefore a coordination call rather than a quiet patch. Recorded
+/// here, at the number itself, so it is met by anyone who reaches for it.
 pub fn ulp_bound(e: &ScalarExpr) -> f64 {
     match e {
         // Coord rates 0 like the other leaves: the long-long → float/double

@@ -2803,6 +2803,13 @@ pub fn required_fidelity(plan: &KernelPlan<'_>, operands: &[OperandDesc]) -> Opt
         return Some(Fidelity::BitExact);
     }
 
+    // KNOWN LIMIT, stated at the use site because it is invisible from the
+    // signature: `ulp_bound` sums a **CUDA** per-op ULP table, and neither it nor
+    // this function takes a target. So the band computed here is CUDA's accuracy
+    // for every backend. On a target whose guarantees are looser — Vulkan's `exp`
+    // is 3 ULP against CUDA `expf`'s 2 — this band is too tight to be met, and a
+    // conforming kernel fails a comparison it should pass. See `ulp_bound`'s
+    // "KNOWN LIMIT" section; closing it needs a per-target accuracy seam.
     let ulp = crate::contract::ulp_bound(plan.body);
     if !ulp.is_finite() {
         return None;
