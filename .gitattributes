@@ -27,3 +27,27 @@
 # rule naming one path stops protecting anything the moment the file moves, and
 # does so silently.
 crates/unpopped-vocab/kiss/** text eol=lf
+
+# Licence files are compared byte-for-byte against their canonical upstream —
+# `LICENSE-APACHE` against https://www.apache.org/licenses/LICENSE-2.0.txt. That
+# comparison IS the guarantee: "this is the Apache licence" is a claim with an
+# exact referent, and a verbatim file can be verified by diff or hash while an
+# edited one can only be asserted.
+#
+# Found the hard way (2026-08-19): the LICENSE-APACHE files here were NOT the
+# Apache License 2.0 — 24 substantive divergences including a NARROWER §6
+# trademark carve-out and a §9 retitled "Accepting Warranty or Support" where
+# canonical says "or Additional Liability". One bad source copied into all five
+# crates. Nothing had ever diffed it, because "this is the Apache licence" reads
+# as self-evidently true.
+#
+# Canonical is pure LF. With autocrlf a fresh checkout would materialize these as
+# CRLF, every byte-comparison would fail, and the verifier would cry wolf on a
+# correct file — which teaches the operator to skip the diff, and the next real
+# divergence goes through. Same failure this file already records for the .cu
+# goldens and the vendored KISS artifacts.
+#
+# Matched by glob across the workspace rather than by path, per the lesson above:
+# a rule naming one location stops protecting anything the moment a file moves,
+# and does so silently.
+LICENSE-* text eol=lf
