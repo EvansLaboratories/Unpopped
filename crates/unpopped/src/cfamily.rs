@@ -155,8 +155,9 @@ pub fn out_ctype_of<'c>(plan: &KernelPlan<'_>, j: usize, ctype: &'c str) -> &'c 
 }
 
 /// The store expression for output `j`'s lowered body root. A uniform output
-/// (`out_dtype_of(j) == plan.dtype`) stores the root unchanged (byte-identical to
-/// pre-0b output). A u8 keep-mask output converts the exact 0.0/1.0 predicate
+/// (`out_dtype_of(j) == plan.dtype`) stores the root unchanged **except for the
+/// FP8 pair**, whose codec call is applied here rather than by the body lowering
+/// (f16/bf16 arrive already demoted -- see the branch comment). A u8 keep-mask output converts the exact 0.0/1.0 predicate
 /// (lowered in the COMPUTE dtype `plan.dtype`) to `unsigned char` — exact by
 /// construction (the G1 plan gate + G5 backstop pin the body root to a `Cmp*`).
 /// The conversion is applied HERE at the store site, per output, **never baked
@@ -178,9 +179,30 @@ pub fn store_expr_of(plan: &KernelPlan<'_>, j: usize, root: String) -> String {
         // float->unsigned char conversion TRUNCATE the value instead of encoding
         // it — `1.5f` stored as `1`, silently, with no diagnostic.
         //
-        // `demote_store_f32` is the identity for every dtype that needs no
-        // detour, so this stays byte-identical for f32/f64/integer cells.
-        return demote_store_f32(d, &root);
+        // ONLY the FP8 pair. `demote_store_f32` is NOT the identity for four
+        // dtypes -- the FP8 pair and, via `half_store_intrinsic`, f16/bf16 -- and
+        // the halves arrive here **already demoted**: the house promote-demote
+        // convention lowers an f16 body root as `__float2half(<f32 expr>)`, as
+        // this function's own doc states. Applying it again emits
+        // `__float2half(__float2half(x))`.
+        //
+        // That regressed in 313a798 and shipped in 0.2.0. It is numerically the
+        // identity for representable values, so there is no result-level symptom
+        // -- only byte-identity goldens catch it, and ten of Baracuda's f16 ones
+        // did.
+        //
+        // The asymmetry is real rather than an oversight: an f16 store intrinsic
+        // is applied by the BODY lowering at the root, while an FP8 codec call is
+        // applied HERE at the store site. So the uniform branch must demote for
+        // exactly the dtypes whose body lowering did not.
+        //
+        // Written as an explicit match rather than `demote_store_f32` minus the
+        // halves, so a new narrow dtype is a decision at this site instead of
+        // inheriting whichever behaviour `narrow_store_fn` happens to have.
+        return match d {
+            ElementKind::Fp8E4M3FN | ElementKind::Fp8E5M2 => demote_store_f32(d, &root),
+            _ => root,
+        };
     }
     // The hetero elementwise store is exactly the U8 keep-mask (a `Cmp*`
     // predicate, pinned by `assert_valid_out_dtype`; the bincount-I32 scatter
