@@ -62,6 +62,26 @@ deliberately being made pre-1.0 so they can land without a major bump — expect
 more than one breaking `0.x`, not a single batch that must be complete before
 anything ships.
 
+> **Attribution note (2026-08-19) — treat "the Vulkane review" as unsourced.**
+> The phrase entered at `be8a04e` (2026-08-06, **pre-extraction**, in the Baracuda
+> workspace) as *"the Vulkane review's #1/#2 — a SPIR-V word stream + ABI/binding
+> manifest — attach here later"*, and came across with the carve. The numbering is
+> real evidence something enumerated was being cited, and it was `Backend`-surface
+> from the first mention. But **Vulkane has no record of raising them**, the
+> primary review is not in this repo, and the session that wrote it is gone — so
+> nobody now alive can source it.
+>
+> The **consumer need is also unconfirmed, and is not any current consumer's.**
+> Measured: Vulkane consumes nothing from this lineage (zero `unpopped`, zero
+> `baracuda-*` in manifest or lockfile), and Fuel consumes the **pre-extraction**
+> crates `baracuda-kernelgen` / `baracuda-kernel-vocab`, not these. `fuel-vulkan-backend`
+> is a plausible *hypothesis* for who would want them — not a re-attribution.
+>
+> Recorded this way because a named attribution reads as verified and stops the
+> next reader checking. This one survived thirteen days, three files, two projects
+> and a repo extraction; it broke only when someone finally asserted it **to the
+> named party**, who could falsify it. Name a party only where the citation can be
+> given.
 **The `cuda:`-prefix defect is fixed, and shipped in `0.2.0` (2026-08-15).**
 Earlier revisions of this file described it as open long after it was fixed, and
 the correction mattered: it was being reported upward as a live blocker on a
