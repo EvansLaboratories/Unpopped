@@ -389,3 +389,137 @@ fn recognition_exceeds_lowering_and_the_gap_is_named() {
         settled.len()
     );
 }
+
+
+/// **Every backend either emits a real store or returns a typed decline. Never a
+/// panic, never an empty body.**
+///
+/// # What this recovers, and what it deliberately does not
+///
+/// `c584818` moved the emitters out of the core, which stranded three of
+/// Baracuda's cross-backend tests: they re-emit through `CpuC`/`Slang`, and with
+/// those crates unpublished a downstream consumer cannot dev-dep them. Baracuda
+/// carries that as a **documented, tracked deferral** and restores the tests when
+/// the emitters publish.
+///
+/// **The deferred gap is "three-way agreement", not "three tests"** — and the
+/// two-way share has a home here, because this crate already dev-deps both
+/// emitters for exactly this reason. So this closes the `CpuC` x `Slang` part
+/// with no publish and no irreversible act.
+///
+/// **It does NOT close the three-way part.** Agreement *including* Cuda is
+/// unreachable from here: the dependency points one way and this crate cannot see
+/// `baracuda-cuda-emit`. That share stays open until the emitters publish, and is
+/// stated so nobody later reads this test as having closed the whole thing --
+/// which would be the overclaiming failure this repo keeps finding, in a poor
+/// place to introduce a fresh one.
+///
+/// # Why it is not folded into the coverage table above
+///
+/// The table **cannot** assert this property: [`lowers`] wraps its probe in
+/// `catch_unwind(..).unwrap_or(false)`, so a **panic and a decline are the same
+/// answer there** -- deliberately, since for a coverage question both mean "does
+/// not lower". That conflation is what this test refuses. A backend that panicked
+/// on every dtype would show as uniformly unsupported above, and green.
+///
+/// Baracuda's version of this shape is what surfaced Slang's intentional
+/// `Copysign`/`Nextafter` decline, so it has a track record of catching something
+/// real rather than being hypothetical.
+///
+/// # The store spelling is per-language AND per-dtype, which this test learned
+///
+/// There is no neutral spelling to assert -- a store's target-language surface is
+/// emitter-supplied -- so the accepted spellings travel with the backend.
+///
+/// The first version looked only for `out[i] =` and **failed on `i4`**, correctly,
+/// and not because the emitter was wrong. A **sub-byte store is a statement, not
+/// an assignment**: several elements share a byte, so there is no per-element
+/// lvalue and `CpuC` emits `unpopped_i4_store(out, i, ..)`. That is the exact
+/// distinction `cpu_c`'s own comment warns about -- writing `out[i] =` for a
+/// sub-byte dtype "compiles, it runs, and it scrambles every lane past the first."
+///
+/// So a backend has a *set* of store spellings, not one. Asserting a single form
+/// would have made this test wrong for four dtypes while looking rigorous.
+#[test]
+fn every_backend_emits_a_real_store_or_declines_and_never_panics() {
+    // Same probe-op choice as `lowers`: `bool` admits the logical ops, not `Add`
+    // (its ops normalize to 0/1, so `true + true` is not a value of the dtype).
+    fn probe(dt: ElementKind) -> OpDef {
+        if dt == ElementKind::Bool {
+            OpDef::elementwise(
+                "and",
+                2,
+                &[dt],
+                input(0).binary(unpopped::ir::BinaryOp::LogicalAnd, input(1)),
+            )
+        } else {
+            OpDef::elementwise("add", 2, &[dt], input(0) + input(1))
+        }
+    }
+
+    let mut emitted = 0usize;
+    let mut declined = 0usize;
+
+    for dt in ElementKind::ALL {
+        let op = probe(dt);
+        let d = scalar_shape(dt);
+        let key = structure_key(OpCategory::BinaryElementwise, &[d, d, d], ArchSku::Sm89);
+
+        // `CpuC` has two accepted spellings: the plain assignment, and the packed
+        // statement used where a sub-byte dtype has no per-element lvalue.
+        for (name, slang, stores) in [
+            ("CpuC", false, &["out[i] =", "_store(out, i,"][..]),
+            ("Slang", true, &["output[i] ="][..]),
+        ] {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if slang {
+                    try_generate(&op, &key, &Slang)
+                } else {
+                    try_generate(&op, &key, &CpuC)
+                }
+            }));
+
+            match outcome {
+                Err(_) => panic!(
+                    "{name} PANICKED on {dt:?}. A backend that cannot serve a cell must \
+                     return a typed decline, not unwind -- and the coverage table above \
+                     cannot catch this, because it maps a panic and a decline to the same \
+                     answer."
+                ),
+                Ok(Ok(kernel)) => {
+                    assert!(
+                        !kernel.source.trim().is_empty(),
+                        "{name} returned Ok on {dt:?} with an EMPTY body -- a kernel that \
+                         emits nothing is worse than a decline, because it looks like success"
+                    );
+                    assert!(
+                        stores.iter().any(|m| kernel.source.contains(m)),
+                        "{name} returned Ok on {dt:?} but the body has no store (none of \
+                         {stores:?}). An emitted kernel that never writes its output is the \
+                         all-zero / never-wrote failure class, and it passes every \
+                         byte-identity check:\n{}",
+                        kernel.source
+                    );
+                    emitted += 1;
+                }
+                // A typed decline is a correct answer; WHICH dtypes decline is the
+                // coverage table's business rather than this test's.
+                Ok(Err(_)) => declined += 1,
+            }
+        }
+    }
+
+    // Positive controls: without these the test passes vacuously if one arm never
+    // executes.
+    assert!(
+        emitted > 0,
+        "no backend emitted for any dtype -- the store assertion never ran, so this test \
+         proved nothing"
+    );
+    assert!(
+        declined > 0,
+        "every backend emitted for every dtype -- the decline path never ran, so this test \
+         is not exercising the decline-vs-panic distinction it exists for"
+    );
+    println!("emitted with a real store: {emitted}   typed declines: {declined}");
+}

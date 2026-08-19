@@ -68,26 +68,38 @@ source-emitting one:
 - the artifact type is source text — `GeneratedKernel::source` is a `String` —
   rather than an arbitrary word stream such as SPIR-V `[u32]` (#2).
 
-> **Attribution note (2026-08-19) — treat "the Vulkane review" as unsourced.**
-> The phrase entered at `be8a04e` (2026-08-06, **pre-extraction**, in the Baracuda
-> workspace) as *"the Vulkane review's #1/#2 — a SPIR-V word stream + ABI/binding
-> manifest — attach here later"*, and came across with the carve. The numbering is
-> real evidence something enumerated was being cited, and it was `Backend`-surface
-> from the first mention. But **Vulkane has no record of raising them**, the
-> primary review is not in this repo, and the session that wrote it is gone — so
-> nobody now alive can source it.
+> **Attribution note (2026-08-19) — these are the editor's position, not an
+> external requirement.**
 >
-> The **consumer need is also unconfirmed, and is not any current consumer's.**
-> Measured: Vulkane consumes nothing from this lineage (zero `unpopped`, zero
-> `baracuda-*` in manifest or lockfile), and Fuel consumes the **pre-extraction**
-> crates `baracuda-kernelgen` / `baracuda-kernel-vocab`, not these. `fuel-vulkan-backend`
-> is a plausible *hypothesis* for who would want them — not a re-attribution.
+> These two were recorded from `be8a04e` (2026-08-06, **pre-extraction**) as
+> *"the Vulkane review's #1/#2"*. **All three plausible parties have since been
+> checked, independently, and none raised them:**
 >
-> Recorded this way because a named attribution reads as verified and stops the
-> next reader checking. This one survived thirteen days, three files, two projects
-> and a repo extraction; it broke only when someone finally asserted it **to the
-> named party**, who could falsify it. Name a party only where the citation can be
-> given.
+> | party | consumes `unpopped`? | has the stake? | raised it? |
+> |---|---|---|---|
+> | Vulkane | no | no | no record |
+> | Fuel | no | plausibly, via a SPIR-V backend | no record — and against their own filed-outreach convention |
+> | Baracuda | **yes** | **yes** | **no** — "a consumer *with* the stake, but I didn't speak them" |
+>
+> The likeliest reading is that **there was never an external requester**, and
+> that Unpopped's own design judgment was recorded as someone else's ask.
+>
+> **The engineering is untouched by that** — a backend emitting a word stream
+> rather than source text genuinely needs both, and that stands on its merits.
+> **What changes is the category.** A design judgment recorded as an external ask
+> stops being arguable: a position invites pushback, a requirement gets scheduled
+> around. That misattribution then did real work — it became the stated trigger
+> for holding the emitter publish, which stranded three cross-backend tests
+> downstream.
+>
+> So they are recorded here as the editor's position, held for the technical
+> reasons given, **open to challenge**. That is a stronger artifact than a
+> citation nobody can produce.
+>
+> Rule, owed to Fuel: **a citation naming a party must be checkable *by that
+> party*.** Confirm a cross-project attribution at the source before it hardens
+> into a premise. This one survived thirteen days, three files, two projects and
+> a repo extraction, and broke on first contact with any of the three.
 A **third** item on this list — "takes no target descriptor" — has since landed
 and is no longer outstanding: `supports_dtype` takes a `TargetId`, and
 `structure_key` takes `impl Into<TargetId>` over an open, KISS §6.8-validated
