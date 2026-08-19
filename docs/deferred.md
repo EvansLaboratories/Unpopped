@@ -29,17 +29,42 @@ Nothing to do but be ready. Each names its trigger.
 | ~~**Final byte-match leg**~~ — **DONE** (`6bc8bea`), committed as a permanent test | Ran against merged KISS `a43a96f` (spec `19c3ad7`): **19/19 claimed positives byte-exact + 1 earned capability exclusion (vulkan namespace), 10/10 declines with exact verdict and payload.** Skips are earned by substituting an implemented target and requiring a byte-exact round-trip, so an exclusion cannot hide a divergence. **Known bound, recorded in code as `this_leg_is_not_dtype_coverage`:** the vectors exercise 3 dtypes in the dtype position and 5 anywhere, against 22 usable — a dtype-spelling divergence on the other 17 is invisible here and is caught by `kiss_dtype_manifest.rs` instead. The two tests are complementary; neither is sufficient alone. |
 | ~~**Vendor the KISS dtype manifest**~~ — **DONE** (`4d72bcb`) | Unblocked by KISS #131: `conformance/corpus/dtype_manifest.json` carries `structure_key_schema_version` / `token_prefix`. Vendored verbatim at `19c3ad7` under `crates/unpopped-vocab/kiss/`, with equality asserted **both ways** plus a schema-version assertion, so a copy taken from a newer schema fails loudly instead of quietly widening the set. |
 | **`cuda.md` SSOT appendix needs an `Sm90` row** — ours to flag, Baracuda's to edit | We wired `ArchSku::Sm90` in 0.2.0 to close five `cuda:sm90` byte-match vectors. `spec/namespaces/cuda.md`'s appendix says a row is added "when the emitter wires that arch", and lists only Sm80/Sm89/Sm90a — so the SSOT and its own named reference implementation (`unpopped-vocab`) are out of sync now. Row sent to Baracuda; the annex is maintainer-owned so we do not edit it. **Nothing but a human reading the annex noticed** — which is the live evidence for the manifest proposal in section C. |
+| **Publish `unpopped-cpu-c` / `unpopped-slang`** — the reference emitters, currently unreachable to anyone outside this repo | **The `Backend` trait settling** — concretely, the two gaps the crate README still names as open: no structured binding/ABI manifest, and an artifact type that is source text rather than an arbitrary word stream (both Vulkane review items, both wanted by a SPIR-V backend). **Ruled 2026-08-15: hold.** The recruiting argument for publishing is real — KISS-EMIT §8.2-0002's freeze gate needs an emitter whose surface spellings differ from the reference's, and a dependable published emitter is what makes an outsider's life easier. But it inverts once you ask what they would be implementing *against*: a third party who adopts `unpopped-slang` and then eats two breaking `Backend` changes in a month concludes the umbrella is not ready, and is right. **Unreachable is a better first impression than unstable.** Note the trigger is an artifact (those two gaps closed), not an event ("when someone asks") — a demand-shaped trigger would fire exactly when the churn is most expensive. |
 | **`unpopped-cuda` sub-crate**: CUDA emitter donated by Baracuda, plus the `convert.rs` CUDA parser moving out of neutral core | The 0.2 trait freeze. The crate has **two** inbound streams — IR→`.cu` (Baracuda's donation) and `.cu`→IR (our parser) — so it must not be designed emit-only. |
 | ~~**Make the target namespace pluggable**~~ — **DONE**; the `cuda:` token eviction is what remains | Pluggable landed: `StructureKey.arch: ArchSku` → `target: TargetId`, an interned §6.8 token validated for **grammar only**. The CUDA-only `arch_code`/`arch_from_code` pair was **deleted**, not adapted — measured, the codec has *zero* non-test `ArchSku` code, and Vulkane's v3→v4 four-to-five-field bump cost **zero changes** (byte-match 19/20-with-an-exclusion → **20/20, zero exclusions**), which is what proves it opaque rather than opaque-looking. **Remaining is four sites and two decisions, no codec work:** the enum (`layout.rs`), the re-export (`lib.rs`), `KernelSku.arch` (`sku.rs`), and `From<ArchSku> for TargetId` (`target.rs`). Decided 2026-08-15 with Baracuda: **drop the reserved block** and convert via `TargetId::parse`, fully evicting CUDA from neutral core; `KernelSku.arch` is a *separate* call pending Fuel, since it turns on who constructs it. **Trigger: the registry repoint.** §6.8-0003 names `unpopped-vocab` as `cuda`'s `reference_implementation`, so evicting before the pointer moves to `baracuda-cuda-vocab` breaks a PR-gated file. Landing crate is `baracuda-cuda-vocab` (Eric). |
 
-**Publication is no longer held.** `unpopped-vocab` shipped 0.2.0 on the sk4 cut.
-The rule that produced the hold still stands for the next schema event: per sk4
-§6 (Eric-ratified) that clause binds the *token-deriving* crate, so its breaking
-changes ride the coordinated cut — and the ordering within a cut is **push →
-byte-match → publish**, because a registry version is immutable and cannot be
-un-published if the match then finds a divergence. The generator (`unpopped`) is
-explicitly **not** gated and ships on its own schedule; it remains at 0.1.0 with
-its own breaking batch pending.
+**Publication is no longer held, and both crates have now shipped.** Live on
+crates.io as of 2026-08-15: **`unpopped-vocab` 0.3.0** and **`unpopped` 0.2.0**
+(tags `unpopped-vocab-v0.3.0`, `unpopped-v0.2.0`, release commit `8a242e8`).
+`unpopped` is at **0.3.0 in-tree, unpublished** — the `JitRequest::target` break
+landed after the cut; its publish trigger is *when Baracuda is ready to consume
+it*.
+
+**The vocab went to 0.3.0, not 0.2.0, and the reason is worth keeping.** 0.2.0
+was already published, and the in-tree code had moved materially past it while
+the manifest still said `0.2.0`. The workspace dep was
+`{ path = ..., version = "0.2.0" }` — and **cargo strips `path` on publish and
+keeps `version`**, so a published `unpopped` would have resolved against the OLD
+registry vocab and failed to compile for every downloader, unrecoverably, since
+registry versions are immutable. Caught by a `cargo package` dry-run, which
+resolves the verification build against the registry exactly as a downloader
+does. **That leg is now permanent, between byte-match and publish**, and it makes
+dependency-first publish order a precondition the tooling enforces rather than a
+convention someone remembers: once the dep says `0.3.0`, `cargo package -p
+unpopped` cannot pass until vocab 0.3.0 is actually on the registry.
+
+The rule that produced the original hold still stands for the next schema event:
+per sk4 §6 (Eric-ratified) that clause binds the *token-deriving* crate, so its
+breaking changes ride the coordinated cut — and the ordering within a cut is
+**push → byte-match → cargo package → publish**, because a registry version is
+immutable and cannot be un-published if verification then finds a divergence.
+The generator is explicitly **not** gated on a schema cut and ships on its own
+schedule.
+
+**Corollary now enforced by habit: bump on landing, not on shipping.** Leaving a
+manifest at a published version while `main` holds breaking changes past it
+recreates exactly the state above. `unpopped` went to 0.3.0 the moment the
+`JitRequest` break landed, not at its future publish.
 
 ---
 

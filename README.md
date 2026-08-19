@@ -14,8 +14,8 @@ Unpopped. Unpopped depends on no backend, no driver, and no vendor crate.
 
 | Crate | Status | What it is |
 |---|---|---|
-| [`unpopped`](crates/unpopped) | published 0.1.0 | The generator: the neutral IR, the transform pipeline, the `Backend` and `Compiler` traits, a portable-C99 reference backend, and the CPU oracle. |
-| [`unpopped-vocab`](crates/unpopped-vocab) | published 0.1.0 | The driver-free classifier vocabulary: dtype hierarchy, `DeviceRepr`, dispatch tags, the `StructureKey` classifier key, dispatch tables. |
+| [`unpopped`](crates/unpopped) | published 0.2.0 | The generator: the neutral IR, the transform pipeline, the `Backend` and `Compiler` traits, a portable-C99 reference backend, and the CPU oracle. |
+| [`unpopped-vocab`](crates/unpopped-vocab) | published 0.3.0 | The driver-free classifier vocabulary: dtype hierarchy, `DeviceRepr`, dispatch tags, the `StructureKey` classifier key, dispatch tables. |
 
 ## Emitters
 
@@ -23,16 +23,21 @@ Unpopped is becoming **a standard with a normative reference emitter per
 target**. Each emitter is its own crate implementing `unpopped::Backend`; none of
 them live inside the core.
 
-That is a change of direction, and the tree does not fully reflect it yet — the
-C99 and Slang emitters are still in-tree in `unpopped`, and moving them out is
-in progress. Until that lands, treat the core crate's emitter modules as
-scheduled to relocate rather than as stable API.
+**That split has landed.** The core crate holds no emitter: `cargo test -p
+unpopped` builds with no emitter in its dependency graph. Cross-emitter evidence
+lives in `unpopped-conformance` so no emitter dev-depends on a sibling.
+
+The two reference emitters are **not yet published**, deliberately. Publishing
+them against a `Backend` trait known to be moving would hand a third party two
+breaking changes in a month, and *unreachable is a better first impression than
+unstable*. The trigger is the two `Backend` gaps above closing — see
+[`docs/deferred.md`](docs/deferred.md) §A.
 
 | target | crate | owner |
 |---|---|---|
 | CUDA | [`baracuda-cuda-emit`](https://github.com/ciresnave/baracuda) | Baracuda |
-| CPU (C99) | in-tree, relocating | Unpopped |
-| Slang | in-tree, relocating | Unpopped |
+| CPU (C99) | `unpopped-cpu-c` (in-tree, unpublished) | Unpopped |
+| Slang | `unpopped-slang` (in-tree, unpublished) | Unpopped |
 
 A project that originates an emitter may keep owning it — Baracuda's CUDA
 emitter is theirs, and stays theirs. The umbrella exists so a third party
@@ -57,9 +62,10 @@ deliberately being made pre-1.0 so they can land without a major bump — expect
 more than one breaking `0.x`, not a single batch that must be complete before
 anything ships.
 
-**The `cuda:`-prefix defect is fixed in-tree and ships in `0.2.0`.** Earlier
-revisions of this file described it as open; that is out of date and the
-correction matters, because it was being reported upward as a live blocker.
+**The `cuda:`-prefix defect is fixed, and shipped in `0.2.0` (2026-08-15).**
+Earlier revisions of this file described it as open long after it was fixed, and
+the correction mattered: it was being reported upward as a live blocker on a
+three-project chain.
 `ArchSku` no longer determines the target: `structure_key` takes
 `impl Into<TargetId>` over an open target namespace validated per KISS §6.8
 (grammar and charset here; each namespace's capability vocabulary stays with its
@@ -67,14 +73,16 @@ maintainer), and `Backend::supports_dtype` takes a `TargetId`.
 
 Two honest caveats on that:
 
-- **It is still true of published `0.1.0`.** Every structure key `0.1.0` produces
-  claims a CUDA target, and it is schema-visible in that wire format. If you are
-  pinned to `0.1.0` this still affects you; the fix arrives with `0.2.0`.
-- **One residual is real in-tree:** `JitRequest::arch` is still typed `ArchSku`,
-  the closed CUDA enum. It converts to a `TargetId` before reaching
-  `structure_key`, so the derived key and artifact identity are target-neutral —
-  this is an API-expressiveness gap, not a wire-format or cache-soundness one.
-  The effect is that a non-CUDA JIT request has nowhere to name its target.
+- **It is still true of published `0.1.0`,** which remains on the registry.
+  Every structure key `0.1.0` produces claims a CUDA target, and it is
+  schema-visible in that wire format. If you are pinned to `0.1.0` this still
+  affects you — **upgrade to `0.2.0`**, which requires `unpopped-vocab` `0.3.0`.
+- ~~**One residual is real in-tree:** `JitRequest::arch` is still typed
+  `ArchSku`.~~ **Closed** — `JitRequest::target` is a `TargetId`, so the request
+  path can now name a non-CUDA target. It was an API-expressiveness gap rather
+  than a wire-format or cache-soundness one (the key and artifact identity were
+  already target-neutral), which is why it could land after `0.2.0` instead of
+  blocking it. In-tree at `0.3.0`, unpublished.
 
 ## History
 

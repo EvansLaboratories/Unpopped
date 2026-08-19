@@ -73,12 +73,19 @@ and is no longer outstanding: `supports_dtype` takes a `TargetId`, and
 `structure_key` takes `impl Into<TargetId>` over an open, KISS §6.8-validated
 target namespace. Anything still describing the trait as target-blind is stale.
 
-One residual from that work is real and worth naming rather than leaving to be
-rediscovered: `JitRequest::arch` is still typed `ArchSku`, the closed CUDA enum
-(`src/jit.rs`). It converts to a `TargetId` before it reaches `structure_key`, so
-**the derived key and the on-disk artifact identity are target-neutral** — this is
-an API-expressiveness gap, not a wire-format or cache-soundness one. The effect
-is that a non-CUDA JIT request has nowhere to name its target.
+A **fourth** has since closed too: `JitRequest::arch` was typed `ArchSku`, the
+closed CUDA enum, so the JIT **request path** could not name a non-CUDA target
+even though the derived key already could. It is now `JitRequest::target:
+TargetId` (`src/jit.rs`), and the public `Synthesizer::synthesize` takes
+`impl Into<TargetId>` so `ArchSku` call sites compile unchanged — a CUDA caller's
+migration is `.into()`.
+
+Worth keeping the distinction that made it safe to fix *after* `0.2.0` rather
+than in it: `jit.rs` converted before keying, so **the derived key and the
+on-disk artifact identity were already target-neutral.** That made it an
+API-expressiveness gap rather than a wire-format or cache-soundness one — a
+re-pin and a compile fix, not a re-derivation. The expensive class of breaking
+change was already correct in what shipped.
 
 The trait is deliberately shipped pre-1.0 so all of this can land without a major
 bump; expect more than one breaking `0.x`.
