@@ -193,11 +193,33 @@ pub struct CandidateResult {
     pub entry_point: Option<String>,
 }
 
-/// One row: the decision for a single `(op, structure-key, dtype, arch)` cell.
+/// One row: the decision for a single `(op-category, structure-key, dtype,
+/// arch)` cell.
 ///
-/// `structure_key` already encodes op+dtype+arch, so the token **is** the row
-/// key. `ranked` is the top-K candidates (winner first) that item 08 reads;
-/// the committed artifact keeps only the routing projection.
+/// `structure_key` already encodes op-category+dtype+arch, so the token **is**
+/// the row key. `ranked` is the top-K candidates (winner first) that item 08
+/// reads; the committed artifact keeps only the routing projection.
+///
+/// # Precondition: one cell, one computation
+///
+/// The token names an op **category**, never a computation. `structure_key`
+/// takes no op body, so `a + b` and `a * b` over the same shapes, dtype and
+/// target derive the *same token* — by construction, not by collision.
+///
+/// This table is keyed by that token **alone**:
+/// [`DispatchTable::from_entries`] keeps one row per token, and [`merge`] reads
+/// a differing `winner_entry` as a competing schedule *variant* to be evicted on
+/// margin — not as a second, co-resident route. So a producer that puts two
+/// computations in one cell gets them benchmarked against each other, and both
+/// routed to whichever measured faster.
+///
+/// Nothing in a `DispatchEntry` names the computation, so this type cannot check
+/// it and no assertion here could: **the producer owns the precondition.** (In
+/// Fuel's pipeline it holds by layering — the computation is already identified
+/// upstream by `FusedOpId`, and the cell is asked only which *schedule* serves
+/// it.) The collapse is measured in
+/// `unpopped-conformance/tests/cell_token_is_not_a_computation.rs`, so the
+/// precondition is executable rather than a sentence someone has to find.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DispatchEntry {
     /// [`StructureKey::to_token`] — the cell identity and the table's join key.
@@ -207,9 +229,13 @@ pub struct DispatchEntry {
     /// The winner's entry point, when it has one (a `Generated`/`Bespoke`
     /// kernel symbol; for a multi-kernel schedule variant, the first kernel in
     /// launch order). Load-bearing for **variants**: one cell can hold several
-    /// `Generated` candidates and the collapse-form token cannot disambiguate
-    /// them, so a routing decision's identity is `(structure_key,
-    /// winner_entry)` — never the token alone.
+    /// `Generated` candidates *for one computation* and the collapse-form token
+    /// cannot disambiguate them, so a routing decision's identity is
+    /// `(structure_key, winner_entry)` — never the token alone.
+    ///
+    /// It disambiguates *schedules*, not *computations* — see the precondition
+    /// on [`DispatchEntry`]. Two entry points in one cell are read as rivals,
+    /// so the loser is dropped rather than kept.
     pub winner_entry: Option<String>,
     /// `second_best_ns / winner_ns` (`> 1` ⇒ a real win; `1.0` ⇒ single
     /// candidate, no contest).
