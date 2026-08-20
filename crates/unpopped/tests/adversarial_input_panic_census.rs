@@ -1,47 +1,50 @@
-//! **Census, not a fuzzer.** How many `(OpDef, structure_key)` pairs make
-//! `try_generate` panic, and at which lines.
+//! **Census, not a fuzzer.** What `(OpDef, structure_key)` pairs do at the
+//! emitter boundary: lower, decline, or abort.
 //!
 //! KISS-EMIT-6.8-0004 requires an emitter to return a typed decline rather than
 //! panic on **any** input, and §6.1-0001 fixes that input as exactly
-//! `(OpDef, structure_key)`. `crates/unpopped/tests/plan_gate_panics_on_malformed_input.rs`
-//! pins that this crate does not comply. This file measures **how far** it does
-//! not, so the fix can be scoped from a number instead of an estimate.
+//! `(OpDef, structure_key)`. This file scoped the 0.6.0 fix, then measured it.
 //!
 //! # Why a census before a refactor
 //!
-//! `plan.rs` holds ~158 panic-family sites in production code (135 `assert!`,
-//! 17 `panic!`, 3 `assert_eq!`, 3 `unreachable!`). Converting all of them is the
-//! wrong instinct, and it is the instinct this crate's own boundary ruling
+//! `plan.rs` held ~158 panic-family sites in production code (135 `assert!`,
+//! 17 `panic!`, 3 `assert_eq!`, 3 `unreachable!`). Converting all of them was
+//! the wrong instinct, and it is the instinct this crate's own boundary ruling
 //! argues against: an assertion that **no input can reach** is an internal
 //! invariant, and internal invariants are supposed to abort — they fire on a bug
 //! in this crate, never on a caller's data. Only the input-reachable ones are
 //! §6.8-0004 violations.
 //!
 //! Those two populations are not separable by reading. They are separable by
-//! feeding the emitter inputs and seeing which sites fire. That is this file.
+//! feeding the emitter inputs and seeing which sites fire. **Six fired, not
+//! 158**, and that is what 0.6.0 converted.
 //!
 //! # What it asserts, and why each assertion is here
 //!
-//! - **A ratchet on the count.** It MUST NOT rise. A new admissibility `assert!`
-//!   on the plan path is a new violation, and it should cost whoever adds it a
-//!   red build rather than going unnoticed among 158.
-//! - **A floor on the corpus.** If the corpus stops producing panics the census
-//!   is either fixed or broken, and those must not look alike — so the count
-//!   going to zero fails too, loudly, and whoever fixed it edits this file
-//!   deliberately.
+//! - **A ratchet on the pair.** Panics MUST NOT rise, and a fix moves mass to
+//!   declines, so both numbers are re-recorded together by whoever earns the
+//!   movement. A one-sided ratchet would let a panic be *deleted* rather than
+//!   converted and call it progress.
+//! - **A floor on declines.** Zero declines and zero panics is what a corpus
+//!   that stopped reaching the plan gate looks like — and it is also what
+//!   compliance looks like from outside. Those must not be confusable.
 //! - **A floor on successes.** A corpus where nothing lowers is measuring
 //!   nothing: every input would be rejected for being nonsense rather than for
 //!   the property under test.
+//! - **A positive control on the detector.** Now that the census counts zero
+//!   panics, nothing else proves it could still see one. Closing a gap takes
+//!   away the free proof that the instrument works, and that is precisely when
+//!   an instrument quietly stops working.
 //!
 //! # What it is not
 //!
 //! Not adversarial in the §6.8-0004 sense — these are *structured* inputs, an
 //! op paired with a cell that does not fit it. Truncated tokens, hostile
 //! `OperandDesc` values, and rank/operand-count extremes are a separate axis and
-//! are not covered here. **The number below is a lower bound on the gap**, and
-//! naming it a census rather than a fuzz run is the point: a name that claimed
-//! adversarial coverage while sampling a lattice is the defect this repository
-//! keeps finding.
+//! are not covered here. **Zero panics here is a lower bound on compliance, not
+//! a proof of it**, and naming this a census rather than a fuzz run is the
+//! point: a name that claimed adversarial coverage while sampling a lattice is
+//! the defect this repository keeps finding.
 
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Mutex;
@@ -54,25 +57,29 @@ use unpopped_vocab::{
     ArchSku, ElementKind, OpCategory, OperandDesc, StructureKey, TargetId, structure_key,
 };
 
-/// Measured 2026-08-20 over the corpus below. **The pair moves together.**
+/// Measured over the corpus below. **The pair moves together.**
 ///
-/// 1280 structured inputs → **640 lowered, 640 panicked, 0 declined**, across
-/// six distinct sites in `plan.rs`.
+/// ```text
+/// 2026-08-20, before 0.6.0:  640 lowered,   0 declined, 640 PANICKED  (6 sites)
+/// 2026-08-20, after  0.6.0:  640 lowered, 640 declined,   0 panicked
+/// ```
 ///
-/// Half the corpus panics. The zero is the sharper number: with a backend that
-/// declines nothing, `try_generate` produced **not one typed decline** across
-/// 1280 inputs. The admissibility layer has no decline channel at all — it
-/// passes or it aborts. Every decline this crate can currently produce comes
-/// from a *backend*, downstream of the gate that panicked.
+/// The before-state is kept because it is the measurement that scoped the fix.
+/// Half the corpus aborted, and the zero was the sharper number: with a backend
+/// that declines nothing, `try_generate` produced **not one typed decline**
+/// across 1280 inputs, because the gate it called had no decline channel wired
+/// to it. Every decline the crate could then produce came from a *backend*,
+/// downstream of the gate that panicked.
 ///
-/// Fixing §6.8-0004 moves mass from `KNOWN_PANICKING` to `KNOWN_DECLINED`, one
-/// site at a time. Both are pinned so that movement must be recorded here, in
-/// the same commit, by whoever earns it.
-const KNOWN_PANICKING: usize = 640;
+/// Both stay pinned. Panics MUST NOT rise: a new admissibility `assert!` on the
+/// plan path is a new §6.8-0004 violation and should cost a red build rather
+/// than disappear among the ~150 sites `plan.rs` still holds. A one-sided
+/// ratchet would let someone delete a panic instead of converting it and call
+/// that progress.
+const KNOWN_PANICKING: usize = 0;
 
-/// See [`KNOWN_PANICKING`]. Zero today; every point it rises is a panic that
-/// became a typed decline.
-const KNOWN_DECLINED: usize = 0;
+/// See [`KNOWN_PANICKING`]. Every one of these was a panic before 0.6.0.
+const KNOWN_DECLINED: usize = 640;
 
 /// Spells every dtype and every plan, so a panic is never a backend decline in
 /// disguise. A backend that declined would mask the very thing being counted.
@@ -261,11 +268,12 @@ fn the_panic_census_holds_at_its_recorded_count() {
          even the thing that is green"
     );
     assert!(
-        c.panicked > 0,
-        "the census found no panics. Either KISS-EMIT 6.8-0004 is now satisfied \
-         on this corpus — in which case delete this assertion deliberately and \
-         retire the gap pin — or the corpus stopped reaching the plan gate. \
-         Those must not look alike, so this fails rather than passing quietly"
+        c.declined > 0,
+        "no input was declined. Before 0.6.0 this assertion read `panicked > 0` \
+         and existed so that a closed gap and a broken corpus could not look \
+         alike. Inverted, it does the same job: a corpus that stopped REACHING \
+         the plan gate would report zero declines and zero panics — which is \
+         exactly what compliance looks like from the outside"
     );
     assert_eq!(
         (c.panicked, c.declined),
@@ -275,5 +283,34 @@ fn the_panic_census_holds_at_its_recorded_count() {
          fix moves mass the other way, so record BOTH numbers in the same \
          commit as the change that earned them. Distinct panic sites now: {:?}",
         c.sites
+    );
+}
+
+/// Positive control for the counter itself.
+///
+/// The census now reports **zero** panics, which means its panic-detection path
+/// is never exercised by the census. A counter that has stopped counting and a
+/// subject that has stopped panicking produce identical output, and the whole
+/// file would go quietly green if `catch_unwind` were ever removed, or if the
+/// hook swallowed the location, or if a future edit classified an `Err(_)`
+/// return as a panic.
+///
+/// So: drive a known panic through the same detection path and require it to be
+/// seen. This is the assertion the `panicked > 0` guard used to make for free
+/// while the gap was open — closing the gap took the free proof away with it,
+/// and that is exactly when a guard silently stops guarding.
+#[test]
+fn the_census_can_still_see_a_panic() {
+    let prev = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+    let seen = panic::catch_unwind(AssertUnwindSafe(|| {
+        panic!("deliberate: proving the detector fires");
+    }))
+    .is_err();
+    panic::set_hook(prev);
+
+    assert!(
+        seen,
+        "the census cannot detect a panic, so its zero means nothing"
     );
 }

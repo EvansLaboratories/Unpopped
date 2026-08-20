@@ -316,6 +316,28 @@ pub enum LowerError {
         /// Why, in the backend's own words.
         detail: String,
     },
+    /// **No plan was built.** The op is inadmissible in the requested cell, so
+    /// no backend was consulted.
+    ///
+    /// Distinct from every variant above, which are a *backend* refusing a plan
+    /// that exists. This one is the plan gate refusing to make one. Folding it
+    /// into [`Self::UnsupportedPlanShape`] would put "the backend cannot emit
+    /// this" and "there is nothing to emit" under one label, leaving `detail` —
+    /// diagnostics, never matched on — as the only way to tell them apart.
+    ///
+    /// Before 0.6.0 this case did not exist because the gate *panicked*, which
+    /// KISS-EMIT §6.8-0004 forbids: on any input an emitter must return the
+    /// typed decline instead.
+    InadmissiblePlan {
+        /// The gate's refusal, typed.
+        source: crate::plan::PlanError,
+    },
+}
+
+impl From<crate::plan::PlanError> for LowerError {
+    fn from(source: crate::plan::PlanError) -> Self {
+        LowerError::InadmissiblePlan { source }
+    }
 }
 
 /// What a [`Lowering`] seam returns: a spelling, **or a typed refusal to spell**.
@@ -468,11 +490,19 @@ impl std::fmt::Display for LowerError {
             Self::UnsupportedSchedule { detail } => write!(f, "unsupported schedule: {detail}"),
             Self::UnsupportedOp { detail } => write!(f, "unsupported op: {detail}"),
             Self::UnsupportedPlanShape { detail } => write!(f, "unsupported plan shape: {detail}"),
+            Self::InadmissiblePlan { source } => write!(f, "inadmissible plan: {source}"),
         }
     }
 }
 
-impl std::error::Error for LowerError {}
+impl std::error::Error for LowerError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InadmissiblePlan { source } => Some(source),
+            _ => None,
+        }
+    }
+}
 
 /// Lowers a neutral [`crate::plan::KernelPlan`] to concrete kernel source.
 pub trait Backend {

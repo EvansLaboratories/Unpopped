@@ -340,12 +340,28 @@ pub enum PlanError {
         /// The gate's own explanation, verbatim — for diagnostics, never matching.
         detail: String,
     },
+    /// The op is inadmissible in this cell for a reason that is **not** the
+    /// dtype: a construct used in an [`Access`] arm that does not admit it, or a
+    /// term naming something the cell does not have (an axis past `key.rank`).
+    ///
+    /// Separate from [`Self::InadmissibleOpAtDtype`] because "this dtype cannot
+    /// carry this construct" and "this cell has no such axis" are different
+    /// facts with different fixes — one is answered by re-keying the dtype, the
+    /// other never is. Collapsing them would leave the `detail` string as the
+    /// only way to tell, and `detail` is diagnostics and must never be matched
+    /// on.
+    InadmissibleOpInCell {
+        /// The gate's own explanation, verbatim — for diagnostics, never matching.
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for PlanError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InadmissibleOpAtDtype { detail, .. } => write!(f, "{detail}"),
+            Self::InadmissibleOpAtDtype { detail, .. } | Self::InadmissibleOpInCell { detail } => {
+                write!(f, "{detail}")
+            }
         }
     }
 }
@@ -396,7 +412,15 @@ pub fn try_build_plan<'a>(
     check_int_op_admissibility(op, key.dtype)?;
     check_complex_op_admissibility(op, key.dtype)?;
     check_bool_op_admissibility(op, key.dtype)?;
-    Ok(build_plan(op, key))
+    check_coord_admissibility(op, key)?;
+    if let Access::RowReduce {
+        ref stages,
+        ref epilogue,
+    } = op.access
+    {
+        check_row_reduce(stages, epilogue, op.n_inputs, key)?;
+    }
+    Ok(build_plan_core(op, key))
 }
 
 /// Choose the schedule for `op` at structure cell `key` and return a neutral
@@ -408,13 +432,22 @@ pub fn try_build_plan<'a>(
 /// call, not this function's.)
 #[must_use]
 pub fn build_plan<'a>(op: &'a OpDef, key: &'a StructureKey) -> KernelPlan<'a> {
+    try_build_plan(op, key).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// [`build_plan`] minus the admissibility gates [`try_build_plan`] already ran.
+///
+/// The gates left here are **structural invariants about how an `OpDef` was
+/// constructed** — arity, view validity, multi-output shape — which a caller
+/// cannot trip by requesting a cell. They panic on purpose: reaching one means a
+/// bug in construction, not an unserveable request, and an internal invariant
+/// that returns `Err` teaches its caller to handle a case that cannot happen.
+///
+/// Measured, not assumed: `tests/adversarial_input_panic_census.rs` fires none
+/// of them across 1280 `(OpDef, structure_key)` pairs.
+fn build_plan_core<'a>(op: &'a OpDef, key: &'a StructureKey) -> KernelPlan<'a> {
     assert_valid_out_dtype(op);
     assert_valid_multi_output(op, key);
-    assert_no_half_nextafter(op, key.dtype);
-    assert_int_op_admissibility(op, key.dtype);
-    assert_complex_op_admissibility(op, key.dtype);
-    assert_bool_op_admissibility(op, key.dtype);
-    assert_coord_admissibility(op, key);
     assert_valid_reduction_post(op);
     assert_valid_views(op, key);
     assert_valid_gather(op, key);
@@ -442,9 +475,13 @@ pub fn build_plan<'a>(op: &'a OpDef, key: &'a StructureKey) -> KernelPlan<'a> {
         // v1 always routes RowReduce to the block-parallel tree reduce.
         Access::RowReduce {
             ref stages,
-            ref epilogue,
+            epilogue: _,
         } => {
-            validate_row_reduce(stages, epilogue, op.n_inputs, key);
+            // Validation moved to `check_row_reduce`, hoisted into
+            // `try_build_plan` (0.6.0): it is op/dtype admissibility a caller
+            // trips by REQUESTING a cell, so it owes a typed decline rather
+            // than a panic. Left here it could only abort — this arm has no
+            // error channel.
             Schedule::RowReduce {
                 n_stages: stages.len() as u8,
                 block: true,
@@ -1739,16 +1776,6 @@ pub(crate) fn check_no_half_nextafter(op: &OpDef, dtype: ElementKind) -> Result<
     Ok(())
 }
 
-/// Panicking form of [`check_no_half_nextafter`] — the AOT gate.
-///
-/// The rule lives once, in the checking form; this is the shape `build_plan`
-/// uses, where a violation is an authoring error worth failing loudly on.
-fn assert_no_half_nextafter(op: &OpDef, dtype: ElementKind) {
-    if let Err(e) = check_no_half_nextafter(op, dtype) {
-        panic!("{e}");
-    }
-}
-
 /// The integer compute dtypes of increment 0c: `I32`/`I64` (already lowering
 /// pre-0c) plus the newly-promoted `S8` (FKC `I8`) and `U8`.
 pub fn is_int_dtype(dt: ElementKind) -> bool {
@@ -2335,33 +2362,10 @@ pub(crate) fn check_bool_op_admissibility(op: &OpDef, dtype: ElementKind) -> Res
     walk(&op.body, &op.name)
 }
 
-/// Panicking wrapper for [`check_bool_op_admissibility`].
-fn assert_bool_op_admissibility(op: &OpDef, dtype: ElementKind) {
-    if let Err(e) = check_bool_op_admissibility(op, dtype) {
-        panic!("{e}");
-    }
-}
-
 /// `true` for the complex dtypes — the third compute domain alongside int and
 /// float.
 pub fn is_complex_dtype(dt: ElementKind) -> bool {
     matches!(dt, ElementKind::Complex64 | ElementKind::Complex128)
-}
-
-/// Panicking wrapper for [`check_complex_op_admissibility`], for the AOT
-/// [`build_plan`] path where a violation is an authoring error.
-fn assert_complex_op_admissibility(op: &OpDef, dtype: ElementKind) {
-    if let Err(e) = check_complex_op_admissibility(op, dtype) {
-        panic!("{e}");
-    }
-}
-
-/// `build_plan` uses, where a violation is an authoring error worth failing
-/// loudly on rather than a request that cannot be served.
-fn assert_int_op_admissibility(op: &OpDef, dtype: ElementKind) {
-    if let Err(e) = check_int_op_admissibility(op, dtype) {
-        panic!("{e}");
-    }
 }
 
 #[cfg(test)]
@@ -2370,10 +2374,16 @@ mod int_reduction_predicate_gate_validate {
     //! admissibility lift. Two directions, both required: the elementwise int
     //! `Cmp*` rejection must survive UNCHANGED (negative control), and the
     //! reduction-predicate `Cmp*`/`Const` shape (`count = Sum(in != 0)`) must
-    //! now be admitted (positive case). Calls `assert_int_op_admissibility`
-    //! directly (it is private to this module) rather than `build_plan`, to
-    //! isolate the gate from unrelated key/shape plumbing.
-    use super::assert_int_op_admissibility;
+    //! now be admitted (positive case). Calls `check_int_op_admissibility`
+    //! directly rather than `build_plan`, to isolate the gate from unrelated
+    //! key/shape plumbing.
+    //!
+    //! It used to call an `assert_int_op_admissibility` wrapper and read
+    //! rejection through `catch_unwind`. 0.6.0 removed the wrapper — each rule
+    //! now has ONE implementation and one panicking caller — so these read the
+    //! `Result` directly, which is both simpler and a stronger assertion:
+    //! `catch_unwind` could not tell WHICH rule fired, only that something did.
+    use super::check_int_op_admissibility;
     use crate::ir::{BinaryOp, OpDef, ReduceOp, input, konst, reduced};
     use unpopped_vocab::ElementKind;
 
@@ -2388,9 +2398,8 @@ mod int_reduction_predicate_gate_validate {
             &[ElementKind::U8],
             input(0).binary(BinaryOp::CmpNe, konst(0.0)),
         );
-        let r = std::panic::catch_unwind(|| assert_int_op_admissibility(&op, ElementKind::U8));
         assert!(
-            r.is_err(),
+            check_int_op_admissibility(&op, ElementKind::U8).is_err(),
             "elementwise int Cmp must still decline after the reduction-post lift"
         );
     }
@@ -2410,7 +2419,7 @@ mod int_reduction_predicate_gate_validate {
             ReduceOp::Sum,
         );
         op.out_dtype = Some(ElementKind::I64);
-        assert_int_op_admissibility(&op, ElementKind::I8); // must not panic
+        check_int_op_admissibility(&op, ElementKind::I8).expect("admitted");
     }
 
     // Positive case, the other authored shape: `any` — a Max fold over a
@@ -2429,7 +2438,7 @@ mod int_reduction_predicate_gate_validate {
             reduced(0).binary(BinaryOp::CmpNe, konst(0.0)),
         );
         op.out_dtype = Some(ElementKind::U8);
-        assert_int_op_admissibility(&op, ElementKind::U8); // must not panic
+        check_int_op_admissibility(&op, ElementKind::U8).expect("admitted");
     }
 
     // Double-math-hazard guard: a Cmp* Const in the admitted reduction
@@ -2445,9 +2454,8 @@ mod int_reduction_predicate_gate_validate {
             input(0).binary(BinaryOp::CmpGt, konst(5.0)),
             ReduceOp::Sum,
         );
-        let r = std::panic::catch_unwind(|| assert_int_op_admissibility(&op, ElementKind::I8));
         assert!(
-            r.is_err(),
+            check_int_op_admissibility(&op, ElementKind::I8).is_err(),
             "a non-0/1 Const threshold must still decline — the leaf-or-{{0,1}} \
              pin is what keeps the lift from reopening the double-math hazard"
         );
@@ -2465,9 +2473,8 @@ mod int_reduction_predicate_gate_validate {
             (input(0) + input(0)).binary(BinaryOp::CmpNe, konst(0.0)),
             ReduceOp::Sum,
         );
-        let r = std::panic::catch_unwind(|| assert_int_op_admissibility(&op, ElementKind::I8));
         assert!(
-            r.is_err(),
+            check_int_op_admissibility(&op, ElementKind::I8).is_err(),
             "a composed Cmp* operand must still decline in the reduction \
              predicate position — v1 pins operands to leaves or 0/1 Consts"
         );
@@ -2495,9 +2502,8 @@ mod int_reduction_predicate_gate_validate {
                 + input(0).binary(BinaryOp::CmpNe, konst(0.0)),
             ReduceOp::Sum,
         );
-        let r = std::panic::catch_unwind(|| assert_int_op_admissibility(&op, ElementKind::I8));
         assert!(
-            r.is_err(),
+            check_int_op_admissibility(&op, ElementKind::I8).is_err(),
             "a Cmp* reached as a sub-node of Add/Sub/Mul (not the reduction \
              body/post ROOT) must decline — the emitter only integer-lowers a \
              Cmp* at the root, so a nested Cmp admitted here would silently \
@@ -2553,37 +2559,59 @@ pub(crate) fn expr_contains_coord(e: &ScalarExpr) -> bool {
 /// The exactness bound (f32 coordinates exact to 2²⁴, f64 to 2⁵³) is a CALLER
 /// precondition — the key abstracts extents away, the same trust level as the
 /// RowReduce column-weight extent precondition (see [`ScalarExpr::Coord`]).
-fn assert_coord_admissibility(op: &OpDef, key: &StructureKey) {
+pub(crate) fn check_coord_admissibility(op: &OpDef, key: &StructureKey) -> Result<(), PlanError> {
     let elementwise = matches!(op.access, Access::Elementwise);
-    fn walk(e: &ScalarExpr, op_name: &str, dtype: ElementKind, rank: u8, elementwise: bool) {
+    fn walk(
+        e: &ScalarExpr,
+        op_name: &str,
+        dtype: ElementKind,
+        rank: u8,
+        elementwise: bool,
+    ) -> Result<(), PlanError> {
         match e {
             ScalarExpr::Input(_)
             | ScalarExpr::Const(_)
             | ScalarExpr::Param(_)
-            | ScalarExpr::Reduced(_) => {}
+            | ScalarExpr::Reduced(_) => Ok(()),
             ScalarExpr::Coord(d) => {
-                assert!(
-                    elementwise,
-                    "op '{op_name}': Coord({d}) is Elementwise-only in 0d — a coordinate \
-                     along a reduced/folded axis is ambiguous (which fold iteration?), and \
-                     the RowReduce/Contraction stages/epilogues iterate their own \
-                     coordinate spaces; miss honestly"
-                );
-                assert!(
-                    matches!(
+                // Message text is preserved BYTE-FOR-BYTE from the `assert!`s
+                // this replaced. `build_plan` panics with `Display`, which is
+                // this `detail`, so every existing `#[should_panic(expected =
+                // ...)]` against the panicking path keeps matching — including
+                // an adopter's 34, which this crate cannot run.
+                if !elementwise {
+                    return Err(PlanError::InadmissibleOpInCell {
+                        detail: format!(
+                            "op '{op_name}': Coord({d}) is Elementwise-only in 0d — a coordinate \
+                             along a reduced/folded axis is ambiguous (which fold iteration?), and \
+                             the RowReduce/Contraction stages/epilogues iterate their own \
+                             coordinate spaces; miss honestly"
+                        ),
+                    });
+                }
+                if !matches!(
+                    dtype,
+                    ElementKind::F32 | ElementKind::F32Strict | ElementKind::F64
+                ) {
+                    return Err(PlanError::InadmissibleOpAtDtype {
                         dtype,
-                        ElementKind::F32 | ElementKind::F32Strict | ElementKind::F64
-                    ),
-                    "op '{op_name}': Coord({d}) requires an f32/f64 compute dtype, got \
-                     {dtype:?} — f16/bf16 coordinates round past extent 2048 (bf16: 256) \
-                     and int dtypes would inject the float-cast coordinate into integer \
-                     math (int-literal coordinate spelling is a follow-up); miss honestly"
-                );
-                assert!(
-                    *d < rank,
-                    "op '{op_name}': Coord({d}) axis out of range for rank {rank} — the \
-                     iteration space has no such coordinate"
-                );
+                        detail: format!(
+                            "op '{op_name}': Coord({d}) requires an f32/f64 compute dtype, got \
+                             {dtype:?} — f16/bf16 coordinates round past extent 2048 (bf16: 256) \
+                             and int dtypes would inject the float-cast coordinate into integer \
+                             math (int-literal coordinate spelling is a follow-up); miss honestly"
+                        ),
+                    });
+                }
+                if *d >= rank {
+                    return Err(PlanError::InadmissibleOpInCell {
+                        detail: format!(
+                            "op '{op_name}': Coord({d}) axis out of range for rank {rank} — the \
+                             iteration space has no such coordinate"
+                        ),
+                    });
+                }
+                Ok(())
             }
             ScalarExpr::Unary(_, x) => walk(x, op_name, dtype, rank, elementwise),
             ScalarExpr::Add(a, b)
@@ -2591,13 +2619,13 @@ fn assert_coord_admissibility(op: &OpDef, key: &StructureKey) {
             | ScalarExpr::Mul(a, b)
             | ScalarExpr::Div(a, b)
             | ScalarExpr::Binary(_, a, b) => {
-                walk(a, op_name, dtype, rank, elementwise);
-                walk(b, op_name, dtype, rank, elementwise);
+                walk(a, op_name, dtype, rank, elementwise)?;
+                walk(b, op_name, dtype, rank, elementwise)
             }
             ScalarExpr::Select(c, a, b) => {
-                walk(c, op_name, dtype, rank, elementwise);
-                walk(a, op_name, dtype, rank, elementwise);
-                walk(b, op_name, dtype, rank, elementwise);
+                walk(c, op_name, dtype, rank, elementwise)?;
+                walk(a, op_name, dtype, rank, elementwise)?;
+                walk(b, op_name, dtype, rank, elementwise)
             }
         }
     }
@@ -2638,8 +2666,9 @@ fn assert_coord_admissibility(op: &OpDef, key: &StructureKey) {
         Access::Elementwise => {}
     }
     for e in exprs {
-        walk(e, &op.name, key.dtype, key.rank, elementwise);
+        walk(e, &op.name, key.dtype, key.rank, elementwise)?;
     }
+    Ok(())
 }
 
 /// Validate [`crate::ir::OpDef::out_dtype`] at plan time (AOT — like
@@ -2838,14 +2867,31 @@ fn assert_valid_reduction_post(op: &OpDef) {
     walk(post, &op.name);
 }
 
-fn validate_row_reduce(
+/// `assert!`, but returning the plan gate's typed refusal.
+///
+/// Exists so converting a gate from panicking to declining is a change of ONE
+/// TOKEN per site: the condition, the message and its arguments are carried
+/// through untouched. That matters more than it looks — `build_plan` panics with
+/// `PlanError`'s `Display`, which is this `detail`, so every
+/// `#[should_panic(expected = ...)]` written against the panicking path keeps
+/// matching. An adopter has 34 of those and this crate cannot run them.
+macro_rules! require {
+    ($cond:expr, $($msg:tt)*) => {
+        if !($cond) {
+            return Err(PlanError::InadmissibleOpInCell {
+                detail: format!($($msg)*),
+            });
+        }
+    };
+}
+pub(crate) fn check_row_reduce(
     stages: &[ReduceStage],
     epilogue: &ScalarExpr,
     n_inputs: u8,
     key: &StructureKey,
-) {
+) -> Result<(), PlanError> {
     let dtype = key.dtype;
-    assert!(
+    require!(
         matches!(
             dtype,
             ElementKind::F16
@@ -2857,17 +2903,17 @@ fn validate_row_reduce(
         "RowReduce requires a float dtype, got {dtype:?}"
     );
     let n = n_inputs as usize;
-    assert!(
+    require!(
         (1..MAX_OPERANDS).contains(&n),
         "RowReduce n_inputs {n_inputs} out of [1, MAX_OPERANDS)"
     );
-    assert!(
+    require!(
         key.n_operands as usize == n + 1,
         "RowReduce expects n_inputs+1 operands (inputs then output); got {}",
         key.n_operands
     );
     let rank = key.rank as usize;
-    assert!(rank >= 1, "RowReduce needs a last (reduced) axis");
+    require!(rank >= 1, "RowReduce needs a last (reduced) axis");
     let last = (rank - 1) as u8;
 
     // Operand roles + layout legality (the OOB / mis-index guards). Parallel index
@@ -2883,7 +2929,7 @@ fn validate_row_reduce(
         let o = key.operands[i];
         match rr_role(o, last) {
             RrRole::RowStreamed => {
-                assert!(
+                require!(
                     o.contig == Contiguity::Contig,
                     "RowReduce row-streamed input {i} must be contiguous (base = row*k assumes a dense last axis)"
                 );
@@ -2896,25 +2942,25 @@ fn validate_row_reduce(
                 // #2: the pre-lift inputs>0-must-be-column guard flip-checked every
                 // extra input; lifting it to allow a 2nd row-streamed input newly
                 // exposed this path.)
-                assert!(
+                require!(
                     !o.flipped,
                     "RowReduce row-streamed input {i} must not be reversed along an axis (base = row*k reads forward-dense; a flipped view would read mirrored/OOB)"
                 );
                 input0_streamed |= i == 0;
             }
             RrRole::ColBroadcast => {
-                assert!(
+                require!(
                     !o.bcast.is_set(last),
                     "RowReduce input {i}: the feature (last) axis is broadcast (mask {:#04x}) — a column weight/bias must vary along it; bake a true scalar as Const",
                     o.bcast.0
                 );
                 // Must broadcast EVERY outer axis (a per-column [k] vector), else
                 // in_i[j] silently drops an outer-axis dependence.
-                assert!(
+                require!(
                     (0..last).all(|d| o.bcast.is_set(d)),
                     "RowReduce column input {i} must broadcast every outer (row) axis — a per-column [k] weight/bias"
                 );
-                assert!(
+                require!(
                     !o.flipped,
                     "RowReduce column input {i} must not be reversed along the feature axis"
                 );
@@ -2928,23 +2974,23 @@ fn validate_row_reduce(
                 // an outer axis (rank >= 2) laid out dense (offset == row), the
                 // latter a caller precondition at the same trust level as `x`'s
                 // base = row*k (see the module note).
-                assert!(
+                require!(
                     (0..last).all(|d| !o.bcast.is_set(d)),
                     "RowReduce row-scalar input {i}: an outer (row) axis is broadcast (mask {:#04x}) — a per-row scalar varies across rows and is constant only along the feature axis; an all-broadcast operand is a true scalar (bake as Const)",
                     o.bcast.0
                 );
-                assert!(
+                require!(
                     !o.flipped,
                     "RowReduce row-scalar input {i} must not be reversed"
                 );
-                assert!(
+                require!(
                     rank >= 2,
                     "RowReduce row-scalar input {i} needs rank >= 2 (an outer row axis to index by `row`)"
                 );
             }
         }
     }
-    assert!(
+    require!(
         input0_streamed,
         "RowReduce Input0 (x) must be the row-streamed reduced tensor, not a column-broadcast weight or a per-row scalar"
     );
@@ -2956,13 +3002,13 @@ fn validate_row_reduce(
     // as row-streamed — its full extent [n_out,k] is a caller precondition (the key
     // cannot see n_out/k), the identical trust level as input 0. See the module note.
     if n > 1 {
-        assert!(
+        require!(
             rank >= 2,
             "RowReduce with a multi-operand epilogue needs rank >= 2"
         );
     }
     let out = key.operands[n];
-    assert!(
+    require!(
         out.bcast.is_empty() && out.contig == Contiguity::Contig,
         "RowReduce output must be full-width contiguous (empty bcast)"
     );
@@ -2970,33 +3016,42 @@ fn validate_row_reduce(
     // Expression legality. `max_reduced` = stages already produced (stage `i` may
     // read `Reduced(0..i)`; the epilogue may read all). `in_stage` forbids a column
     // input inside a reduction `pre` (reducing a per-column operand is nonsense).
-    fn check(e: &ScalarExpr, n_inputs: u8, max_reduced: u8, in_stage: bool, is_col: &[bool]) {
+    fn check(
+        e: &ScalarExpr,
+        n_inputs: u8,
+        max_reduced: u8,
+        in_stage: bool,
+        is_col: &[bool],
+    ) -> Result<(), PlanError> {
         match e {
             ScalarExpr::Input(i) => {
-                assert!(*i < n_inputs, "RowReduce Input({i}) >= n_inputs {n_inputs}");
+                require!(*i < n_inputs, "RowReduce Input({i}) >= n_inputs {n_inputs}");
                 if in_stage {
-                    assert!(
+                    require!(
                         !is_col[*i as usize],
                         "RowReduce column input {i} used inside a reduction stage.pre — column weight/bias are epilogue-only"
                     );
                 }
+                Ok(())
             }
-            ScalarExpr::Reduced(s) => assert!(
-                *s < max_reduced,
-                "RowReduce Reduced({s}) references a stage not yet produced (have {max_reduced})"
-            ),
-            ScalarExpr::Param(i) => {
-                panic!("RowReduce v1 forbids Param({i}) — bake scalars (eps) as Const")
+            ScalarExpr::Reduced(s) => {
+                require!(
+                    *s < max_reduced,
+                    "RowReduce Reduced({s}) references a stage not yet produced (have {max_reduced})"
+                );
+                Ok(())
             }
-            ScalarExpr::Coord(d) => {
-                panic!(
-                    "RowReduce forbids Coord({d}) — the RowReduce stages/epilogue iterate \
-                     the (row, j) space, not an elementwise output coordinate space; \
-                     Coord is Elementwise-only in 0d"
-                )
-            }
+            ScalarExpr::Param(i) => Err(PlanError::InadmissibleOpInCell {
+                detail: format!("RowReduce v1 forbids Param({i}) — bake scalars (eps) as Const"),
+            }),
+            ScalarExpr::Coord(d) => Err(PlanError::InadmissibleOpInCell {
+                detail: format!(
+                    "RowReduce forbids Coord({d}) — the RowReduce stages/epilogue iterate                      the (row, j) space, not an elementwise output coordinate space;                      Coord is Elementwise-only in 0d"
+                ),
+            }),
             ScalarExpr::Const(v) => {
-                assert!(v.is_finite(), "RowReduce Const must be finite, got {v}")
+                require!(v.is_finite(), "RowReduce Const must be finite, got {v}");
+                Ok(())
             }
             ScalarExpr::Unary(_, x) => check(x, n_inputs, max_reduced, in_stage, is_col),
             ScalarExpr::Add(a, b)
@@ -3004,13 +3059,13 @@ fn validate_row_reduce(
             | ScalarExpr::Mul(a, b)
             | ScalarExpr::Div(a, b)
             | ScalarExpr::Binary(_, a, b) => {
-                check(a, n_inputs, max_reduced, in_stage, is_col);
-                check(b, n_inputs, max_reduced, in_stage, is_col);
+                check(a, n_inputs, max_reduced, in_stage, is_col)?;
+                check(b, n_inputs, max_reduced, in_stage, is_col)
             }
             ScalarExpr::Select(c, a, b) => {
-                check(c, n_inputs, max_reduced, in_stage, is_col);
-                check(a, n_inputs, max_reduced, in_stage, is_col);
-                check(b, n_inputs, max_reduced, in_stage, is_col);
+                check(c, n_inputs, max_reduced, in_stage, is_col)?;
+                check(a, n_inputs, max_reduced, in_stage, is_col)?;
+                check(b, n_inputs, max_reduced, in_stage, is_col)
             }
         }
     }
@@ -3023,9 +3078,9 @@ fn validate_row_reduce(
             "RowReduce stage {i}: the Prod combiner is not supported in the fused \
              row-reduce path (0e adds Prod to Access::Reduction only); miss honestly"
         );
-        check(&st.pre, n_inputs, i as u8, true, &is_col);
+        check(&st.pre, n_inputs, i as u8, true, &is_col)?;
     }
-    check(epilogue, n_inputs, stages.len() as u8, false, &is_col);
+    check(epilogue, n_inputs, stages.len() as u8, false, &is_col)
 }
 
 /// Validate an [`Access::Scan`] op at build time (AOT — a scan never crosses the

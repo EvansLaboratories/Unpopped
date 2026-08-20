@@ -1,6 +1,6 @@
 [package]
 name = "unpopped-cpu-c"
-version = "0.3.0"
+version = "0.4.0"
 description = "The portable-C99 reference emitter for Unpopped: lowers a neutral `KernelPlan` to C source that compiles on any C compiler, with no vendor intrinsic, no conditional compilation, and no device. Ships the software codecs the narrow dtypes need (FP8 E4M3/E5M2, sub-byte i4/u4/b1, and a struct complex ABI), so `f8e4m3fn` and `c128` lower without naming anyone's toolchain. This is the normative reference emitter a new target is read against, and the one every differential test runs through."
 edition.workspace = true
 rust-version.workspace = true
