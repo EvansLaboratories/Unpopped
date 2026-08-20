@@ -370,15 +370,19 @@ rather than a cleanup commit.
   Constructors and the reservation landed in one commit, which is the ordering
   the earlier backed-out attempt got wrong: reserved-first breaks cross-crate
   struct literals with no constructor to fall back on.
-  **`SymExtent` was in that list and I missed it — it is still unreserved, and
-  0.2.0 has shipped.** The cost is exactly what the item exists to prevent:
-  reserving it now is a breaking change. It should ride the **next** cut rather
-  than justify a 0.3.0 of its own, and the natural home is the quant/scale-sibling
-  rework below, which touches the same two vestigial `OperandDesc` fields
-  (`quant`, `symbolic`). Cheap when it happens — one construction site, in this
-  crate's own tests. Recorded here because the whole argument for doing this
-  before a cut was that the window closes when the *next* break is designed, and
-  this is now waiting on one.
+  ~~**`SymExtent` was in that list and I missed it — it is still unreserved, and
+  0.2.0 has shipped.**~~ — **DONE**, and it rode exactly the cut this entry
+  predicted: `734915d` (*adopt sk4's scale-sibling model*) reserved it and added
+  `SymExtent::new`, because that rework touched the same two vestigial
+  `OperandDesc` fields (`quant`, `symbolic`).
+
+  **The plan worked and this entry did not know it for two releases.** Left as
+  written it said "still unreserved" and "should ride the next cut" about a type
+  that had already ridden one — a worklist entry describing work that was done,
+  which is worse than a stale note because it is an instruction to redo it.
+  Found 2026-08-20 by scanning every backticked identifier in this file against
+  the sources; the *identifier* check could not catch it (`SymExtent` still
+  exists), only reading the claim could.
 - **Per-target N2 verification.** NaN-propagation surviving the toolchain is a
   property of *one optimizer*, re-measured per target, never inherited. Verified
   on portable C (`/O2`) and CUDA (nvrtc→PTX→driver JIT, RTX 4070). Any new target

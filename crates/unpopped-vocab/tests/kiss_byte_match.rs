@@ -32,7 +32,10 @@ use unpopped_vocab::{STRUCTURE_KEY_VERSION, StructureKey, TokenDecline};
 const VECTORS: &str = include_str!("../kiss/structure_key_vectors.json");
 
 /// A target this codec implements, used to prove a decline is target-only.
-/// Must be one `arch_from_code` accepts, or the control proves nothing.
+/// Must be one this codec parses, or the control proves nothing — asserted by
+/// `the_skip_control_can_fail`, not left to this sentence. (It named
+/// `arch_from_code` until that function was deleted with the closed `ArchSku`
+/// codec, at which point the precondition pointed at nothing.)
 const SUBSTITUTE_TARGET: &str = "cuda:sm89";
 
 // ---------------------------------------------------------------------------

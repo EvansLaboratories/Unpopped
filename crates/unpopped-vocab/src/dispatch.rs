@@ -445,6 +445,10 @@ pub fn seed_winner(key: &StructureKey) -> Option<(Implementor, &'static str)> {
 /// scan. Lookup is **arch-gated**: a query only matches a row whose token arch
 /// equals the query's arch, so a measurement taken on one arch can never route
 /// another.
+///
+/// **Precondition on whoever fills it:** every candidate in a cell must compute
+/// the same thing. The token names an op *category*, not a computation — see
+/// [`DispatchEntry`]. This type cannot check it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DispatchTable {
     /// The decision rows, **unique and sorted by `structure_key` token** — the
@@ -518,6 +522,16 @@ impl DispatchTable {
 ///   arch).
 ///
 /// After the fold the table is re-normalized (sorted + unique by token).
+///
+/// # Precondition: the incoming rows describe the same computation as the cell
+///
+/// Every rule above arbitrates *rivals for one cell*. A differing `winner_entry`
+/// is read as a competing schedule **variant** and resolved on margin, so
+/// feeding this two rows that are actually two different **computations** does
+/// not store both — it benchmarks them against each other and routes both to
+/// whichever measured faster. Nothing in a [`DispatchEntry`] names the
+/// computation, so this cannot be checked here; the feed owns it. See
+/// [`DispatchEntry`] for why the token cannot carry it.
 pub fn merge(table: &mut DispatchTable, incoming: &[DispatchEntry]) {
     for inc in incoming {
         // A non-finite margin is a broken / poisoned measurement. `winner_of` can

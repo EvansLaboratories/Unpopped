@@ -15,6 +15,18 @@
 //! the bench CSV). [`parse_dispatch_table`] reads the projection back so the
 //! emit→parse round-trip is a real, testable identity — the guard against a
 //! token-codec drift between build time and runtime silently missing every row.
+//!
+//! # One row per cell, so one computation per cell
+//!
+//! Rows are deduped by `structure_key` **alone** (last-writer-wins), because a
+//! cell routes to one winner — that is the artifact's whole job. It means the
+//! table's producer carries a precondition this crate cannot check: **every
+//! candidate in a cell must compute the same thing.** The token names an op
+//! *category*, and two different computations over the same shapes, dtype and
+//! target derive the same token. See
+//! [`DispatchEntry`], and
+//! `unpopped-conformance/tests/cell_token_is_not_a_computation.rs`, which
+//! measures the collision rather than asserting it.
 
 use unpopped_vocab::{DispatchEntry, DispatchTable, Implementor, Provenance};
 
