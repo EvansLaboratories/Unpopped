@@ -412,8 +412,16 @@ pub enum DeclinedOp {
     Select,
     /// A constant literal.
     Constant,
-    /// An operand access — leaf, reduced-scalar, or coordinate.
-    Access,
+    /// An input operand leaf the backend will not spell, by **operand index**.
+    ///
+    /// Carries the index because a leaf refusal is usually *positional* — "this
+    /// emitter spells at most two operands" — and an index is matchable where a
+    /// sentence about one is not.
+    Leaf(u8),
+    /// A per-row reduced-scalar leaf ([`ScalarExpr::Reduced`]), by index.
+    Reduced(u8),
+    /// An output-coordinate leaf ([`ScalarExpr::Coord`]), by axis.
+    Coord(u8),
 }
 
 impl Spelling {
@@ -679,7 +687,7 @@ mod default_seam {
     /// that choice away from every caller in order to make a point to one.
     pub(super) static REDUCED: fn(u8) -> Result<Spelling, LowerError> = |i| {
         Ok(Spelling::Declined(Decline::UnsupportedOp {
-            op: DeclinedOp::Access,
+            op: DeclinedOp::Reduced(i),
             why: format!(
                 "a Reduced({i}) leaf reached an emitter with no `reduced` seam. Only a                  row-reduction emitter produces such a body; either supply                  `.reduced(..)` or route this body to a reduction schedule."
             ),
@@ -687,7 +695,7 @@ mod default_seam {
     };
     pub(super) static COORD: fn(u8) -> Result<Spelling, LowerError> = |d| {
         Ok(Spelling::Declined(Decline::UnsupportedOp {
-            op: DeclinedOp::Access,
+            op: DeclinedOp::Coord(d),
             why: format!(
                 "a Coord({d}) leaf reached an emitter with no `coord` seam. Coord bodies                  lower via a strided schedule only (a linear-index loop has no per-axis                  coordinates); either supply `.coord(..)` or route this body to                  Schedule::Strided."
             ),
