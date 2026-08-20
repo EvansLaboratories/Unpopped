@@ -395,7 +395,7 @@ impl std::error::Error for PlanError {}
 /// structure_key)` pairs through the emitter. Seven of the nine untyped gates
 /// never fire — the classification holds for them. **Two do:**
 ///
-/// - `assert_coord_admissibility` — `coord(1)` at `i32`, or a coordinate whose
+/// - `check_coord_admissibility` — `coord(1)` at `i32`, or a coordinate whose
 ///   axis exceeds the cell rank. A caller trips this by *requesting a cell*, not
 ///   by mis-constructing an op.
 /// - the RowReduce validator — likewise reachable from an ordinary request.
@@ -518,7 +518,7 @@ fn build_plan_core<'a>(op: &'a OpDef, key: &'a StructureKey) -> KernelPlan<'a> {
             Schedule::Contraction
         }
         // Increment 6 SCAN: validate admissibility (mirrors the RowReduce arm's
-        // `validate_row_reduce` call), then derive the serial-fold BASE schedule
+        // `check_row_reduce` call), then derive the serial-fold BASE schedule
         // (`block: false`). The cooperative block-scan is produced separately by
         // `cuda::scan_blockscan_variant` (a `lower_variants` filter), never here.
         Access::Scan {
@@ -783,7 +783,7 @@ fn contraction_epilogue_admissible(e: &crate::ir::ScalarExpr, n_inputs: u8) -> b
         E::Input(i) => *i >= 2 && *i < n_inputs,
         // Coord rejects here too: a contraction epilogue iterates the (m, n)
         // output space, not an elementwise cell's — Coord's v1 semantics are
-        // Elementwise-only (`assert_coord_admissibility` fires first with the
+        // Elementwise-only (`check_coord_admissibility` fires first with the
         // targeted message; this arm keeps the predicate honest regardless).
         E::Param(_) | E::Reduced(_) | E::Coord(_) => false,
         E::Unary(_, x) => contraction_epilogue_admissible(x, n_inputs),
@@ -888,7 +888,7 @@ pub enum RrRole {
 /// Classify a RowReduce input by its broadcast mask, given the feature axis
 /// `last` (`rank-1`). **Total / non-panicking** — the emitter calls this for the
 /// load index and must never crash; all *rejection* of malformed shapes lives in
-/// `validate_row_reduce` (one source of truth, no drift). The three-way split:
+/// `check_row_reduce` (one source of truth, no drift). The three-way split:
 ///
 /// - empty bcast ⇒ [`RrRole::RowStreamed`] (the reduced/streamed tensor);
 /// - `last` axis broadcast ⇒ [`RrRole::RowScalar`] (constant along the feature
@@ -990,7 +990,7 @@ pub fn rr_role(o: OperandKey, last: u8) -> RrRole {
 ///    would give); `Const` finite. `Param` f32-only is enforced by the emitter's
 ///    param assert over all output bodies (same rule as the single-output path).
 ///    (This gate rejecting `Coord` here is also what lets the downstream
-///    `assert_coord_admissibility` keep its `Access::Elementwise => {}` arm — a
+///    `check_coord_admissibility` keep its `Access::Elementwise => {}` arm — a
 ///    multi-output `Coord` never reaches it.)
 /// 5. **Output operands**: each of the last `n_outputs` operands must be
 ///    **non-broadcast** (a stride-0 output would alias its own writes across
@@ -1894,7 +1894,7 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
     ) -> Result<(), String> {
         match e {
             ScalarExpr::Input(_) | ScalarExpr::Reduced(_) => {}
-            // Coord's own gate (`assert_coord_admissibility`, which also runs
+            // Coord's own gate (`check_coord_admissibility`, which also runs
             // at the top of build_plan) rejects EVERY int dtype — a Coord is
             // spelled as a float cast, the same double-math hazard this walk
             // polices for Const/Param — so this arm carries no second assert
@@ -2370,7 +2370,7 @@ pub fn is_complex_dtype(dt: ElementKind) -> bool {
 
 #[cfg(test)]
 mod int_reduction_predicate_gate_validate {
-    //! Rule 4 (`assert_int_op_admissibility`, above): the int8 any/all/count
+    //! Rule 4 (`check_int_op_admissibility`, above): the int8 any/all/count
     //! admissibility lift. Two directions, both required: the elementwise int
     //! `Cmp*` rejection must survive UNCHANGED (negative control), and the
     //! reduction-predicate `Cmp*`/`Const` shape (`count = Sum(in != 0)`) must
@@ -2378,7 +2378,7 @@ mod int_reduction_predicate_gate_validate {
     //! directly rather than `build_plan`, to isolate the gate from unrelated
     //! key/shape plumbing.
     //!
-    //! It used to call an `assert_int_op_admissibility` wrapper and read
+    //! It used to call an `check_int_op_admissibility` wrapper and read
     //! rejection through `catch_unwind`. 0.6.0 removed the wrapper — each rule
     //! now has ONE implementation and one panicking caller — so these read the
     //! `Result` directly, which is both simpler and a stronger assertion:
@@ -2672,7 +2672,7 @@ pub(crate) fn check_coord_admissibility(op: &OpDef, key: &StructureKey) -> Resul
 }
 
 /// Validate [`crate::ir::OpDef::out_dtype`] at plan time (AOT — like
-/// `assert_no_half_nextafter`, this runs at the top of [`build_plan`] so EVERY
+/// `check_no_half_nextafter`, this runs at the top of [`build_plan`] so EVERY
 /// Access arm and every lowering path is covered; a panic here is an
 /// author-error backstop, and the JIT never constructs a `Some` out_dtype).
 ///
@@ -3085,7 +3085,7 @@ pub(crate) fn check_row_reduce(
 
 /// Validate an [`Access::Scan`] op at build time (AOT — a scan never crosses the
 /// JIT trust boundary, so a panic here is an author-error backstop). Mirrors
-/// [`validate_row_reduce`]'s operand-role + layout checks, with three DELIBERATE
+/// [`check_row_reduce`]'s operand-role + layout checks, with three DELIBERATE
 /// differences:
 ///
 /// - **ADMITS `Prod`** — unlike RowReduce (which forbids `Prod` because the fused
@@ -3151,7 +3151,7 @@ fn validate_scan(op: &OpDef, key: &StructureKey, axis: u8, reverse: bool, exclus
          miss is honest, not silently wrong)"
     );
 
-    // Operand roles + layout legality (mirrors validate_row_reduce). Input 0 is the
+    // Operand roles + layout legality (mirrors check_row_reduce). Input 0 is the
     // row-streamed scanned tensor: `base = row*k` + the forward `idx = base+j` walk
     // assume a dense, forward last axis, so it must be Contig and NOT flipped (a
     // reversed operand keys |stride|-Contig + flipped and would read mirrored/OOB —
@@ -3201,7 +3201,7 @@ fn validate_scan(op: &OpDef, key: &StructureKey, axis: u8, reverse: bool, exclus
     // Expression legality. `pre` (the per-element pre-map) runs BEFORE the fold, so
     // it must NOT read the running prefix (`Reduced` is rejected in `pre`); `post`
     // (the per-element epilogue) reads the running prefix as the single `Reduced(0)`
-    // leaf. Coord is rejected upstream by `assert_coord_admissibility` (non-
+    // leaf. Coord is rejected upstream by `check_coord_admissibility` (non-
     // elementwise); Param is f32-only (emitter). Input indices must be in range.
     fn check(e: &ScalarExpr, n_inputs: u8, allow_reduced: bool, ctx: &str, name: &str) {
         match e {
@@ -4910,7 +4910,7 @@ mod scan_gate_validate {
     #[test]
     fn integer_scan_builds_sum_max_min() {
         // Integer Sum/Max/Min ride the serial base BitIdentical — validate_scan
-        // does NOT copy validate_row_reduce's float-only gate.
+        // does NOT copy check_row_reduce's float-only gate.
         for op in [ReduceOp::Sum, ReduceOp::Max, ReduceOp::Min] {
             let sc = OpDef::scan_simple("cumi", &[ElementKind::I32], op, 1, false, false);
             let _ = build_plan(&sc, &scan_key(ElementKind::I32));
@@ -4919,7 +4919,7 @@ mod scan_gate_validate {
 
     #[test]
     fn prod_is_admitted_unlike_rowreduce() {
-        // DELIBERATE difference from validate_row_reduce: Prod IS admitted (cumprod).
+        // DELIBERATE difference from check_row_reduce: Prod IS admitted (cumprod).
         let sc = OpDef::scan_simple(
             "cumprod",
             &[ElementKind::F32],
@@ -6328,7 +6328,7 @@ mod select_gate_validate {
     }
 
     // G1: select is rejected OUTRIGHT at every int dtype (v1 float-only) —
-    // the int-reject arm in `assert_int_op_admissibility`.
+    // the int-reject arm in `check_int_op_admissibility`.
     #[test]
     #[should_panic(expected = "Select has no integer lowering")]
     fn select_at_i32_is_rejected_at_the_plan_gate() {

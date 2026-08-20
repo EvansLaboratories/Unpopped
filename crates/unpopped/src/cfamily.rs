@@ -702,7 +702,7 @@ pub fn cast_scalar(from: ElementKind, to: ElementKind, expr: &str) -> String {
 ///
 /// **It is a pure optimization here, and that is a property of the op set rather
 /// than of temp-binding.** Every op above is float-only: the plan gate
-/// (`assert_int_op_admissibility` rule 2) rejects *every* `UnaryOp`, the float
+/// (`check_int_op_admissibility` rule 2) rejects *every* `UnaryOp`, the float
 /// binary fns, and `Cmp*` at an integer dtype. At a float compute dtype a temp
 /// has the same type as the expression it holds, so the round-trip is exact and
 /// the emitted values cannot move.
@@ -873,7 +873,7 @@ pub fn binary_f32(op: BinaryOp, a: String, b: String) -> String {
         BinaryOp::CmpGt => format!("((float){a} > (float){b} ? 1.0f : 0.0f)"),
         BinaryOp::CmpGe => format!("((float){a} >= (float){b} ? 1.0f : 0.0f)"),
         // increment-0c INT-ONLY ops: an independent emitter backstop behind
-        // the plan gate (assert_int_op_admissibility) — a bitwise/logical op
+        // the plan gate (check_int_op_admissibility) — a bitwise/logical op
         // must never reach a float speller, including the f16/bf16 promote
         // path and the reduction-class accumulator lowerings, which all route
         // through here.
@@ -951,7 +951,7 @@ pub fn binary_f64(op: BinaryOp, a: String, b: String) -> String {
 ///
 /// **Integer-promotion note (S8/U8):** the operand strings are `signed char`/
 /// `unsigned char` loads — GUARANTEED, not assumed: the plan gate's 8-bit
-/// composition pin (`plan::assert_int_op_admissibility` rule 3) requires every
+/// composition pin (`plan::check_int_op_admissibility` rule 3) requires every
 /// int-op operand at `S8`/`U8` to be a leaf `Input`, so a composed operand
 /// (whose inlined un-truncated value would diverge from its hoisted 8-bit-tmp
 /// value under DAG sharing) can never reach this speller. The loads promote to
@@ -1065,13 +1065,13 @@ pub fn params_used(e: &ScalarExpr) -> Vec<u8> {
 /// exactly the device-dangerous pair: integer `/0` is device-UB, and an
 /// f64-spelled Const injects double math into an int kernel (f64 cannot even
 /// represent all i64). Called from `Backend::lower` over the body and every
-/// reduction-class stage/epilogue, independent of `assert_int_op_admissibility`.
+/// reduction-class stage/epilogue, independent of `check_int_op_admissibility`.
 ///
-/// `in_reduction` mirrors `plan::assert_int_op_admissibility`'s rule 4 (the
+/// `in_reduction` mirrors `plan::check_int_op_admissibility`'s rule 4 (the
 /// any/all/count fused-predicate lift, ba325509/Task 3b): `true` only when the
 /// expression is this plan's `Access::Reduction` body/post — CpuC/Slang (v1,
 /// Elementwise-only) always pass `false`, so their coverage is unchanged.
-/// `at_reduction_root` mirrors `plan::assert_int_op_admissibility`'s
+/// `at_reduction_root` mirrors `plan::check_int_op_admissibility`'s
 /// `at_reduction_root` (whole-branch-review fix, closing the composed-
 /// predicate leak): `true` ONLY for the initial call on the reduction
 /// body/post root, `false` for every recursive descent — CpuC/Slang pass
@@ -1132,7 +1132,7 @@ pub fn assert_no_int_div_or_const(
             assert_no_int_div_or_const(b, dtype, in_reduction, false);
         }
         // The exemption test is `ir::is_admissible_int_reduction_operand` —
-        // the SAME helper `plan::assert_int_op_admissibility` (rule 4) and
+        // the SAME helper `plan::check_int_op_admissibility` (rule 4) and
         // `cuda::emit_reduction`'s `int_reduction_predicate`/`int_cmp_operand`
         // call, so this shape cannot drift from the gate/emitter again. An
         // operand this helper doesn't admit still recurses into the general
@@ -1187,14 +1187,14 @@ mod int_div_or_const_root_gate_validate {
     //! Direct unit coverage for `assert_no_int_div_or_const`'s
     //! `at_reduction_root` restriction (whole-branch-review fix, mirroring
     //! `plan::int_reduction_predicate_gate_validate`). This backstop normally
-    //! only runs AFTER `plan::assert_int_op_admissibility` has already
+    //! only runs AFTER `plan::check_int_op_admissibility` has already
     //! validated the op at `build_plan` time, so a composed-predicate body
     //! never reaches it via the `generate()`/`Backend::lower` path — the plan
     //! gate rejects it first. These tests call the function directly (it is
     //! `pub(crate)`) to exercise it as an independent layer in its own right
     //! (the "gate every layer" principle the surrounding code comments name
     //! throughout this file), the same way the plan-gate tests bypass
-    //! `build_plan` to isolate `assert_int_op_admissibility`.
+    //! `build_plan` to isolate `check_int_op_admissibility`.
     use super::assert_no_int_div_or_const;
     use crate::ir::{BinaryOp, ScalarExpr, input, konst};
     use unpopped_vocab::ElementKind;
@@ -1215,7 +1215,7 @@ mod int_div_or_const_root_gate_validate {
     // nested Cmp on the general `Binary(_, a, b)` arm instead of the
     // exemption arm, and its `Const(0.0)` operand then hits the ordinary
     // blanket `Const` panic — closing the same composed-predicate leak this
-    // gate mirrors from `plan::assert_int_op_admissibility`. Before this fix
+    // gate mirrors from `plan::check_int_op_admissibility`. Before this fix
     // the nested Cmp still matched `in_reduction && bop.is_cmp()`
     // (unconditionally, no root check) and its 0/1 Const was wrongly
     // exempted, so this call did NOT panic.

@@ -102,7 +102,7 @@ pub enum ScalarExpr {
     ///   **caller precondition**: the structure key deliberately abstracts
     ///   numeric extents away — the same trust level as the established
     ///   RowReduce column-weight extent precondition (see
-    ///   `plan::validate_row_reduce`'s caller-pre-condition note).
+    ///   `plan::check_row_reduce`'s caller-pre-condition note).
     /// - **access**: [`Access::Elementwise`] bodies ONLY (v1). Reduction-class
     ///   bodies reject: a coordinate along a reduced/folded axis is ambiguous
     ///   (which fold iteration?), and RowReduce/Contraction epilogues iterate
@@ -270,7 +270,7 @@ pub enum UnaryOp {
 /// # Op × dtype admissibility (increment 0c — audited against the bespoke surface)
 ///
 /// The compute-dtype legality table, enforced at the TOP of `plan::build_plan`
-/// (`assert_int_op_admissibility`, every `Access` arm) with independent
+/// (`check_int_op_admissibility`, every `Access` arm) with independent
 /// emitter backstops in `cuda::binary_int` / `cuda::binary_f32` / `binary_f64`
 /// and the JIT's `dtype_compatible`. "int" = `I32`/`I64`/`S8`(FKC `I8`)/`U8`.
 ///
@@ -281,7 +281,7 @@ pub enum UnaryOp {
 /// | every [`UnaryOp`]                               | legal (0a/0b gates)   | REJECT  | REJECT| bespoke unary elementwise surface is `_fp`-only |
 /// | `Max`/`Min`/`Pow`/`Rem` + 0a fns                | legal (Nextafter f32/f64) | REJECT | REJECT | float device fns only; no bespoke int instantiation |
 /// | `CmpEq`…`CmpGe`                                 | legal                 | REJECT  | REJECT| bespoke cmp is `_fp`-only (`binary_cmp_*_fp.cu`) |
-/// | `BitAnd`/`BitOr`/`BitXor`/`Shl`/`Shr`           | REJECT                | legal   | legal, LEAF operands only | bespoke `binary_bitwise_*_int.cu` instantiates i32/i64; 8-bit legal per the 0c charter with the promote-then-truncate semantics documented per variant — and at `S8`/`U8` every operand must be a leaf `Input` (a composed operand observes the un-truncated promoted value when inlined but the truncated 8-bit tmp when hoisted, so its result would depend on DAG sharing; see `plan::assert_int_op_admissibility` rule 3) |
+/// | `BitAnd`/`BitOr`/`BitXor`/`Shl`/`Shr`           | REJECT                | legal   | legal, LEAF operands only | bespoke `binary_bitwise_*_int.cu` instantiates i32/i64; 8-bit legal per the 0c charter with the promote-then-truncate semantics documented per variant — and at `S8`/`U8` every operand must be a leaf `Input` (a composed operand observes the un-truncated promoted value when inlined but the truncated 8-bit tmp when hoisted, so its result would depend on DAG sharing; see `plan::check_int_op_admissibility` rule 3) |
 /// | `LogicalAnd`/`LogicalOr`/`LogicalXor`           | REJECT                | REJECT  | U8 only, LEAF operands only | bespoke `binary_logical_*_bool.cu` instantiates ONLY `uint8_t` (Bool); the `!= 0` tests observe un-truncated composed values, so the same 8-bit leaf-operand pin applies |
 /// | `Const`/`Param` leaves in the body              | legal (Param f32-only)| REJECT  | REJECT| a `Const` is spelled as an f64 C literal — at an int dtype it would silently run double math (and f64 cannot represent all i64); an int-literal speller is a follow-up |
 ///
@@ -505,7 +505,7 @@ impl BinaryOp {
 ///
 /// SINGLE SOURCE OF TRUTH for this operand shape: this exact rule is checked
 /// independently by three call sites that must never disagree —
-/// `plan::assert_int_op_admissibility` (rule 4, the validating gate),
+/// `plan::check_int_op_admissibility` (rule 4, the validating gate),
 /// `cuda::assert_no_int_div_or_const` (the emitter's independent backstop),
 /// and `cuda::emit_reduction`'s `int_reduction_predicate`/`int_cmp_operand`
 /// (the emitter that actually lowers the admitted shape to C). The rule

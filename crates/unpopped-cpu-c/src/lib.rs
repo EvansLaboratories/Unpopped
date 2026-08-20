@@ -166,7 +166,7 @@ impl Backend for CpuC {
         // Independent int Div/Const backstop, REUSED from the CUDA emitter (same
         // dtype-blind hazard: a `Const` is spelled as an f64 literal, infix `Div`
         // is `/` — both device/host dangerous at an integer dtype). The plan gate
-        // (`assert_int_op_admissibility`) rejects these upstream; this is the
+        // (`check_int_op_admissibility`) rejects these upstream; this is the
         // gate-every-layer backstop, identical coverage to `Cuda::lower`.
         if unpopped::plan::is_int_dtype(plan.dtype) {
             // v1 is Elementwise/Scalar-only (panics below on any other
