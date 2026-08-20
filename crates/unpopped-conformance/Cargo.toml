@@ -15,6 +15,25 @@ homepage.workspace = true
 # not a test of either.
 publish = false
 
+# Declared, not inferred: this crate's tests are ABOUT other crates, so the
+# workspace-layout guard
+# (`tests/tests_live_in_the_crate_they_guard.rs`) must not read them as
+# misplaced.
+#
+# It was inferred, twice, and both inferences were wrong. "Has a `src/lib.rs`"
+# fails because a test host still carries one — this crate's is twenty lines of
+# prose explaining why the crate exists. "Exports nothing" fails on the shape it
+# most needs to recognise: kiss-ref's conformance host has a real `pub` surface
+# (`Ledger`, `ledger()`) precisely BECAUSE the coverage ledger is the crate's
+# product, read by consumers to see which cells are done. A count-based rule
+# inverts there.
+#
+# So the crate says so itself. A declaration travels with the crate when files
+# move — which is what made a name-keyed allowlist in the guard the wrong axis —
+# and cannot be inverted by a legitimate API.
+[package.metadata.workspace-layout]
+role = "test-host"
+
 [dependencies]
 unpopped = { workspace = true }
 unpopped-vocab = { workspace = true }

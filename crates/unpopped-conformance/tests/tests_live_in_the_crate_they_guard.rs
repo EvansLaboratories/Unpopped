@@ -39,19 +39,29 @@
 //!
 //! - **Names no workspace crate at all.** Then it is not misplaced, it is a
 //!   *repo-policy gate*: its subject is the tree. This very file is one.
-//! - **Host crate has no library surface.** Then the crate exists to hold
-//!   evidence spanning several crates, and naming another crate is the point.
-//!   Measured as zero `pub` items in `src/lib.rs`, not as a name on a list — a
-//!   test-host crate still carries a `lib.rs` (this one carries twenty lines of
-//!   prose explaining why the crate exists), so testing for the *file* finds
-//!   nothing. That is the trap that made a portfolio-wide sweep report zero
-//!   exempt crates.
+//! - **Host crate declares itself a test host** —
+//!   `[package.metadata.workspace-layout] role = "test-host"`. Then its tests
+//!   are *about* other crates and naming one is the point.
+//!
+//! The second was inferred twice and both inferences were wrong, which is why it
+//! is now declared. "Has a `src/lib.rs`" fails because a test host still carries
+//! one — this crate's is twenty lines of prose explaining why the crate exists;
+//! a portfolio sweep using that rule found **zero** exempt crates anywhere.
+//! "Exports nothing" survives longer and then inverts on the shape it most needs
+//! to recognise: kiss-ref reported that their conformance host has a real `pub`
+//! surface (`Ledger`, `ledger()`) **because the coverage ledger is the crate's
+//! product**, read by consumers to see which cells are done. A count-based rule
+//! calls that crate an ordinary library and flags every test in it.
+//!
+//! A declaration travels with the crate when files move — which is what made a
+//! name-keyed allowlist in *this file* the wrong axis — and cannot be inverted
+//! by a legitimate API.
 //!
 //! Each exemption is asserted to still **fire** somewhere. A rule that matches
 //! nothing is dead code claiming to do work, and it would leave this guard green
 //! while asserting less than it says.
 //!
-//! # Why the no-lib crate hosts the guard
+//! # Why the exempt crate hosts the guard
 //!
 //! A rule cannot be enforced from inside the one place that legitimately breaks
 //! it.
@@ -101,29 +111,71 @@ fn test_targets(krate: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// A crate with no `pub` item in `src/lib.rs` exists to hold tests, not API.
-fn has_lib_surface(krate: &Path) -> bool {
-    match fs::read_to_string(krate.join("src/lib.rs")) {
-        Ok(src) => code_only(&src)
-            .lines()
-            .any(|l| l.trim_start().starts_with("pub ")),
-        Err(_) => krate.join("src/main.rs").is_file(),
-    }
+/// Does the crate declare itself a host for tests about *other* crates?
+///
+/// Read from the manifest rather than guessed from the code: see the module doc
+/// for the two inferences this replaces and the shape that inverted the second.
+fn declares_test_host(krate: &Path) -> bool {
+    fs::read_to_string(krate.join("Cargo.toml")).is_ok_and(|m| {
+        let decl = strip_hash_comments(&m);
+        decl.contains("[package.metadata.workspace-layout]")
+            && decl.contains("role = \"test-host\"")
+    })
 }
 
-/// Strip `//`-comments so a crate named only in prose does not count as use.
-///
-/// Load-bearing: `neutral_spelling.rs` mentioned `CpuC` twice, both times in a
-/// doc comment. Without this the file would have looked like it used the crate
-/// it sat in, and the defect would have been invisible to exactly this check.
-fn code_only(src: &str) -> String {
+/// Strip `#`-comments so the rationale ABOVE the declaration cannot be mistaken
+/// for the declaration. The comment there names the key it is explaining.
+fn strip_hash_comments(src: &str) -> String {
     src.lines()
-        .map(|l| match l.find("//") {
+        .map(|l| match l.find('#') {
             Some(i) => &l[..i],
             None => l,
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Strip `//`-comments **and string literals**, so a crate named only in prose
+/// or only inside a message does not count as use.
+///
+/// Both halves are load-bearing and both were established by being wrong:
+///
+/// - `neutral_spelling.rs` mentioned `CpuC` twice, both times in a doc comment.
+///   Without comment-stripping the file would have looked like it used the crate
+///   it sat in, and the original defect would have been invisible to exactly
+///   this check.
+/// - The first draft of [`declares_test_host`] looked for a marker key that
+///   contained the string `unpopped` at token boundaries. That credited **this
+///   file** with using a crate it does not use, and its own `RepoPolicyGate`
+///   exemption stopped matching anything. `each_exemption_is_still_exercised`
+///   caught it within minutes, which is the whole argument for that test.
+///
+/// A test naming its own crate only in an assertion message is the same false
+/// positive one level over, and this closes that too.
+fn code_only(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    for line in src.lines() {
+        let code = match line.find("//") {
+            Some(i) => &line[..i],
+            None => line,
+        };
+        let mut in_str = false;
+        let mut escaped = false;
+        for c in code.chars() {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' if in_str => escaped = true,
+                '"' => {
+                    in_str = !in_str;
+                    out.push(' ');
+                }
+                _ if in_str => out.push(' '),
+                _ => out.push(c),
+            }
+        }
+        out.push('\n');
+    }
+    out
 }
 
 fn mentions(code: &str, lib: &str) -> bool {
@@ -141,8 +193,8 @@ enum Verdict {
     NamesItsOwnCrate,
     /// Exempt: its subject is the tree, not a crate.
     RepoPolicyGate,
-    /// Exempt: the host crate has no API to test.
-    HostHasNoLibSurface,
+    /// Exempt: the host crate declares itself a host for tests about others.
+    DeclaredTestHost,
     Misplaced,
 }
 
@@ -153,10 +205,10 @@ fn classify(krate: &Path, target: &Path, all_libs: &[String]) -> Verdict {
         Verdict::NamesItsOwnCrate
     } else if !all_libs.iter().any(|l| mentions(&code, l)) {
         Verdict::RepoPolicyGate
-    } else if has_lib_surface(krate) {
-        Verdict::Misplaced
+    } else if declares_test_host(krate) {
+        Verdict::DeclaredTestHost
     } else {
-        Verdict::HostHasNoLibSurface
+        Verdict::Misplaced
     }
 }
 
@@ -213,7 +265,7 @@ fn every_test_target_names_the_crate_it_lives_in() {
 #[test]
 fn each_exemption_is_still_exercised() {
     let survey = survey();
-    for want in [Verdict::RepoPolicyGate, Verdict::HostHasNoLibSurface] {
+    for want in [Verdict::RepoPolicyGate, Verdict::DeclaredTestHost] {
         assert!(
             survey.iter().any(|(.., v)| *v == want),
             "no test target is exempt as {want:?} — that branch matches nothing, \
