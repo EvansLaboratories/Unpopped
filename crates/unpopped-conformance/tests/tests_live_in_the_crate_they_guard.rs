@@ -1,4 +1,5 @@
-//! A test file must exercise the crate it lives in.
+//! A test file must exercise the crate it lives in — unless it exercises no
+//! crate at all.
 //!
 //! # The defect this closes, which was four files deep
 //!
@@ -26,20 +27,37 @@
 //! *emitters* out of core and had no reason to look at what the remaining tests
 //! were testing. The next split will do the same thing.
 //!
-//! # `unpopped-conformance` is the exception, and it is the reason this file
+//! # The two exemptions are measured, not listed
 //!
-//! This crate has no library surface. Its whole purpose is holding evidence that
-//! must see several crates at once — a dtype matrix spanning both reference
-//! emitters is a test of neither. So it is exempt by construction, and the
-//! exemption is what makes it the right host: a rule cannot be enforced from
-//! inside the one place that legitimately breaks it.
+//! An earlier cut of this file exempted `unpopped-conformance` **by name**. Fuel
+//! pointed out why that is the wrong axis: a crate-keyed allowlist is correct
+//! only until a repo-policy test lands in an ordinary crate, and it says nothing
+//! about *why* the file is exempt. Their formulation — **does the file walk the
+//! tree, or does it test its host crate?** — keys on what the file does, so it
+//! cannot go stale when a file moves. Both exemptions below are properties this
+//! test measures:
+//!
+//! - **Names no workspace crate at all.** Then it is not misplaced, it is a
+//!   *repo-policy gate*: its subject is the tree. This very file is one.
+//! - **Host crate has no library surface.** Then the crate exists to hold
+//!   evidence spanning several crates, and naming another crate is the point.
+//!   Measured as zero `pub` items in `src/lib.rs`, not as a name on a list — a
+//!   test-host crate still carries a `lib.rs` (this one carries twenty lines of
+//!   prose explaining why the crate exists), so testing for the *file* finds
+//!   nothing. That is the trap that made a portfolio-wide sweep report zero
+//!   exempt crates.
+//!
+//! Each exemption is asserted to still **fire** somewhere. A rule that matches
+//! nothing is dead code claiming to do work, and it would leave this guard green
+//! while asserting less than it says.
+//!
+//! # Why the no-lib crate hosts the guard
+//!
+//! A rule cannot be enforced from inside the one place that legitimately breaks
+//! it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
-
-/// Crates whose `tests/` legitimately exercise *other* crates. Keep this list
-/// short and argued: every entry is a place the guard cannot see.
-const NO_LIB_SURFACE: &[&str] = &["unpopped-conformance"];
 
 fn crates_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -48,12 +66,30 @@ fn crates_dir() -> PathBuf {
         .to_path_buf()
 }
 
+fn crate_dirs() -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = fs::read_dir(crates_dir())
+        .expect("crates/ is readable")
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.join("Cargo.toml").is_file())
+        .collect();
+    v.sort();
+    v
+}
+
+fn crate_name(krate: &Path) -> String {
+    krate
+        .file_name()
+        .expect("named dir")
+        .to_string_lossy()
+        .to_string()
+}
+
 /// Test *targets* only: `tests/*.rs`. A `tests/common/` module is a helper
 /// compiled into other targets, not a target itself, so it is not expected to
 /// name anything.
 fn test_targets(krate: &Path) -> Vec<PathBuf> {
-    let dir = krate.join("tests");
-    let Ok(entries) = fs::read_dir(&dir) else {
+    let Ok(entries) = fs::read_dir(krate.join("tests")) else {
         return Vec::new();
     };
     let mut out: Vec<PathBuf> = entries
@@ -63,6 +99,16 @@ fn test_targets(krate: &Path) -> Vec<PathBuf> {
         .collect();
     out.sort();
     out
+}
+
+/// A crate with no `pub` item in `src/lib.rs` exists to hold tests, not API.
+fn has_lib_surface(krate: &Path) -> bool {
+    match fs::read_to_string(krate.join("src/lib.rs")) {
+        Ok(src) => code_only(&src)
+            .lines()
+            .any(|l| l.trim_start().starts_with("pub ")),
+        Err(_) => krate.join("src/main.rs").is_file(),
+    }
 }
 
 /// Strip `//`-comments so a crate named only in prose does not count as use.
@@ -89,75 +135,89 @@ fn mentions(code: &str, lib: &str) -> bool {
     })
 }
 
-#[test]
-fn every_test_target_names_the_crate_it_lives_in() {
-    let mut checked = 0;
-    let mut offenders = Vec::new();
+/// Why a given test target is, or is not, required to name its own crate.
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    NamesItsOwnCrate,
+    /// Exempt: its subject is the tree, not a crate.
+    RepoPolicyGate,
+    /// Exempt: the host crate has no API to test.
+    HostHasNoLibSurface,
+    Misplaced,
+}
 
-    for entry in fs::read_dir(crates_dir()).expect("crates/ is readable") {
-        let krate = entry.expect("readable entry").path();
-        if !krate.is_dir() {
-            continue;
-        }
-        let name = krate
-            .file_name()
-            .expect("named dir")
-            .to_string_lossy()
-            .to_string();
-        if NO_LIB_SURFACE.contains(&name.as_str()) {
-            continue;
-        }
-        let lib = name.replace('-', "_");
-        for t in test_targets(&krate) {
-            let src = fs::read_to_string(&t).expect("test file is readable");
-            checked += 1;
-            if !mentions(&code_only(&src), &lib) {
-                offenders.push(format!(
-                    "{}/tests/{} does not use `{lib}`",
-                    name,
-                    t.file_name().expect("named file").to_string_lossy()
-                ));
-            }
+fn classify(krate: &Path, target: &Path, all_libs: &[String]) -> Verdict {
+    let code = code_only(&fs::read_to_string(target).expect("test file is readable"));
+    let own = crate_name(krate).replace('-', "_");
+    if mentions(&code, &own) {
+        Verdict::NamesItsOwnCrate
+    } else if !all_libs.iter().any(|l| mentions(&code, l)) {
+        Verdict::RepoPolicyGate
+    } else if has_lib_surface(krate) {
+        Verdict::Misplaced
+    } else {
+        Verdict::HostHasNoLibSurface
+    }
+}
+
+fn survey() -> Vec<(String, String, Verdict)> {
+    let dirs = crate_dirs();
+    let libs: Vec<String> = dirs
+        .iter()
+        .map(|d| crate_name(d).replace('-', "_"))
+        .collect();
+    let mut out = Vec::new();
+    for krate in &dirs {
+        for t in test_targets(krate) {
+            let file = t
+                .file_name()
+                .expect("named file")
+                .to_string_lossy()
+                .to_string();
+            out.push((crate_name(krate), file, classify(krate, &t, &libs)));
         }
     }
+    out
+}
+
+#[test]
+fn every_test_target_names_the_crate_it_lives_in() {
+    let survey = survey();
+    assert!(
+        survey.len() > 10,
+        "only {} test targets scanned — the walk found nothing, so a green here \
+         would certify nothing",
+        survey.len()
+    );
+
+    let misplaced: Vec<String> = survey
+        .iter()
+        .filter(|(.., v)| *v == Verdict::Misplaced)
+        .map(|(k, f, _)| format!("{k}/tests/{f} names another crate but not `{k}`"))
+        .collect();
 
     assert!(
-        checked > 10,
-        "only {checked} test targets scanned — the walk found nothing, so a \
-         green here would certify nothing"
-    );
-    assert!(
-        offenders.is_empty(),
+        misplaced.is_empty(),
         "a test target must exercise the crate it lives in, or `cargo test -p \
          <that crate>` silently skips it:\n  {}",
-        offenders.join("\n  ")
+        misplaced.join("\n  ")
     );
 }
 
-/// The detector discriminates — it is not returning "no offenders" for every
-/// input.
+/// Both exemptions still match something.
 ///
-/// `unpopped-conformance` is exempt precisely because its tests use *other*
-/// crates. So its own files must trip the check when it is pointed at them. If
-/// this ever goes green the exemption has become vacuous and the guard above is
-/// asserting nothing.
+/// An exemption that matches nothing is dead code claiming to do work: the guard
+/// above stays green while quietly checking a narrower rule than it states.
+/// Same argument as preferring `#[expect]` to `#[allow]` — a suppression that
+/// stops being needed should go red rather than sit there.
 #[test]
-fn the_detector_fires_on_the_exempt_crate() {
-    let me = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let targets = test_targets(me);
-    assert!(!targets.is_empty(), "this crate has test targets");
-
-    let tripped = targets
-        .iter()
-        .filter(|t| {
-            let src = fs::read_to_string(t).expect("readable");
-            !mentions(&code_only(&src), "unpopped_conformance")
-        })
-        .count();
-
-    assert!(
-        tripped > 0,
-        "no file in the exempt crate trips the check — the detector cannot \
-         distinguish a test that uses its own crate from one that does not"
-    );
+fn each_exemption_is_still_exercised() {
+    let survey = survey();
+    for want in [Verdict::RepoPolicyGate, Verdict::HostHasNoLibSurface] {
+        assert!(
+            survey.iter().any(|(.., v)| *v == want),
+            "no test target is exempt as {want:?} — that branch matches nothing, \
+             so the guard is asserting a narrower rule than it claims"
+        );
+    }
 }
