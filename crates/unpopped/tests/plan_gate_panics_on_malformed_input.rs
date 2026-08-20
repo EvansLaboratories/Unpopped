@@ -36,6 +36,31 @@
 //! that the text does not contain, and this crate is the reference
 //! implementation, so the gap is visible to anyone who runs it.
 //!
+//! # The scale, because one pin reads like one defect
+//!
+//! It is not one assert. Swept 2026-08-20: the adopter's suite holds **67**
+//! `#[should_panic]` tests, of which **25 are named
+//! `..._is_rejected_at_the_plan_gate`** and call `unpopped::build_plan`
+//! directly, plus several more of the same shape under other names. Each names
+//! an `(OpDef, structure_key)` pair that panics here.
+//!
+//! State the claim precisely, because two things get conflated otherwise:
+//! `build_plan` returns `KernelPlan`, not a `Result`, so a caller invoking it
+//! *directly* has opted into its panics and those 25 tests pin a **contract**
+//! rather than a violation. **The violation is that `try_generate` routes
+//! through `build_plan` and inherits every one of them** — and `try_generate` is
+//! the signature §6.1-0001 names.
+//!
+//! Measured through `try_generate` rather than inferred, on two independent
+//! inputs landing on two different asserts ~400 lines apart: a
+//! forward-referencing `RowReduce` stage (`validate_row_reduce`), and `coord(1)`
+//! at `i32`.
+//!
+//! So the fix is not "convert an assert". The plan gate is assert-based by
+//! design — twelve `assert_valid_*` / `assert_*_admissibility` calls plus
+//! `validate_row_reduce`, all running before a backend sees anything — and
+//! closing this means making that layer fallible.
+//!
 //! # Why a pin rather than a fix
 //!
 //! Closing it changes `build_plan` from `-> KernelPlan` to a fallible return,
