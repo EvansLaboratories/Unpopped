@@ -38,7 +38,7 @@ use kiss_classify_vocab::Dtype;
 use kiss_ops_vocab::Op;
 use kiss_ref_core::{
     Combine, FlatDag, IndexRef, Monoid, Node, OobPolicy, RecipeEval, Tensor, eval_recipe,
-    scalar_int, tensor_int,
+    scalar_int, tensor_int, ulp_distance_f32,
 };
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_key};
 
@@ -473,6 +473,19 @@ pub(crate) fn eval_recipe_for(
 /// Bit-exact comparator: every lane's raw f32 bit pattern must match. Use where
 /// the values are exactly representable (integer-valued, or a fold order that
 /// cannot reorder) so byte equality is the correct assertion.
+///
+/// **Never use it where a lane can be a COMPUTED NaN.** Rust does not guarantee
+/// NaN bit patterns — the reference says they are "not guaranteed to be portable
+/// or even fully deterministic", varying by platform, compiler version, and even
+/// invocation — so a raw-bit assertion on a produced NaN is a latent divergence
+/// that passes here and fails somewhere else. [`assert_conforming_eq`] is the
+/// form for those, and it classes NaN rather than comparing its payload.
+///
+/// Audited 2026-08-20 across all 23 call sites at kiss-ref's request: none can
+/// produce a NaN. Two came close enough to need reading — `add_contiguous` feeds
+/// `+inf` (and `inf + 0.0` is `inf`, a single deterministic pattern), and
+/// `reduce_sum_last` sums small integers. Every test that touches a NaN already
+/// uses the conforming form.
 pub(crate) fn assert_bits_eq(name: &str, reference: &[f32], candidate: &[f32]) {
     assert_eq!(reference.len(), candidate.len(), "{name}: length");
     for (i, (a, b)) in reference.iter().zip(candidate).enumerate() {
@@ -489,19 +502,26 @@ pub(crate) fn assert_bits_eq(name: &str, reference: &[f32], candidate: &[f32]) {
 /// The KISS-Conform §6.8 exact comparator: bit-identical, EXCEPT both-NaN is
 /// conforming (0 distance) — IEEE 754 leaves NaN payload propagation optional,
 /// and hardware genuinely differs (an sm_89 float add canonicalizes a produced
-/// NaN to `0x7fffffff`; x86 propagates the input's `0x7fc00000`). Mirrors
-/// kiss-ref's `ulp_distance_*` pin: both-NaN → 0, one-NaN → MAX, ±0 → 1 (the
-/// signed-zero distinction — exactly what caught the max_prop tie bug — is
-/// PRESERVED; only the NaN payload/sign is classed).
+/// NaN to `0x7fffffff`; x86 propagates the input's `0x7fc00000`).
+///
+/// **Calls kiss-ref's [`ulp_distance_f32`] rather than mirroring it.** It used to
+/// re-implement the rule here and say so — "mirrors kiss-ref's `ulp_distance_*`
+/// pin" — which is two implementations of one rule and drifts the moment they
+/// refine it. Rust does not guarantee NaN bit patterns *at all* (they vary by
+/// platform, version, even invocation), so the rule that classes them is the
+/// load-bearing part of every differential here, and it must have exactly one
+/// author. That author is the party that owns the reference.
+///
+/// `ulp_distance_f32(a, b) == 0` is equivalent to bit equality for non-NaN — its
+/// sign-magnitude key is injective over bit patterns — so **±0 still separates**
+/// (distance 1), which is exactly what caught the `max_prop` tie bug. Only the
+/// NaN payload and sign are classed.
 pub(crate) fn assert_conforming_eq(name: &str, reference: &[f32], candidate: &[f32]) {
     assert_eq!(reference.len(), candidate.len(), "{name}: length");
     for (i, (r, c)) in reference.iter().zip(candidate).enumerate() {
-        if r.is_nan() && c.is_nan() {
-            continue; // both-NaN: conforming (payload unpinned across hardware)
-        }
         assert_eq!(
-            r.to_bits(),
-            c.to_bits(),
+            ulp_distance_f32(*r, *c),
+            0,
             "{name}: divergence at [{i}]: reference {r:?} (0x{:08x}) vs candidate {c:?} (0x{:08x})",
             r.to_bits(),
             c.to_bits()
