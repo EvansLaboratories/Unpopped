@@ -899,7 +899,8 @@ int main(void) {{
 /// # Why FP8 got a lowering before f16/bf16, which have been "ready" longer
 ///
 /// The f16/bf16 arms spell `__half2float` — a CUDA name emitted from the module
-/// that calls itself neutral, tripwired in `tests/neutral_spelling.rs`. Fixing
+/// that calls itself neutral, tripwired in
+/// `unpopped/tests/neutral_spelling.rs`. Fixing
 /// that means replacing a vendor intrinsic with an emitted software codec, which
 /// **rewrites every existing f16 golden including Baracuda's physical CUDA
 /// corpus**, so it is gated on a coordinated regen.
