@@ -119,7 +119,7 @@ fn the_driver_routes_every_ordinary_constant_through_the_emitter_seam() {
     let (leaf, constant) = sentinel_seam();
     let mut checked = 0;
 
-    for v in [0.5_f64, 1.0, -1.0, 2.0, 1e30, -1e-30, 3.141_592_653_589_793] {
+    for v in [0.5_f64, 1.0, -1.0, 2.0, 1e30, -1e-30, std::f64::consts::PI] {
         let out = lower_with(&input_plus(v), &leaf, &constant);
         assert!(
             out.contains(SENTINEL),
