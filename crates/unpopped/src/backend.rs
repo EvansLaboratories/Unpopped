@@ -318,6 +318,141 @@ pub enum LowerError {
     },
 }
 
+/// What a [`Lowering`] seam returns: a spelling, **or a typed refusal to spell**.
+///
+/// # Why a decline is a SUCCESS value and not an error variant
+///
+/// The obvious design is one error enum with `Declined` and `Failed` variants.
+/// **It is wrong, and the reason is `?`.** With a single error type,
+/// `let s = spell(..)?;` compiles, reads naturally, and silently converts a
+/// *decline* into a propagated *failure* — every call site has to remember to
+/// discriminate, and the one that forgets is indistinguishable from the one that
+/// didn't.
+///
+/// With `Result<Spelling, LowerError>`, `?` propagates only real failures and a
+/// decline **forces a `match`**. That makes the lazy path the correct one, which
+/// matters because the lazy path is the one that ships.
+///
+/// Owed to Vulkane, who had solved the same shape three times in their own crate:
+/// `cooperative_matrix_properties()` returned a bare `Vec` where empty meant both
+/// *"the device supports none"* and *"the query failed"*. It is now `Result<Vec<_>>`
+/// — extension absent is `Ok(empty)`, missing entry point is `Err`. **"Supports
+/// none" is an answer; "I could not ask" is a failure.**
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Spelling {
+    /// The target-language text for this node.
+    Spelled(String),
+    /// This backend does not spell this — a **capability statement**, not a fault.
+    Declined(Decline),
+}
+
+/// Why a [`Lowering`] seam declined, as a **matchable** value.
+///
+/// KISS-EMIT §6.8-0001 requires a **typed** decline. A `String` reason cannot be
+/// matched on, so it cannot be the type — it can only ride along for diagnostics.
+///
+/// # This carries WHAT was declined, deliberately
+///
+/// Baracuda's cross-backend suite asserts *"Slang declines `Copysign`"* by
+/// inspecting a panic payload, so that an unrelated crash cannot satisfy it. When
+/// the panic became a typed value that discrimination had to survive, or their test
+/// would have got **weaker at exactly the moment this API got better**.
+/// `matches!(d, Decline::UnsupportedOp { op: BinaryOp::Copysign, .. })` is
+/// strictly stronger than payload-string matching and is structurally
+/// unsatisfiable by an unrelated failure.
+///
+/// `#[non_exhaustive]`: `NotExpressible` is deliberately here from the start so the
+/// `supports_dtype` third state — supported / unsupported / **not expressible** —
+/// has a home when it is designed, without a second breaking change.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Decline {
+    /// The backend has no spelling for this op at all.
+    UnsupportedOp {
+        /// The op, so a caller can match on the specific refusal.
+        op: DeclinedOp,
+        /// Diagnostics only. Never match on this.
+        why: String,
+    },
+    /// The backend spells this op, but not at this dtype.
+    UnsupportedDtypeForOp {
+        /// The op it otherwise spells.
+        op: DeclinedOp,
+        /// The dtype it will not spell it at.
+        dtype: ElementKind,
+        /// Diagnostics only. Never match on this.
+        why: String,
+    },
+    /// The target language cannot express this at all, at any dtype — distinct
+    /// from "this backend has not implemented it". Reserved for the
+    /// `supports_dtype` third state.
+    NotExpressible {
+        /// Diagnostics only. Never match on this.
+        why: String,
+    },
+}
+
+/// Which op a [`Decline`] is about, so the refusal is matchable rather than
+/// described.
+///
+/// Deliberately **not** a `String`: a declined op named by text is a decline a
+/// caller can only recognise by spelling, which is the thing this type exists to
+/// stop.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DeclinedOp {
+    /// A [`UnaryOp`] the backend will not spell.
+    Unary(UnaryOp),
+    /// A [`BinaryOp`] the backend will not spell.
+    Binary(BinaryOp),
+    /// An [`ArithOp`] the backend will not spell.
+    Arith(ArithOp),
+    /// The ternary select.
+    Select,
+    /// A constant literal.
+    Constant,
+    /// An operand access — leaf, reduced-scalar, or coordinate.
+    Access,
+}
+
+impl Spelling {
+    /// The spelled text, or the decline.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`Decline`] unchanged when this is not a spelling. Provided so
+    /// a caller that genuinely wants to treat a decline as terminal can say so in
+    /// one place, rather than each call site inventing the conversion.
+    pub fn spelled(self) -> Result<String, Decline> {
+        match self {
+            Spelling::Spelled(s) => Ok(s),
+            Spelling::Declined(d) => Err(d),
+        }
+    }
+}
+
+impl From<Decline> for LowerError {
+    /// A decline that reaches the top of a lowering becomes the emitter's typed
+    /// decline (KISS-EMIT §6.8-0001/-0002), preserving which op refused.
+    fn from(d: Decline) -> Self {
+        match d {
+            Decline::UnsupportedOp { op, why } => LowerError::UnsupportedOp {
+                detail: format!("{op:?}: {why}"),
+            },
+            Decline::UnsupportedDtypeForOp { op, dtype, why } => {
+                LowerError::UnsupportedDtype {
+                    dtype,
+                    detail: format!("{op:?}: {why}"),
+                }
+            }
+            Decline::NotExpressible { why } => LowerError::UnsupportedOp {
+                detail: format!("not expressible in this target language: {why}"),
+            },
+        }
+    }
+}
+
 impl std::fmt::Display for LowerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
