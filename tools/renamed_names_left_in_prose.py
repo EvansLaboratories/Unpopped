@@ -10,8 +10,27 @@ two crates that document which gate they defer to.
     python tools/renamed_names_left_in_prose.py <base-ref> <head-ref>
     python tools/renamed_names_left_in_prose.py HEAD~1 HEAD
 
-Scans `//` comments in `.rs` and every line of `.md`. Exit 1 when a candidate is
-undispositioned, or when a disposition no longer matches anything.
+Exit 1 when a mention is undispositioned, or when a disposition matches nothing.
+
+WHAT IT SCANS, stated because coverage decided by whatever file type the author
+happened to think of is a population claim nobody made:
+
+    *.rs    `//` comment lines only
+    *.md    every line
+
+Nothing else. Not `*.toml`, not `*.tsv`, not `*.json`, not commit messages —
+each of which can name an identifier. The Markdown gap was found by a peer, not
+by me, which is the argument for naming the set rather than leaving it implicit.
+
+A NAME MUST BE SPELLED AS CODE
+------------------------------
+
+The name has to appear inside backticks, optionally behind a path
+(`` `plan::validate_row_reduce` ``). The cost of dropping that requirement was
+measured, not guessed: across this repo's full history the bare-word form
+reports `header` 31 times and `main` 14 times, because an item by each name once
+existed and both words occur in ordinary English. **Prose that refers to an
+identifier spells it as one; prose that uses a word uses a word.**
 
 A HIT IS A CANDIDATE, NOT A DEFECT
 ----------------------------------
@@ -26,35 +45,55 @@ Fuel's taxonomy, and the reason this tool cannot decide for you:
                     -> renaming makes it FALSE
 
 **HISTORICAL is the expected case in any repo that documents its own renames**,
-and it is not a rare tail. Fuel ran the manual version of this check across a
-296-file `Lazy`-prefix drop: twelve prose mentions of names that no longer exist,
-**twelve of twelve correct to leave** — including `docs/method-rules.md`
-narrating the very rename defect that motivated this tool. A naive exit 1 there
-is 12-for-12 wrong-in-effect, and the first person who meets it either sweeps
-twelve historical records or stops trusting the check. Both are worse than not
-running it.
+and it is not a rare tail. Fuel ran the manual form across a 296-file
+`Lazy`-prefix drop: twelve prose mentions of names that no longer exist, **twelve
+of twelve correct to leave** — ten of them the write-up of a sweep corrupting a
+verification control inside a fenced code block. Had the tool ever swept those,
+it would have erased the record of why it must not sweep them.
 
-So candidates are dispositioned once, in `tools/renamed_names_dispositioned.tsv`,
-and the tool goes quiet about them. `stale` is not a category there: a stale
-mention gets fixed, never recorded.
+DISPOSITIONS ARE KEYED ON CONTENT, NOT ON LOCATION
+--------------------------------------------------
 
-The ledger is itself ratcheted. A disposition whose name no longer appears
-anywhere ALSO fails — otherwise the file accumulates entries that suppress
-nothing, and a suppression that has stopped suppressing is the failure this
-repository spent a day cataloguing.
+A row in `tools/renamed_names_dispositioned.tsv` is `(name, hash-of-the-line)`.
+Not `(name, file)`. Fuel's argument, and this repo supplied the proof:
+
+`kiss_byte_match.rs` named `arch_from_code` in the **present tense** as a live
+precondition — STALE — and a rewording turned it into a record of what the
+precondition used to point at — HISTORICAL. Same name, same file, changed only
+by someone editing the sentence. **The transition is real and it runs both
+ways**, so a row keyed on `(name, file)` would permanently silence every future
+mention of that name in that file, including one a later edit reintroduces in
+the present tense. That is a 282-entry allowlist arriving one row at a time —
+the design rejected below, entering through the door marked "disposition".
+
+Content-keying gives the property actually wanted: **a disposition expires when
+its subject changes, and only when its subject changes.** An edited line loses
+its row and comes back for fresh judgement; an untouched historical line stays
+quiet forever.
+
+It is also what makes `stale` deliberately absent from the categories: a stale
+mention gets FIXED, never recorded — and **a fixed line is a changed line, so it
+cannot silently inherit a row that no longer describes it.**
+
+The hash covers the line's text only, not the file or line number: a sentence
+that moves is the same sentence, and expiring rows on unrelated edits elsewhere
+would be churn without judgement.
+
+The ledger is ratcheted both ways. A row matching no current line ALSO fails —
+a suppression that has stopped suppressing reads like coverage while providing
+none.
 
 WHY THIS SHAPE AND NOT A LINT
 -----------------------------
 
-The obvious version — "every backticked name in a comment must resolve" — is not
-viable here and the measurement says so: 282 bare names in this workspace's
-comments have no in-tree referent, and the large majority are legitimate. They
-name things in Fuel (`dispatch_record`, `KernelRef`), in Baracuda
-(`emit_scalar`), in C and MSVC (`uint32_t`, `_FCbuild`, `_Fcomplex`), in the KISS
-specs (`target_capability`, `OpAttrs`), and in deliberate historical narration. A
-gate demanding a 282-entry allowlist would be abandoned within a week, and
-rightly. The naive version is the one you reach by reasoning, and it dies on
-contact with the count.
+"Every backticked name in a comment must resolve" is not viable here and the
+measurement says so: 282 bare names in this workspace's comments have no in-tree
+referent, and the large majority are legitimate. They name things in Fuel
+(`dispatch_record`, `KernelRef`), in Baracuda (`emit_scalar`), in C and MSVC
+(`uint32_t`, `_FCbuild`, `_Fcomplex`), in the KISS specs (`target_capability`,
+`OpAttrs`), and in deliberate historical narration. A gate demanding a 282-entry
+allowlist would be abandoned within a week, and rightly. The naive version is
+the one you reach by reasoning, and it dies on contact with the count.
 
 The rustdoc gate this repo added the same day (`[workspace.lints.rustdoc]`)
 closes the *linked* half: `[`Foo`]` fails when `Foo` dies. It is structurally
@@ -62,25 +101,37 @@ blind to the unlinked half — `` `Foo` `` has no referent to check — and that
 the larger half, because most prose names things without linking them.
 
 So this keys on the one signal that is both cheap and specific: **the identifier
-existed at `base` and does not exist at `head`.** That is exactly the population
-a rename or deletion creates, it needs no allowlist, and it produced zero false
-positives on the commit that motivated it.
+existed at `base` and does not exist at `head`.**
+
+IT READS COMMITTED CONTENT, NOT THE WORKING TREE
+------------------------------------------------
+
+Both refs are read through `git show`, so **an uncommitted edit is invisible to
+it**. Run it after committing the rename, not while making it — a clean result
+on a dirty tree is a result about a tree you are not looking at. Found by trying
+to mutation-test it against a working-tree edit and getting silence.
+
+ARMED, NOT AUTOMATIC — AND SLOW
+-------------------------------
+
+There is no CI in this repository. This runs when a person runs it.
+
+It shells out to `git show` for every `.rs` and `.md` file at both refs, so a
+296-file rename takes minutes. **Those two facts combine badly and the
+combination is the point:** a check that takes minutes and runs only when
+remembered is the one skipped exactly when a rename is large — which is when it
+matters. Budget for it in the rename, not after.
 
 VALIDATION
 ----------
 
-    96c46eb~1..96c46eb   7 definitions gone, 4 still named, 31 mentions   -> exit 1
-    96c46eb~1..c57e8b8   7 definitions gone, 0 still named                -> exit 0
-
-NOTHING RUNS THIS AUTOMATICALLY
--------------------------------
-
-There is no CI in this repository. It is a check to run when you rename or
-delete something, not a gate that runs itself, and saying so is the point: a
-guard described as automatic when it is manual is the failure this repo spent a
-day cataloguing.
+    96c46eb~1..96c46eb            4 undispositioned, 31 mentions   -> exit 1
+    96c46eb~1..HEAD               clean                            -> exit 0
+    unpopped-vocab-v0.2.0..HEAD   3 dispositioned, shown as such    -> exit 0
+    a ledger row for a line that no longer exists                  -> exit 1
 """
 
+import hashlib
 import os
 import re
 import subprocess
@@ -120,6 +171,11 @@ def files_at(ref, suffix):
     return [p for p in git("ls-tree", "-r", "--name-only", ref).split("\n") if p.endswith(suffix)]
 
 
+def line_hash(text):
+    """Identity of a mention: its own words, nothing else. See the module doc."""
+    return hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()[:12]
+
+
 def strip_line_comments(src):
     return "\n".join(l.split("//")[0] for l in src.split("\n"))
 
@@ -134,10 +190,11 @@ def defined_at(ref):
 
 
 def prose_mentions(ref, names):
-    """Where each name still appears in prose at `ref`: `//` in Rust, all of Markdown."""
-    hits = {n: [] for n in names}
+    """[(name, hash, where, looks_historical)] for every code-spelled mention."""
     if not names:
-        return hits
+        return []
+    pats = {n: re.compile(r"`[A-Za-z0-9_:]*\b" + re.escape(n) + r"\b[^`]*`") for n in names}
+    found = []
     sources = [(p, True) for p in files_at(ref, ".rs")] + [(p, False) for p in files_at(ref, ".md")]
     for path, rust in sources:
         for lineno, line in enumerate(git("show", f"{ref}:{path}").split("\n"), 1):
@@ -145,13 +202,15 @@ def prose_mentions(ref, names):
             if rust and not text.startswith("//"):
                 continue
             for name in names:
-                if re.search(r"\b" + re.escape(name) + r"\b", text):
-                    hits[name].append((f"{path}:{lineno}", bool(HISTORICAL_HINTS.search(text))))
-    return hits
+                if pats[name].search(text):
+                    found.append(
+                        (name, line_hash(text), f"{path}:{lineno}", bool(HISTORICAL_HINTS.search(text)))
+                    )
+    return found
 
 
 def read_ledger():
-    """name -> (category, note). Absent file is fine: nothing dispositioned yet."""
+    """(name, hash) -> (category, note). Absent file is fine: nothing dispositioned."""
     out = {}
     if not os.path.exists(LEDGER):
         return out
@@ -161,14 +220,14 @@ def read_ledger():
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
             parts = line.split("\t")
-            if len(parts) < 3:
-                print(f"{LEDGER}: malformed row (want name<TAB>category<TAB>note): {line!r}")
+            if len(parts) < 4:
+                print(f"{LEDGER}: malformed row (want name<TAB>hash<TAB>category<TAB>note): {line!r}")
                 continue
-            name, category, note = parts[0].strip(), parts[1].strip(), parts[2].strip()
+            name, h, category, note = (p.strip() for p in parts[:4])
             if category not in CATEGORIES:
-                print(f"{LEDGER}: unknown category {category!r} for {name} (want one of {sorted(CATEGORIES)})")
+                print(f"{LEDGER}: unknown category {category!r} for {name} — want one of {sorted(CATEGORIES)}")
                 continue
-            out[name] = (category, note)
+            out[(name, h)] = (category, note)
     return out
 
 
@@ -176,36 +235,32 @@ def main(base, head):
     gone = sorted(defined_at(base) - defined_at(head))
     print(f"identifiers whose definition disappeared in {base}..{head}: {len(gone)}")
 
-    hits = prose_mentions(head, gone)
+    mentions = prose_mentions(head, gone)
     ledger = read_ledger()
-    named = [n for n in gone if hits[n]]
 
-    undispositioned = [n for n in named if n not in ledger]
-    for name in undispositioned:
-        where = hits[name]
-        hinted = sum(1 for _, h in where if h)
-        hint = f"  [{hinted}/{len(where)} read as HISTORICAL]" if hinted else ""
-        print(f"  {name:<42} {len(where)} prose mention(s){hint}")
-        for w, h in where[:5]:
-            print(f"      {w}{'   <- historical?' if h else ''}")
-        if len(where) > 5:
-            print(f"      ... and {len(where) - 5} more")
+    undispositioned = [m for m in mentions if (m[0], m[1]) not in ledger]
+    quiet = [m for m in mentions if (m[0], m[1]) in ledger]
 
-    quiet = [n for n in named if n in ledger]
+    for name, h, where, hinted in undispositioned:
+        print(f"  {name}  at {where}{'   <- reads as HISTORICAL' if hinted else ''}")
+        print(f"      to disposition:  {name}\t{h}\t<historical|pinned>\t<why>")
+
     if quiet:
-        print(f"\ndispositioned, not shown: {', '.join(f'{n} ({ledger[n][0]})' for n in quiet)}")
+        names = sorted({f"{n} ({ledger[(n, h)][0]})" for n, h, _, _ in quiet})
+        print(f"\ndispositioned, not shown: {', '.join(names)}")
 
-    dead = [n for n in ledger if not hits.get(n)]
-    for name in dead:
-        print(f"\n{LEDGER}: {name} is dispositioned but named nowhere — remove the row.")
+    live = {(n, h) for n, h, _, _ in prose_mentions(head, sorted({k[0] for k in ledger}))}
+    dead = [k for k in ledger if k not in live]
+    for name, h in dead:
+        print(f"\n{LEDGER}: {name} {h} matches no current line — the sentence changed. Remove the row.")
 
     if undispositioned or dead:
         if undispositioned:
-            print(f"\nEXIT 1: {len(undispositioned)} name(s) to disposition.")
+            print(f"\nEXIT 1: {len(undispositioned)} mention(s) to disposition.")
             print("Each is STALE (rename it), HISTORICAL (leave it, record it),")
-            print(f"or PINNED (leave it, record it). Record the last two in {LEDGER}.")
+            print(f"or PINNED (leave it, record it). Paste the last two into {LEDGER}.")
         if dead:
-            print(f"\nEXIT 1: {len(dead)} disposition(s) suppressing nothing.")
+            print(f"\nEXIT 1: {len(dead)} row(s) matching nothing.")
         return 1
 
     print("OK: every deleted identifier is either absent from prose or dispositioned.")

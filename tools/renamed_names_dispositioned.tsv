@@ -3,7 +3,23 @@
 # Read by tools/renamed_names_left_in_prose.py. Rows silence a candidate it
 # would otherwise ask about.
 #
-#   name <TAB> category <TAB> note
+#   name <TAB> hash <TAB> category <TAB> note
+#
+# `hash` identifies the MENTION BY ITS CONTENT — the first 12 hex of a sha256
+# over the line's whitespace-normalized text. Not the file, not the line number.
+#
+# WHY CONTENT AND NOT LOCATION, with this repo's own proof: kiss_byte_match.rs
+# named `arch_from_code` in the PRESENT TENSE as a live precondition — stale —
+# and a rewording turned it into a record of what that precondition used to
+# point at — historical. Same name, same file, changed only by editing the
+# sentence. A row keyed on (name, file) would silence every future mention of
+# that name in that file, INCLUDING one a later edit reintroduces in the present
+# tense: a 282-entry allowlist arriving one row at a time, through the door
+# marked "disposition". Keyed on content, a disposition expires when its subject
+# changes and only when its subject changes.
+#
+# Owed to Fuel, who saw it before anyone had written a row — when the migration
+# was three rows rather than "re-disposition everything, which nobody does".
 #
 # category is one of:
 #   historical   the prose is ABOUT the rename or about prior behaviour.
@@ -21,6 +37,9 @@
 # RATCHETED BOTH WAYS. A row whose name is named nowhere also fails the check —
 # a suppression that has stopped suppressing is worse than no suppression,
 # because it reads like coverage.
-QuantFacts	historical	The struct removed when sk4 §3.2 settled a block's shared scale as a sibling OPERAND. Two struck-through register rows record the change; structure_key.rs and tests/scale_sibling_model.rs explain why the field model collided (the field was never encoded into the token) and the sibling model does not.
-arch_code	historical	Half of the closed CUDA arch codec deleted when the target namespace opened. The register row's whole point is that the pair was DELETED rather than adapted — the evidence that the codec holds zero non-test ArchSku code.
-arch_from_code	historical	The other half. structure_key.rs narrates a test that used to assert against it; kiss_byte_match.rs names it to explain what the SUBSTITUTE_TARGET precondition pointed at before the function was deleted — reworded 2026-08-20 from a present-tense claim, which WAS stale, into a record, which is not.
+arch_from_code	1aab51563640	historical	structure_key.rs narrates a test that USED TO assert against it, and why it no longer can. The sentence is the record of a deliberate scope change when the target namespace opened.
+arch_from_code	fe45aedbf1cf	historical	kiss_byte_match.rs's SUBSTITUTE_TARGET note. Reworded 2026-08-20 from a present-tense claim, which WAS stale, into a record of what the precondition pointed at before the function was deleted. This exact line is why dispositions are keyed on content.
+arch_code	061d3e7eb9ec	historical	The deferred register's row on opening the target namespace. Its whole point is that the CUDA arch codec pair was DELETED rather than adapted — the evidence that the codec holds zero non-test ArchSku code.
+arch_from_code	061d3e7eb9ec	historical	Same register row, the other half of the deleted pair.
+QuantFacts	9889ffc75f7c	historical	Struck-through DONE row recording that QuantFacts was removed when sk4 §3.2 settled a block's shared scale as a sibling operand rather than a field.
+QuantFacts	b2f0737a6c34	historical	Struck-through DONE row listing the types that gained constructors before being reserved. Names QuantFacts as one of them, at a time when it existed.
