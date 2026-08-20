@@ -323,6 +323,10 @@ impl KernelPlan<'_> {
 ///
 /// So the rules live once, in the gate, and are reachable in two shapes:
 /// [`try_build_plan`] returns this, and [`build_plan`] panics with its `Display`.
+///
+/// **The two shapes are not yet equivalent** — `try_build_plan` types four of
+/// the thirteen gates and then calls `build_plan`, which re-runs all thirteen as
+/// asserts. See its `# Honest scope`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PlanError {
@@ -356,13 +360,34 @@ impl std::error::Error for PlanError {}
 ///
 /// # Honest scope
 ///
-/// This types the **op/dtype admissibility** gates — the ones a caller can trip
-/// by requesting a cell, and the ones the JIT's old pre-screen mirrored. The
-/// remaining `build_plan` gates are *structural* invariants about how an `OpDef`
-/// was constructed (operand arity, view validity, multi-output shape), and those
-/// still panic on purpose: the JIT builds its `OpDef` itself via `region_to_op`,
-/// which already validates the region and returns `Result`, so reaching one of
-/// those means a bug in the construction rather than an unserveable request.
+/// This types **four** of the thirteen gates: the op/dtype admissibility ones a
+/// caller can trip by requesting a cell, and the ones the JIT's old pre-screen
+/// mirrored. It then calls [`build_plan`], which **re-runs all thirteen as
+/// asserts** — so a rejection outside those four still panics, from inside a
+/// function whose name says otherwise.
+///
+/// The intended line is that the remaining gates are *structural* invariants
+/// about how an `OpDef` was constructed (operand arity, view validity,
+/// multi-output shape), which panic on purpose: the JIT builds its `OpDef`
+/// itself via `region_to_op`, which already validates the region and returns
+/// `Result`, so reaching one means a bug in construction rather than an
+/// unserveable request.
+///
+/// # Two gates are on the wrong side of that line, measured
+///
+/// `tests/adversarial_input_panic_census.rs` feeds 1280 `(OpDef,
+/// structure_key)` pairs through the emitter. Seven of the nine untyped gates
+/// never fire — the classification holds for them. **Two do:**
+///
+/// - `assert_coord_admissibility` — `coord(1)` at `i32`, or a coordinate whose
+///   axis exceeds the cell rank. A caller trips this by *requesting a cell*, not
+///   by mis-constructing an op.
+/// - the RowReduce validator — likewise reachable from an ordinary request.
+///
+/// Both are op/dtype admissibility wearing a structural gate's clothes, and both
+/// are KISS-EMIT §6.8-0004 violations when reached through [`crate::try_generate`].
+/// They gain `check_*` twins in 0.6.0; until then this scope note is the honest
+/// description rather than the intended one.
 pub fn try_build_plan<'a>(
     op: &'a OpDef,
     key: &'a StructureKey,

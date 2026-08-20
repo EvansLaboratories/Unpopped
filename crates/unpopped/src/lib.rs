@@ -165,9 +165,13 @@ pub fn generate(op: &OpDef, key: &StructureKey, backend: &dyn Backend) -> Genera
 ///
 /// Returns [`backend::LowerError`] when the backend has no lowering for this
 /// plan. Note this does **not** cover plan construction: an op/dtype combination
-/// the plan gate rejects panics inside [`build_plan`]. Use
-/// [`plan::try_build_plan`] with [`Backend::lower`] directly when both refusals
-/// must be typed.
+/// the plan gate rejects panics inside [`build_plan`].
+///
+/// [`plan::try_build_plan`] with [`Backend::lower`] gets you **closer, not all
+/// the way** — read its `# Honest scope` before relying on it. It types four of
+/// the thirteen gates and then calls [`build_plan`], which re-asserts all
+/// thirteen; two of the untyped nine are caller-trippable and measured as such.
+/// Full typing of both refusals lands in 0.6.0.
 pub fn try_generate(
     op: &OpDef,
     key: &StructureKey,
