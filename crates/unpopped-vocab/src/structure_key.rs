@@ -27,9 +27,15 @@
 //! for follow-ups and are called out at their use sites:
 //!
 //! - **Reduction keying** ([`StructureKey::reduce_axes`] is always empty here).
-//! - **Quant-aware keying** ([`OperandDesc::quant`] is carried so Fuel can bind
-//!   the interface, but v1 does not fold it into the key — quant operands are
-//!   out of scope until the quant pilot).
+//! - **Quant-aware keying** — *no longer a gap of this kind, and the bullet
+//!   that used to sit here described a field that has been removed.* sk4 §3.2
+//!   settles a block's shared scale as a **sibling operand** rather than a
+//!   field on the operand it scales, so it reaches the key through the operand
+//!   list like any other operand (see [`OperandDesc`]). The residual limit is
+//!   bucket saturation, not the model: divisibility saturates at `d16` and
+//!   vector width at `v8`, so any two block counts ≥ 16 derive the same token
+//!   while smaller ones genuinely differ — measured in
+//!   `tests/scale_sibling_model.rs`.
 //! - **Full canonicalization** (size-1 squeeze is applied; adjacent-contiguous
 //!   merge feeds the effective rank; legality-aware axis *reordering*
 //!   to maximize cell-merging is a follow-up).
@@ -320,7 +326,7 @@ impl LayoutOrder {
 /// additive like `batch`: an identity order serializes byte-identically to
 /// the pre-order codec, so only a transposed/permuted operand adds a token
 /// component. `derive_contraction` derives real (possibly non-identity)
-/// values via [`classify_mat_layout`] — a packed transpose/permutation of
+/// values via `classify_mat_layout` — a packed transpose/permutation of
 /// lhs/rhs is accepted (sub-spec A); a genuinely non-packed operand still
 /// declines the whole cell to `None` (sub-spec D).
 /// # Reserved for growth
@@ -365,7 +371,7 @@ pub struct ContractionKey {
     /// rides [`ContractionKey::mp`]).
     pub wdt: ElementKind,
     /// Accumulator / compute dtype (D5's key half). Derived by the canonical
-    /// accumulator lattice ([`contraction_acc`]); the cell's contract MUST
+    /// accumulator lattice (`contraction_acc`); the cell's contract MUST
     /// declare the same dtype as `accumulation_type` (KISS-Contract §6.8 pin).
     pub acc: ElementKind,
     /// Output operand dtype (Fuel #22) — canonical (never `F32Strict`).
@@ -454,7 +460,7 @@ impl ContractionKey {
 /// slot the contraction group occupies for `gem`, and a cell carries **at most
 /// one** precision field — the two never coexist. That is what makes the
 /// nine-or-ten-field decode unambiguous: the tenth field is resolved by the
-/// op-family code, never by counting fields. See [`carries_contraction_field`].
+/// op-family code, never by counting fields. See `carries_contraction_field`.
 ///
 /// # Why this exists
 ///
@@ -504,7 +510,7 @@ impl AccMp {
     /// otherwise (not `-`, not empty); and never emitted all-default, which is a
     /// forbidden redundant emission that a decoder MUST reject.
     ///
-    /// `compute` is folded through [`canonical_dtype`] first, so an `F32Strict`
+    /// `compute` is folded through `canonical_dtype` first, so an `F32Strict`
     /// compute dtype compares against the `F32` its token actually spells — an
     /// `f32` accumulator on an `F32Strict` cell is *not* a deviation, and
     /// claiming otherwise would emit a field that says nothing.
@@ -631,7 +637,7 @@ pub struct StructureKey {
     /// `None` on a `gem` cell (which carries [`StructureKey::contraction`]
     /// instead) and on any cell whose accumulator and math-precision both sit at
     /// their defaults. The two precision fields never coexist — see
-    /// [`carries_contraction_field`].
+    /// `carries_contraction_field`.
     ///
     /// A `None` here serializes byte-identically to the pre-sk4 codec (modulo
     /// the §6.1 dtype renames), so the sk4 regen diff is exactly the cells whose

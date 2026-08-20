@@ -28,7 +28,7 @@
 //! matching requirement: per FKC rev-4 §3a.2a Fuel canonicalizes *both* the
 //! imported pattern and the user graph into one order before matching, so any
 //! single emitted ordering matches regardless. The ordering key here
-//! ([`canonicalize`]'s `sig`) is Baracuda-internal and need not equal Fuel's.
+//! (`canonicalize`'s `sig`) is Baracuda-internal and need not equal Fuel's.
 
 use crate::ir::{Access, BinaryOp, OpDef, ScalarExpr, UnaryOp};
 use std::collections::BTreeSet;

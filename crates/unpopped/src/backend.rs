@@ -448,12 +448,10 @@ impl From<Decline> for LowerError {
             Decline::UnsupportedOp { op, why } => LowerError::UnsupportedOp {
                 detail: format!("{op:?}: {why}"),
             },
-            Decline::UnsupportedDtypeForOp { op, dtype, why } => {
-                LowerError::UnsupportedDtype {
-                    dtype,
-                    detail: format!("{op:?}: {why}"),
-                }
-            }
+            Decline::UnsupportedDtypeForOp { op, dtype, why } => LowerError::UnsupportedDtype {
+                dtype,
+                detail: format!("{op:?}: {why}"),
+            },
             Decline::NotExpressible { why } => LowerError::UnsupportedOp {
                 detail: format!("not expressible in this target language: {why}"),
             },
@@ -627,7 +625,7 @@ pub struct Lowering<'a> {
     ///
     /// # Both walkers must honour it
     ///
-    /// [`lower_expr`] and [`lower_node`] lower the same four nodes, and every
+    /// [`lower_expr`] and `lower_node` lower the same four nodes, and every
     /// real emitter goes through `lower_node` (via [`lower_dag`]) — `lower_expr`
     /// is the simple path. Wiring this seam into `lower_expr` alone left the
     /// production path spelling `(a * b)` on a struct, which C rejects. Anything
@@ -771,7 +769,10 @@ impl<'a> LoweringBuilder<'a> {
     }
     /// Ternary select spelling ([`ScalarExpr::Select`]).
     #[must_use]
-    pub fn select(mut self, f: &'a dyn Fn(String, String, String) -> Result<Spelling, LowerError>) -> Self {
+    pub fn select(
+        mut self,
+        f: &'a dyn Fn(String, String, String) -> Result<Spelling, LowerError>,
+    ) -> Self {
         self.inner.select = f;
         self
     }
@@ -792,7 +793,10 @@ impl<'a> LoweringBuilder<'a> {
     /// wrote the struct literal directly. It surfaced the moment they moved out —
     /// as a compile error, immediately, which is the argument for the move.
     #[must_use]
-    pub fn arith(mut self, f: &'a dyn Fn(ArithOp, String, String) -> Result<Spelling, LowerError>) -> Self {
+    pub fn arith(
+        mut self,
+        f: &'a dyn Fn(ArithOp, String, String) -> Result<Spelling, LowerError>,
+    ) -> Self {
         self.inner.arith = f;
         self
     }

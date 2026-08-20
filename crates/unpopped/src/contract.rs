@@ -60,7 +60,7 @@ fn fkc_backend_token(backend: &str) -> &str {
 /// `ImplId.kernel_revision_hash` base). Carries `seam_profiles: [1]` so an
 /// importer can reject a contract outside the negotiated seam profile (§3.5).
 /// The `backend` token is canonicalized to Fuel's capitalized spelling via
-/// [`fkc_backend_token`] (`"cuda"` → `Cuda`).
+/// `fkc_backend_token` (`"cuda"` → `Cuda`).
 #[must_use]
 pub fn front_matter(provider: &str, backend_name: &str, revision_base: &str) -> String {
     let backend = fkc_backend_token(backend_name);
@@ -157,7 +157,7 @@ pub fn bundle(
 /// against a pre-recipe-import peer, a fused contract with no Fuel FusedOp is
 /// withheld; once Baracuda emits the recipe AND the peer advertises recipe-import
 /// (`SEAM_CAP_RECIPE_IMPORT`), that withhold retires — no code change here, only
-/// [`contract_carries_recipe`] becoming real. The KISC header-line and bundle
+/// `contract_carries_recipe` becoming real. The KISC header-line and bundle
 /// structure are PROVISIONAL (see [`crate::kisc`]).
 #[must_use]
 pub fn bundle_kisc(
@@ -1267,7 +1267,7 @@ fn count_flops(e: &ScalarExpr) -> u32 {
 ///
 /// # KNOWN LIMIT: these are CUDA's numbers, and this function is neutral
 ///
-/// [`unary_ulp`] and [`binary_ulp`] are documented as *"Per-op **CUDA** f32 ULP
+/// `unary_ulp` and `binary_ulp` are documented as *"Per-op **CUDA** f32 ULP
 /// error"*, and nothing in this chain takes a backend or a target — even though
 /// [`contract`] is handed a `&dyn Backend` and could ask. So every precision
 /// claim this crate makes is CUDA's, for every backend: the emitted contract's

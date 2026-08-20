@@ -1003,12 +1003,12 @@ fn kbest_table(eg: &EGraph, k: usize) -> HashMap<Id, Vec<KCand>> {
 ///
 /// `optimize_top_k(e, 1) == [optimize(e)]` and, for every `k ≥ 1`, `form[0]` is
 /// **bit-identical** to [`optimize`]`(e)` — guaranteed *by construction* here
-/// (form[0] is literally `optimize(e)`), never inferred from a second
+/// (`form[0]` is literally `optimize(e)`), never inferred from a second
 /// reconstruction path. This is the load-bearing pin: a k-best that silently
 /// changed the k==1 winner would alter every JIT-selected default form.
 ///
 /// `form[1..]` are the next-cheapest structurally-distinct equivalents drawn from
-/// the [`kbest_table`], deduped against `form[0]` and never cheaper than it, so
+/// the `kbest_table`, deduped against `form[0]` and never cheaper than it, so
 /// the whole list is in non-decreasing cost order — this holds even on a
 /// pathological cyclic body where `optimize` returns a non-minimal head (see the
 /// body comment). [`ScalarExpr::Reduced`] is an opaque leaf with no rule, so a per-row reduced

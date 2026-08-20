@@ -4,7 +4,8 @@
 //! Rust static — the exact discipline as [`crate::link::emit_link_registry`]:
 //! sorted by token, deduped, `@generated`, human-diffable, closes cleanly. The
 //! sys/plan crate `include!`s it and, at dispatch, computes the live
-//! [`StructureKey`], projects to [`StructureKey::to_token`], and looks up the
+//! [`StructureKey`](unpopped_vocab::StructureKey), projects to
+//! [`to_token`](unpopped_vocab::StructureKey::to_token), and looks up the
 //! route.
 //!
 //! The committed row is the **routing projection**

@@ -39,6 +39,19 @@ missing_docs = "deny"
 missing_debug_implementations = "warn"
 unreachable_pub = "warn"
 
+# Doc links are part of the published artifact: a broken one renders as plain
+# text on docs.rs, and a link into a private item renders as nothing at all.
+# Both were live here — 27 of them across three crates, including a module
+# header that documented an `OperandDesc::quant` field removed a release
+# earlier. Nothing had failed, because nothing ran `cargo doc`.
+#
+# Denied rather than warned so the next one stops a build instead of joining a
+# pile nobody reads. Note the reach: this fires for whoever runs `cargo doc`,
+# and there is no CI in this repo to run it for them.
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
+
 [workspace.lints.clippy]
 # Pragmatic clippy posture: warn loud, but no draconian style enforcement.
 all = { level = "warn", priority = -1 }

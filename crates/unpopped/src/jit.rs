@@ -11,8 +11,8 @@
 //! [`derive_pattern`] emits — read in reverse), the operand projection that keys
 //! the schedule, and a target. [`synthesize`] turns it into a [`JitResponse`] =
 //! `(kernel + FKC contract + recipe + link row)`, the §5 shape. The heavy lifting
-//! reuses the AOT generator ([`generate`], [`contract`], [`derive_pattern`]); the
-//! only new step is [`region_to_op`] (region → op IR) and the on-demand
+//! reuses the AOT generator ([`crate::generate`], [`contract`], [`derive_pattern`]); the
+//! only new step is `region_to_op` (region → op IR) and the on-demand
 //! [`Compiler`] seam.
 //!
 //! # Scope (increment 1)
@@ -31,9 +31,7 @@ use crate::ir::{Access, BinaryOp, OpDef, ScalarExpr, UnaryOp};
 use crate::link::{LinkEntry, link_entry};
 use crate::optimize::optimize;
 use crate::pattern::{PatternError, PatternNode, derive_pattern, to_fkc};
-use unpopped_vocab::{
-    ElementKind, MAX_OPERANDS, OpCategory, OperandDesc, TargetId, structure_key,
-};
+use unpopped_vocab::{ElementKind, MAX_OPERANDS, OpCategory, OperandDesc, TargetId, structure_key};
 
 /// A JIT synthesis request from Fuel (the strategist).
 #[derive(Clone, Debug)]
@@ -41,7 +39,7 @@ pub struct JitRequest {
     /// The primitive subgraph to fuse — a graph-`Op` tree rooted at the sink,
     /// with `bind` leaves for the region's inputs (the §4.1 vocabulary; the same
     /// node shape [`derive_pattern`] produces). Per-node `consumers`/`extract`
-    /// are ignored — [`region_to_op`] regenerates them (see its docs).
+    /// are ignored — `region_to_op` regenerates them (see its docs).
     pub region: PatternNode,
     /// Region input count; `bind` indices must be exactly `[0, n_inputs)`, and
     /// [`Self::operands`] must hold exactly `n_inputs + 1` entries.
@@ -50,7 +48,7 @@ pub struct JitRequest {
     /// choose (strategist); the synthesizer does not second-guess it.
     pub op_category: OpCategory,
     /// Operand descriptors (inputs then output) — Fuel's `FdxOperandDesc`
-    /// projection, the input to [`structure_key`]. Increment 1 requires a single
+    /// projection, the input to [`fn@structure_key`]. Increment 1 requires a single
     /// shared dtype across all operands.
     pub operands: Vec<OperandDesc>,
     /// The target this request is keyed to — a KISS §6.8

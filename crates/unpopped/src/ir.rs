@@ -595,7 +595,7 @@ impl DagNode {
 ///    This type carries only notion (1).
 ///
 /// `Const` is interned by `f64::to_bits()` (NaN-safe by bits), mirroring the
-/// e-graph in [`crate::optimize`]. A `Reduced`/`Param` leaf interns once but is
+/// e-graph in [`mod@crate::optimize`]. A `Reduced`/`Param` leaf interns once but is
 /// never merged with a structurally different node, so the RowReduce per-row-leaf
 /// invariant holds for free (a leaf has no children to fold across rows).
 #[derive(Clone, Debug)]
@@ -636,7 +636,7 @@ impl ExprDag {
     /// ([`OpDef::elementwise_multi`]). Returns the roots in body order via
     /// [`Self::roots`]; `root()` is `roots[0]` (output 0) for API compatibility.
     ///
-    /// Order-of-composition note (pinned): the optimizer ([`crate::optimize`])
+    /// Order-of-composition note (pinned): the optimizer ([`mod@crate::optimize`])
     /// simplifies a single `ScalarExpr`, so a multi-output op is optimized
     /// **per body first, THEN interned here** — the interning is what preserves the
     /// cross-body sharing, and running it after per-body optimization keeps both

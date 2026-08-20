@@ -13,7 +13,7 @@
 //!   [`EpilogueKind`], [`ActivationKind`], [`OpCategory`], [`BackendKind`], the
 //!   op-family discriminants in [`ops`], …).
 //! - The structure-key vocabulary ([`StructureKey`], [`OperandDesc`],
-//!   [`structure_key`], the per-operand axes) — the classifier INPUT both
+//!   [`fn@structure_key`], the per-operand axes) — the classifier INPUT both
 //!   Baracuda and Fuel key on.
 //! - The dispatch-table types ([`DispatchTable`], [`DispatchEntry`],
 //!   [`Implementor`], [`Provenance`], …) and the plan descriptors

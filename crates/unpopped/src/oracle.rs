@@ -64,7 +64,7 @@
 //!
 //! Stated as scope rather than as a TODO list, because this list had gone stale
 //! in the direction that matters: it claimed `Access::Contraction` was deferred
-//! long after [`eval_contraction`] shipped and `evaluate` began dispatching it.
+//! long after `eval_contraction` shipped and `evaluate` began dispatching it.
 //! A reader trusting it would conclude matmul results were unvalidated and skip
 //! writing the differential test that already works. An over-cautious scope note
 //! is not harmless — it suppresses testing.
@@ -77,7 +77,7 @@
 //!   is checkable at all, so it needs a different notion of "correct" rather
 //!   than more of this module.
 //!
-//! **`Access::Contraction` IS covered** ([`eval_contraction`], dispatched by
+//! **`Access::Contraction` IS covered** (`eval_contraction`, dispatched by
 //! [`evaluate`]) — rank-2 and batched rank-3, transposed / permuted / broadcast
 //! operands, the `Reduced(0)` epilogue and the fused per-column bias.
 //!

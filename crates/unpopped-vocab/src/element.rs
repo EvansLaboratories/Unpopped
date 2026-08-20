@@ -1092,7 +1092,7 @@ pub enum ElementKind {
     /// able to tell "you are newer than me" from "we agree, and this is
     /// parked".
     ///
-    /// It is byte-incompatible with [`Fp8E4M3FN`](Self::Fp8E4M3) — same width,
+    /// It is byte-incompatible with [`Fp8E4M3FN`](Self::Fp8E4M3FN) — same width,
     /// different bias and no infinities — so the two MUST NOT share a token
     /// and MUST NOT be substituted for one another.
     ///
@@ -1285,7 +1285,7 @@ pub enum MathPrecision {
     /// and the epilogue cast saturates to the E4M3 max-finite (±448).
     Fp8E4M3FN,
     /// FP8 E5M2 multiply-add. Same instruction family as
-    /// [`Fp8E4M3FN`](Self::Fp8E4M3) but with the E5M2 encoding (wider
+    /// [`Fp8E4M3FN`](Self::Fp8E4M3FN) but with the E5M2 encoding (wider
     /// exponent, narrower mantissa).
     Fp8E5M2,
     /// 4-bit integer multiply-add (`mma.sync m16n8k64` int4 variant)

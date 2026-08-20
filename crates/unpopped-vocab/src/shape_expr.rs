@@ -4,7 +4,7 @@
 //! as its companion: a symbolic function from operand shapes (plus OpAttrs and
 //! params) to the output shape. This module is the closed vocabulary, its
 //! evaluator, and its canonical byte codec — pure data, driver-free, and a
-//! sibling of [`crate::structure_key`] (the other pinned KISS wire codec).
+//! sibling of [`mod@crate::structure_key`] (the other pinned KISS wire codec).
 //!
 //! **Reserved constructors.** `Reduce` (0x09), `WithDim` (0x0A) and `Dims`
 //! (0x0B) are reserved at this vocabulary version (§6.20-0002): they enter

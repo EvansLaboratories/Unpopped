@@ -231,7 +231,7 @@ pub struct KernelPlan<'a> {
     /// emission (the stride-index remap in `cuda::offset_expr`); `Identity` /
     /// same-rank `Reshape` read at the iteration coordinate, and `Broadcast` is a
     /// key-driven validation-only declaration in v1. Validated at the top of
-    /// [`build_plan`] ([`assert_valid_views`]) with an independent emitter backstop
+    /// [`build_plan`] (`assert_valid_views`) with an independent emitter backstop
     /// in [`Backend::lower`](crate::backend::Backend::lower).
     pub views: &'a [crate::ir::View],
     /// Per-input **data-dependent read roles** ([`crate::ir::ReadIndex`], increment
@@ -241,7 +241,7 @@ pub struct KernelPlan<'a> {
     /// [`crate::ir::ReadIndex::Indexed`] entry changes emission (the axis
     /// value-substitution in `cuda::emit_strided`); `Direct` reads at the
     /// iteration coordinate. Validated at the top of [`build_plan`]
-    /// ([`assert_valid_gather`]) with an independent emitter backstop in
+    /// (`assert_valid_gather`) with an independent emitter backstop in
     /// [`Backend::lower`](crate::backend::Backend::lower).
     pub read_index: &'a [crate::ir::ReadIndex],
     /// The output's **data-dependent write role** ([`crate::ir::WriteIndex`],
@@ -250,7 +250,7 @@ pub struct KernelPlan<'a> {
     /// output offset); a [`crate::ir::WriteIndex::ScatterIndexed`] role
     /// substitutes a runtime index value for one OUTPUT-axis coordinate and turns
     /// the store into a [`crate::ir::WriteCombine`] op. Validated at the top of
-    /// [`build_plan`] ([`assert_valid_scatter`]) with an independent emitter
+    /// [`build_plan`] (`assert_valid_scatter`) with an independent emitter
     /// backstop in [`Backend::lower`](crate::backend::Backend::lower).
     pub write_index: &'a crate::ir::WriteIndex,
     /// Per-input **runtime base element offsets** ([`crate::ir::BaseOffset`], the
@@ -261,7 +261,7 @@ pub struct KernelPlan<'a> {
     /// (a `long long off{i}` launch arg bumped onto the operand base at kernel
     /// entry). Presence forces [`Schedule::Strided`] (a runtime offset invalidates
     /// the keyed alignment fact the vectorized path relies on). Validated at the top
-    /// of [`build_plan`] ([`assert_valid_offsets`]) with an independent emitter
+    /// of [`build_plan`] (`assert_valid_offsets`) with an independent emitter
     /// backstop in the backend.
     pub base_offsets: &'a [BaseOffset],
     /// The **single output's** runtime base element offset
@@ -826,7 +826,7 @@ pub enum RrRole {
 /// Classify a RowReduce input by its broadcast mask, given the feature axis
 /// `last` (`rank-1`). **Total / non-panicking** — the emitter calls this for the
 /// load index and must never crash; all *rejection* of malformed shapes lives in
-/// [`validate_row_reduce`] (one source of truth, no drift). The three-way split:
+/// `validate_row_reduce` (one source of truth, no drift). The three-way split:
 ///
 /// - empty bcast ⇒ [`RrRole::RowStreamed`] (the reduced/streamed tensor);
 /// - `last` axis broadcast ⇒ [`RrRole::RowScalar`] (constant along the feature

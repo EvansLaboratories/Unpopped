@@ -390,7 +390,6 @@ fn recognition_exceeds_lowering_and_the_gap_is_named() {
     );
 }
 
-
 /// **Every backend either emits a real store or returns a typed decline — never a
 /// panic, never an empty body.**
 ///
@@ -600,8 +599,9 @@ fn an_op_level_refusal_is_a_typed_decline_not_a_panic() {
     let d = scalar_shape(dt);
     let key = structure_key(OpCategory::BinaryElementwise, &[d, d, d], ArchSku::Sm89);
 
-    let outcome =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| try_generate(&op, &key, &Slang)));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        try_generate(&op, &key, &Slang)
+    }));
 
     let result = outcome.expect(
         "an op-level refusal must NOT unwind. This is KISS-EMIT-6.8-0004: an emitter          must not panic on any input, and an op it does not spell IS input.",

@@ -20,7 +20,7 @@
 //! [`unpopped::backend::const_lit`] (`NAN`/`INFINITY`/decimal — already valid C, and
 //! `<math.h>` supplies the two macros). The ONLY CUDA-specific unary atom is
 //! `rsqrt` (a CUDA intrinsic, `rsqrtf`/`rsqrt`); the CpuC unary twin
-//! ([`unary_f32_cpu`]/[`unary_f64_cpu`]) reuses [`unpopped::cfamily::unary_f32`] /
+//! (`unary_f32_cpu`/`unary_f64_cpu`) reuses [`unpopped::cfamily::unary_f32`] /
 //! [`unpopped::cfamily::unary_f64`] for EVERY other op and overrides only `Rsqrt` to
 //! `1.0f/sqrtf(x)` (f64: `1.0/sqrt(x)`). Because the reused CUDA fns are promoted
 //! `pub(crate)` with their bodies untouched, every CUDA golden stays
@@ -40,7 +40,10 @@
 //!   scatter/offset/coord-free Elementwise cell, accepting only it inherently
 //!   excludes every complex case.
 
-use unpopped::backend::{Spelling, DeclinedOp, Decline, Backend, GeneratedKernel, LowerError, Lowering, const_lit, lower_dag};
+use unpopped::backend::{
+    Backend, Decline, DeclinedOp, GeneratedKernel, LowerError, Lowering, Spelling, const_lit,
+    lower_dag,
+};
 use unpopped::cfamily::{
     assert_no_int_div_or_const, binary_f32, binary_f64, binary_int, complex_arith, complex_helpers,
     dtype_tag, fp8_helpers, narrow_load_fn, out_ctype_of, param_args, param_ctype,
@@ -333,11 +336,13 @@ fn cpu_unary(op: UnaryOp, x: String, dtype: ElementKind) -> Result<Spelling, Low
         | ElementKind::Fp8E4M3FN
         | ElementKind::Fp8E5M2 => unary_f32_cpu(op, x),
         ElementKind::F64 => unary_f64_cpu(op, x),
-        _ => return Ok(Spelling::Declined(Decline::UnsupportedDtypeForOp {
-            op: DeclinedOp::Unary(op),
-            dtype,
-            why: "no lowering at this dtype in cpu_c v1".to_string(),
-        })),
+        _ => {
+            return Ok(Spelling::Declined(Decline::UnsupportedDtypeForOp {
+                op: DeclinedOp::Unary(op),
+                dtype,
+                why: "no lowering at this dtype in cpu_c v1".to_string(),
+            }));
+        }
     };
     Ok(Spelling::Spelled(spelled))
 }
@@ -402,11 +407,13 @@ fn cpu_binary(
         | ElementKind::I4
         | ElementKind::U4
         | ElementKind::B1 => binary_int(op, a, b, dtype),
-        _ => return Ok(Spelling::Declined(Decline::UnsupportedDtypeForOp {
-            op: DeclinedOp::Binary(op),
-            dtype,
-            why: "no lowering at this dtype in cpu_c v1".to_string(),
-        })),
+        _ => {
+            return Ok(Spelling::Declined(Decline::UnsupportedDtypeForOp {
+                op: DeclinedOp::Binary(op),
+                dtype,
+                why: "no lowering at this dtype in cpu_c v1".to_string(),
+            }));
+        }
     };
     Ok(Spelling::Spelled(spelled))
 }
@@ -415,20 +422,17 @@ fn cpu_binary(
 /// identity-cast-pinned C ternary spellers ([`select_f32`]/[`select_f64`]), which
 /// are portable C as-is. v1 select is float-only (an int select raises the
 /// unresolved cond-observer question), so an integer dtype backstop-panics.
-fn cpu_select(
-    c: String,
-    a: String,
-    b: String,
-    dtype: ElementKind,
-) -> Result<Spelling, LowerError> {
+fn cpu_select(c: String, a: String, b: String, dtype: ElementKind) -> Result<Spelling, LowerError> {
     let spelled = match dtype {
         ElementKind::F32 | ElementKind::F32Strict => select_f32(c, a, b),
         ElementKind::F64 => select_f64(c, a, b),
-        _ => return Ok(Spelling::Declined(Decline::UnsupportedDtypeForOp {
-            op: DeclinedOp::Select,
-            dtype,
-            why: "no lowering at this dtype in cpu_c v1".to_string(),
-        })),
+        _ => {
+            return Ok(Spelling::Declined(Decline::UnsupportedDtypeForOp {
+                op: DeclinedOp::Select,
+                dtype,
+                why: "no lowering at this dtype in cpu_c v1".to_string(),
+            }));
+        }
     };
     Ok(Spelling::Spelled(spelled))
 }
