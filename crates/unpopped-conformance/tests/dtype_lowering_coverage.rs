@@ -391,24 +391,30 @@ fn recognition_exceeds_lowering_and_the_gap_is_named() {
 }
 
 
-/// **Across the DTYPE axis, every backend either emits a real store or returns a
-/// typed decline — never a panic, never an empty body.**
+/// **Every backend either emits a real store or returns a typed decline — never a
+/// panic, never an empty body.**
 ///
-/// # The axis is in the name because it was not, and that misled a reader
+/// # The axis restriction is GONE, and the sequence is worth keeping
 ///
-/// This was `every_backend_emits_a_real_store_or_declines_and_never_panics`.
-/// **Baracuda caught that the name claimed more than the test checks**, while
-/// dev-depping these emitters for their three-way agreement suite.
+/// This was `..._and_never_panics`, and **Baracuda caught that the name claimed
+/// more than the test checked** while dev-depping these emitters. The loop
+/// iterates `ElementKind::ALL` with a **fixed op**, so "never panics" was measured
+/// on the **dtype axis only** — on the **op** axis both emitters panicked
+/// deliberately, a known `KISS-EMIT-6.8-0004` divergence.
 ///
-/// The loop below iterates `ElementKind::ALL` with a **fixed op**. So "never
-/// panics" is measured on the **dtype axis only**. On the **op** axis both
-/// emitters panic deliberately, which is a known `KISS-EMIT-6.8-0004` divergence
-/// pinned by `the_op_axis_still_panics_and_that_is_a_known_6_8_0004_divergence`
-/// at the end of this file.
+/// Rather than rename around that, the gap was **pinned as an inequality**: a test
+/// asserting the op-axis panic *existed*, so that the day it became a typed
+/// decline the test would fail and force a deliberate deletion.
 ///
-/// A name describing more than it checks is the same defect class this file's
-/// other tests exist to catch — found here by an external consumer rather than
-/// by me, which is the honest provenance.
+/// **It fired.** `Lowering` now returns `Result<Spelling, LowerError>`, the
+/// emitters have **zero** `panic!` between them, and the pin failed with its own
+/// instruction to delete itself and widen this note. So the axis qualifier is
+/// removed here because the restriction no longer exists — not because anyone
+/// remembered to check.
+///
+/// That is the whole argument for pinning a gap rather than documenting it: a gap
+/// nothing asserts is a gap nobody notices closing, and this one would otherwise
+/// have left a stale axis-note describing a restriction that had been lifted.
 ///
 /// # What this recovers, and what it deliberately does not
 ///
@@ -457,7 +463,7 @@ fn recognition_exceeds_lowering_and_the_gap_is_named() {
 /// So a backend has a *set* of store spellings, not one. Asserting a single form
 /// would have made this test wrong for four dtypes while looking rigorous.
 #[test]
-fn every_backend_emits_a_real_store_or_declines_typed_across_the_dtype_axis() {
+fn every_backend_emits_a_real_store_or_declines_typed_and_never_panics() {
     // Same probe-op choice as `lowers`: `bool` admits the logical ops, not `Add`
     // (its ops normalize to 0/1, so `true + true` is not a value of the dtype).
     fn probe(dt: ElementKind) -> OpDef {
@@ -540,53 +546,50 @@ fn every_backend_emits_a_real_store_or_declines_typed_across_the_dtype_axis() {
     println!("emitted with a real store: {emitted}   typed declines: {declined}");
 }
 
-/// **The op axis is NOT covered by the test above, and both emitters panic on it
-/// by design. Pinned so the gap is measured rather than merely unnamed.**
+/// **An op-level refusal is now a MATCHABLE value naming the op it refused.**
 ///
-/// # Why this exists
+/// This is what the `Lowering`-returns-`Result` change bought, and it is worth a
+/// test of its own because the previous shape — a `panic!` — was satisfiable by
+/// any unrelated crash.
 ///
-/// The sibling test was originally called
-/// `every_backend_emits_a_real_store_or_declines_and_never_panics`. **Baracuda
-/// caught that the name claimed more than the test checks**, while dev-depping
-/// these emitters for their three-way agreement suite.
+/// # The bar this had to clear
 ///
-/// It iterates `ElementKind::ALL` with a **fixed op** (`add`, or `and` at `bool`).
-/// So "never panics" is measured **on the dtype axis only**. On the **op** axis
-/// both emitters panic deliberately — `unpopped-slang` on `Copysign`/`Nextafter`
-/// and on int-only ops at float dtypes, `unpopped-cpu-c` on unary/select at
-/// integer dtypes. A reader took the name as a total guarantee; it was an
-/// axis-scoped one. Renamed, and the axis is now in the name.
+/// Baracuda's cross-backend suite asserts *"Slang declines `Copysign`"* by
+/// inspecting a **panic payload**, precisely so an unrelated panic could not
+/// satisfy it. The transition to a typed value had to make that discrimination
+/// **stronger, not weaker** — otherwise their test would have degraded at exactly
+/// the moment this API improved.
 ///
-/// # The gap is real, not just misnamed
+/// `matches!(d, Decline::UnsupportedOp { op: DeclinedOp::Binary(Copysign), .. })` is
+/// structurally unsatisfiable by an unrelated failure, where a payload substring
+/// is not. That is the bar cleared.
 ///
-/// **`KISS-EMIT-6.8-0004` requires an emitter never to panic on *any* input** —
-/// it must return the typed decline instead. An op-level `panic!` is a divergence
-/// from that clause, in this project's own reference emitters, on a clause this
-/// project holds the pen on.
+/// # Scope limit, stated because it changes what this test can prove
 ///
-/// It is **not** closable here. The `Lowering` seams return bare `String`, so a
-/// spelling function has no way to decline; making them return `Result` is a
-/// breaking change to a type peer backends implement, and is pending a decision.
-/// Until then the honest position is: **the dtype axis returns typed declines, the
-/// op axis panics, and the difference is a known divergence rather than a
-/// distinction the design intends.**
+/// **That matchable form lives at the SEAM, and the seam is not reachable from
+/// here.** An emitter builds its `Lowering` internally, so from outside the crate
+/// the observable property is the weaker one: an op-level refusal is a **typed
+/// `Err`** rather than a panic. That is what this test asserts, and it deliberately
+/// checks the *variant* rather than only the message.
 ///
-/// # What this pins, and why it is written as an inequality
+/// The stronger property is real but is exercised by a **backend author**, who
+/// constructs the seam and matches on `Decline` directly — which is precisely
+/// Baracuda's position. Asserting more than this from here would be claiming a
+/// reach the test does not have.
 ///
-/// It asserts the op-axis panic **exists**, so that the day it becomes a typed
-/// decline this test fails and someone deletes it deliberately. A gap nothing
-/// asserts is a gap nobody notices closing — and a silently-closed gap leaves the
-/// sibling test's axis limit documented for a restriction that no longer applies.
+/// # Why the decline is a success value
 ///
-/// Baracuda independently reached the same disposition from the other side: their
-/// decline test asserts the panic via `catch_unwind` with a site comment that a
-/// typed `Err` upstream is *an improvement to fix forward, not a regression*.
+/// Note the shape: `Ok(Spelling::Declined(..))`, not `Err(..)`. Owed to Vulkane —
+/// with a single error type, `let s = spell(..)?;` compiles, reads naturally, and
+/// **silently converts a decline into a propagated failure**. Making a decline a
+/// success value means `?` propagates only real failures and a decline *forces* a
+/// match. The lazy path is the correct one, which matters because the lazy path is
+/// the one that ships.
 #[test]
-fn the_op_axis_still_panics_and_that_is_a_known_6_8_0004_divergence() {
+fn an_op_level_refusal_is_a_typed_decline_not_a_panic() {
+    use unpopped::backend::LowerError;
     use unpopped::ir::BinaryOp;
 
-    // Slang refuses Copysign by design. Same shape as CpuC's unary/select refusals
-    // at integer dtypes; one instance is enough to pin the class.
     let dt = ElementKind::F32;
     let op = OpDef::elementwise(
         "copysign",
@@ -597,16 +600,27 @@ fn the_op_axis_still_panics_and_that_is_a_known_6_8_0004_divergence() {
     let d = scalar_shape(dt);
     let key = structure_key(OpCategory::BinaryElementwise, &[d, d, d], ArchSku::Sm89);
 
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        try_generate(&op, &key, &Slang)
-    }));
+    let outcome =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| try_generate(&op, &key, &Slang)));
 
-    assert!(
-        outcome.is_err(),
-        "unpopped-slang no longer panics on an op-level refusal. If it now returns a \
-         typed decline, that is KISS-EMIT-6.8-0004 being SATISFIED and is an \
-         improvement -- delete this test and narrow the axis note on \
-         `every_backend_emits_a_real_store_or_declines_typed_across_the_dtype_axis`, \
-         which currently documents a restriction that would no longer apply."
+    let result = outcome.expect(
+        "an op-level refusal must NOT unwind. This is KISS-EMIT-6.8-0004: an emitter          must not panic on any input, and an op it does not spell IS input.",
     );
+
+    match result {
+        Err(LowerError::UnsupportedOp { detail }) => {
+            assert!(
+                detail.contains("Copysign"),
+                "the decline must name what it refused; got: {detail}"
+            );
+        }
+        Err(other) => panic!(
+            "expected UnsupportedOp naming Copysign, got {other:?}. The variant is the              matchable part -- a consumer branching on WHY cannot use the message."
+        ),
+        Ok(k) => panic!(
+            "Slang emitted for Copysign, which it declines by design:
+{}",
+            k.source
+        ),
+    }
 }

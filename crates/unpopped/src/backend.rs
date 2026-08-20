@@ -594,22 +594,22 @@ pub trait Backend {
 #[non_exhaustive]
 pub struct Lowering<'a> {
     /// Operand-access spelling.
-    pub leaf: &'a dyn Fn(u8) -> String,
+    pub leaf: &'a dyn Fn(u8) -> Result<Spelling, LowerError>,
     /// Per-row reduced-scalar spelling ([`ScalarExpr::Reduced`]). Only the
     /// `RowReduce` emitter produces a body containing a `Reduced` leaf; every other
     /// emitter passes a closure that panics (its bodies never contain one).
-    pub reduced: &'a dyn Fn(u8) -> String,
+    pub reduced: &'a dyn Fn(u8) -> Result<Spelling, LowerError>,
     /// Output-coordinate spelling ([`ScalarExpr::Coord`], increment 0d): the
     /// per-axis coordinate of the output element, cast to the compute dtype
     /// (`(float)c{d}` in the CUDA strided emitter). Only the strided
     /// elementwise emitter materializes coordinates; every other emitter
     /// passes a panicking closure — the plan gate routes Coord bodies to
     /// `Schedule::Strided`, and those closures are the per-emitter backstop.
-    pub coord: &'a dyn Fn(u8) -> String,
+    pub coord: &'a dyn Fn(u8) -> Result<Spelling, LowerError>,
     /// Unary-op spelling.
-    pub unary: &'a dyn Fn(UnaryOp, String) -> String,
+    pub unary: &'a dyn Fn(UnaryOp, String) -> Result<Spelling, LowerError>,
     /// Binary-function-op spelling.
-    pub binary: &'a dyn Fn(BinaryOp, String, String) -> String,
+    pub binary: &'a dyn Fn(BinaryOp, String, String) -> Result<Spelling, LowerError>,
     /// Spelling for the four **infix arithmetic** nodes.
     ///
     /// Defaults to the C operator (`(a + b)`), which is right for every scalar
@@ -627,7 +627,7 @@ pub struct Lowering<'a> {
     /// are what notice when it is not: a unit test that greps the emitted source
     /// for a helper NAME matches the helper's own definition and passes while the
     /// body still says `*`.
-    pub arith: &'a dyn Fn(ArithOp, String, String) -> String,
+    pub arith: &'a dyn Fn(ArithOp, String, String) -> Result<Spelling, LowerError>,
     /// Ternary select spelling ([`ScalarExpr::Select`]) over the three
     /// already-lowered operand strings `(cond, a, b)`. Its own seam — the
     /// 2-operand `binary` closure cannot carry three operands, and the select
@@ -636,7 +636,7 @@ pub struct Lowering<'a> {
     /// `cuda::cuda_select`). Emitters whose bodies can never contain a Select
     /// (the packed f16/bf16 pair path — `body_packs` excludes it) pass a
     /// panicking closure, the `coord` precedent.
-    pub select: &'a dyn Fn(String, String, String) -> String,
+    pub select: &'a dyn Fn(String, String, String) -> Result<Spelling, LowerError>,
     /// Constant-literal spelling ([`ScalarExpr::Const`]).
     ///
     /// A seam rather than a fixed call to [`const_lit`] because the correct
@@ -653,7 +653,7 @@ pub struct Lowering<'a> {
     /// re-verified before the spelling changes.
     ///
     /// Backends capture the dtype the same way `unary`/`binary` do.
-    pub constant: &'a dyn Fn(f64) -> String,
+    pub constant: &'a dyn Fn(f64) -> Result<Spelling, LowerError>,
 }
 
 /// Defaults for the seams [`LoweringBuilder`] does not require.
@@ -664,38 +664,54 @@ pub struct Lowering<'a> {
 /// means a backend that never sees such a body writes nothing, while one that
 /// does still fails loudly instead of emitting something plausible.
 mod default_seam {
-    pub(super) static REDUCED: fn(u8) -> String = |i| {
-        panic!(
-            "Lowering: a Reduced({i}) leaf reached an emitter with no `reduced` seam. \
-             Only a row-reduction emitter produces such a body; either supply \
-             `.reduced(..)` or route this body to a reduction schedule."
-        )
+    use super::{ArithOp, Decline, DeclinedOp, LowerError, Spelling};
+
+    /// These three USED TO PANIC. They now return a typed decline, which is the
+    /// KISS-EMIT §6.8-0004 fix: an emitter must not panic on any input, and a
+    /// mis-routed body IS input.
+    ///
+    /// The reasoning that justified the panic is preserved and still true — a body
+    /// containing one of these leaves has been routed to an emitter that cannot
+    /// spell it, which is a plan-gate bug rather than a user error. **But "this is
+    /// a bug" and "abort the process" are different claims.** A typed decline is
+    /// strictly more informative than a panic: a caller can still treat it as
+    /// fatal, and one that would rather report it can now do so. The panic took
+    /// that choice away from every caller in order to make a point to one.
+    pub(super) static REDUCED: fn(u8) -> Result<Spelling, LowerError> = |i| {
+        Ok(Spelling::Declined(Decline::UnsupportedOp {
+            op: DeclinedOp::Access,
+            why: format!(
+                "a Reduced({i}) leaf reached an emitter with no `reduced` seam. Only a                  row-reduction emitter produces such a body; either supply                  `.reduced(..)` or route this body to a reduction schedule."
+            ),
+        }))
     };
-    pub(super) static COORD: fn(u8) -> String = |d| {
-        panic!(
-            "Lowering: a Coord({d}) leaf reached an emitter with no `coord` seam. \
-             Coord bodies lower via a strided schedule only (a linear-index loop has \
-             no per-axis coordinates); either supply `.coord(..)` or route this body \
-             to Schedule::Strided."
-        )
+    pub(super) static COORD: fn(u8) -> Result<Spelling, LowerError> = |d| {
+        Ok(Spelling::Declined(Decline::UnsupportedOp {
+            op: DeclinedOp::Access,
+            why: format!(
+                "a Coord({d}) leaf reached an emitter with no `coord` seam. Coord bodies                  lower via a strided schedule only (a linear-index loop has no per-axis                  coordinates); either supply `.coord(..)` or route this body to                  Schedule::Strided."
+            ),
+        }))
     };
-    pub(super) static SELECT: fn(String, String, String) -> String = |_c, _a, _b| {
-        panic!(
-            "Lowering: a Select leaf reached an emitter with no `select` seam. \
-             Select has its own bitwise contract (its arms must move raw bits and must \
-             never route through a promote-demote wrapper), which is why it is not \
-             expressible through the 2-operand `binary` seam. Supply `.select(..)`."
-        )
-    };
+    pub(super) static SELECT: fn(String, String, String) -> Result<Spelling, LowerError> =
+        |_c, _a, _b| {
+            Ok(Spelling::Declined(Decline::UnsupportedOp {
+                op: DeclinedOp::Select,
+                why: "a Select reached an emitter with no `select` seam. Select has its own                       bitwise contract (its arms must move raw bits and must never route                       through a promote-demote wrapper), which is why it is not expressible                       through the 2-operand `binary` seam. Supply `.select(..)`."
+                    .to_string(),
+            }))
+        };
+
     /// The C infix operator — right for every dtype whose compute type is a C
-    /// scalar, which is all of them except the complex structs. Unlike the other
-    /// defaults this is a working spelling rather than a panic, because "spell it
+    /// scalar, which is all of them except the complex structs. Unlike the three
+    /// above this is a working spelling rather than a refusal, because "spell it
     /// infix" is the correct answer almost everywhere and a backend should only
     /// have to say so when it is not.
-    pub(super) static ARITH: fn(super::ArithOp, String, String) -> String =
-        |op, a, b| format!("({a} {} {b})", op.c_operator());
+    pub(super) static ARITH: fn(ArithOp, String, String) -> Result<Spelling, LowerError> =
+        |op, a, b| Ok(Spelling::Spelled(format!("({a} {} {b})", op.c_operator())));
 
-    pub(super) static CONSTANT: fn(f64) -> String = super::const_lit;
+    pub(super) static CONSTANT: fn(f64) -> Result<Spelling, LowerError> =
+        |v| Ok(Spelling::Spelled(super::const_lit(v)));
 }
 
 /// Builds a [`Lowering`] — the only way an out-of-crate backend constructs one,
@@ -713,9 +729,9 @@ impl<'a> Lowering<'a> {
     /// Start building a `Lowering` from the three seams every backend must answer.
     #[must_use]
     pub fn builder(
-        leaf: &'a dyn Fn(u8) -> String,
-        unary: &'a dyn Fn(UnaryOp, String) -> String,
-        binary: &'a dyn Fn(BinaryOp, String, String) -> String,
+        leaf: &'a dyn Fn(u8) -> Result<Spelling, LowerError>,
+        unary: &'a dyn Fn(UnaryOp, String) -> Result<Spelling, LowerError>,
+        binary: &'a dyn Fn(BinaryOp, String, String) -> Result<Spelling, LowerError>,
     ) -> LoweringBuilder<'a> {
         LoweringBuilder {
             inner: Lowering {
@@ -735,19 +751,19 @@ impl<'a> Lowering<'a> {
 impl<'a> LoweringBuilder<'a> {
     /// Per-row reduced-scalar spelling ([`ScalarExpr::Reduced`]).
     #[must_use]
-    pub fn reduced(mut self, f: &'a dyn Fn(u8) -> String) -> Self {
+    pub fn reduced(mut self, f: &'a dyn Fn(u8) -> Result<Spelling, LowerError>) -> Self {
         self.inner.reduced = f;
         self
     }
     /// Output-coordinate spelling ([`ScalarExpr::Coord`]).
     #[must_use]
-    pub fn coord(mut self, f: &'a dyn Fn(u8) -> String) -> Self {
+    pub fn coord(mut self, f: &'a dyn Fn(u8) -> Result<Spelling, LowerError>) -> Self {
         self.inner.coord = f;
         self
     }
     /// Ternary select spelling ([`ScalarExpr::Select`]).
     #[must_use]
-    pub fn select(mut self, f: &'a dyn Fn(String, String, String) -> String) -> Self {
+    pub fn select(mut self, f: &'a dyn Fn(String, String, String) -> Result<Spelling, LowerError>) -> Self {
         self.inner.select = f;
         self
     }
@@ -768,13 +784,13 @@ impl<'a> LoweringBuilder<'a> {
     /// wrote the struct literal directly. It surfaced the moment they moved out —
     /// as a compile error, immediately, which is the argument for the move.
     #[must_use]
-    pub fn arith(mut self, f: &'a dyn Fn(ArithOp, String, String) -> String) -> Self {
+    pub fn arith(mut self, f: &'a dyn Fn(ArithOp, String, String) -> Result<Spelling, LowerError>) -> Self {
         self.inner.arith = f;
         self
     }
     /// Constant-literal spelling ([`ScalarExpr::Const`]). Defaults to [`const_lit`].
     #[must_use]
-    pub fn constant(mut self, f: &'a dyn Fn(f64) -> String) -> Self {
+    pub fn constant(mut self, f: &'a dyn Fn(f64) -> Result<Spelling, LowerError>) -> Self {
         self.inner.constant = f;
         self
     }
@@ -838,30 +854,75 @@ pub fn const_lit(v: f64) -> String {
     }
 }
 
+/// Unwrap a child's [`Spelling`], propagating a **decline** as this node's decline
+/// and a **failure** via `?`.
+///
+/// This is the whole propagation rule in one place, and it exists so no walker arm
+/// can get it subtly wrong. A declined child makes the parent declined -- it does
+/// NOT become an error -- which is the distinction the type was introduced to
+/// preserve: *"this backend does not spell that"* is an answer, not a fault.
+macro_rules! spelled_or_return_decline {
+    ($e:expr) => {
+        match $e? {
+            Spelling::Spelled(s) => s,
+            declined @ Spelling::Declined(_) => return Ok(declined),
+        }
+    };
+}
+
 /// Lower a [`ScalarExpr`] tree to a backend expression string via `lo`'s seams.
 ///
 /// Structural: a subtree reachable by two paths is re-rendered once per path. For
 /// shared-interior dedup (emit a value once as a `tmp`), lower an [`ExprDag`] via
 /// [`lower_dag`] instead — this remains the inlining primitive both paths share
 /// (single-use nodes lower identically through either).
-#[must_use]
-pub fn lower_expr(e: &ScalarExpr, lo: &Lowering<'_>) -> String {
-    match e {
-        ScalarExpr::Input(i) => (lo.leaf)(*i),
-        ScalarExpr::Reduced(i) => (lo.reduced)(*i),
-        ScalarExpr::Coord(d) => (lo.coord)(*d),
-        ScalarExpr::Param(i) => format!("p{i}"),
-        ScalarExpr::Const(v) => (lo.constant)(*v),
-        ScalarExpr::Unary(op, x) => (lo.unary)(*op, lower_expr(x, lo)),
-        ScalarExpr::Binary(op, a, b) => (lo.binary)(*op, lower_expr(a, lo), lower_expr(b, lo)),
-        ScalarExpr::Select(c, a, b) => {
-            (lo.select)(lower_expr(c, lo), lower_expr(a, lo), lower_expr(b, lo))
-        }
-        ScalarExpr::Add(a, b) => (lo.arith)(ArithOp::Add, lower_expr(a, lo), lower_expr(b, lo)),
-        ScalarExpr::Sub(a, b) => (lo.arith)(ArithOp::Sub, lower_expr(a, lo), lower_expr(b, lo)),
-        ScalarExpr::Mul(a, b) => (lo.arith)(ArithOp::Mul, lower_expr(a, lo), lower_expr(b, lo)),
-        ScalarExpr::Div(a, b) => (lo.arith)(ArithOp::Div, lower_expr(a, lo), lower_expr(b, lo)),
+///
+/// # Errors
+///
+/// Propagates a [`LowerError`] from a seam that genuinely failed. A seam that
+/// **declined** is not an error: it surfaces as `Ok(Spelling::Declined(..))`, so a
+/// caller must match rather than `?` past a capability statement.
+pub fn lower_expr(e: &ScalarExpr, lo: &Lowering<'_>) -> Result<Spelling, LowerError> {
+    macro_rules! sp {
+        ($x:expr) => {
+            spelled_or_return_decline!(lower_expr($x, lo))
+        };
     }
+    Ok(match e {
+        ScalarExpr::Input(i) => return (lo.leaf)(*i),
+        ScalarExpr::Reduced(i) => return (lo.reduced)(*i),
+        ScalarExpr::Coord(d) => return (lo.coord)(*d),
+        ScalarExpr::Param(i) => Spelling::Spelled(format!("p{i}")),
+        ScalarExpr::Const(v) => return (lo.constant)(*v),
+        ScalarExpr::Unary(op, x) => {
+            let x = sp!(x);
+            return (lo.unary)(*op, x);
+        }
+        ScalarExpr::Binary(op, a, b) => {
+            let (a, b) = (sp!(a), sp!(b));
+            return (lo.binary)(*op, a, b);
+        }
+        ScalarExpr::Select(c, a, b) => {
+            let (c, a, b) = (sp!(c), sp!(a), sp!(b));
+            return (lo.select)(c, a, b);
+        }
+        ScalarExpr::Add(a, b) => {
+            let (a, b) = (sp!(a), sp!(b));
+            return (lo.arith)(ArithOp::Add, a, b);
+        }
+        ScalarExpr::Sub(a, b) => {
+            let (a, b) = (sp!(a), sp!(b));
+            return (lo.arith)(ArithOp::Sub, a, b);
+        }
+        ScalarExpr::Mul(a, b) => {
+            let (a, b) = (sp!(a), sp!(b));
+            return (lo.arith)(ArithOp::Mul, a, b);
+        }
+        ScalarExpr::Div(a, b) => {
+            let (a, b) = (sp!(a), sp!(b));
+            return (lo.arith)(ArithOp::Div, a, b);
+        }
+    })
 }
 
 /// Lower an [`ExprDag`] to `(prelude, root_ref)`.
@@ -876,8 +937,17 @@ pub fn lower_expr(e: &ScalarExpr, lo: &Lowering<'_>) -> String {
 /// with no shared interior the prelude is empty and `root_ref` is byte-identical
 /// to [`lower_expr`] — the DAG is transparent for every single-use body, which is
 /// the no-regression guarantee for existing goldens.
-#[must_use]
-pub fn lower_dag(dag: &ExprDag, ctype: &str, lo: &Lowering<'_>) -> (Vec<String>, String) {
+///
+/// # Errors
+///
+/// Propagates a [`LowerError`] from a seam that genuinely failed. A seam that
+/// **declined** is not an error — it surfaces as `Ok(Spelling::Declined(..))`, so
+/// a caller must match rather than `?` its way past a capability statement.
+pub fn lower_dag(
+    dag: &ExprDag,
+    ctype: &str,
+    lo: &Lowering<'_>,
+) -> Result<(Vec<String>, String), LowerError> {
     let mut refs: Vec<Option<String>> = vec![None; dag.len()];
     let mut prelude: Vec<String> = Vec::new();
     let policy = HoistPolicy {
@@ -885,8 +955,16 @@ pub fn lower_dag(dag: &ExprDag, ctype: &str, lo: &Lowering<'_>) -> (Vec<String>,
         hoist_shared_leaves: false,
         extra_uses: &[],
     };
-    let root_ref = lower_node(dag, dag.root(), ctype, lo, &mut refs, &mut prelude, &policy);
-    (prelude, root_ref)
+    // A decline becomes a LowerError HERE and not at the seam. That is the whole
+    // boundary: at a seam, "I do not spell that" is an answer and must not be
+    // `?`-able into a failure. At the top of a lowering it is terminal -- the body
+    // cannot be emitted -- and LowerError's Unsupported* variants ARE the emitter's
+    // typed-decline vocabulary (KISS-EMIT 6.8-0002). So the conversion happens once,
+    // in one place, rather than each backend inventing it.
+    let root = lower_node(dag, dag.root(), ctype, lo, &mut refs, &mut prelude, &policy)?
+        .spelled()
+        .map_err(LowerError::from)?;
+    Ok((prelude, root))
 }
 
 /// Hoisting policy for [`lower_node`] — how aggressively a value is bound to a
@@ -929,13 +1007,12 @@ impl HoistPolicy<'_> {
 /// `hoist_all` mirrors [`lower_dag_all`] for the packed pair-split path (every
 /// non-leaf a `tmp`). `root_refs[j]` names output body `j`'s value; a node that
 /// is the sole use of its value inlines exactly as the single-output path does.
-#[must_use]
 pub fn lower_dag_multi(
     dag: &ExprDag,
     ctype: &str,
     lo: &Lowering<'_>,
     hoist_all: bool,
-) -> (Vec<String>, Vec<String>) {
+) -> Result<(Vec<String>, Vec<String>), LowerError> {
     // Root multiplicity: how many output bodies name each node as their root.
     // A node that is a body root AND referenced by another node (or the root of
     // two bodies) has total_uses > 1, so it hoists once rather than re-emitting.
@@ -950,12 +1027,19 @@ pub fn lower_dag_multi(
     };
     let mut refs: Vec<Option<String>> = vec![None; dag.len()];
     let mut prelude: Vec<String> = Vec::new();
-    let root_refs = dag
-        .roots()
-        .iter()
-        .map(|&r| lower_node(dag, r, ctype, lo, &mut refs, &mut prelude, &policy))
-        .collect();
-    (prelude, root_refs)
+    // One at a time rather than `collect()`: a decline is a SUCCESS value, so
+    // collecting would hand back a Vec containing one and a caller could emit it.
+    // The first decline aborts the whole multi-body lowering, which is the only
+    // correct answer -- a kernel with one unspellable output is not a kernel with
+    // n-1 outputs.
+    let mut root_refs = Vec::with_capacity(dag.roots().len());
+    for &r in dag.roots() {
+        let one = lower_node(dag, r, ctype, lo, &mut refs, &mut prelude, &policy)?
+            .spelled()
+            .map_err(LowerError::from)?;
+        root_refs.push(one);
+    }
+    Ok((prelude, root_refs))
 }
 
 /// [`lower_dag`], but hoisting **every** non-leaf node to a named `tmp` (not
@@ -965,8 +1049,16 @@ pub fn lower_dag_multi(
 /// duplicate whole subexpression *text* per reference — exponential in depth.
 /// Hoist-all makes every operand a `tmp` name, so a duplicate is a name, never
 /// an expression, and the emitted source stays linear. Values are unchanged.
-#[must_use]
-pub fn lower_dag_all(dag: &ExprDag, ctype: &str, lo: &Lowering<'_>) -> (Vec<String>, String) {
+///
+/// # Errors
+///
+/// As [`lower_dag`]: a genuine seam failure propagates; a decline surfaces as
+/// `Ok(Spelling::Declined(..))`.
+pub fn lower_dag_all(
+    dag: &ExprDag,
+    ctype: &str,
+    lo: &Lowering<'_>,
+) -> Result<(Vec<String>, String), LowerError> {
     let mut refs: Vec<Option<String>> = vec![None; dag.len()];
     let mut prelude: Vec<String> = Vec::new();
     let policy = HoistPolicy {
@@ -974,8 +1066,16 @@ pub fn lower_dag_all(dag: &ExprDag, ctype: &str, lo: &Lowering<'_>) -> (Vec<Stri
         hoist_shared_leaves: false,
         extra_uses: &[],
     };
-    let root_ref = lower_node(dag, dag.root(), ctype, lo, &mut refs, &mut prelude, &policy);
-    (prelude, root_ref)
+    // A decline becomes a LowerError HERE and not at the seam. That is the whole
+    // boundary: at a seam, "I do not spell that" is an answer and must not be
+    // `?`-able into a failure. At the top of a lowering it is terminal -- the body
+    // cannot be emitted -- and LowerError's Unsupported* variants ARE the emitter's
+    // typed-decline vocabulary (KISS-EMIT 6.8-0002). So the conversion happens once,
+    // in one place, rather than each backend inventing it.
+    let root = lower_node(dag, dag.root(), ctype, lo, &mut refs, &mut prelude, &policy)?
+        .spelled()
+        .map_err(LowerError::from)?;
+    Ok((prelude, root))
 }
 
 /// Post-order, memoized lowering of one DAG node. Emits a shared interior once
@@ -989,52 +1089,51 @@ fn lower_node(
     refs: &mut Vec<Option<String>>,
     prelude: &mut Vec<String>,
     policy: &HoistPolicy<'_>,
-) -> String {
+) -> Result<Spelling, LowerError> {
     if let Some(r) = &refs[id as usize] {
-        return r.clone();
+        return Ok(Spelling::Spelled(r.clone()));
     }
     // Copy the node out (all fields are `Copy`) so the immutable borrow of `dag`
     // is released before the `&mut refs`/`&mut prelude` recursion.
     let node = dag.node(id).clone();
+    macro_rules! child {
+        ($n:expr) => {
+            spelled_or_return_decline!(lower_node(dag, $n, ctype, lo, refs, prelude, policy))
+        };
+    }
     let rhs = match node {
-        DagNode::Input(i) => (lo.leaf)(i),
-        DagNode::Reduced(i) => (lo.reduced)(i),
-        DagNode::Coord(d) => (lo.coord)(d),
+        DagNode::Input(i) => spelled_or_return_decline!((lo.leaf)(i)),
+        DagNode::Reduced(i) => spelled_or_return_decline!((lo.reduced)(i)),
+        DagNode::Coord(d) => spelled_or_return_decline!((lo.coord)(d)),
         DagNode::Param(i) => format!("p{i}"),
-        DagNode::Const(v) => (lo.constant)(v),
+        DagNode::Const(v) => spelled_or_return_decline!((lo.constant)(v)),
         DagNode::Unary(op, x) => {
-            (lo.unary)(op, lower_node(dag, x, ctype, lo, refs, prelude, policy))
+            let x = child!(x);
+            spelled_or_return_decline!((lo.unary)(op, x))
         }
         DagNode::Binary(op, a, b) => {
-            let a = lower_node(dag, a, ctype, lo, refs, prelude, policy);
-            let b = lower_node(dag, b, ctype, lo, refs, prelude, policy);
-            (lo.binary)(op, a, b)
+            let (a, b) = (child!(a), child!(b));
+            spelled_or_return_decline!((lo.binary)(op, a, b))
         }
         DagNode::Select(c, a, b) => {
-            let c = lower_node(dag, c, ctype, lo, refs, prelude, policy);
-            let a = lower_node(dag, a, ctype, lo, refs, prelude, policy);
-            let b = lower_node(dag, b, ctype, lo, refs, prelude, policy);
-            (lo.select)(c, a, b)
+            let (c, a, b) = (child!(c), child!(a), child!(b));
+            spelled_or_return_decline!((lo.select)(c, a, b))
         }
         DagNode::Add(a, b) => {
-            let a = lower_node(dag, a, ctype, lo, refs, prelude, policy);
-            let b = lower_node(dag, b, ctype, lo, refs, prelude, policy);
-            (lo.arith)(ArithOp::Add, a, b)
+            let (a, b) = (child!(a), child!(b));
+            spelled_or_return_decline!((lo.arith)(ArithOp::Add, a, b))
         }
         DagNode::Sub(a, b) => {
-            let a = lower_node(dag, a, ctype, lo, refs, prelude, policy);
-            let b = lower_node(dag, b, ctype, lo, refs, prelude, policy);
-            (lo.arith)(ArithOp::Sub, a, b)
+            let (a, b) = (child!(a), child!(b));
+            spelled_or_return_decline!((lo.arith)(ArithOp::Sub, a, b))
         }
         DagNode::Mul(a, b) => {
-            let a = lower_node(dag, a, ctype, lo, refs, prelude, policy);
-            let b = lower_node(dag, b, ctype, lo, refs, prelude, policy);
-            (lo.arith)(ArithOp::Mul, a, b)
+            let (a, b) = (child!(a), child!(b));
+            spelled_or_return_decline!((lo.arith)(ArithOp::Mul, a, b))
         }
         DagNode::Div(a, b) => {
-            let a = lower_node(dag, a, ctype, lo, refs, prelude, policy);
-            let b = lower_node(dag, b, ctype, lo, refs, prelude, policy);
-            (lo.arith)(ArithOp::Div, a, b)
+            let (a, b) = (child!(a), child!(b));
+            spelled_or_return_decline!((lo.arith)(ArithOp::Div, a, b))
         }
     };
     // Hoisting decision:
@@ -1061,5 +1160,5 @@ fn lower_node(
         rhs
     };
     refs[id as usize] = Some(r.clone());
-    r
+    Ok(Spelling::Spelled(r))
 }

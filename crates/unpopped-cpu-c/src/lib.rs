@@ -40,7 +40,7 @@
 //!   scatter/offset/coord-free Elementwise cell, accepting only it inherently
 //!   excludes every complex case.
 
-use unpopped::backend::{Backend, GeneratedKernel, LowerError, Lowering, const_lit, lower_dag};
+use unpopped::backend::{Spelling, DeclinedOp, Decline, Backend, GeneratedKernel, LowerError, Lowering, const_lit, lower_dag};
 use unpopped::cfamily::{
     assert_no_int_div_or_const, binary_f32, binary_f64, binary_int, complex_arith, complex_helpers,
     dtype_tag, fp8_helpers, narrow_load_fn, out_ctype_of, param_args, param_ctype,
@@ -174,7 +174,7 @@ impl Backend for CpuC {
             assert_no_int_div_or_const(plan.body, plan.dtype, false, false);
         }
         match plan.schedule {
-            Schedule::Scalar => Ok(emit_scalar_cpu(plan, ctype)),
+            Schedule::Scalar => emit_scalar_cpu(plan, ctype),
             other => Err(LowerError::UnsupportedSchedule {
                 detail: format!(
                     "cpu_c backend v1: Elementwise (the scalar contiguous path) ONLY — got \
@@ -193,7 +193,7 @@ impl Backend for CpuC {
 /// seam), but a plain `void` signature + `#include <math.h>` + a SERIAL
 /// `for (long long i = 0; i < n; ++i)` loop instead of the `extern "C" __global__`
 /// header and the grid-stride prologue.
-fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
+fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> Result<GeneratedKernel, LowerError> {
     let name = format!("unpopped_cpu_{}_{}", plan.op_name, dtype_tag(plan.dtype));
     let n = plan.n_inputs;
     let octype = out_ctype_of(plan, 0, ctype);
@@ -255,9 +255,11 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
     } else {
         ctype
     };
-    let acc = |idx: u8| match packed {
-        Some(f) => format!("{f}(in{idx}, i)"),
-        None => promote_load_f32(plan.dtype, &format!("in{idx}[i]")),
+    let acc = |idx: u8| {
+        Ok(Spelling::Spelled(match packed {
+            Some(f) => format!("{f}(in{idx}, i)"),
+            None => promote_load_f32(plan.dtype, &format!("in{idx}[i]")),
+        }))
     };
     let (prelude, root) = lower_dag(
         &ExprDag::from_expr(plan.body),
@@ -281,13 +283,15 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
         // Complex compute types are structs, so their arithmetic is a call.
         // Every other dtype falls through to the C operator.
         .arith(&|op, a, b| {
-            complex_arith(plan.dtype, op, &a, &b)
-                .unwrap_or_else(|| format!("({a} {} {b})", op.c_operator()))
+            Ok(Spelling::Spelled(
+                complex_arith(plan.dtype, op, &a, &b)
+                    .unwrap_or_else(|| format!("({a} {} {b})", op.c_operator())),
+            ))
         })
         .select(&|c, a, b| cpu_select(c, a, b, plan.dtype))
-        .constant(&const_lit)
+        .constant(&|v| Ok(Spelling::Spelled(const_lit(v))))
         .build(),
-    );
+    )?;
     let store = store_expr_of(plan, 0, root);
     // A packed store is a STATEMENT, not an assignment: several elements share a
     // byte, so there is no per-element lvalue to assign to. Writing `out[i] = ..`
@@ -313,7 +317,7 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
         s.push_str("    }\n");
     }
     s.push_str("}\n");
-    GeneratedKernel::new(name, s)
+    Ok(GeneratedKernel::new(name, s))
 }
 
 /// Lower a unary op for `dtype` on the CPU — the twin of `baracuda_cuda_emit::cuda`'s
@@ -321,19 +325,21 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> GeneratedKernel {
 /// to the CpuC unary spellers ([`unary_f32_cpu`]/[`unary_f64_cpu`]); an integer
 /// dtype has no unary math (the ir admissibility table rejects it), so the panic
 /// is the emitter backstop.
-fn cpu_unary(op: UnaryOp, x: String, dtype: ElementKind) -> String {
-    match dtype {
+fn cpu_unary(op: UnaryOp, x: String, dtype: ElementKind) -> Result<Spelling, LowerError> {
+    let spelled = match dtype {
         // Promoted to `float` at the leaf, so unary math is f32 math.
         ElementKind::F32
         | ElementKind::F32Strict
         | ElementKind::Fp8E4M3FN
         | ElementKind::Fp8E5M2 => unary_f32_cpu(op, x),
         ElementKind::F64 => unary_f64_cpu(op, x),
-        other => panic!(
-            "cpu_c backend: no unary math for dtype {other:?} — v1 lowers unary for f32/f64 \
-             only (integer dtypes have no unary math; f16/bf16 are declined)"
-        ),
-    }
+        _ => return Ok(Spelling::Declined(Decline::UnsupportedDtypeForOp {
+            op: DeclinedOp::Unary(op),
+            dtype,
+            why: "no lowering at this dtype in cpu_c v1".to_string(),
+        })),
+    };
+    Ok(Spelling::Spelled(spelled))
 }
 
 /// The f32 unary twin: identical to [`unpopped::cfamily::unary_f32`] for EVERY op
@@ -361,8 +367,13 @@ fn unary_f64_cpu(op: UnaryOp, x: String) -> String {
 /// verbatim (`powf`/`atan2f`/`copysignf`/`fmaxf`/`fmodf`/the `Cmp*` operators are
 /// all C99, and the int-op speller is raw C operators). Mirrors the shape of
 /// `cuda_binary` minus the f16/bf16 promote arms (declined in v1).
-fn cpu_binary(op: BinaryOp, a: String, b: String, dtype: ElementKind) -> String {
-    match dtype {
+fn cpu_binary(
+    op: BinaryOp,
+    a: String,
+    b: String,
+    dtype: ElementKind,
+) -> Result<Spelling, LowerError> {
+    let spelled = match dtype {
         // A narrow float has already been promoted to `float` by the leaf, so
         // its arithmetic IS f32 arithmetic.
         ElementKind::F32
@@ -391,24 +402,35 @@ fn cpu_binary(op: BinaryOp, a: String, b: String, dtype: ElementKind) -> String 
         | ElementKind::I4
         | ElementKind::U4
         | ElementKind::B1 => binary_int(op, a, b, dtype),
-        other => panic!(
-            "cpu_c backend: no binary math for dtype {other:?} — f16/bf16 are declined in v1"
-        ),
-    }
+        _ => return Ok(Spelling::Declined(Decline::UnsupportedDtypeForOp {
+            op: DeclinedOp::Binary(op),
+            dtype,
+            why: "no lowering at this dtype in cpu_c v1".to_string(),
+        })),
+    };
+    Ok(Spelling::Spelled(spelled))
 }
 
 /// Lower a ternary select for `dtype` on the CPU — REUSES the CUDA
 /// identity-cast-pinned C ternary spellers ([`select_f32`]/[`select_f64`]), which
 /// are portable C as-is. v1 select is float-only (an int select raises the
 /// unresolved cond-observer question), so an integer dtype backstop-panics.
-fn cpu_select(c: String, a: String, b: String, dtype: ElementKind) -> String {
-    match dtype {
+fn cpu_select(
+    c: String,
+    a: String,
+    b: String,
+    dtype: ElementKind,
+) -> Result<Spelling, LowerError> {
+    let spelled = match dtype {
         ElementKind::F32 | ElementKind::F32Strict => select_f32(c, a, b),
         ElementKind::F64 => select_f64(c, a, b),
-        other => panic!(
-            "cpu_c backend: Select has no {other:?} lowering — v1 select is float-only (f32/f64)"
-        ),
-    }
+        _ => return Ok(Spelling::Declined(Decline::UnsupportedDtypeForOp {
+            op: DeclinedOp::Select,
+            dtype,
+            why: "no lowering at this dtype in cpu_c v1".to_string(),
+        })),
+    };
+    Ok(Spelling::Spelled(spelled))
 }
 
 #[cfg(test)]
