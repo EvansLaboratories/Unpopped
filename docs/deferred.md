@@ -33,12 +33,16 @@ Nothing to do but be ready. Each names its trigger.
 | **`unpopped-cuda` sub-crate**: CUDA emitter donated by Baracuda, plus the `convert.rs` CUDA parser moving out of neutral core | ~~The 0.2 trait freeze.~~ **That trigger passed unmet and must be restated.** 0.2 shipped 2026-08-15 and `Backend`/`Lowering` has taken two breaking changes since (0.4.0 `Result<Spelling, LowerError>`, 0.5.0 the `DeclinedOp` split), so "the 0.2 trait freeze" now names an event that happened without the condition being true — the failure mode section B's rule exists to prevent, in a row written before that rule. Restate against an artifact when the next freeze is designed. The crate has **two** inbound streams — IR→`.cu` (Baracuda's donation) and `.cu`→IR (our parser) — so it must not be designed emit-only. |
 | ~~**Make the target namespace pluggable**~~ — **DONE**; the `cuda:` token eviction is what remains | Pluggable landed: `StructureKey.arch: ArchSku` → `target: TargetId`, an interned §6.8 token validated for **grammar only**. The CUDA-only `arch_code`/`arch_from_code` pair was **deleted**, not adapted — measured, the codec has *zero* non-test `ArchSku` code, and Vulkane's v3→v4 four-to-five-field bump cost **zero changes** (byte-match 19/20-with-an-exclusion → **20/20, zero exclusions**), which is what proves it opaque rather than opaque-looking. **Remaining is four sites and two decisions, no codec work:** the enum (`layout.rs`), the re-export (`lib.rs`), `KernelSku.arch` (`sku.rs`), and `From<ArchSku> for TargetId` (`target.rs`). Decided 2026-08-15 with Baracuda: **drop the reserved block** and convert via `TargetId::parse`, fully evicting CUDA from neutral core; `KernelSku.arch` is a *separate* call pending Fuel, since it turns on who constructs it. **Trigger: the registry repoint.** §6.8-0003 names `unpopped-vocab` as `cuda`'s `reference_implementation`, so evicting before the pointer moves to `baracuda-cuda-vocab` breaks a PR-gated file. Landing crate is `baracuda-cuda-vocab` (Eric). |
 
-**Publication is no longer held, and both crates have now shipped.** Live on
-crates.io as of 2026-08-15: **`unpopped-vocab` 0.3.0** and **`unpopped` 0.2.0**
-(tags `unpopped-vocab-v0.3.0`, `unpopped-v0.2.0`, release commit `8a242e8`).
-`unpopped` is at **0.3.0 in-tree, unpublished** — the `JitRequest::target` break
-landed after the cut; its publish trigger is *when Baracuda is ready to consume
-it*.
+**Publication is no longer held; every crate here has shipped.** The first cut
+was 2026-08-15 — `unpopped-vocab` 0.3.0 and `unpopped` 0.2.0, release commit
+`8a242e8`.
+
+**No live version number is recorded in this file.** A paragraph naming the
+published and in-tree versions was here and went stale twice while nothing
+forced it to move; that is the same defect as every other stale row in this
+register, in the one field where the answer is a `curl` away. The manifests are
+in-tree truth and `https://index.crates.io/un/po/<crate>` is registry truth;
+`git tag -l` lists what was cut and its annotation says why.
 
 **The vocab went to 0.3.0, not 0.2.0, and the reason is worth keeping.** 0.2.0
 was already published, and the in-tree code had moved materially past it while
@@ -64,7 +68,11 @@ schedule.
 **Corollary now enforced by habit: bump on landing, not on shipping.** Leaving a
 manifest at a published version while `main` holds breaking changes past it
 recreates exactly the state above. `unpopped` went to 0.3.0 the moment the
-`JitRequest` break landed, not at its future publish.
+`JitRequest` break landed, not at its future publish — and to 0.6.0 the moment
+the plan gate began declining, likewise before any publish.
+
+That habit is why the in-tree version is a *fact about the tree* rather than a
+plan, and it is the reason this file no longer needs to carry one.
 
 ---
 

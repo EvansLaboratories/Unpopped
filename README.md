@@ -114,7 +114,7 @@ Two honest caveats on that:
   path can now name a non-CUDA target. It was an API-expressiveness gap rather
   than a wire-format or cache-soundness one (the key and artifact identity were
   already target-neutral), which is why it could land after `0.2.0` instead of
-  blocking it. In-tree at `0.3.0`, unpublished.
+  blocking it. Landed in `0.3.0`.
 
 ## History
 
