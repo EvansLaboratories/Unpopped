@@ -1,0 +1,62 @@
+# The first automated verification this repository has ever had.
+#
+# There has never been a `.github/` directory here — not removed, never added, in
+# the whole history. Until 2026-08-21 nothing but a local run had ever compiled a
+# pushed commit, in the one workspace in the portfolio that publishes to a
+# registry with no delete. At `672d938` — the commit `unpopped 0.5.0` and both
+# emitters shipped from — `cargo fmt --check` exited 1 and `cargo doc` threw 37
+# warnings. That is the concrete instance behind this file.
+#
+# WHAT THIS COVERS, AND WHAT IT DOES NOT
+#
+# It covers: fmt, clippy, the test suite, and docs, on default features, on
+# Linux. It does NOT cover `--all-features` (the optional `convert` feature
+# compiles tree-sitter grammars through `cc`), Windows, or any device backend.
+#
+# Naming that matters more than the coverage does. Most of what this repository
+# found on 2026-08-20 was GREEN-PASSING — a version divergence between tree and
+# registry, a non-canonical licence file, 22 tests sitting in the wrong crate, a
+# plan gate that aborted on malformed input. A job like this catches none of
+# those. It catches the two cheap checks that were failing at a published commit,
+# and calling it "verified" would be the defect this repository spent a day
+# cataloguing.
+name: verify
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The toolchain is NOT named here. `rustup` reads `rust-toolchain.toml`, so the
+  # pinned version lives in exactly one place and this job cannot disagree with
+  # it. A duplicated fact with no gate on the duplication is a scheduled
+  # divergence — the cheaper fix is not to duplicate it.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain   # prints what rust-toolchain.toml resolved to
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo doc --workspace --no-deps
+
+  # `rust-version` in Cargo.toml is a promise published in every crate here, and
+  # until 2026-08-21 nobody had ever built against it. This job READS the
+  # declaration rather than restating it, so the thing under test and the thing
+  # declared cannot drift apart.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: msrv
+        run: |
+          v=$(grep -m1 '^rust-version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          test -n "$v" || { echo "no rust-version in Cargo.toml"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "declared MSRV: $v"
+      - run: rustup toolchain install ${{ steps.msrv.outputs.version }} --profile minimal
+      - run: cargo +${{ steps.msrv.outputs.version }} test --workspace
