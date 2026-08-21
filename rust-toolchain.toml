@@ -1,3 +1,17 @@
 [toolchain]
-channel = "stable"
+# PINNED TO A LITERAL VERSION, not to `stable`, under the portfolio ruling of
+# 2026-08-21.
+#
+# `channel = "stable"` LOOKS like a pin and floats: it resolved to 1.97.1 on this
+# machine while the current release was 1.98.0, so "verified against stable" was a
+# claim about whenever the reader happened to run it. That matters more here than
+# in a repo that does not ship — this workspace publishes to a registry with no
+# delete, and until 2026-08-21 nothing but a local run had ever compiled a pushed
+# commit.
+#
+# Verified green on this version before pinning: 41 suites / 670 passed / 0
+# failed, clippy 0, doc 0, fmt clean. The declared `rust-version = "1.85"` MSRV
+# is a separate claim about what CONSUMERS may use, and was verified against
+# 1.85.0 the same day.
+channel = "1.98.0"
 components = ["rustfmt", "clippy"]
