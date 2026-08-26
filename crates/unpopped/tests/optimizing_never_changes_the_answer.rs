@@ -50,7 +50,7 @@
 //! is right. It is a check that the **rewrite is answer-preserving**, which is a
 //! narrower claim and the one the optimizer actually makes.
 
-use unpopped::ir::{OpDef, ScalarExpr, UnaryOp, input, konst};
+use unpopped::ir::{BinaryOp, OpDef, ScalarExpr, UnaryOp, input, konst};
 use unpopped::optimize::optimize;
 use unpopped::oracle::{TypedBuffer, evaluate};
 use unpopped::plan::build_plan;
@@ -66,9 +66,30 @@ use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_ke
 ///
 /// KISS ships an op-vector corpus (`kiss-op-manifest-v1`, generated from
 /// `spec/ops.md`, vendored by Fuel at `fuel-dispatch/fixtures/kiss-corpus/`)
-/// whose `tags` field already carries `signed-zero`. **Its coverage is one op of
-/// 106 and it has zero NaN vectors today**, so it cannot yet supply this — but
-/// when it can, `SPECIALS` should READ it rather than restate it.
+/// whose `tags` field already carries `signed-zero`. **When it can supply this,
+/// `SPECIALS` should READ it rather than restate it.**
+///
+/// **It cannot today, and the reason is worse than thin coverage.** KISS
+/// `origin/main` ships `ops-minmax-signed-zero.json` — 48 vectors over
+/// `fmax_ieee` / `fmin_ieee` / `max_prop` / `min_prop`, exactly the four ops
+/// this file exists for. It has **zero NaN vectors**, and KISS's architect
+/// measured the consequence:
+///
+/// > **All 48 vectors pass for an implementation with `max_prop` and
+/// > `fmax_ieee` SWAPPED.**
+///
+/// `ops.md` calls them four distinct ops *because* two propagate NaN and two
+/// suppress it. So the one artefact enumerating all four **cannot distinguish
+/// the property that is the stated reason they are four** — a green carrying no
+/// information on its own axis. Filed as KISS #329.
+///
+/// **Consuming its inputs is right when they land. Treating its present
+/// existence as coverage is the trap**, and it is the trap this file would have
+/// walked into had the debt been written as "wait for KISS".
+///
+/// (An earlier revision of this note said "one op of 106" — Fuel's figure for
+/// their VENDORED copy, which is 48 vectors and a whole file behind KISS. I
+/// repeated it without its qualifier. The zero-NaN half was right about both.)
 ///
 /// A private list of values that another project authoritatively defines is the
 /// same hazard this workspace removed from `kiss_ref_diff::assert_conforming_eq`
@@ -173,6 +194,29 @@ fn corpus() -> Vec<(&'static str, u8, ScalarExpr)> {
         ("sub_zero", 1, (input(0) - konst(0.0)).0),
         ("add_sub", 2, ((input(0) + input(1)) - input(1)).0),
         ("untouched", 2, (input(0) + input(1)).0),
+        // The four ops this file exists for. Absent from the first revision,
+        // which is the same defect KISS #329 records one level up: a corpus
+        // that omits the case it was built for.
+        ("max_prop", 2, input(0).max(input(1)).0),
+        ("min_prop", 2, input(0).min(input(1)).0),
+        (
+            "fmax_ieee",
+            2,
+            ScalarExpr::Binary(
+                BinaryOp::FmaxIeee,
+                Box::new(ScalarExpr::Input(0)),
+                Box::new(ScalarExpr::Input(1)),
+            ),
+        ),
+        (
+            "fmin_ieee",
+            2,
+            ScalarExpr::Binary(
+                BinaryOp::FminIeee,
+                Box::new(ScalarExpr::Input(0)),
+                Box::new(ScalarExpr::Input(1)),
+            ),
+        ),
         // the traps
         ("mul_zero", 1, (input(0) * konst(0.0)).0),
         ("self_sub", 1, (input(0) - input(0)).0),
@@ -248,4 +292,71 @@ fn the_corpus_still_contains_the_values_rewrites_break_on() {
         "no ordinary magnitude — without one, a body that disagrees EVERYWHERE \
          is indistinguishable from one that disagrees only on the specials"
     );
+}
+
+/// **The corpus can tell the NaN-propagating ops from the NaN-suppressing ones.**
+///
+/// This is KISS #329's defect, checked against this file's own input set rather
+/// than assumed absent from it.
+///
+/// KISS ships 48 vectors over `fmax_ieee` / `fmin_ieee` / `max_prop` /
+/// `min_prop` and **all 48 pass with `max_prop` and `fmax_ieee` swapped**,
+/// because it has no NaN vectors and the entire difference between the pairs is
+/// NaN behaviour. An artefact that enumerates four ops and cannot distinguish
+/// the property that makes them four is green carrying no information.
+///
+/// The preservation test above would inherit that defect silently: if `SPECIALS`
+/// could not separate `Max` from `FmaxIeee`, then an optimizer that rewrote one
+/// into the other would be *answer-preserving on this corpus* and pass. The
+/// corpus would be endorsing the substitution it exists to catch.
+///
+/// So: require the two forms to actually disagree somewhere in `SPECIALS`. This
+/// is not a claim about the optimizer at all — it is a claim about the inputs,
+/// and it is the one that makes every claim about the optimizer meaningful.
+#[test]
+fn the_corpus_separates_nan_propagating_from_nan_suppressing() {
+    let (a, b) = cross();
+    let bin = |op: BinaryOp| {
+        ScalarExpr::Binary(
+            op,
+            Box::new(ScalarExpr::Input(0)),
+            Box::new(ScalarExpr::Input(1)),
+        )
+    };
+
+    for (prop, ieee, name) in [
+        (BinaryOp::Max, BinaryOp::FmaxIeee, "max"),
+        (BinaryOp::Min, BinaryOp::FminIeee, "min"),
+    ] {
+        let p = eval_body(&bin(prop), 2, &a, &b);
+        let i = eval_body(&bin(ieee), 2, &a, &b);
+        // Restricted to inputs where a NaN is actually involved.
+        //
+        // An earlier revision counted EVERY differing position and PASSED WITH
+        // NaN REMOVED FROM THE CORPUS — because these pairs also differ on
+        // signed zero. It discriminated the ops, but on the wrong axis, so it
+        // would have certified a NaN-blind corpus as adequate: the precise
+        // shape of KISS #329, reproduced inside the test written to avoid it.
+        //
+        // Caught by mutating SPECIALS down to KISS's shape and watching this
+        // test stay green while its sibling went red. A guard that passes for
+        // an adjacent reason is the failure this file is about.
+        let differing = p
+            .iter()
+            .zip(&i)
+            .enumerate()
+            .filter(|(k, _)| a[*k].is_nan() || b[*k].is_nan())
+            .filter(|(_, (x, y))| x.to_bits() != y.to_bits())
+            .count();
+
+        assert!(
+            differing > 0,
+            "{name}_prop and f{name}_ieee produce IDENTICAL output on every input \
+             in SPECIALS. The corpus cannot separate NaN-propagating from \
+             NaN-suppressing, which is the exact property `ops.md` says makes \
+             them distinct ops — so the preservation test above would pass an \
+             optimizer that rewrote one into the other. This is KISS #329's \
+             defect, in this file."
+        );
+    }
 }
