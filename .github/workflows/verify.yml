@@ -13,6 +13,19 @@
 # Linux. It does NOT cover `--all-features` (the optional `convert` feature
 # compiles tree-sitter grammars through `cc`), Windows, or any device backend.
 #
+# THE `pull_request:` TRIGGER HAS NEVER FIRED. Measured 2026-08-26: five runs,
+# all `push`, and zero pull requests have ever existed in this repository — work
+# lands straight on `main` because there is no branch protection to require
+# otherwise. So one of the two triggers declared below is exercised and the other
+# is not, and a declared trigger is not an exercised one.
+#
+# Left in rather than removed: it costs nothing and it is what a reviewer would
+# expect to find. But it is untested, and the first PR here will be its first
+# run — which is worth knowing in advance rather than discovering when a PR
+# reports no checks at all. Baracuda hit the neighbouring version of this the
+# same day: their workflow fired only on PRs to `main`, so a stacked PR was
+# judged by nothing and looked clean.
+#
 # Naming that matters more than the coverage does. Most of what this repository
 # found on 2026-08-20 was GREEN-PASSING — a version divergence between tree and
 # registry, a non-canonical licence file, 22 tests sitting in the wrong crate, a
