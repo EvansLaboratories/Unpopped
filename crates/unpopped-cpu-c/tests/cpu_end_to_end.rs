@@ -120,12 +120,34 @@ fn find_compiler() -> Option<CCompiler> {
             vcvars: None,
         });
     }
-    find_vs_install().map(|vcvars| CCompiler {
+    let found = find_vs_install().map(|vcvars| CCompiler {
         cmd: "cl",
         msvc: true,
         needs_libm: false,
         vcvars: Some(vcvars),
-    })
+    });
+
+    // UNDER CI, A MISSING COMPILER IS A FAILURE RATHER THAN A SKIP.
+    //
+    // The file header records the decision to skip loudly where there is
+    // genuinely no toolchain, and that stays right for a developer's machine —
+    // nobody should be blocked from running the rest of the suite by a missing
+    // `cc`. But it leaves a hole this file's own words already name: **a loud
+    // skip is still a pass**, the `eprintln!` is CAPTURED by the harness on a
+    // passing test, and the run reports `ok` either way. So in a CI log a skip
+    // and a real execution are indistinguishable, and the strongest gate this
+    // workspace has could stop running with nothing to show for it.
+    //
+    // A runner always has a toolchain. `CI` is set by GitHub Actions and by
+    // every other runner worth naming, so where it is set a `None` here is not
+    // "no toolchain available" — it is "the toolchain we were promised is
+    // missing", which is a fact worth failing on.
+    if found.is_none() && std::env::var_os("CI").is_some() {
+        panic!(
+            "no host C compiler under CI (tried cc, gcc, clang, cl, and the              vswhere/vcvars fallback). Every real-execution test in this file              would SKIP and report `ok`, so the suite would go green while              compiling nothing. Under CI that is a failure, not a skip."
+        );
+    }
+    found
 }
 
 impl CCompiler {
