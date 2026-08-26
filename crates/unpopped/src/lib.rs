@@ -148,6 +148,32 @@ fn provenance_for(key: &StructureKey, backend: &dyn Backend) -> backend::Provena
 ///
 /// The result carries a [`backend::Provenance`]; a kernel a backend builds
 /// directly does not. Anything that caches or ships a kernel should require it.
+///
+/// # This function PANICS on an inadmissible op, and that is pinned across a
+/// # repo boundary
+///
+/// `generate` is infallible by signature, so it cannot express a decline: it is
+/// the trusted-AOT convenience, and it panics with [`plan::PlanError`]'s
+/// `Display` where [`try_generate`] returns
+/// [`backend::LowerError::InadmissiblePlan`]. **That difference is load-bearing
+/// outside this crate.**
+///
+/// An adopter's §6.8-0004 reachability guard uses the pair as a **born-red
+/// anchor**: it asserts that `generate` still aborts on an inadmissible op while
+/// `try_generate` declines it. So the guard goes red the moment the two stop
+/// differing — which makes it a regression detector, in another repository, on
+/// this crate's `try_generate` -> `plan::try_build_plan` wiring.
+///
+/// Two consequences worth stating rather than discovering:
+///
+/// - Making `generate` fallible, or making it decline instead of abort, breaks
+///   that anchor. It would look like their bug and would not be.
+/// - Making `try_generate` panic again — a 0.6.0 regression — also breaks it,
+///   which is the direction the anchor exists to catch and is welcome.
+///
+/// The mirror of this constraint points the other way and lives here too: their
+/// 34 `#[should_panic(expected = ...)]` tests match this crate's panic TEXT, and
+/// `tests/plan_gate_declines_malformed_input.rs` pins it because they cannot.
 #[must_use]
 pub fn generate(op: &OpDef, key: &StructureKey, backend: &dyn Backend) -> GeneratedKernel {
     try_generate(op, key, backend)
