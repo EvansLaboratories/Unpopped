@@ -2214,6 +2214,74 @@ mod tests {
             .fold(weight(&node), |acc, k| acc.saturating_add(cost_of(k)))
     }
 
+    /// **Optimizing never costs more than not optimizing.**
+    ///
+    /// The question this answers, asked by CireSnave: read a kernel in, optimize
+    /// it, write it back out — does it come back better, the same, or worse? At
+    /// the IR layer it must never be worse, and this is the check rather than
+    /// the argument.
+    ///
+    /// The argument, for what it is worth, is that `add_expr` puts the input's
+    /// own nodes in the e-graph and `extract` takes the minimum, so the input is
+    /// always a candidate. **The reason that is not sufficient** is
+    /// `enode_cost`, which returns `Option` — a node it cannot price is SKIPPED,
+    /// and if the input's own form is unpriceable, extraction must pick
+    /// something else, which is free to be worse. So the property is measured
+    /// over a spread wide enough to reach the odd corners: unpriceable nodes,
+    /// saturation limits, and bodies the rewrite set does not touch at all.
+    #[test]
+    fn optimizing_never_increases_cost() {
+        let abs = |e: ScalarExpr| ScalarExpr::Unary(UnaryOp::Abs, Box::new(e));
+        let sel = |c: ScalarExpr, a: ScalarExpr, b: ScalarExpr| {
+            ScalarExpr::Select(Box::new(c), Box::new(a), Box::new(b))
+        };
+        let bodies = [
+            // already minimal — must not be made worse
+            ScalarExpr::Input(0),
+            (input(0) + input(1)).0,
+            // rewritable
+            (input(0) * konst(1.0)).0,
+            (input(0) / konst(2.0)).0,
+            (input(0) + konst(0.0)).0,
+            neg(neg(ScalarExpr::Input(0))),
+            abs(abs(ScalarExpr::Input(0))),
+            // constant-foldable
+            (konst(2.0) * konst(3.0)).0,
+            konst(2.0).max(konst(5.0)).0,
+            // untouched by any rule
+            sel(input(0).0, input(1).0, input(2).0),
+            ScalarExpr::Unary(UnaryOp::Erf, Box::new(ScalarExpr::Input(0))),
+            (reduced(0) + konst(1e-5)).0,
+            ScalarExpr::Coord(1),
+            ScalarExpr::Param(0),
+            // deep enough to press the saturation limit
+            (0..12).fold(ScalarExpr::Input(0), |acc, _| {
+                ScalarExpr::Add(Box::new(acc), Box::new(konst(1.0).0))
+            }),
+        ];
+
+        let mut improved = 0;
+        for body in bodies {
+            let before = cost_of(&body);
+            let after = cost_of(&optimize(&body, F32));
+            assert!(
+                after <= before,
+                "optimize made this MORE expensive ({before} -> {after}): {body:?}"
+            );
+            if after < before {
+                improved += 1;
+            }
+        }
+
+        // Vacuity control. If nothing in the corpus improves, `after <= before`
+        // is satisfied by an optimizer that returns its input unchanged, and the
+        // assertion above would hold for a no-op.
+        assert!(
+            improved > 0,
+            "no body improved — the corpus cannot tell a working optimizer from              an identity function"
+        );
+    }
+
     /// The #1 pin: `form[0] == optimize(e, F32)` bit-identical, and `top_k(_, 1)` IS
     /// the shipped optimizer — across a spread of body shapes. A k-best that
     /// silently changed the k==1 winner would alter every JIT-selected form.
