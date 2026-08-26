@@ -87,6 +87,20 @@ use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_ke
 /// existence as coverage is the trap**, and it is the trap this file would have
 /// walked into had the debt been written as "wait for KISS".
 ///
+/// **Re-measured 2026-08-26 rather than updated from a relay.** A report reached
+/// this repo that 96 NaN vectors had "merged tonight as kiss-ref `c6f89f84`",
+/// which would have made this note stale. Measured at the refs instead:
+///
+/// - KISS `origin/main` `becf90f`: `conformance/corpus/ops-minmax-signed-zero.json`
+///   still declares `number_of_vectors: 48`, every one tagged `signed-zero` /
+///   `tie`, **no NaN inputs**.
+/// - kiss-ref `c6f89f8`: landed a **generator and guard** for
+///   `ops-minmax-nan.json`. The file itself does not exist in either tree.
+///
+/// So the note was correct and stayed. **A generator for an artefact is not the
+/// artefact** — the same shape as a vendored copy read as the source, and it
+/// would have cost a "correction" of a claim that was already true.
+///
 /// (An earlier revision of this note said "one op of 106" — Fuel's figure for
 /// their VENDORED copy, which is 48 vectors and a whole file behind KISS. I
 /// repeated it without its qualifier. The zero-NaN half was right about both.)
