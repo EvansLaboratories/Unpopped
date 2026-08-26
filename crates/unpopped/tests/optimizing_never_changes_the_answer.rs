@@ -61,6 +61,27 @@ use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_ke
 /// Ordinary magnitudes (`1.0`, `-2.0`) are present as a control rather than as
 /// coverage: if a body disagrees on those too, the fault is not subtle and the
 /// message should say so.
+///
+/// # This list should not stay private, and that is a recorded debt
+///
+/// KISS ships an op-vector corpus (`kiss-op-manifest-v1`, generated from
+/// `spec/ops.md`, vendored by Fuel at `fuel-dispatch/fixtures/kiss-corpus/`)
+/// whose `tags` field already carries `signed-zero`. **Its coverage is one op of
+/// 106 and it has zero NaN vectors today**, so it cannot yet supply this — but
+/// when it can, `SPECIALS` should READ it rather than restate it.
+///
+/// A private list of values that another project authoritatively defines is the
+/// same hazard this workspace removed from `kiss_ref_diff::assert_conforming_eq`
+/// last week, where a local mirror of kiss-ref's NaN-classing rule was replaced
+/// by a call to `kiss_ref_core::ulp_distance_f32`. **A mirror cannot receive the
+/// original's refinement**, and the divergence set is exactly the kind of thing
+/// that gets refined — every new op with a discontinuity adds to it.
+///
+/// **What this file must NOT take from that corpus is the expected VALUES.** The
+/// claim here is *preservation* — `eval(body)` equals `eval(optimize(body))` —
+/// not correctness, so both sides go through this crate's own oracle and no
+/// external authority is needed or wanted. The shared artifact is the INPUT SET,
+/// nothing else.
 const SPECIALS: &[f32] = &[
     0.0,
     -0.0,
