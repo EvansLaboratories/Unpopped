@@ -1,6 +1,6 @@
 [package]
 name = "unpopped-vocab"
-version = "0.3.0"
+version = "0.3.1"
 description = "The driver-free classifier vocabulary for kernel generation: pure-data dispatch tags (ElementKind, ArchSku, OpCategory, layout / op-family tags), the StructureKey / OperandDesc classifier key and its `structure_key` derivation, the dispatch-table types, the PlanPreference / PrecisionGuarantee descriptors, and the DeviceRepr memory-layout marker. Vendor-neutral and device-free: it depends on no backend, no driver, and no vendor crate, so generators, selectors and runtimes can share one vocabulary without inheriting anyone's device stack. Extracted from the Baracuda workspace, where it was developed as baracuda-kernel-vocab."
 edition.workspace = true
 rust-version.workspace = true
