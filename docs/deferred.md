@@ -282,6 +282,27 @@ rather than a cleanup commit.
   and a key with two spellings for one meaning is not an identity. When a clause
   looks silent, check whether an adjacent value's *domain* already answers it.
   (KISS #160.)
+- **A schedule language, and whether Unpopped should have one.** Tiling, shared-
+  memory staging and unroll factor have **no representation** in the IR: a
+  `StructureKey` carries `contig`/`bcast`/`vec_width`/`inner_div`/`flipped` per
+  operand, `WorkClass` is three values, and `Schedule::Contraction` is the one
+  variant of ten carrying no parameters — precisely the one that would need tile
+  dimensions. Seven of the other nine already carry real coordinates (`Window`
+  holds `size`/`stride`/`dilation`/`pad_lo`/`pad_hi`), **so the gap is a specific
+  hole in a pattern the design already uses, not a missing concept.**
+
+  **The cost is not in the key, it is downstream.** `Lowering`'s eight seams are
+  expression spellers; there is no seam for *"stage this into shared memory"*, and
+  adding one changes what a `Backend` is. So this is priced as **"give Unpopped a
+  schedule language"**, not as a field — and a schedule language with nothing
+  searching it is a more elaborate way to hardcode a number, so it also implies a
+  search. **CireSnave's spend, not ours**; recorded because it was designed in
+  conversation on 2026-08-27 and would otherwise exist only in a transcript.
+
+  **What it is NOT:** a reason to lift hand-tuned kernels. A lifter drops what it
+  cannot represent; PTX bakes the schedule in; the round trip would re-enter the
+  competition having discarded the advantage. `LiftError::Inexpressible` already
+  refuses the population that matters (ten CUDA residue markers).
 
 ---
 
@@ -408,6 +429,29 @@ rather than a cleanup commit.
   property of *one optimizer*, re-measured per target, never inherited. Verified
   on portable C (`/O2`) and CUDA (nvrtc→PTX→driver JIT, RTX 4070). Any new target
   needs its own; a source-text golden is structurally blind to it.
+- **Hardware-aware candidate generation.** Unpopped **chooses nothing** today:
+  the caller supplies the whole `StructureKey`, `vec_width` included, and
+  `plan.rs` only honours it. There is no hardware-resource module in the tree.
+
+  The unblocked increment is a `TargetCapabilities` (per-compute-capability
+  static limits, plus per-device facts queried at runtime — `baracuda_driver`'s
+  `Device::attribute` is public and generic over `CUdevice_attribute`, so the
+  whole table is reachable) and a `candidates()` returning a **small set of legal
+  `StructureKey`s** worth racing. **Candidates as key variations, not as tile
+  parameters** — `vec_width`, `WorkClass` and `IdxWidth` are already carried
+  end-to-end and honoured by every emitter, so this needs no new seam and is
+  independent of the schedule-language question in C.
+
+  **It has a consumer on day one**, which is the test it must pass: Fuel's Judge
+  races siblings at one `structure_key`, distinguished by `kernel_revision_hash`.
+  Bound the count — **4–6 survivors per cell, not 40** — by filtering
+  spec-legal, then by `ptxas -v` (registers/spills) *before* anything reaches the
+  race. Judge cost is ops × dtypes × sizes × devices × **siblings**, and that last
+  factor is ~1 today.
+
+  **Precondition:** Fuel's GAP-244 — `"unpopped"` is not in `kernel_source_intern`,
+  and an unknown tag interns to `""`, which collapses our candidates into
+  `portable-cpu`'s cell rather than merging them with each other.
 
 ---
 
