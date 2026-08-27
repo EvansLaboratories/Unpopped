@@ -124,13 +124,6 @@ use Status::{Blocked, ByDesign, Lowers, NotYet};
 /// Eric.
 const SLANG_NARROW: &str = "asymmetric: i8/u8 are answerable from the vulkan <arith> field today      (over-refusal); i16/u16 are not expressible — the vocabulary does not name shaderInt16";
 
-/// `uint`/`uint32_t` and `uint64_t` are Slang types this backend simply has not
-/// written a lowering for. Unlike [`SLANG_NARROW`] there is no capability
-/// question — `uint32_t` is one of the two integer types Slang documents as
-/// *universally* supported, so this one is entirely ours to add.
-const SLANG_U32: &str = "Slang lowering for the unsigned types is unwritten; the types \
-     themselves are supported, so this is ours to add";
-
 /// `f8e8m0` and `f8e6m2` are the OCP Microscaling **scale** dtypes, and
 /// KISS-CLASSIFY §6.1-0013 is explicit about what that means: each is "the
 /// per-block shared scale of an MX-encoded value operand, carried as a **sibling
@@ -168,8 +161,8 @@ const COVERAGE: &[(&str, ElementKind, Status, Status)] = &[
     ("u16", ElementKind::U16, Lowers, Blocked(SLANG_NARROW)),
     ("i32", ElementKind::I32, Lowers, Lowers),
     ("i64", ElementKind::I64, Lowers, Lowers),
-    ("u32", ElementKind::U32, Lowers, Blocked(SLANG_U32)),
-    ("u64", ElementKind::U64, Lowers, Blocked(SLANG_U32)),
+    ("u32", ElementKind::U32, Lowers, Lowers),
+    ("u64", ElementKind::U64, Lowers, Lowers),
     ("bool", ElementKind::Bool, Lowers, NotYet),
     ("f8e4m3fn", ElementKind::Fp8E4M3FN, Lowers, NotYet),
     ("f8e5m2", ElementKind::Fp8E5M2, Lowers, NotYet),

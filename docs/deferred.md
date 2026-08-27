@@ -322,7 +322,7 @@ rather than a cleanup commit.
 
 
 - **Dtype lowering coverage.** The numbers are no longer here: they are
-  **measured** by `crates/unpopped/tests/dtype_lowering_coverage.rs`, which
+  **measured** by `crates/unpopped-conformance/tests/dtype_lowering_coverage.rs`, which
   carries the per-dtype × per-backend table and fails when it goes stale. The
   prose figures this entry used to give were **wrong twice** — first "CpuC 9,
   Slang 5" against a measured 8, then "CpuC 8/22" against a measured 18 once the
