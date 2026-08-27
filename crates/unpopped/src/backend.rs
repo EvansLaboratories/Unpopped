@@ -690,6 +690,28 @@ pub struct Lowering<'a> {
     ///
     /// Backends capture the dtype the same way `unary`/`binary` do.
     pub constant: &'a dyn Fn(f64) -> Result<Spelling, LowerError>,
+    /// How a hoisted temporary is **declared and assigned** — `(ctype, name, rhs)`
+    /// to one prelude line.
+    ///
+    /// A seam rather than a fixed `format!` because the driver had exactly one
+    /// target-specific line in it: `{ctype} {name} = {rhs};` is C-family syntax,
+    /// and it sat in the language-neutral walker that every backend shares. Slang
+    /// and CpuC both accept it, so **no in-tree test could ever see it** — the
+    /// neutrality claim had no way to fail. A target whose declaration form is not
+    /// `type name = rhs;` (an SSA/three-address ISA, a `let`-binding language)
+    /// could not use `lower_dag` at all, and nothing said so.
+    ///
+    /// # What this does NOT make neutral
+    ///
+    /// Only the **declaration** half. `rhs` is still whatever the `binary`/`arith`
+    /// seams spelled, and those compose *expressions* — `(a + b)`. A genuine
+    /// three-address emitter needs the operand seams to emit instructions and
+    /// return register names, which this seam does not reach. Stated because a
+    /// half-closed leak described as closed is worse than an open one.
+    ///
+    /// The default is [`c_temp`], which is what every in-tree emitter uses, so
+    /// opening this seam changed no emitted byte.
+    pub temp: &'a dyn Fn(&str, &str, &str) -> String,
 }
 
 /// Defaults for the seams [`LoweringBuilder`] does not require.
@@ -699,6 +721,16 @@ pub struct Lowering<'a> {
 /// cannot spell it, which is a plan-gate bug, not a user error. Defaulting them
 /// means a backend that never sees such a body writes nothing, while one that
 /// does still fails loudly instead of emitting something plausible.
+/// The C-family declaration form for a hoisted temporary: `{ctype} {name} = {rhs};`.
+///
+/// The default for [`Lowering::temp`], and the reference spelling for any target
+/// whose declaration syntax is C's. Exposed so a backend that wants to *wrap* the
+/// C form (adding a qualifier, say) can call it rather than restate it.
+#[must_use]
+pub fn c_temp(ctype: &str, name: &str, rhs: &str) -> String {
+    format!("{ctype} {name} = {rhs};")
+}
+
 mod default_seam {
     use super::{ArithOp, Decline, DeclinedOp, LowerError, Spelling};
 
@@ -746,6 +778,8 @@ mod default_seam {
     pub(super) static ARITH: fn(ArithOp, String, String) -> Result<Spelling, LowerError> =
         |op, a, b| Ok(Spelling::Spelled(format!("({a} {} {b})", op.c_operator())));
 
+    /// The C-family declaration form. See [`super::Lowering::temp`].
+    pub(super) static TEMP: fn(&str, &str, &str) -> String = super::c_temp;
     pub(super) static CONSTANT: fn(f64) -> Result<Spelling, LowerError> =
         |v| Ok(Spelling::Spelled(super::const_lit(v)));
 }
@@ -779,6 +813,7 @@ impl<'a> Lowering<'a> {
                 arith: &default_seam::ARITH,
                 select: &default_seam::SELECT,
                 constant: &default_seam::CONSTANT,
+                temp: &default_seam::TEMP,
             },
         }
     }
@@ -834,6 +869,14 @@ impl<'a> LoweringBuilder<'a> {
     #[must_use]
     pub fn constant(mut self, f: &'a dyn Fn(f64) -> Result<Spelling, LowerError>) -> Self {
         self.inner.constant = f;
+        self
+    }
+    /// How a hoisted temporary is declared and assigned ([`Lowering::temp`]).
+    ///
+    /// Supply this when the target's declaration form is not `type name = rhs;`.
+    #[must_use]
+    pub fn temp(mut self, f: &'a dyn Fn(&str, &str, &str) -> String) -> Self {
+        self.inner.temp = f;
         self
     }
     /// Finish.
@@ -1196,7 +1239,7 @@ fn lower_node(
     };
     let r = if hoist {
         let name = format!("tmp{}", prelude.len());
-        prelude.push(format!("{ctype} {name} = {rhs};"));
+        prelude.push((lo.temp)(ctype, &name, &rhs));
         name
     } else {
         rhs
