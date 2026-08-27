@@ -311,8 +311,20 @@ fn eval_unary(op: UnaryOp, v: f64) -> Option<f64> {
         UnaryOp::Abs => v.abs(),
         UnaryOp::Sqr => v * v,
         UnaryOp::Sqrt => v.sqrt(),
-        // Rsqrt is NOT folded: device `rsqrtf` is an approximation (~2 ulp), so a
-        // host `1/sqrt(v)` fold would change the bits the kernel emits.
+        // Rsqrt is NOT folded, and the reason is backend-neutral rather than
+        // CUDA-specific. The neutral speller now emits portable `(1.0f/sqrtf(x))`
+        // — so "the device computes rsqrtf" is no longer true of the default —
+        // but a backend MAY legitimately spell the approximate hardware
+        // intrinsic through its own `unary` seam (CUDA's `rsqrtf` is ~2 ulp;
+        // HLSL/Slang `rsqrt` likewise). This pass runs on the IR, BEFORE a
+        // backend is chosen, so it cannot know which spelling will be used.
+        // Folding to an exact host `1/sqrt(v)` would therefore change the
+        // emitted bits for some backends and not others.
+        //
+        // Read the old reason carefully before relaxing this: it said the
+        // device emits `rsqrtf`, which stopped being true when the non-portable
+        // default was fixed. The DECISION survived that change; the
+        // justification did not.
         UnaryOp::Recip => 1.0 / v,
         UnaryOp::Relu => {
             if v < 0.0 {

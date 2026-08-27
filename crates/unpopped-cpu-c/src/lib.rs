@@ -19,10 +19,12 @@
 //! [`unpopped::cfamily::select_f32`] / [`unpopped::cfamily::select_f64`], plus
 //! [`unpopped::backend::const_lit`] (`NAN`/`INFINITY`/decimal — already valid C, and
 //! `<math.h>` supplies the two macros). The ONLY CUDA-specific unary atom is
-//! `rsqrt` (a CUDA intrinsic, `rsqrtf`/`rsqrt`); the CpuC unary twin
-//! (`unary_f32_cpu`/`unary_f64_cpu`) reuses [`unpopped::cfamily::unary_f32`] /
-//! [`unpopped::cfamily::unary_f64`] for EVERY other op and overrides only `Rsqrt` to
-//! `1.0f/sqrtf(x)` (f64: `1.0/sqrt(x)`). Because the reused CUDA fns are promoted
+//! `rsqrt`; the CpuC unary twin (`unary_f32_cpu`/`unary_f64_cpu`) now delegates
+//! wholly to [`unpopped::cfamily::unary_f32`] / [`unpopped::cfamily::unary_f64`].
+//! It used to override `Rsqrt` because the shared default spelled the CUDA
+//! intrinsic `rsqrtf(x)`; that default is now portable C99
+//! (`(1.0f/sqrtf(x))`), so the override is deleted rather than left redundant.
+//! Because the reused CUDA fns are promoted
 //! `pub(crate)` with their bodies untouched, every CUDA golden stays
 //! byte-identical.
 //!
@@ -347,25 +349,24 @@ fn cpu_unary(op: UnaryOp, x: String, dtype: ElementKind) -> Result<Spelling, Low
     Ok(Spelling::Spelled(spelled))
 }
 
-/// The f32 unary twin: identical to [`unpopped::cfamily::unary_f32`] for EVERY op
-/// except `Rsqrt`, which the CUDA path spells as the intrinsic `rsqrtf(x)` — not
-/// portable C — so it is respelled `1.0f/sqrtf(x)` (the one genuinely new atom).
-/// Every other arm (`expf`/`sqrtf`/`fabsf`/`erff`/…) is a C99 `<math.h>` function
-/// reused verbatim.
+/// The f32 unary twin: now a straight delegation to
+/// [`unpopped::cfamily::unary_f32`], every arm of which is a C99 `<math.h>`
+/// function.
+///
+/// It used to override `Rsqrt`, because the shared default spelled the CUDA
+/// intrinsic `rsqrtf(x)` — not portable C. That default is fixed, so the
+/// override is gone rather than left redundant, and **the deletion is the
+/// point**: while it stood, CpuC never exercised the neutral default, so the
+/// only in-tree backend that could have caught a non-portable default was the
+/// one opted out of it. A duplicate is not a guard.
 fn unary_f32_cpu(op: UnaryOp, x: String) -> String {
-    match op {
-        UnaryOp::Rsqrt => format!("(1.0f/sqrtf({x}))"),
-        _ => unary_f32(op, x),
-    }
+    unary_f32(op, x)
 }
 
-/// The f64 unary twin: [`unpopped::cfamily::unary_f64`] for every op except `Rsqrt`,
-/// respelled `1.0/sqrt(x)` (the CUDA intrinsic `rsqrt(x)` is not portable C).
+/// The f64 unary twin — a straight delegation, for the reason given on
+/// [`unary_f32_cpu`].
 fn unary_f64_cpu(op: UnaryOp, x: String) -> String {
-    match op {
-        UnaryOp::Rsqrt => format!("(1.0/sqrt({x}))"),
-        _ => unary_f64(op, x),
-    }
+    unary_f64(op, x)
 }
 
 /// Lower a non-infix binary op for `dtype` on the CPU — REUSES the CUDA spellers

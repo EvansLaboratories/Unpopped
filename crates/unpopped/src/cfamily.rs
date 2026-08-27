@@ -726,7 +726,14 @@ pub fn unary_f32(op: UnaryOp, x: String) -> String {
         UnaryOp::Abs => format!("fabsf({x})"),
         UnaryOp::Sqr => format!("({x}*{x})"),
         UnaryOp::Sqrt => format!("sqrtf({x})"),
-        UnaryOp::Rsqrt => format!("rsqrtf({x})"),
+        // PORTABLE C99, not the CUDA `rsqrtf` intrinsic this used to spell.
+        // `rsqrtf`/`rsqrt` are CUDA math-API names absent from C99 <math.h>, and
+        // this module advertises itself as backend-neutral on a crates.io crate.
+        // Both in-tree backends already overrode this entry independently, which
+        // is the tell: when every consumer overrides a shared default, the
+        // default is the bug. A CUDA emitter that wants the intrinsic supplies
+        // it through its own `unary` seam.
+        UnaryOp::Rsqrt => format!("(1.0f/sqrtf({x}))"),
         UnaryOp::Recip => format!("(1.0f/{x})"),
         UnaryOp::Exp => format!("expf({x})"),
         UnaryOp::Log => format!("logf({x})"),
@@ -776,7 +783,8 @@ pub fn unary_f64(op: UnaryOp, x: String) -> String {
         UnaryOp::Abs => format!("fabs({x})"),
         UnaryOp::Sqr => format!("({x}*{x})"),
         UnaryOp::Sqrt => format!("sqrt({x})"),
-        UnaryOp::Rsqrt => format!("rsqrt({x})"),
+        // Portable C99 — see the f32 twin above.
+        UnaryOp::Rsqrt => format!("(1.0/sqrt({x}))"),
         UnaryOp::Recip => format!("(1.0/{x})"),
         UnaryOp::Exp => format!("exp({x})"),
         UnaryOp::Log => format!("log({x})"),
