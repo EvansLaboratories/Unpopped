@@ -113,6 +113,13 @@ rather than a cleanup commit.
   `int`, so an inlined compound operand is un-truncated while a hoisted one is
   truncated by its temp: `(in0+in1)>>in2` at u8 is `150` inlined, `22` hoisted.
   Anyone extending these ops to 8/16-bit must settle truncation **first**.
+- **A Slang complex prelude (`c64`/`c128`).** CpuC implements complex as an
+  emitted **C prelude** — `typedef struct { float re, im; } unpopped_c64;` plus a
+  library of `unpopped_c64_add`/`_sub`/… statics. Slang needs a parallel prelude
+  in its own syntax. **That is a new emitted-text surface, so it changes bytes
+  for every complex kernel and belongs to the regen event rather than to dtype
+  coverage.** Filed here on the PM's ruling 2026-08-27, bundled with the
+  f16/bf16 seam so one dated regen discharges three held items rather than two.
 
 ---
 
@@ -159,11 +166,22 @@ rather than a cleanup commit.
   trigger rule, do not treat it as ruled until it lands as a clause ID. What is
   settled and needs no clause is the local half: the referent is the same-cell
   default lowering, and the field stays on `Variant`.
-- **Whether NaN propagation (rule N2) is universally required** — on Vulkan it
-  may be unachievable *by any lowering*:
-  `shaderSignedZeroInfNanPreserveFloat32` is a `returnedonly` **property**, not a
-  feature you enable. Either gate on the capability and declare non-advertising
-  devices out of conformance, or weaken the rule. (OPEN-4.)
+- ~~**Whether NaN propagation (rule N2) is universally required**~~ —
+  **ANSWERED: no. Propagation is a per-op pinned semantic, not a global rule.**
+  Verified in `spec/ops.md` at `ef5efec`, not relayed: **`max_prop`/`min_prop`**
+  (NaN-*propagating*, matching `torch.maximum`/`torch.minimum`) and
+  **`fmax_ieee`/`fmin_ieee`** (IEEE-754 `maxNum`/`minNum`, NaN-*suppressing*) are
+  **four distinct ops**, and §80-81 lists *"pinned per-op numeric semantics — for
+  each op: NaN propagation, signed-zero behavior, IEEE versus NaN-propagating
+  min/max"*. **An implementation does not choose a propagation policy; it
+  implements whichever op it was asked for.**
+
+  The Vulkan worry that opened this entry is *not* refuted — it is a different
+  question. `shaderSignedZeroInfNanPreserveFloat32` being a `returnedonly`
+  property still means a device may not deliver what the op pins, and **whether a
+  given toolchain delivers it must be measured per target and never inherited.**
+  That half is live and is item **D — per-target N2 verification**, where it
+  belongs. The two claims were being answered as one.
 - ~~**A standard machine-readable form for §6.8-0004 namespace vocabularies**~~ —
   **RULED AND MERGED; this entry was stale.** See the re-anchoring note at the
   end of this item. Originally
@@ -268,9 +286,23 @@ rather than a cleanup commit.
   useful direction: **the coupling dissolved because the replacement declined to
   hold vocabulary at all.** A dependency between two pieces of work is a claim
   about a design that has not been made yet, and it expires when the design does.
-- **The KISS cost model** (#125) — vector-authoritative vs optional sibling. Our
-  position is recorded: we already emit a two-axis vector with provenance, and a
-  generator can only ever say `declared`.
+- ~~**The KISS cost model** (#125)~~ — **ANSWERED: it is KISS-Contract's, not a
+  separate model.** `contract.md:390` defines `cost_provenance` (`declared` or
+  `measured`, authored in Guarantees, mirrored in Provenance);
+  **KISS-CONTRACT-6.7-0006** requires the Capabilities `cost` to carry a cost
+  *class* plus cost expressions; **KISS-CONTRACT-6.8-0007** names the cost model
+  itself. Our position is unchanged and now has a home: we emit a two-axis vector
+  with provenance, and a generator can only ever say `declared`.
+
+  ⚠️ **Read the citation with its limit, which I found by checking rather than
+  quoting.** The conformance table maps both clauses to test names —
+  `test_contract_cost_expressions` and `test_contract_cost_single_home` — and
+  **only the second one exists** (`conformance/tests/contract_schema.rs:402`, at
+  `ef5efec`; positive control: the same grep finds other tests). **The row for
+  6.7-0006 names a checker that is not there**, which reads as covered. So
+  6.8-0007 is conformance-checked, 6.7-0006 is normative-only, and *"the cost
+  model is checkable"* is true of exactly half of it. Reported to the KISS
+  architect; the table is theirs, not ours.
 - ~~**Whether a reader must decline a non-canonical `x<hh>` reduce field**~~ —
   **RULED, and implemented** (`4d72bcb`). I read §6.6-0009/§6.7-0005 as silent on
   the reader and shipped accept-and-normalize. It is not silent: the `x<hh>`
@@ -330,6 +362,50 @@ rather than a cleanup commit.
   argument for moving them: a coverage claim decays silently, because nothing
   about adding a dtype arm forces the sentence describing it to change. **Run the
   test.** Any number written here is a number that will be wrong.
+
+  **Split by what actually blocks it, ruled by the portfolio PM 2026-08-27**,
+  because filing the whole thing as available made it look actionable when most
+  of it was not — the mirror of Section B's ownerless gate, one section down.
+
+  **CpuC is 18/22 and its remaining two are f16/bf16 (Section B).** Slang is
+  **6/22** after `u32`/`u64` landed (`6818679`); the rest sorts as:
+
+  - **UNBLOCKED, this section:** `i8`/`u8`, `bool`, both FP8s, `i4`/`u4`/`b1`.
+    Vulkane answered the gating question on 2026-08-28 and it is recorded here
+    rather than left in a transcript:
+    - **Grammar is `arith-f16-i8`** — hyphen-separated tuples, `.` between
+      fields, `arith-none` for empty. **Juxtaposition (`arith-f16i8`) is
+      MALFORMED**, not merely unusual (`spec/namespaces/vulkan.md` V-6).
+    - ⚠️ **Order is load-bearing.** The set is spelled in **lexicographic** name
+      order (`dot8, f16, f64, i16, i64, i8, st16, st8`), and §6.8-0002 matching
+      is **byte-exact** — so `arith-i8-f16` matches *nothing*. **Sort, then join.**
+      A wrong order is a well-formed string that silently never satisfies.
+    - ⚠️ **There is no `u8` token.** `i8` names `shaderInt8`, which is
+      **signedness-agnostic** — 8-bit integers usable in shader code. So `u8`
+      arithmetic gates on `i8`, and that absence is not an omission. Signedness
+      lives in the component-type vocabulary (`cm-`/`cv-`), a different alphabet.
+    - ⚠️ **`st8` and `i8` answer different questions, and the question is about
+      the KERNEL, not the dtype.** `st8` is `storageBuffer8BitAccess` (8-bit data
+      in a buffer); `i8` is 8-bit *arithmetic*. A kernel that only loads and
+      stores `Bool`-as-`U8` bytes needs `st8`; one that computes in 8-bit needs
+      `i8`. Reading one as the other is a silently wrong lowering on hardware
+      that is behaving correctly (V-15).
+  - **WAITING ON A PUBLISH (CireSnave's):** `i16`/`u16`. `i16` names
+    `shaderInt16` and **exists as of vocabulary v5**, on vulkane's `main` and
+    unreleased. This entry previously recorded it as *not expressible*; that was
+    true of published v4 and is **no longer a vocabulary gap — it is an unshipped
+    one.** It clears when vulkane 0.14.0 / kiss-vulkan-vocab 0.4.0 publish. Plan
+    for it rather than designing around an absence that is already fixed.
+  - **SECTION B:** `f16`/`bf16` (the spelling seam), and **complex `c64`/`c128`**
+    — see the new Section B entry; a Slang complex prelude is a new emitted-text
+    surface, so it rides the regen rather than this section.
+
+  **Why I could not answer the `arith` question myself, recorded because it is
+  their finding not my gap:** all eight of vulkane's normative vectors carry
+  `arith-none`, so the machine-readable artifact a consumer validates against
+  never exercises the multi-value form. The only multi-value example in their
+  tree is one string in two unit tests and a README table. They are adding a
+  normative multi-value vector — **found by asking rather than guessing.**
 
   **The list below is done.** `bool`, `u32`, `u64`, both FP8s, `i4`/`u4`/`b1` and
   `c64`/`c128` all lower and are differentially tested through a real C compiler.
