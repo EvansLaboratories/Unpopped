@@ -122,7 +122,7 @@ use Status::{Blocked, ByDesign, Lowers, NotYet};
 /// `supports_dtype` state — supported / unsupported / *not expressible in this
 /// vocabulary version* — which is a peer-implemented-trait change and is with
 /// Eric.
-const SLANG_NARROW: &str = "asymmetric: i8/u8 are answerable from the vulkan <arith> field today      (over-refusal); i16/u16 are not expressible — the vocabulary does not name shaderInt16";
+const SLANG_NARROW: &str = "i8/u8 are now GATED, not refused: Slang spells them      (int8_t/uint8_t) when the target advertises 8-bit arithmetic (`i8` in the vulkan      <arith> field — signedness-agnostic, so u8 gates on it; and NOT `st8`, which is      storage-only). This row probes cuda:sm89, which carries no <arith> field at all, so      the refusal here is correct rather than over-broad. i16/u16 wait on vocabulary v5      shipping `i16` — an UNSHIPPED vocabulary, not a missing one";
 
 /// `f8e8m0` and `f8e6m2` are the OCP Microscaling **scale** dtypes, and
 /// KISS-CLASSIFY §6.1-0013 is explicit about what that means: each is "the

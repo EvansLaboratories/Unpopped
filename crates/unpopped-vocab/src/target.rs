@@ -240,6 +240,60 @@ impl TargetId {
         let s = self.as_str();
         s[s.find(':').expect("interned tokens are validated") + 1..].to_string()
     }
+
+    /// The tuples carried by one named capability field, if the token has it.
+    ///
+    /// `vulkan:sg64.ops-abr.arith-f16-i8.cm-none` with `field = "arith"` gives
+    /// `["f16", "i8"]`; `arith-none` gives `[]`; a token without the field gives
+    /// `None`. **Absent and empty are different answers** — "this token does not
+    /// speak about arithmetic" is not "this target does no arithmetic".
+    ///
+    /// # Grammar, which is not this crate's to invent
+    ///
+    /// Fields separate on `.`, tuples within a field on `-`, and an empty set is
+    /// spelled `<field>-none`. **Juxtaposition (`arith-f16i8`) is malformed**, not
+    /// merely unusual: tuple names are variable-length, so juxtaposition is only
+    /// decodable while the name set happens to stay uniquely decodable as it
+    /// grows, which nothing checks. Owned by the namespace's vocabulary — for
+    /// `vulkan:` that is Vulkane, V-6.
+    ///
+    /// # This returns tuples in the order written, and that matters
+    ///
+    /// §6.8-0002 matching is **byte-exact**, and a set is *spelled* in
+    /// lexicographic name order. So a caller BUILDING a token must sort before
+    /// joining — `arith-i8-f16` is well-formed and matches nothing. This reader
+    /// does not sort for you, because silently accepting an unsorted token would
+    /// hide exactly the bug that a byte-exact match exists to catch.
+    #[must_use]
+    pub fn capability_field(&self, field: &str) -> Option<Vec<String>> {
+        capability_field_of(&self.capability_set(), field)
+    }
+}
+
+/// [`TargetId::capability_field`] over a bare capability set.
+///
+/// Split out so the grammar is testable without interning a token, and so a
+/// caller holding a set from elsewhere (a manifest, a probe) can use it.
+#[must_use]
+pub fn capability_field_of(capability_set: &str, field: &str) -> Option<Vec<String>> {
+    for part in capability_set.split('.') {
+        // Exact field match, never a prefix: a bare `contains` would let a
+        // future `arith2-...` answer a query for `arith`, and that class of
+        // substring collision has cost this workspace real time before.
+        let Some(rest) = part.strip_prefix(field) else {
+            continue;
+        };
+        let Some(rest) = rest.strip_prefix('-') else {
+            // `field` matched a longer name (`arith` vs `arithmetic`), or the
+            // field carries no `-` at all. Neither is this field.
+            continue;
+        };
+        if rest == "none" {
+            return Some(Vec::new());
+        }
+        return Some(rest.split('-').map(str::to_string).collect());
+    }
+    None
 }
 
 /// The §6.8-0001 and §6.8-0005 grammar, split out so it is testable without
@@ -462,5 +516,96 @@ mod tests {
                 "declined token {b:?} reached the intern table"
             );
         }
+    }
+
+    /// The multi-value form, which is the one nothing in the wild exercises.
+    ///
+    /// Vulkane's own normative vector set carries `arith-none` in all eight
+    /// vectors, so a parser written against the shipped artifact alone would
+    /// never see more than one tuple. This is that case.
+    #[test]
+    fn a_field_yields_its_tuples_in_written_order() {
+        let set = "sg64.ops-abr.arith-f16-i8.cm-none";
+        assert_eq!(
+            capability_field_of(set, "arith"),
+            Some(vec!["f16".to_string(), "i8".to_string()])
+        );
+        assert_eq!(
+            capability_field_of(set, "ops"),
+            Some(vec!["abr".to_string()])
+        );
+    }
+
+    /// **Order is preserved, never sorted.**
+    ///
+    /// §6.8-0002 matching is byte-exact and a set is *spelled* in lexicographic
+    /// order, so a caller BUILDING a token must sort before joining. If this
+    /// reader silently sorted, `arith-i8-f16` would round-trip looking correct
+    /// and still match nothing at the consumer — hiding the exact defect the
+    /// byte-exact rule exists to expose.
+    #[test]
+    fn the_reader_does_not_silently_sort_a_misordered_set() {
+        assert_eq!(
+            capability_field_of("arith-i8-f16", "arith"),
+            Some(vec!["i8".to_string(), "f16".to_string()]),
+            "the reader reordered a malformed token into a valid-looking one"
+        );
+    }
+
+    /// Absent and empty are different answers.
+    ///
+    /// `None` is "this token does not speak about arithmetic"; `Some([])` is
+    /// "this target advertises no 8-bit or 16-bit arithmetic". Collapsing them
+    /// would make a silent token indistinguishable from a denying one — the
+    /// same absence-is-silence-not-denial distinction the vocabulary itself
+    /// draws.
+    #[test]
+    fn absent_and_empty_are_distinguished() {
+        assert_eq!(
+            capability_field_of("sg64.arith-none", "arith"),
+            Some(vec![])
+        );
+        assert_eq!(capability_field_of("sg64.ops-abr", "arith"), None);
+    }
+
+    /// A longer field name never answers a shorter query.
+    ///
+    /// Without the `-` check, `strip_prefix("arith")` accepts `arithmetic-x` and
+    /// `arith2-x`. A `contains`-based reader would too. That substring class has
+    /// cost this workspace real time before.
+    #[test]
+    fn a_field_query_does_not_match_a_longer_field_name() {
+        assert_eq!(capability_field_of("arith2-f16", "arith"), None);
+        assert_eq!(capability_field_of("arithmetic-f16", "arith"), None);
+        assert_eq!(
+            capability_field_of("sg64", "sg"),
+            None,
+            "no separator, no field"
+        );
+    }
+
+    /// A juxtaposed set is returned as written — one tuple, not two.
+    ///
+    /// `arith-f16i8` is **malformed** per V-6, and the honest reading of
+    /// malformed input is what it literally says. Splitting it into `f16` and
+    /// `i8` would be this crate inventing a grammar the namespace owner
+    /// explicitly forbade, and would make a malformed token work by accident.
+    #[test]
+    fn a_juxtaposed_set_is_not_helpfully_split() {
+        assert_eq!(
+            capability_field_of("arith-f16i8", "arith"),
+            Some(vec!["f16i8".to_string()]),
+            "the reader split a juxtaposed set and made malformed input work"
+        );
+    }
+
+    #[test]
+    fn the_field_reader_works_through_an_interned_token() {
+        let t = TargetId::parse("vulkan:sg32.arith-f16-i8").expect("valid token");
+        assert_eq!(
+            t.capability_field("arith"),
+            Some(vec!["f16".to_string(), "i8".to_string()])
+        );
+        assert_eq!(t.capability_field("cm"), None);
     }
 }
