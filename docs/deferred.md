@@ -453,6 +453,29 @@ rather than a cleanup commit.
   and an unknown tag interns to `""`, which collapses our candidates into
   `portable-cpu`'s cell rather than merging them with each other.
 
+  **Increment 1 landed:** `crate::capability` — `TargetCapabilities`, the CUDA
+  per-compute-capability table, and `capabilities_for(TargetId)`. An unknown
+  capability returns `None` rather than a neighbouring row, and a `vulkan:` token
+  is refused rather than answered from the CUDA table.
+
+  ⚠️ **The design in this entry was WRONG about where candidates live, and the
+  correction is measured.** "Candidates as `StructureKey` variations" is **not
+  expressible**: every field of a key is *derived* from `(op, operands, target)` —
+  `idx` from the largest offset, `work` from `frame_work_class`, `vec_width` from
+  the operand's own alignment and extent via `classify_vec_width`. **A key is a
+  pure function of the request, so two candidates for one request cannot differ
+  in it.** That is the identity property working correctly, and it means
+  variation belongs to **`Backend::lower_variants`** — which already exists,
+  already returns `Vec<Variant>` with a `tag` and a `VariantFidelity`, and is
+  already implemented by baracuda's CUDA backend. Capabilities inform *which
+  variants are worth emitting*, not which key to build.
+
+  **Also found while measuring, and not fixed here:** `classify_vec_width` caps
+  vector accesses at a hardcoded `vbytes <= 16` in `unpopped-vocab`. That is
+  CUDA's `float4` limit living in the neutral vocabulary — the same shape as the
+  `backend.rs:1199` declaration leak, one crate over, and it is what
+  `TargetCapabilities::max_vector_bytes` should eventually feed.
+
 ---
 
 ## Not deferred, just worth knowing

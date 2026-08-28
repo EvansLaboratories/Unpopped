@@ -63,6 +63,7 @@
 //! backends, FKC emission, and the algebraic optimizer are the growth path.
 
 pub mod backend;
+pub mod capability;
 pub mod cfamily;
 pub mod contract;
 #[cfg(feature = "convert")]
