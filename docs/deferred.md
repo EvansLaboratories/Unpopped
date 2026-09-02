@@ -929,6 +929,30 @@ Forcing that fix created the pattern that later answered this question.)*
   Found 2026-08-20 by scanning every backticked identifier in this file against
   the sources; the *identifier* check could not catch it (`SymExtent` still
   exists), only reading the claim could.
+- **Sweep for exhaustive checks over the wrong axis.** Opened 2026-09-02 by a
+  live finding: `oracle.rs`'s `Coverage` classifier enumerates `Access`
+  **exhaustively**, compiler-enforced, every variant `Evaluated` — and the oracle
+  was nonetheless panicking on four dtypes the plan gate admitted, because
+  **nothing was measuring the DTYPE axis**. Fixed at `80bcd8c`; the *class* is
+  not.
+
+  ⚠️ **An exhaustive check over the wrong axis reads exactly like an exhaustive
+  check** — it is compiler-enforced, it is complete, and its completeness is over
+  a dimension nobody chose deliberately.
+
+  **The sweep question:** for each guard in this workspace that claims coverage,
+  **which axis is it exhaustive over, and is that the axis the claim is about?**
+  Known instances so far, all found one at a time rather than by looking:
+
+  - `Coverage` — exhaustive over `Access`, silent over dtype *(fixed)*
+  - `KNOWN_PANICKING = 0` — exhaustive over dtypes × ranks, and its **op set**
+    excluded every op with a panic path *(fixed 2026-09-02)*
+  - `neutral_spelling.rs` — exhaustive over `ElementKind`; says nothing about the
+    *functions* that spell them, which is how `cast_scalar` moves by delegation
+    without naming `F16`
+
+  **Three instances of one shape is a rate.** Unblocked and in-tree.
+
 - **Per-target N2 verification.** NaN-propagation surviving the toolchain is a
   property of *one optimizer*, re-measured per target, never inherited. Verified
   on portable C (`/O2`) and CUDA (nvrtc→PTX→driver JIT, RTX 4070). Any new target
