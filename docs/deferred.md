@@ -123,14 +123,56 @@ adding the seam with today's spelling as its default changes **no emitted byte**
 exactly as the `temp` seam did in `9123b84` — so the seam is not gated on the
 regen at all, and only a backend actually exercising it is.
 
-**Not started, because it is a real API question rather than a mechanical one:**
-backends call `cfamily::scalar_ctype` **directly** (baracuda imports it among
-eighteen symbols), not through the `Lowering` struct, so there is no existing
-seam to add a field to. Whether the override arrives as a new additive function,
-a `Lowering` field the emitters are refactored onto, or something keyed off the
-target is a design choice with a published-API cost — **the same shape as "a
-schedule language, and whether Unpopped should have one" in section C, and it
-should be priced the same way rather than started.**
+✅ **ANSWERED 2026-09-02, and the answer is that there is nothing to build here.**
+Three shapes were offered — a new additive `cfamily` function, a `Lowering` field
+the emitters refactor onto, or something keyed off the target. Baracuda priced
+all three and returned **none of them**: the override belongs in the **consumer**,
+via a **local function that shadows the name and delegates the rest**.
+
+```rust
+// baracuda-cuda-emit/src/cuda.rs — `unary_f32` is NOT in their cfamily import
+fn unary_f32(op, x) {
+    match op { Rsqrt => "rsqrtf({x})",
+               other => unpopped::cfamily::unary_f32(other, x) }
+}
+```
+
+Their reasons for declining each shape are the part worth keeping. The additive
+function is **redundant with shadowing, and two public names on a four-consumer
+crate IS the divergence generator**. The `Lowering` field would ripple across
+~24 free `emit_*(plan, ..)` sites that have no `Lowering` in scope, **for zero
+benefit to the consumer doing the refactor**. And the target-keyed option — the
+one *cheapest for them* — they turned down because **it would force this crate to
+model targets**, a concept it does not want. A consumer declining the option that
+costs them least because of what it would cost us is the right instinct from the
+right side.
+
+**Both in-tree emitters had already resolved it independently, in two different
+ways, and neither needed shared API:**
+
+| emitter | shape | why it is right there |
+|---|---|---|
+| `unpopped-cpu-c` | **calls `cfamily::scalar_ctype` directly** (5 sites) | CpuC *is* portable C — the neutral default is exactly what it wants |
+| `unpopped-slang` | **zero references; a full local `slang_ctype`** | a non-C-family target needs different spellings for most dtypes, so delegating to a C table would be wrong more often than right |
+
+**Three consumers, three shapes, no shared mechanism** — and Slang's is stronger
+evidence than a delegating shadow, because it replaced the table outright and
+that was simply the natural thing to do without anyone designing for it.
+
+⚠️ **So the collapse goes further than "the seam is not gated on the regen": there
+is no seam.** Each backend spells its own; `cfamily` keeps the neutral default;
+the regen shrinks to only the backends that actually deviate — **and CUDA's
+default already is the spelling CUDA wants.**
+
+**One question stays open and it is not ours:** whether *vulkane's* and *fuel's*
+call sites can name-shadow as cleanly. Baracuda's can because their sites are
+free functions taking `plan`. **One consumer who cannot shadow is the whole
+argument for a shared-crate mechanism; two who can is the argument against.**
+Routed by the PM; **nothing is to be built here until both have answered.**
+
+*(Closing the loop: the idiom baracuda cites as proven is the shadow they built
+for PR #46 — the precondition of this workspace's own `rsqrt` fix in `8f42471`.
+Forcing that fix created the pattern that later answered this question.)*
 
 - **The f16/bf16 spelling seam.** `cfamily::scalar_ctype` spells `__half` /
   `__nv_bfloat16` and `cast_scalar` emits `__half2float`-class intrinsics from
