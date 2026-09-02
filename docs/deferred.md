@@ -100,6 +100,38 @@ rather than a cleanup commit.
 >
 > The window opened when `unpopped 0.7.0` published on 2026-09-02.
 
+⚠️ **THESE THREE ARE ONE MECHANISM, not three items.** Found 2026-09-02 by
+auditing this file's own row count, and it changes what the regen has to be.
+
+The "Not deferred, just worth knowing" section already says it about complex —
+*"structurally identical to f16/bf16: **a dtype whose neutral spelling must be
+overridable per backend.** Complex only LOOKED settled because its portable
+default already works"* — and the same is true of FP8 and the sub-byte types,
+which reached the portable-struct answer for the same reason. So:
+
+| row | what it needs |
+|---|---|
+| the f16/bf16 spelling seam | a per-backend override for `scalar_ctype` |
+| a Slang complex prelude | the same override, plus a Slang-side default |
+| FP8 / sub-byte (from section D) | the same override, plus Slang-side codecs |
+
+**One override mechanism discharges all of them.** The regen is what the
+*overrides* cost, not what the *seam* costs.
+
+⚠️ **And that suggests a split worth pricing before the regen is scheduled:**
+adding the seam with today's spelling as its default changes **no emitted byte**,
+exactly as the `temp` seam did in `9123b84` — so the seam is not gated on the
+regen at all, and only a backend actually exercising it is.
+
+**Not started, because it is a real API question rather than a mechanical one:**
+backends call `cfamily::scalar_ctype` **directly** (baracuda imports it among
+eighteen symbols), not through the `Lowering` struct, so there is no existing
+seam to add a field to. Whether the override arrives as a new additive function,
+a `Lowering` field the emitters are refactored onto, or something keyed off the
+target is a design choice with a published-API cost — **the same shape as "a
+schedule language, and whether Unpopped should have one" in section C, and it
+should be priced the same way rather than started.**
+
 - **The f16/bf16 spelling seam.** `cfamily::scalar_ctype` spells `__half` /
   `__nv_bfloat16` and `cast_scalar` emits `__half2float`-class intrinsics from
   the *neutral* module. Tripwired in `crates/unpopped/tests/neutral_spelling.rs`,
