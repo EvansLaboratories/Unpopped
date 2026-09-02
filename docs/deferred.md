@@ -82,6 +82,24 @@ These rewrite emitted text. Doing any of them quietly breaks byte-identity
 goldens *including Baracuda's physical CUDA corpus*, so they ride a regen event
 rather than a cleanup commit.
 
+> **⚠️ THIS SECTION NOW HAS A DATE AND AN OWNER.** It previously had neither, and
+> that is a defect rather than sequencing: *a gate whose trigger nobody is
+> responsible for pulling is not a deferral, it is a permanent hold wearing a
+> deferral's clothes.* An item held on *"when the regen happens"* never fires if
+> the regen never happens.
+>
+> **Checkpoint: 2026-10-01. Owner: the portfolio PM** (accepts the regen; this
+> workspace drafts and implements it). **Enforced, not remembered** —
+> `crates/unpopped-conformance/tests/golden_regen_checkpoint.rs` goes red on that
+> date and says what to do. Proven to fire by moving the date into the past.
+>
+> When it reds, exactly one of: **schedule the regen** and do all three together,
+> or **move the date in a commit that says why it slipped and who agreed.** A
+> moved date with a reason is a live deferral; a moved date without one is this
+> defect returning.
+>
+> The window opened when `unpopped 0.7.0` published on 2026-09-02.
+
 - **The f16/bf16 spelling seam.** `cfamily::scalar_ctype` spells `__half` /
   `__nv_bfloat16` and `cast_scalar` emits `__half2float`-class intrinsics from
   the *neutral* module. Tripwired in `crates/unpopped/tests/neutral_spelling.rs`,

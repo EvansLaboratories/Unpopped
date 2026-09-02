@@ -140,6 +140,12 @@ const SLANG_NARROW: &str = "i8/u8 are now GATED, not refused: Slang spells them 
 /// an entry should be rare enough to be suspicious — so: the claim is not "we
 /// haven't got to it", it is that the §6.1 row exists to be *named and carried*,
 /// not computed with, and a future version should not quietly change that.
+/// `Bool` is stored as U8 (FKC §5), so Slang spells it `uint8_t` and gates it on
+/// the same 8-bit-arithmetic capability as `i8`/`u8`. This row probes
+/// `cuda:sm89`, which carries no `<arith>` field, so the refusal is correct here
+/// rather than unwritten — which is why it moved from `NotYet` to `Blocked`.
+const SLANG_BOOL: &str = "bool is stored as U8 (FKC §5) and gates on 8-bit arithmetic      (`i8` in the vulkan <arith> field). Refused for cuda:sm89, which advertises no      <arith> field at all. NOTE: this is a deliberate OVER-refusal — a bool kernel may      only need `st8` storage if its compiler promotes to 32-bit, and supports_dtype is      handed no plan so it cannot tell movement from compute";
+
 const MX_SCALE: &str = "MX shared-exponent scale (KISS-CLASSIFY 6.1-0013): a sibling operand \
      that scales a block, never an element value dtype a kernel computes in";
 
@@ -163,7 +169,7 @@ const COVERAGE: &[(&str, ElementKind, Status, Status)] = &[
     ("i64", ElementKind::I64, Lowers, Lowers),
     ("u32", ElementKind::U32, Lowers, Lowers),
     ("u64", ElementKind::U64, Lowers, Lowers),
-    ("bool", ElementKind::Bool, Lowers, NotYet),
+    ("bool", ElementKind::Bool, Lowers, Blocked(SLANG_BOOL)),
     ("f8e4m3fn", ElementKind::Fp8E4M3FN, Lowers, NotYet),
     ("f8e5m2", ElementKind::Fp8E5M2, Lowers, NotYet),
     (
