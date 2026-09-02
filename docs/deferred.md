@@ -973,6 +973,49 @@ Forcing that fix created the pattern that later answered this question.)*
   **Deriving inherits that guarantee; copying does not**, and the two look
   identical at the call site.
 
+- ~~**External-axis sweep** — which guards depend on a fact this repo cannot
+  observe?~~ — **DONE 2026-09-02.** Space: 39 test files + 22 production sources.
+  Discriminator: **if the external fact changed, would anything here go red?**
+
+  **Three outcomes, not two — and the third turned out to be the common one.**
+
+  **1 · EXTERNAL WITH A MECHANISM (no action).** `kiss_byte_match` and
+  `kiss_dtype_manifest` read **vendored** KISS artifacts and pin their **length
+  and content**. Re-vendoring reds them, forcing a deliberate update. ⚠️ **Their
+  own comment makes the distinction that matters:** *"this is the check
+  `source_commit` cannot perform, because that field records the spec commit and
+  does not move when the artifact is regenerated."* **Pinning the provenance field
+  would have been a false mechanism.** This is the mechanism worth copying.
+
+  **2 · EXTERNAL, DOMINATED (annotate, do not remedy).** `ADMISSION_API`. Fuel
+  measured that its six names are **private internals** — `mod jit_ingest` is not
+  `pub mod`, `adopt_verified` is not `pub fn`, zero re-exports — of a crate this
+  workspace does not depend on. **So compiled code cannot name them without first
+  declaring the dependency the guard's OTHER axis already checks.** The manifest
+  scan strictly dominates; the name list adds coverage only for non-compiled
+  mentions.
+
+  ⚠️ **A guard with two axes where one dominates reads as two checks and is one.
+  The dominated axis costs maintenance and its rot is INVISIBLE, because the
+  surviving axis keeps the test green.** That is a different finding from *"this
+  guard will silently stop checking"* — and it needed the other repo's
+  **visibility modifiers**, which are exactly what cannot be seen from here.
+
+  **3 · EXTERNAL WITHOUT A MECHANISM — one, and it is small.**
+  `KISS-CLASSIFY-6.8-0002`, asserted by `operand_facts_reach_the_key.rs` and
+  covered by **no vendored vector**. Of 6 clause IDs asserted across the vocab
+  tests, 5 appear in the 37 vendored vectors and this one does not. **Remedy is
+  cheap and not local: ask KISS for a vector exercising it**, which converts a
+  paraphrase into the same content-pinned mechanism the other five already have.
+
+  ⚠️ **Three self-inflicted measurement errors during this sweep, all the same
+  shape — a label that does not depend on what it labels.** An `echo "(empty…)"`
+  that printed unconditionally over a six-hit result; a `grep -E "a\|b"` that
+  searched for a literal pipe and returned a false zero; and guessing JSON key
+  names and reading the miss as "0 vectors" when the file had 37 under different
+  keys. **Each produced a plausible number from a query that had not asked the
+  question**, which is the class this whole sweep is about, committed three times
+  by the sweeper inside one hour.
 - **Per-target N2 verification.** NaN-propagation surviving the toolchain is a
   property of *one optimizer*, re-measured per target, never inherited. Verified
   on portable C (`/O2`) and CUDA (nvrtc→PTX→driver JIT, RTX 4070). Any new target

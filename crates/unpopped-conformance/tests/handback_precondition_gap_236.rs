@@ -77,7 +77,40 @@ const ALLOWED_FUEL_DEPS: &[(&str, &str)] = &[(
 
 /// Names that mean this workspace is submitting candidates for admission.
 ///
-/// # ⚠️ THIS AXIS IS EXTERNAL AND UNVERIFIABLE FROM THIS REPO
+/// # ⚠️ THIS AXIS IS EXTERNAL — AND, MEASURED, IT IS DOMINATED RATHER THAN FRAGILE
+///
+/// **Corrected 2026-09-02 by fuel's own measurement, after this note first said
+/// the axis was fragile.** It is external, but the guard has **two** axes and one
+/// strictly dominates the other:
+///
+/// ```text
+/// unallowed_fuel_deps(manifest)   scans Cargo.toml — OWNED ENTIRELY HERE.
+///                                 No rename in fuel touches it.
+/// ADMISSION_API name scan of .rs  keyed on fuel's symbol names — the external one
+/// ```
+///
+/// **Fuel measured that these are not public entry points at all**:
+/// `mod jit_ingest` is **not** `pub mod`, `adopt_verified` is `fn` rather than
+/// `pub fn`, and there are **zero** re-exports. *(Control: all six symbols exist
+/// at their `origin/main` with one definition site each.)*
+///
+/// **So compiled code cannot name any of them without first declaring a
+/// dependency on `fuel-dispatch` — and a private module cannot be re-exported, so
+/// there is no second route.** Every trigger the name scan could catch in
+/// compiled code **must pass the manifest check first.**
+///
+/// ⚠️ **The name list therefore adds coverage only for NON-COMPILED mentions** —
+/// a stub, a plan, a name written before the dependency exists. **Real, but small,
+/// and it is exactly the half that rots.** Treat it as a **best-effort tripwire,
+/// not a coverage claim.**
+///
+/// **A guard with two axes where one dominates reads as two checks and is one.**
+/// The dominated axis costs maintenance and **its rot is invisible, because the
+/// surviving axis keeps the test green.** That is a different finding from *"this
+/// guard will silently stop checking"* — nothing here stops checking; one half
+/// was never load-bearing for the case that matters.
+///
+/// # What was originally written here, kept because the reasoning was sound
 ///
 /// Every other corpus in this workspace is either derived from a
 /// guaranteed-complete source (`ElementKind::ALL`, complete by mechanism) or is
