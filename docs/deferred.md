@@ -156,6 +156,46 @@ well-formed cooperative-matrix value** — it is a minimal probe for the substri
 class, not a realistic token. **The hazard it guards is real; the token it uses is
 synthetic**, and those are different claims.
 
+### ⚠️ f16 and bf16 are NOT parallel in the vulkan namespace
+
+**Offered by vulkane 2026-09-02, verified in the packaged `kiss-vulkan-vocab
+0.4.0` (`vocabulary_version: 5`) rather than taken from their message:**
+
+```
+       arith   component_type
+f16    yes     yes
+bf16   NO      yes
+f32    NO      yes
+f64    yes     yes
+```
+
+**`arith_names` only names capabilities a device can LACK.** `f16` is there
+because `shaderFloat16` is an optional feature bit; `f32` is absent because it is
+baseline; **`bf16` is absent because Vulkan has no bfloat16 scalar-arithmetic
+feature bit at all.** Cooperative-matrix support for bf16 elements exists; a
+scalar *"can this device do bf16 arithmetic"* capability does not. **It is a gap
+in Vulkan, not a choice of theirs.**
+
+**This tree treats the two as parallel everywhere** — `scalar_ctype` gives
+`__half`/`__nv_bfloat16`, `half_load_intrinsic` gives
+`__half2float`/`__bfloat162float`, and `unpopped-slang` declines both together.
+
+**For CUDA that parallelism is correct** — both types exist with matching
+intrinsics, so the storage-shape half of this row (spell storage, emit software
+helpers) is symmetric and unaffected.
+
+⚠️ **It stops being correct the moment a vulkan-family backend tries to GATE
+them**, which is the step immediately after this row lands. `f16` gates on
+`arith` containing `f16`. **`bf16` has nothing to gate on** — the honest answer is
+a permanent decline for scalar bf16 arithmetic, or a route through the
+cooperative-matrix surface, which is a different mechanism entirely.
+
+**So "f16/bf16" is one row for the storage change and two cases for the
+capability gate.** Recorded now because the asymmetry is invisible from this side:
+nothing in this workspace distinguishes them, and the first thing to notice would
+have been a gate that silently never satisfies — **the failure mode with no error
+message.**
+
 ### The f16/bf16 shadow surface, for a consumer that must pin current bytes
 
 **Measured at HEAD 2026-09-02**, because baracuda asked for the *surface* rather
