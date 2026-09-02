@@ -414,9 +414,17 @@ rather than a cleanup commit.
     true of published v4 and is **no longer a vocabulary gap — it is an unshipped
     one.** It clears when vulkane 0.14.0 / kiss-vulkan-vocab 0.4.0 publish. Plan
     for it rather than designing around an absence that is already fixed.
-  - **SECTION B:** `f16`/`bf16` (the spelling seam), and **complex `c64`/`c128`**
-    — see the new Section B entry; a Slang complex prelude is a new emitted-text
-    surface, so it rides the regen rather than this section.
+  - **SECTION B:** `f16`/`bf16` (the spelling seam), **complex `c64`/`c128`**,
+    and — **corrected 2026-09-02** — **both FP8s and `i4`/`u4`/`b1`**. These were
+    listed as unblocked on the strength of `bool` being one, and that was wrong:
+    `bool` needed only a ctype because FKC §5 stores it as U8 and its ops route
+    through `binary_int`. **FP8 and sub-byte need CODECS.** `cfamily::fp8_helpers`
+    returns emitted C prelude text, and `sub_byte_load_fn` names
+    `unpopped_i4_load` / `unpopped_b1_load`, defined as `static int
+    unpopped_i4_load(const unsigned char* p, ...)`. Slang needs a parallel prelude
+    in its own syntax — the same shape as complex, the same new emitted-text
+    surface, and therefore the same regen. **"Follows bool's test" was true of the
+    gate and false of the work.**
 
   **Why I could not answer the `arith` question myself, recorded because it is
   their finding not my gap:** all eight of vulkane's normative vectors carry
@@ -478,11 +486,19 @@ rather than a cleanup commit.
   The reserved `fnuz` pair must **never** be lowered at this schema version, and
   that is asserted separately from the table: "forbidden" and "not done yet" are
   different facts and should not share a column of `false`s.
-- **Oracle coverage**: `RowSort` (NaN-greatest `key_lt`, stable ties, TopK), and
-  gather/scatter — the latter needs a *different notion of correct*, since under
-  nondeterministic FP `atomicAdd` only an order-independent invariant is
-  checkable at all. Pinned by the exhaustive `Coverage` classifier in
-  `oracle.rs`'s tests.
+- **Oracle coverage**: ~~`RowSort`~~ — **DONE**; `eval_row_sort` evaluates it
+  (NaN-greatest in both directions, stable index ties, TopK read off the output
+  operand's width), and the `Coverage` classifier moved `Deferred` -> `Evaluated`.
+  **That also removed a `panic!` from a `pub` module**: `oracle` is
+  `pub mod oracle`, so `evaluate` on a `RowSort` plan was a reachable panic on
+  valid input — the same class 0.6.0 removed from the plan gate, in a corner
+  nobody had swept.
+
+  **Still open: gather/scatter** — it needs a *different notion of correct*, since
+  under nondeterministic FP `atomicAdd` only an order-independent invariant is
+  checkable at all. That is a design question rather than coverage, and it is why
+  it is not bundled with the above. Pinned by the exhaustive `Coverage`
+  classifier in `oracle.rs`'s tests.
 - ~~**Quant: adopt the scale-sibling-operand model.**~~ — **DONE**; `QuantFacts`
   removed, the sibling model measured. The residual sentence that used to sit
   here — *"blk32 vs blk128 both contribute one same-rank scale sibling and still
@@ -569,6 +585,23 @@ rather than a cleanup commit.
   CUDA's `float4` limit living in the neutral vocabulary — the same shape as the
   `backend.rs:1199` declaration leak, one crate over, and it is what
   `TargetCapabilities::max_vector_bytes` should eventually feed.
+
+  ⚠️ **Increment 2 has NO IN-TREE SUBJECT, measured 2026-09-02 before building
+  it.** A variant needs an axis to vary, and both in-tree emitters serve
+  `Schedule::Scalar` only — there is no second thing for CpuC or Slang to emit.
+  The real variant axis is **algorithmic**, not tiling: `plan.rs` names
+  `cuda::scan_blockscan_variant` and `cuda::row_sort_bitonic_variant` as
+  `lower_variants` filters, and those are baracuda's. `unpopped/src/lib.rs:249`
+  does call `lower_variants`, so the seam is wired — it is the *producers* that
+  are all out of tree.
+
+  **So the next real increment is a capability-aware legality predicate** (is a
+  block-cooperative variant viable for this plan on this target — block size,
+  shared memory, warp width), whose only consumer today is baracuda. **Not built
+  speculatively:** an API with no in-tree caller is the exact shape this
+  workspace keeps finding defects in, and building one *for* an adopter who has
+  not asked is worse than waiting. **Ask baracuda whether they want it before
+  writing it.**
 
 ---
 

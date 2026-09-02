@@ -101,7 +101,7 @@
 //! BEFORE all per-element address math), since the plan carries only the PRESENCE
 //! mask, not the runtime value.
 
-use crate::ir::{Access, BinaryOp, ReduceOp, ScalarExpr, UnaryOp, View};
+use crate::ir::{Access, BinaryOp, ReduceOp, ScalarExpr, SortOrder, SortOut, UnaryOp, View};
 use crate::plan::{KernelPlan, RrRole, Schedule, rr_role};
 use unpopped_vocab::{ElementKind, OperandDesc};
 
@@ -1822,8 +1822,110 @@ pub fn evaluate(
         Access::Window { .. } => vec![eval_window(plan, operands, inputs, params)],
         Access::Im2Col { .. } => vec![eval_im2col(plan, operands, inputs)],
         Access::Contraction { .. } => vec![eval_contraction(plan, operands, inputs, params)],
-        Access::RowSort { .. } => panic!("oracle v1: RowSort is deferred to v2"),
+        Access::RowSort { .. } => eval_row_sort(plan, operands, inputs),
     }
+}
+
+// ===========================================================================
+// H. RowSort (stable pair-sort, NaN-greatest).
+
+/// Total order on the sort key with **NaN as the maximum**.
+///
+/// `Access::RowSort`'s doc pins it: *NaN orders GREATEST in both* — so
+/// ascending puts NaN last and **descending puts NaN FIRST**. That is the arm a
+/// reader expects to be wrong, so it is one comparator used twice rather than
+/// two comparators that could drift apart.
+///
+/// `-0.0` and `0.0` compare Equal, matching the emitter's `<` on floats. The
+/// sort is stable, so equal keys keep their original index order and the
+/// signed-zero pair is not reordered.
+fn sort_key_cmp(a: f64, b: f64) -> core::cmp::Ordering {
+    match (a.is_nan(), b.is_nan()) {
+        (true, true) => core::cmp::Ordering::Equal,
+        (true, false) => core::cmp::Ordering::Greater,
+        (false, true) => core::cmp::Ordering::Less,
+        (false, false) => a.partial_cmp(&b).expect("neither operand is NaN"),
+    }
+}
+
+/// Per-row stable sort of the last axis.
+///
+/// The body is pinned to exactly `Input(0)` by `validate_row_sort`, so there is
+/// no pre- or post-map to apply — this permutes, it does not compute. Values
+/// move as **raw bits** rather than through `f64`, because a values-sort is a
+/// permutation: a payload that round-tripped through `f64` would normalise a
+/// signalling NaN and silently differ from what the kernel writes.
+fn eval_row_sort(
+    plan: &KernelPlan<'_>,
+    operands: &[OperandDesc],
+    inputs: &[TypedBuffer],
+) -> Vec<TypedBuffer> {
+    let (order, out_kind) = match plan.access {
+        Access::RowSort { order, out, .. } => (order, out),
+        _ => unreachable!(),
+    };
+    let n_in = 1usize;
+    let rank = plan.key.rank as usize;
+    let in_od = &operands[0];
+    let k_in = in_od.shape[rank - 1];
+    let n_rows = if k_in > 0 {
+        prod(&in_od.shape[..rank]).max(0) / k_in
+    } else {
+        0
+    };
+
+    let n_outputs = usize::from(matches!(out_kind, SortOut::Both)) + 1;
+    let mut outs: Vec<TypedBuffer> = (0..n_outputs)
+        .map(|j| alloc_output(plan, operands, n_in, j))
+        .collect();
+
+    for row in 0..n_rows {
+        let base = row * k_in;
+        let keys: Vec<f64> = (0..k_in)
+            .map(|j| read_flat(inputs, operands, 0, base + j).f64())
+            .collect();
+        // `sort_by` is stable, and reversing the comparator does not change
+        // which pairs compare Equal — so ties keep ascending original index in
+        // BOTH orders, which is what the emitter's (key, index) pair-sort does.
+        let mut perm: Vec<usize> = (0..k_in as usize).collect();
+        perm.sort_by(|&a, &b| {
+            let c = sort_key_cmp(keys[a], keys[b]);
+            match order {
+                SortOrder::Asc => c,
+                SortOrder::Desc => c.reverse(),
+            }
+        });
+
+        for (j, ob) in outs.iter_mut().enumerate() {
+            // The output width may be SHORTER than the input for a TopK cap;
+            // `validate_row_sort` allows exactly that and nothing else, so the
+            // cap is read off the operand rather than from `SortLimit`.
+            let k_out = operands[n_in + j].shape[rank - 1];
+            let take = k_out.min(k_in).max(0) as usize;
+            let obase = (row * k_out) as usize;
+            let writes_indices =
+                matches!((out_kind, j), (SortOut::Indices, 0) | (SortOut::Both, 1));
+            for (t, &src) in perm.iter().take(take).enumerate() {
+                if writes_indices {
+                    store_val(
+                        Val::Int(src as i128),
+                        ElementKind::I32,
+                        &mut ob.bytes,
+                        obase + t,
+                    );
+                } else {
+                    let bits = read_elem(
+                        &inputs[0].bytes,
+                        (inputs[0].base_offset + base + src as i64) as usize,
+                        in_od.dtype,
+                    );
+                    let odt = plan.out_dtype_of(j);
+                    write_elem(&mut ob.bytes, obase + t, odt, bits);
+                }
+            }
+        }
+    }
+    outs
 }
 
 // ===========================================================================
@@ -3179,6 +3281,19 @@ mod tests {
         /// `evaluate` dispatches it to a real evaluator.
         Evaluated,
         /// `evaluate` panics — genuinely not implemented.
+        ///
+        /// Unreachable since `eval_row_sort` shipped and every `Access` became
+        /// `Evaluated`. Kept rather than deleted so the next deferred access has
+        /// a home, and `#[expect]` rather than `#[allow]` deliberately: the
+        /// moment something constructs this, the expectation goes unfulfilled and
+        /// reds, which is the prompt to remove the attribute. An `#[allow]` would
+        /// sit here silently forever.
+        ///
+        /// (`#[expect]` is safe here where it is not generally safe in this
+        /// workspace: this lives inside `#[cfg(test)]`, so there is exactly one
+        /// compilation of it and the dead-in-lib/live-in-test trap does not
+        /// apply.)
+        #[expect(dead_code, reason = "a home for the next deferred Access")]
         Deferred,
     }
 
@@ -3193,9 +3308,11 @@ mod tests {
             | Access::Im2Col { .. }
             // Covered since `eval_contraction` shipped. The module doc said
             // otherwise for long enough that it is worth naming here.
-            | Access::Contraction { .. } => Coverage::Evaluated,
-            // The NaN-greatest `key_lt` / stable-index-tie / TopK comparator.
-            Access::RowSort { .. } => Coverage::Deferred,
+            | Access::Contraction { .. }
+            // Covered since `eval_row_sort` shipped: NaN-greatest ordering in
+            // both directions, stable index ties, and the TopK cap read off the
+            // output operand's width.
+            | Access::RowSort { .. } => Coverage::Evaluated,
         }
     }
 
@@ -3205,6 +3322,20 @@ mod tests {
         // time. This asserts the one variant that is cheap to name, so the
         // classifier cannot be deleted without a test failing too.
         assert_eq!(coverage(&Access::Elementwise), Coverage::Evaluated);
+        // Every variant is now Evaluated, which makes `Deferred` unreachable —
+        // kept rather than deleted so the NEXT deferred access has somewhere to
+        // go, and asserted here so "nothing is deferred" is a measured claim
+        // rather than an empty enum nobody noticed.
+        assert_eq!(
+            coverage(&Access::RowSort {
+                order: SortOrder::Asc,
+                stable: true,
+                out: SortOut::Values,
+                limit: crate::ir::SortLimit::Full,
+            }),
+            Coverage::Evaluated,
+            "RowSort is evaluated since eval_row_sort shipped"
+        );
     }
 
     use super::*;
@@ -3227,6 +3358,10 @@ mod tests {
     }
 
     // Decode helpers reused across the suite.
+    fn i32s(b: &TypedBuffer) -> Vec<i32> {
+        (0..b.len()).map(|i| b.bits_at(i) as u32 as i32).collect()
+    }
+
     fn f32s(b: &TypedBuffer) -> Vec<f32> {
         (0..b.len())
             .map(|i| f32::from_bits(b.bits_at(i) as u32))
@@ -3375,6 +3510,117 @@ mod tests {
     // WHOLE: it exercises REVERSE scan, an emission-level honest miss (flip
     // withdrawn — `semantics_dag` returns None) that kiss-ref cannot cover, so it
     // has no equal-or-better replacement to retire against.
+
+    // --- H. RowSort ---------------------------------------------------------
+
+    /// NaN orders GREATEST in BOTH directions — so ascending puts it last and
+    /// **descending puts it FIRST**.
+    ///
+    /// The descending arm is the one a reader expects to be wrong, and a test
+    /// that only checked ascending would pass against a comparator that treated
+    /// NaN as smallest-under-reversal. Both arms, from one corpus.
+    #[test]
+    fn row_sort_orders_nan_greatest_in_both_directions() {
+        let ind = desc(&[1, 4], &[4, 1], ElementKind::F32);
+        let data = [3.0f32, f32::NAN, 1.0, 2.0];
+        let k = key(OpCategory::Sorting, &[ind, ind]);
+
+        let asc = OpDef::row_sort("s_asc", ElementKind::F32, SortOrder::Asc);
+        let out = evaluate(
+            &build_plan(&asc, &k),
+            &[ind, ind],
+            &[f32b(&[1, 4], &data)],
+            &[],
+        );
+        let v = f32s(&out[0]);
+        assert_eq!(&v[..3], &[1.0, 2.0, 3.0], "ascending values");
+        assert!(v[3].is_nan(), "ascending puts NaN LAST, got {v:?}");
+
+        let desc_op = OpDef::row_sort("s_desc", ElementKind::F32, SortOrder::Desc);
+        let out = evaluate(
+            &build_plan(&desc_op, &k),
+            &[ind, ind],
+            &[f32b(&[1, 4], &data)],
+            &[],
+        );
+        let v = f32s(&out[0]);
+        assert!(v[0].is_nan(), "descending puts NaN FIRST, got {v:?}");
+        assert_eq!(&v[1..], &[3.0, 2.0, 1.0], "descending values after the NaN");
+    }
+
+    /// Ties keep their original index order, in both directions.
+    ///
+    /// `sort_by` is stable and reversing a comparator does not change which
+    /// pairs compare Equal — so descending must NOT reverse ties. An
+    /// implementation that sorted ascending then reversed the whole row would
+    /// pass the ordering test above and fail this one.
+    #[test]
+    fn row_sort_ties_keep_their_original_index_in_both_directions() {
+        // `row_sort_indices` builds `SortOut::Both`: input, VALUES out, INDICES
+        // out. Three operands, and the indices are output 1.
+        let ind = desc(&[1, 4], &[4, 1], ElementKind::F32);
+        let iout = desc(&[1, 4], &[4, 1], ElementKind::I32);
+        let data = [5.0f32, 1.0, 5.0, 1.0];
+        let k = key(OpCategory::Sorting, &[ind, ind, iout]);
+        let ops = [ind, ind, iout];
+
+        let asc = OpDef::row_sort_indices("i_asc", ElementKind::F32, SortOrder::Asc);
+        let out = evaluate(&build_plan(&asc, &k), &ops, &[f32b(&[1, 4], &data)], &[]);
+        assert_eq!(
+            i32s(&out[1]),
+            vec![1, 3, 0, 2],
+            "the two 1.0s keep 1<3, the two 5.0s keep 0<2"
+        );
+        assert_eq!(
+            f32s(&out[0]),
+            vec![1.0, 1.0, 5.0, 5.0],
+            "Both's value output must agree with its own index output"
+        );
+
+        let dsc = OpDef::row_sort_indices("i_desc", ElementKind::F32, SortOrder::Desc);
+        let out = evaluate(&build_plan(&dsc, &k), &ops, &[f32b(&[1, 4], &data)], &[]);
+        assert_eq!(
+            i32s(&out[1]),
+            vec![0, 2, 1, 3],
+            "descending reverses the VALUES but not the ties — a whole-row reverse would give [2,0,3,1]"
+        );
+    }
+
+    /// A narrower output is a TopK cap, read off the operand rather than a flag.
+    #[test]
+    fn row_sort_truncates_to_the_output_width() {
+        let ind = desc(&[1, 5], &[5, 1], ElementKind::F32);
+        let outd = desc(&[1, 2], &[2, 1], ElementKind::F32);
+        let data = [3.0f32, 1.0, 4.0, 1.5, 9.0];
+        let k = key(OpCategory::Sorting, &[ind, outd]);
+        let op = OpDef::row_sort("top2", ElementKind::F32, SortOrder::Desc);
+        let out = evaluate(
+            &build_plan(&op, &k),
+            &[ind, outd],
+            &[f32b(&[1, 5], &data)],
+            &[],
+        );
+        assert_eq!(f32s(&out[0]), vec![9.0, 4.0], "top 2 descending");
+    }
+
+    /// Multiple rows are sorted independently.
+    ///
+    /// A row loop that computed `base` once, or shared the permutation, passes
+    /// every single-row test above.
+    #[test]
+    fn row_sort_treats_rows_independently() {
+        let ind = desc(&[2, 3], &[3, 1], ElementKind::F32);
+        let data = [3.0f32, 1.0, 2.0, 9.0, 7.0, 8.0];
+        let k = key(OpCategory::Sorting, &[ind, ind]);
+        let op = OpDef::row_sort("rows", ElementKind::F32, SortOrder::Asc);
+        let out = evaluate(
+            &build_plan(&op, &k),
+            &[ind, ind],
+            &[f32b(&[2, 3], &data)],
+            &[],
+        );
+        assert_eq!(f32s(&out[0]), vec![1.0, 2.0, 3.0, 7.0, 8.0, 9.0]);
+    }
 
     #[test]
     fn scan_cummax_forward_and_reverse_and_exclusive() {
