@@ -408,6 +408,7 @@ pub fn try_build_plan<'a>(
     op: &'a OpDef,
     key: &'a StructureKey,
 ) -> Result<KernelPlan<'a>, PlanError> {
+    check_dtype_is_a_compute_dtype(key.dtype)?;
     check_no_half_nextafter(op, key.dtype)?;
     check_int_op_admissibility(op, key.dtype)?;
     check_complex_op_admissibility(op, key.dtype)?;
@@ -1693,6 +1694,48 @@ fn assert_valid_offsets(op: &OpDef, _key: &StructureKey) {
          per lane parity)",
         op.n_outputs()
     );
+}
+
+/// A `structure_key` dtype position must name a dtype a kernel can COMPUTE IN.
+///
+/// Four §6.1 rows are not that, and the vocabulary says so in its own doc:
+///
+/// - **`Fp8E4M3FNUZ` / `Fp8E5M2FNUZ`** — RESERVED. *"Every use in a
+///   `structure_key` dtype position is a **typed decline**."* They are recognized
+///   and distinguished from unknown precisely so they can be refused rather than
+///   mistaken for their `FN` near-twins, which they are **byte-incompatible**
+///   with.
+/// - **`F8E8M0` / `F8E6M2`** — MX shared block **scales** (KISS-CLASSIFY
+///   §6.1-0013): a sibling operand that scales a block, **never an element value
+///   dtype a kernel computes in**. A kernel does not compute *in* a scale.
+///
+/// # Why this is a gate rather than a comment
+///
+/// The emitters already refuse all four, so the emission path was safe and
+/// `the_reserved_dtypes_never_lower` proved it. **But `unpopped::oracle` is a
+/// second consumer of a plan and it is `pub`** — `evaluate` takes a
+/// `KernelPlan` and never sees a backend. Measured 2026-09-02: the gate ADMITTED
+/// all four and `oracle::elem_size` then **panicked** on each, which is a
+/// reachable panic on valid input in a published crate.
+///
+/// ⚠️ **The op-level coverage was complete and the DTYPE axis was not, and
+/// nothing was measuring that axis.** `Coverage` in `oracle.rs` enumerates
+/// `Access` exhaustively — schedules — so it went green while four dtypes had no
+/// evaluation at all. **An exhaustive check over the wrong axis reads exactly
+/// like an exhaustive check.**
+fn check_dtype_is_a_compute_dtype(dtype: ElementKind) -> Result<(), PlanError> {
+    let why = match dtype {
+        ElementKind::Fp8E4M3FNUZ | ElementKind::Fp8E5M2FNUZ => {
+            "a RESERVED dtype with no computation semantics at this schema              version; it is recognized so it can be declined rather than confused              with its byte-incompatible `fn` twin"
+        }
+        ElementKind::F8E8M0 | ElementKind::F8E6M2 => {
+            "an MX shared block SCALE (KISS-CLASSIFY 6.1-0013) — a sibling              operand that scales a block, never an element value dtype a kernel              computes in"
+        }
+        _ => return Ok(()),
+    };
+    Err(PlanError::InadmissibleOpInCell {
+        detail: format!("{dtype:?} is not a compute dtype: {why}"),
+    })
 }
 
 pub(crate) fn check_no_half_nextafter(op: &OpDef, dtype: ElementKind) -> Result<(), PlanError> {
