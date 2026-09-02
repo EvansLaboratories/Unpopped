@@ -494,11 +494,41 @@ rather than a cleanup commit.
   valid input — the same class 0.6.0 removed from the plan gate, in a corner
   nobody had swept.
 
-  **Still open: gather/scatter** — it needs a *different notion of correct*, since
-  under nondeterministic FP `atomicAdd` only an order-independent invariant is
-  checkable at all. That is a design question rather than coverage, and it is why
-  it is not bundled with the above. Pinned by the exhaustive `Coverage`
-  classifier in `oracle.rs`'s tests.
+  **Still open: gather/scatter.** The entry used to say it *"needs a different
+  notion of correct"* as though that were true of the whole of it. **Measured
+  2026-09-02, it is true of exactly ONE cell**, and the plan gate had already
+  done most of the narrowing:
+
+  | write combine | dtypes the gate admits | order-independent? |
+  |---|---|---|
+  | `Assign` | any | **only when the indices are unique** — otherwise last-writer-wins with no defined order |
+  | `AtomicAdd` | `i32`/`i64` | **yes** — integer addition is associative and commutative, wrapping included |
+  | `AtomicAdd` | `f32`/`f64` | **NO. This is the whole open question.** |
+  | `AtomicMax` / `AtomicMin` | **integer only** (`combine_legal_for_dtype`) | **yes** — and the float case that would have been genuinely subtle (`max(-0.0, +0.0)` is implementation-defined, so it could have been order-dependent) **is not admitted**, so it does not arise |
+
+  **And gather is not part of the question at all.** It is a `ReadIndex` — an
+  indexed *read*, no contention, fully deterministic, exactly checkable.
+
+  **Recommendation for the one open cell, cheapest sound answer first:** do not
+  weaken the check, **characterise the subset where the nondeterminism cannot
+  manifest.** Float addition is exact — and therefore associative and
+  order-independent — when every scattered value is an integer exactly
+  representable in the type and every running partial stays inside the exact
+  range (2^24 for `f32`, 2^53 for `f64`). A corpus built that way makes
+  `AtomicAdd@f32/f64` bit-exact and needs no new notion of correct. Only if
+  someone needs coverage *outside* that subset does a weaker invariant (an
+  acceptance envelope over several accumulation orders) become necessary — and
+  that is a separate, later question.
+
+  ⚠️ **NOT BUILT, and the reason is the same as increment 2's:** neither in-tree
+  emitter consumes `read_index` or `write_index` — `grep` returns nothing in
+  `unpopped-cpu-c` or `unpopped-slang`. The plan carries both fields through
+  (`plan.rs:246`/`255`), but **every producer is baracuda's.** Oracle support here
+  would be a reference implementation with no in-tree counterpart to differ
+  against. **Ask baracuda whether they want it before writing it** — same ask,
+  same reason.
+
+  Pinned by the exhaustive `Coverage` classifier in `oracle.rs`'s tests.
 - ~~**Quant: adopt the scale-sibling-operand model.**~~ — **DONE**; `QuantFacts`
   removed, the sibling model measured. The residual sentence that used to sit
   here — *"blk32 vs blk128 both contribute one same-rank scale sibling and still
