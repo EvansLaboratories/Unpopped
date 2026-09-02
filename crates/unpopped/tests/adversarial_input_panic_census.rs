@@ -50,7 +50,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::sync::Mutex;
 
 use unpopped::backend::{Backend, GeneratedKernel, LowerError};
-use unpopped::ir::{Expr, OpDef, ReduceOp, ReduceStage, coord, input, reduced};
+use unpopped::ir::{BinaryOp, Expr, OpDef, ReduceOp, ReduceStage, coord, input, reduced};
 use unpopped::plan::KernelPlan;
 use unpopped::try_generate;
 use unpopped_vocab::{
@@ -76,10 +76,17 @@ use unpopped_vocab::{
 /// than disappear among the ~150 sites `plan.rs` still holds. A one-sided
 /// ratchet would let someone delete a panic instead of converting it and call
 /// that progress.
+/// **640 -> 1008 on 2026-09-02**, and the delta is coverage rather than
+/// behaviour: four ops with panic paths were added to the probe set
+/// (`Max`/`Min`, which `cfamily::binary_int` panics on at integer dtypes, and
+/// `BitAnd`/`Shr`, which are int-only and must miss at float dtypes). **No
+/// lowering changed.** The zero above now covers the ops whose panic path
+/// exists; before, it was a true number measured over a surface that excluded
+/// them.
 const KNOWN_PANICKING: usize = 0;
 
 /// See [`KNOWN_PANICKING`]. Every one of these was a panic before 0.6.0.
-const KNOWN_DECLINED: usize = 640;
+const KNOWN_DECLINED: usize = 1008;
 
 /// Spells every dtype and every plan, so a panic is never a backend decline in
 /// disguise. A backend that declined would mask the very thing being counted.
@@ -156,6 +163,34 @@ fn ops(dt: ElementKind) -> Vec<(&'static str, OpDef)> {
             OpDef::elementwise("b", 2, &[dt], input(0) * input(1)),
         ),
         ("neg_ish", unary(input(0) * input(0))),
+        // ⚠️ THE OPS WITH PANIC PATHS, added 2026-09-02 because the census's
+        // zero did not cover them.
+        //
+        // `cfamily::binary_int` ends in `other => panic!("{other:?} has no
+        // integer lowering ... must miss honestly at the plan gate")`. That
+        // panic is defended by the gate — verified — but the census's op set was
+        // `+`, `*`, `Sum` and coord, **none of which can reach it**. So
+        // `KNOWN_PANICKING = 0` was a true number measured over a surface that
+        // excluded the only ops whose panic path exists.
+        //
+        // A guard's verdict being right does not mean its coverage supports it.
+        // These four make the zero cover the claim.
+        (
+            "max_float_only_at_int",
+            OpDef::elementwise("b", 2, &[dt], input(0).binary(BinaryOp::Max, input(1))),
+        ),
+        (
+            "min_float_only_at_int",
+            OpDef::elementwise("b", 2, &[dt], input(0).binary(BinaryOp::Min, input(1))),
+        ),
+        (
+            "bitand_int_only_at_float",
+            OpDef::elementwise("b", 2, &[dt], input(0).binary(BinaryOp::BitAnd, input(1))),
+        ),
+        (
+            "shr_int_only_at_float",
+            OpDef::elementwise("b", 2, &[dt], input(0).binary(BinaryOp::Shr, input(1))),
+        ),
         ("coord0", unary(input(0) + coord(0))),
         ("coord1", unary(input(0) + coord(1))),
         (
