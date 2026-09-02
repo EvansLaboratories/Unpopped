@@ -100,6 +100,36 @@ rather than a cleanup commit.
 >
 > The window opened when `unpopped 0.7.0` published on 2026-09-02.
 
+⚠️ **BUT THE OVERRIDE ANSWER DOES NOT CLOSE THEM — it answers a different
+question than the rows ask.** Recorded 2026-09-02 after the PM read the
+consumer-side shadow ruling as disposing of the f16/bf16 row.
+
+**The shadow ruling answers "how does a backend get a DIFFERENT spelling."** That
+was real and it is settled. **The f16/bf16 row asks something else: should the
+neutral module spell a vendor type AT ALL.** `cfamily::scalar_ctype(F16)` returns
+`__half` to anyone who calls it, from a module documented "deliberately
+backend-neutral" and published to crates.io. A consumer shadowing does not remove
+that.
+
+**And the answer is already in the tree, working, with its own tripwire comment
+naming it:**
+
+> *"THE SEAM, WORKING. `f8e4m3fn`/`f8e5m2` spell `unsigned char` — the STORAGE
+> type — and their conversions are software helpers emitted into the kernel
+> (`cfamily::fp8_helpers`), not vendor intrinsics. **That is precisely the shape
+> the `F16`/`Bf16` arms below still need**, and FP8 got it first because **it had
+> no existing goldens to rewrite**."*
+
+**So the row is: adopt FP8's proven shape for f16/bf16 — spell the storage type,
+emit software conversion helpers — and the ONLY thing gating it is the goldens,
+exactly as Section B says.** Not an unanswered design question. **A known target
+shape with a rewrite cost.**
+
+**Slang complex is independent of all of it:** `unpopped-slang` names `Complex`
+nowhere, so it needs a prelude whether or not any override mechanism exists.
+
+**All three rows survive. The checkpoint is more justified, not less.**
+
 ⚠️ **THESE THREE ARE ONE MECHANISM, not three items.** Found 2026-09-02 by
 auditing this file's own row count, and it changes what the regen has to be.
 
