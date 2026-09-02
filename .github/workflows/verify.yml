@@ -10,8 +10,20 @@
 # WHAT THIS COVERS, AND WHAT IT DOES NOT
 #
 # It covers: fmt, clippy, the test suite, and docs, on default features, on
-# Linux. It does NOT cover `--all-features` (the optional `convert` feature
-# compiles tree-sitter grammars through `cc`), Windows, or any device backend.
+# Linux; and clippy + tests again under `--all-features` (see the `all-features`
+# job). It does NOT cover Windows or any device backend.
+#
+# `--all-features` WAS excluded here until 2026-09-02, and the exclusion was
+# costing more than the CI minutes it saved. Measured: 734 `#[test]` functions
+# exist in this workspace and 712 ran, because `convert` is off by default and
+# its 20 tests went with it. Worse, `#[cfg(feature = "seam")] pub mod seam` in
+# `crates/unpopped/src/jit.rs` — the entry point Fuel and Baracuda actually call
+# — was never COMPILED by CI at all, so a breaking change to its frozen grammar
+# dep would have landed green here and failed in their tree instead of ours.
+#
+# An optional feature is not optional to the consumer who enables it. The cost
+# of this job is one tree-sitter build; the cost of not having it was that the
+# cross-repo seam was the least-verified code in the repository.
 #
 # THE `pull_request:` TRIGGER HAS NEVER FIRED. Measured 2026-08-26: five runs,
 # all `push`, and zero pull requests have ever existed in this repository — work
@@ -73,3 +85,21 @@ jobs:
           echo "declared MSRV: $v"
       - run: rustup toolchain install ${{ steps.msrv.outputs.version }} --profile minimal
       - run: cargo +${{ steps.msrv.outputs.version }} test --workspace
+
+  # THE OPTIONAL FEATURES, WHICH NOTHING ELSE HERE COMPILES.
+  #
+  # Separate from `verify` rather than folded into it: this one builds
+  # tree-sitter grammars through `cc` and is the slow job, and keeping it
+  # separate means a failure names WHICH surface broke without reading logs.
+  #
+  # `--all-features` turns on both `seam` (Fuel's frozen region grammar) and
+  # `convert` (the CUDA/Slang tree-sitter frontends). Neither is in `default`,
+  # so without this job neither is type-checked, linted, or tested by anything
+  # that runs automatically.
+  all-features:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain
+      - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
+      - run: cargo test --workspace --all-features

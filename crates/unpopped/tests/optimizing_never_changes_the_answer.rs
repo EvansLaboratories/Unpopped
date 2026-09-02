@@ -252,6 +252,14 @@ fn optimizing_agrees_bit_for_bit_on_every_value_a_rewrite_could_break() {
 
         let before = eval_body(&body, n_inputs, &a, &b);
         let after = eval_body(&opt, n_inputs, &a, &b);
+        // ⚠️ `assert_eq!(a.len(), b.len())` is satisfied by `0 == 0`, and the zip
+        // below then iterates nothing — a green test that compared no values.
+        // The equality is the interesting check and the non-emptiness is what
+        // makes it mean something.
+        assert!(
+            !before.is_empty(),
+            "{name}: the corpus evaluated to NOTHING, so the comparison below              ran zero times. This assertion exists because the length-equality              check underneath it passes on two empty vectors."
+        );
         assert_eq!(before.len(), after.len(), "{name}: length");
 
         for (i, (x, y)) in before.iter().zip(&after).enumerate() {

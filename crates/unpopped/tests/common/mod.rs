@@ -19,7 +19,13 @@
 // A `tests/common/` module is compiled INTO each test binary that declares it,
 // so an item only one binary uses is genuinely unreachable from the others'
 // perspective. That is the nature of a shared test helper, not a mistake.
-#![allow(unreachable_pub)]
+//
+// `dead_code` is allowed for the same reason and was added when the first
+// binary to use only ONE of the two doubles appeared: `OtherStub` exists so a
+// test can prove a stamp REPORTS its backend rather than returning a constant,
+// which needs two backends. A binary that needs one of them is not evidence the
+// other is dead — it is evidence this module is shared, which is its purpose.
+#![allow(unreachable_pub, dead_code)]
 
 use unpopped::backend::{Backend, GeneratedKernel, LowerError};
 use unpopped::plan::KernelPlan;

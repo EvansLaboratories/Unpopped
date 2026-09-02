@@ -1122,3 +1122,42 @@ Two things follow that are easy to miss:
   settled because its portable default already works. See `fp8_helpers` for what
   that override has to carry — including arity, since a packed-pair override
   reshapes the emit loop rather than renaming anything in it.
+
+---
+
+**A test count that does not reconcile is the cheapest defect detector here.**
+Found 2026-09-02 during a vacuous-pass sweep, by an arithmetic mismatch and
+nothing cleverer: **734 `#[test]` functions existed in this workspace and 712
+ran.** The suite was green, every gate passed, and no output anywhere said that
+22 tests had not executed.
+
+The cause was two optional features. `convert` (20 tests) and `seam` are off by
+default, and `verify.yml` explicitly excluded `--all-features` — the exclusion
+was *documented*, which is why it survived: it read as a considered decision
+rather than a hole. What the note did not say is what it cost.
+
+⚠️ **The expensive half was not the 20 unrun tests. It was that
+`#[cfg(feature = "seam")] pub mod seam` — the entry point Fuel and Baracuda
+actually call — was never COMPILED by CI at all.** Not linted, not type-checked,
+zero tests. A breaking change to its frozen grammar dep, or a refactor of
+`region_to_op`, would have gone green here and failed in a consumer's tree, where
+it costs *them* a debugging session to find out it was ours. **The least-verified
+code in the repository was the cross-repo seam**, and the default-features
+convention is what put it there.
+
+**An optional feature is not optional to the consumer who enables it.** Fixed by
+an `all-features` CI job (clippy + test) and `tests/seam_reaches_core_synthesis.rs`
+— 5 tests covering the grammar walk, its recursion, and its three typed declines.
+
+Two transferable pieces:
+
+- **`cargo test` reports what it RAN, never what it SKIPPED COMPILING.** A
+  feature-gated test contributes zero to both the numerator and the denominator,
+  so no ratio anywhere goes down. Count `#[test]` on disk and compare it to the
+  count that executed; the gap is the whole finding, and it needs no judgment to
+  read. Reconciling it here also turned up a `#[cfg(feature = "convert")]` test
+  inside `unpopped-slang` that nothing had ever run.
+- **A documented exclusion still has to be re-priced when what it excludes
+  changes.** The `--all-features` note was accurate when written and the `seam`
+  module landed behind it later. Nothing re-read the exclusion in light of the
+  new module, because an exclusion with a stated reason stops looking like a gap.

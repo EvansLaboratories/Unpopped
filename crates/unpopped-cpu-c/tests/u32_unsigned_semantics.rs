@@ -174,6 +174,8 @@ fn shr_of_a_composed_sum_is_logical_not_arithmetic() {
         .expect("one output")
         .to_f64_vec();
 
+    // Zero lanes would make the loop below a no-op and the test green.
+    assert!(!got.is_empty(), "the oracle produced no lanes to check");
     for (i, &g) in got.iter().enumerate() {
         let want = f64::from(a[i].wrapping_add(b[i]) >> c[i]);
         assert!(
@@ -285,6 +287,8 @@ fn u64_shr_of_a_composed_sum_is_logical_not_arithmetic() {
         .expect("one output")
         .to_i128_vec();
 
+    // Zero lanes would make the loop below a no-op and the test green.
+    assert!(!got.is_empty(), "the oracle produced no lanes to check");
     for (i, &g) in got.iter().enumerate() {
         let want = i128::from(a[i].wrapping_add(b[i]) >> c[i]);
         assert_eq!(

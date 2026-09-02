@@ -248,8 +248,26 @@ fn workspace_files(suffix: &str) -> Vec<(String, String)> {
 
 #[test]
 fn no_handback_provider_ships_before_gap_236_increment_2() {
+    // A DISCHARGED GUARD RETIRES LOUDLY OR IT NEVER RETIRES.
+    //
+    // The obvious spelling here is `return`, and it is the wrong one: a
+    // silently-disabled test still reports `ok`, so the day this flag flips
+    // this function becomes a permanent green no-op that asserts nothing and
+    // that no one will ever come back to delete. That is the same defect the
+    // rest of this sweep is about, with a scheduled fuse on it.
+    //
+    // Failing instead makes the flip and the deletion ONE commit: whoever
+    // records increment 2 as landed cannot leave the corpse behind, because
+    // CI will not go green until they remove it.
     if GAP_236_INCREMENT_2_LANDED {
-        return;
+        panic!(
+            "GAP-236 increment 2 is recorded as landed, so this guard has \
+             discharged and must be DELETED rather than left to pass vacuously.\n\n\
+             Delete `no_handback_provider_ships_before_gap_236_increment_2`, the \
+             `GAP_236_INCREMENT_2_LANDED` constant, and any helper left with no \
+             other caller. Keep `the_trigger_detector_fires_and_discriminates` \
+             -- it tests the detector, not the precondition, and outlives this."
+        );
     }
 
     let manifests = workspace_files("Cargo.toml");
