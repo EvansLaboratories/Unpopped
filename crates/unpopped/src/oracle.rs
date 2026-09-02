@@ -891,7 +891,12 @@ fn f64_to_fp8_e5m2_bits(x: f64) -> u8 {
     }
     // Halfway between max-finite and the next power up rounds to infinity, as
     // IEEE requires; anything larger overflows to infinity too.
-    if a > MAX_FINITE + 2f64.powi(12) {
+    //
+    // `>=`, not `>`: the comment above says the halfway case rounds to infinity
+    // and the operator said otherwise, so exactly 61440.0 came back as 0x7B.
+    // Ties-to-even picks the candidate with the even trailing significand, and
+    // between max-finite (`11`) and the overflow (`00`) that is the overflow.
+    if a >= MAX_FINITE + 2f64.powi(12) {
         return sign | 0x7c;
     }
     let mut best: u8 = 0;

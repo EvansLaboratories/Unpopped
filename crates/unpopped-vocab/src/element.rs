@@ -672,10 +672,46 @@ unsafe impl DeviceRepr for Fp8E4M3FN {}
 pub struct Fp8E5M2(pub u8);
 
 impl Fp8E5M2 {
-    /// Convert from `f32` using NVIDIA's `SATFINITE` semantics
-    /// (round-half-to-even, clamp `|x|` to the E5M2 max-finite `57344.0`).
+    /// Convert from `f32`, round-half-to-even. **E5M2 is IEEE-shaped and HAS
+    /// infinities (§6.1-0011), so overflow produces one rather than saturating.**
+    ///
+    /// # Why this does not simply delegate
+    ///
+    /// `float8` 0.7.0's E5M2 encoder saturates EVERY overflow to the max-finite
+    /// `0x7B`, including a literal `f32::INFINITY` — while its own decoder maps
+    /// `0x7C` to infinity correctly. Measured 2026-09-02 against `float8` 0.7.0:
+    ///
+    /// ```text
+    /// from_f32(inf)   -> 0x7B -> 57344      from_bits(0x7C).to_f32() -> inf
+    /// from_f32(1e30)  -> 0x7B -> 57344      is_infinite(0x7C)        -> false
+    /// ```
+    ///
+    /// The decoder is the half that proves the intent: a deliberately saturating
+    /// format would not decode `0x7C` to infinity. So the encoder disagrees with
+    /// its own decoder, and delegating to it left this crate holding TWO
+    /// contradictory contracts — [`crate::element`] saturating here while
+    /// `unpopped`'s oracle emitted `0x7C` on overflow, as IEEE requires. Nothing
+    /// caught it because no test called this function.
+    ///
+    /// Overflow threshold: `|x| >= 61440.0`, the midpoint between max-finite
+    /// `57344` and the next power `65536`. **The midpoint itself rounds to
+    /// infinity**, not to max-finite — ties-to-even picks the candidate whose
+    /// significand ends even, and that is infinity (`00`), not `0x7B` (`11`).
     #[inline]
     pub fn from_f32(x: f32) -> Self {
+        // NaN first: it is neither finite nor an overflow, and the upstream
+        // encoder spells NaN correctly.
+        if x.is_nan() {
+            return Self(float8::F8E5M2::from_f32(x).to_bits());
+        }
+        /// Midpoint between the E5M2 max-finite (57344) and 2^16.
+        const OVERFLOW_AT: f32 = 61440.0;
+        if x.abs() >= OVERFLOW_AT {
+            let sign: u8 = if x.is_sign_negative() { 0x80 } else { 0 };
+            return Self(sign | 0x7c);
+        }
+        // In range: the upstream encoder is correct here, and reusing it keeps
+        // the rounding (half-to-even, subnormals) in one place.
         Self(float8::F8E5M2::from_f32(x).to_bits())
     }
 
