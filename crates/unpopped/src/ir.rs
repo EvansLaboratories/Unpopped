@@ -493,6 +493,50 @@ impl BinaryOp {
     }
 }
 
+/// Whether `e`'s value is a **moved operand** rather than a computed one.
+///
+/// **KISS-OPS-6.16-0009.** An op whose §6.13 decomposition contains no
+/// arithmetic *computes nothing, so there is nothing to round*: its result is
+/// the moved operand, bits exact per §6.8-0010(a) — **payload and sign included
+/// for a NaN, preserved exactly.** A narrow-float lowering that promotes to
+/// `f32`, selects, and rounds back is therefore non-conforming for such an op.
+///
+/// `max_prop`/`min_prop` are the canonical case: their decomposition is
+/// comparison-and-`select`, which is why this returns `true` through them.
+///
+/// # Why this is a property of the WHOLE body, not of one op
+///
+/// The clause is about what reaches the store. `max(a, b)` alone must move bits.
+/// `max(a, b) + c` need not — the addition legitimately computes, and
+/// **KISS-OPS-6.16-0010 requires it to quiet a signalling NaN**, so a round-trip
+/// there is not merely allowed but demanded. Removing the round-trip globally
+/// would conform to 0009 and **break 0010**; the decomposition decides, and it
+/// decides per body.
+///
+/// # Deliberately conservative
+///
+/// Only [`ScalarExpr::Input`] counts as a moving leaf. A `Const` is a value this
+/// crate renders rather than one it moves, and a `Param`/`Coord`/`Reduced` is not
+/// an element of the operand at all — none of them has narrow-float bits to
+/// preserve. **Returning `false` costs a conforming round-trip; returning `true`
+/// wrongly would emit a type the caller does not expect**, so the asymmetry is
+/// deliberate.
+#[must_use]
+pub fn is_bit_move(e: &ScalarExpr) -> bool {
+    match e {
+        ScalarExpr::Input(_) => true,
+        // NaN-propagating min/max ARE comparison-and-select (§6.13). The
+        // IEEE-suppressing `FmaxIeee`/`FminIeee` are deliberately NOT here: they
+        // are a different op with a different decomposition, and this workspace
+        // keeps that distinction exactly because the two diverge on NaN.
+        ScalarExpr::Binary(BinaryOp::Max | BinaryOp::Min, a, b) => is_bit_move(a) && is_bit_move(b),
+        // A select moves one of its arms; the CONDITION may compute freely,
+        // because its value is tested rather than stored.
+        ScalarExpr::Select(_, a, b) => is_bit_move(a) && is_bit_move(b),
+        _ => false,
+    }
+}
+
 /// Whether `e` is an admissible operand of an int-reduction predicate `Cmp*`
 /// node — the any/all/count fused-predicate shape (`count = Sum(in != 0)`,
 /// `any`/`all`'s post cast-back). Admissible: a leaf [`ScalarExpr::Input`] or

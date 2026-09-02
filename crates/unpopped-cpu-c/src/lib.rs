@@ -44,7 +44,7 @@
 
 use unpopped::backend::{
     Backend, Decline, DeclinedOp, GeneratedKernel, LowerError, Lowering, Spelling, const_lit,
-    lower_dag,
+    lower_dag, lower_dag_all,
 };
 use unpopped::cfamily::{
     assert_no_int_div_or_const, binary_f32, binary_f64, binary_int, complex_arith, complex_helpers,
@@ -52,7 +52,7 @@ use unpopped::cfamily::{
     promote_load_f32, scalar_ctype, select_f32, select_f64, store_expr_of, sub_byte_helpers,
     sub_byte_load_fn, sub_byte_store_fn, unary_f32, unary_f64,
 };
-use unpopped::ir::{BinaryOp, ExprDag, UnaryOp};
+use unpopped::ir::{BinaryOp, ExprDag, UnaryOp, is_bit_move};
 use unpopped::plan::{KernelPlan, Schedule};
 use unpopped_vocab::{ElementKind, TargetId};
 
@@ -253,7 +253,28 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> Result<GeneratedKernel
     // unpacks it, and the body computes at `int` — the width C promotes a nibble
     // or a bit to anyway.
     let packed = sub_byte_load_fn(plan.dtype);
-    let body_ctype = if narrow {
+    // ⚠️ KISS-OPS-6.16-0009: an op whose §6.13 decomposition contains no
+    // arithmetic COMPUTES NOTHING, so there is nothing to round — its result is
+    // the moved operand, bits exact, payload and sign included.
+    //
+    // A narrow float normally lowers promote -> compute in f32 -> round back.
+    // For a body that only MOVES (`max_prop`/`min_prop`/`select` over inputs)
+    // that round-trip is non-conforming, and measurably so: the E5M2 store codec
+    // is `if (x != x) return 0x7F`, which collapses every NaN encoding —
+    // `0x7D`, `0x7E`, `0x7F` and the negatives — onto one constant. A moved
+    // signalling NaN is quieted AND a moved quiet NaN loses its payload.
+    //
+    // So a pure-move body promotes ONLY to run the comparison and selects the
+    // RAW storage value, exactly as baracuda's `cuda_select` already does.
+    //
+    // ⚠️ NOT a global removal of the round-trip. `max(a, b) + c` must keep it —
+    // KISS-OPS-6.16-0010 requires arithmetic to quiet a signalling NaN, so
+    // stripping it everywhere would satisfy 0009 and BREAK 0010. The
+    // decomposition decides, per body, which is what `is_bit_move` computes.
+    let bit_move = narrow && is_bit_move(plan.body);
+    let body_ctype = if bit_move {
+        ctype
+    } else if narrow {
         "float"
     } else if packed.is_some() {
         "int"
@@ -262,42 +283,72 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> Result<GeneratedKernel
     };
     let acc = |idx: u8| {
         Ok(Spelling::Spelled(match packed {
+            // A bit-move leaf is the STORAGE element itself, undecoded.
+            _ if bit_move => format!("in{idx}[i]"),
             Some(f) => format!("{f}(in{idx}, i)"),
             None => promote_load_f32(plan.dtype, &format!("in{idx}[i]")),
         }))
     };
-    let (prelude, root) = lower_dag(
-        &ExprDag::from_expr(plan.body),
-        body_ctype,
-        // Built through the BUILDER, not a struct literal. `Lowering` is
-        // `#[non_exhaustive]`, so this is the only route available to a backend
-        // outside the `unpopped` crate — which this one now is. Writing the
-        // literal was possible only while the emitter lived in core, and doing so
-        // is what hid a missing `.arith()` setter: the seam existed on the struct
-        // and was unreachable through the builder every out-of-crate backend has
-        // to use.
-        //
-        // `reduced` and `coord` are omitted deliberately. Their builder defaults
-        // panic with a message naming the missing seam and what to do about it,
-        // which is strictly better than the hand-written panics that used to sit
-        // here — and omitting them means the defaults are exercised rather than
-        // shadowed by every emitter passing its own copy.
-        &Lowering::builder(&acc, &|op, x| cpu_unary(op, x, plan.dtype), &|op, a, b| {
+    // ⚠️ A bit-move spelling names each operand FIVE times
+    // (`pa != pa ? a : (pb != pb ? b : (pa >= pb ? a : b))`), so inlining
+    // duplicates whole subexpressions per reference — 5^depth for nested moves,
+    // and `max(max(a,b),c)` already emits the inner max six times. That is
+    // exactly the hazard `lower_dag_all` documents and exists for: hoisting every
+    // non-leaf makes each reference a NAME rather than an expression, so the text
+    // stays linear. Values are unchanged either way.
+    //
+    // The non-move narrow path has the same property and always has
+    // (`binary_f32`'s Max names each operand four times); it is left alone here
+    // rather than widened into, but it is the same latent shape.
+    let dag = ExprDag::from_expr(plan.body);
+    // Built through the BUILDER, not a struct literal. `Lowering` is
+    // `#[non_exhaustive]`, so this is the only route available to a backend
+    // outside the `unpopped` crate — which this one now is. Writing the literal
+    // was possible only while the emitter lived in core, and doing so is what hid
+    // a missing `.arith()` setter: the seam existed on the struct and was
+    // unreachable through the builder every out-of-crate backend has to use.
+    //
+    // `reduced` and `coord` are omitted deliberately. Their builder defaults
+    // panic with a message naming the missing seam and what to do about it, which
+    // is strictly better than the hand-written panics that used to sit here — and
+    // omitting them means the defaults are exercised rather than shadowed by
+    // every emitter passing its own copy.
+    let un = |op, x| cpu_unary(op, x, plan.dtype);
+    let bin = |op, a: String, b: String| {
+        if bit_move {
+            cpu_binary_bit_move(op, &a, &b, plan.dtype)
+        } else {
             cpu_binary(op, a, b, plan.dtype)
-        })
-        // Complex compute types are structs, so their arithmetic is a call.
-        // Every other dtype falls through to the C operator.
-        .arith(&|op, a, b| {
-            Ok(Spelling::Spelled(
-                complex_arith(plan.dtype, op, &a, &b)
-                    .unwrap_or_else(|| format!("({a} {} {b})", op.c_operator())),
-            ))
-        })
-        .select(&|c, a, b| cpu_select(c, a, b, plan.dtype))
-        .constant(&|v| Ok(Spelling::Spelled(const_lit(v))))
-        .build(),
-    )?;
-    let store = store_expr_of(plan, 0, root);
+        }
+    };
+    // Complex compute types are structs, so their arithmetic is a call. Every
+    // other dtype falls through to the C operator.
+    let ar = |op: unpopped::ir::ArithOp, a: String, b: String| {
+        Ok(Spelling::Spelled(
+            complex_arith(plan.dtype, op, &a, &b)
+                .unwrap_or_else(|| format!("({a} {} {b})", op.c_operator())),
+        ))
+    };
+    let sel = |c, a, b| cpu_select(c, a, b, plan.dtype);
+    let cst = |v| Ok(Spelling::Spelled(const_lit(v)));
+    let lowering = Lowering::builder(&acc, &un, &bin)
+        .arith(&ar)
+        .select(&sel)
+        .constant(&cst)
+        .build();
+    let (prelude, root) = if bit_move {
+        lower_dag_all(&dag, body_ctype, &lowering)?
+    } else {
+        lower_dag(&dag, body_ctype, &lowering)?
+    };
+    // A bit-move root is ALREADY the storage type — re-encoding it is exactly the
+    // step 6.16-0009 forbids. Only the same-dtype case is bypassed; a genuine
+    // dtype change still converts, because that IS a computation.
+    let store = if bit_move && plan.out_dtype_of(0) == plan.dtype {
+        root
+    } else {
+        store_expr_of(plan, 0, root)
+    };
     // A packed store is a STATEMENT, not an assignment: several elements share a
     // byte, so there is no per-element lvalue to assign to. Writing `out[i] = ..`
     // for a sub-byte dtype silently treats the packed buffer as one byte per
@@ -423,6 +474,42 @@ fn cpu_binary(
 /// identity-cast-pinned C ternary spellers ([`select_f32`]/[`select_f64`]), which
 /// are portable C as-is. v1 select is float-only (an int select raises the
 /// unresolved cond-observer question), so an integer dtype backstop-panics.
+/// `Max`/`Min` for a narrow float whose body only MOVES (KISS-OPS-6.16-0009).
+///
+/// **Identical control flow to `cfamily::binary_f32`'s arms — the operands are
+/// promoted to run the comparison, and the RAW storage value is selected.** The
+/// decode is a test, not a conversion of the result, so nothing is rounded and
+/// the moved operand reaches the store with its bits intact.
+///
+/// Only `Max`/`Min` are reachable here: [`is_bit_move`] admits nothing else
+/// through a `Binary`, so any other op arriving is a plan-gate bug rather than a
+/// user error — and it gets a typed decline rather than a panic, per
+/// KISS-EMIT-6.8-0004.
+fn cpu_binary_bit_move(
+    op: BinaryOp,
+    a: &str,
+    b: &str,
+    dtype: ElementKind,
+) -> Result<Spelling, LowerError> {
+    let p = |x: &str| promote_load_f32(dtype, x);
+    let (pa, pb) = (p(a), p(b));
+    let cmp = match op {
+        BinaryOp::Max => ">=",
+        BinaryOp::Min => "<=",
+        other => {
+            return Ok(Spelling::Declined(Decline::UnsupportedOp {
+                op: DeclinedOp::Binary(other),
+                why: format!(
+                    "{other:?} reached the narrow-float bit-move path, which only                      serves Max/Min (KISS-OPS-6.16-0009). `is_bit_move` admits no                      other binary, so this is a routing bug rather than a missing                      spelling."
+                ),
+            }));
+        }
+    };
+    Ok(Spelling::Spelled(format!(
+        "({pa} != {pa} ? {a} : ({pb} != {pb} ? {b} : ({pa} {cmp} {pb} ? {a} : {b})))"
+    )))
+}
+
 fn cpu_select(c: String, a: String, b: String, dtype: ElementKind) -> Result<Spelling, LowerError> {
     let spelled = match dtype {
         ElementKind::F32 | ElementKind::F32Strict => select_f32(c, a, b),

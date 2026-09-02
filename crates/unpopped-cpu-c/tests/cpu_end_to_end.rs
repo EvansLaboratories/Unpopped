@@ -37,7 +37,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use unpopped::ir::{OpDef, input};
+use unpopped::ir::{BinaryOp, OpDef, input};
 use unpopped::oracle::{Fidelity, TypedBuffer, compare, evaluate};
 use unpopped::{build_plan, generate};
 use unpopped_cpu_c::CpuC;
@@ -931,6 +931,93 @@ int main(void) {{
 /// goes first, and the seam it proves — `narrow_load_fn`/`narrow_store_fn`, one
 /// name over two strategies — is what the f16 arms move onto at the regen, with
 /// callers unchanged.
+/// KISS-OPS-6.16-0009, proved by executing the kernel rather than by reading it.
+///
+/// A `max_prop` decomposes to comparison-and-`select` — **no arithmetic** — so
+/// its result is the moved operand, **bits exact, payload and sign included**.
+///
+/// # Why this corpus discriminates and a NaN check would not
+///
+/// E5M2 has SIX NaN encodings: `0x7D`/`0x7E`/`0x7F` and their negatives. The
+/// store codec is `if (x != x) return 0x7F`, so the pre-fix lowering
+/// (`store(load(x))`) mapped **all six onto `0x7F`**.
+///
+/// **A test asserting "the result is NaN" passes on both lowerings.** Only
+/// asserting the exact byte separates them — which is the difference between a
+/// predicate the right answer satisfies and one the wrong answer fails.
+#[test]
+fn a_moved_nan_keeps_its_exact_encoding_through_a_real_compiler() {
+    let Some(cc) = find_compiler() else {
+        eprintln!(
+            "SKIP a_moved_nan_keeps_its_exact_encoding_through_a_real_compiler:              no host C compiler."
+        );
+        return;
+    };
+    let dir: PathBuf = std::env::temp_dir().join("unpopped-e2e");
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    let dt = ElementKind::Fp8E5M2;
+    // Every E5M2 NaN encoding: exponent all-ones with a non-zero mantissa.
+    let nans: Vec<u8> = vec![0x7D, 0x7E, 0x7F, 0xFD, 0xFE, 0xFF];
+    // The other operand is +0, which is FINITE — so `max` takes the `a != a`
+    // branch and the NaN is the MOVED operand rather than a comparison winner.
+    let zeros: Vec<u8> = vec![0x00; nans.len()];
+    let n = nans.len() as i64;
+
+    let op = OpDef::elementwise("mxnan", 2, &[dt], input(0).binary(BinaryOp::Max, input(1)));
+    let d = OperandDesc::new(1, &[n], &[1], dt, 1);
+    let operands = vec![d; 3];
+    let key = structure_key(OpCategory::BinaryElementwise, &operands, ArchSku::Sm89);
+    let kernel = generate(&op, &key, &CpuC);
+
+    let lit = |v: &[u8]| {
+        v.iter()
+            .map(|x| format!("{x}u"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let src = format!(
+        "{}
+#include <stdio.h>
+
+int main(void) {{
+    const unsigned char in0[{n}] = {{{}}};
+    const unsigned char in1[{n}] = {{{}}};
+    unsigned char out[{n}];
+    for (int i = 0; i < {n}; ++i) out[i] = 0xAAu;
+    {}(in0, in1, out, {n});
+    for (int i = 0; i < {n}; ++i) printf(\"%u\\n\", (unsigned)out[i]);
+    return 0;
+}}
+",
+        kernel.source,
+        lit(&nans),
+        lit(&zeros),
+        kernel.name
+    );
+
+    let c_file = dir.join("fp8_move_nan.c");
+    let exe = dir.join("fp8_move_nan.exe");
+    std::fs::write(&c_file, &src).expect("write");
+    cc.compile(&c_file, &exe, false)
+        .unwrap_or_else(|e| panic!("compile the moved-NaN kernel: {e}"));
+    let out = std::process::Command::new(&exe).output().expect("run");
+    assert!(out.status.success(), "exited {:?}", out.status);
+    let actual: Vec<u8> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.trim().parse::<u8>().expect("non-integer"))
+        .collect();
+
+    assert_eq!(actual.len(), nans.len(), "printed {} lines", actual.len());
+    assert_eq!(
+        actual, nans,
+        "a moved NaN did not survive with its exact bits. Pre-fix, EVERY one of          these collapsed to 0x7F, because the store codec is          `if (x != x) return 0x7F` and re-encoding was applied to a value that          was SELECTED, never computed (KISS-OPS-6.16-0009).
+  in : {nans:02X?}
+           out: {actual:02X?}"
+    );
+}
+
 #[test]
 fn fp8_kernels_round_trip_against_the_oracles_independent_codec() {
     let Some(cc) = find_compiler() else {
