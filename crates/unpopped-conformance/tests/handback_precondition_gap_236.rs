@@ -76,6 +76,36 @@ const ALLOWED_FUEL_DEPS: &[(&str, &str)] = &[(
 )];
 
 /// Names that mean this workspace is submitting candidates for admission.
+///
+/// # ⚠️ THIS AXIS IS EXTERNAL AND UNVERIFIABLE FROM THIS REPO
+///
+/// Every other corpus in this workspace is either derived from a
+/// guaranteed-complete source (`ElementKind::ALL`, complete by mechanism) or is
+/// honestly a corpus over a space with no authoritative list. **This one is
+/// neither: it is a hand-copy of six entry points in *fuel's* public API, and
+/// fuel can rename any of them without this repo observing it.**
+///
+/// **The failure mode is not a break — it is a stop.** A renamed entry point
+/// makes this guard match nothing, and **a guard that has stopped checking looks
+/// exactly like a guard that keeps passing.** Nothing here goes red; the trigger
+/// simply becomes unreachable, which is the same shape as
+/// `KNOWN_PANICKING = 0` measured over a population that excluded its own
+/// subject.
+///
+/// **No local fix exists and none should be attempted.** The real remedies all
+/// live on fuel's side — an exported name list, a stability declaration, or a
+/// contract test in their repo that fails when an entry point is renamed.
+/// Routed to their architect 2026-09-02.
+///
+/// **What is achievable from here is exactly this note**: converting a silent
+/// decay into a documented limitation. That is the honest ceiling, and writing
+/// it down is not a substitute for the fix — it is a statement of which half of
+/// the guard is load-bearing and which half is a copy that will rot.
+///
+/// Sibling shape, recorded because the pair is instructive: this workspace pins
+/// an adopter's panic strings on *its own* side because the adopter cannot run
+/// the tests. **Here the guard runs fine and cannot see its subject.** Same
+/// boundary, opposite failure.
 const ADMISSION_API: &[&str] = &[
     "verify_candidate",
     "ingest_one",
