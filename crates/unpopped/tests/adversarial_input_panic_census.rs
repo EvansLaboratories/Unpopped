@@ -76,6 +76,11 @@ use unpopped_vocab::{
 /// than disappear among the ~150 sites `plan.rs` still holds. A one-sided
 /// ratchet would let someone delete a panic instead of converting it and call
 /// that progress.
+/// **1008 -> 1428 on 2026-09-02 (second widening)**, again coverage rather than
+/// behaviour: the dtype axis now derives from `ElementKind::ALL` (25) instead of
+/// a hand-listed 20. **No lowering changed and `KNOWN_PANICKING` stayed 0** over
+/// the larger 2400-input surface.
+///
 /// **640 -> 1008 on 2026-09-02**, and the delta is coverage rather than
 /// behaviour: four ops with panic paths were added to the probe set
 /// (`Max`/`Min`, which `cfamily::binary_int` panics on at integer dtypes, and
@@ -86,7 +91,7 @@ use unpopped_vocab::{
 const KNOWN_PANICKING: usize = 0;
 
 /// See [`KNOWN_PANICKING`]. Every one of these was a panic before 0.6.0.
-const KNOWN_DECLINED: usize = 1008;
+const KNOWN_DECLINED: usize = 1428;
 
 /// Spells every dtype and every plan, so a panic is never a backend decline in
 /// disguise. A backend that declined would mask the very thing being counted.
@@ -110,28 +115,24 @@ impl Backend for SpellsAll {
     }
 }
 
-const DTYPES: &[ElementKind] = &[
-    ElementKind::F32,
-    ElementKind::F64,
-    ElementKind::F16,
-    ElementKind::Bf16,
-    ElementKind::I32,
-    ElementKind::I64,
-    ElementKind::I8,
-    ElementKind::U8,
-    ElementKind::I16,
-    ElementKind::U16,
-    ElementKind::U32,
-    ElementKind::U64,
-    ElementKind::Bool,
-    ElementKind::I4,
-    ElementKind::U4,
-    ElementKind::B1,
-    ElementKind::Fp8E4M3FN,
-    ElementKind::Fp8E5M2,
-    ElementKind::Complex64,
-    ElementKind::Complex128,
-];
+/// ⚠️ Derived from `ElementKind::ALL`, not hand-listed — the census is a claim
+/// about "every input" and a copied list stops being every input the day a dtype
+/// is added.
+///
+/// It used to name 20 variants while `ALL` had 25. Four of the five omitted are
+/// the non-compute rows the plan gate now declines (`Fp8E4M3FNUZ`,
+/// `Fp8E5M2FNUZ`, `F8E8M0`, `F8E6M2`) — including them costs nothing and proves
+/// they decline rather than panic, which is the whole point. **The fifth was
+/// `F32Strict`, a live compute dtype**, so `KNOWN_PANICKING = 0` was measured
+/// over 20 of 25 while reading as a statement about all input.
+///
+/// `ALL` is complete by mechanism rather than by care: the enum is exhaustive so
+/// a new variant breaks every match site, and `kiss_dtype_manifest` fails if a
+/// §6.1-token-carrying variant is missing from it. **Deriving inherits that;
+/// copying does not.**
+fn dtypes() -> &'static [ElementKind] {
+    &ElementKind::ALL
+}
 
 const CATEGORIES: &[OpCategory] = &[
     OpCategory::UnaryElementwise,
@@ -255,7 +256,7 @@ fn run_census() -> Census {
         sites: Vec::new(),
     };
 
-    for &dt in DTYPES {
+    for &dt in dtypes() {
         for &cat in CATEGORIES {
             for rank in [1u8, 2] {
                 let key = key_for(dt, cat, rank);

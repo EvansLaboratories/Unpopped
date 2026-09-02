@@ -25,41 +25,25 @@ use unpopped::oracle::{TypedBuffer, evaluate};
 use unpopped::plan::try_build_plan;
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_key};
 
-/// Every §6.1 row, so a new dtype cannot be added without meeting this test.
-const ALL: &[ElementKind] = &[
-    ElementKind::F32,
-    ElementKind::F32Strict,
-    ElementKind::F64,
-    ElementKind::F16,
-    ElementKind::Bf16,
-    ElementKind::I8,
-    ElementKind::U8,
-    ElementKind::I16,
-    ElementKind::U16,
-    ElementKind::I32,
-    ElementKind::U32,
-    ElementKind::I64,
-    ElementKind::U64,
-    ElementKind::Bool,
-    ElementKind::I4,
-    ElementKind::U4,
-    ElementKind::B1,
-    ElementKind::Fp8E4M3FN,
-    ElementKind::Fp8E5M2,
-    ElementKind::Complex64,
-    ElementKind::Complex128,
-    // The four that had no evaluation and were admitted anyway.
-    ElementKind::Fp8E4M3FNUZ,
-    ElementKind::Fp8E5M2FNUZ,
-    ElementKind::F8E8M0,
-    ElementKind::F8E6M2,
-];
+/// ⚠️ `ElementKind::ALL`, not a hand-written list — and the difference is the
+/// whole point of the sweep this test came out of.
+///
+/// The first version of this file hand-listed 25 variants. **That list would not
+/// have grown when a 26th dtype was added**, so the guard would have gone on
+/// passing over a corpus that no longer covered its own claim — which is exactly
+/// the defect it was written to close, one level up.
+///
+/// `ALL` is kept complete by a mechanism rather than by care: the enum is
+/// intentionally exhaustive so a new variant breaks every match site, and
+/// `unpopped-vocab`'s `kiss_dtype_manifest` test fails if a variant carrying a
+/// §6.1 token is missing from it. **Deriving from it inherits that guarantee;
+/// copying from it does not.**
 
 #[test]
 fn no_dtype_the_gate_admits_can_panic_the_oracle() {
     let mut admitted = 0usize;
     let mut declined = 0usize;
-    for &dt in ALL {
+    for dt in ElementKind::ALL {
         let op = OpDef::elementwise("probe", 2, &[dt], input(0) + input(1));
         let d = OperandDesc::new(1, &[7], &[1], dt, 4);
         let key = structure_key(OpCategory::BinaryElementwise, &[d, d, d], ArchSku::Sm89);

@@ -929,29 +929,49 @@ Forcing that fix created the pattern that later answered this question.)*
   Found 2026-08-20 by scanning every backticked identifier in this file against
   the sources; the *identifier* check could not catch it (`SymExtent` still
   exists), only reading the claim could.
-- **Sweep for exhaustive checks over the wrong axis.** Opened 2026-09-02 by a
-  live finding: `oracle.rs`'s `Coverage` classifier enumerates `Access`
-  **exhaustively**, compiler-enforced, every variant `Evaluated` — and the oracle
-  was nonetheless panicking on four dtypes the plan gate admitted, because
-  **nothing was measuring the DTYPE axis**. Fixed at `80bcd8c`; the *class* is
-  not.
+- ~~**Sweep for exhaustive checks over the wrong axis.**~~ — **DONE 2026-09-02.**
+  Swept all 39 test files; 8 declare a corpus and therefore make a coverage claim.
 
-  ⚠️ **An exhaustive check over the wrong axis reads exactly like an exhaustive
-  check** — it is compiler-enforced, it is complete, and its completeness is over
-  a dimension nobody chose deliberately.
+  ⚠️ **The class was already known here and I did not know that.** The remedy is
+  in the tree, written after **baracuda** caught `..._and_never_panics` claiming
+  more than it checked: *"the loop iterates `ElementKind::ALL` with a fixed op, so
+  'never panics' was measured on the dtype axis only."* **Rather than rename
+  around the gap, it was pinned as an INEQUALITY** — a test asserting the op-axis
+  panic *existed*, so the day it became a typed decline the test fails and forces
+  a deliberate deletion. **So the finding is not a new class; it is that the
+  remedy was applied once and never systematised.**
 
-  **The sweep question:** for each guard in this workspace that claims coverage,
-  **which axis is it exhaustive over, and is that the axis the claim is about?**
-  Known instances so far, all found one at a time rather than by looking:
+  **What the sweep changed:**
 
-  - `Coverage` — exhaustive over `Access`, silent over dtype *(fixed)*
-  - `KNOWN_PANICKING = 0` — exhaustive over dtypes × ranks, and its **op set**
-    excluded every op with a panic path *(fixed 2026-09-02)*
-  - `neutral_spelling.rs` — exhaustive over `ElementKind`; says nothing about the
-    *functions* that spell them, which is how `cast_scalar` moves by delegation
-    without naming `F16`
+  - **`adversarial_input_panic_census`** — its dtype axis was a hand-listed 20
+    while `ElementKind::ALL` has 25. Four omitted were the non-compute rows; **the
+    fifth was `F32Strict`, a live compute dtype.** `KNOWN_PANICKING = 0` read as a
+    statement about all input and was measured over 20 of 25. Now derived from
+    `ALL`; surface 1920 → **2400 inputs, still 0 panicking**, declines
+    1008 → 1428.
+  - **`oracle_reachable_on_every_admitted_dtype`** — **I hand-listed 25 variants
+    in a test written that same hour to close a coverage gap.** The list would not
+    have grown with a 26th dtype. Now derives from `ALL`.
 
-  **Three instances of one shape is a rate.** Unblocked and in-tree.
+  **What the sweep found and deliberately did NOT change**, because a hand list is
+  not a defect when no authoritative axis exists:
+
+  - `CHANNELS` (9 output-channel names) — there is no enum of *ways to print*.
+  - `VENDOR_MARKERS` (6 prefixes) — no authoritative list of vendor spellings.
+  - `SPECIALS` (13 floats), `A` (7 u32s) — honestly corpora, and named as such.
+  - `ADMISSION_API` (6 names) — ⚠️ **the interesting one: its axis is ANOTHER
+    REPO'S API surface.** A rename in fuel silently disarms the guard, and no
+    local mechanism can see it. Same shape as [[panic-text-is-a-cross-repo-api]]
+    inverted: there the guard had to live on the side that could not run the
+    tests; here it has to name a subject it cannot observe.
+
+  **The transferable rule, which is narrower than "check your axis":**
+  **derive a corpus from a guaranteed-complete source where one exists, and where
+  none exists, say so in the guard.** `ElementKind::ALL` is complete by
+  *mechanism* — the enum is exhaustive so a new variant breaks every match site,
+  and `kiss_dtype_manifest` fails if a §6.1-token variant is missing from it.
+  **Deriving inherits that guarantee; copying does not**, and the two look
+  identical at the call site.
 
 - **Per-target N2 verification.** NaN-propagation surviving the toolchain is a
   property of *one optimizer*, re-measured per target, never inherited. Verified
