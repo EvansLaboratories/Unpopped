@@ -132,13 +132,29 @@ compute through the promote/demote path where it already lives for FP8. That is
 vulkane's remedy stated in this crate's terms: **they made the field part of the
 identity; the analogue here is making the function answer one question.**
 
-**And their finding confirmed a guard here was better than it knew.**
+**And their finding confirmed a guard here was better than it knew** —
+**verified against the manifest rather than relayed**, at vulkane `a9f89e5`,
+`vocabulary_version: 5`, on their advice that a token colliding today may not be
+the one that collided at v4:
+
+```
+arith_names      dot8 f16 f64 i16 i64 i8 st16 st8            (8)
+component_types  f16 f32 f64 bf16 i8 i16 i32 i64 u8 u16
+                 u32 u64 f8e4m3fn f8e5m2 i8packed u8packed   (16)
+IN BOTH          f16  f64  i16  i64  i8
+```
+
 `unpopped-slang`'s gate test asserts
 `!can("vulkan:sg32.arith-none.cm-i8", ElementKind::U8)` — an `i8` in some *other*
 field must not answer for `arith`. **Written as a generic substring-collision
-guard; `cm-` turns out to be exactly where component types live, and `i8`
-genuinely appears in both alphabets.** A defensive test guarding a real,
-documented collision rather than a hypothetical one.
+guard; `cm-` is the cooperative-matrix field and `i8` is confirmed present in both
+alphabets**, so it defends a real documented collision rather than a hypothetical.
+
+⚠️ **One precision the manifest adds that the test's comment should not overstate:**
+a `cm-` tuple is *M-N-K plus four component types*, so **`cm-i8` is not a
+well-formed cooperative-matrix value** — it is a minimal probe for the substring
+class, not a realistic token. **The hazard it guards is real; the token it uses is
+synthetic**, and those are different claims.
 
 ### The f16/bf16 shadow surface, for a consumer that must pin current bytes
 
