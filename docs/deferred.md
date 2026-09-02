@@ -100,6 +100,42 @@ rather than a cleanup commit.
 >
 > The window opened when `unpopped 0.7.0` published on 2026-09-02.
 
+### The f16/bf16 shadow surface, for a consumer that must pin current bytes
+
+**Measured at HEAD 2026-09-02**, because baracuda asked for the *surface* rather
+than the change — the difference between shadowing 2 functions and discovering in
+October that it was 4.
+
+**MOVES when the halves adopt FP8's shape — must be shadowed:**
+
+| fn | why it moves |
+|---|---|
+| `scalar_ctype` | F16/Bf16 arms return `__half` / `__nv_bfloat16` directly |
+| `promote_load_f32` | chains `narrow_load_fn` → `half_load_intrinsic` |
+| `demote_store_f32` | chains `narrow_store_fn` → `half_store_intrinsic` |
+| **`cast_scalar`** | **delegates to all three above** |
+
+⚠️ **`cast_scalar` is the one a grep would miss: it contains no `F16` literal at
+all.** It moves purely by delegation, so *"which functions mention F16"* returns
+three and the true answer is four. **The surface is defined by the call graph,
+not by the token.**
+
+**DOES NOT move:**
+
+- `store_expr_of` — its match routes **only the FP8 pair** to `demote_store_f32`,
+  written as an explicit match precisely so it does not inherit whatever
+  `narrow_store_fn` happens to do. That deliberate choice is what keeps it still.
+- `dtype_tag` — spells the NAME (`"f16"`), not the storage.
+- `half_load_intrinsic` / `half_store_intrinsic` / `narrow_load_fn` /
+  `narrow_store_fn` — the leaves that actually change, but a consumer shadowing
+  the four wrappers above never calls them.
+
+⚠️ **Caveat on the usage counts**, which matter to a consumer sizing the work:
+they come from `baracuda-cuda-emit-0.0.1-alpha.79`, **which pins
+`unpopped = "0.1.0"` — five minor versions back.** The *set* of functions is from
+this tree at HEAD and is authoritative; the *counts* are indicative only and the
+consumer must re-derive them on their own main.
+
 ⚠️ **BUT THE OVERRIDE ANSWER DOES NOT CLOSE THEM — it answers a different
 question than the rows ask.** Recorded 2026-09-02 after the PM read the
 consumer-side shadow ruling as disposing of the f16/bf16 row.
