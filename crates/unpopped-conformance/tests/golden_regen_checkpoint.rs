@@ -91,6 +91,12 @@ fn section_b_comes_back_to_the_pm_on_its_checkpoint_date() {
          (1) schedule the regen, do the three together, and delete this file; or\n  \
          (2) move REGEN_CHECKPOINT, in a commit that says why the window slipped \
          and who agreed.\n\n\
+         NOT waiting on a decision — the shape is known. The override-mechanism \
+         sub-question is settled (consumer-side shadow, no shared API); what remains \
+         is that the neutral module must stop spelling a vendor type, adopting the \
+         shape FP8 already proves: spell the STORAGE type and emit software helpers \
+         into the kernel, no vendor intrinsics. FP8 got there first solely because it \
+         had no goldens to rewrite.\n\n\
          Owner: the portfolio PM. A moved date with a reason is a live deferral; \
          a moved date without one is the hold-with-no-owner defect returning."
     );
