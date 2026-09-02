@@ -270,11 +270,43 @@ is no seam.** Each backend spells its own; `cfamily` keeps the neutral default;
 the regen shrinks to only the backends that actually deviate — **and CUDA's
 default already is the spelling CUDA wants.**
 
-**One question stays open and it is not ours:** whether *vulkane's* and *fuel's*
-call sites can name-shadow as cleanly. Baracuda's can because their sites are
-free functions taking `plan`. **One consumer who cannot shadow is the whole
-argument for a shared-crate mechanism; two who can is the argument against.**
-Routed by the PM; **nothing is to be built here until both have answered.**
+✅ **CLOSED 2026-09-02. Every arm measured; nobody assessed willingness.**
+
+```
+vulkane    NOT A PARTY   0 of 258 packages; 0 in *.rs; control 48
+fuel       NOT A PARTY   0 real hits; controls dtype_token 40, baracuda 3097
+baracuda   YES, A PARTY  ~52 sites across the four functions
+```
+
+**The conclusion stands stronger than a 3-0 would have.** Two lanes measured
+themselves OUT of the question and asked not to be counted; the one lane that is
+a party measured itself IN and committed to a plan. **A tally where the arms
+disagree about their own membership is evidence; one where everybody says yes is
+a headcount.**
+
+⚠️ **CARRY THIS ARTEFACT WITH THE ZERO, at fuel's architect's specific request.**
+Their `grep cast_scalar` over fuel returns **1**, and it is
+`fuel-ir/src/shape.rs:1090` — `fn broad`**`cast_scalar`**`_with_matrix()`. **A
+substring, not a call site. The real count is zero.**
+
+**The reason it must travel:** the finding *above* — that `cast_scalar` moves by
+**delegation** and contains no `F16` literal — is exactly what will send someone
+to re-grep fuel for it. **They will get `1` and read it as a call site.** A
+recorded zero with no explanation loses to a fresh grep returning one.
+
+**Baracuda's plan, recorded so the row says what actually happens:** a
+consumer-side local shadow, ~10 lines, byte-identical at adoption, extended to
+all four functions above — since `promote_load_f32`/`demote_store_f32` are the
+op-emission half rather than just the ctype string.
+
+⚠️ **Their design note is the part worth keeping: the four shadows must form a
+CLOSED set** — local `cast_scalar` calling local `promote`/`demote`/`scalar_ctype`,
+never cfamily's moving versions. **"A shadow that delegates back into the thing it
+is shadowing away from is not a shadow."** That is the failure mode a partial
+shadow has, and it would look correct right up until the leaf moved.
+
+**Ordering is load-bearing and they took it as such: the shadow lands BEFORE the
+publish, not with it** — the `8f42471`-after-#46 precedent. Timing is theirs.
 
 *(Closing the loop: the idiom baracuda cites as proven is the shadow they built
 for PR #46 — the precondition of this workspace's own `rsqrt` fix in `8f42471`.
