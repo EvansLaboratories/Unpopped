@@ -661,7 +661,29 @@ Forcing that fix created the pattern that later answered this question.)*
       This entry once recorded it as *not expressible*; that was true of published
       v4 and was **an unshipped vocabulary, never a missing one.**
 
-      ⚠️ **And a correction to how I said I would detect the unblock.** I told the
+      ⚠️ **Re-verified against the PUBLISHED CRATE 2026-09-02, not a peer's tree.**
+    My first check read `vulkan-vocabulary.json` from vulkane's working tree on a
+    **topic branch** (`a9f89e5`, `ci/the-changelog-must-name-the-version-being-shipped`).
+    That is not the artifact anyone consumes. Pulled
+    `kiss-vulkan-vocab-0.4.0.crate` from crates.io instead — 54,602 bytes,
+    `.cargo_vcs_info.json` sha1 `64001e79`:
+
+    ```
+    vocabulary_version : 5
+    arith_names        : dot8 f16 f64 i16 i64 i8 st16 st8
+      i16 in arith?  true       u16 in arith?  FALSE
+      i8  in arith?  true       u8  in arith?  FALSE
+      i16 and u16 both in component_types: true
+    ```
+
+    **`u16` is not an arith capability and is not planned to be one** — Vulkan's
+    feature bit is `shaderInt16`, signedness-agnostic, exactly as `shaderInt8` is
+    for the 8-bit pair. **So `u16` gating on `i16` is not a convenience; it is the
+    only spelling that exists**, and this crate's gate does that. The absence of
+    `u8`/`u16` from `arith_names` is confirmed in the shipped artifact rather than
+    inferred from the pattern.
+
+    ⚠️ **And a correction to how I said I would detect the unblock.** I told the
       PM I would *"see `arith-i16` appear in the coverage table without being
       told."* **That could never have happened.** The coverage table probes
       `ArchSku::Sm89` — a `cuda:` token, which carries no `<arith>` field at all —
