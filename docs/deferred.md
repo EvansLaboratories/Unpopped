@@ -662,9 +662,21 @@ Forcing that fix created the pattern that later answered this question.)*
       v4 and was **an unshipped vocabulary, never a missing one.**
 
       ⚠️ **Re-verified against the PUBLISHED CRATE 2026-09-02, not a peer's tree.**
-    My first check read `vulkan-vocabulary.json` from vulkane's working tree on a
-    **topic branch** (`a9f89e5`, `ci/the-changelog-must-name-the-version-being-shipped`).
-    That is not the artifact anyone consumes. Pulled
+    My first check read `vulkan-vocabulary.json` from vulkane's working tree at
+    `a9f89e5`. **I recorded that as "a topic branch" and it was `main`** — their
+    correction, verified here: `git branch --contains a9f89e5` lists `main`, and
+    `git ls-remote` has it as `origin/main`'s head. **My error was reading
+    `git rev-parse --abbrev-ref HEAD`, which answers *where is the worktree
+    pointed*, not *what branch is this commit on*.** Their checkout sat on a topic
+    branch that had zero commits at the time, so it pointed at main's head.
+    **Branch membership is `--contains`; `--abbrev-ref HEAD` is a different
+    question that happens to agree most of the time.**
+
+    ⚠️ **And the correction makes the lesson stronger, not weaker.** A topic branch
+    being unreliable is unsurprising. **`main` being unreliable as a source for
+    what shipped is the actual finding** — measured: **9 commits** between the
+    published `64001e79` and `a9f89e5`. Both are "the repository"; only one is what
+    anyone consumes. Pulled
     `kiss-vulkan-vocab-0.4.0.crate` from crates.io instead — 54,602 bytes,
     `.cargo_vcs_info.json` sha1 `64001e79`:
 
@@ -682,6 +694,14 @@ Forcing that fix created the pattern that later answered this question.)*
     only spelling that exists**, and this crate's gate does that. The absence of
     `u8`/`u16` from `arith_names` is confirmed in the shipped artifact rather than
     inferred from the pattern.
+
+    ⚠️ **Adopt `.cargo_vcs_info.json` with its own limit, which vulkane supplied:**
+    it records the commit `cargo package` **ran from**, which is not necessarily a
+    commit anyone can fetch — it can name a dirty tree or an unpushed commit.
+    **It tells you what shipped; it does not guarantee you can check it out.**
+    Resolve the sha before treating it as a ref. Here it does resolve and is an
+    ancestor of `main` (verified), but that is a property of this release rather
+    than of the mechanism.
 
     ⚠️ **And a correction to how I said I would detect the unblock.** I told the
       PM I would *"see `arith-i16` appear in the coverage table without being
