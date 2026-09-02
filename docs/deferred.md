@@ -583,128 +583,147 @@ Forcing that fix created the pattern that later answered this question.)*
   findings about the *generator* survive the catalog being dropped.
 
 
-- **Dtype lowering coverage.** The numbers are no longer here: they are
-  **measured** by `crates/unpopped-conformance/tests/dtype_lowering_coverage.rs`, which
-  carries the per-dtype × per-backend table and fails when it goes stale. The
-  prose figures this entry used to give were **wrong twice** — first "CpuC 9,
-  Slang 5" against a measured 8, then "CpuC 8/22" against a measured 18 once the
-  work below landed. Twice in the same entry, in both directions, is the whole
-  argument for moving them: a coverage claim decays silently, because nothing
-  about adding a dtype arm forces the sentence describing it to change. **Run the
-  test.** Any number written here is a number that will be wrong.
+- ~~**Dtype lowering coverage.**~~ — **CLOSED 2026-09-02: nothing remains in this
+  section.** Measured at HEAD rather than declared: **CpuC 18 Lowers / 2 NotYet**
+  (f16+bf16, Section B) and **Slang 6 Lowers / 5 Blocked / 9 NotYet / 2 ByDesign**.
 
-  **Split by what actually blocks it, ruled by the portfolio PM 2026-08-27**,
-  because filing the whole thing as available made it look actionable when most
-  of it was not — the mirror of Section B's ownerless gate, one section down.
+  **The five Slang `Blocked` cells are implemented and correctly refusing** —
+  `i8`/`u8`/`i16`/`u16`/`bool` all lower when the target advertises the matching
+  arithmetic capability, and this table probes `cuda:sm89`, which advertises none.
+  **A gated refusal is not missing work.**
 
-  **CpuC is 18/22 and its remaining two are f16/bf16 (Section B).** Slang is
-  **6/22** after `u32`/`u64` landed (`6818679`); the rest sorts as:
+  **All nine Slang `NotYet` cells are Section B**, not this section: `f16`/`bf16`
+  are the spelling seam, and both FP8s, `i4`/`u4`/`b1` and `c64`/`c128` need
+  emitted preludes — a new emitted-text surface, so they ride the regen.
 
-  - **UNBLOCKED, this section:** `i8`/`u8`, `bool`, both FP8s, `i4`/`u4`/`b1`.
-    Vulkane answered the gating question on 2026-08-28 and it is recorded here
-    rather than left in a transcript:
-    - **Grammar is `arith-f16-i8`** — hyphen-separated tuples, `.` between
-      fields, `arith-none` for empty. **Juxtaposition (`arith-f16i8`) is
-      MALFORMED**, not merely unusual (`spec/namespaces/vulkan.md` V-6).
-    - ⚠️ **Order is load-bearing.** The set is spelled in **lexicographic** name
-      order (`dot8, f16, f64, i16, i64, i8, st16, st8`), and §6.8-0002 matching
-      is **byte-exact** — so `arith-i8-f16` matches *nothing*. **Sort, then join.**
-      A wrong order is a well-formed string that silently never satisfies.
-    - ⚠️ **There is no `u8` token.** `i8` names `shaderInt8`, which is
-      **signedness-agnostic** — 8-bit integers usable in shader code. So `u8`
-      arithmetic gates on `i8`, and that absence is not an omission. Signedness
-      lives in the component-type vocabulary (`cm-`/`cv-`), a different alphabet.
-    - ⚠️ **`st8` and `i8` answer different questions, and the question is about
-      the KERNEL, not the dtype.** `st8` is `storageBuffer8BitAccess` (8-bit data
-      in a buffer); `i8` is 8-bit *arithmetic*. A kernel that only loads and
-      stores `Bool`-as-`U8` bytes needs `st8`; one that computes in 8-bit needs
-      `i8`. Reading one as the other is a silently wrong lowering on hardware
-      that is behaving correctly (V-15).
-  - ✅ **`i16`/`u16` — DONE.** They spell `int16_t`/`uint16_t` and gate on `i16`
-    (`shaderInt16`), which became expressible on **2026-09-02** when
-    kiss-vulkan-vocab 0.4.0 / vulkane 0.14.0 shipped capability vocabulary v5.
-    This entry once recorded it as *not expressible*; that was true of published
-    v4 and was **an unshipped vocabulary, never a missing one.**
+  ⚠️ **This row stayed open after its content had emptied**, which is the same
+  defect as counting notes as work: **a row is not a unit of work, it is a
+  container, and a container empties without announcing it.** Found by asking what
+  was still IN it rather than by reading its title. The original entry follows,
+  kept because its lesson outlives its content.
 
-    ⚠️ **And a correction to how I said I would detect the unblock.** I told the
-    PM I would *"see `arith-i16` appear in the coverage table without being
-    told."* **That could never have happened.** The coverage table probes
-    `ArchSku::Sm89` — a `cuda:` token, which carries no `<arith>` field at all —
-    so no vulkan capability can ever surface there. **The detector I named was
-    fictional, and I would have waited on it indefinitely.** The real signal was
-    the publish itself, which only the PM could see.
-  - **SECTION B:** `f16`/`bf16` (the spelling seam), **complex `c64`/`c128`**,
-    and — **corrected 2026-09-02** — **both FP8s and `i4`/`u4`/`b1`**. These were
-    listed as unblocked on the strength of `bool` being one, and that was wrong:
-    `bool` needed only a ctype because FKC §5 stores it as U8 and its ops route
-    through `binary_int`. **FP8 and sub-byte need CODECS.** `cfamily::fp8_helpers`
-    returns emitted C prelude text, and `sub_byte_load_fn` names
-    `unpopped_i4_load` / `unpopped_b1_load`, defined as `static int
-    unpopped_i4_load(const unsigned char* p, ...)`. Slang needs a parallel prelude
-    in its own syntax — the same shape as complex, the same new emitted-text
-    surface, and therefore the same regen. **"Follows bool's test" was true of the
-    gate and false of the work.**
+  **The original entry, kept for its lesson.** The numbers are no longer here: they are
+    **measured** by `crates/unpopped-conformance/tests/dtype_lowering_coverage.rs`, which
+    carries the per-dtype × per-backend table and fails when it goes stale. The
+    prose figures this entry used to give were **wrong twice** — first "CpuC 9,
+    Slang 5" against a measured 8, then "CpuC 8/22" against a measured 18 once the
+    work below landed. Twice in the same entry, in both directions, is the whole
+    argument for moving them: a coverage claim decays silently, because nothing
+    about adding a dtype arm forces the sentence describing it to change. **Run the
+    test.** Any number written here is a number that will be wrong.
 
-  **Why I could not answer the `arith` question myself, recorded because it is
-  their finding not my gap:** all eight of vulkane's normative vectors carry
-  `arith-none`, so the machine-readable artifact a consumer validates against
-  never exercises the multi-value form. The only multi-value example in their
-  tree is one string in two unit tests and a README table. They are adding a
-  normative multi-value vector — **found by asking rather than guessing.**
+    **Split by what actually blocks it, ruled by the portfolio PM 2026-08-27**,
+    because filing the whole thing as available made it look actionable when most
+    of it was not — the mirror of Section B's ownerless gate, one section down.
 
-  **The list below is done.** `bool`, `u32`, `u64`, both FP8s, `i4`/`u4`/`b1` and
-  `c64`/`c128` all lower and are differentially tested through a real C compiler.
-  It is kept rather than deleted because each entry records *why the dtype was
-  hard*, and those reasons outlived the work — the promotion rule below is still
-  the reason `u8`/`u16` are correct today, and someone will need it again.
+    **CpuC is 18/22 and its remaining two are f16/bf16 (Section B).** Slang is
+    **6/22** after `u32`/`u64` landed (`6818679`); the rest sorts as:
 
-  `bool` was **not simply a missing arm** — the logical ops already narrow to
-  `U8`, which *is* the bespoke Bool surface, so the question was whether a
-  `Bool`-keyed cell routes to that same `uint8_t` path or whether
-  `ElementKind::Bool` is deliberately not a plan dtype. A naming question wearing
-  a coverage question's clothes. (Resolved: it routes there, and arithmetic on a
-  truth value is refused.)
-  **`u32` and `u64` together** shared one blocker, sharper than "unsigned-wrap
-  audit" suggests: C's integer promotions lift `unsigned char`/`unsigned short`
-  to **signed** `int`, so `u8`/`u16` genuinely compute at 32-bit signed width —
-  which is what the oracle's `op_width` (32) and sign-extending `wrap_bits`
-  model, and why those two were already correct. `unsigned int` has the same rank
-  as `int` and does **not** promote, so `u32` arithmetic is unsigned modulo
-  2³² and the old model read `3_000_000_000u32` as negative. Both needed an
-  unsigned width/wrap path in the oracle and the emitter. (`u32`'s index/address
-  role is additive and was previously — wrongly — recorded as the reason it
-  cannot compute.)
-  `i4`/`u4`/`b1` needed sub-byte pack/unpack — and the store is a
-  **read-modify-write**, safe only because `cpu_c`'s loop is serial; a threaded
-  backend copying it races. Both FP8s needed a software codec, with an
-  *independent* one in the oracle or it stops being a differential.
-  `c64`/`c128` needed a struct ABI and complex arithmetic in the IR — see the
-  MSVC finding under "worth knowing".
+    - **UNBLOCKED, this section:** `i8`/`u8`, `bool`, both FP8s, `i4`/`u4`/`b1`.
+      Vulkane answered the gating question on 2026-08-28 and it is recorded here
+      rather than left in a transcript:
+      - **Grammar is `arith-f16-i8`** — hyphen-separated tuples, `.` between
+        fields, `arith-none` for empty. **Juxtaposition (`arith-f16i8`) is
+        MALFORMED**, not merely unusual (`spec/namespaces/vulkan.md` V-6).
+      - ⚠️ **Order is load-bearing.** The set is spelled in **lexicographic** name
+        order (`dot8, f16, f64, i16, i64, i8, st16, st8`), and §6.8-0002 matching
+        is **byte-exact** — so `arith-i8-f16` matches *nothing*. **Sort, then join.**
+        A wrong order is a well-formed string that silently never satisfies.
+      - ⚠️ **There is no `u8` token.** `i8` names `shaderInt8`, which is
+        **signedness-agnostic** — 8-bit integers usable in shader code. So `u8`
+        arithmetic gates on `i8`, and that absence is not an omission. Signedness
+        lives in the component-type vocabulary (`cm-`/`cv-`), a different alphabet.
+      - ⚠️ **`st8` and `i8` answer different questions, and the question is about
+        the KERNEL, not the dtype.** `st8` is `storageBuffer8BitAccess` (8-bit data
+        in a buffer); `i8` is 8-bit *arithmetic*. A kernel that only loads and
+        stores `Bool`-as-`U8` bytes needs `st8`; one that computes in 8-bit needs
+        `i8`. Reading one as the other is a silently wrong lowering on hardware
+        that is behaving correctly (V-15).
+    - ✅ **`i16`/`u16` — DONE.** They spell `int16_t`/`uint16_t` and gate on `i16`
+      (`shaderInt16`), which became expressible on **2026-09-02** when
+      kiss-vulkan-vocab 0.4.0 / vulkane 0.14.0 shipped capability vocabulary v5.
+      This entry once recorded it as *not expressible*; that was true of published
+      v4 and was **an unshipped vocabulary, never a missing one.**
 
-  **Slang's `i8`/`i16`/`u8`/`u16` are blocked on a missing mechanism, not on
-  Slang.** Slang's conformance docs say *"Only `int`/`int32_t` and
-  `uint`/`uint32_t` are universally supported; the others depend on target +
-  capabilities"* — which means Slang **can** spell them on a capable target. The
-  gap is ours: `Backend::supports_dtype(&self, dtype) -> bool` has no target
-  parameter, so a backend can only answer "always" or "never", and for a
-  conditionally-available type the sole *sound* unconditional answer is "never"
-  (claiming it would emit `int8_t` for a target that cannot compile it — the
-  fall-through the backend contract forbids).
+      ⚠️ **And a correction to how I said I would detect the unblock.** I told the
+      PM I would *"see `arith-i16` appear in the coverage table without being
+      told."* **That could never have happened.** The coverage table probes
+      `ArchSku::Sm89` — a `cuda:` token, which carries no `<arith>` field at all —
+      so no vulkan capability can ever surface there. **The detector I named was
+      fictional, and I would have waited on it indefinitely.** The real signal was
+      the publish itself, which only the PM could see.
+    - **SECTION B:** `f16`/`bf16` (the spelling seam), **complex `c64`/`c128`**,
+      and — **corrected 2026-09-02** — **both FP8s and `i4`/`u4`/`b1`**. These were
+      listed as unblocked on the strength of `bool` being one, and that was wrong:
+      `bool` needed only a ctype because FKC §5 stores it as U8 and its ops route
+      through `binary_int`. **FP8 and sub-byte need CODECS.** `cfamily::fp8_helpers`
+      returns emitted C prelude text, and `sub_byte_load_fn` names
+      `unpopped_i4_load` / `unpopped_b1_load`, defined as `static int
+      unpopped_i4_load(const unsigned char* p, ...)`. Slang needs a parallel prelude
+      in its own syntax — the same shape as complex, the same new emitted-text
+      surface, and therefore the same regen. **"Follows bool's test" was true of the
+      gate and false of the work.**
 
-  The capability data already exists: `KernelPlan.key` carries the
-  `StructureKey`, and KISS §6.8 target tokens encode capabilities directly —
-  `vulkan:sg64.ops-abr.arith-f16.cm-none` names an `arith-f16` capability. Only
-  the admissibility gate cannot see it.
+    **Why I could not answer the `arith` question myself, recorded because it is
+    their finding not my gap:** all eight of vulkane's normative vectors carry
+    `arith-none`, so the machine-readable artifact a consumer validates against
+    never exercises the multi-value form. The only multi-value example in their
+    tree is one string in two unit tests and a README table. They are adding a
+    normative multi-value vector — **found by asking rather than guessing.**
 
-  **This is the same root cause as the one vulkan vector excluded from the
-  byte-match**, where `ArchSku` — a closed CUDA-only enum — cannot represent a
-  `vulkan:` target at all. Capability-aware dtype admission and the pluggable
-  target namespace are one piece of work, not two, and doing them together turns
-  19/19-plus-an-exclusion into 20/20 *and* unlocks these four dtypes.
+    **The list below is done.** `bool`, `u32`, `u64`, both FP8s, `i4`/`u4`/`b1` and
+    `c64`/`c128` all lower and are differentially tested through a real C compiler.
+    It is kept rather than deleted because each entry records *why the dtype was
+    hard*, and those reasons outlived the work — the promotion rule below is still
+    the reason `u8`/`u16` are correct today, and someone will need it again.
 
-  The reserved `fnuz` pair must **never** be lowered at this schema version, and
-  that is asserted separately from the table: "forbidden" and "not done yet" are
-  different facts and should not share a column of `false`s.
+    `bool` was **not simply a missing arm** — the logical ops already narrow to
+    `U8`, which *is* the bespoke Bool surface, so the question was whether a
+    `Bool`-keyed cell routes to that same `uint8_t` path or whether
+    `ElementKind::Bool` is deliberately not a plan dtype. A naming question wearing
+    a coverage question's clothes. (Resolved: it routes there, and arithmetic on a
+    truth value is refused.)
+    **`u32` and `u64` together** shared one blocker, sharper than "unsigned-wrap
+    audit" suggests: C's integer promotions lift `unsigned char`/`unsigned short`
+    to **signed** `int`, so `u8`/`u16` genuinely compute at 32-bit signed width —
+    which is what the oracle's `op_width` (32) and sign-extending `wrap_bits`
+    model, and why those two were already correct. `unsigned int` has the same rank
+    as `int` and does **not** promote, so `u32` arithmetic is unsigned modulo
+    2³² and the old model read `3_000_000_000u32` as negative. Both needed an
+    unsigned width/wrap path in the oracle and the emitter. (`u32`'s index/address
+    role is additive and was previously — wrongly — recorded as the reason it
+    cannot compute.)
+    `i4`/`u4`/`b1` needed sub-byte pack/unpack — and the store is a
+    **read-modify-write**, safe only because `cpu_c`'s loop is serial; a threaded
+    backend copying it races. Both FP8s needed a software codec, with an
+    *independent* one in the oracle or it stops being a differential.
+    `c64`/`c128` needed a struct ABI and complex arithmetic in the IR — see the
+    MSVC finding under "worth knowing".
+
+    **Slang's `i8`/`i16`/`u8`/`u16` are blocked on a missing mechanism, not on
+    Slang.** Slang's conformance docs say *"Only `int`/`int32_t` and
+    `uint`/`uint32_t` are universally supported; the others depend on target +
+    capabilities"* — which means Slang **can** spell them on a capable target. The
+    gap is ours: `Backend::supports_dtype(&self, dtype) -> bool` has no target
+    parameter, so a backend can only answer "always" or "never", and for a
+    conditionally-available type the sole *sound* unconditional answer is "never"
+    (claiming it would emit `int8_t` for a target that cannot compile it — the
+    fall-through the backend contract forbids).
+
+    The capability data already exists: `KernelPlan.key` carries the
+    `StructureKey`, and KISS §6.8 target tokens encode capabilities directly —
+    `vulkan:sg64.ops-abr.arith-f16.cm-none` names an `arith-f16` capability. Only
+    the admissibility gate cannot see it.
+
+    **This is the same root cause as the one vulkan vector excluded from the
+    byte-match**, where `ArchSku` — a closed CUDA-only enum — cannot represent a
+    `vulkan:` target at all. Capability-aware dtype admission and the pluggable
+    target namespace are one piece of work, not two, and doing them together turns
+    19/19-plus-an-exclusion into 20/20 *and* unlocks these four dtypes.
+
+    The reserved `fnuz` pair must **never** be lowered at this schema version, and
+    that is asserted separately from the table: "forbidden" and "not done yet" are
+    different facts and should not share a column of `false`s.
 - **Oracle coverage**: ~~`RowSort`~~ — **DONE**; `eval_row_sort` evaluates it
   (NaN-greatest in both directions, stable index ties, TopK read off the output
   operand's width), and the `Coverage` classifier moved `Deferred` -> `Evaluated`.
