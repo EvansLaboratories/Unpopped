@@ -411,14 +411,43 @@ Forcing that fix created the pattern that later answered this question.)*
 
 ## C. Needs a ruling — not ours to decide alone
 
-- **Whether `required_fidelity` belongs to us at all.** The function now exists
-  (`oracle::required_fidelity`, derived from unit roundoff + rounding steps +
-  `contract::ulp_bound`, so validation and the declared `max_ulp` cannot drift).
-  What is NOT settled is ownership: the original note said "plausibly
-  KISS-Conform's rather than ours", and **Fuel already checks kernel contracts at
-  runtime**. Asked them 2026-08-14 whether this duplicates machinery they hold —
-  if so, ours belongs behind theirs rather than beside it. Answer pending.
+- ~~**Whether `required_fidelity` belongs to us at all**~~ — **ANSWERED
+  2026-09-02: it is OURS, and the two are complementary rather than duplicated.**
+  **Askee: fuel (architect). Asked 2026-08-14, answered 2026-09-02 — 19 days.**
   (`conformance.md` OPEN-1.)
+
+  Fuel measured their side at `1fb2e9db`: **0 occurrences of
+  `required_fidelity`/`RequiredFidelity` in any spelling**; "fidelity" appears 4
+  times, all prose in doc comments. Their runtime layer is
+  `fuel-dispatch/src/fkc/verify/` (14 files), which **empirically verifies a
+  kernel contract's `precision` claims and ledgers `(kernel, backend, dtypes,
+  claim)` tuples, downgrading at import any claim the ledger does not cover.**
+
+  **That layer is SUPPLY-SIDE — "has this kernel EARNED what it CLAIMS?"** Ours
+  is neither that nor a caller's demand: `required_fidelity(plan, operands)`
+  derives, from the body's own structure, **the band a CORRECT implementation
+  must land in** — integer cells bit-exact because wrapping is modelled exactly,
+  otherwise `(arith_steps + reduction_len + 2·ulp_bound) · unit_roundoff`. It is
+  the threshold `compare` judges an emitted kernel against its oracle with.
+
+  ⚠️ **The decisive evidence is structural, not the naming argument: the input is
+  `plan.body`, an Unpopped IR node. Fuel does not have it and cannot compute this
+  band.** Their ledger records what was *measured after the fact*; this derives
+  what *must be true a priori*. A kernel can pass ours and still lack an entry in
+  theirs, and both statements are worth having.
+
+  **Fuel's own limit, stated by them: they answered about FUEL's surface only and
+  did not read `oracle::required_fidelity`** — the half only they could supply,
+  handing back the half only we could.
+
+  **Carried forward as a live defect rather than closed clean:** `ulp_bound` sums
+  a **CUDA** per-op table and neither it nor `required_fidelity` takes a target,
+  so the band is CUDA's accuracy for every backend. Vulkan's `exp` is 3 ULP
+  against CUDA `expf`'s 2, so **a conforming Vulkan kernel fails a comparison it
+  should pass.** Latent today (the only caller is `unpopped-cpu-c`'s test), live
+  the moment a Vulkan backend compares through it. Needs a per-target accuracy
+  seam — see `ulp_bound`'s own KNOWN LIMIT. **Owner: this workspace. Party:
+  vulkane.**
 - ~~**What `VariantFidelity::BitIdentical` means across backends**~~ — **ANSWERED
   2026-08-15: bit-identical to the default lowering of the same cell, in the same
   backend, at the same version.** The two horns were the right pair and the left
