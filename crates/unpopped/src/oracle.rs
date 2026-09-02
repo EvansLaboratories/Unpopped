@@ -1942,22 +1942,102 @@ fn eval_elementwise(
     let rank = plan.key.rank as usize;
     let n_outputs = plan.n_outputs as usize;
     let out0 = &operands[n_in];
-    let ext: Vec<i64> = out0.shape[..rank].to_vec();
-    let n_out = prod(&ext).max(0);
 
     let bodies = plan.output_bodies();
     let mut outs: Vec<TypedBuffer> = (0..n_outputs)
         .map(|j| alloc_output(plan, operands, n_in, j))
         .collect();
 
+    // A GATHER is `Access::Elementwise` with one data-dependent read address —
+    // the plan gate admits it nowhere else — so it belongs in this walk rather
+    // than beside it. `None` for every ordinary elementwise op, and then every
+    // branch below is inert.
+    let gather = crate::plan::gather_of(plan.read_index);
+
+    // A SCATTER is the mirror: `Access::Elementwise`, single output, one
+    // data-dependent WRITE address. Its OOB policy is pinned to `Skip` by the
+    // gate ("bespoke scatter/scatter_add/index_add/bincount all skip an OOB
+    // target"), so there is no ZeroFill/Clamp branch to write here.
+    //
+    // **Two semantics worth stating rather than leaving to the reader:**
+    //
+    // 1. The destination starts ZEROED (`alloc_output`). That is right for
+    //    `AtomicAdd` — scatter-add accumulates into zero — and it is a real
+    //    assumption for `AtomicMax`/`Min`, where an all-negative source would
+    //    max against the 0 that was already there. A kernel whose caller
+    //    pre-initialises the destination differently will differ, and correctly.
+    // 2. `Assign` with DUPLICATE indices is last-writer-wins with no defined
+    //    order on device. This walks the iteration space in order, so it
+    //    produces ONE valid outcome, not THE outcome. Compare against it only on
+    //    a unique-index corpus; the other combines are order-independent and do
+    //    not carry that caveat.
+    let scatter = crate::plan::scatter_of(plan.write_index);
+
+    // ⚠️ THE ITERATION SPACE IS THE SOURCE'S FOR A SCATTER, not the output's.
+    //
+    // Every other elementwise op produces one output element per iteration, so
+    // walking the output shape is the same walk. **A scatter does not**: its
+    // destination can be smaller than its source (bincount is the extreme —
+    // thousands of elements into a handful of bins), and walking the output
+    // would visit the bins and silently drop every source element past the
+    // first few. The value operand is the input that is not the index.
+    let src_slot = scatter.map(|(idx_op, ..)| usize::from(idx_op == 0));
+    let ext: Vec<i64> = match src_slot {
+        Some(v) => operands[v].shape[..rank].to_vec(),
+        None => out0.shape[..rank].to_vec(),
+    };
+    let n_out = prod(&ext).max(0);
+
     for lin in 0..n_out {
         let coords = unravel(lin, &ext);
+
+        // Resolve the index ONCE per output element, before any body runs.
+        //
+        // **Out-of-range is a STORE predicate, not a load behaviour** — the
+        // policy docs are explicit that no OOB load occurs, because the emitter
+        // clamps the load address in-bounds and guards the store. So the address
+        // is always clamped here, and the OOB decision changes what is written:
+        // `Skip` leaves the cell alone, `ZeroFill` writes zero, `Clamp` stores
+        // the clamped read as an ordinary value. Reading OOB and then discarding
+        // would agree on every output byte and disagree on whether the load
+        // happened, which is exactly the difference a sanitizer sees.
+        let mut gcoords = coords.clone();
+        let mut oob_zero = false;
+        if let Some((g, idx_op, axis, oob, _)) = gather {
+            let axis = axis as usize;
+            let extent = operands[g].shape[axis];
+            let raw = i64::try_from(
+                read_strided(
+                    inputs,
+                    operands,
+                    idx_op as usize,
+                    &coords,
+                    input_perm(plan, idx_op as usize),
+                )
+                .i128(),
+            )
+            .unwrap_or(i64::MIN);
+            gcoords[axis] = raw.clamp(0, (extent - 1).max(0));
+            if raw < 0 || raw >= extent {
+                match oob {
+                    crate::ir::OobPolicy::Skip => continue,
+                    crate::ir::OobPolicy::ZeroFill => oob_zero = true,
+                    crate::ir::OobPolicy::Clamp => {}
+                }
+            }
+        }
+
         let leaf = |i: u8| {
+            let c = if gather.is_some_and(|(g, ..)| g == i as usize) {
+                &gcoords
+            } else {
+                &coords
+            };
             read_strided(
                 inputs,
                 operands,
                 i as usize,
-                &coords,
+                c,
                 input_perm(plan, i as usize),
             )
         };
@@ -1970,16 +2050,80 @@ fn eval_elementwise(
             coord: &coord,
         };
         // Evaluate all output bodies first (they share the input reads), then store.
-        let vals: Vec<Val> = (0..n_outputs).map(|j| eval(bodies[j], &ev)).collect();
+        let vals: Vec<Val> = (0..n_outputs)
+            .map(|j| {
+                if oob_zero {
+                    // The op's zero fill. `Val::Int(0)` rather than
+                    // `Val::Float(0.0)` so an integer output stores an exact 0
+                    // rather than a float that has to round back.
+                    Val::Int(0)
+                } else {
+                    eval(bodies[j], &ev)
+                }
+            })
+            .collect();
+        // Scatter redirects the STORE address along one axis. Resolved after the
+        // bodies run, because an OOB target guards the store rather than the
+        // read — the same shape as gather's policy, mirrored.
+        let mut scoords = coords.clone();
+        let mut combine = None;
+        if let Some((idx_op, axis, cmb, _oob, _)) = scatter {
+            let axis = axis as usize;
+            let extent = operands[n_in].shape[axis];
+            let raw = i64::try_from(
+                read_strided(
+                    inputs,
+                    operands,
+                    idx_op as usize,
+                    &coords,
+                    input_perm(plan, idx_op as usize),
+                )
+                .i128(),
+            )
+            .unwrap_or(i64::MIN);
+            // v1 pins the policy to Skip, so an out-of-range target is dropped.
+            if raw < 0 || raw >= extent {
+                continue;
+            }
+            scoords[axis] = raw;
+            combine = Some(cmb);
+        }
+
         for (j, val) in vals.into_iter().enumerate() {
             let od = &operands[n_in + j];
-            let off: i64 = coords
+            let dst = if scatter.is_some() { &scoords } else { &coords };
+            let off: i64 = dst
                 .iter()
                 .enumerate()
                 .take(rank)
                 .map(|(d, &c)| c * od.strides[d])
                 .sum();
             let odt = plan.out_dtype_of(j);
+            let val = match combine {
+                None | Some(crate::ir::WriteCombine::Assign) => val,
+                Some(cmb) => {
+                    // Read-modify-write. Serial here, and that is exact for
+                    // these three: integer add is associative and commutative,
+                    // and max/min are too — the gate admits max/min for integers
+                    // only, which is also what keeps `max(-0.0, +0.0)` from ever
+                    // arising. Float `AtomicAdd` is order-dependent in general
+                    // and is exact only on a corpus of integer-valued floats
+                    // inside 2^24 (f32) / 2^53 (f64); see docs/deferred.md.
+                    let prev = Val::Raw(read_elem(&outs[j].bytes, off as usize, odt), odt);
+                    match cmb {
+                        crate::ir::WriteCombine::AtomicAdd => {
+                            if is_int(odt) {
+                                Val::Int(prev.i128() + val.i128())
+                            } else {
+                                Val::Float(prev.f64() + val.f64())
+                            }
+                        }
+                        crate::ir::WriteCombine::AtomicMax => Val::Int(prev.i128().max(val.i128())),
+                        crate::ir::WriteCombine::AtomicMin => Val::Int(prev.i128().min(val.i128())),
+                        crate::ir::WriteCombine::Assign => unreachable!("handled above"),
+                    }
+                }
+            };
             store_val(val, odt, &mut outs[j].bytes, off as usize);
         }
     }
@@ -3339,7 +3483,7 @@ mod tests {
     }
 
     use super::*;
-    use crate::ir::{BinaryOp, OpDef, ReduceOp, input, konst};
+    use crate::ir::{BinaryOp, OobPolicy, OpDef, ReduceOp, input, konst};
     use crate::plan::build_plan;
     use unpopped_vocab::{ArchSku, OpCategory, StructureKey, structure_key};
 
@@ -3510,6 +3654,173 @@ mod tests {
     // WHOLE: it exercises REVERSE scan, an emission-level honest miss (flip
     // withdrawn — `semantics_dag` returns None) that kiss-ref cannot cover, so it
     // has no equal-or-better replacement to retire against.
+
+    // --- I. Gather / scatter -----------------------------------------------
+
+    fn i32b(shape: &[i64], data: &[i32]) -> TypedBuffer {
+        let mut b = TypedBuffer::new(
+            ElementKind::I32,
+            shape.to_vec(),
+            row_major(shape),
+            vec![0u8; data.len() * 4],
+        );
+        for (i, &v) in data.iter().enumerate() {
+            store_val(Val::Int(i128::from(v)), ElementKind::I32, &mut b.bytes, i);
+        }
+        b
+    }
+
+    fn row_major(shape: &[i64]) -> Vec<i64> {
+        let mut st = vec![1i64; shape.len()];
+        for d in (0..shape.len().saturating_sub(1)).rev() {
+            st[d] = st[d + 1] * shape[d + 1];
+        }
+        st
+    }
+
+    /// A gather reads at a data-dependent coordinate.
+    #[test]
+    fn gather_permutes_by_its_index_operand() {
+        let d = desc(&[1, 4], &[4, 1], ElementKind::F32);
+        let i = desc(&[1, 4], &[4, 1], ElementKind::I32);
+        let op = OpDef::gather(
+            "g",
+            &[ElementKind::F32],
+            1,
+            OobPolicy::Clamp,
+            ElementKind::I32,
+        );
+        let k = key(OpCategory::UnaryElementwise, &[d, i, d]);
+        let out = evaluate(
+            &build_plan(&op, &k),
+            &[d, i, d],
+            &[
+                f32b(&[1, 4], &[10.0, 20.0, 30.0, 40.0]),
+                i32b(&[1, 4], &[3, 0, 2, 1]),
+            ],
+            &[],
+        );
+        assert_eq!(f32s(&out[0]), vec![40.0, 10.0, 30.0, 20.0]);
+    }
+
+    /// `Clamp` pins out-of-range indices to the ends, in BOTH directions.
+    ///
+    /// ⚠️ `Skip` and `ZeroFill` are NOT distinguishable here and that is a
+    /// property of the oracle rather than of the semantics: `alloc_output`
+    /// zeroes the destination, so "leave the cell alone" and "write zero"
+    /// produce the same bytes. On device they differ whenever the caller
+    /// pre-filled the buffer. **Recorded rather than tested, because a test
+    /// asserting they agree would be asserting the oracle's limitation as if it
+    /// were the contract.**
+    #[test]
+    fn gather_clamp_pins_both_ends_and_negative_counts_as_out_of_range() {
+        let d = desc(&[1, 4], &[4, 1], ElementKind::F32);
+        let i = desc(&[1, 4], &[4, 1], ElementKind::I32);
+        let op = OpDef::gather(
+            "gc",
+            &[ElementKind::F32],
+            1,
+            OobPolicy::Clamp,
+            ElementKind::I32,
+        );
+        let k = key(OpCategory::UnaryElementwise, &[d, i, d]);
+        let out = evaluate(
+            &build_plan(&op, &k),
+            &[d, i, d],
+            &[
+                f32b(&[1, 4], &[10.0, 20.0, 30.0, 40.0]),
+                i32b(&[1, 4], &[3, -1, 5, 1]),
+            ],
+            &[],
+        );
+        assert_eq!(
+            f32s(&out[0]),
+            vec![40.0, 10.0, 40.0, 20.0],
+            "-1 clamps to index 0 and 5 clamps to index 3"
+        );
+    }
+
+    /// ⚠️ A scatter iterates its SOURCE, not its destination.
+    ///
+    /// This is the bincount shape: 6 source elements into 2 bins. An
+    /// implementation that walked the output shape would visit 2 positions and
+    /// silently drop four fifths of the input — and every same-extent test above
+    /// would still pass. That is why this one has unequal extents.
+    #[test]
+    fn scatter_add_iterates_the_source_not_the_destination() {
+        let src = desc(&[1, 6], &[6, 1], ElementKind::I32);
+        let idx = desc(&[1, 6], &[6, 1], ElementKind::I32);
+        let dst = desc(&[1, 2], &[2, 1], ElementKind::I32);
+        let op = OpDef::scatter_add("sa", &[ElementKind::I32], 1, ElementKind::I32);
+        let k = key(OpCategory::UnaryElementwise, &[src, idx, dst]);
+        let out = evaluate(
+            &build_plan(&op, &k),
+            &[src, idx, dst],
+            &[
+                i32b(&[1, 6], &[1, 2, 3, 4, 5, 6]),
+                i32b(&[1, 6], &[0, 1, 0, 1, 0, 1]),
+            ],
+            &[],
+        );
+        assert_eq!(
+            i32s(&out[0]),
+            vec![9, 12],
+            "1+3+5 into bin 0 and 2+4+6 into bin 1; a destination-shaped walk gives [1,2]"
+        );
+    }
+
+    /// An out-of-range scatter target is dropped — v1 pins the policy to `Skip`.
+    #[test]
+    fn scatter_skips_out_of_range_targets() {
+        let src = desc(&[1, 4], &[4, 1], ElementKind::I32);
+        let idx = desc(&[1, 4], &[4, 1], ElementKind::I32);
+        let dst = desc(&[1, 2], &[2, 1], ElementKind::I32);
+        let op = OpDef::scatter_add("ss", &[ElementKind::I32], 1, ElementKind::I32);
+        let k = key(OpCategory::UnaryElementwise, &[src, idx, dst]);
+        let out = evaluate(
+            &build_plan(&op, &k),
+            &[src, idx, dst],
+            &[
+                i32b(&[1, 4], &[7, 100, 9, 200]),
+                i32b(&[1, 4], &[0, 5, 1, -1]),
+            ],
+            &[],
+        );
+        assert_eq!(
+            i32s(&out[0]),
+            vec![7, 9],
+            "the 5 and -1 targets are dropped"
+        );
+    }
+
+    /// Float `AtomicAdd` is bit-exact on the deterministic corpus.
+    ///
+    /// The values are integer-valued floats well inside f32's exact range
+    /// (2^24), so every partial sum is exact and the result is independent of
+    /// accumulation order — which is what makes an order-nondeterministic op
+    /// checkable by VALUE rather than by a bound. See `docs/deferred.md`.
+    #[test]
+    fn scatter_add_f32_is_exact_on_the_integer_valued_corpus() {
+        let src = desc(&[1, 6], &[6, 1], ElementKind::F32);
+        let idx = desc(&[1, 6], &[6, 1], ElementKind::I32);
+        let dst = desc(&[1, 2], &[2, 1], ElementKind::F32);
+        let op = OpDef::scatter_add("saf", &[ElementKind::F32], 1, ElementKind::I32);
+        let k = key(OpCategory::UnaryElementwise, &[src, idx, dst]);
+        let out = evaluate(
+            &build_plan(&op, &k),
+            &[src, idx, dst],
+            &[
+                f32b(&[1, 6], &[1.0, 2.0, 4.0, 8.0, 16.0, 32.0]),
+                i32b(&[1, 6], &[0, 1, 0, 1, 0, 1]),
+            ],
+            &[],
+        );
+        assert_eq!(
+            f32s(&out[0]),
+            vec![21.0, 42.0],
+            "1+4+16 and 2+8+32, exact in f32 at any accumulation order"
+        );
+    }
 
     // --- H. RowSort ---------------------------------------------------------
 

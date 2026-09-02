@@ -520,13 +520,41 @@ rather than a cleanup commit.
   acceptance envelope over several accumulation orders) become necessary — and
   that is a separate, later question.
 
-  ⚠️ **NOT BUILT, and the reason is the same as increment 2's:** neither in-tree
-  emitter consumes `read_index` or `write_index` — `grep` returns nothing in
-  `unpopped-cpu-c` or `unpopped-slang`. The plan carries both fields through
-  (`plan.rs:246`/`255`), but **every producer is baracuda's.** Oracle support here
-  would be a reference implementation with no in-tree counterpart to differ
-  against. **Ask baracuda whether they want it before writing it** — same ask,
-  same reason.
+  ✅ **BUILT.** The PM routed the ask and it came back a yes with a **named,
+  not-yet-built consumer**: `tools/kiss-ref-diff/main.rs` scopes *"gather/scatter
+  with `IndexRef` are step 2c"*, and the converter already carries the `IndexMap`
+  scaffolding. **That named consumer is the whole difference between this and the
+  variant predicate** — which stayed unbuilt for exactly the reason this one did
+  not.
+
+  Gather lives inside `eval_elementwise` because the gate admits it nowhere else,
+  and OOB is handled as a **store predicate** rather than a load behaviour (the
+  policy docs are explicit that no OOB load occurs — the emitter clamps the
+  address and guards the store). Scatter mirrors it on the store side, with the
+  policy pinned to `Skip` by the gate.
+
+  ⚠️ **The bug worth recording: a scatter iterates its SOURCE, not its
+  destination.** Every other elementwise op produces one output element per
+  iteration, so walking the output shape is the same walk — **a scatter's
+  destination can be far smaller than its source** (bincount is the extreme), and
+  walking the output silently drops everything past the first few elements. Found
+  by asking what a bincount would do, not by a test; then pinned by one with
+  deliberately unequal extents (6 → 2), and mutation-proven — the
+  destination-shaped walk yields `[1, 2]` where the source-shaped one yields
+  `[9, 12]`. **Every same-extent test passes under both.**
+
+  ⚠️ **And one limitation of the oracle recorded rather than tested around:**
+  `Skip` and `ZeroFill` are indistinguishable here, because `alloc_output` zeroes
+  the destination and so "leave the cell alone" and "write zero" produce the same
+  bytes. They differ on device whenever the caller pre-filled the buffer. **A test
+  asserting they agree would be pinning the oracle's limitation as if it were the
+  contract**, so there isn't one — the note is the artifact.
+
+  The deterministic-subset recommendation is confirmed **proven rather than
+  proposed**: baracuda's fold differentials already use exactly-representable
+  integer-valued floats so any fold order gives identical bits, and
+  `AtomicAdd` on the 2²⁴/2⁵³ subset is that same construction one op-class over.
+  `scatter_add_f32_is_exact_on_the_integer_valued_corpus` is that corpus.
 
   Pinned by the exhaustive `Coverage` classifier in `oracle.rs`'s tests.
 - ~~**Quant: adopt the scale-sibling-operand model.**~~ — **DONE**; `QuantFacts`
