@@ -122,7 +122,7 @@ use Status::{Blocked, ByDesign, Lowers, NotYet};
 /// `supports_dtype` state — supported / unsupported / *not expressible in this
 /// vocabulary version* — which is a peer-implemented-trait change and is with
 /// Eric.
-const SLANG_NARROW: &str = "i8/u8 are now GATED, not refused: Slang spells them      (int8_t/uint8_t) when the target advertises 8-bit arithmetic (`i8` in the vulkan      <arith> field — signedness-agnostic, so u8 gates on it; and NOT `st8`, which is      storage-only). This row probes cuda:sm89, which carries no <arith> field at all, so      the refusal here is correct rather than over-broad. i16/u16 wait on vocabulary v5      shipping `i16` — an UNSHIPPED vocabulary, not a missing one";
+const SLANG_NARROW: &str = "i8/u8/i16/u16 are GATED, not refused: Slang spells them      (int8_t/uint8_t/int16_t/uint16_t) when the target advertises the matching arithmetic      capability — `i8` (shaderInt8) for the 8-bit pair, `i16` (shaderInt16) for the 16-bit      pair. Both tokens are signedness-agnostic, so u8 gates on i8 and u16 on i16. i16 became      expressible on 2026-09-02 with kiss-vulkan-vocab 0.4.0 / vulkane 0.14.0 (capability      vocabulary v5); it was an UNSHIPPED vocabulary, never a missing one. This row probes      cuda:sm89, which carries no <arith> field at all, so the refusal here is correct";
 
 /// `f8e8m0` and `f8e6m2` are the OCP Microscaling **scale** dtypes, and
 /// KISS-CLASSIFY §6.1-0013 is explicit about what that means: each is "the

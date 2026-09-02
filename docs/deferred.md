@@ -482,12 +482,19 @@ Forcing that fix created the pattern that later answered this question.)*
       stores `Bool`-as-`U8` bytes needs `st8`; one that computes in 8-bit needs
       `i8`. Reading one as the other is a silently wrong lowering on hardware
       that is behaving correctly (V-15).
-  - **WAITING ON A PUBLISH (CireSnave's):** `i16`/`u16`. `i16` names
-    `shaderInt16` and **exists as of vocabulary v5**, on vulkane's `main` and
-    unreleased. This entry previously recorded it as *not expressible*; that was
-    true of published v4 and is **no longer a vocabulary gap — it is an unshipped
-    one.** It clears when vulkane 0.14.0 / kiss-vulkan-vocab 0.4.0 publish. Plan
-    for it rather than designing around an absence that is already fixed.
+  - ✅ **`i16`/`u16` — DONE.** They spell `int16_t`/`uint16_t` and gate on `i16`
+    (`shaderInt16`), which became expressible on **2026-09-02** when
+    kiss-vulkan-vocab 0.4.0 / vulkane 0.14.0 shipped capability vocabulary v5.
+    This entry once recorded it as *not expressible*; that was true of published
+    v4 and was **an unshipped vocabulary, never a missing one.**
+
+    ⚠️ **And a correction to how I said I would detect the unblock.** I told the
+    PM I would *"see `arith-i16` appear in the coverage table without being
+    told."* **That could never have happened.** The coverage table probes
+    `ArchSku::Sm89` — a `cuda:` token, which carries no `<arith>` field at all —
+    so no vulkan capability can ever surface there. **The detector I named was
+    fictional, and I would have waited on it indefinitely.** The real signal was
+    the publish itself, which only the PM could see.
   - **SECTION B:** `f16`/`bf16` (the spelling seam), **complex `c64`/`c128`**,
     and — **corrected 2026-09-02** — **both FP8s and `i4`/`u4`/`b1`**. These were
     listed as unblocked on the strength of `bool` being one, and that was wrong:
