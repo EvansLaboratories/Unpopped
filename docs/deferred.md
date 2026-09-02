@@ -100,6 +100,46 @@ rather than a cleanup commit.
 >
 > The window opened when `unpopped 0.7.0` published on 2026-09-02.
 
+### Why FP8's shape is the RIGHT answer and not merely a working one
+
+**Offered by vulkane 2026-09-02 as a data point from their namespace, explicitly
+not as advice about ours. It applies, one layer over.**
+
+Their finding: five tokens — `f16 f64 i16 i64 i8` — appear in **both**
+`arith_names` and `component_types` in their published manifest, and they are
+**different capabilities with different witnesses** (`Arith::FLOAT16` is
+`shaderFloat16`; `ComponentType::F16` is a cooperative-matrix element type read
+from another query). **So a bare token is not a key there; `(token, class)` is.**
+They solved it by making the field part of the identity rather than by inventing
+globally unique names.
+
+**The same shape is in `scalar_ctype`, and it is the row's actual defect:**
+
+| dtype | `scalar_ctype` returns | which question does it answer? |
+|---|---|---|
+| `F32` | `float` | storage **and** compute — they coincide |
+| `Fp8E4M3FN` | `unsigned char` | **storage only**; compute goes via `promote_load_f32` to f32 |
+| `F16` | `__half` | storage **and** native compute — conflated, vendor-named |
+
+**`scalar_ctype` is a bare name where the real key is `(dtype, storage-or-compute)`.**
+The two coincide for wide types and diverge for narrow ones, which is why the
+conflation is invisible until a narrow dtype arrives — and why this workspace has
+already fixed one storage-vs-compute trap in CpuC.
+
+⚠️ **So adopting FP8's shape is not "a portable spelling that happens to work."
+It is making `scalar_ctype` answer exactly one question** — storage — and routing
+compute through the promote/demote path where it already lives for FP8. That is
+vulkane's remedy stated in this crate's terms: **they made the field part of the
+identity; the analogue here is making the function answer one question.**
+
+**And their finding confirmed a guard here was better than it knew.**
+`unpopped-slang`'s gate test asserts
+`!can("vulkan:sg32.arith-none.cm-i8", ElementKind::U8)` — an `i8` in some *other*
+field must not answer for `arith`. **Written as a generic substring-collision
+guard; `cm-` turns out to be exactly where component types live, and `i8`
+genuinely appears in both alphabets.** A defensive test guarding a real,
+documented collision rather than a hypothetical one.
+
 ### The f16/bf16 shadow surface, for a consumer that must pin current bytes
 
 **Measured at HEAD 2026-09-02**, because baracuda asked for the *surface* rather
