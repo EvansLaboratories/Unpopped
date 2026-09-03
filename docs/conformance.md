@@ -192,42 +192,116 @@ these is used in a bit-exact path.
 
 ## OPEN — needs a ruling before this is a contract
 
-### OPEN-1. Nothing determines which fidelity a cell is entitled to
+> ⚠️ **TWO OF THE FOUR ENTRIES BELOW WERE STALE, AND BOTH FAILED THE SAME WAY.**
+> Answers to these questions land in `deferred.md` — that is where the work and
+> the rulings are recorded — and **nothing propagated them back here.** OPEN-2
+> was answered 2026-08-15 and sat open here for 19 days; OPEN-1 was answered in
+> two halves, the second on 2026-09-02, and was still describing
+> `oracle::required_fidelity` as a function that did not exist. Both were
+> corrected 2026-09-03.
+>
+> **This file asks the questions; that file records the answers; the link is one
+> parenthetical `(OPEN-n)` pointing the wrong way.** A reader arriving here — the
+> natural place to look for what is unsettled — gets a confident description of a
+> gap that has been closed. ⚠️ **An answered question left open is worse than an
+> unasked one: it invites work that has already been done, and it argues from a
+> premise the repository itself has retired.**
+>
+> **When an OPEN-n is answered, edit BOTH files in the same commit.** The
+> `(OPEN-n)` tags in `deferred.md` are what make that mechanical — grep for the
+> tag before recording a ruling.
 
-This is the gap that most limits the document. `Fidelity` (`BitExact` vs
-`Tolerant { rel, abs }`) is chosen **by the caller of `compare`**, not derived
-from the plan. Nothing in `plan.rs`, `backend.rs` or `contract.rs` computes it.
 
-The mechanism is also barely exercised, which is worth stating plainly because it
-is easy to assume otherwise from a 500-test suite. There are exactly **six**
-sites that construct a `Fidelity` and pass it to `compare`, and **five of them
-are inside the oracle's own unit tests** — the oracle checking its comparator.
-The sixth is `tests/cpu_end_to_end.rs`. Tolerances used: `rel: 1e-5`,
-`abs: 1e-6`, and `0.0`.
+### OPEN-1. ~~Nothing determines which fidelity a cell is entitled to~~ — **ANSWERED**
 
-Two consequences follow, and the second is the uncomfortable one:
+**Answered in two halves, on two dates. The derivation landed first; the
+ownership question that was blocking anyone from maintaining it closed
+2026-09-02.**
 
-1. The standard cannot currently answer *"did this backend pass?"* — only *"did
-   it pass at a tolerance whoever wrote the test chose?"* A backend could be
-   certified against a tolerance loose enough to hide a real defect.
-2. There is **no established body of practice to derive a tolerance table from**.
-   I had assumed the hand-picked values across the suite would serve as evidence
-   for what a `required_fidelity(plan)` should return. They will not; there are
-   too few, and they are almost all the comparator testing itself rather than
-   real cells being judged. This makes OPEN-1 more open than it first appears —
-   the table has to be *derived from the numerics*, not read off existing usage.
+`oracle::required_fidelity(plan, operands) -> Option<Fidelity>` reads the
+entitlement off the plan, exactly as the original entry asked:
 
-The missing piece is still a derivation — roughly
-`required_fidelity(plan) -> Fidelity` — that reads the entitlement off the plan:
-which cells must be bit-exact (identity bodies, movement/permutation, integer
-arithmetic, `Im2Col`, `Select` arm moves) and what error bound the rest are
-allowed given accumulation depth and dtype.
+```text
+integer in AND integer out          -> BitExact   (wrapping is modelled exactly, so a
+                                                   tolerant compare would ACCEPT a wrong
+                                                   integer rather than merely be loose)
+steps == 0 && ulp == 0              -> BitExact   (a body that only MOVES rounds nothing)
+otherwise (arith_steps + reduction_len + 2*ulp_bound) * unit_roundoff(dtype)
+ulp_bound not finite                -> None       (declines rather than guessing)
+```
 
-I have deliberately not invented the tolerance table. It is a standard-defining
-decision with consequences for Baracuda and Vulkane, and it plausibly belongs to
-KISS-Conform rather than to Unpopped alone.
+Derived from the numerics, not read off existing usage — which is what the
+original entry's second consequence said it would have to be.
 
-### OPEN-2. What does `VariantFidelity::BitIdentical` mean across backends?
+**Ownership: OURS, settled 2026-09-02.** The entry above supposed it "plausibly
+belongs to KISS-Conform rather than to Unpopped alone". Fuel measured their side
+at `1fb2e9db`: **zero occurrences of `required_fidelity`/`RequiredFidelity` in
+any spelling**; their `fuel-dispatch/src/fkc/verify/` layer is **supply-side** —
+*has this kernel EARNED what it CLAIMS?* — and ledgers verified claims,
+downgrading unearned ones at import. ⚠️ **The deciding evidence is structural,
+not the naming argument: the input is `plan.body`, an Unpopped IR node. Fuel does
+not have it and cannot compute this band.** Their ledger records what was
+measured after the fact; this derives what must be true a priori. Complementary,
+not duplicated. (`deferred.md` C-1 carries the askee and the 19-day latency.)
+
+**The exercise count in the original entry is stale and the correction is worth
+recording, because the number was the entry's main evidence.** It said *"exactly
+six sites construct a `Fidelity`, and five of them are inside the oracle's own
+unit tests"*. Measured 2026-09-03 at `2d83a731`: **37 sites across five files.**
+
+| file | sites |
+|---|---|
+| `unpopped-cpu-c/tests/complex_domain.rs` | 9 |
+| `unpopped/src/oracle.rs` (production) | 8 |
+| `unpopped/tests/wide_integer_comparison.rs` | 8 |
+| `unpopped-cpu-c/tests/required_fidelity.rs` | 8 |
+| `unpopped/src/oracle.rs` (`#[cfg(test)]`) | 5 |
+| `unpopped-cpu-c/tests/cpu_end_to_end.rs` | 1 |
+
+**Five of six inside the comparator's own tests has become five of
+thirty-seven**, and there is now a test file dedicated to the derivation itself.
+The original entry's *"the mechanism is barely exercised"* was true when written
+and is no longer.
+
+#### What is still open, narrowed
+
+1. **Nothing COMPELS a caller to use it.** `compare` still takes whatever
+   `Fidelity` it is handed, so the original consequence — *"did it pass at a
+   tolerance whoever wrote the test chose?"* — survives for any caller that does
+   not ask. The derivation exists; using it is not enforced.
+2. ⚠️ **The band is CUDA's for every backend.** `contract::ulp_bound` sums a
+   **CUDA** per-op ULP table and neither it nor `required_fidelity` takes a
+   target. Vulkan's `exp` is 3 ULP against CUDA `expf`'s 2, so **a conforming
+   Vulkan kernel fails a comparison it should pass.** Latent today — the only
+   caller is `unpopped-cpu-c`'s test — and live the moment a Vulkan backend
+   compares through it.
+
+   **This is [OPEN-4](#open-4-n2-is-not-achievable-on-every-target-and-the-standard-must-say-so)
+   on a second axis.** OPEN-4 is *NaN propagation is target-conditional*; this is
+   *accuracy is target-conditional*. **Two instances of one shape: the rule is
+   target-conditional and the code assumes it is universal.** They probably want
+   one per-target seam rather than two. **Owner: this workspace. Party: vulkane**
+   — a comparison band they may adopt is keyed to someone else's device.
+
+### OPEN-2. ~~What does `VariantFidelity::BitIdentical` mean across backends?~~ — **ANSWERED 2026-08-15**
+
+**Bit-identical to the default lowering of the same cell, in the same backend, at
+the same version.**
+
+The entry below framed two readings and asked which. **The two horns were the
+right pair and the left one is the answer:** local-to-this-backend is the only
+referent that is both real and non-normative. *"Says nothing across backends"* is
+a **feature**, not the cost of the choice — the moment the referent becomes a
+normative reference, accumulation order becomes normative for the base variant,
+which contradicts I1.
+
+**The axis is ours and KISS has no home for it — measured, not inferred.**
+`deferred.md` carries the evidence: a search across KISS `spec/` at `efe111c`
+returns seven hits for bit-identity language and **every one is cross-language
+prose** (Slang `tanh` vs CUDA `tanh`), never a within-backend variant claim.
+
+<details>
+<summary>The original question, kept because the framing is what produced the answer</summary>
 
 `VariantFidelity` describes a variant's fidelity *relative to the base kernel*.
 Bit-identical to **what**, exactly?
@@ -237,9 +311,7 @@ Bit-identical to **what**, exactly?
 - If it means "to a normative reference", then accumulation order becomes
   normative for the base variant, contradicting I1.
 
-The two readings are not distinguishable from the current code, and they imply
-different obligations. This needs answering before a second backend can claim
-`BitIdentical` about anything.
+</details>
 
 ### OPEN-4. N2 is not achievable on every target, and the standard must say so
 
