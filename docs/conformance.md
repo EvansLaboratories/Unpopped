@@ -280,8 +280,46 @@ and is no longer.
    on a second axis.** OPEN-4 is *NaN propagation is target-conditional*; this is
    *accuracy is target-conditional*. **Two instances of one shape: the rule is
    target-conditional and the code assumes it is universal.** They probably want
-   one per-target seam rather than two. **Owner: this workspace. Party: vulkane**
-   — a comparison band they may adopt is keyed to someone else's device.
+   one per-target seam rather than two. **Owner: this workspace.**
+
+   ⚠️ **The numbers are NOT AVAILABLE from any machine-readable source, measured
+   2026-09-03 by vulkane rather than assumed:**
+
+   ```
+   vk.xml       ULP 0 · ulp 0 · accuracy 0   (control: maxImageDimension2D = 1)
+   vulkaninfo   ULP 0 · accuracy 0
+   Vulkan SDK   Bin / Include / Lib — no spec document present
+   ```
+
+   **Vulkan's precision requirements live in the specification's prose appendix,
+   not in the registry and not in any runtime query.** Vulkane declined to supply
+   recalled figures, for the right reason: a number sourced from memory and
+   seeded into a normative-adjacent table is recall wearing a measurement's
+   clothes.
+
+   ⚠️ **AND THE TABLE'S SHAPE MAY BE WRONG BEFORE ITS VALUES MATTER.** Flagged by
+   vulkane as **hypothesis, not measurement**, to be checked against the spec
+   before anything is built: Vulkan states precision requirements **per
+   instruction AND per precision mode** — some operations are required to be
+   *correctly rounded* rather than carrying a ULP bound at all, and the
+   requirement differs between 32-bit and 16-bit and again under
+   `RelaxedPrecision`.
+
+   **`contract::ulp_bound` is one scalar per op.** If that hypothesis holds, this
+   seam is **the same category error as the `vbytes <= 16` cap in
+   `unpopped-vocab`** — right question, wrong dimensionality — and a per-target
+   table of scalars would encode the error one level deeper rather than fix it.
+   **Check the dimensionality before collecting values.**
+
+   **Measuring per-op ULP on real hardware is possible and is a DIFFERENT CLAIM:**
+   it yields *this device and this driver*, not *Vulkan's requirement*, which is
+   what a conformance band needs. Offered by vulkane at a cost of hours; **not
+   taken, because the gap is more useful than a plausible constant.**
+
+   **Party: NOT vulkane.** They hold no `unpopped` dependency and consume no band
+   from this crate (measured at their `origin/main` `8425770`). The earlier
+   attribution here was mine and was never checked — the same error, in the same
+   hour, as the one corrected in `deferred.md`'s `vec_width` row.
 
 ### OPEN-2. ~~What does `VariantFidelity::BitIdentical` mean across backends?~~ — **ANSWERED 2026-08-15**
 

@@ -1157,13 +1157,43 @@ Forcing that fix created the pattern that later answered this question.)*
   expresses CUDA's limit without privileging it: `float4` is *"4 components of 4
   bytes"*, which is a fact about CUDA rather than a constant in the vocabulary.
 
+  ⚠️ **MEASURED ON HARDWARE 2026-09-03, and it settles the design: THERE IS NO
+  STATIC NUMBER TO TABULATE.** Vulkane ran `vulkaninfo` on one machine, one
+  Vulkan version, two physical devices:
+
+  | device | `VK_EXT_shader_long_vector` | `maxVectorComponents` |
+  |---|---|---|
+  | AMD Radeon 610M | **absent** | absent |
+  | NVIDIA RTX 4070 Laptop | present, rev 1 | **1024** |
+
+  **Two GPUs in one laptop give *absent* and *1024*, so a static `spirv: <bytes>`
+  row would be wrong for at least one of them.** Option 1 above — a per-target
+  table in vocab — is not merely awkward to place; **it is not expressible.**
+
+  ⚠️ **AND THE 1024 RETIRES THE PREMISE UNDER THE WHOLE ROW.** The NVIDIA device
+  — the same vendor whose CUDA `float4` is where our 16 comes from — reports
+  **1024 components** through Vulkan. **So 16 was never a hardware limit. It is a
+  CUDA vector-TYPE limit**, off by roughly two orders of magnitude in the
+  permissive direction on the very hardware that motivated it.
+
+  **That is the cleanest possible argument for `(component_count, element_type)`:
+  CUDA's constraint is real and belongs to CUDA's TYPE SYSTEM, not to a device
+  and not to a neutral vocabulary.** This row called it *"CUDA's `float4` limit
+  living in the neutral vocabulary"* and was right about the leak while wrong
+  about what leaked — **it is not a device fact in the wrong crate, it is a
+  LANGUAGE fact in the wrong crate.**
+
   ⚠️ **If anyone wires a real device query to feed this, gate it on BOTH the
   extension AND the API version.** An ungated `pNext` property read on a device
   lacking the extension **reads back zeroed and looks like an answer** —
   `maxVectorComponents: 0` means *"no vectors at all"*, a plausible number and a
   false one. (Vulkane's scar tissue, not ours; their property queries gate on
   `min(instance, device)` version and check extension presence rather than
-  trusting a populated struct.)
+  trusting a populated struct.) **Now OBSERVED rather than predicted: the AMD row
+  above IS that device — the extension is absent, so an ungated read returns
+  `maxVectorComponents = 0`, reading as "vectors of zero components" rather than
+  "this device does not answer that question". One machine, and the wrong query
+  yields a plausible number on one GPU and a false one on the other.**
 
   **PARTY CORRECTION — the urgency I attached to this was mine and it was never
   measured.** I told the PM this was *"wrong for the first non-CUDA backend that
