@@ -1129,9 +1129,60 @@ Forcing that fix created the pattern that later answered this question.)*
   3. **Leave it, document it as target-conditional.** Costs nothing today because
      both in-tree emitters are `Schedule::Scalar` only.
 
-  **Party: vulkane** (holds the non-CUDA corpus and would supply the real cap);
-  **baracuda** if option 2. **Not startable solo** — it was listed as unblocked
-  on 2026-09-03 and that was wrong; the measurement above is what corrected it.
+  ⚠️ **AND THE UNIT IS WRONG, WHICH RETIRES ALL THREE OPTIONS ABOVE AS STATED.**
+  Vulkane measured Vulkan's actual constraint in `vk.xml` 2026-09-03 rather than
+  recalling it:
+
+  ```
+  vk.xml:11351  VkPhysicalDeviceShaderLongVectorPropertiesEXT
+                  maxVectorComponents : uint32_t   limittype="max"
+  vk.xml:30792  extension VK_EXT_shader_long_vector (636, device, EXT)
+  vk.xml:33729  VkPhysicalDeviceShaderLongVectorFeaturesEXT.longVector
+  ```
+
+  **A byte cap is wrong on three axes at once:**
+
+  1. **Wrong unit.** `maxVectorComponents` is a **component count**. Bytes =
+     count × element size, and Vulkan has 8/16/32/64-bit components, so **no
+     single byte number expresses it** — a 16-byte cap admits `vec4<f32>` and
+     wrongly rejects `vec4<f64>`.
+  2. **Wrong lifetime.** Runtime-queried per physical device via
+     `vkGetPhysicalDeviceProperties2`. A vocabulary compiled ahead of time
+     cannot know it.
+  3. **Wrong scope.** Per-**device**, not per-target. Two Vulkan devices on one
+     machine can differ.
+
+  **So the parameter is `(component_count, element_type)`, derived to bytes at
+  the call site where the element type is known — not a byte cap.** That also
+  expresses CUDA's limit without privileging it: `float4` is *"4 components of 4
+  bytes"*, which is a fact about CUDA rather than a constant in the vocabulary.
+
+  ⚠️ **If anyone wires a real device query to feed this, gate it on BOTH the
+  extension AND the API version.** An ungated `pNext` property read on a device
+  lacking the extension **reads back zeroed and looks like an answer** —
+  `maxVectorComponents: 0` means *"no vectors at all"*, a plausible number and a
+  false one. (Vulkane's scar tissue, not ours; their property queries gate on
+  `min(instance, device)` version and check extension presence rather than
+  trusting a populated struct.)
+
+  **PARTY CORRECTION — the urgency I attached to this was mine and it was never
+  measured.** I told the PM this was *"wrong for the first non-CUDA backend that
+  vectorises — vulkane, on day one"*, and wrote **"Party: vulkane (holds the
+  non-CUDA corpus)"** into this file. **Vulkane measured their own tree at
+  `origin/main` `8425770`: zero `unpopped` in any `Cargo.toml`, zero SPIR-V
+  emission** (`OpTypeVector|rspirv|spirv_headers` = 0; control: `"SPIR-V"`
+  appears 60 times in prose), **and all 13 `structure_key`/`vbytes` hits are doc
+  comments about KISS's concept.** They hand shader source to `naga` / `shaderc`
+  / `slang` and receive words back, **so for a Vulkan target the vector-width
+  decision belongs to those compilers and vulkane makes no such choice.**
+
+  **There is no day-one consumer. The item stands; the deadline does not.**
+  Vulkane holds no corpus keyed by our `structure_key`, so option 2's blast
+  radius is **baracuda alone**, not baracuda-and-vulkane.
+
+  **Not startable solo** — it was listed as unblocked on 2026-09-03 and that was
+  wrong; the blast-radius table corrected the design, and vulkane's registry read
+  corrected the unit and the party.
 
   ⚠️ **Increment 2 has NO IN-TREE SUBJECT, measured 2026-09-02 before building
   it.** A variant needs an axis to vary, and both in-tree emitters serve
