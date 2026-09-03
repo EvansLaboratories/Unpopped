@@ -1091,10 +1091,47 @@ Forcing that fix created the pattern that later answered this question.)*
   variants are worth emitting*, not which key to build.
 
   **Also found while measuring, and not fixed here:** `classify_vec_width` caps
-  vector accesses at a hardcoded `vbytes <= 16` in `unpopped-vocab`. That is
-  CUDA's `float4` limit living in the neutral vocabulary — the same shape as the
-  `backend.rs:1199` declaration leak, one crate over, and it is what
-  `TargetCapabilities::max_vector_bytes` should eventually feed.
+  vector accesses at a hardcoded `vbytes <= 16` in `unpopped-vocab`
+  (`structure_key.rs:1282`). That is CUDA's `float4` limit living in the neutral
+  vocabulary — the same shape as the `backend.rs:1199` declaration leak, one
+  crate over, and it is what `TargetCapabilities::max_vector_bytes` should
+  eventually feed.
+
+  ⚠️ **Scoped 2026-09-03, and it is NOT the solo unblocked fix it reads as.**
+  `classify_vec_width` feeds `structure_key`, so changing it changes **normative
+  key derivation** — the identity property, cache keys, and any corpus keyed by
+  them. Measured over the rule itself (`align = 64`, `ext = 256`):
+
+  | dtype | today (cap 16) | uncapped | per-target cap 64 |
+  |---|---|---|---|
+  | `f32` | V4 | **V8** | **V8** |
+  | `f64` | V2 | **V8** | **V8** |
+  | `f16` | V8 | V8 | V8 |
+  | `i8` | V8 | V8 | V8 |
+
+  **Removing the cap changes CUDA keys too** — 3 of 5 sampled rows move, and
+  `cuda:` is exactly where 16 is the *correct* limit. So "delete the vendor
+  constant from the neutral crate" is not a neutrality fix; it would make the
+  vocabulary wrong for the one target it is currently right for.
+
+  **Three designs, different blast radii, and this is a decision rather than an
+  implementation:**
+
+  1. **Per-target cap.** Only non-CUDA keys move. Needs a target→`max_vector_bytes`
+     table *in vocab* — and vocab is BELOW `unpopped`, so it cannot read
+     `TargetCapabilities`. `structure_key(op, operands, target)` does take the
+     target, so the fact is derivable there; where the table lives is the open
+     part.
+  2. **No cap in vocab; the backend caps.** Cleanest neutrality — *the vocabulary
+     says what the DATA permits, the backend says what the DEVICE permits* — and
+     the 16 conflates those two. **But it moves CUDA keys**, so it is a
+     coordinated change on baracuda's corpus, i.e. section B in all but location.
+  3. **Leave it, document it as target-conditional.** Costs nothing today because
+     both in-tree emitters are `Schedule::Scalar` only.
+
+  **Party: vulkane** (holds the non-CUDA corpus and would supply the real cap);
+  **baracuda** if option 2. **Not startable solo** — it was listed as unblocked
+  on 2026-09-03 and that was wrong; the measurement above is what corrected it.
 
   ⚠️ **Increment 2 has NO IN-TREE SUBJECT, measured 2026-09-02 before building
   it.** A variant needs an axis to vary, and both in-tree emitters serve
