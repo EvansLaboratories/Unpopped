@@ -310,4 +310,109 @@ fn the_reduction_field_table_is_not_duplicated_in_prose() {
         "control: the table itself must be present and spelled as expected, or \
          this test passes by finding nothing rather than by finding one"
     );
+
+    // ⚠️ AND THE SAME CLAIM ESCAPED INTO A DOC THIS TEST DID NOT READ.
+    //
+    // Round 3 was two copies in `ir.rs`. Round 4 was `docs/normative-seams.md`
+    // saying "`plan.body` is the epilogue (Reduced(0) -> false, safe)" — the
+    // RowReduce-only claim, unqualified, in the file whose whole subject is
+    // stating things accurately. A guard scoped to one file cannot see that.
+    //
+    // The invariant is not a phrase, because each round spelled it differently.
+    // It is: you may not discuss what `plan.body` means at a reduction without
+    // naming BOTH shapes, since every wrong version was true of exactly one.
+    for (name, text) in [
+        (
+            "docs/normative-seams.md",
+            include_str!("../../../docs/normative-seams.md"),
+        ),
+        ("src/ir.rs", src),
+    ] {
+        if !(text.contains("plan.body") && text.contains("epilogue")) {
+            continue;
+        }
+        assert!(
+            text.contains("Access::Reduction") && text.contains("Access::RowReduce"),
+            "{name} discusses `plan.body` and `epilogue` together but does not name \
+             BOTH access shapes. Every wrong version of this claim was true of one \
+             shape and stated unqualified — naming both is what makes it checkable"
+        );
+    }
+}
+
+/// The four cases of KISS #416's attachment rule, and the one that was
+/// inexpressible until `is_bit_move_reduction_output` existed.
+///
+/// §6.16-0009 attaches to the value reaching the OBSERVABLE OUTPUT: trace fold →
+/// output, and if every transformation is a move the whole is a move.
+#[test]
+fn the_output_attachment_rule_covers_a_moving_post() {
+    use unpopped::ir::{ReduceOp, UnaryOp, input, is_bit_move_reduction_output, reduced};
+
+    let elem = input(0).0;
+    let identity = reduced(0).0;
+    let moving = reduced(0).unary(UnaryOp::Neg).0;
+    let arithmetic = reduced(0).unary(UnaryOp::Sqrt).0;
+
+    // 1 — move fold, identity post.
+    assert!(is_bit_move_reduction_output(
+        ReduceOp::Max,
+        &elem,
+        &identity
+    ));
+
+    // 4 — move fold, MOVING post. THE CASE THAT WAS UNREACHABLE: an epilogue's
+    // leaf is `Reduced(0)`, which the public predicate scores false, so
+    // `Neg(Reduced(0))` was not merely unimplemented — it was inexpressible.
+    assert!(
+        is_bit_move_reduction_output(ReduceOp::Max, &elem, &moving),
+        "a sign edit applied to a moved fold result is still a move, and this is \
+         the case the leaf policy exists for"
+    );
+
+    // 2 — move fold, ARITHMETIC post.
+    assert!(
+        !is_bit_move_reduction_output(ReduceOp::Max, &elem, &arithmetic),
+        "sqrt of the fold result computes, so §6.16-0010 governs the output no \
+         matter how bit-preserving the fold was"
+    );
+
+    // 3 — arithmetic fold, any post.
+    for post in [&identity, &moving] {
+        assert!(
+            !is_bit_move_reduction_output(ReduceOp::Sum, &elem, post),
+            "a Sum fold computes, so no post can make the output a move"
+        );
+    }
+
+    // And the element half still has teeth.
+    assert!(
+        !is_bit_move_reduction_output(ReduceOp::Max, &(input(0) + input(1)).0, &identity),
+        "a Max fold over COMPUTED elements is not a move — all three halves must \
+         hold, not two"
+    );
+}
+
+/// Adding the leaf policy must NOT have changed the public predicate, because a
+/// bare `Reduced(0)` reading `true` there is precisely the dangerous answer.
+///
+/// An identity epilogue IS bare `Reduced(0)`. If this ever returns true, a caller
+/// checking only the epilogue routes an identity post over a SUM fold as a move.
+#[test]
+fn the_public_move_predicate_still_scores_a_fold_result_false() {
+    use unpopped::ir::{UnaryOp, input, is_bit_or_sign_move, reduced};
+
+    assert!(
+        !is_bit_or_sign_move(&reduced(0).0),
+        "a bare fold result must stay FALSE here — the safe answer. The leaf \
+         policy lives in `is_bit_move_reduction_output`, whose signature cannot \
+         be satisfied without naming the fold"
+    );
+    assert!(!is_bit_or_sign_move(&reduced(0).unary(UnaryOp::Neg).0));
+    // Control: the walk still works for the leaf it does admit.
+    assert!(
+        is_bit_or_sign_move(&input(0).unary(UnaryOp::Neg).0),
+        "control: `Neg(Input(0))` must stay true, or the two assertions above \
+         pass because the walk broke rather than because the policy holds"
+    );
 }

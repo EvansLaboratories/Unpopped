@@ -24,8 +24,8 @@ finding.
 | | |
 |---|---|
 | **What we decide** | Whether an op MOVES bits (KISS-OPS-§6.16-0009, bits preserved exactly) or COMPUTES (§6.16-0010, MUST quiet a signalling NaN) |
-| **Where** | `unpopped::ir::{is_bit_move, is_bit_or_sign_move, is_bit_move_reduce}` |
-| **Status** | **MEASURED.** Public API of `unpopped` 0.8.3. |
+| **Where** | `unpopped::ir::{is_bit_move, is_bit_or_sign_move, is_bit_move_reduce, is_bit_move_reduction_output}` |
+| **Status** | **MEASURED.** Public API of `unpopped` 0.8.6. |
 
 **This is a normative predicate living in a dependency.** A backend that routes on
 it inherits our reading of §6.16 without ever citing it.
@@ -50,10 +50,35 @@ here rather than hidden.**
   same mechanism, different dtype, hours apart, with no coordination** — which is
   what makes this structural rather than one lane's slip.
 - **The same day:** baracuda found the predicate's *subject* is wrong at a
-  reduction site. **Their mechanism was right and the field they named was not** —
-  measured: `plan.body` is the epilogue (`Reduced(0)` → false, safe);
-  `ReduceStage::pre` is `Input(0)` → true for a **sum** fold exactly as for a
-  **max** fold.
+  reduction site. ⚠️ **I then got the correction wrong twice more, and the second
+  time was in THIS FILE** — see below.
+- **Same day, third round:** the element expression lives in **opposite fields per
+  `Access` shape**. `Access::Reduction` puts it in `plan.body` (its `post` is
+  separate); `Access::RowReduce` puts the *epilogue* in `plan.body` and the
+  elements in `stages[i].pre`. **There is no single safe field**, and every
+  statement of the form "`plan.body` is safe" is true of one shape and false of
+  the other.
+- **Same day, fourth round:** §6.16-0009 attaches to the **observable output**,
+  not the fold — so a *moving* post (`Neg(Reduced(0))`) keeps -0009 while an
+  arithmetic one (`Sqrt(Reduced(0))`) does not. **`is_bit_or_sign_move` could not
+  express that at all**: an epilogue's leaf is `Reduced`, which scores `false`, so
+  the case was inexpressible rather than unimplemented. Closed by
+  `is_bit_move_reduction_output(fold, element, post)`.
+
+  ⚠️ **The obvious fix was rejected as dangerous:** admitting `Reduced` as a leaf
+  in the *public* predicate would make a bare identity epilogue read `true`, and a
+  caller checking only the epilogue would then route an identity post over a
+  **Sum** fold as a move. **So the leaf policy lives in a function whose signature
+  cannot be satisfied without naming the fold** — structural safety rather than a
+  documented warning.
+
+⚠️ **AND THE ROUNDS ARE THE ROW'S REAL CONTENT.** Four corrections in one day on
+one predicate, and **the code was wrong only in the first.** Rounds 2–4 were
+*prose and expressiveness*: a claim true of one constructor stated unqualified, the
+same claim surviving in a second doc after the first was fixed, and a case the
+vocabulary could not name. **A seam is not just what a predicate decides — it is
+what its documentation causes consumers to believe**, and this file was itself
+round 4's carrier until 0.8.6.
 
 **KISS-side question, if there is one:** whether the move/compute boundary is a
 property KISS states and implementations derive, or one each implementation

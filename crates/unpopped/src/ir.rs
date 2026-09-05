@@ -615,21 +615,36 @@ pub fn is_bit_move(e: &ScalarExpr) -> bool {
 ///
 #[must_use]
 pub fn is_bit_or_sign_move(e: &ScalarExpr) -> bool {
+    moves(e, false)
+}
+
+/// The shared walk behind [`is_bit_or_sign_move`] and
+/// [`is_bit_move_reduction_output`], parameterised by ONE thing: whether a
+/// [`ScalarExpr::Reduced`] leaf counts as a move.
+///
+/// One walk rather than two, because two copies of a normative rule is the
+/// defect this workspace keeps removing — and the two policies differ in exactly
+/// one arm, which a duplicated walker would let drift.
+fn moves(e: &ScalarExpr, reduced_is_leaf: bool) -> bool {
     match e {
+        // A fold result is a move ONLY where the caller has already accounted for
+        // the fold. See `is_bit_move_reduction_output` for why this is not simply
+        // `true` in the public predicate.
+        ScalarExpr::Reduced(_) => reduced_is_leaf,
         ScalarExpr::Input(_) => true,
         // Exactly one bit changes and nothing is computed.
-        ScalarExpr::Unary(UnaryOp::Neg | UnaryOp::Abs, a) => is_bit_or_sign_move(a),
+        ScalarExpr::Unary(UnaryOp::Neg | UnaryOp::Abs, a) => moves(a, reduced_is_leaf),
         // Magnitude bits from `a`, sign bit from `b`. Both must be bit-derived:
         // a computed `b` would have gone through a rounding step of its own.
         ScalarExpr::Binary(BinaryOp::Copysign, a, b) => {
-            is_bit_or_sign_move(a) && is_bit_or_sign_move(b)
+            moves(a, reduced_is_leaf) && moves(b, reduced_is_leaf)
         }
         // As `is_bit_move`, but the arms may themselves carry a sign edit —
         // `max(neg(a), b)` still yields one operand's bytes.
         ScalarExpr::Binary(BinaryOp::Max | BinaryOp::Min, a, b) => {
-            is_bit_or_sign_move(a) && is_bit_or_sign_move(b)
+            moves(a, reduced_is_leaf) && moves(b, reduced_is_leaf)
         }
-        ScalarExpr::Select(_, a, b) => is_bit_or_sign_move(a) && is_bit_or_sign_move(b),
+        ScalarExpr::Select(_, a, b) => moves(a, reduced_is_leaf) && moves(b, reduced_is_leaf),
         _ => false,
     }
 }
@@ -683,6 +698,56 @@ pub fn is_bit_or_sign_move(e: &ScalarExpr) -> bool {
 #[must_use]
 pub fn is_bit_move_reduce(op: ReduceOp, e: &ScalarExpr) -> bool {
     matches!(op, ReduceOp::Max | ReduceOp::Min) && is_bit_or_sign_move(e)
+}
+
+/// Whether a reduction's **observable output** is bit-preserved: the fold moves
+/// bits AND every transformation between the fold and the output moves them too.
+///
+/// **This is the complete §6.16-0009 question for a reduction.**
+/// [`is_bit_move_reduce`] answers only the FOLD half, which is sufficient only
+/// when the post/epilogue is the identity.
+///
+/// # The ruling (KISS #416, restated variant-independently)
+///
+/// §6.16-0009 attaches to the value that reaches the op's **observable output**.
+/// Trace from the fold to the output: if EVERY transformation between them is a
+/// move, -0009 governs the whole; if ANY is arithmetic, §6.16-0010 does.
+///
+/// ```text
+/// fold   post                    governs
+/// Max    Reduced(0)   identity   -0009
+/// Max    Neg(Reduced(0))         -0009   <- inexpressible before this function
+/// Max    Sqrt(Reduced(0))        -0010
+/// Sum    anything                -0010
+/// ```
+///
+/// **Pass the post/epilogue for whichever [`Access`] shape you hold** — the
+/// `post` of [`Access::Reduction`], or the `epilogue` of [`Access::RowReduce`].
+/// The ruling was first stated over the variant and that was wrong: a
+/// non-identity `post` on a `Reduction` does exactly what a `RowReduce` epilogue
+/// does, so **the variant only CORRELATES with the boundary and the output IS
+/// it.**
+///
+/// # ⚠️ WHY `Reduced` IS NOT SIMPLY A MOVE-LEAF IN [`is_bit_or_sign_move`]
+///
+/// The obvious fix for the case this function exists to reach — admit
+/// `ScalarExpr::Reduced` as a leaf in the public predicate — **converts a safe
+/// answer into a dangerous one.** An identity epilogue is bare `Reduced(0)`, so
+/// it would start reading `true`, and a caller who checks only the epilogue
+/// would route an identity post over a **Sum** fold as a move. That is the
+/// §6.16-0010 breakage, reached by the exact caller shape that has already gone
+/// wrong twice on this predicate.
+///
+/// **So the leaf policy lives here, where the signature cannot be satisfied
+/// without naming the fold.** The safety is structural rather than documented:
+/// there is no way to ask this question and forget the fold.
+#[must_use]
+pub fn is_bit_move_reduction_output(
+    fold: ReduceOp,
+    element: &ScalarExpr,
+    post: &ScalarExpr,
+) -> bool {
+    is_bit_move_reduce(fold, element) && moves(post, true)
 }
 
 /// Whether `e` is an admissible operand of an int-reduction predicate `Cmp*`
