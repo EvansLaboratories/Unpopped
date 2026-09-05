@@ -1233,42 +1233,33 @@ Forcing that fix created the pattern that later answered this question.)*
 
 ---
 
-- **The oracle cannot carry an e5m2 NaN's PAYLOAD, so it disagrees with a correct
-  emitter on 4–8 bytes of 256.** Found 2026-09-05 by the differential added the
-  same day (`cpu_end_to_end::a_sign_edit_agrees_with_the_oracle_on_every_fp8_byte`).
+- ~~**The oracle cannot carry an e5m2 NaN's PAYLOAD**~~ — **CLOSED 2026-09-05,
+  the same day it was found.** `oracle::eval` now moves RAW bytes for the
+  bit-preserving ops (`Neg`/`Abs`/`Copysign` as masks, `Max`/`Min` comparing
+  through `f64` and then moving the winner's bytes). `Select` already did.
 
-  `evaluate` decodes to `f64`, computes, and re-encodes. `f64` has one NaN class;
-  **e5m2 has six encodings** — `0x7D`/`0x7E`/`0x7F` and their negatives — so the
-  round trip collapses them. `e4m3fn` is unaffected: `0x7F`/`0xFF` are all it has,
-  so its canonical form is its only form.
+  **The whole 256-byte domain now agrees between the compiled emitter and the
+  oracle, for both fp8 dtypes, with no carve-out** —
+  `cpu_end_to_end::a_sign_edit_agrees_with_the_oracle_on_every_fp8_byte`.
 
-  ⚠️ **This is not confined to the sign edits fixed today. `max` diverges too, and
-  has since `54a256b` in August** — the emitter has been correct and the reference
-  has been wrong for the entire bit-preserving class, and **nothing could notice,
-  because before today no test compared the two legs on this path.** They agreed
-  while both were wrong, and the agreement is what made the pair look verified.
+  ⚠️ **Kept because of what it cost to notice.** `f64` has ONE NaN class and
+  `e5m2` has six encodings, so the oracle's decode-compute-encode detour
+  collapsed them — and it had disagreed with a correct emitter on `Max` **since
+  `54a256b` in August**. The emitter was right, the reference was wrong, and
+  **nothing could detect it, because no test compared the two legs on this
+  path.** They agreed while both were broken; fixing the emitter is what turned
+  a silent agreement into a visible divergence.
 
-  **Why it matters rather than being cosmetic:** the oracle is the reference every
-  backend is checked against. On these inputs it **certifies the collapsing
-  behaviour and rejects the correct one** — so a backend that implements
-  KISS-OPS-6.16-0009 properly fails a comparison it should pass.
+  **The intermediate state is the transferable part.** For one commit the gap was
+  BOUNDED rather than excluded: the test asserted every divergence was an e5m2
+  NaN case *and that the gap still existed*. **That second assertion is what
+  retired it** — the fix made it fire, saying "delete this carve-out", instead of
+  leaving a permanently-green exclusion. A carve-out with no expiry condition is
+  the thing nobody revisits.
 
-  **Two designs, both needing the `is_bit_or_sign_move` predicate on the oracle
-  side (measured: neither works without it):**
-  1. **Payload-carrying `f64`.** Decoders embed the source byte in the NaN payload;
-     encoders extract it. Smaller — `encode_float` has 4 call sites and `max`/`min`
-     already return the selected operand, so payloads survive the existing
-     evaluator, and `neg`/`abs`/`copysign` work through ordinary `f64` sign ops.
-     ⚠️ **But arithmetic would then also propagate a payload**, where the emitter's
-     store codec canonicalises — so the extract must be gated on the body being a
-     move, or it trades this divergence for a new one on the arithmetic path.
-  2. **A raw-byte evaluator** mirroring the emitter's bit-move path. More code, and
-     `Select` needs the general machinery to evaluate its condition.
-
-  **Bounded rather than excluded in the meantime:** the test asserts every
-  divergence is an e5m2 case with a NaN operand, **and that the gap still exists**
-  — so it fires if the gap widens *and* when someone closes it, instead of
-  becoming a permanently-green carve-out nobody revisits.
+  **Restricted to the narrow floats deliberately**: that is where the loss was
+  measured. `f32`/`f64` round-trip their own storage exactly, so widening it
+  would change behaviour with nothing to fix.
 
 ## Not deferred, just worth knowing
 

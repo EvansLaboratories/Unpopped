@@ -1138,6 +1138,35 @@ fn encode_complex(re: f64, im: f64, out: ElementKind) -> u128 {
 }
 
 /// Decode a raw storage pattern to `f64` (independent half decode for f16/bf16).
+/// Sign and magnitude masks over a **narrow float's raw storage**, or `None` for
+/// any dtype this bit-level path does not serve.
+///
+/// # Why the bit-level path exists at all
+///
+/// A body that only MOVES bits, or edits at most the SIGN bit, computes nothing —
+/// so there is nothing to round, and rounding it destroys what the op is defined
+/// to do (KISS-OPS-6.16-0009). `Select` already moves its chosen arm verbatim;
+/// this is the same guarantee for `Neg`/`Abs`/`Copysign`/`Max`/`Min`.
+///
+/// **The oracle's `f64` detour is lossy in exactly one direction that matters:**
+/// `f64` has ONE NaN class, and `e5m2` has six encodings (`0x7D`/`0x7E`/`0x7F`
+/// and negatives). Decoding to `f64` and re-encoding collapses them, so the
+/// reference disagreed with a correct emitter on 4–8 bytes of 256 — and did so
+/// for `Max` since 2026-08, unnoticed, because nothing compared the two legs.
+///
+/// Restricted to the narrow floats deliberately: that is where the loss is
+/// measured. `f32`/`f64` results already round-trip their own storage exactly,
+/// so widening this would change behaviour with nothing to fix.
+fn raw_sign_masks(dt: ElementKind) -> Option<(u128, u128)> {
+    match dt {
+        ElementKind::F16 | ElementKind::Bf16 | ElementKind::Fp8E4M3FN | ElementKind::Fp8E5M2 => {
+            let sign = 1u128 << (8 * elem_size(dt) as u32 - 1);
+            Some((sign, sign - 1))
+        }
+        _ => None,
+    }
+}
+
 fn raw_to_f64(bits: u128, dt: ElementKind) -> f64 {
     match dt {
         ElementKind::Fp8E4M3FN => fp8_e4m3fn_to_f64(bits as u8),
@@ -1588,6 +1617,21 @@ fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
             },
         ),
         ScalarExpr::Unary(op, x) => {
+            // A sign edit on a narrow float is a MASK, not an f64 detour: it
+            // computes nothing, so the operand's payload must survive it.
+            if matches!(op, UnaryOp::Neg | UnaryOp::Abs) {
+                if let Val::Raw(b, dt) = eval(x, ev) {
+                    if let Some((sign, mag)) = raw_sign_masks(dt) {
+                        return Val::Raw(
+                            match op {
+                                UnaryOp::Neg => b ^ sign,
+                                _ => b & mag,
+                            },
+                            dt,
+                        );
+                    }
+                }
+            }
             let xv = eval(x, ev).f64();
             // Sign/Step are DISCONTINUOUS (a full ±1/0 flip): the emitter decides
             // on the compute-dtype float register (`x > 0.0f`), so round the
@@ -1671,6 +1715,44 @@ fn eval_binary(op: BinaryOp, a: &ScalarExpr, b: &ScalarExpr, ev: &Eval<'_>) -> V
             }
             _ => next_after_f64(x, y),
         });
+    }
+    // Bit-preserving binaries on a narrow float. `Copysign` is a pure mask;
+    // `Max`/`Min` COMPARE through `f64` — which is exact, the comparison is not
+    // the lossy step — and then move the winner's RAW bytes, exactly as the
+    // emitter's bit-move path does. NaN-first ordering mirrors both the emitted
+    // `(pa != pa ? a : ...)` and the f64 arm below, so the two cannot drift.
+    if matches!(op, BinaryOp::Copysign | BinaryOp::Max | BinaryOp::Min) {
+        if let (Val::Raw(ba, da), Val::Raw(bb, db)) = (eval(a, ev), eval(b, ev)) {
+            if da == db {
+                if let Some((sign, mag)) = raw_sign_masks(da) {
+                    let (va, vb) = (raw_to_f64(ba, da), raw_to_f64(bb, db));
+                    return Val::Raw(
+                        match op {
+                            BinaryOp::Copysign => (ba & mag) | (bb & sign),
+                            BinaryOp::Max => {
+                                if va.is_nan() || vb.is_nan() {
+                                    if va.is_nan() { ba } else { bb }
+                                } else if va >= vb {
+                                    ba
+                                } else {
+                                    bb
+                                }
+                            }
+                            _ => {
+                                if va.is_nan() || vb.is_nan() {
+                                    if va.is_nan() { ba } else { bb }
+                                } else if va <= vb {
+                                    ba
+                                } else {
+                                    bb
+                                }
+                            }
+                        },
+                        da,
+                    );
+                }
+            }
+        }
     }
     let (x, y) = (eval(a, ev).f64(), eval(b, ev).f64());
     // The Cmp* family is DISCONTINUOUS (yields exactly 1.0/0.0): the emitter rounds

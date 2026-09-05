@@ -1641,8 +1641,7 @@ fn a_sign_edit_agrees_with_the_oracle_on_every_fp8_byte() {
     // Every case is measured before anything is asserted. A per-case assert stops
     // at the first failure and hides the rest — it reported the sign-edit
     // divergence and concealed whether the pure-move class shares it.
-    let mut known: Vec<String> = Vec::new();
-    let mut unexpected: Vec<String> = Vec::new();
+    let mut diffs: Vec<String> = Vec::new();
 
     for (tag, dt) in [
         ("e4m3fn", ElementKind::Fp8E4M3FN),
@@ -1763,52 +1762,28 @@ int main(void) {{
                     continue;
                 }
                 let (i0, i1) = (pats[idx], rev[idx]);
-                // Classified HERE, where the operand bytes are in hand, rather
-                // than by matching the message text later: for a 2-input op the
-                // NaN can arrive through EITHER operand, and a carve-out keyed
-                // on `in0` alone silently mis-sorts every `max`/`copysign` case.
-                let nan = |b: u8| dt == ElementKind::Fp8E5M2 && (b & 0x7C) == 0x7C && (b & 3) != 0;
-                let known_gap = nan(i0) || (n_in == 2 && nan(i1));
-                let line = if n_in == 2 {
+                diffs.push(if n_in == 2 {
                     format!(
                         "  {tag} {name}: in0 0x{i0:02X}, in1 0x{i1:02X} -> emitter 0x{a:02X}, oracle 0x{w:02X}"
                     )
                 } else {
                     format!("  {tag} {name}: in 0x{i0:02X} -> emitter 0x{a:02X}, oracle 0x{w:02X}")
-                };
-                if known_gap {
-                    known.push(line);
-                } else {
-                    unexpected.push(line);
-                }
+                });
             }
         }
     }
 
-    // ⚠️ ONE KNOWN GAP, BOUNDED AND POLICED HERE RATHER THAN EXCLUDED.
-    //
-    // The oracle evaluates through `f64`, so it cannot carry an e5m2 NaN's
-    // PAYLOAD: the format has six NaN encodings (0x7D/0x7E/0x7F and negatives)
-    // and a round trip through `f64` collapses them to one. e4m3fn is unaffected
-    // because 0x7F/0xFF are all it has, so its canonical form IS its only form.
-    //
-    // Anything else — any e4m3fn divergence, or an e5m2 divergence where neither
-    // operand was a NaN — is a real defect and fails here.
+    // NO CARVE-OUT. There was one for a day: the oracle evaluated through `f64`,
+    // which has a single NaN class, so it could not carry an e5m2 NaN's payload
+    // across that format's six encodings — and it disagreed with a correct
+    // emitter on 4–8 bytes of 256, for `max` since August. `oracle::eval` now
+    // moves the raw bytes for the bit-preserving ops, so the whole 256-byte
+    // domain agrees and the exclusion is gone rather than merely documented.
     assert!(
-        unexpected.is_empty(),
-        "emitter and oracle disagree OUTSIDE the known e5m2 NaN-payload gap. Both \
-         legs are independent implementations of the same bit-preserving op, so a \
-         disagreement here is a defect in one of them:\n{}",
-        unexpected.join("\n")
-    );
-
-    // And the gap must still EXIST. When the oracle learns to carry the payload,
-    // this fires and says to delete the carve-out rather than leaving a
-    // permanently-green exclusion nobody revisits.
-    assert!(
-        !known.is_empty(),
-        "the e5m2 NaN-payload divergence is GONE, so the oracle now carries the \
-         payload. Delete this carve-out and assert that there are no differences \
-         at all — an exclusion that no longer excludes anything is a dead end."
+        diffs.is_empty(),
+        "emitter and oracle disagree. Both legs are independent implementations of \
+         the same bit-preserving op, so a disagreement is a defect in one of them, \
+         and a NaN's sign and payload are the discriminating cases:\n{}",
+        diffs.join("\n")
     );
 }
