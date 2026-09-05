@@ -27,7 +27,7 @@
 //! decides, per body — which is what `unpopped::ir::is_bit_move` computes, and
 //! why the second half of this file matters as much as the first.
 
-use unpopped::ir::{BinaryOp, OpDef, input};
+use unpopped::ir::{BinaryOp, OpDef, UnaryOp, input};
 use unpopped::try_generate;
 use unpopped_cpu_c::CpuC;
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_key};
@@ -135,5 +135,112 @@ fn a_wide_float_move_is_unaffected() {
     assert!(
         b.contains("in0[i] >= in1[i]") || b.contains("in0[i] != in0[i]"),
         "f32 max is no longer the plain compare-select:\n{b}"
+    );
+}
+
+/// `neg`/`abs`/`copysign` edit ONE BIT and compute nothing, so a store codec has
+/// nothing to round — and applying one destroys what the op is defined to do.
+///
+/// # The defect, as it shipped
+///
+/// `is_bit_move` admitted `Input`/`Max`/`Min`/`Select` — the **no-sign-edit**
+/// subset — so these three fell through to the arithmetic path and emitted
+/// `store(op(load(x)))`. The E5M2 store codec is `if (x != x) { return 0x7F; }`
+/// and E5M2 has **six** NaN encodings, so `neg(NaN)` returned a fixed constant:
+/// the sign flip was discarded along with the payload.
+///
+/// `f8e4m3fn` is the sharper case and the reason this is not merely about
+/// payloads. It has **two** NaN encodings, `0x7F` and `0xFF`, so a NaN's SIGN is
+/// representable in it — and `neg` losing that is a loss of information the
+/// format can hold. (KISS `#402` corrects §6.16-0004, whose "a single NaN
+/// encoding" wording invited exactly this reading; OCP OFP8 spells e4m3fn NaN as
+/// `S.1111.111`, with the sign free.)
+#[test]
+fn a_sign_edit_is_a_mask_and_never_a_codec_round_trip() {
+    for dt in [ElementKind::Fp8E5M2, ElementKind::Fp8E4M3FN] {
+        let cases = [
+            (
+                "neg",
+                OpDef::elementwise("n", 1, &[dt], input(0).unary(UnaryOp::Neg)),
+                1,
+                "^ 0x80u",
+            ),
+            (
+                "abs",
+                OpDef::elementwise("a", 1, &[dt], input(0).unary(UnaryOp::Abs)),
+                1,
+                "& 0x7Fu",
+            ),
+            (
+                "copysign",
+                OpDef::elementwise("c", 2, &[dt], input(0).binary(BinaryOp::Copysign, input(1))),
+                2,
+                "| ((in1[i]) & 0x80u)",
+            ),
+        ];
+        for (nm, op, n, mask) in cases {
+            let b = body(&emit(&op, dt, n));
+            assert!(
+                b.contains(mask),
+                "{dt:?} {nm}: expected the byte mask `{mask}`, which is exact for \
+                 every input including NaN:\n{b}"
+            );
+            // The load codec is what promotes to f32; its absence is what makes
+            // the mask exact. Asserted separately from the store because a body
+            // that loaded and then masked would be wrong in a subtler way.
+            assert!(
+                !b.contains("_load("),
+                "{dt:?} {nm}: promoted through f32, so a NaN reaches the store \
+                 codec and collapses:\n{b}"
+            );
+            assert!(
+                !b.contains("_store("),
+                "{dt:?} {nm}: re-encoded a value that was never computed — the \
+                 exact step KISS-OPS-6.16-0009 forbids:\n{b}"
+            );
+        }
+    }
+}
+
+/// The complement, and the reason the predicate is a predicate rather than a
+/// blanket rule: a sign edit FEEDING arithmetic is arithmetic, and must round.
+///
+/// Without this, "stop rounding sign edits" would satisfy §6.16-0009 by breaking
+/// §6.16-0010, which requires arithmetic to quiet a signalling NaN.
+#[test]
+fn a_sign_edit_feeding_arithmetic_still_rounds() {
+    let dt = ElementKind::Fp8E5M2;
+    let op = OpDef::elementwise("na", 2, &[dt], input(0).unary(UnaryOp::Neg) + input(1));
+    let b = body(&emit(&op, dt, 2));
+    assert!(
+        b.contains("unpopped_f8e5m2_store"),
+        "`neg(a) + b` computes, so it must round-trip — the sign edit does not \
+         make the addition a move:\n{b}"
+    );
+}
+
+/// A sign edit nested INSIDE a move still bypasses: `max(neg(a), b)` yields one
+/// operand's bytes, possibly sign-flipped, and computes nothing.
+///
+/// This is the composition case, and it is why the predicate recurses through
+/// `Max`/`Min`/`Select` arms rather than only matching at the root.
+#[test]
+fn a_sign_edit_inside_a_move_is_still_a_move() {
+    let dt = ElementKind::Fp8E5M2;
+    let op = OpDef::elementwise(
+        "mn",
+        2,
+        &[dt],
+        input(0).unary(UnaryOp::Neg).binary(BinaryOp::Max, input(1)),
+    );
+    let b = body(&emit(&op, dt, 2));
+    assert!(
+        !b.contains("_store("),
+        "`max(neg(a), b)` selects bytes and computes nothing, so it must not \
+         re-encode:\n{b}"
+    );
+    assert!(
+        b.contains("^ 0x80u"),
+        "the negated arm must still be spelled as a mask:\n{b}"
     );
 }

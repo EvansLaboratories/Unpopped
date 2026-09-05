@@ -537,6 +537,58 @@ pub fn is_bit_move(e: &ScalarExpr) -> bool {
     }
 }
 
+/// The body's result is the operand's **bits, with at most a SIGN-BIT edit**.
+///
+/// Wider than [`is_bit_move`], which admits only bodies that move bits
+/// *unaltered*. `neg`, `abs` and `copysign` alter exactly one bit and compute
+/// nothing — so like a pure move they have **no rounding step for a narrow-float
+/// store to apply**, and re-encoding their result through a codec is the same
+/// defect KISS-OPS-6.16-0009 names.
+///
+/// # Why this is separate rather than folded into `is_bit_move`
+///
+/// The two predicates answer different questions and the emitters need both.
+/// `is_bit_move` says *"the result IS one of the operands"*, so a leaf can be
+/// selected verbatim. This says *"the result is derivable from one operand's
+/// bytes without arithmetic"*, which still needs a spelling — `x ^ 0x80` is not
+/// `x`. A backend that conflated them would emit the operand where it owed a
+/// sign flip.
+///
+/// # The defect this exists to close, measured
+///
+/// `is_bit_move` covered `Input`/`Max`/`Min`/`Select` — the no-sign-edit subset
+/// — so `unpopped-cpu-c` emitted, for `neg` at `f8e5m2`:
+///
+/// ```text
+/// out[i] = unpopped_f8e5m2_store((-unpopped_f8e5m2_load(in0[i])));
+/// ```
+///
+/// Promote to `f32`, negate, re-encode. The E5M2 store codec collapses every NaN
+/// to `0x7F`, and E5M2 has six NaN encodings — **so a negated NaN lost its
+/// payload and its sign**, where the operation is defined to flip exactly one
+/// bit. `f8e4m3fn` has two NaN encodings (`0x7F`/`0xFF`), so its sign is
+/// representable too and was lost the same way.
+#[must_use]
+pub fn is_bit_or_sign_move(e: &ScalarExpr) -> bool {
+    match e {
+        ScalarExpr::Input(_) => true,
+        // Exactly one bit changes and nothing is computed.
+        ScalarExpr::Unary(UnaryOp::Neg | UnaryOp::Abs, a) => is_bit_or_sign_move(a),
+        // Magnitude bits from `a`, sign bit from `b`. Both must be bit-derived:
+        // a computed `b` would have gone through a rounding step of its own.
+        ScalarExpr::Binary(BinaryOp::Copysign, a, b) => {
+            is_bit_or_sign_move(a) && is_bit_or_sign_move(b)
+        }
+        // As `is_bit_move`, but the arms may themselves carry a sign edit —
+        // `max(neg(a), b)` still yields one operand's bytes.
+        ScalarExpr::Binary(BinaryOp::Max | BinaryOp::Min, a, b) => {
+            is_bit_or_sign_move(a) && is_bit_or_sign_move(b)
+        }
+        ScalarExpr::Select(_, a, b) => is_bit_or_sign_move(a) && is_bit_or_sign_move(b),
+        _ => false,
+    }
+}
+
 /// Whether `e` is an admissible operand of an int-reduction predicate `Cmp*`
 /// node — the any/all/count fused-predicate shape (`count = Sum(in != 0)`,
 /// `any`/`all`'s post cast-back). Admissible: a leaf [`ScalarExpr::Input`] or

@@ -52,7 +52,7 @@ use unpopped::cfamily::{
     promote_load_f32, scalar_ctype, select_f32, select_f64, store_expr_of, sub_byte_helpers,
     sub_byte_load_fn, sub_byte_store_fn, unary_f32, unary_f64,
 };
-use unpopped::ir::{BinaryOp, ExprDag, UnaryOp, is_bit_move};
+use unpopped::ir::{BinaryOp, ExprDag, UnaryOp, is_bit_or_sign_move};
 use unpopped::plan::{KernelPlan, Schedule};
 use unpopped_vocab::{ElementKind, TargetId};
 
@@ -271,7 +271,11 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> Result<GeneratedKernel
     // KISS-OPS-6.16-0010 requires arithmetic to quiet a signalling NaN, so
     // stripping it everywhere would satisfy 0009 and BREAK 0010. The
     // decomposition decides, per body, which is what `is_bit_move` computes.
-    let bit_move = narrow && is_bit_move(plan.body);
+    // `is_bit_or_sign_move`, not `is_bit_move`: `neg`/`abs`/`copysign` alter one
+    // bit and compute nothing, so they have no rounding step for a store codec to
+    // apply either. The narrower predicate shipped first and left exactly those
+    // three on the arithmetic path — see the sign-edit arm of `cpu_unary_bit_move`.
+    let bit_move = narrow && is_bit_or_sign_move(plan.body);
     let body_ctype = if bit_move {
         ctype
     } else if narrow {
@@ -313,7 +317,13 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> Result<GeneratedKernel
     // is strictly better than the hand-written panics that used to sit here — and
     // omitting them means the defaults are exercised rather than shadowed by
     // every emitter passing its own copy.
-    let un = |op, x| cpu_unary(op, x, plan.dtype);
+    let un = |op, x: String| {
+        if bit_move {
+            cpu_unary_bit_move(op, &x, plan.dtype)
+        } else {
+            cpu_unary(op, x, plan.dtype)
+        }
+    };
     let bin = |op, a: String, b: String| {
         if bit_move {
             cpu_binary_bit_move(op, &a, &b, plan.dtype)
@@ -481,7 +491,49 @@ fn cpu_binary(
 /// decode is a test, not a conversion of the result, so nothing is rounded and
 /// the moved operand reaches the store with its bits intact.
 ///
-/// Only `Max`/`Min` are reachable here: [`is_bit_move`] admits nothing else
+/// Storage ctype plus sign / magnitude masks for a narrow float, or `None` when
+/// the width is not one this backend spells.
+///
+/// Derived from the storage type rather than hardcoded: `0x80` is right for an
+/// 8-bit element and silently wrong for a 16-bit one, and this backend declines
+/// `f16`/`bf16` today only for want of a codec.
+fn sign_masks(dtype: ElementKind) -> Option<(&'static str, &'static str, &'static str)> {
+    match scalar_ctype(dtype) {
+        Some(ct @ "unsigned char") => Some((ct, "0x80u", "0x7Fu")),
+        Some(ct @ "unsigned short") => Some((ct, "0x8000u", "0x7FFFu")),
+        _ => None,
+    }
+}
+
+/// `neg` / `abs` on the narrow-float bit-move path: a mask, not an `f32` detour.
+///
+/// KISS-OPS-6.16-0009. `-load(x)` promotes, negates and re-encodes, and the fp8
+/// store codecs collapse every NaN to a single constant — so the sign flip this
+/// op is defined to perform was being discarded along with the payload. A byte
+/// mask is exact for every input, NaN included, and needs no codec at all.
+fn cpu_unary_bit_move(op: UnaryOp, x: &str, dtype: ElementKind) -> Result<Spelling, LowerError> {
+    let Some((ct, sign, mag)) = sign_masks(dtype) else {
+        return Ok(Spelling::Declined(Decline::UnsupportedDtypeForOp {
+            op: DeclinedOp::Unary(op),
+            dtype,
+            why: "the bit-move path needs a known storage width for its sign mask".to_string(),
+        }));
+    };
+    match op {
+        UnaryOp::Neg => Ok(Spelling::Spelled(format!("(({ct})(({x}) ^ {sign}))"))),
+        UnaryOp::Abs => Ok(Spelling::Spelled(format!("(({ct})(({x}) & {mag}))"))),
+        other => Ok(Spelling::Declined(Decline::UnsupportedOp {
+            op: DeclinedOp::Unary(other),
+            why: format!(
+                "{other:?} reached the narrow-float bit-move path, which serves only \
+                 the sign-edit unaries Neg/Abs. `is_bit_or_sign_move` admits no other \
+                 unary, so this is a routing bug rather than a missing spelling."
+            ),
+        })),
+    }
+}
+
+/// Only `Max`/`Min`/`Copysign` are reachable here: [`is_bit_move`] admits nothing else
 /// through a `Binary`, so any other op arriving is a plan-gate bug rather than a
 /// user error — and it gets a typed decline rather than a panic, per
 /// KISS-EMIT-6.8-0004.
@@ -494,6 +546,20 @@ fn cpu_binary_bit_move(
     let p = |x: &str| promote_load_f32(dtype, x);
     let (pa, pb) = (p(a), p(b));
     let cmp = match op {
+        // Magnitude bytes from `a`, sign byte from `b`. No comparison, no
+        // promotion: this is the whole operation, exactly.
+        BinaryOp::Copysign => {
+            let Some((ct, sign, mag)) = sign_masks(dtype) else {
+                return Ok(Spelling::Declined(Decline::UnsupportedDtypeForOp {
+                    op: DeclinedOp::Binary(op),
+                    dtype,
+                    why: "copysign on the bit-move path needs a known storage width for its sign mask".to_string(),
+                }));
+            };
+            return Ok(Spelling::Spelled(format!(
+                "(({ct})((({a}) & {mag}) | (({b}) & {sign})))"
+            )));
+        }
         BinaryOp::Max => ">=",
         BinaryOp::Min => "<=",
         other => {
