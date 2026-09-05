@@ -341,13 +341,13 @@ fn the_reduction_field_table_is_not_duplicated_in_prose() {
 }
 
 /// The four cases of KISS #416's attachment rule, and the one that was
-/// inexpressible until `is_bit_move_reduction_output` existed.
+/// inexpressible until `is_bit_move_fold_output` existed.
 ///
 /// §6.16-0009 attaches to the value reaching the OBSERVABLE OUTPUT: trace fold →
 /// output, and if every transformation is a move the whole is a move.
 #[test]
 fn the_output_attachment_rule_covers_a_moving_post() {
-    use unpopped::ir::{ReduceOp, UnaryOp, input, is_bit_move_reduction_output, reduced};
+    use unpopped::ir::{ReduceOp, UnaryOp, input, is_bit_move_fold_output, reduced};
 
     let elem = input(0).0;
     let identity = reduced(0).0;
@@ -355,24 +355,20 @@ fn the_output_attachment_rule_covers_a_moving_post() {
     let arithmetic = reduced(0).unary(UnaryOp::Sqrt).0;
 
     // 1 — move fold, identity post.
-    assert!(is_bit_move_reduction_output(
-        ReduceOp::Max,
-        &elem,
-        &identity
-    ));
+    assert!(is_bit_move_fold_output(ReduceOp::Max, &elem, &identity));
 
     // 4 — move fold, MOVING post. THE CASE THAT WAS UNREACHABLE: an epilogue's
     // leaf is `Reduced(0)`, which the public predicate scores false, so
     // `Neg(Reduced(0))` was not merely unimplemented — it was inexpressible.
     assert!(
-        is_bit_move_reduction_output(ReduceOp::Max, &elem, &moving),
+        is_bit_move_fold_output(ReduceOp::Max, &elem, &moving),
         "a sign edit applied to a moved fold result is still a move, and this is \
          the case the leaf policy exists for"
     );
 
     // 2 — move fold, ARITHMETIC post.
     assert!(
-        !is_bit_move_reduction_output(ReduceOp::Max, &elem, &arithmetic),
+        !is_bit_move_fold_output(ReduceOp::Max, &elem, &arithmetic),
         "sqrt of the fold result computes, so §6.16-0010 governs the output no \
          matter how bit-preserving the fold was"
     );
@@ -380,14 +376,14 @@ fn the_output_attachment_rule_covers_a_moving_post() {
     // 3 — arithmetic fold, any post.
     for post in [&identity, &moving] {
         assert!(
-            !is_bit_move_reduction_output(ReduceOp::Sum, &elem, post),
+            !is_bit_move_fold_output(ReduceOp::Sum, &elem, post),
             "a Sum fold computes, so no post can make the output a move"
         );
     }
 
     // And the element half still has teeth.
     assert!(
-        !is_bit_move_reduction_output(ReduceOp::Max, &(input(0) + input(1)).0, &identity),
+        !is_bit_move_fold_output(ReduceOp::Max, &(input(0) + input(1)).0, &identity),
         "a Max fold over COMPUTED elements is not a move — all three halves must \
          hold, not two"
     );
@@ -405,7 +401,7 @@ fn the_public_move_predicate_still_scores_a_fold_result_false() {
     assert!(
         !is_bit_or_sign_move(&reduced(0).0),
         "a bare fold result must stay FALSE here — the safe answer. The leaf \
-         policy lives in `is_bit_move_reduction_output`, whose signature cannot \
+         policy lives in `is_bit_move_fold_output`, whose signature cannot \
          be satisfied without naming the fold"
     );
     assert!(!is_bit_or_sign_move(&reduced(0).unary(UnaryOp::Neg).0));

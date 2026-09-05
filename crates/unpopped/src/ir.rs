@@ -619,7 +619,7 @@ pub fn is_bit_or_sign_move(e: &ScalarExpr) -> bool {
 }
 
 /// The shared walk behind [`is_bit_or_sign_move`] and
-/// [`is_bit_move_reduction_output`], parameterised by ONE thing: whether a
+/// [`is_bit_move_fold_output`], parameterised by ONE thing: whether a
 /// [`ScalarExpr::Reduced`] leaf counts as a move.
 ///
 /// One walk rather than two, because two copies of a normative rule is the
@@ -628,7 +628,7 @@ pub fn is_bit_or_sign_move(e: &ScalarExpr) -> bool {
 fn moves(e: &ScalarExpr, reduced_is_leaf: bool) -> bool {
     match e {
         // A fold result is a move ONLY where the caller has already accounted for
-        // the fold. See `is_bit_move_reduction_output` for why this is not simply
+        // the fold. See `is_bit_move_fold_output` for why this is not simply
         // `true` in the public predicate.
         ScalarExpr::Reduced(_) => reduced_is_leaf,
         ScalarExpr::Input(_) => true,
@@ -721,8 +721,27 @@ pub fn is_bit_move_reduce(op: ReduceOp, e: &ScalarExpr) -> bool {
 /// Sum    anything                -0010
 /// ```
 ///
-/// **Pass the post/epilogue for whichever [`Access`] shape you hold** — the
-/// `post` of [`Access::Reduction`], or the `epilogue` of [`Access::RowReduce`].
+/// # ⚠️ THIS IS NOT REDUCTION-ONLY — THREE ACCESS SHAPES CARRY THE SAME TRIPLE
+///
+/// Every fold-shaped access has a monoid, a per-element expression and an
+/// epilogue, and **all three have the same §6.16-0009 exposure.** Measured — the
+/// fields exist under these names:
+///
+/// ```text
+/// Access::Reduction   fold = op   element = plan.body   post = post
+/// Access::Scan        fold = op   element = pre         post = post
+/// Access::Window      fold = op   element = pre         post = post
+/// Access::RowReduce   fold = stage.op  element = stage.pre   post = epilogue
+/// ```
+///
+/// **Named `fold`, not `reduction`, deliberately.** The first name was
+/// `is_bit_move_reduction_output`, and baracuda flagged before wiring it that a
+/// caller would read "reduction" and leave scan and window on the old predicate
+/// — **which is the same defect as every other round on this predicate: an
+/// accurate artefact whose NAME is narrower than its truth.** Renamed before
+/// publication rather than aliased after.
+///
+/// **Pass the post/epilogue for whichever [`Access`] shape you hold.**
 /// The ruling was first stated over the variant and that was wrong: a
 /// non-identity `post` on a `Reduction` does exactly what a `RowReduce` epilogue
 /// does, so **the variant only CORRELATES with the boundary and the output IS
@@ -742,11 +761,7 @@ pub fn is_bit_move_reduce(op: ReduceOp, e: &ScalarExpr) -> bool {
 /// without naming the fold.** The safety is structural rather than documented:
 /// there is no way to ask this question and forget the fold.
 #[must_use]
-pub fn is_bit_move_reduction_output(
-    fold: ReduceOp,
-    element: &ScalarExpr,
-    post: &ScalarExpr,
-) -> bool {
+pub fn is_bit_move_fold_output(fold: ReduceOp, element: &ScalarExpr, post: &ScalarExpr) -> bool {
     is_bit_move_reduce(fold, element) && moves(post, true)
 }
 

@@ -24,7 +24,7 @@ finding.
 | | |
 |---|---|
 | **What we decide** | Whether an op MOVES bits (KISS-OPS-§6.16-0009, bits preserved exactly) or COMPUTES (§6.16-0010, MUST quiet a signalling NaN) |
-| **Where** | `unpopped::ir::{is_bit_move, is_bit_or_sign_move, is_bit_move_reduce, is_bit_move_reduction_output}` |
+| **Where** | `unpopped::ir::{is_bit_move, is_bit_or_sign_move, is_bit_move_reduce, is_bit_move_fold_output}` |
 | **Status** | **MEASURED.** Public API of `unpopped` 0.8.6. |
 
 **This is a normative predicate living in a dependency.** A backend that routes on
@@ -63,7 +63,7 @@ here rather than hidden.**
   arithmetic one (`Sqrt(Reduced(0))`) does not. **`is_bit_or_sign_move` could not
   express that at all**: an epilogue's leaf is `Reduced`, which scores `false`, so
   the case was inexpressible rather than unimplemented. Closed by
-  `is_bit_move_reduction_output(fold, element, post)`.
+  `is_bit_move_fold_output(fold, element, post)`.
 
   ⚠️ **The obvious fix was rejected as dangerous:** admitting `Reduced` as a leaf
   in the *public* predicate would make a bare identity epilogue read `true`, and a
@@ -223,9 +223,43 @@ silently.**
 - **I have not measured any consumer's tree.** baracuda's use of
   `is_bit_or_sign_move` is REPORTED. I can see my own re-exports; I cannot see
   theirs.
-- **I did not audit `unpopped-slang` separately.** It declines the narrow-float
-  dtypes, so the §6.16 rows do not reach it — but that is a reason it is *out of
-  scope for those rows*, not evidence it decides nothing.
+- ~~**I did not audit `unpopped-slang` separately.**~~ **Audited 2026-09-05 after
+  baracuda enumerated FOUR defective §6.16-0009 lowering surfaces in their own
+  emitter and sent the mechanism.** MEASURED through `supports_dtype`, with an
+  `F32` control so the falses are real:
+
+  | | F16 | Bf16 | fp8 | F32 (control) |
+  |---|---|---|---|---|
+  | `unpopped-slang` | false | false | **false** | true |
+  | `unpopped-cpu-c` | false | false | **true** | true |
+
+  **slang serves no narrow float at all**, so the §6.16 rows do not reach it —
+  and it has **zero** `bit_move` references. ⚠️ **That count alone is
+  indistinguishable from "the surface exists and is unhandled"**; only the dtype
+  measurement separates them, and baracuda flagged that asymmetry rather than me.
+
+  **cpu-c serves fp8 only, and the guard's dtype range equals the served range**
+  (`Fp8E4M3FN`, `Fp8E5M2`, plus `F32` as a wide control) — the trap baracuda hit,
+  where a live and correctly-aimed guard stayed green because its dtype
+  population excluded exactly the buggy dtypes.
+
+  **Population taken from each emitter's own `Schedule::` dispatch, not a grep:**
+  one arm each, everything else a named typed decline. ⚠️ **A grep's completeness
+  is unknowable from inside the grep.**
+
+  ⚠️ **AND THE EXPIRY IS ENFORCED RATHER THAN WRITTEN.** This nil is about
+  **today's dispatch**, not a property of the crates.
+  `unpopped-conformance/tests/one_lowering_path_per_emitter.rs` asserts each
+  emitter still dispatches exactly one `Schedule` arm and fails with what to do —
+  sweep the new path for an accumulator register whose type was chosen for
+  arithmetic convenience, then update this nil. It carries a control, so a
+  renamed enum reds instead of passing by measuring nothing. **baracuda's
+  prescription: a nil about a dispatch decays silently; a test that asserts the
+  arm count fails loudly.**
+
+  **JUDGED, not measured:** the sub-byte and complex sub-paths inside that one arm
+  were reasoned out (sub-byte types are integers — no NaN, no rounding; complex is
+  not `narrow`, so it never reaches the move path) rather than emitted.
 - **I have not asked whether KISS WANTS any of these.** ⚠️ Listing a decision here
   is not a request that KISS adopt it. Several are probably correctly ours; row 3's
   ownership was already ruled ours after being asked.
