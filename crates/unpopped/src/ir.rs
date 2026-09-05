@@ -568,6 +568,35 @@ pub fn is_bit_move(e: &ScalarExpr) -> bool {
 /// payload and its sign**, where the operation is defined to flip exactly one
 /// bit. `f8e4m3fn` has two NaN encodings (`0x7F`/`0xFF`), so its sign is
 /// representable too and was lost the same way.
+/// # ⚠️ ITS SUBJECT IS ONE `ScalarExpr`, AND AT A REDUCTION THAT IS NOT THE FOLD
+///
+/// A reduction's combine lives in [`ReduceStage::op`], **outside any expression
+/// this function can see**. So it answers about the expression handed to it and
+/// is silent about the fold wrapped around it — and nothing in the signature can
+/// say so. Measured (`OpDef::row_reduce`, identity epilogue):
+///
+/// ```text
+///                 plan.body                stage.pre
+/// reduce_MAX      Reduced(0) -> false      Input(0) -> TRUE
+/// reduce_SUM      Reduced(0) -> false      Input(0) -> TRUE
+/// ```
+///
+/// **`plan.body` is SAFE**: for a reduction it is the *epilogue*, whose identity
+/// is [`ScalarExpr::Reduced`], which is not an arm here and yields `false`.
+///
+/// ⚠️ **[`ReduceStage::pre`] is NOT.** Its identity is `Input(0)`, so this returns
+/// `true` for a **sum**-fold exactly as it does for a **max**-fold. A caller that
+/// routed on it would send an arithmetic reduction down a bit-move path — the
+/// same KISS-OPS-6.16-0010 breakage as stripping the round-trip globally,
+/// arriving through a predicate that looks precisely applicable.
+///
+/// **A reduction site needs the fold op as well as the expression** — pair
+/// `stage.op` with `stage.pre` rather than calling this on `pre` alone. Whether a
+/// `Max`/`Min` fold *is* a move under §6.16-0009 is a normative question for
+/// KISS, not a property of this function; found by baracuda 2026-09-05, who
+/// declined to write a local copy rather than duplicate a normative predicate in
+/// a backend.
+///
 #[must_use]
 pub fn is_bit_or_sign_move(e: &ScalarExpr) -> bool {
     match e {

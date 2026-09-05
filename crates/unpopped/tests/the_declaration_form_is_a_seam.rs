@@ -148,3 +148,38 @@ fn the_public_c_temp_is_the_default_the_driver_uses() {
     );
     assert_eq!(prelude(None), prelude(Some(&c_temp)));
 }
+
+/// `is_bit_or_sign_move`'s SUBJECT is one expression, and at a reduction the fold
+/// is not in it — pinned so the doc comment cannot drift from the behaviour.
+///
+/// `plan.body` is safe because a reduction's body is the epilogue, whose identity
+/// is `Reduced(0)` and which is not an arm of the predicate. `ReduceStage::pre` is
+/// the hazard: its identity is `Input(0)`, which answers TRUE for a sum-fold
+/// exactly as for a max-fold, so a caller routing on it alone would send an
+/// arithmetic reduction down a bit-move path.
+#[test]
+fn the_move_predicate_cannot_see_a_reduction_fold() {
+    use unpopped::ir::{OpDef, ReduceOp, ReduceStage, is_bit_or_sign_move, reduced};
+    use unpopped_vocab::ElementKind;
+
+    for rop in [ReduceOp::Max, ReduceOp::Sum] {
+        let stage = ReduceStage {
+            pre: unpopped::ir::input(0).0,
+            op: rop,
+        };
+        let op = OpDef::row_reduce("r", 1, &[ElementKind::F32], vec![stage.clone()], reduced(0));
+
+        assert!(
+            !is_bit_or_sign_move(&op.body),
+            "{rop:?}: a reduction's body is the EPILOGUE (identity `Reduced(0)`), \
+             which must not read as a move — this is why routing on `plan.body` \
+             is safe today"
+        );
+        assert!(
+            is_bit_or_sign_move(&stage.pre),
+            "{rop:?}: `pre` is `Input(0)` and DOES read as a move. If this ever \
+             returns false the hazard is gone and the doc comment on \
+             `is_bit_or_sign_move` should be updated rather than left claiming it"
+        );
+    }
+}
