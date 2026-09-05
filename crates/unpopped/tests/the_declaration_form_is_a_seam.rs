@@ -266,3 +266,48 @@ fn the_element_expression_lives_in_a_different_field_per_access_shape() {
         "a Max fold over a moved element IS a move (KISS #416)"
     );
 }
+
+/// The truth table about which field holds a reduction's element expression
+/// exists in exactly ONE place, and no doc restates it.
+///
+/// # Why a test reads prose here
+///
+/// The behavioural claim is already pinned by
+/// `the_element_expression_lives_in_a_different_field_per_access_shape`. **That
+/// test cannot read doc comments**, and the same false sentence survived a
+/// correction precisely by living in prose on a neighbouring function — the
+/// correct table was written once while the wrong instruction stayed on the
+/// function callers actually read.
+///
+/// So this pins the DELETION, not the fact: a second copy is what produced the
+/// defect, and a second copy is what this forbids.
+#[test]
+fn the_reduction_field_table_is_not_duplicated_in_prose() {
+    let src = include_str!("../src/ir.rs");
+
+    // The exact unqualified form that was false for `Access::Reduction`.
+    assert!(
+        !src.contains("which for a reduction is the *epilogue*"),
+        "the unqualified 'plan.body is the epilogue' claim is back. It is true \
+         for RowReduce and FALSE for Access::Reduction, where `body` IS the \
+         element expression. Point at the table on `is_bit_or_sign_move` instead \
+         of restating it"
+    );
+
+    // Exactly one table. Its header row is the marker.
+    let tables = src.matches("element expr lives in").count();
+    assert_eq!(
+        tables, 1,
+        "expected exactly ONE reduction-field table in ir.rs, found {tables}. Two \
+         copies of this fact is how the correction landed in one doc while the \
+         falsehood survived in the other"
+    );
+
+    // Control: the marker IS present, so a zero above would be a real finding
+    // rather than a renamed table silently passing both assertions.
+    assert!(
+        src.contains("Access::RowReduce        Reduced(0)"),
+        "control: the table itself must be present and spelled as expected, or \
+         this test passes by finding nothing rather than by finding one"
+    );
+}

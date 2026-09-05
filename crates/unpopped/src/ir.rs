@@ -637,10 +637,17 @@ pub fn is_bit_or_sign_move(e: &ScalarExpr) -> bool {
 /// Whether a **reduction stage** moves bits: the fold preserves them AND its
 /// per-element expression does.
 ///
-/// Call it with a [`ReduceStage`]'s own two halves — `stage.op` and `stage.pre`.
-/// ⚠️ **Not with `plan.body`**, which for a reduction is the *epilogue* and
-/// answers a different question; see [`is_bit_or_sign_move`] for the measured
-/// truth table and why `pre` alone is not enough.
+/// ⚠️ **WHICH FIELD HOLDS THE ELEMENT EXPRESSION DIFFERS BY [`Access`] SHAPE, AND
+/// THIS DOC DELIBERATELY DOES NOT RESTATE WHICH.** The table lives on
+/// [`is_bit_or_sign_move`] and is pinned by a test; **read it there.**
+///
+/// A second copy of that fact is what produced the defect this paragraph
+/// replaces. The correct table was written on the neighbouring function while
+/// **this** doc kept saying "not with `plan.body`, which for a reduction is the
+/// epilogue" — true for `RowReduce`, false for `Access::Reduction`, and sitting
+/// on the function a caller about to call it actually reads. **The pointer in
+/// the same sentence as the falsehood does not help: by the time you follow it
+/// you have already been told the wrong thing.**
 ///
 /// # The ruling this encodes
 ///
