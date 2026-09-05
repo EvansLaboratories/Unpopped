@@ -37,7 +37,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use unpopped::ir::{BinaryOp, OpDef, input};
+use unpopped::ir::{BinaryOp, OpDef, UnaryOp, input};
 use unpopped::oracle::{Fidelity, TypedBuffer, compare, evaluate};
 use unpopped::{build_plan, generate};
 use unpopped_cpu_c::CpuC;
@@ -1587,4 +1587,228 @@ fn the_harness_element_count_matches_the_emitter_count_unit() {
              wrong range — see the comment in `harness()`."
         );
     }
+}
+
+/// The differential whose ABSENCE let the sign-edit defect live in two places at
+/// once — and the reason it could not have caught it before 2026-09-05.
+///
+/// # Why this test is the finding, not the fix
+///
+/// Until today the emitter lowered fp8 `neg`/`abs`/`copysign` as
+/// `store(op(load(x)))`, and the oracle encoded a NaN result as a bare `0x7f`
+/// with the sign computed on the next line and never applied. **Both collapsed a
+/// NaN's sign, in the same direction.** So a comparison between them would have
+/// been GREEN on the broken pair, and the defect was found by an outside question
+/// rather than by anything in this workspace.
+///
+/// ⚠️ **An oracle that is wrong in the same direction as the thing it checks is
+/// not a check.** That is what makes agreement between two implementations weak
+/// evidence when they share a mistake — and both of these did, because
+/// promote-compute-demote is the obvious way to write either one.
+///
+/// # What it asserts
+///
+/// The whole 256-byte domain per dtype, so "correct for all inputs" is
+/// **enumerated rather than sampled** — and the NaN encodings, which are the only
+/// patterns that discriminate, are 6 of 256 for e5m2 and 2 of 256 for e4m3fn. A
+/// random sample would miss them most of the time.
+#[test]
+fn a_sign_edit_agrees_with_the_oracle_on_every_fp8_byte() {
+    let Some(cc) = find_compiler() else {
+        eprintln!(
+            "SKIP a_sign_edit_agrees_with_the_oracle_on_every_fp8_byte: \
+             no host C compiler."
+        );
+        return;
+    };
+    let dir: PathBuf = std::env::temp_dir().join("unpopped-e2e");
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    let pats: Vec<u8> = (0u8..=255).collect();
+    let n = pats.len() as i64;
+    // For `copysign` the second operand walks the domain BACKWARDS, so every
+    // (magnitude, sign) pairing is exercised rather than sign always coming from
+    // the same byte. `0x00` throughout would make every result positive and the
+    // test would pass on an implementation that ignored operand 1 entirely.
+    let rev: Vec<u8> = pats.iter().rev().copied().collect();
+    let lit = |v: &[u8]| {
+        v.iter()
+            .map(|x| format!("{x}u"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    // Every case is measured before anything is asserted. A per-case assert stops
+    // at the first failure and hides the rest — it reported the sign-edit
+    // divergence and concealed whether the pure-move class shares it.
+    let mut known: Vec<String> = Vec::new();
+    let mut unexpected: Vec<String> = Vec::new();
+
+    for (tag, dt) in [
+        ("e4m3fn", ElementKind::Fp8E4M3FN),
+        ("e5m2", ElementKind::Fp8E5M2),
+    ] {
+        let cases: Vec<(&str, OpDef, usize)> = vec![
+            (
+                "neg",
+                OpDef::elementwise("sneg", 1, &[dt], input(0).unary(UnaryOp::Neg)),
+                1,
+            ),
+            (
+                "abs",
+                OpDef::elementwise("sabs", 1, &[dt], input(0).unary(UnaryOp::Abs)),
+                1,
+            ),
+            (
+                "copysign",
+                OpDef::elementwise(
+                    "scs",
+                    2,
+                    &[dt],
+                    input(0).binary(BinaryOp::Copysign, input(1)),
+                ),
+                2,
+            ),
+            // Not a sign edit -- a pure MOVE, fixed in August. Included because
+            // it is the same bit-preserving class and the same oracle path, so
+            // if the oracle collapses a payload it collapses it here too.
+            (
+                "max",
+                OpDef::elementwise("smx", 2, &[dt], input(0).binary(BinaryOp::Max, input(1))),
+                2,
+            ),
+        ];
+
+        for (name, op, n_in) in cases {
+            let d = OperandDesc::new(1, &[n], &[1], dt, 1);
+            let operands = vec![d; n_in + 1];
+            let key = structure_key(OpCategory::BinaryElementwise, &operands, ArchSku::Sm89);
+            let kernel = generate(&op, &key, &CpuC);
+
+            // The emitted leg must not reach a codec at all — asserted here as
+            // well as in `narrow_float_moves_do_not_round`, because a lowering
+            // that promoted AND happened to agree with a broken oracle would
+            // otherwise pass this test for the wrong reason.
+            assert!(
+                !kernel.source.contains(&format!("unpopped_{tag}_store")),
+                "{tag} {name}: re-encoded a value that was never computed:\n{}",
+                kernel.source
+            );
+
+            let (decls, call) = if n_in == 1 {
+                (
+                    format!("    const unsigned char in0[{n}] = {{{}}};", lit(&pats)),
+                    format!("{}(in0, out, {n});", kernel.name),
+                )
+            } else {
+                (
+                    format!(
+                        "    const unsigned char in0[{n}] = {{{}}};\n    const unsigned char in1[{n}] = {{{}}};",
+                        lit(&pats),
+                        lit(&rev)
+                    ),
+                    format!("{}(in0, in1, out, {n});", kernel.name),
+                )
+            };
+            let src = format!(
+                "{}
+#include <stdio.h>
+
+int main(void) {{
+{decls}
+    unsigned char out[{n}];
+    for (int i = 0; i < {n}; ++i) out[i] = 0xAAu;
+    {call}
+    for (int i = 0; i < {n}; ++i) printf(\"%u\\n\", (unsigned)out[i]);
+    return 0;
+}}
+",
+                kernel.source
+            );
+
+            let c_file = dir.join(format!("fp8_sign_{tag}_{name}.c"));
+            let exe = dir.join(format!("fp8_sign_{tag}_{name}.exe"));
+            std::fs::write(&c_file, &src).expect("write");
+            cc.compile(&c_file, &exe, false)
+                .unwrap_or_else(|e| panic!("{tag} {name}: compile: {e}"));
+            let out = std::process::Command::new(&exe).output().expect("run");
+            assert!(
+                out.status.success(),
+                "{tag} {name}: exited {:?}",
+                out.status
+            );
+            let actual: Vec<u8> = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| l.trim().parse::<u8>().expect("non-integer"))
+                .collect();
+            assert_eq!(actual.len(), pats.len(), "{tag} {name}: short output");
+
+            // The oracle leg, through its own independently-written codec.
+            let plan = build_plan(&op, &key);
+            let mut bufs = vec![TypedBuffer::from_fp8_bits(dt, &[n], &pats)];
+            if n_in == 2 {
+                bufs.push(TypedBuffer::from_fp8_bits(dt, &[n], &rev));
+            }
+            let want: Vec<u8> = evaluate(&plan, &operands, &bufs, &[])
+                .into_iter()
+                .next()
+                .expect("one output")
+                .raw_bytes()
+                .to_vec();
+            assert_eq!(want.len(), pats.len(), "{tag} {name}: oracle short");
+
+            for (idx, (a, w)) in actual.iter().zip(want.iter()).enumerate() {
+                if a == w {
+                    continue;
+                }
+                let (i0, i1) = (pats[idx], rev[idx]);
+                // Classified HERE, where the operand bytes are in hand, rather
+                // than by matching the message text later: for a 2-input op the
+                // NaN can arrive through EITHER operand, and a carve-out keyed
+                // on `in0` alone silently mis-sorts every `max`/`copysign` case.
+                let nan = |b: u8| dt == ElementKind::Fp8E5M2 && (b & 0x7C) == 0x7C && (b & 3) != 0;
+                let known_gap = nan(i0) || (n_in == 2 && nan(i1));
+                let line = if n_in == 2 {
+                    format!(
+                        "  {tag} {name}: in0 0x{i0:02X}, in1 0x{i1:02X} -> emitter 0x{a:02X}, oracle 0x{w:02X}"
+                    )
+                } else {
+                    format!("  {tag} {name}: in 0x{i0:02X} -> emitter 0x{a:02X}, oracle 0x{w:02X}")
+                };
+                if known_gap {
+                    known.push(line);
+                } else {
+                    unexpected.push(line);
+                }
+            }
+        }
+    }
+
+    // ⚠️ ONE KNOWN GAP, BOUNDED AND POLICED HERE RATHER THAN EXCLUDED.
+    //
+    // The oracle evaluates through `f64`, so it cannot carry an e5m2 NaN's
+    // PAYLOAD: the format has six NaN encodings (0x7D/0x7E/0x7F and negatives)
+    // and a round trip through `f64` collapses them to one. e4m3fn is unaffected
+    // because 0x7F/0xFF are all it has, so its canonical form IS its only form.
+    //
+    // Anything else — any e4m3fn divergence, or an e5m2 divergence where neither
+    // operand was a NaN — is a real defect and fails here.
+    assert!(
+        unexpected.is_empty(),
+        "emitter and oracle disagree OUTSIDE the known e5m2 NaN-payload gap. Both \
+         legs are independent implementations of the same bit-preserving op, so a \
+         disagreement here is a defect in one of them:\n{}",
+        unexpected.join("\n")
+    );
+
+    // And the gap must still EXIST. When the oracle learns to carry the payload,
+    // this fires and says to delete the carve-out rather than leaving a
+    // permanently-green exclusion nobody revisits.
+    assert!(
+        !known.is_empty(),
+        "the e5m2 NaN-payload divergence is GONE, so the oracle now carries the \
+         payload. Delete this carve-out and assert that there are no differences \
+         at all — an exclusion that no longer excludes anything is a dead end."
+    );
 }

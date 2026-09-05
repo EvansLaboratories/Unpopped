@@ -812,7 +812,13 @@ fn fp8_e4m3fn_to_f64(bits: u8) -> f64 {
     // The sole NaN: exponent all-ones AND mantissa all-ones. Every other
     // all-ones-exponent pattern is an ordinary finite value.
     if exp == 0x0f && mant == 0x07 {
-        return f64::NAN;
+        // `.copysign(sign)`, not a bare `f64::NAN`. e4m3fn has TWO NaN encodings
+        // — 0x7F and 0xFF — so the sign here is information the format carries,
+        // and `sign` was computed on this function's first line and then dropped.
+        // Measured: the emitter's `neg` maps 0xFF -> 0x7F while this returned a
+        // positive NaN, so the negation produced 0xFF and the two disagreed on
+        // exactly one byte of 256.
+        return f64::NAN.copysign(sign);
     }
     let mag = if exp == 0 {
         // Subnormal / zero: value = mant * 2^(1-bias) / 8 = mant * 2^-9.
@@ -840,7 +846,17 @@ fn fp8_e5m2_to_f64(bits: u8) -> f64 {
     } else {
         (1.0 + f64::from(mant) / 4.0) * 2f64.powi(i32::from(exp) - 15)
     };
-    sign * mag
+    // `.copysign(sign)`, not `sign * mag`. ⚠️ MULTIPLICATION DOES NOT CARRY A
+    // NaN's SIGN: measured on this platform, `(-1.0 * f64::NAN).is_sign_negative()`
+    // is FALSE while `f64::NAN.copysign(-1.0)` is true. IEEE leaves the sign of a
+    // NaN product unspecified and x86 returns the NaN operand unchanged, so the
+    // three negative e5m2 NaN encodings all decoded to a POSITIVE NaN.
+    //
+    // Identical for every other class — magnitude is non-negative here, so
+    // copysign and multiplication agree on normals, subnormals, zero (giving -0.0)
+    // and infinity. NaN is the only input where they differ, which is exactly why
+    // the multiplication read as correct.
+    mag.copysign(sign)
 }
 
 /// Round an `f64` to an OCP FP8 **E4M3** bit pattern (round-to-nearest, ties-to-even).
@@ -850,10 +866,27 @@ fn fp8_e5m2_to_f64(bits: u8) -> f64 {
 /// returned an "infinity" pattern here would be emitting NaN or 448 by accident
 /// depending on which pattern it chose.
 fn f64_to_fp8_e4m3fn_bits(x: f64) -> u8 {
-    if x.is_nan() {
-        return 0x7f;
-    }
+    // ⚠️ SIGN FIRST, and applied to the NaN return.
+    //
+    // This read `if x.is_nan() { return 0x7f; }` with `sign` computed on the very
+    // next line and never applied to it — so a NaN's sign was discarded while the
+    // saturate path below applied it correctly, three lines down.
+    //
+    // Both fp8 formats represent a NaN's sign: e5m2 has 0x7D/0x7E/0x7F and their
+    // negatives, and e4m3fn has exactly 0x7F and 0xFF. So this was a loss of
+    // information the format can hold, not a distinction it cannot express.
+    //
+    // Found 2026-09-05, immediately after the same defect was fixed in the CpuC
+    // emitter. Before that fix the two AGREED — both collapsed to 0x7F — which is
+    // why no differential in this workspace ever caught either of them. An oracle
+    // that is wrong in the same direction as the thing it checks is not a check.
+    // `neg`/`abs`/`copysign` are sign edits, so preserving is REQUIRED there; for
+    // arithmetic IEEE leaves a NaN's sign unspecified, so preserving is permitted
+    // and never worse. One rule serves both.
     let sign: u8 = if x.is_sign_negative() { 0x80 } else { 0 };
+    if x.is_nan() {
+        return sign | 0x7f;
+    }
     let a = x.abs();
     const MAX_FINITE: f64 = 448.0;
     if a.is_infinite() || a > MAX_FINITE {
@@ -880,10 +913,27 @@ fn f64_to_fp8_e4m3fn_bits(x: f64) -> u8 {
 ///
 /// E5M2 *does* have infinities, so overflow produces one rather than saturating.
 fn f64_to_fp8_e5m2_bits(x: f64) -> u8 {
-    if x.is_nan() {
-        return 0x7f;
-    }
+    // ⚠️ SIGN FIRST, and applied to the NaN return.
+    //
+    // This read `if x.is_nan() { return 0x7f; }` with `sign` computed on the very
+    // next line and never applied to it — so a NaN's sign was discarded while the
+    // saturate path below applied it correctly, three lines down.
+    //
+    // Both fp8 formats represent a NaN's sign: e5m2 has 0x7D/0x7E/0x7F and their
+    // negatives, and e4m3fn has exactly 0x7F and 0xFF. So this was a loss of
+    // information the format can hold, not a distinction it cannot express.
+    //
+    // Found 2026-09-05, immediately after the same defect was fixed in the CpuC
+    // emitter. Before that fix the two AGREED — both collapsed to 0x7F — which is
+    // why no differential in this workspace ever caught either of them. An oracle
+    // that is wrong in the same direction as the thing it checks is not a check.
+    // `neg`/`abs`/`copysign` are sign edits, so preserving is REQUIRED there; for
+    // arithmetic IEEE leaves a NaN's sign unspecified, so preserving is permitted
+    // and never worse. One rule serves both.
     let sign: u8 = if x.is_sign_negative() { 0x80 } else { 0 };
+    if x.is_nan() {
+        return sign | 0x7f;
+    }
     let a = x.abs();
     const MAX_FINITE: f64 = 57344.0;
     if a.is_infinite() {
