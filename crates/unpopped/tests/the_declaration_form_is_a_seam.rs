@@ -183,3 +183,44 @@ fn the_move_predicate_cannot_see_a_reduction_fold() {
         );
     }
 }
+
+/// `is_bit_move_reduce` discriminates the FOLD, which is the whole reason it
+/// exists — `is_bit_or_sign_move` alone cannot, because `pre` is `Input(0)` for
+/// every fold (KISS #416).
+#[test]
+fn the_reduce_predicate_separates_a_max_fold_from_a_sum_fold() {
+    use unpopped::ir::{ReduceOp, input, is_bit_move_reduce, is_bit_or_sign_move};
+
+    let pre = input(0).0;
+    // The control: the expression half says "move" for every one of these.
+    assert!(
+        is_bit_or_sign_move(&pre),
+        "control: `pre` must read as a move, or this test proves nothing about \
+         the FOLD half"
+    );
+
+    for op in [ReduceOp::Max, ReduceOp::Min] {
+        assert!(
+            is_bit_move_reduce(op, &pre),
+            "{op:?} folds by comparison and select, so the result IS one of the \
+             input elements — a move under KISS-OPS-6.16-0009"
+        );
+    }
+    for op in [ReduceOp::Sum, ReduceOp::Prod, ReduceOp::Mean] {
+        assert!(
+            !is_bit_move_reduce(op, &pre),
+            "{op:?} produces a value that is not any input element, so it is \
+             COMPUTED and must keep its rounding step (§6.16-0010). Routing it as \
+             a move is the breakage this predicate exists to prevent"
+        );
+    }
+
+    // And the expression half still has teeth: an arithmetic `pre` under a Max
+    // fold is not a move, because the elements were computed before the fold.
+    let arith = (input(0) + input(1)).0;
+    assert!(
+        !is_bit_move_reduce(ReduceOp::Max, &arith),
+        "a Max fold over COMPUTED elements is not a bit move — both halves must \
+         hold, and this is the half `matches!(op, ..)` alone would miss"
+    );
+}

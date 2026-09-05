@@ -618,6 +618,50 @@ pub fn is_bit_or_sign_move(e: &ScalarExpr) -> bool {
     }
 }
 
+/// Whether a **reduction stage** moves bits: the fold preserves them AND its
+/// per-element expression does.
+///
+/// Call it with a [`ReduceStage`]'s own two halves — `stage.op` and `stage.pre`.
+/// ⚠️ **Not with `plan.body`**, which for a reduction is the *epilogue* and
+/// answers a different question; see [`is_bit_or_sign_move`] for the measured
+/// truth table and why `pre` alone is not enough.
+///
+/// # The ruling this encodes
+///
+/// **KISS #416.** `Max`/`Min` fold by comparison and select, so the result **is
+/// one of the input elements** and no arithmetic occurs — a MOVE under
+/// KISS-OPS-6.16-0009, bits preserved exactly. `Sum`/`Prod`/`Mean` produce a
+/// value that is **not** any input element — COMPUTED, under §6.16-0010, and
+/// they MUST quiet a signalling NaN.
+///
+/// **Arity does not change character:** `max`/`min` on two operands is the binary
+/// case and a max-reduction the N-ary case of the same comparison-and-select,
+/// which is why the arms here mirror [`is_bit_or_sign_move`]'s `Max`/`Min`.
+///
+/// # ⚠️ "ONE OF THE INPUT ELEMENTS" DOES NOT MEAN "A UNIQUE ONE"
+///
+/// **Reduction order is deliberately unpinned**, so when several elements tie —
+/// and every NaN ties, since `Max`/`Min` here are NaN-propagating — **which
+/// element's bits survive is schedule-dependent.** Two conformant
+/// implementations may return different NaN payloads for the same input and both
+/// be right.
+///
+/// **So a conformance vector MUST NOT pin a particular surviving payload.** It
+/// can require that the result IS one of the input encodings; requiring *which*
+/// over-constrains and fails conformant implementations. Stated here because the
+/// next person to write a test against this predicate is the one who needs it.
+///
+/// # A new fold defaults to "not a move"
+///
+/// [`ReduceOp`] is a closed enum, so adding a variant is a breaking change its
+/// author will see — but this `matches!` would not error, it would answer
+/// `false`. That is the **conservative** direction: an unclassified fold keeps
+/// its rounding step rather than silently acquiring a bit-move path.
+#[must_use]
+pub fn is_bit_move_reduce(op: ReduceOp, e: &ScalarExpr) -> bool {
+    matches!(op, ReduceOp::Max | ReduceOp::Min) && is_bit_or_sign_move(e)
+}
+
 /// Whether `e` is an admissible operand of an int-reduction predicate `Cmp*`
 /// node — the any/all/count fused-predicate shape (`count = Sum(in != 0)`,
 /// `any`/`all`'s post cast-back). Admissible: a leaf [`ScalarExpr::Input`] or
