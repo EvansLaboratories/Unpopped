@@ -70,13 +70,27 @@ pub enum ScalarExpr {
     /// `Param` is passed at launch (and, in a fused graph, comes from an
     /// `AddScalar`/`MulScalar` attribute via the pattern's `extract:`).
     Param(u8),
-    /// The per-row reduced scalar produced by [`Access::RowReduce`] stage `i`,
-    /// broadcast across every element of the row. A leaf exactly like
-    /// [`ScalarExpr::Input`]/`Param` — to the per-element math a reduction result
-    /// is just another scalar source. Legal **only** inside a `RowReduce`: in a
-    /// stage `pre` referencing an earlier stage (`Reduced(j)`, `j < i`) or in the
-    /// `epilogue` (any `Reduced(0..n_stages)`). Never an `Input` — it carries no
-    /// bind index and must not be folded across rows by the optimizer.
+    /// The reduced scalar produced by a fold stage, broadcast to the per-element
+    /// math. A leaf exactly like [`ScalarExpr::Input`]/`Param` — to the epilogue a
+    /// fold result is just another scalar source.
+    ///
+    /// ⚠️ **NOT RowReduce-only.** It is the shared bridge for **every**
+    /// fold-shaped access: `Scan`'s `post` reaches the running prefix through it
+    /// (identity `Reduced(0)`), and `Reduction`/`Window` epilogues do the same.
+    /// This doc said *"legal only inside a `RowReduce`"* until 2026-09-05 — true
+    /// when written, when `RowReduce` was the only user, and narrower than the
+    /// truth once `Scan` and `Window` arrived. **Found while answering a KISS
+    /// consensus question about which §6.12 leaf `scan_placeholder` corresponds
+    /// to: the stale doc would have made the answer "RowReduce only", which is
+    /// wrong.**
+    ///
+    /// Legal in a stage `pre` referencing an EARLIER stage (`Reduced(j)`, `j < i`)
+    /// and in the epilogue/`post` (any `Reduced(0..n_stages)`). Rejected in a
+    /// scan's `pre`, where no running result exists yet.
+    ///
+    /// ⚠️ **Carries a STAGE INDEX AND NOTHING ELSE.** There is no carry-vs-element
+    /// role here or anywhere in this IR. Never an `Input` — it carries no bind
+    /// index and must not be folded across rows by the optimizer.
     Reduced(u8),
     /// The **output element's coordinate** along axis `axis` (increment 0d) —
     /// the row-major unravel of the output index over the cell's iteration
