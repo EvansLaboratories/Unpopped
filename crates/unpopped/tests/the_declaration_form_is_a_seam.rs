@@ -169,6 +169,9 @@ fn the_move_predicate_cannot_see_a_reduction_fold() {
         };
         let op = OpDef::row_reduce("r", 1, &[ElementKind::F32], vec![stage.clone()], reduced(0));
 
+        // ⚠️ ONLY for RowReduce. `Access::Reduction` puts the ELEMENT expr in
+        // `body`, so the same assertion there would be false — see the second
+        // loop below, which is the half the first version of this test missed.
         assert!(
             !is_bit_or_sign_move(&op.body),
             "{rop:?}: a reduction's body is the EPILOGUE (identity `Reduced(0)`), \
@@ -222,5 +225,44 @@ fn the_reduce_predicate_separates_a_max_fold_from_a_sum_fold() {
         !is_bit_move_reduce(ReduceOp::Max, &arith),
         "a Max fold over COMPUTED elements is not a bit move — both halves must \
          hold, and this is the half `matches!(op, ..)` alone would miss"
+    );
+}
+
+/// The OTHER reduction shape, where `plan.body` IS the element expression — the
+/// half the first version of this test did not cover, and the reason its doc
+/// comment claimed a safety that does not hold generally.
+///
+/// `OpDef::reduction_axes` sets `body` to the per-element expr and keeps the
+/// epilogue in `Access::Reduction::post`. `OpDef::row_reduce` does the opposite.
+/// **There is no single field that is safe across both**, which is why
+/// `is_bit_move_reduce` takes the fold explicitly.
+#[test]
+fn the_element_expression_lives_in_a_different_field_per_access_shape() {
+    use unpopped::ir::{OpDef, ReduceOp, input, is_bit_move_reduce, is_bit_or_sign_move};
+    use unpopped_vocab::ElementKind;
+
+    for rop in [ReduceOp::Max, ReduceOp::Sum] {
+        let op = OpDef::reduction("r", 1, &[ElementKind::F32], input(0), rop);
+        assert!(
+            is_bit_or_sign_move(&op.body),
+            "{rop:?}: Access::Reduction carries the ELEMENT expr in `body`, so the \
+             expression half reads TRUE here — for a Sum fold as much as a Max one. \
+             This is exactly why `is_bit_or_sign_move` alone is not a safe guard"
+        );
+    }
+
+    // The fold half is what separates them, and it must, since the expression
+    // half cannot.
+    let sum = OpDef::reduction("s", 1, &[ElementKind::F32], input(0), ReduceOp::Sum);
+    assert!(
+        !is_bit_move_reduce(ReduceOp::Sum, &sum.body),
+        "a Sum fold over Access::Reduction must NOT read as a move — this is the \
+         mis-route the predicate exists to prevent, on the shape where `body` is \
+         the element expression"
+    );
+    let max = OpDef::reduction("m", 1, &[ElementKind::F32], input(0), ReduceOp::Max);
+    assert!(
+        is_bit_move_reduce(ReduceOp::Max, &max.body),
+        "a Max fold over a moved element IS a move (KISS #416)"
     );
 }

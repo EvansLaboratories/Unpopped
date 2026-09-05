@@ -570,32 +570,48 @@ pub fn is_bit_move(e: &ScalarExpr) -> bool {
 /// representable too and was lost the same way.
 /// # ⚠️ ITS SUBJECT IS ONE `ScalarExpr`, AND AT A REDUCTION THAT IS NOT THE FOLD
 ///
-/// A reduction's combine lives in [`ReduceStage::op`], **outside any expression
-/// this function can see**. So it answers about the expression handed to it and
-/// is silent about the fold wrapped around it — and nothing in the signature can
-/// say so. Measured (`OpDef::row_reduce`, identity epilogue):
+/// A reduction's combine lives in the [`Access`] variant, **outside any
+/// expression this function can see**. So it answers about the expression handed
+/// to it and is silent about the fold wrapped around it.
+///
+/// ⚠️ **AND WHICH FIELD HOLDS THE ELEMENT EXPRESSION DIFFERS BY ACCESS SHAPE.**
+/// There is no single safe field. Measured:
 ///
 /// ```text
-///                 plan.body                stage.pre
-/// reduce_MAX      Reduced(0) -> false      Input(0) -> TRUE
-/// reduce_SUM      Reduced(0) -> false      Input(0) -> TRUE
+///                          plan.body                 element expr lives in
+/// Access::Reduction        Input(0)      -> TRUE     plan.body  (post is separate)
+/// Access::RowReduce        Reduced(0)    -> false    stages[i].pre
 /// ```
 ///
-/// **`plan.body` is SAFE**: for a reduction it is the *epilogue*, whose identity
-/// is [`ScalarExpr::Reduced`], which is not an arm here and yields `false`.
+/// [`OpDef::reduction_axes`] sets `body` to the caller's **per-element**
+/// expression and keeps the epilogue in `Access::Reduction::post`.
+/// [`OpDef::row_reduce`] does the **opposite** — `body` IS the epilogue, and the
+/// elements are the stages' `pre`. **A caller that learned one shape and
+/// generalised will guard the wrong field on the other**, in whichever
+/// direction they happened to learn first.
 ///
-/// ⚠️ **[`ReduceStage::pre`] is NOT.** Its identity is `Input(0)`, so this returns
-/// `true` for a **sum**-fold exactly as it does for a **max**-fold. A caller that
-/// routed on it would send an arithmetic reduction down a bit-move path — the
-/// same KISS-OPS-6.16-0010 breakage as stripping the round-trip globally,
-/// arriving through a predicate that looks precisely applicable.
+/// **So this function alone is not enough at any reduction site.** Pair the
+/// element expression with its fold and use [`is_bit_move_reduce`]:
 ///
-/// **A reduction site needs the fold op as well as the expression** — pair
-/// `stage.op` with `stage.pre` rather than calling this on `pre` alone. Whether a
-/// `Max`/`Min` fold *is* a move under §6.16-0009 is a normative question for
-/// KISS, not a property of this function; found by baracuda 2026-09-05, who
-/// declined to write a local copy rather than duplicate a normative predicate in
-/// a backend.
+/// ```text
+/// Access::Reduction   is_bit_move_reduce(access.op,      plan.body)
+/// Access::RowReduce   is_bit_move_reduce(stage.op,       &stage.pre)   per stage
+/// ```
+///
+/// Without the fold, `Input(0)` reads TRUE for a **sum**-fold exactly as for a
+/// **max**-fold, and routing on that sends an arithmetic reduction down a
+/// bit-move path — the same KISS-OPS-6.16-0010 breakage as stripping the
+/// round-trip globally, arriving through a predicate that looks precisely
+/// applicable.
+///
+/// ⚠️ **A FURTHER QUESTION THIS DOES NOT ANSWER, and neither does
+/// [`is_bit_move_reduce`]:** whether the fold's result reaches the OUTPUT
+/// un-arithmetic'd. For `Access::Reduction` with an identity `post` they
+/// coincide. For `RowReduce` the epilogue decides — softmax's stability-max
+/// stage is a `Max` fold whose result feeds an arithmetic shift, so it is a move
+/// by this predicate and a compute in the kernel. **§6.16-0009 does not state
+/// which the obligation attaches to; routed to KISS. Do not encode an answer
+/// here while it is open.** (Found by baracuda 2026-09-05 auditing call sites.)
 ///
 #[must_use]
 pub fn is_bit_or_sign_move(e: &ScalarExpr) -> bool {
