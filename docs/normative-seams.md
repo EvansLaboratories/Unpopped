@@ -334,3 +334,47 @@ the constant is private and numeric. **The others cite clauses somewhere nearby 
 a citation-shaped sweep would plausibly surface them.** That belief is why this
 document leads with those two, and it is a judgement about someone else's query,
 which is the weakest kind of claim in here.
+
+## 8 · Whether the emitter↔oracle differentials are actually two parties
+
+**Measured at `cc92a757417f4feee3475e90c1e185f957393158`, prompted by KISS-CONSUME §8.2-0001** — merged 2026-09-06 —
+which rules that agreement excludes *"shared lowering code, and two values tracing
+to a single authored source, because **the question is provenance, not
+equality**."* Written about lifters. **It ranges over every differential in this
+tree, so I ran the sweep on myself.**
+
+| construct | measured |
+|---|---|
+| emitter's total imported surface from core | **10 symbols** |
+| of those, symbols the oracle also *mentions* | 5 |
+| of those, symbols the oracle actually **calls** | **1** — `ir::narrow_sign_masks` |
+| the other 4 | `//!` doc-comment mentions in the oracle's module header |
+
+⚠️ **The 5-vs-1 gap is this workspace's own recorded trap: a mention is not a
+call.** Had I stopped at 5 I would have filed four false shared sources and,
+worse, proposed re-duplicating code that was never shared.
+
+**The one real overlap is closed** — `narrow_sign_masks` is now cross-checked
+against `elem_bits`, authored separately and maintained for a different reason.
+**Mutation-proven on both dtype families.** The differential that could not see it
+records its own boundary in its doc comment, with the measurement.
+
+**Two findings in the other direction, both nulls with controls:**
+
+- **The bit-move predicate is emitter-only.** `is_bit_or_sign_move` has 5
+  non-doc references, **none in the oracle** — which decides sign preservation by
+  evaluating the semantics, not by consulting the same predicate. **So a wrong
+  predicate sends the emitter down the wrong path and the oracle disagrees.**
+  That differential is sound, and it is sound *by construction* rather than by
+  luck.
+- **`is_bit_move_reduce` and `is_bit_move_fold_output` have zero in-tree
+  callers** — the shape that shipped the f16 double-demote, whose only caller
+  lived in another repo. **But both are well covered: 9 and 8 test references.**
+  The predicates' truth tables are exercised; what no test here can reach is what
+  a *consumer's emitter* does with the answer, which is the consumer's side.
+
+**What this section does NOT establish:** the sweep ranges over `oracle.rs`, not
+over everything `evaluate` transitively reaches. **Shared *types* (`ScalarExpr`,
+`BinaryOp`) are excluded deliberately** — a shared vocabulary is not a shared
+derivation, and demanding two spellings of an enum would be the re-duplication
+this whole finding argues against.
