@@ -279,6 +279,32 @@ impl DispatchEntry {
     }
 }
 
+/// Total order for candidate ranking: median ascending, then a tiebreak that
+/// exists **only so the result is reproducible**.
+///
+/// # ⚠️ The secondary keys carry NO performance or preference meaning
+///
+/// They are not a claim that `bespoke` beats `cublas`, or that a named entry
+/// point is better than none. They exist because an exact tie previously fell
+/// through to `sort_by`'s stability and was decided by **the order the caller
+/// happened to push candidates**, which is not a decision — and the artifact
+/// this feeds is documented as "stable, diff-friendly".
+///
+/// **An omitted sort-key component does not error. It silently defers to input
+/// order, and input order is usually right by luck** — relayed by baracuda
+/// 2026-09-06, who hit it as a stable-sort accident in their own producer.
+///
+/// If a real preference policy is ever wanted on a tie, it replaces this
+/// function and it should say so in its own name. **Reproducible-but-arbitrary
+/// and arbitrary-and-irreproducible are different defects, and only the second
+/// one is this function's business.**
+fn rank_order(a: &CandidateResult, b: &CandidateResult) -> core::cmp::Ordering {
+    a.median_ns
+        .total_cmp(&b.median_ns)
+        .then_with(|| a.implementor.code().cmp(b.implementor.code()))
+        .then_with(|| a.entry_point.cmp(&b.entry_point))
+}
+
 /// Reduce a set of measured candidates for one cell to a routing decision.
 ///
 /// Candidates with a non-finite (NaN/±inf) or non-positive median are dropped
@@ -309,10 +335,15 @@ pub fn winner_of(
     if candidates.is_empty() {
         return None;
     }
-    // Ascending by median. Every surviving median is finite and positive, so
-    // `total_cmp` is a genuine total order with no NaN corner — the fastest wins,
-    // independent of input order.
-    candidates.sort_by(|a, b| a.median_ns.total_cmp(&b.median_ns));
+    // Ascending by median, then by a NAMED tiebreak.
+    //
+    // ⚠️ This comment used to say the fastest wins "independent of input order",
+    // and that was FALSE on a tie. `total_cmp` is a total order on VALUES; it
+    // says nothing about which of two EQUAL candidates lands at index 0, and
+    // `sort_by` is stable, so the winner was whichever the caller pushed first.
+    // Measured: swapping two candidates with identical medians changed the
+    // winner (`a_tie_in_the_ranking_is_decided_by_input_order`).
+    candidates.sort_by(rank_order);
     let winner = candidates[0].implementor;
     let winner_entry = candidates[0].entry_point.clone();
     let margin = if candidates.len() >= 2 {
@@ -384,7 +415,7 @@ pub fn reported_entry(
             })
         })
         .collect();
-    ranked.sort_by(|a, b| a.median_ns.total_cmp(&b.median_ns));
+    ranked.sort_by(rank_order);
     let chosen_ns = chosen.latency_ns.filter(|&ns| ns > 0).map(|ns| ns as f64);
     let margin = match chosen_ns {
         Some(cns) => ranked
