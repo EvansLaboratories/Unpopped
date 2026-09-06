@@ -345,6 +345,39 @@ fn the_reduction_field_table_is_not_duplicated_in_prose() {
 ///
 /// §6.16-0009 attaches to the value reaching the OBSERVABLE OUTPUT: trace fold →
 /// output, and if every transformation is a move the whole is a move.
+///
+/// # ⚠️ These four rows are the CLAUSE's own enumeration, not mine
+///
+/// Read at KISS `origin/main` `3db1f994`, `spec/ops.md:1536`, KISS-OPS
+/// §6.16-0011 — which does not merely state the rule, it names the
+/// discriminating cases in both directions:
+///
+/// > *"trace the whole path from the op's inputs to that output, **the fold
+/// > itself included** … An implementation MUST NOT classify such an op by its
+/// > access variant, by its fold operator alone, or by its epilogue alone —
+/// > **both** directions fail. A max-reduction under an arithmetic epilogue is a
+/// > computed op, though its fold is a move; and a sum-reduction is a computed
+/// > op even when its epilogue is a pure move."*
+///
+/// **The provenance is the point.** A reader cannot otherwise tell whether these
+/// cases were derived from the clause or read off my own predicate — and a table
+/// derived from the implementation it checks proves only that the implementation
+/// is self-consistent. **KISS-CONSUME §8.2-0001: the question is provenance, not
+/// equality.**
+///
+/// **Case 4 (`Sum` + pure-move post → COMPUTED) is the one to keep.** It is the
+/// trap in the opposite direction, the clause spends a whole sentence on it, and
+/// it is the row least likely to be written by anyone reasoning forward from
+/// "which folds preserve bits". ⚠️ **A `pub` predicate answering the fold
+/// question WITHOUT the post is what makes that row reachable as a mistake** —
+/// see the note on `is_bit_move_reduce`'s exposure.
+///
+/// Measured 2026-09-06: baracuda's CUDA emitter — the only consumer — gates on
+/// `is_bit_move_fold_output` and agrees with all four rows in code, while a
+/// comment beside that gate described case 2 as deliberately unrouted. **The
+/// clause says routing it is required, so the code conforms and the prose does
+/// not.** The disagreement was in prose on both sides of the repo boundary and
+/// no test on either side could see it.
 #[test]
 fn the_output_attachment_rule_covers_a_moving_post() {
     use unpopped::ir::{ReduceOp, UnaryOp, input, is_bit_move_fold_output, reduced};
