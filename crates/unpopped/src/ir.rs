@@ -766,18 +766,37 @@ pub fn narrow_sign_masks(dt: ElementKind) -> Option<(u128, u128)> {
 /// [`is_bit_move_reduce`] answers only the FOLD half, which is sufficient only
 /// when the post/epilogue is the identity.
 ///
-/// # The ruling (KISS #416, restated variant-independently)
+/// # The ruling (KISS §6.16-0011, corrected text `3102b4c`)
 ///
 /// §6.16-0009 attaches to the value that reaches the op's **observable output**.
-/// Trace from the fold to the output: if EVERY transformation between them is a
-/// move, -0009 governs the whole; if ANY is arithmetic, §6.16-0010 does.
+/// ⚠️ **Trace from the op's INPUTS to the output — the fold ITSELF included.** If
+/// every transformation along that path is a move, -0009 governs the whole; if
+/// any is arithmetic, §6.16-0010 does.
+///
+/// ⚠️ **This doc said "trace from the FOLD to the output" until 2026-09-06**,
+/// which omits the element leg — and that leg is load-bearing: `Max` over
+/// `input(0) + input(1)` is a move fold over COMPUTED elements and is NOT a move.
+/// **The function was always right** — it takes `element` as its own argument and
+/// `the_reduce_predicate_separates_a_max_fold_from_a_sum_fold` pins that case.
+/// **The prose inherited the clause's pre-correction phrasing from a relay.**
+/// KISS's first §6.16-0011 push carried an inverted example, caught by an
+/// automated reviewer on their #437 and fixed in `3102b4c`.
+///
+/// **Three legs, all required:**
 ///
 /// ```text
-/// fold   post                    governs
-/// Max    Reduced(0)   identity   -0009
-/// Max    Neg(Reduced(0))         -0009   <- inexpressible before this function
-/// Max    Sqrt(Reduced(0))        -0010
-/// Sum    anything                -0010
+/// inputs --> element expr --> FOLD --> post --> output
+///            must move        must     must
+///                             move     move
+/// ```
+///
+/// ```text
+/// element      fold   post              governs
+/// input(0)     Max    Reduced(0)        -0009
+/// input(0)     Max    Neg(Reduced(0))   -0009   <- inexpressible before this fn
+/// input(0)     Max    Sqrt(Reduced(0))  -0010
+/// input(0)     Sum    anything          -0010
+/// in0 + in1    Max    Reduced(0)        -0010   <- the ELEMENT leg
 /// ```
 ///
 /// # ⚠️ THIS IS NOT REDUCTION-ONLY — THREE ACCESS SHAPES CARRY THE SAME TRIPLE
