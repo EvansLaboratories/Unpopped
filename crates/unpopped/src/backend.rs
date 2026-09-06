@@ -154,16 +154,41 @@ impl GeneratedKernel {
 pub enum VariantFidelity {
     /// Same result bits as the default lowering for every input.
     BitIdentical,
-    /// Deterministic (fixed order for a fixed launch configuration), but a
-    /// different operation *association* than the default — e.g. a split-K
-    /// partial-sum tree vs the sequential fold.
-    ReassociatedDeterministic,
+    /// Deterministic for a fixed launch configuration and binary, but **not
+    /// bit-identical to the default lowering**, and not directed either way.
+    ///
+    /// # Two mechanisms, one selection policy
+    ///
+    /// 1. **A different operation association** — a split-K partial-sum tree vs
+    ///    the sequential fold. Floating-point add is non-associative, so the
+    ///    tree shape moves the bits.
+    /// 2. **A different evaluation of an equal expression** — caching a value in
+    ///    shared memory and reloading it where the default recomputes it. The
+    ///    association is *identical*; a compiler is free to evaluate two
+    ///    source-equal `expf` sites differently, and it does.
+    ///
+    /// ⚠️ **This variant was named `DeterministicallyDivergent` until 2026-09-06,
+    /// and that name asserted mechanism 1 for every member of the class.**
+    /// baracuda measured mechanism 2: a `smemrow` variant differing from its base
+    /// on 12,283,172 of 16,777,216 elements, worst 11 ULP, reproducible, with the
+    /// reduction tree provably unchanged — and had to declare a fidelity whose
+    /// name would tell the next reader the tree had moved.
+    ///
+    /// **The class is not widened by this; the name stopped excluding half of
+    /// it.** Both mechanisms are deterministic-on-fixed-hardware and undirected,
+    /// so both carry the same policy — *never selected silently, only through an
+    /// honest contract* — which is what a consumer actually matches on. **A fifth
+    /// variant with identical semantics would be a distinction nobody could act
+    /// on** (baracuda's argument, and it is the right one).
+    ///
+    /// The FKC determinism spelling is unchanged: `same_hardware_bitwise`.
+    DeterministicallyDivergent,
     /// **Run-to-run non-deterministic** (increment 5, SCATTER): the result bits
     /// vary *between launches of the same configuration* because the schedule
     /// accumulates through order-varying floating-point atomics (`atomicAdd` on
     /// an FP cell whose completion order the hardware does not fix), and FP add
     /// is non-associative. This is strictly weaker than
-    /// [`Self::ReassociatedDeterministic`] (which is at least stable for a fixed
+    /// [`Self::DeterministicallyDivergent`] (which is at least stable for a fixed
     /// launch): a `Nondeterministic` variant can differ from ITSELF run to run.
     ///
     /// Per the house variant-selection rule this may **never** be selected
@@ -181,7 +206,7 @@ pub enum VariantFidelity {
     /// rounded reduction — a *directed* "closer to the true reduction" guarantee.
     /// That directedness is the whole selection signal, and it is why this is
     /// neither [`Self::BitIdentical`] (it differs from the default bits, so it
-    /// must never be chosen silently) nor [`Self::ReassociatedDeterministic`]
+    /// must never be chosen silently) nor [`Self::DeterministicallyDivergent`]
     /// (which is same-accuracy-different-rounding, undirected).
     ///
     /// The serial double fold is bitwise-reproducible on any IEEE-754 double
@@ -207,7 +232,7 @@ impl VariantFidelity {
     pub fn determinism_str(self) -> &'static str {
         match self {
             VariantFidelity::BitIdentical => "bitwise",
-            VariantFidelity::ReassociatedDeterministic => "same_hardware_bitwise",
+            VariantFidelity::DeterministicallyDivergent => "same_hardware_bitwise",
             VariantFidelity::Nondeterministic => "nondeterministic",
             // A serial double fold is reproducible across IEEE-754 hardware.
             VariantFidelity::MorePrecise => "bitwise",

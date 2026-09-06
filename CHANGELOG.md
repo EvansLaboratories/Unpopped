@@ -19,6 +19,17 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ### `unpopped` — ⚠️ a BEHAVIOUR change, recorded the moment it landed
 
+- ⚠️ **BREAKING: `VariantFidelity::ReassociatedDeterministic` renamed to
+  `DeterministicallyDivergent`**, with its definition widened to name both
+  mechanisms. The old name asserted *reassociation* for every member of the
+  class; baracuda measured a member whose reduction tree was provably unchanged
+  and whose bits differed anyway (recompute vs cache-and-reuse of an equal
+  `expf`) — 12,283,172 of 16,777,216 elements, worst 11 ULP, reproducible.
+  **One selection policy, so one variant** — a fifth with identical semantics
+  would be a distinction no consumer could act on. **The FKC determinism
+  spelling is unchanged (`same_hardware_bitwise`), asserted by
+  `the_fidelity_rename_is_wire_invisible`.**
+
 **Published 0.10.0 and the tree both say `0.10.0`. This must NOT ship as
 `0.10.1`** — `^0.10.0` accepts a patch and this changes emitted contract text.
 **Requires `0.11.0`.**
