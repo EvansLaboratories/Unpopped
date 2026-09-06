@@ -8,25 +8,69 @@
 //! which is what kills the silent-adopt-empty and truncation hazards the older
 //! `## `-heading framing was prone to.
 //!
-//! # Header-line format — PROVISIONAL, and confirmed so
+//! # Header-line format — PINNED BY §6.11, AND THIS FILE SAID OTHERWISE
 //!
-//! KISS §6.11 pins the header's *fields* (magic `KISC`, `kiss-contract` kind, a
-//! version, `len=<N>`, `crc32=<…>`) but not the exact literal bytes. The spelling
-//! below is a **strawman**, and it is isolated in [`kisc_frame`]/[`kisc_unframe`]
-//! so pinning the final form stays a localized change.
+//! ⚠️ **This section used to call the spelling below a "strawman" and claim
+//! §6.11 pinned the header's FIELDS but not the exact literal bytes. That was
+//! FALSE, and it was false on the day it was written — not stale.** Corrected
+//! 2026-09-06 after baracuda refuted it and the KISS architect confirmed;
+//! re-measured here rather than relayed.
 //!
-//! **Checked with Fuel (2026-08-08) rather than inferred: nobody has confirmed
-//! these bytes, and Fuel structurally cannot.** Their KISC reply is dated
-//! 2026-07-14 and *predates* the 2026-07-15 ask for the exact spelling — it
-//! adopts the *framing* (KISC as the single import frame, build-stamped
-//! `len`/`crc32`, one kernel per document) and says nothing about field order,
-//! hex case, or CRLF tolerance. And Fuel has **no KISC implementation at all**
-//! — zero hits for `KISC`/`crc32` across their sources — so there is no importer
-//! whose expectations could confirm or contradict this.
+//! **`spec/contract.md` at KISS `origin/main`, read directly:**
 //!
-//! Which is why this marker stays. Reading Baracuda's side alone would have
-//! recorded "Fuel confirms" about a party holding no opinion, because it holds no
-//! code.
+//! - **§6.11-0002 (contract.md:1348)** pins the magic **as bytes** —
+//!   `0x4B 0x49 0x53 0x43` — then one space, `kiss-contract`, one space, the
+//!   decimal version, one space, `len=<N>`, one space, `crc32=<HHHHHHHH>`, then a
+//!   **single LF (`0x0A`)**, with the literal example line spelled out.
+//! - **§6.11-0003 (contract.md:1355)** pins the CRC fully: **IEEE 802.3
+//!   polynomial, reflected, initial `0xFFFFFFFF`, final XOR `0xFFFFFFFF`, as 8
+//!   LOWERCASE hex digits**, over exactly the `N` body bytes.
+//!
+//! **No free parameter remains** — including reflection and final XOR, the two
+//! nobody could have guessed.
+//!
+//! **Both entered `contract.md` on 2026-07-13; the strawman note was dated
+//! 2026-08-08.** ⚠️ **Pinned twenty-six days before this file asserted they were
+//! not.**
+//!
+//! # ⚠️ AND THE IMPLEMENTATION CONFORMS TO THE SPEC ITS OWN DOC DENIED
+//!
+//! Measured here:
+//!
+//! ```text
+//! kisc_frame("body")     ->  KISC kiss-contract 1 len=4 crc32=dba80bb2
+
+//! crc32(b"123456789")    ->  0xCBF43926   the published CRC-32 check value
+//! ```
+//!
+//! **The emitted form matches §6.11-0002 byte for byte, `{:08x}` gives the
+//! lowercase §6.11-0003 requires, and the check value proves the CRC variant.**
+//! Pinned by `the_kisc_framing_conforms_to_the_pinned_spelling`.
+//!
+//! # How it happened, because the mechanism is the transferable part
+//!
+//! ⚠️ **The note MEASURED FUEL AND INFERRED KISS.** Its Fuel findings are careful,
+//! dated and — as far as anyone knows — still true: their KISC reply of
+//! 2026-07-14 predates the 2026-07-15 ask for the exact spelling, it adopts the
+//! framing and says nothing about field order, hex case or CRLF tolerance, and
+//! Fuel has **no KISC implementation at all** (zero hits for `KISC`/`crc32`).
+//!
+//! **All of that is a fact about the party holding no code. It was used to
+//! support a claim about the party that owns the document, and the document was
+//! never opened.**
+//!
+//! ⚠️ **The note even states the rule it breaks** — *"reading Baracuda's side
+//! alone would have recorded 'Fuel confirms' about a party holding no opinion,
+//! because it holds no code."* **It read the parties holding no code and did not
+//! read the spec.**
+//!
+//! **What the Fuel observation actually supports, and is worth keeping:** no
+//! importer has ever exercised this framing. That is *unexercised*, not
+//! *unpinned* — the same distinction as an empty affected set meaning "nobody is
+//! affected" versus "nobody has implemented it yet".
+//!
+//! **The isolation in [`kisc_frame`]/[`kisc_unframe`] stays** — as an ordinary
+//! single-point-of-change, not as a hedge against a format that was never open.
 //!
 //! **Where it gets pinned: KISS, not bilaterally.** `KISC` is KISS-Contract
 //! §2.8/§6.11 vocabulary, and KISS-owned vocabulary is imported from KISS rather
@@ -129,7 +173,11 @@ mod tests {
 
     #[test]
     fn crc32_matches_the_standard_check_value() {
-        // The canonical CRC-32/ISO-HDLC check value for "123456789".
+        // The canonical CRC-32/ISO-HDLC check value for "123456789" — which is
+        // the variant KISS-CONTRACT §6.11-0003 pins BY PARAMETER (IEEE 802.3
+        // polynomial, reflected, initial 0xFFFFFFFF, final XOR 0xFFFFFFFF). One
+        // value determines all four, which is why a check VALUE beats a
+        // description of an ALGORITHM.
         assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
     }
 
@@ -266,5 +314,45 @@ mod tests {
                 .collect();
             assert_eq!(kisc_unframe(&kisc_frame(&body)), Ok(body.as_str()));
         }
+    }
+}
+
+#[cfg(test)]
+mod conformance_to_the_pinned_spelling {
+    use super::*;
+
+    /// The framing matches KISS-CONTRACT §6.11-0002/-0003 exactly.
+    ///
+    /// ⚠️ This file's module doc claimed for a month that the spelling was
+    /// unpinned. It was pinned on 2026-07-13, and the implementation happened to
+    /// conform anyway — so nothing was broken and nothing would have failed.
+    /// **A test is what turns "happens to conform" into "conforms".**
+    #[test]
+    fn the_kisc_framing_conforms_to_the_pinned_spelling() {
+        // ⚠️ NO CRC ASSERTION HERE. `crc32_matches_the_standard_check_value`
+        // above already pins 0xCBF43926, and this test was drafted with a SECOND
+        // COPY of it — the exact duplication this workspace spent the day removing,
+        // written while fixing a doc defect about the same clause. The CRC variant
+        // was already pinned; the header LINE was not, and that is the whole of
+        // what this adds.
+
+        // §6.11-0002: magic bytes, single spaces, decimal version, len=, crc32=,
+        // one LF. Asserted as the literal line rather than field-by-field,
+        // because the clause pins the LINE.
+        let doc = kisc_frame("body");
+        let header = doc.lines().next().expect("a header line");
+        assert_eq!(
+            header, "KISC kiss-contract 1 len=4 crc32=dba80bb2",
+            "§6.11-0002 pins this line, including LOWERCASE hex (§6.11-0003)"
+        );
+        assert!(
+            doc.as_bytes().starts_with(&[0x4B, 0x49, 0x53, 0x43]),
+            "§6.11-0002 pins the magic AS BYTES 0x4B 0x49 0x53 0x43"
+        );
+        assert_eq!(
+            doc.as_bytes()[header.len()],
+            0x0A,
+            "§6.11-0002 pins a single LF after the header line, never CRLF"
+        );
     }
 }
