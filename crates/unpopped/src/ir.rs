@@ -843,6 +843,57 @@ pub fn is_bit_move_fold_output(fold: ReduceOp, element: &ScalarExpr, post: &Scal
     is_bit_move_reduce(fold, element) && moves(post, true)
 }
 
+/// The same §6.16-0011 question for the **`Access::RowReduce`** shape, whose
+/// fields sit in the opposite places from [`Access::Reduction`].
+///
+/// # Why this exists, measured rather than anticipated
+///
+/// Asked by baracuda 2026-09-06: their CUDA emitter — the only one in the
+/// portfolio that lowers `RowReduce` — promotes its accumulator
+/// unconditionally, with **no bit-move path at all**. They could not tell
+/// whether an all-move `RowReduce` was constructible, because every one they
+/// build is softmax or rmsnorm and both carry arithmetic epilogues.
+///
+/// **It is constructible, and it plans** (see
+/// `tests/an_all_move_row_reduce_is_expressible.rs`).
+///
+/// ⚠️ **And the cause of their gap was on THIS side.** Until now the
+/// `is_bit_move_*` family covered only the `Reduction` shape, and this module's
+/// own field table told a `RowReduce` caller to hand-assemble a per-stage
+/// loop — **in the same breath as warning that "a caller that learned one shape
+/// and generalised will guard the wrong field on the other".** The structural
+/// safety [`is_bit_move_fold_output`] claims, that its signature cannot be
+/// satisfied without naming the fold, **did not extend to the shape with more
+/// folds in it.** An emitter with no helper to call is an emitter that gates on
+/// nothing.
+///
+/// # The trace
+///
+/// §6.16-0011 traces the whole path from inputs to output, **every fold
+/// included**. For this shape that is: every stage's fold op is a move-fold, and
+/// every stage's `pre` and the `epilogue` are moves.
+///
+/// **The leaf policy is `true` throughout, and that is deliberate.** Stage `i`'s
+/// `pre` may reference `Reduced(0..i)`, and by induction those stages are
+/// themselves moves, so a `Reduced` leaf here IS a moved value. **This predicate
+/// assumes an already-valid plan and does not re-check stage ordering** — a
+/// forward reference is `plan`'s to reject, and duplicating that check here
+/// would put the same rule in two places with no detector on their agreement.
+///
+/// # Refusals
+///
+/// **An empty `stages` is NOT a move.** There is no fold to trace, so the
+/// question is malformed rather than affirmative, and returning `true` would
+/// hand a caller a bit-move route for an op with no reduction in it.
+#[must_use]
+pub fn is_bit_move_row_reduce_output(stages: &[ReduceStage], epilogue: &ScalarExpr) -> bool {
+    !stages.is_empty()
+        && stages
+            .iter()
+            .all(|s| matches!(s.op, ReduceOp::Max | ReduceOp::Min) && moves(&s.pre, true))
+        && moves(epilogue, true)
+}
+
 /// Whether `e` is an admissible operand of an int-reduction predicate `Cmp*`
 /// node — the any/all/count fused-predicate shape (`count = Sum(in != 0)`,
 /// `any`/`all`'s post cast-back). Admissible: a leaf [`ScalarExpr::Input`] or
