@@ -18,6 +18,13 @@ use unpopped::{build_plan, generate};
 use unpopped_cpu_c::CpuC;
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, StructureKey, structure_key};
 
+/// Every ulp_bound call here is keyed to a CUDA target, which is the only
+/// namespace with an accuracy table — see `contract::AccuracyKey`. A non-CUDA
+/// target yields an UNKNOWN bound by design, not this file's numbers.
+fn k() -> unpopped::contract::AccuracyKey {
+    unpopped::contract::AccuracyKey::for_target(ArchSku::Sm89.into())
+}
+
 fn cell(dtype: ElementKind, n: i64, n_ops: usize) -> (Vec<OperandDesc>, StructureKey) {
     let d = OperandDesc::new(1, &[n], &[1], dtype, 256);
     let ops = vec![d; n_ops];
@@ -138,12 +145,12 @@ fn an_approximate_op_widens_the_band_by_its_declared_ulp() {
         "an approximate op must earn more band than a correctly-rounded one: {ra} vs {re}"
     );
     assert_eq!(
-        unpopped::contract::ulp_bound(&exact.body),
+        unpopped::contract::ulp_bound(&exact.body, &k()),
         0.0,
         "harness precondition: Sqrt is correctly rounded, so this comparison is \
          about the ULP term and not about node count"
     );
-    assert!(unpopped::contract::ulp_bound(&approx.body) > 0.0);
+    assert!(unpopped::contract::ulp_bound(&approx.body, &k()) > 0.0);
 }
 
 /// **The band's magnitude is pinned against a hand-counted expectation.**
@@ -286,5 +293,48 @@ fn a_reduction_earns_band_for_its_accumulation_length() {
     assert!(
         rl > rs,
         "a 4096-long sum accumulates more rounding than a 16-long one: {rl} vs {rs}"
+    );
+}
+
+/// A target with no accuracy table gets NO fidelity claim, not CUDA's.
+///
+/// # The defect this closes
+///
+/// `contract::ulp_bound` sums a **CUDA** per-op ULP table, and until 2026-09-06
+/// neither it nor `required_fidelity` took a target — so the band was CUDA's
+/// **for every backend**. ⚠️ The failure direction is the bad one: the borrowed
+/// band is TIGHTER than a looser target may need, so a *conforming* kernel is
+/// REJECTED. A wrong answer accepted would at least be visible downstream.
+///
+/// `required_fidelity` already declined on a non-finite bound; the fix was to
+/// make an unknown target produce one, so the decline mechanism did not need
+/// inventing — only reaching.
+#[test]
+fn an_unknown_target_yields_no_fidelity_claim_rather_than_cudas() {
+    let dt = ElementKind::F32;
+    // `exp` is rated 2 ULP in the CUDA table — a body with a real, finite bound,
+    // so a `None` below cannot come from the body being unrateable.
+    let op = OpDef::elementwise("e", 1, &[dt], input(0).unary(UnaryOp::Exp));
+    let d = OperandDesc::new(1, &[8], &[1], dt, 4);
+    let ops = [d, d];
+
+    let cuda = structure_key(OpCategory::UnaryElementwise, &ops, ArchSku::Sm89);
+    let cuda_plan = build_plan(&op, &cuda);
+    let cuda_band = required_fidelity(&cuda_plan, &ops);
+    assert!(
+        cuda_band.is_some(),
+        "CONTROL: a CUDA target must still get a band, or the assertion below \
+         passes because the body is unrateable rather than because the target is"
+    );
+
+    let vk = unpopped_vocab::TargetId::parse("vulkan:st16").expect("a valid §6.8 token");
+    let vk_key = structure_key(OpCategory::UnaryElementwise, &ops, vk);
+    let vk_plan = build_plan(&op, &vk_key);
+    assert_eq!(
+        required_fidelity(&vk_plan, &ops),
+        None,
+        "a vulkan target has no accuracy table here, so the honest answer is NO \
+         CLAIM. Returning CUDA's band asserts an accuracy nobody measured, and \
+         rejects a conforming kernel"
     );
 }

@@ -32,7 +32,7 @@
 use crate::backend::GeneratedKernel;
 use crate::ir::{BinaryOp, ExprDag, NodeId, OobPolicy, OpDef, ScalarExpr, UnaryOp};
 use crate::pattern::{PatternNode, derive_pattern, to_fkc};
-use unpopped_vocab::{Contiguity, ElementKind, StructureKey, VecWidth};
+use unpopped_vocab::{Contiguity, ElementKind, StructureKey, TargetId, VecWidth};
 
 /// Canonicalize a caller's backend token to the exact capitalized spelling
 /// Fuel's FKC importer accepts (fuel-dispatch `fkc/lower.rs` `lower_backend`,
@@ -706,7 +706,7 @@ pub fn contract(
 
     let out_idx = key.n_operands.saturating_sub(1) as usize;
     let params = params_used(&op.body);
-    let (prec_mode, prec_ulp) = precision_of(&op.body);
+    let (prec_mode, prec_ulp) = precision_of(&op.body, &AccuracyKey::for_target(key.target));
 
     let mut s = String::from("```fkc\n");
     s.push_str(&format!("kernel: {}_{}\n", op.name, cell_suffix(key)));
@@ -1250,6 +1250,46 @@ fn count_flops(e: &ScalarExpr) -> u32 {
         .count() as u32
 }
 
+/// The axes an accuracy bound depends on.
+///
+/// # ⚠️ THIS TYPE EXISTS BECAUSE THE KEY IS UNDECIDED, AND SAYS SO
+///
+/// Measured 2026-09-06: the ULP path was keyed on the **operator alone** — no
+/// dtype, no target, no precision mode. Three missing axes, and the target one
+/// was where CUDA's table was baked in, because there was no parameter for it to
+/// be anything else.
+///
+/// **`target` is here because it fixes the live defect.** The other two are known
+/// missing and are NOT fields yet, deliberately:
+///
+/// - **dtype** — `exp` at `f32` and at `f16` are different functions with
+///   different accuracy. No per-dtype data exists here to key on.
+/// - **precision mode** — vulkane's `RelaxedPrecision` point. ⚠️ **Unrecoverable
+///   from `vk.xml`**, which they measured carries zero accuracy data: whoever
+///   fills it for a `vulkan:` target reads a prose appendix by hand.
+///
+/// ⚠️ **A field that is present and ignored implies data that does not exist.**
+/// So they are absent and documented rather than accepted and dropped —
+/// `#[non_exhaustive]` is what lets them arrive without another break.
+///
+/// **This is the cheapest moment to fix the shape:** `required_fidelity` has zero
+/// non-test callers today, so the axes can change while nothing depends on them.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AccuracyKey {
+    /// The compilation target. A namespace with no accuracy table yields an
+    /// unknown bound rather than a borrowed one.
+    pub target: TargetId,
+}
+
+impl AccuracyKey {
+    /// Key an accuracy bound to `target`.
+    #[must_use]
+    pub fn for_target(target: TargetId) -> Self {
+        Self { target }
+    }
+}
+
 /// Conservative max-ULP bound over the lowered body — a *declared upper bound*,
 /// the sum of the **vendor-approximate** ops' errors (transcendentals ~2 ulp,
 /// `powf` 4, `logf` 1, the hand-rolled `Sigmoid`/`Silu`/`Gelu` composites a bit
@@ -1297,7 +1337,24 @@ fn count_flops(e: &ScalarExpr) -> u32 {
 /// Closing it needs a per-target accuracy seam, which is a `Backend`-surface
 /// change and therefore a coordination call rather than a quiet patch. Recorded
 /// here, at the number itself, so it is met by anyone who reaches for it.
-pub fn ulp_bound(e: &ScalarExpr) -> f64 {
+pub fn ulp_bound(e: &ScalarExpr, key: &AccuracyKey) -> f64 {
+    // ⚠️ THE TABLE BELOW IS CUDA'S. Handing it to another target asserts CUDA's
+    // accuracy for hardware nobody measured, and the band is TIGHTER than a
+    // conforming implementation may need — so the failure is a conforming kernel
+    // being REJECTED, not a wrong one accepted.
+    //
+    // Declining is the honest answer and the mechanism already exists:
+    // `required_fidelity` returns `None` on a non-finite bound, so an unknown
+    // target yields no fidelity claim rather than a borrowed one.
+    if key.target.namespace() != "cuda" {
+        return f64::INFINITY;
+    }
+    ulp_sum(e)
+}
+
+/// The op-keyed walk. Unchanged, and **that is the remaining defect**: see
+/// [`AccuracyKey`] for the axes it still does not have.
+fn ulp_sum(e: &ScalarExpr) -> f64 {
     match e {
         // Coord rates 0 like the other leaves: the long-long → float/double
         // cast is exact under the documented caller precondition (axis extent
@@ -1311,12 +1368,12 @@ pub fn ulp_bound(e: &ScalarExpr) -> f64 {
         | ScalarExpr::Param(_)
         | ScalarExpr::Reduced(_)
         | ScalarExpr::Coord(_) => 0.0,
-        ScalarExpr::Unary(op, x) => ulp_bound(x) + unary_ulp(*op),
-        ScalarExpr::Binary(op, a, b) => ulp_bound(a) + ulp_bound(b) + binary_ulp(*op),
+        ScalarExpr::Unary(op, x) => ulp_sum(x) + unary_ulp(*op),
+        ScalarExpr::Binary(op, a, b) => ulp_sum(a) + ulp_sum(b) + binary_ulp(*op),
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
-        | ScalarExpr::Div(a, b) => ulp_bound(a) + ulp_bound(b),
+        | ScalarExpr::Div(a, b) => ulp_sum(a) + ulp_sum(b),
         // Select contributes 0 ulp of its OWN: the pick never rounds (the arms'
         // bits move untouched, the cond compare is exact) — the same modeling
         // call as the Cmp* predicates in `binary_ulp`. Subexpression tiers sum
@@ -1324,7 +1381,7 @@ pub fn ulp_bound(e: &ScalarExpr) -> f64 {
         // any select body contract-less — but the table stays exhaustive on
         // purpose so the rating is decided here, not silently defaulted, when
         // the Where advert lands.)
-        ScalarExpr::Select(c, a, b) => ulp_bound(c) + ulp_bound(a) + ulp_bound(b),
+        ScalarExpr::Select(c, a, b) => ulp_sum(c) + ulp_sum(a) + ulp_sum(b),
     }
 }
 
@@ -1513,8 +1570,8 @@ fn cmp_dispatch_op_kind(body: &ScalarExpr) -> &'static str {
 }
 
 #[doc(hidden)]
-pub fn precision_of(body: &ScalarExpr) -> (&'static str, Option<u32>) {
-    let u = ulp_bound(body);
+pub fn precision_of(body: &ScalarExpr, key: &AccuracyKey) -> (&'static str, Option<u32>) {
+    let u = ulp_bound(body, key);
     if u <= 0.0 {
         ("correctly_rounded", Some(0))
     } else if u.is_infinite() {
@@ -1979,8 +2036,18 @@ mod tests {
         // table rates a select 0 (an exact pick — the Cmp* modeling call).
         let body = input(0).select(input(1), input(2)).0;
         assert_eq!(count_flops(&body), 1, "select = 1 flop, deliberately");
-        assert_eq!(ulp_bound(&body), 0.0, "select never rounds (0 ulp)");
-        let (mode, ulp) = precision_of(&body);
+        assert_eq!(
+            ulp_bound(
+                &body,
+                &AccuracyKey::for_target(unpopped_vocab::ArchSku::Sm89.into())
+            ),
+            0.0,
+            "select never rounds (0 ulp)"
+        );
+        let (mode, ulp) = precision_of(
+            &body,
+            &AccuracyKey::for_target(unpopped_vocab::ArchSku::Sm89.into()),
+        );
         assert_eq!(mode, "correctly_rounded");
         assert_eq!(ulp, Some(0));
         // Params thread through all three children.
@@ -2117,7 +2184,8 @@ mod tests {
         // max_ulp is the fn's vendor tier, and the exact/bit-level ops stay
         // correctly_rounded. (Under-stating is the unsafe direction — these pins
         // hold the table honest.)
-        let u = |op: UnaryOp| precision_of(&input(0).unary(op).0);
+        let k = AccuracyKey::for_target(unpopped_vocab::ArchSku::Sm89.into());
+        let u = |op: UnaryOp| precision_of(&input(0).unary(op).0, &k);
         assert_eq!(u(UnaryOp::Trunc), ("correctly_rounded", Some(0)));
         assert_eq!(u(UnaryOp::Log1p), ("approximate", Some(1)));
         assert_eq!(u(UnaryOp::Expm1), ("approximate", Some(1)));
@@ -2130,7 +2198,7 @@ mod tests {
         assert_eq!(u(UnaryOp::Acosh), ("approximate", Some(4)));
         assert_eq!(u(UnaryOp::Erfc), ("approximate", Some(4)));
         assert_eq!(u(UnaryOp::Lgamma), ("approximate", Some(6)));
-        let b = |op: BinaryOp| precision_of(&input(0).binary(op, input(1)).0);
+        let b = |op: BinaryOp| precision_of(&input(0).binary(op, input(1)).0, &k);
         assert_eq!(b(BinaryOp::Atan2), ("approximate", Some(3)));
         // bit-level / exact binaries are correctly rounded.
         assert_eq!(b(BinaryOp::Copysign), ("correctly_rounded", Some(0)));
@@ -2154,7 +2222,10 @@ mod tests {
             BinaryOp::CmpGe,
         ] {
             assert_eq!(
-                precision_of(&input(0).binary(op, input(1)).0),
+                precision_of(
+                    &input(0).binary(op, input(1)).0,
+                    &AccuracyKey::for_target(unpopped_vocab::ArchSku::Sm89.into())
+                ),
                 ("correctly_rounded", Some(0)),
                 "{op:?}"
             );
@@ -2163,7 +2234,13 @@ mod tests {
         // the body ulp is exactly the subexpression's tier (exp -> 2), the
         // pinned increment-0b modeling decision.
         let e = input(0).exp().binary(BinaryOp::CmpGt, input(1));
-        assert_eq!(precision_of(&e.0), ("approximate", Some(2)));
+        assert_eq!(
+            precision_of(
+                &e.0,
+                &AccuracyKey::for_target(unpopped_vocab::ArchSku::Sm89.into())
+            ),
+            ("approximate", Some(2))
+        );
     }
 
     #[test]
