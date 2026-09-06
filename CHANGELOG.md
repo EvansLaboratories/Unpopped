@@ -17,6 +17,45 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ## Unreleased
 
+**Version cascade applied 2026-09-06 on the PM's ruling: `unpopped-vocab 0.4.0`,
+never `0.3.3`.**
+
+| crate | was | now | why it moved |
+|---|---|---|---|
+| `unpopped-vocab` | 0.3.2 | **0.4.0** | two behaviour changes, one numeric |
+| `unpopped` | 0.9.0 | **0.10.0** | new public fn, a deprecation, and its vocab requirement moved |
+| `unpopped-cpu-c` | 0.8.0 | **0.9.0** | ⚠️ **source BYTE-IDENTICAL to the published 0.8.0** — bumped ONLY because a dependency did |
+| `unpopped-slang` | 0.6.0 | **0.7.0** | ⚠️ **source BYTE-IDENTICAL to the published 0.6.0** — bumped ONLY because a dependency did |
+| `unpopped-conformance` | 0.1.0 | 0.1.0 | `publish = false`; not on the registry |
+
+⚠️ **The two "byte-identical" rows are stated because a reader who sees a version
+move with no behaviour change will otherwise assume there was one they cannot
+find.** Both were verified by diffing the served `.crate` tarball against the
+tree, not by inspection.
+
+### Downstream, measured rather than reasoned
+
+**Registry reverse-dependencies of `unpopped-vocab`: 6, all in this portfolio**
+(control: `serde` returns 120,294, so the query works).
+
+    baracuda-cuda-emit / -kernels-types / -types   require ^0.1.0  (an OLD line;
+                                                    0.3.x never reached them)
+    unpopped / unpopped-cpu-c / unpopped-slang     require ^0.3.2
+
+⚠️ **And the hop that mattered was the one nobody had measured.** baracuda's
+**working tree** declares `unpopped-vocab = "0.3.2"` **directly** — measured at
+their `origin/main` `2b3292ca`, after fetching, because the local ref was stale.
+**So the reassurance "baracuda is caret-pinned `^0.8.7` on `unpopped`, therefore
+cannot reach the new vocab" was FALSE**: their direct vocab dependency would have
+taken `0.3.3` on the next `cargo update`, bypassing the `unpopped` pin entirely.
+
+**Their exposure to the numeric change is nonetheless zero, measured on their
+side:** `Fp8E5M2::from_f32` has **0** call sites in baracuda. **`Fp8E4M3FN` is
+unchanged by this release** — 0 diff lines between published 0.3.2 and the tree
+mention E4M3, against a control of 5 mentioning E5M2 — so their two E4M3 call
+sites are unaffected.
+
+
 ### `unpopped-vocab` — ⚠️ published 0.3.2 and the tree BOTH say `0.3.2`, with different behaviour
 
 **Two behaviour changes. Neither may ship as `0.3.3`.** Published
