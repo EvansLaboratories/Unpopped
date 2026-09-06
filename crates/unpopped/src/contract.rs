@@ -1290,6 +1290,33 @@ impl AccuracyKey {
     }
 }
 
+/// Whether every operator in `e` is exact on **any** conforming target, so its
+/// ULP bound is target-independent and may be stated without an accuracy table.
+///
+/// Deliberately narrow: leaves, [`BinaryOp::is_int_only`] operators, and a
+/// `Select` whose every arm qualifies (the pick moves bits and never rounds).
+/// **Float operators are excluded even when `ulp_sum` rates them 0**, because
+/// that rating asserts a target implements IEEE semantics without contraction —
+/// which is precisely what an unmeasured target has not told us.
+fn is_exact_on_every_target(e: &ScalarExpr) -> bool {
+    match e {
+        ScalarExpr::Input(_)
+        | ScalarExpr::Const(_)
+        | ScalarExpr::Param(_)
+        | ScalarExpr::Reduced(_)
+        | ScalarExpr::Coord(_) => true,
+        ScalarExpr::Binary(op, a, b) => {
+            op.is_int_only() && is_exact_on_every_target(a) && is_exact_on_every_target(b)
+        }
+        ScalarExpr::Select(c, a, b) => {
+            is_exact_on_every_target(c)
+                && is_exact_on_every_target(a)
+                && is_exact_on_every_target(b)
+        }
+        _ => false,
+    }
+}
+
 /// Conservative max-ULP bound over the lowered body — a *declared upper bound*,
 /// the sum of the **vendor-approximate** ops' errors (transcendentals ~2 ulp,
 /// `powf` 4, `logf` 1, the hand-rolled `Sigmoid`/`Silu`/`Gelu` composites a bit
@@ -1346,8 +1373,30 @@ pub fn ulp_bound(e: &ScalarExpr, key: &AccuracyKey) -> f64 {
     // Declining is the honest answer and the mechanism already exists:
     // `required_fidelity` returns `None` on a non-finite bound, so an unknown
     // target yields no fidelity claim rather than a borrowed one.
+    // ⚠️ EXCEPT where exactness is BY CONSTRUCTION rather than by measurement.
+    //
+    // An expression built entirely from [`BinaryOp::is_int_only`] operators —
+    // the bitwise and logical ops — has **no rounding step on any hardware**.
+    // Its zero is not a claim about CUDA, so declining it hands a non-CUDA
+    // backend a weaker contract than it can prove, while nothing wrong is ever
+    // emitted and nobody files anything.
+    //
+    // Raised by baracuda 2026-09-06, applying this workspace's own rule to it:
+    // **a prescription that errs conservatively has no complainant.** They found
+    // it only because a signature change forced them to read this function.
+    //
+    // ⚠️ **The test is `is_int_only`, NOT `ulp_sum(e) == 0`, and the difference
+    // is the whole point.** `unary_ulp` rates `Sqrt`/`Recip`/`Floor` at 0.0 and
+    // `binary_ulp` rates `Copysign`/`Nextafter`/`FmaxIeee` at 0.0 — **those
+    // zeros are IEEE claims about a target's float unit**, exactly the kind of
+    // borrowed assertion the namespace gate exists to refuse. Keying on the
+    // summed rating would re-admit every one of them.
     if key.target.namespace() != "cuda" {
-        return f64::INFINITY;
+        return if is_exact_on_every_target(e) {
+            0.0
+        } else {
+            f64::INFINITY
+        };
     }
     ulp_sum(e)
 }
