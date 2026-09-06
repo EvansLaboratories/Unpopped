@@ -311,6 +311,50 @@ and is no longer.
    table of scalars would encode the error one level deeper rather than fix it.
    **Check the dimensionality before collecting values.**
 
+   ### ⚠️ MEASURED 2026-09-06: THE SHAPE IS WRONG, AND BY THREE AXES NOT ONE
+
+   **vulkane's hypothesis is confirmed, and it understated it.** The whole ULP
+   path is keyed on the **operator alone**:
+
+   ```text
+   contract.rs:1296  pub fn ulp_bound(e: &ScalarExpr) -> f64      expression only
+   contract.rs:1332  fn unary_ulp(op: UnaryOp)  -> f64            op only
+   contract.rs:1389  fn binary_ulp(op: BinaryOp) -> f64           op only
+   ```
+
+   **No dtype. No target. No precision mode.** They hypothesised a missing
+   precision-mode axis; there are **three** missing:
+
+   - **dtype** — `exp` at `f32` and at `f16` are different functions with
+     different accuracy, and get the same number here.
+   - **target** — the KNOWN LIMIT above, now located: this is *where* the CUDA
+     table is baked in, because there is no parameter for anything else.
+   - **precision mode** — vulkane's `RelaxedPrecision` point.
+
+   **One half of their concern does NOT apply, and it is worth saying so:**
+   *correctly rounded* **is** expressible — it is `0.0`, and **twelve ops already
+   use it** (`Neg`, `Abs`, `Sqr`, `Sqrt`, `Recip`, `Relu`, `Floor`, `Ceil`,
+   `Round`, `Sign`, `Step`, `Trunc`). The table is not missing a way to say "no
+   bound"; it is missing the axes that decide *when* that value is true.
+
+   ### The concrete bite, since a dimensionality argument is easy to wave through
+
+   **`Sqrt` is rated `0.0` — asserted correctly-rounded.** `arith_steps` counts a
+   unary as 1, so `sqrt(x)` gets `rel = (1 + 2·0)·unit_roundoff` = **one unit
+   roundoff**, `2^-24 ≈ 5.96e-8` at `f32`.
+
+   ⚠️ **Vulkan's `sqrt` under `RelaxedPrecision` is not correctly rounded.** A
+   3-ULP result is `3·2^-23` ≈ `3.6e-7` — **about six times the band it is
+   compared against.** **A conforming implementation fails, and the rating that
+   fails it is the one asserting the op is EXACT.**
+
+   ### So: do not collect values
+
+   ⚠️ **The key is undecided, and a table with the wrong number of axes cannot be
+   fixed by better entries.** Deciding whether the key is `(op)`, `(op, dtype)`,
+   `(op, dtype, target)` or `(op, dtype, target, mode)` is the work; filling it is
+   the expensive half and is wasted until then.
+
    **Measuring per-op ULP on real hardware is possible and is a DIFFERENT CLAIM:**
    it yields *this device and this driver*, not *Vulkan's requirement*, which is
    what a conformance band needs. Offered by vulkane at a cost of hours; **not
