@@ -1158,13 +1158,10 @@ fn encode_complex(re: f64, im: f64, out: ElementKind) -> u128 {
 /// measured. `f32`/`f64` results already round-trip their own storage exactly,
 /// so widening this would change behaviour with nothing to fix.
 fn raw_sign_masks(dt: ElementKind) -> Option<(u128, u128)> {
-    match dt {
-        ElementKind::F16 | ElementKind::Bf16 | ElementKind::Fp8E4M3FN | ElementKind::Fp8E5M2 => {
-            let sign = 1u128 << (8 * elem_size(dt) as u32 - 1);
-            Some((sign, sign - 1))
-        }
-        _ => None,
-    }
+    // Delegates. This derived the mask from `elem_size` while `unpopped-cpu-c`
+    // derived it from a ctype string — two independent derivations of one
+    // normative fact, agreeing by construction until one of them stopped.
+    crate::ir::narrow_sign_masks(dt)
 }
 
 fn raw_to_f64(bits: u128, dt: ElementKind) -> f64 {

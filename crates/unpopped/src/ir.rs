@@ -714,6 +714,51 @@ pub fn is_bit_move_reduce(op: ReduceOp, e: &ScalarExpr) -> bool {
     matches!(op, ReduceOp::Max | ReduceOp::Min) && is_bit_or_sign_move(e)
 }
 
+/// The sign and magnitude bit masks for a narrow float's **raw storage word**,
+/// or `None` for a dtype the move path does not serve.
+///
+/// # ⚠️ ROUTING A MOVE IS NECESSARY AND NOT SUFFICIENT — YOU MUST ALSO SPELL IT
+///
+/// [`is_bit_or_sign_move`] and [`is_bit_move_fold_output`] answer *"is the output
+/// a moved operand?"* **They say nothing about how an emitter SPELLS the move, and
+/// the native narrow operators destroy exactly the bits the predicate exists to
+/// protect.**
+///
+/// **Measured on sm_89 by baracuda** — REPORTED here; this workspace has no CUDA
+/// hardware and did not reproduce it:
+///
+/// ```text
+/// -bf16(0x7F81)         = 0x7FFF     want 0xFF81
+/// __habs(bf16 0x7F81)   = 0x7FFF     want 0x7F81
+/// -f16(0x7C01)          = 0x7FFF     want 0xFC01
+/// __habs(f16 0x7C01)    = 0x7FFF     want 0x7C01
+/// ```
+///
+/// ⚠️ **So a correctly-routed, correctly-gated kernel that emits `(-red0)` is
+/// NON-CONFORMING.** baracuda shipped exactly that, and separately found
+/// `reduce_max(abs(x))` — how a quantisation scale is computed, not a corner —
+/// emitting `fabsf` over a storage word after routing narrow.
+///
+/// **Every move op inside the element expression or the epilogue needs a raw-bit
+/// spelling.** `unpopped-cpu-c` emits `(ct)((x) ^ sign)` and `(ct)((x) & mag)`.
+///
+/// # Why a function rather than a sentence
+///
+/// The mask is a normative fact — **which bit is the sign for this dtype** — and
+/// by 2026-09-05 it was already derived independently in two places here:
+/// `unpopped-cpu-c` keyed off a **ctype string**, the oracle off an **element
+/// width**. They agreed, and a third consumer writing a fourth derivation is how
+/// they stop agreeing. **A second copy of a normative rule is the defect this
+/// workspace spent the day removing; this is the single source.**
+#[must_use]
+pub fn narrow_sign_masks(dt: ElementKind) -> Option<(u128, u128)> {
+    match dt {
+        ElementKind::Fp8E4M3FN | ElementKind::Fp8E5M2 => Some((0x80, 0x7F)),
+        ElementKind::F16 | ElementKind::Bf16 => Some((0x8000, 0x7FFF)),
+        _ => None,
+    }
+}
+
 /// Whether a reduction's **observable output** is bit-preserved: the fold moves
 /// bits AND every transformation between the fold and the output moves them too.
 ///

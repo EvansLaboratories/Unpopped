@@ -497,12 +497,14 @@ fn cpu_binary(
 /// Derived from the storage type rather than hardcoded: `0x80` is right for an
 /// 8-bit element and silently wrong for a 16-bit one, and this backend declines
 /// `f16`/`bf16` today only for want of a codec.
-fn sign_masks(dtype: ElementKind) -> Option<(&'static str, &'static str, &'static str)> {
-    match scalar_ctype(dtype) {
-        Some(ct @ "unsigned char") => Some((ct, "0x80u", "0x7Fu")),
-        Some(ct @ "unsigned short") => Some((ct, "0x8000u", "0x7FFFu")),
-        _ => None,
-    }
+fn sign_masks(dtype: ElementKind) -> Option<(&'static str, String, String)> {
+    // The MASK VALUES come from core. This used to key off the ctype string
+    // while `oracle::raw_sign_masks` keyed off an element width — two
+    // derivations of one normative fact, agreeing until one of them stopped.
+    // Only the C SPELLING is this crate's business.
+    let ct = scalar_ctype(dtype)?;
+    let (sign, mag) = unpopped::ir::narrow_sign_masks(dtype)?;
+    Some((ct, format!("0x{sign:X}u"), format!("0x{mag:X}u")))
 }
 
 /// `neg` / `abs` on the narrow-float bit-move path: a mask, not an `f32` detour.
