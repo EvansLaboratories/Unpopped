@@ -206,6 +206,45 @@ live on the side that cannot run the adopter's tests.
 
 ---
 
+## 7 · An empty fold is UNREACHABLE here, so the monoid identity is never materialised
+
+| | |
+|---|---|
+| **What we decide** | That `Max`/`Min` folds **peel the first element** rather than seeding a `±inf` identity — and that the empty fold which would break that is forbidden at the gate |
+| **Where** | `unpopped::ir::ReduceOp` doc; enforced at `unpopped::plan` `plan.rs:3399` |
+| **Status** | **MEASURED** |
+
+```rust
+assert!(2 * u32::from(pad_lo) <= span, "Window pad_lo {pad_lo} exceeds half the window span {span}");
+assert!(2 * u32::from(pad_hi) <= span, ...);
+```
+
+**Every window overlaps the input by at least one tap.** Pad taps are **SKIPPED**
+for `Max`/`Min` (*"padding never wins"*), so a fold always has ≥1 real element —
+**which is why `ReduceOp` can say *"`Max`/`Min` peel the first element, so no ±∞
+literal"*** and keep the emitted source header-light.
+
+⚠️ **A PEER EMITTER MATERIALISES THE IDENTITY AND WE DO NOT — REPORTED by
+baracuda 2026-09-06**, who carry `narrow_extreme_lit` (`F16` ±inf `0xfc00`/`0x7c00`,
+`Bf16` `0xff80`/`0x7f80`) **because an all-pad window emits the identity AS ITS
+OUTPUT** — a wrong encoding there is a wrong result, not dead initialisation.
+
+**That case is unreachable under our gate.** So the divergence is not a missing
+feature on our side; **it is that one of the two models admits a shape the other
+forbids**, and the seam question is which is right:
+
+- if the constraint is correct, a consumer permitting all-pad windows accepts
+  inputs this IR rejects, and their identity encoding is load-bearing where ours
+  would never run;
+- if it is stricter than necessary, we reject shapes a caller may legitimately
+  want, and the peel design is resting on it.
+
+⚠️ **Deliberately NOT adding an identity table to core.** ⚠️ **Encoding a constant
+for a case our own gate forbids would invite a consumer to read its presence as
+permission** — and this workspace has spent the day on artefacts whose existence
+implied more than they meant. **The `2*pad <= span` assertion is the fact; the
+identity constant would be a second, weaker statement of it.**
+
 ## What I did NOT check
 
 **State this loudly, because a seam list is the kind of document a reader widens
