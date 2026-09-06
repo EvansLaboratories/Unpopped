@@ -34,12 +34,16 @@ it inherits our reading of §6.16 without ever citing it.
 **Out-of-tree:** baracuda's CUDA emitter — **REPORTED by them and by the PM; I have
 not measured their tree.**
 
-⚠️ **`is_bit_move_reduce` has ZERO consumers, in-tree or out, as of this writing.**
-It exists because baracuda asked for the shape rather than writing a second copy of
-a normative predicate in a backend, and the KISS architect ruled the truth
-(#416: `Max`/`Min` fold → move; `Sum`/`Prod`/`Mean` → computed). **An API with no
-in-tree caller is a shape this workspace has been burned by, and it is recorded
-here rather than hidden.**
+~~**`is_bit_move_reduce` has ZERO consumers.**~~ **It has one: baracuda calls
+`is_bit_move_fold_output` at three sites, and that is built on it (REPORTED by
+them 2026-09-06).** It was uncalled for about six hours.
+
+⚠️ **The zero-consumer note was true when written and became evidence against the
+decision it should support.** The roadmap row it echoes guards against building
+for an adopter **who has not asked** — baracuda asked, and the KISS architect
+ruled the truth (#416). **A consumer taking two more rounds to arrive is not the
+same as no consumer**, and leaving the note unqualified made a correct decision
+read as the mistake it was written to avoid.
 
 ### The history is the argument for the row
 

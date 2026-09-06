@@ -1223,13 +1223,49 @@ Forcing that fix created the pattern that later answered this question.)*
   does call `lower_variants`, so the seam is wired — it is the *producers* that
   are all out of tree.
 
-  **So the next real increment is a capability-aware legality predicate** (is a
+  ⚠️ **ANSWERED 2026-09-06 — AND THE CONSUMER REFUSED THE INCREMENT THIS ROW
+  PROPOSES.** The row says to ask baracuda before building. Asked; they answered
+  from source:
+
+  - **They compute NO capability legality today.** Measured: 144 `ArchSku` uses in
+    their emitter, **0 outside tests.** Variant selection gates on plan shape only.
+  - **The requirement is DECLARED in `launch_note` prose (`B <= 1024`,
+    `k <= 1024`) and enforced by nobody in either tree.** ⚠️ **Confirmed here:
+    `k <= 1024` appears at `plan.rs:121/1656/3672/3684`, all `///`, and
+    `validate_row_sort` does not check it.** A contract stating its ABI
+    requirement is the sanctioned mechanism, so not a defect — but the bound lives
+    in a doc string on both sides.
+  - ⚠️ **They want the NUMBERS, not a verdict.** `is_block_variant_viable(plan,
+    target) -> bool` would **sit beside** their plan-shape selection rather than
+    replace it — it cannot know their dtype/monoid/layout filters — **two decision
+    points that must agree, which is the second-copy defect with extra steps.**
+    Their framing: *"you gave me the MASK VALUE, not a verdict. The value
+    collapsed four derivations; a verdict would have added a fifth opinion."*
+
+  **AND WHAT THEY WANT ALREADY SHIPPED.** `crate::capability::TargetCapabilities`
+  (`unpopped` 0.8.7, live) carries `max_threads_per_block`,
+  `max_shared_mem_per_block` — **documented as CUDA's opt-in maximum, not the
+  48 KiB default, which is the figure they named** — `warp_size`,
+  `max_shared_mem_per_sm`, register/occupancy limits, and
+  `capabilities_for(TargetId)`.
+
+  **This row closes as ANSWERED, not deferred.** The proposed increment is refused
+  by its only consumer; the increment they want was increment 1 and is live.
+  ⚠️ **Had it been built speculatively it would have been the wrong SHAPE — a
+  verdict where a constant was wanted — which is this row's own warning vindicated
+  in a direction nobody predicted.**
+
+  <details><summary>The superseded proposal, kept because the refusal is the finding</summary>
+
+  **The next real increment is a capability-aware legality predicate** (is a
   block-cooperative variant viable for this plan on this target — block size,
   shared memory, warp width), whose only consumer today is baracuda. **Not built
   speculatively:** an API with no in-tree caller is the exact shape this
   workspace keeps finding defects in, and building one *for* an adopter who has
   not asked is worse than waiting. **Ask baracuda whether they want it before
   writing it.**
+
+  </details>
 
 ---
 
