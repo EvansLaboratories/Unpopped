@@ -3544,6 +3544,75 @@ mod complex_arithmetic_tests {
 
 #[cfg(test)]
 mod tests {
+
+    /// The shared sign/magnitude masks, checked against an **independently
+    /// authored** width table rather than against themselves.
+    ///
+    /// # Why this exists
+    ///
+    /// `unpopped-cpu-c`'s emitter and this oracle both delegate to
+    /// `ir::narrow_sign_masks`. That deduplication is right — one normative fact,
+    /// one definition — but it means the emitter-vs-oracle differential
+    /// (`a_sign_edit_agrees_with_the_oracle_on_every_fp8_byte`) compares the
+    /// constant against itself. **Measured 2026-09-06: mutating the fp8 pair to
+    /// `(0x40, 0xBF)` leaves that differential GREEN.**
+    ///
+    /// The constant is in fact covered — by literal expected C text in
+    /// `narrow_float_moves_do_not_round.rs`. ⚠️ **But that coverage is a string
+    /// match in a downstream crate's test file, and nothing said it was
+    /// load-bearing.** Deleting it as redundant would silently unguard the mask.
+    ///
+    /// This derives the same fact from `elem_bits`, which is authored separately
+    /// and maintained for a different reason, so the two disagree if either
+    /// moves. **KISS-CONSUME §8.2-0001: the question is provenance, not
+    /// equality.**
+    #[test]
+    fn the_shared_sign_masks_agree_with_an_independent_width_derivation() {
+        for dt in [
+            ElementKind::Fp8E4M3FN,
+            ElementKind::Fp8E5M2,
+            ElementKind::F16,
+            ElementKind::Bf16,
+        ] {
+            let (sign, mag) = crate::ir::narrow_sign_masks(dt)
+                .unwrap_or_else(|| panic!("{dt:?} is a narrow float and must have masks"));
+
+            // Independent derivation: an IEEE-shaped float's sign is the top bit
+            // of its storage width, and its magnitude mask is everything else.
+            let bits = elem_bits(dt);
+            let want_sign = 1u128 << (bits - 1);
+            let want_mag = want_sign - 1;
+
+            assert_eq!(
+                sign, want_sign,
+                "{dt:?}: narrow_sign_masks says sign={sign:#X}, but elem_bits \
+                 says {bits} bits so the top bit is {want_sign:#X}. One of the \
+                 two tables is wrong -- this test cannot say which, only that \
+                 they no longer agree"
+            );
+            assert_eq!(
+                mag, want_mag,
+                "{dt:?}: magnitude mask {mag:#X} is not the complement of sign \
+                 {sign:#X} within {bits} bits ({want_mag:#X})"
+            );
+            assert_eq!(
+                sign | mag,
+                (1u128 << bits) - 1,
+                "{dt:?}: sign and magnitude must partition the storage width \
+                 exactly -- no bit unclaimed, none claimed twice"
+            );
+            assert_eq!(sign & mag, 0, "{dt:?}: the two masks must not overlap");
+        }
+
+        // Control: a dtype that is NOT a narrow float must decline, or the loop
+        // above is vacuous for any type someone adds to the match later.
+        assert!(
+            crate::ir::narrow_sign_masks(ElementKind::F32).is_none(),
+            "control: f32 is not a NARROW float and must decline, so this \
+             family stays the set the emitter actually mask-edits"
+        );
+    }
+
     /// Pins the module doc's coverage list to the code.
     ///
     /// The doc previously claimed `Access::Contraction` was deferred for a long

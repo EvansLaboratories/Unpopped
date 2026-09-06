@@ -1612,6 +1612,35 @@ fn the_harness_element_count_matches_the_emitter_count_unit() {
 /// **enumerated rather than sampled** — and the NaN encodings, which are the only
 /// patterns that discriminate, are 6 of 256 for e5m2 and 2 of 256 for e4m3fn. A
 /// random sample would miss them most of the time.
+///
+/// # ⚠️ What it CANNOT catch, measured rather than reasoned
+///
+/// **Both legs read the same mask constant.** `unpopped-cpu-c`'s `sign_masks`
+/// and the oracle's `raw_sign_masks` both delegate to
+/// `unpopped::ir::narrow_sign_masks`, so the pair `(0x80, 0x7F)` enters this
+/// comparison **once** and is compared against itself.
+///
+/// Measured 2026-09-06 by mutating that function to return `(0x40, 0xBF)` — a
+/// wrong but plausible pair: **this test passed.** Two tests in
+/// `narrow_float_moves_do_not_round.rs` went red, because they spell the
+/// expected C bytes (`"^ 0x80u"`, `"& 0x7Fu"`) as literal text rather than
+/// reading the function — an independently authored copy of the same fact.
+///
+/// **So the constant IS covered, and this is not the thing covering it.** The
+/// deduplication that unified the two derivations was right for correctness and
+/// it narrowed this test's population, which nothing recorded until now.
+///
+/// ⚠️ **The hazard is citation, not coverage:** this test's name says it agrees
+/// "on every fp8 byte", which reads as including the masks. A future reader
+/// removing `narrow_float_moves_do_not_round.rs` as redundant would leave the
+/// constant unguarded while this stayed green — and would have this test's name
+/// as their evidence.
+///
+/// KISS-CONSUME §8.2-0001 rules on the general form: agreement between parties
+/// excludes "shared lowering code, and two values tracing to a single authored
+/// source, because *the question is provenance, not equality*". **That clause
+/// was written about lifters; it convicts this differential, and I unified these
+/// two derivations myself the day before reading it.**
 #[test]
 fn a_sign_edit_agrees_with_the_oracle_on_every_fp8_byte() {
     let Some(cc) = find_compiler() else {
