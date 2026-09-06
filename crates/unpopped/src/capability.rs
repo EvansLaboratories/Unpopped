@@ -92,6 +92,35 @@ use unpopped_vocab::{TargetId, VecWidth};
 /// [`Self::from_queried`] — documented as the authoritative path — wherever a
 /// live device is in hand.
 ///
+/// # ⚠️ AND THESE LIMITS ARE NOT MONOTONIC IN THE ARCHITECTURE NUMBER
+///
+/// **A newer compute capability is NOT necessarily at least as capable.** Shared
+/// memory per block, from [`cuda_capabilities`]:
+///
+/// ```text
+/// sm_80   166_912
+/// sm_86   101_376
+/// sm_87   166_912
+/// sm_89   101_376   <- LOWER than sm_80 and sm_87, higher arch number
+/// sm_90   232_448
+/// ```
+///
+/// ⚠️ **Any consumer reasoning "newer architecture, so at least as much" is wrong
+/// on real hardware, and sm_89 is the counterexample sitting in the middle of the
+/// range.** baracuda hit this on-device 2026-09-06: one kernel/dtype/head_dim is
+/// unsupportable on sm_89 (needs 131840, cap 101376) and **fits on both sm_80 and
+/// sm_90.**
+///
+/// **Cross-validated:** the three rows they measured on live devices —
+/// `sm_80 166912`, `sm_89 101376`, `sm_90 232448` — **match this static table
+/// exactly.** A compile-time table and a driver query agreeing on the
+/// counterexample is the strongest check either could get.
+///
+/// **This is also why [`cuda_capabilities`] returns `None` for an unknown
+/// capability rather than the nearest lower row.** ⚠️ **A nearest-neighbour
+/// fallback silently assumes monotonicity**, and on this table it would hand
+/// `sm_89` a figure 65 KiB too large.
+///
 /// `#[non_exhaustive]`: this grows as choosers learn to use more of the machine
 /// (L2 size, memory bandwidth, tensor-core shapes), and a caller must not be
 /// broken by a field it does not read.
