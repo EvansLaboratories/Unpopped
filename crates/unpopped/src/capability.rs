@@ -345,6 +345,58 @@ mod tests {
         assert!(cuda_capabilities(8, 5).is_none(), "8.5 does not exist");
     }
 
+    /// ⚠️ The table is NOT monotonic in the architecture number, and sm_89 is the
+    /// counterexample sitting in the middle of the range.
+    ///
+    /// # Why this is a test and not a comment
+    ///
+    /// It was a comment until now — accurate, cross-validated against baracuda's
+    /// live devices, and **unenforced**. A later reader tidying these rows into
+    /// ascending order would break a real hardware fact and nothing would fire.
+    /// **A documented invariant with no detector is the shape this workspace has
+    /// spent the day removing.**
+    ///
+    /// The consequence is a wrong answer on conformant hardware, not missing
+    /// data: baracuda measured one kernel/dtype/head_dim unsupportable on sm_89
+    /// (needs 131_840) that fits on both sm_80 and sm_90.
+    #[test]
+    fn shared_memory_is_not_monotonic_in_the_architecture_number() {
+        let cap = |maj, min| {
+            cuda_capabilities(maj, min)
+                .unwrap_or_else(|| panic!("sm_{maj}{min} must be in the table"))
+                .max_shared_mem_per_block
+        };
+
+        let (sm80, sm86, sm87, sm89, sm90) =
+            (cap(8, 0), cap(8, 6), cap(8, 7), cap(8, 9), cap(9, 0));
+
+        assert!(
+            sm89 < sm80,
+            "sm_89 ({sm89}) must be BELOW sm_80 ({sm80}). This is measured \
+             hardware, not an ordering mistake — baracuda confirmed both on \
+             live devices. If this fires because the rows were sorted, the \
+             sort is the defect"
+        );
+        assert!(
+            sm89 < sm87,
+            "sm_89 ({sm89}) is also below sm_87 ({sm87}), so the dip is not a \
+             single stale row"
+        );
+        assert!(
+            sm90 > sm80 && sm86 == sm89,
+            "the surrounding shape must hold too: sm_90 ({sm90}) above sm_80 \
+             ({sm80}), and sm_86 ({sm86}) sharing sm_89's cap ({sm89})"
+        );
+
+        // The control: the table must actually DISCRIMINATE, or every assertion
+        // above is satisfied by a table of equal rows.
+        assert_ne!(
+            sm80, sm89,
+            "control: if every row were equal the comparisons above would be \
+             vacuous rather than wrong"
+        );
+    }
+
     #[test]
     fn a_cuda_target_token_resolves_and_other_namespaces_do_not() {
         let sm89 = capabilities_for(ArchSku::Sm89.into()).expect("sm89 token resolves");
