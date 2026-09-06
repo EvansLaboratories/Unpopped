@@ -101,3 +101,47 @@ fn precision_of_now_rates_an_integer_op_correctly_on_an_unmeasured_target() {
         "an unmeasured target must not downgrade a bitwise op to approximate"
     );
 }
+
+/// ⚠️ **The exception is UNREACHABLE on a measured target, so a CUDA consumer's
+/// numeric surface is untouched by it.**
+///
+/// The `is_exact_on_every_target` branch sits inside `namespace() != "cuda"`. A
+/// `cuda:` key returns `ulp_sum(e)` exactly as before. **baracuda emits for
+/// `cuda:sm89` and carries `ulp_bound`'s output into emitted FKC contracts, so
+/// "does 0.11.0 move my numbers" is a question they will have to ask** — this
+/// answers it as an assertion rather than as a sentence in a message.
+///
+/// Spread across the rating tiers deliberately: an exact op, a 1-ULP op, a 2-ULP
+/// op and a declined one. **Checking only the integer case would leave the claim
+/// resting on the one expression the exception was written for.**
+#[test]
+fn a_measured_target_is_untouched_by_the_exception() {
+    let k = cuda();
+    let u = |op| ScalarExpr::Unary(op, Box::new(input(0).0));
+
+    for (e, want, why) in [
+        (
+            bitwise(),
+            0.0,
+            "int-only: the exception's own case, on CUDA",
+        ),
+        (u(UnaryOp::Sqrt), 0.0, "float rated exact"),
+        (u(UnaryOp::Log), 1.0, "the 1-ULP tier"),
+        (u(UnaryOp::Exp), 2.0, "the 2-ULP tier"),
+    ] {
+        assert_eq!(
+            ulp_bound(&e, &k),
+            want,
+            "{why}: a CUDA key must still return the summed rating -- if this \
+             moved, the non-CUDA exception leaked into the measured path"
+        );
+    }
+
+    // Control: the same spread on an unmeasured target must NOT all be equal to
+    // the above, or this test would pass on a build where the namespace gate
+    // had been deleted entirely.
+    assert!(
+        ulp_bound(&u(UnaryOp::Exp), &non_cuda()).is_infinite(),
+        "control: the gate still exists and still declines an inexact op"
+    );
+}
