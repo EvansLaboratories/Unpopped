@@ -62,6 +62,36 @@ use unpopped_vocab::{TargetId, VecWidth};
 
 /// The resource limits a schedule chooser needs, for one target.
 ///
+/// # ⚠️ THESE ARE TARGET PROPERTIES. A LAUNCHER NEEDS THE DEVICE'S OWN ANSWER.
+///
+/// Every field here is a **static property of a compute capability, known at EMIT
+/// time**. That is the right thing for deciding **what to OFFER**: *should this
+/// variant be emitted for this target at all?*
+///
+/// ⚠️ **It is the wrong thing for deciding what to RUN.** A launcher executes on a
+/// specific device, after compilation, and must ask that device — on CUDA,
+/// `cudaDeviceGetAttribute(cudaDevAttrMaxSharedMemoryPerBlockOptin, dev)` rather
+/// than a row from this table. **A static figure baked into a launcher asserts a
+/// fact about the target the code was BUILT for, not the device it is RUNNING
+/// on.**
+///
+/// **The two coincide in the normal case, which is exactly why this class of bug
+/// survives** — the substitution looks like an obvious cleanup and the field name
+/// invites it. **baracuda talked themselves out of it while adopting 0.8.7 and
+/// asked for this paragraph** (2026-09-06); they keep a runtime
+/// `dynamic_smem_fits` in CUDA C and use this table only for emit-time offering.
+///
+/// **And a per-target table structurally CANNOT express the divergent case.**
+/// vulkane measured `maxVectorComponents` **absent** on an integrated Radeon and
+/// **1024** on an RTX 4070 — **one host, two answers.** A per-target row has
+/// nowhere to put that, and should not try; a per-device query cannot be
+/// evaluated at emit time, and should not try.
+///
+/// **The seam: the emitter decides what to OFFER, the launcher decides what to
+/// RUN, and the same number means different things on the two sides of it.** Use
+/// [`Self::from_queried`] — documented as the authoritative path — wherever a
+/// live device is in hand.
+///
 /// `#[non_exhaustive]`: this grows as choosers learn to use more of the machine
 /// (L2 size, memory bandwidth, tensor-core shapes), and a caller must not be
 /// broken by a field it does not read.
