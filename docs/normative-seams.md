@@ -206,44 +206,63 @@ live on the side that cannot run the adopter's tests.
 
 ---
 
-## 7 · An empty fold is UNREACHABLE here, so the monoid identity is never materialised
+## 7 · `2*pad <= span` is a CROSS-EMITTER contract, not an internal validation
 
 | | |
 |---|---|
-| **What we decide** | That `Max`/`Min` folds **peel the first element** rather than seeding a `±inf` identity — and that the empty fold which would break that is forbidden at the gate |
-| **Where** | `unpopped::ir::ReduceOp` doc; enforced at `unpopped::plan` `plan.rs:3399` |
-| **Status** | **MEASURED** |
+| **What we decide** | That every window overlaps the input by ≥1 tap — so `Max`/`Min` folds **peel the first element** and no `±inf` identity is ever materialised |
+| **Where** | `unpopped::plan` `plan.rs:3399`/`3405`; `ReduceOp`'s doc states the consequence |
+| **Status** | **MEASURED**, here and independently by baracuda |
 
 ```rust
 assert!(2 * u32::from(pad_lo) <= span, "Window pad_lo {pad_lo} exceeds half the window span {span}");
-assert!(2 * u32::from(pad_hi) <= span, ...);
 ```
 
-**Every window overlaps the input by at least one tap.** Pad taps are **SKIPPED**
-for `Max`/`Min` (*"padding never wins"*), so a fold always has ≥1 real element —
-**which is why `ReduceOp` can say *"`Max`/`Min` peel the first element, so no ±∞
-literal"*** and keep the emitted source header-light.
+Pad taps are **SKIPPED** for `Max`/`Min` (*"padding never wins"*), so this
+assertion is what guarantees a fold always has a real element — **the peel is not
+an optimisation, it rests on this.**
 
-⚠️ **A PEER EMITTER MATERIALISES THE IDENTITY AND WE DO NOT — REPORTED by
-baracuda 2026-09-06**, who carry `narrow_extreme_lit` (`F16` ±inf `0xfc00`/`0x7c00`,
-`Bf16` `0xff80`/`0x7f80`) **because an all-pad window emits the identity AS ITS
-OUTPUT** — a wrong encoding there is a wrong result, not dead initialisation.
+### ⚠️ I FIRST WROTE THIS ROW AS A DIVERGENCE. THERE IS NO DIVERGENCE.
 
-**That case is unreachable under our gate.** So the divergence is not a missing
-feature on our side; **it is that one of the two models admits a shape the other
-forbids**, and the seam question is which is right:
+**The first version said one of two models admits a shape the other forbids, and
+offered two horns.** ⚠️ **Both horns assumed two independent gates. There is ONE,
+and it is in the crate baracuda pins — so it governs their CUDA emitter too.**
 
-- if the constraint is correct, a consumer permitting all-pad windows accepts
-  inputs this IR rejects, and their identity encoding is load-bearing where ours
-  would never run;
-- if it is stricter than necessary, we reject shapes a caller may legitimately
-  want, and the peel design is resting on it.
+**They measured it rather than reading it:** `window_simple(size=3, pad_lo=3)`
+panics on this assertion; a legal shape builds (their control). **Their all-pad
+branch is unreachable, exactly as ours is.**
 
-⚠️ **Deliberately NOT adding an identity table to core.** ⚠️ **Encoding a constant
-for a case our own gate forbids would invite a consumer to read its presence as
-permission** — and this workspace has spent the day on artefacts whose existence
-implied more than they meant. **The `2*pad <= span` assertion is the fact; the
-identity constant would be a second, weaker statement of it.**
+**And their `narrow_extreme_lit` was never an all-pad guard** — it is a **type**
+requirement: the literal initialises an `{acc}`-typed register, and the generic
+`scan_identity` yields a `float` ±inf bit-cast, wrong once `acc` is `__half`.
+**The code was right and the stated reason was wrong**, in a comment they had
+written hours after relaying that exact rule to three lanes.
+
+⚠️ **My error here is the one worth keeping: I built a two-horned seam question
+out of a peer's stated REASON without checking whether the two systems were
+actually independent.** **They share a dependency — mine — and one grep of my own
+`Cargo.toml` consumers would have shown it.**
+
+### The coupling, which is the real content
+
+**Relaxing `2*pad <= span` un-deadens code in a repository this one cannot see.**
+⚠️ **Nothing in baracuda's tests would notice their dead arm going live**, and
+until 2026-09-06 **this gate had no test on our side either** — a relaxation was a
+one-line edit with no signal anywhere.
+
+**Now pinned:** `the_window_pad_gate_is_a_cross_emitter_contract.rs`, with a
+control so the `should_panic` cannot pass on an unrelated assertion, and a header
+naming who goes live if it is relaxed. **Their standing ask: ping in the same
+window as the change, not after.**
+
+**Still deliberately NOT in core: an identity table.** Encoding a constant for a
+case the gate forbids would invite a consumer to read its presence as permission.
+⚠️ **And the argument got stronger, not weaker:** the consumer being protected is
+baracuda, and **they had already made the error the constant would have licensed
+— not by reading a table of ours, but by writing their own and justifying it with
+a shape this gate forbids.** **The artefact would not have created the
+misconception; it would have CONFIRMED one already held**, which is the more
+dangerous case.
 
 ## What I did NOT check
 
