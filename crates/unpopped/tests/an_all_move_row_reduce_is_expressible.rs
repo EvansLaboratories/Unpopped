@@ -169,3 +169,50 @@ fn the_row_reduce_predicate_traces_every_stage() {
          reduction in it"
     );
 }
+
+/// ⚠️ **The prescription this module's field table used to give was WRONG for
+/// stages after the first, and wrong in the direction nobody audits.**
+///
+/// It said: `Access::RowReduce  is_bit_move_reduce(stage.op, &stage.pre)` per
+/// stage. But `is_bit_move_reduce` runs the leaf policy `false`, so a stage whose
+/// `pre` references an earlier `Reduced(_)` scores FALSE — and a legitimately
+/// all-move multi-stage RowReduce is classified computed.
+///
+/// **It fails SAFE — quieting where it could have preserved — which is why it
+/// could sit in a doc block for months.** A consumer following it emits
+/// conforming-but-pessimised code and has no symptom to report.
+///
+/// This pins the difference so the prescription cannot silently come back.
+#[test]
+fn the_old_per_stage_prescription_disagrees_with_the_shape_predicate() {
+    #[allow(deprecated)]
+    use unpopped::ir::is_bit_move_reduce;
+    use unpopped::ir::{ReduceStage, is_bit_move_row_reduce_output};
+
+    // Stage 1 refers to stage 0's result — the ordinary multi-stage shape.
+    let stage0 = ReduceStage {
+        pre: input(0).0,
+        op: ReduceOp::Max,
+    };
+    let stage1 = ReduceStage {
+        pre: reduced(0).unary(UnaryOp::Abs).0,
+        op: ReduceOp::Min,
+    };
+
+    #[allow(deprecated)]
+    let per_stage_says =
+        is_bit_move_reduce(stage0.op, &stage0.pre) && is_bit_move_reduce(stage1.op, &stage1.pre);
+
+    let shape_says = is_bit_move_row_reduce_output(&[stage0, stage1], &reduced(0).0);
+
+    assert!(
+        shape_says,
+        "every fold is Max/Min and every transformation is a move, so \
+         §6.16-0011 governs this as a move"
+    );
+    assert!(
+        !per_stage_says,
+        "the OLD prescription must disagree here -- if it ever agrees, this \
+         test has stopped measuring the hazard it was written for"
+    );
+}

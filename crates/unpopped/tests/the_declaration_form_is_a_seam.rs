@@ -191,6 +191,11 @@ fn the_move_predicate_cannot_see_a_reduction_fold() {
 /// exists — `is_bit_or_sign_move` alone cannot, because `pre` is `Input(0)` for
 /// every fold (KISS #416).
 #[test]
+// Exercises the deprecated `is_bit_move_reduce` ON PURPOSE: a deprecation is a
+// routing change, not a behaviour change, and the predicate must keep answering
+// correctly for as long as it is exported. Scoped to this fn rather than the
+// file so an accidental new use elsewhere still warns.
+#[allow(deprecated)]
 fn the_reduce_predicate_separates_a_max_fold_from_a_sum_fold() {
     use unpopped::ir::{ReduceOp, input, is_bit_move_reduce, is_bit_or_sign_move};
 
@@ -237,6 +242,11 @@ fn the_reduce_predicate_separates_a_max_fold_from_a_sum_fold() {
 /// **There is no single field that is safe across both**, which is why
 /// `is_bit_move_reduce` takes the fold explicitly.
 #[test]
+// Exercises the deprecated `is_bit_move_reduce` ON PURPOSE: a deprecation is a
+// routing change, not a behaviour change, and the predicate must keep answering
+// correctly for as long as it is exported. Scoped to this fn rather than the
+// file so an accidental new use elsewhere still warns.
+#[allow(deprecated)]
 fn the_element_expression_lives_in_a_different_field_per_access_shape() {
     use unpopped::ir::{OpDef, ReduceOp, input, is_bit_move_reduce, is_bit_or_sign_move};
     use unpopped_vocab::ElementKind;

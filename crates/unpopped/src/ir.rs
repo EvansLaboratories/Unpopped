@@ -608,9 +608,19 @@ pub fn is_bit_move(e: &ScalarExpr) -> bool {
 /// element expression with its fold and use [`is_bit_move_reduce`]:
 ///
 /// ```text
-/// Access::Reduction   is_bit_move_reduce(access.op,      plan.body)
-/// Access::RowReduce   is_bit_move_reduce(stage.op,       &stage.pre)   per stage
+/// Access::Reduction   is_bit_move_fold_output(access.op, plan.body, &access.post)
+/// Access::RowReduce   is_bit_move_row_reduce_output(&stages, &epilogue)
 /// ```
+///
+/// ⚠️ **This table used to prescribe `is_bit_move_reduce(stage.op, &stage.pre)`
+/// per stage for `RowReduce`, and that was WRONG for every stage after the
+/// first.** That predicate runs the leaf policy `false`, so a stage whose `pre`
+/// references an earlier `Reduced(_)` scores false, and a legitimately all-move
+/// multi-stage row-reduction is classified **computed**. **It fails SAFE —
+/// quieting where it could have preserved — which is exactly why it sat here
+/// unchallenged: a consumer following it emits conforming-but-pessimised code
+/// and has no symptom to report.** Pinned by
+/// `the_old_per_stage_prescription_disagrees_with_the_shape_predicate`.
 ///
 /// Without the fold, `Input(0)` reads TRUE for a **sum**-fold exactly as for a
 /// **max**-fold, and routing on that sends an arithmetic reduction down a
@@ -710,7 +720,21 @@ fn moves(e: &ScalarExpr, reduced_is_leaf: bool) -> bool {
 /// `false`. That is the **conservative** direction: an unclassified fold keeps
 /// its rounding step rather than silently acquiring a bit-move path.
 #[must_use]
+#[deprecated(
+    since = "0.10.0",
+    note = "answers a FOLD question for shapes that may have several folds. Use \n            `is_bit_move_fold_output` (Access::Reduction) or \n            `is_bit_move_row_reduce_output` (Access::RowReduce), whose signatures \n            cannot be satisfied without naming the whole input->output path"
+)]
 pub fn is_bit_move_reduce(op: ReduceOp, e: &ScalarExpr) -> bool {
+    matches!(op, ReduceOp::Max | ReduceOp::Min) && is_bit_or_sign_move(e)
+}
+
+/// The undeprecated internal twin of [`is_bit_move_reduce`].
+///
+/// Exists so the crate's own callers do not have to `allow(deprecated)` — an
+/// `allow` at a call site silences the warning for everything under it, so
+/// routing internal use through a private fn keeps the deprecation meaning
+/// exactly what it says: **do not ask the fold question without the path.**
+fn bit_move_reduce(op: ReduceOp, e: &ScalarExpr) -> bool {
     matches!(op, ReduceOp::Max | ReduceOp::Min) && is_bit_or_sign_move(e)
 }
 
@@ -840,7 +864,7 @@ pub fn narrow_sign_masks(dt: ElementKind) -> Option<(u128, u128)> {
 /// there is no way to ask this question and forget the fold.
 #[must_use]
 pub fn is_bit_move_fold_output(fold: ReduceOp, element: &ScalarExpr, post: &ScalarExpr) -> bool {
-    is_bit_move_reduce(fold, element) && moves(post, true)
+    bit_move_reduce(fold, element) && moves(post, true)
 }
 
 /// The same §6.16-0011 question for the **`Access::RowReduce`** shape, whose
