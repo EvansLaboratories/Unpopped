@@ -1285,7 +1285,11 @@ fn count_flops(e: &ScalarExpr) -> u32 {
 /// safe, under-stating is not* — but that rule is about the bound versus the
 /// kernel, and this is a different axis. Vulkan's spec-guaranteed accuracy for
 /// several transcendentals is **looser** than CUDA's (`exp` is 3 ULP against
-/// CUDA `expf`'s 2), so on a Vulkan target CUDA's tier is an **over-claim of
+/// CUDA `expf`'s 2 — ⚠️ **UNSOURCED: no citation was ever recorded for that
+/// figure, and vulkane measured 2026-09-06 that `vk.xml` carries NO accuracy
+/// data at all, so it cannot be checked from the registry. Treat the NUMBER as
+/// unverified; the DIRECTION — Vulkan looser than CUDA — is what the limit rests
+/// on**), so on a Vulkan target CUDA's tier is an **over-claim of
 /// precision** — the contract promises tighter than the target guarantees, and
 /// `required_fidelity` compares against a band too tight to be met. Both fail in
 /// the unsafe direction.

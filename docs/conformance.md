@@ -343,9 +343,32 @@ and is no longer.
    unary as 1, so `sqrt(x)` gets `rel = (1 + 2·0)·unit_roundoff` = **one unit
    roundoff**, `2^-24 ≈ 5.96e-8` at `f32`.
 
-   ⚠️ **Vulkan's `sqrt` under `RelaxedPrecision` is not correctly rounded.** A
-   3-ULP result is `3·2^-23` ≈ `3.6e-7` — **about six times the band it is
-   compared against.** **A conforming implementation fails, and the rating that
+   ⚠️ **AND THE `3 ULP` FIGURE THAT WAS HERE WAS FABRICATED — MINE, 2026-09-06.**
+   This said *"Vulkan's `sqrt` under `RelaxedPrecision` is not correctly rounded;
+   a 3-ULP result is ≈ 3.6e-7, about six times the band."* **I took the `exp`
+   figure from two paragraphs up and applied it to `sqrt`, a different op I had no
+   number for.** A specific quantity, for the wrong function, in a document whose
+   subject is being precise.
+
+   **The argument does not need it, and is stronger stated without:** `Sqrt` is
+   rated `0.0` **unconditionally — on every target, at every dtype, in every
+   precision mode — and the table has no axis on which that could be
+   conditional.** **If any target's `sqrt` is not correctly rounded, a conforming
+   implementation is compared against a band of one unit roundoff and fails.**
+
+   ⚠️ **Whether Vulkan's is, NOBODY IN THIS PORTFOLIO CAN SAY.** vulkane measured
+   at `c1ce1af`: `vk.xml` — the registry every Vulkan implementation is generated
+   from — carries **zero** hits for `ulp`, `ULP`, `accuracy` or
+   `RelaxedPrecision`, and its four `precision` hits are all subpixel/subtexel/
+   mipmap **bit counts**. Control: `maxImageDimension2D` = 1. **The requirements
+   live in the spec's prose appendix, which neither of us holds.**
+
+   **That absence is itself the strongest evidence for the key argument:** ⚠️ **the
+   `mode` axis is not merely missing from this table — it is UNRECOVERABLE from
+   the artifact a `vulkan:` target would be generated from.** **A table keyed on
+   `(op)` cannot be repaired into a Vulkan-correct one by anyone reading `vk.xml`,
+   however carefully; whoever fills it is reading a prose appendix by hand.**
+   **That is a cost fact, and it belongs in the decision about the key.** **A conforming implementation fails, and the rating that
    fails it is the one asserting the op is EXACT.**
 
    ### So: do not collect values
