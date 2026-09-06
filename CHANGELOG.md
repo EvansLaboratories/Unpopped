@@ -17,6 +17,45 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ## Unreleased
 
+### `unpopped` — ⚠️ a BEHAVIOUR change, recorded the moment it landed
+
+**Published 0.10.0 and the tree both say `0.10.0`. This must NOT ship as
+`0.10.1`** — `^0.10.0` accepts a patch and this changes emitted contract text.
+**Requires `0.11.0`.**
+
+- **`ulp_bound` no longer declines an expression whose exactness is by
+  construction.** An expression built entirely from `BinaryOp::is_int_only`
+  operators — the bitwise and logical ops — has no rounding step on any
+  hardware, so a non-CUDA target now gets `0.0` where it previously got
+  `INFINITY`, and `precision_of` rates it `("correctly_rounded", Some(0))`
+  instead of `("approximate", None)`.
+
+  ⚠️ **The test is `is_int_only`, NOT `ulp_sum(e) == 0`.** `unary_ulp` rates
+  `Sqrt`/`Recip`/`Floor` at 0.0 and `binary_ulp` rates
+  `Copysign`/`Nextafter`/`FmaxIeee` at 0.0 — **those zeros are IEEE claims about
+  a target's float unit**, exactly the borrowed assertion the namespace gate
+  exists to refuse. Keying on the summed rating would re-admit every one of them,
+  and a test asserts it does not.
+
+  **Found by baracuda while adopting 0.10.0**, applying this repo's own rule: *a
+  prescription that errs conservatively has no complainant.* A non-CUDA backend
+  was getting a weaker contract than it could prove, emitting nothing wrong, and
+  had nothing to file. **They saw it only because a signature change forced them
+  to read the function.**
+
+## Released
+
+## 2026-09-06 — `unpopped-vocab 0.4.0` · `unpopped 0.10.0` · `unpopped-cpu-c 0.9.0` · `unpopped-slang 0.7.0`
+
+⚠️ **Everything below shipped. It sat under "Unreleased" for forty minutes after
+being published** — caught while adding the next entry, which is the only reason
+it was caught at all. **A changelog whose "Unreleased" section describes released
+work is worse than no changelog: it is the same object as a version number that
+no longer matches its code, one level up.**
+
+**Published and verified against the served tarballs; `unpopped-vocab 0.4.0` and
+`unpopped 0.10.0` src trees are byte-identical to the merge commit.**
+
 **Version cascade applied 2026-09-06 on the PM's ruling: `unpopped-vocab 0.4.0`,
 never `0.3.3`.**
 
@@ -56,9 +95,9 @@ mention E4M3, against a control of 5 mentioning E5M2 — so their two E4M3 call
 sites are unaffected.
 
 
-### `unpopped-vocab` — ⚠️ published 0.3.2 and the tree BOTH say `0.3.2`, with different behaviour
+### `unpopped-vocab` 0.3.2 → 0.4.0 — the divergence that forced this release
 
-**Two behaviour changes. Neither may ship as `0.3.3`.** Published
+**Two behaviour changes. Neither could ship as `0.3.3`.** The then-published
 `unpopped 0.9.0` requires `unpopped-vocab = "0.3.2"`, a caret range that
 **accepts 0.3.3** — so a patch bump reaches every existing consumer on their next
 `cargo update`, with no compile error and no version signal.
@@ -78,7 +117,7 @@ sites are unaffected.
   preference meaning. ⚠️ **Emitted dispatch tables can differ for tied cells**,
   which is generated code a consumer has committed.
 
-### `unpopped` — published 0.9.0 and the tree BOTH say `0.9.0`
+### `unpopped` 0.9.0 → 0.10.0
 
 - **Added `ir::is_bit_move_row_reduce_output(stages, epilogue)`** — the
   §6.16-0011 classification for the `Access::RowReduce` shape, which had no
@@ -91,14 +130,13 @@ sites are unaffected.
   CONSERVATIVELY, so a consumer following it emitted pessimised-but-conforming
   code and had no symptom to report.**
 
-### `unpopped-cpu-c`
+### `unpopped-cpu-c` 0.8.0 → 0.9.0 · `unpopped-slang` 0.6.0 → 0.7.0
 
 - **Published 0.8.0 source is IDENTICAL to the tree.** No bump needed on its own
   account; it moves only if its `unpopped` requirement does.
 
 ---
 
-## Released
 
 Versions at or before `unpopped 0.9.0` / `unpopped-cpu-c 0.8.0` /
 `unpopped-vocab 0.3.2` predate this file. **Their contents were verified against
