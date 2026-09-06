@@ -608,9 +608,20 @@ pub fn is_bit_move(e: &ScalarExpr) -> bool {
 /// element expression with its fold and use [`is_bit_move_reduce`]:
 ///
 /// ```text
-/// Access::Reduction   is_bit_move_fold_output(access.op, plan.body, &access.post)
+/// Access::Reduction   is_bit_move_fold_output(access.op, plan.body,   &access.post)
+/// Access::Scan        is_bit_move_fold_output(access.op, &access.pre, &access.post)
+/// Access::Window      is_bit_move_fold_output(access.op, &access.pre, &access.post)
 /// Access::RowReduce   is_bit_move_row_reduce_output(&stages, &epilogue)
 /// ```
+///
+/// ⚠️ **All FOUR fold-shaped variants are listed because the earlier table
+/// listed TWO** — the two whose repair was in front of me — **and asserted the
+/// classification was fixed.** `Scan` and `Window` were never checked; they turn
+/// out to carry `(op, pre, post)`, mapping directly onto the single-fold helper,
+/// **but that was a fact nobody had measured when it was claimed.** Pinned by
+/// `every_fold_shape_has_a_correct_predicate_call`, which also asserts a
+/// one-stage `RowReduce` agrees with a `Reduction` where the two helpers
+/// overlap.
 ///
 /// ⚠️ **This table used to prescribe `is_bit_move_reduce(stage.op, &stage.pre)`
 /// per stage for `RowReduce`, and that was WRONG for every stage after the
