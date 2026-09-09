@@ -3838,6 +3838,33 @@ mod reduction_axes_tests {
     ///
     /// **Stated because "mutation-proven" would have been true and misleading**:
     /// the guard fires, and it is not the reason the build breaks.
+    ///
+    /// # ⚠️ THIS ROUTING HAS A SILENT OFF-SWITCH — and you may be about to use it
+    ///
+    /// **Adding `..` to the pattern below turns it off, and nothing anywhere says
+    /// so.** That is the obvious repair for someone mid-refactor who wants the
+    /// build back, and it is indistinguishable from tidying. **If you added `..`
+    /// here, you did not fix this test — you deleted it.**
+    ///
+    /// # ⚠️ AND WHAT THIS GUARD CANNOT SEE AT ALL
+    ///
+    /// It binds `accum: _`. **It pins `Contraction`'s FIELD LIST, never
+    /// `AccumSpec`'s CONTENTS** — and `AccumSpec`'s own doc forecasts growth:
+    /// *"Tensor-core/TF32 policies join as variants."*
+    ///
+    /// **Measured 2026-09-09 at `098c3847`, by adding `AccumSpec::MaxAccumulate` —
+    /// a variant that would make the `Contraction` ruling FALSE:**
+    ///
+    /// ```text
+    /// build errors   0
+    /// clippy -D      0
+    /// test failures  0        <- including this test
+    /// ```
+    ///
+    /// ⚠️ **THE MUTATION THAT IS A COMPILE ERROR IS THE ONE NOBODY MAKES BY
+    /// ACCIDENT; THE MUTATION THAT COMPILES IS THE ONE THAT SHIPS.** The Claim
+    /// Auditor's phrasing, and forcing the first told me nothing about the second
+    /// while feeling exactly like proof.
     #[test]
     fn a_contraction_cannot_express_a_non_sum_fold() {
         fn is_contraction(a: &Access) -> bool {
