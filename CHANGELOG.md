@@ -17,44 +17,75 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ## Unreleased
 
-### `unpopped` — ⚠️ a BEHAVIOUR change, recorded the moment it landed
-
-- ⚠️ **BREAKING: `VariantFidelity::ReassociatedDeterministic` renamed to
-  `DeterministicallyDivergent`**, with its definition widened to name both
-  mechanisms. The old name asserted *reassociation* for every member of the
-  class; baracuda measured a member whose reduction tree was provably unchanged
-  and whose bits differed anyway (recompute vs cache-and-reuse of an equal
-  `expf`) — 12,283,172 of 16,777,216 elements, worst 11 ULP, reproducible.
-  **One selection policy, so one variant** — a fifth with identical semantics
-  would be a distinction no consumer could act on. **The FKC determinism
-  spelling is unchanged (`same_hardware_bitwise`), asserted by
-  `the_fidelity_rename_is_wire_invisible`.**
-
-**Published 0.10.0 and the tree both say `0.10.0`. This must NOT ship as
-`0.10.1`** — `^0.10.0` accepts a patch and this changes emitted contract text.
-**Requires `0.11.0`.**
-
-- **`ulp_bound` no longer declines an expression whose exactness is by
-  construction.** An expression built entirely from `BinaryOp::is_int_only`
-  operators — the bitwise and logical ops — has no rounding step on any
-  hardware, so a non-CUDA target now gets `0.0` where it previously got
-  `INFINITY`, and `precision_of` rates it `("correctly_rounded", Some(0))`
-  instead of `("approximate", None)`.
-
-  ⚠️ **The test is `is_int_only`, NOT `ulp_sum(e) == 0`.** `unary_ulp` rates
-  `Sqrt`/`Recip`/`Floor` at 0.0 and `binary_ulp` rates
-  `Copysign`/`Nextafter`/`FmaxIeee` at 0.0 — **those zeros are IEEE claims about
-  a target's float unit**, exactly the borrowed assertion the namespace gate
-  exists to refuse. Keying on the summed rating would re-admit every one of them,
-  and a test asserts it does not.
-
-  **Found by baracuda while adopting 0.10.0**, applying this repo's own rule: *a
-  prescription that errs conservatively has no complainant.* A non-CUDA backend
-  was getting a weaker contract than it could prove, emitting nothing wrong, and
-  had nothing to file. **They saw it only because a signature change forced them
-  to read the function.**
+*Nothing. The two entries below shipped in 0.11.0.*
 
 ## Released
+
+## 2026-09-09 — `unpopped 0.11.0` · `unpopped-cpu-c 0.10.0` · `unpopped-slang 0.8.0`
+
+**Remedies issue #4 for TODAY'S INSTANCE ONLY.** ⚠️ Publishing makes published ==
+workspace **at one moment**; the member keeps evolving and the gap reopens on the
+next unpublished commit. **A green publish is not the class being closed** —
+baracuda's argument, and the portfolio gate vulkane is building is the durable
+half.
+
+### ⚠️ BREAKING — `VariantFidelity::ReassociatedDeterministic` → `DeterministicallyDivergent`
+
+The old name asserted **reassociation** for every member of the class. baracuda
+measured a member whose reduction tree was provably unchanged and whose bits
+differed anyway — cache-vs-recompute of an equal `expf`, **12,283,172 of
+16,777,216 elements, worst 11 ULP, reproducible**. The definition now names both
+mechanisms: a different operation *association*, or a different *evaluation of an
+equal expression*.
+
+**One selection policy, so one variant** — a fifth with identical semantics is a
+distinction no consumer can act on. **The FKC determinism spelling is unchanged
+(`same_hardware_bitwise`)**, asserted by `the_fidelity_rename_is_wire_invisible`,
+which pins the whole mapping because a rename breaking a *neighbour* would leave a
+single-variant assertion green.
+
+### `ulp_bound` no longer declines an expression whose exactness is by construction
+
+An expression built entirely from `BinaryOp::is_int_only` operators has no
+rounding step on any hardware, so a **non-CUDA** target now gets `0.0` where it got
+`INFINITY`, and `precision_of` rates it `("correctly_rounded", Some(0))` instead
+of `("approximate", None)`.
+
+⚠️ **Keyed on `is_int_only`, NOT on `ulp_sum(e) == 0`.** `unary_ulp` rates
+`Sqrt`/`Recip`/`Floor` at 0.0 and `binary_ulp` rates
+`Copysign`/`Nextafter`/`FmaxIeee` at 0.0 — **those zeros are IEEE claims about a
+target's float unit**, exactly the borrowed assertion the namespace gate exists to
+refuse. **A CUDA target is untouched**, asserted across four rating tiers.
+
+Found by baracuda while adopting 0.10.0, applying this repo's own rule: *a
+prescription that errs conservatively has no complainant.*
+
+### `Access::Contraction` is documented ALWAYS COMPUTED, and its premise is guarded
+
+"No predicate applies" is an answer; its absence read as an oversight. The K-fold
+is a sum over products and the variant carries **no operator field at all**.
+Guarded by an exhaustive match on `AccumSpec` — **0 exhaustive matches existed
+before, so a variant that falsifies the ruling used to compile with 0 errors, 0
+clippy warnings and 0 test failures.**
+
+### ⚠️ Why three crates and not one
+
+`unpopped-cpu-c 0.9.0` and `unpopped-slang 0.7.0` **both require `unpopped =
+"0.10.0"`** — measured from their served manifests. For a 0.x crate `^0.10.0`
+**excludes 0.11.0**, so publishing `unpopped` alone strands both emitters on the
+old line while every sibling moves. **`baracuda-cuda-emit` declares all four**, so
+it would resolve two `unpopped` versions into one graph — the two-artifacts defect
+this release exists to close.
+
+**Source of both emitters is byte-identical to their published versions; they move
+only because a dependency did.**
+
+### ⚠️ For consumers: `0.11.0` does NOT arrive on `cargo update`
+
+`^0.10.0` excludes it. **baracuda pins `unpopped = "0.10.0"` and needs a manifest
+edit** — deliberate, and the same property that makes the numeric change in the
+0.4.0 cascade impossible to take silently.
+
 
 ## 2026-09-06 — `unpopped-vocab 0.4.0` · `unpopped 0.10.0` · `unpopped-cpu-c 0.9.0` · `unpopped-slang 0.7.0`
 

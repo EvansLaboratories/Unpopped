@@ -1,6 +1,6 @@
 [package]
 name = "unpopped"
-version = "0.10.0"
+version = "0.11.0"
 description = "A vendor-neutral kernel generator: the backend-agnostic IR, plan, transform pipeline, contracts and dispatch artifacts, plus the `Backend` and `Compiler` traits a target implements. Ships a portable-C99 reference backend and a CPU oracle, so it builds and self-tests with no device, no driver, and no vendor dependency. Device backends live under their own vendor identity and depend on this crate — the CUDA emitter, its NVRTC compiler and the Fuel synthesizer live in `baracuda-cuda-emit`. Pre-1.0 and moving; pin exact versions."
 edition.workspace = true
 rust-version.workspace = true
