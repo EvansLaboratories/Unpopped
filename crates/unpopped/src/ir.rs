@@ -3905,6 +3905,72 @@ mod reduction_axes_tests {
         );
     }
 
+    /// **`AccumSpec` must stay a PRECISION policy — the `Contraction` ruling
+    /// rests on it, and today nothing anywhere would notice it changing.**
+    ///
+    /// The caller-facing table says `Access::Contraction` is ALWAYS COMPUTED.
+    /// [`a_contraction_cannot_express_a_non_sum_fold`] pins that variant's FIELD
+    /// LIST; its own doc records that it binds `accum: _` and so cannot see this
+    /// enum's CONTENTS. **This is the guard for that blind spot.**
+    ///
+    /// # Why this DETECTS rather than routes — measured, not hoped
+    ///
+    /// The sibling guard is honest that it only ROUTES: adding a field to
+    /// `Contraction` was already a compile error at three construction sites, so
+    /// the build breaks with or without it. **The mutation this enum's own doc
+    /// PROMISES is the opposite shape.** Measured at `dbb1b1dc` by adding a
+    /// second `AccumSpec` variant with this test absent:
+    ///
+    /// ```text
+    /// build errors   0
+    /// clippy -D      0
+    /// test failures  0
+    /// ```
+    ///
+    /// **Zero. `AccumSpec` is CONSTRUCTED in three places and MATCHED in none**
+    /// (control: 24 `match ` in this file, so a search for one can see them).
+    /// With this test present the same mutation yields **exactly one** error —
+    /// `E0004`, here — and nothing else. **That difference is the whole claim.**
+    ///
+    /// ⚠️ **THE MUTATION THAT IS A COMPILE ERROR IS THE ONE NOBODY MAKES BY
+    /// ACCIDENT; THE MUTATION THAT COMPILES IS THE ONE THAT SHIPS.** And this
+    /// enum forecasts precisely that one, four lines above its own variant:
+    /// *"Tensor-core/TF32 policies join as variants with honest contract flips."*
+    /// **A forecast change, with no detector, under a ruling that depends on it.**
+    ///
+    /// # ⚠️ THIS BROKE YOUR BUILD. READ THIS BEFORE ADDING AN ARM.
+    ///
+    /// It fires ONCE, at a design change — a checkpoint, not an alarm in normal
+    /// operation. Which change you are making decides the repair, and the two are
+    /// not the same size:
+    ///
+    /// - **A PRECISION policy** (TF32, tensor-core — what the doc forecasts):
+    ///   **add the arm and move on. The ruling still holds.**
+    /// - **Anything that changes the OPERATOR**: ⚠️ **the caller-facing table's
+    ///   `Access::Contraction ALWAYS COMPUTED` row is now FALSE**, and it and
+    ///   everything routing off it must change.
+    ///
+    /// **`_ => {}` is not a repair — it deletes this test**, which is the same
+    /// off-switch the sibling guard documents for its own `..`.
+    ///
+    /// `AccumSpec` is `#[non_exhaustive]`, so only an IN-CRATE match can hold
+    /// this: an integration test needs a wildcard and would keep passing silently.
+    #[test]
+    fn accumspec_is_a_precision_policy_and_never_an_operator_choice() {
+        fn is_precision_policy(a: &AccumSpec) -> bool {
+            // No `_` arm. The exhaustiveness IS the detector.
+            match a {
+                AccumSpec::WideFloat => true,
+            }
+        }
+
+        assert!(
+            is_precision_policy(&AccumSpec::WideFloat),
+            "the exhaustive match above is the assertion; this call is what keeps it \
+             compiled rather than dead"
+        );
+    }
+
     #[test]
     fn reduction_defaults_to_last_axis_empty_mask() {
         // OpDef::reduction stays the legacy last-axis default: empty mask, no
