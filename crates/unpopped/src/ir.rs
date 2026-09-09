@@ -612,7 +612,26 @@ pub fn is_bit_move(e: &ScalarExpr) -> bool {
 /// Access::Scan        is_bit_move_fold_output(access.op, &access.pre, &access.post)
 /// Access::Window      is_bit_move_fold_output(access.op, &access.pre, &access.post)
 /// Access::RowReduce   is_bit_move_row_reduce_output(&stages, &epilogue)
+/// Access::Contraction ALWAYS COMPUTED -- there is no call to make
 /// ```
+///
+/// ⚠️ **`Contraction` has a row because "no predicate applies" is an ANSWER, and
+/// its absence read as an oversight.** Raised by the Claim Auditor 2026-09-09:
+/// their derivation excludes it (`is_fold_shaped` needs `op` or `stages`, and it
+/// has neither), **and a shape a caller cannot classify from this table is
+/// exactly the failure the Scan/Window rows were added to stop.**
+///
+/// **The ruling, and it is structural rather than a policy choice:**
+/// `out[m,n] = epilogue(Σ_k lhs[m,k] · rhs[k,n])`. The K-fold is a **sum over
+/// products**, and this variant carries **no operator field at all** — `accum` is
+/// an [`AccumSpec`], an accumulation *precision* policy, not an operator choice.
+/// So under §6.16-0011, tracing inputs→output always crosses arithmetic **whatever
+/// the epilogue does**, and §6.16-0010 governs. **A `Sum` fold is computed under a
+/// pure-move post; a contraction cannot even express a non-sum fold.**
+///
+/// **Pinned by `a_contraction_cannot_express_a_non_sum_fold`**, which destructures
+/// this variant's exact field set: adding an operator field to `Contraction` fails
+/// to compile there, because it would make this ruling false.
 ///
 /// ⚠️ **All FOUR fold-shaped variants are listed because the earlier table
 /// listed TWO** — the two whose repair was in front of me — **and asserted the
@@ -3786,6 +3805,105 @@ mod view_tests {
 #[cfg(test)]
 mod reduction_axes_tests {
     use super::*;
+
+    /// ⚠️ **The `Contraction` ruling's PREMISE, pinned at COMPILE TIME.**
+    ///
+    /// The caller-facing shape table says a `Contraction` is always computed.
+    /// That holds because the variant carries **no operator field** — `accum` is
+    /// an accumulation *precision* policy, so the K-fold cannot be anything but a
+    /// sum over products, and §6.16-0011 crosses arithmetic whatever the epilogue
+    /// does.
+    ///
+    /// **The destructure below has no `..` rest pattern.** Adding a field to
+    /// `Access::Contraction` — an `op: ReduceOp` above all — **fails to compile
+    /// here**, and that is the one change which would make the ruling false.
+    ///
+    /// A doc row asserting "always computed" with nothing watching its premise is
+    /// the shape this crate spent 2026-09-06 removing: an invariant accurate,
+    /// cross-checked and unenforced. ⚠️ **`Access` is `#[non_exhaustive]`, so only
+    /// an IN-CRATE test can hold this** — an integration test needs a wildcard arm
+    /// and would keep passing silently.
+    ///
+    /// # ⚠️ What this actually buys, measured rather than claimed
+    ///
+    /// **Adding a field to `Contraction` was ALREADY a compile error without this
+    /// test.** Measured by applying the mutation: **3× `E0063` from the crate's
+    /// existing construction sites**, plus **1× `E0027`** here.
+    ///
+    /// **So this does not DETECT the change — it ROUTES the person fixing it.**
+    /// The `E0063` errors say *"missing field in initializer"* and their obvious
+    /// repair is to pass a value at each site and move on, with **nothing
+    /// anywhere saying the caller-facing table's ruling has just become false.**
+    /// `E0027` lands on a pattern whose doc says exactly that.
+    ///
+    /// **Stated because "mutation-proven" would have been true and misleading**:
+    /// the guard fires, and it is not the reason the build breaks.
+    ///
+    /// # ⚠️ THIS ROUTING HAS A SILENT OFF-SWITCH — and you may be about to use it
+    ///
+    /// **Adding `..` to the pattern below turns it off, and nothing anywhere says
+    /// so.** That is the obvious repair for someone mid-refactor who wants the
+    /// build back, and it is indistinguishable from tidying. **If you added `..`
+    /// here, you did not fix this test — you deleted it.**
+    ///
+    /// # ⚠️ AND WHAT THIS GUARD CANNOT SEE AT ALL
+    ///
+    /// It binds `accum: _`. **It pins `Contraction`'s FIELD LIST, never
+    /// `AccumSpec`'s CONTENTS** — and `AccumSpec`'s own doc forecasts growth:
+    /// *"Tensor-core/TF32 policies join as variants."*
+    ///
+    /// **Measured 2026-09-09 at `098c3847`, by adding `AccumSpec::MaxAccumulate` —
+    /// a variant that would make the `Contraction` ruling FALSE:**
+    ///
+    /// ```text
+    /// build errors   0
+    /// clippy -D      0
+    /// test failures  0        <- including this test
+    /// ```
+    ///
+    /// ⚠️ **THE MUTATION THAT IS A COMPILE ERROR IS THE ONE NOBODY MAKES BY
+    /// ACCIDENT; THE MUTATION THAT COMPILES IS THE ONE THAT SHIPS.** The Claim
+    /// Auditor's phrasing, and forcing the first told me nothing about the second
+    /// while feeling exactly like proof.
+    #[test]
+    fn a_contraction_cannot_express_a_non_sum_fold() {
+        fn is_contraction(a: &Access) -> bool {
+            match a {
+                // No `..`. The pattern IS the detector.
+                Access::Contraction {
+                    axes: _,
+                    accum: _,
+                    epilogue: _,
+                } => true,
+                _ => false,
+            }
+        }
+
+        let contraction = Access::Contraction {
+            axes: ContractionAxes::matmul(),
+            accum: AccumSpec::WideFloat,
+            epilogue: reduced(0).0,
+        };
+        assert!(
+            is_contraction(&contraction),
+            "the exhaustive destructure above is the assertion; this call is what              keeps it compiled rather than dead"
+        );
+
+        // Control: the fold-shaped variants DO carry an operator, which is the
+        // property that makes them classifiable and this one not.
+        let scan = Access::Scan {
+            op: ReduceOp::Max,
+            axis: 0,
+            reverse: false,
+            exclusive: false,
+            pre: input(0).0,
+            post: reduced(0).0,
+        };
+        assert!(
+            !is_contraction(&scan),
+            "control: `is_contraction` must DISCRIMINATE -- without this it could              answer true for everything and the destructure would still compile"
+        );
+    }
 
     #[test]
     fn reduction_defaults_to_last_axis_empty_mask() {
