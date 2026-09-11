@@ -25,21 +25,26 @@
 # of this job is one tree-sitter build; the cost of not having it was that the
 # cross-repo seam was the least-verified code in the repository.
 #
-# BOTH TRIGGERS ARE NOW EXERCISED. Measured 2026-09-11 over the most recent 100
-# of 131 runs: `pull_request` 12, `push` 88.
+# BOTH TRIGGERS DECLARED BELOW ARE EXERCISED. To get the current split rather
+# than a number that rots in this comment:
 #
-# ⚠️ THIS NOTE PREVIOUSLY READ "THE `pull_request:` TRIGGER HAS NEVER FIRED —
-# measured 2026-08-26: five runs, all `push`, and zero pull requests have ever
-# existed in this repository". That was TRUE when written and FALSE by the time
-# anyone read it again: PRs #1-#8 opened in the interim and the trigger fired
-# twelve times.
+#   gh api repos/EvansLaboratories/Unpopped/actions/workflows/verify.yml/runs --paginate --jq '.workflow_runs[].event' | sort | uniq -c
+#
+# ⚠️ THIS NOTE ONCE CARRIED A COUNT, AND THE COUNT IS WHY IT WENT WRONG. It read
+# "THE `pull_request:` TRIGGER HAS NEVER FIRED — measured 2026-08-26: five runs,
+# all `push`, and zero pull requests have ever existed in this repository."
+# True when written. False by the time anyone read it again, because PRs opened.
 #
 # ⚠️ AND IT WAS FALSIFIED BY AN EVENT THAT PRODUCES NO DIFF AT ALL. A stale
-# comment is usually broken by a commit that touches its neighbourhood; this one
-# was broken by a pull request EXISTING. No diff anywhere contained the change
-# that made it wrong, so no diff-scoped review could ever have caught it. It was
-# found only because an unrelated sweep of the CI annotation surface sent someone
-# to read this file.
+# comment is normally broken by a commit touching its neighbourhood; this one was
+# broken by a pull request EXISTING. No diff anywhere contained the change that
+# made it false, so no diff-scoped review could have caught it.
+#
+# ⚠️ THE FIRST FIX FOR IT WAS A FRESHER COUNT — "most recent 100 of 131 runs:
+# pull_request 12, push 88" — which is the same defect with a later timestamp. A
+# reviewer caught that on the PR. A COUNT CANNOT SURVIVE TREE GROWTH; A PROPERTY
+# CAN, and where a comment wants a number, the command that produces it is always
+# current while the number never is.
 #
 # The underlying rule stands and is why the note was written: A DECLARED TRIGGER
 # IS NOT AN EXERCISED ONE. Baracuda hit the neighbouring version the same day —
