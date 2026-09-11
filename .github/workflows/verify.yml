@@ -25,18 +25,26 @@
 # of this job is one tree-sitter build; the cost of not having it was that the
 # cross-repo seam was the least-verified code in the repository.
 #
-# THE `pull_request:` TRIGGER HAS NEVER FIRED. Measured 2026-08-26: five runs,
-# all `push`, and zero pull requests have ever existed in this repository — work
-# lands straight on `main` because there is no branch protection to require
-# otherwise. So one of the two triggers declared below is exercised and the other
-# is not, and a declared trigger is not an exercised one.
+# BOTH TRIGGERS ARE NOW EXERCISED. Measured 2026-09-11 over the most recent 100
+# of 131 runs: `pull_request` 12, `push` 88.
 #
-# Left in rather than removed: it costs nothing and it is what a reviewer would
-# expect to find. But it is untested, and the first PR here will be its first
-# run — which is worth knowing in advance rather than discovering when a PR
-# reports no checks at all. Baracuda hit the neighbouring version of this the
-# same day: their workflow fired only on PRs to `main`, so a stacked PR was
-# judged by nothing and looked clean.
+# ⚠️ THIS NOTE PREVIOUSLY READ "THE `pull_request:` TRIGGER HAS NEVER FIRED —
+# measured 2026-08-26: five runs, all `push`, and zero pull requests have ever
+# existed in this repository". That was TRUE when written and FALSE by the time
+# anyone read it again: PRs #1-#8 opened in the interim and the trigger fired
+# twelve times.
+#
+# ⚠️ AND IT WAS FALSIFIED BY AN EVENT THAT PRODUCES NO DIFF AT ALL. A stale
+# comment is usually broken by a commit that touches its neighbourhood; this one
+# was broken by a pull request EXISTING. No diff anywhere contained the change
+# that made it wrong, so no diff-scoped review could ever have caught it. It was
+# found only because an unrelated sweep of the CI annotation surface sent someone
+# to read this file.
+#
+# The underlying rule stands and is why the note was written: A DECLARED TRIGGER
+# IS NOT AN EXERCISED ONE. Baracuda hit the neighbouring version the same day —
+# their workflow fired only on PRs to `main`, so a stacked PR was judged by
+# nothing and looked clean.
 #
 # Naming that matters more than the coverage does. Most of what this repository
 # found on 2026-08-20 was GREEN-PASSING — a version divergence between tree and
@@ -62,7 +70,7 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: rustup show active-toolchain   # prints what rust-toolchain.toml resolved to
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -76,7 +84,7 @@ jobs:
   msrv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: msrv
         run: |
           v=$(grep -m1 '^rust-version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
@@ -99,7 +107,7 @@ jobs:
   all-features:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: rustup show active-toolchain
       - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
       - run: cargo test --workspace --all-features
