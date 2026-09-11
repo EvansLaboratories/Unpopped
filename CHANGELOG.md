@@ -17,7 +17,7 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ## Unreleased
 
-*Nothing. The two entries below shipped in 0.11.0.*
+*Nothing. Everything that was here shipped in 0.11.0, below.*
 
 ## Released
 
@@ -104,24 +104,23 @@ Guarded by an exhaustive match on `AccumSpec` — **0 exhaustive matches existed
 before, so a variant that falsifies the ruling used to compile with 0 errors, 0
 clippy warnings and 0 test failures.**
 
-### ⚠️ Why three crates and not one
+### ⚠️ Why the emitters move at all
 
 `unpopped-cpu-c 0.9.0` and `unpopped-slang 0.7.0` **both require `unpopped =
 "0.10.0"`** — measured from their served manifests. For a 0.x crate `^0.10.0`
-**excludes 0.11.0**, so publishing `unpopped` alone strands both emitters on the
-old line while every sibling moves. **`baracuda-cuda-emit` declares all four**, so
-it would resolve two `unpopped` versions into one graph — the two-artifacts defect
-this release exists to close.
+**excludes 0.11.0**, so publishing `unpopped` alone would strand both emitters on
+the old line while every sibling moved. **`baracuda-cuda-emit` declares all four**,
+so it would then resolve two `unpopped` versions into one graph — the two-artifacts
+defect this release exists to close.
 
-**Source of both emitters is byte-identical to their published versions; they move
-only because a dependency did.**
+**Source of both emitters is byte-identical to their published versions. They move
+because a dependency did, and then again because of the unification above.**
 
-### ⚠️ For consumers: `0.11.0` does NOT arrive on `cargo update`
-
-`^0.10.0` excludes it. **baracuda pins `unpopped = "0.10.0"` and needs a manifest
-edit** — deliberate, and the same property that makes the numeric change in the
-0.4.0 cascade impossible to take silently.
-
+⚠️ **This section was headed *"Why three crates and not one"* until the
+unification, and the count was correct when written.** The unification made it
+five, and **a heading carrying a stale number is the artifact a reader trusts
+most** — it was found by a reviewer's nitpick about an unrelated count two
+sections above, which is the only reason anyone re-read this one.
 
 ## 2026-09-06 — `unpopped-vocab 0.4.0` · `unpopped 0.10.0` · `unpopped-cpu-c 0.9.0` · `unpopped-slang 0.7.0`
 
