@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "unpopped-conformance"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "unpopped",
  "unpopped-cpu-c",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "unpopped-cpu-c"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "kiss-ref-core",
  "unpopped",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "unpopped-slang"
-version = "0.8.0"
+version = "0.11.0"
 dependencies = [
  "unpopped",
  "unpopped-vocab",
@@ -346,7 +346,7 @@ dependencies = [
 
 [[package]]
 name = "unpopped-vocab"
-version = "0.4.0"
+version = "0.11.0"
 dependencies = [
  "float8",
  "half",

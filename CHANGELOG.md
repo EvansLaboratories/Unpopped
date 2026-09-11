@@ -21,7 +21,43 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ## Released
 
-## 2026-09-09 — `unpopped 0.11.0` · `unpopped-cpu-c 0.10.0` · `unpopped-slang 0.8.0`
+## 2026-09-09 — everything at `0.11.0`
+
+⚠️ **`unpopped-vocab 0.4.0 → 0.11.0`, `unpopped-cpu-c 0.9.0 → 0.11.0`,
+`unpopped-slang 0.7.0 → 0.11.0`, `unpopped 0.10.0 → 0.11.0` — the skipped version
+numbers are a DELIBERATE UNIFICATION, not a mistake, and this line exists so
+nobody re-derives it later.**
+
+**CireSnave's standing rule, quoted:** *"I always want all crates within a project
+to use the same version number so developers consuming them know which go with
+which."* The exception in that rule is for a **cross-project** pair — an emitter
+crate in another project whose number answers *"which Unpopped does this work
+with"*. `unpopped-cpu-c` and `unpopped-slang` are **inside** this project, so
+their numbers answered nothing and the exception does not reach them.
+
+**`unpopped-conformance` moves too, although it is `publish = false` and has no
+external consumer.** Leaving one crate off the shared number recreates the
+question the rule exists to close.
+
+### ⚠️ For consumers: one number, written four times, and all four must move together
+
+Before this release a consumer wrote **three different numbers** for four crates.
+Now they write `0.11.0` four times.
+
+**Every current pin excludes `0.11.0`, so nothing arrives on a `cargo update`:**
+
+    ^0.10.0  = >=0.10.0, <0.11.0     excludes 0.11.0
+    ^0.4.0   = >=0.4.0,  <0.5.0      excludes 0.11.0
+    ^0.9.0   = >=0.9.0,  <0.10.0     excludes 0.11.0
+    ^0.7.0   = >=0.7.0,  <0.8.0      excludes 0.11.0
+
+⚠️ **A PARTIAL edit resolves two versions of a crate into one graph** — e.g.
+moving `unpopped` to `0.11.0` while leaving `unpopped-vocab` at `^0.4.0` gives
+`0.4.0` (the direct pin) *and* `0.11.0` (what `unpopped 0.11.0` requires), which
+are different types with the same name. **Unification makes that mistake more
+visible, not less: four identical numbers make a missed line obvious, where three
+different numbers made it look plausible.**
+
 
 **Remedies issue #4 for TODAY'S INSTANCE ONLY.** ⚠️ Publishing makes published ==
 workspace **at one moment**; the member keeps evolving and the gap reopens on the
