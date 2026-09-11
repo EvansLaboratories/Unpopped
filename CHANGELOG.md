@@ -67,18 +67,43 @@ half.
 
 ### ⚠️ BREAKING — `VariantFidelity::ReassociatedDeterministic` → `DeterministicallyDivergent`
 
-The old name asserted **reassociation** for every member of the class. baracuda
-measured a member whose reduction tree was provably unchanged and whose bits
-differed anyway — cache-vs-recompute of an equal `expf`, **12,283,172 of
-16,777,216 elements, worst 11 ULP, reproducible**. The definition now names both
-mechanisms: a different operation *association*, or a different *evaluation of an
-equal expression*.
+The old name asserted **reassociation** for every member of the class. The new one
+names the class extensionally — deterministic on fixed hardware, different bits
+from the default, undirected — and **asserts no mechanism**.
 
 **One selection policy, so one variant** — a fifth with identical semantics is a
 distinction no consumer can act on. **The FKC determinism spelling is unchanged
-(`same_hardware_bitwise`)**, asserted by `the_fidelity_rename_is_wire_invisible`,
-which pins the whole mapping because a rename breaking a *neighbour* would leave a
-single-variant assertion green.
+(`same_hardware_bitwise`)**, asserted by `the_fidelity_rename_is_wire_invisible`.
+
+> 🔴 **CORRECTION, 2026-09-11 — this entry originally cited a RETRACTED
+> measurement, and the retracted text is immutable in the published `0.11.0`.**
+>
+> It read: *"baracuda measured a member whose reduction tree was provably
+> unchanged and whose bits differed anyway — cache-vs-recompute of an equal
+> `expf`, 12,283,172 of 16,777,216 elements, worst 11 ULP, reproducible."*
+>
+> **That measurement was withdrawn on 2026-09-09 (baracuda#99, closed
+> `not_planned`), two days before `0.11.0` shipped.** It had been taken against
+> `variants[1]` — which is `prec`, declared `MorePrecise`, whose entire purpose is
+> to differ from the base. Measured against `smemrow`'s own kernel: **0 ULP over
+> 16,777,216 elements.** `smemrow` is `BitIdentical` and always was.
+>
+> ⚠️ **So the second mechanism this rename was argued from has NO measured
+> instance.** It is recorded in `backend.rs` as a hypothesis rather than an
+> observation.
+>
+> **The name is kept.** The old name asserted a mechanism for every member; this
+> one asserts none, and **removing an unsupported claim is not the same act as
+> adding one.** Reverting would re-assert *"every member is a reassociation"* on
+> evidence no better than what was withdrawn, and would cost the one adopter a
+> second 19-site rename. **If the class turns out to be reassociation-only, this
+> name is less specific than it could be, which is not wrong.**
+>
+> **How it happened:** the retraction reached baracuda's issue and two of their
+> code comments, and never reached here. ⚠️ **A RETRACTION MUST TRAVEL AS FAR AS
+> THE CLAIM DID — and a correction is *more* discoverable than the original while
+> still not travelling, because discoverability is pull and propagation is push.
+> Nobody goes looking at a number they have already written down.**
 
 ### `ulp_bound` no longer declines an expression whose exactness is by construction
 
