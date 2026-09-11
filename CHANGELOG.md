@@ -17,44 +17,110 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ## Unreleased
 
-### `unpopped` — ⚠️ a BEHAVIOUR change, recorded the moment it landed
-
-- ⚠️ **BREAKING: `VariantFidelity::ReassociatedDeterministic` renamed to
-  `DeterministicallyDivergent`**, with its definition widened to name both
-  mechanisms. The old name asserted *reassociation* for every member of the
-  class; baracuda measured a member whose reduction tree was provably unchanged
-  and whose bits differed anyway (recompute vs cache-and-reuse of an equal
-  `expf`) — 12,283,172 of 16,777,216 elements, worst 11 ULP, reproducible.
-  **One selection policy, so one variant** — a fifth with identical semantics
-  would be a distinction no consumer could act on. **The FKC determinism
-  spelling is unchanged (`same_hardware_bitwise`), asserted by
-  `the_fidelity_rename_is_wire_invisible`.**
-
-**Published 0.10.0 and the tree both say `0.10.0`. This must NOT ship as
-`0.10.1`** — `^0.10.0` accepts a patch and this changes emitted contract text.
-**Requires `0.11.0`.**
-
-- **`ulp_bound` no longer declines an expression whose exactness is by
-  construction.** An expression built entirely from `BinaryOp::is_int_only`
-  operators — the bitwise and logical ops — has no rounding step on any
-  hardware, so a non-CUDA target now gets `0.0` where it previously got
-  `INFINITY`, and `precision_of` rates it `("correctly_rounded", Some(0))`
-  instead of `("approximate", None)`.
-
-  ⚠️ **The test is `is_int_only`, NOT `ulp_sum(e) == 0`.** `unary_ulp` rates
-  `Sqrt`/`Recip`/`Floor` at 0.0 and `binary_ulp` rates
-  `Copysign`/`Nextafter`/`FmaxIeee` at 0.0 — **those zeros are IEEE claims about
-  a target's float unit**, exactly the borrowed assertion the namespace gate
-  exists to refuse. Keying on the summed rating would re-admit every one of them,
-  and a test asserts it does not.
-
-  **Found by baracuda while adopting 0.10.0**, applying this repo's own rule: *a
-  prescription that errs conservatively has no complainant.* A non-CUDA backend
-  was getting a weaker contract than it could prove, emitting nothing wrong, and
-  had nothing to file. **They saw it only because a signature change forced them
-  to read the function.**
+*Nothing. Everything that was here shipped in 0.11.0, below.*
 
 ## Released
+
+## 2026-09-09 — everything at `0.11.0`
+
+⚠️ **`unpopped-vocab 0.4.0 → 0.11.0`, `unpopped-cpu-c 0.9.0 → 0.11.0`,
+`unpopped-slang 0.7.0 → 0.11.0`, `unpopped 0.10.0 → 0.11.0` — the skipped version
+numbers are a DELIBERATE UNIFICATION, not a mistake, and this line exists so
+nobody re-derives it later.**
+
+**CireSnave's standing rule, quoted:** *"I always want all crates within a project
+to use the same version number so developers consuming them know which go with
+which."* The exception in that rule is for a **cross-project** pair — an emitter
+crate in another project whose number answers *"which Unpopped does this work
+with"*. `unpopped-cpu-c` and `unpopped-slang` are **inside** this project, so
+their numbers answered nothing and the exception does not reach them.
+
+**`unpopped-conformance` moves too, although it is `publish = false` and has no
+external consumer.** Leaving one crate off the shared number recreates the
+question the rule exists to close.
+
+### ⚠️ For consumers: one number, written four times, and all four must move together
+
+Before this release a consumer wrote **three different numbers** for four crates.
+Now they write `0.11.0` four times.
+
+**Every current pin excludes `0.11.0`, so nothing arrives on a `cargo update`:**
+
+    ^0.10.0  = >=0.10.0, <0.11.0     excludes 0.11.0
+    ^0.4.0   = >=0.4.0,  <0.5.0      excludes 0.11.0
+    ^0.9.0   = >=0.9.0,  <0.10.0     excludes 0.11.0
+    ^0.7.0   = >=0.7.0,  <0.8.0      excludes 0.11.0
+
+⚠️ **A PARTIAL edit resolves two versions of a crate into one graph** — e.g.
+moving `unpopped` to `0.11.0` while leaving `unpopped-vocab` at `^0.4.0` gives
+`0.4.0` (the direct pin) *and* `0.11.0` (what `unpopped 0.11.0` requires), which
+are different types with the same name. **Unification makes that mistake more
+visible, not less: four identical numbers make a missed line obvious, where three
+different numbers made it look plausible.**
+
+
+**Remedies issue #4 for TODAY'S INSTANCE ONLY.** ⚠️ Publishing makes published ==
+workspace **at one moment**; the member keeps evolving and the gap reopens on the
+next unpublished commit. **A green publish is not the class being closed** —
+baracuda's argument, and the portfolio gate vulkane is building is the durable
+half.
+
+### ⚠️ BREAKING — `VariantFidelity::ReassociatedDeterministic` → `DeterministicallyDivergent`
+
+The old name asserted **reassociation** for every member of the class. baracuda
+measured a member whose reduction tree was provably unchanged and whose bits
+differed anyway — cache-vs-recompute of an equal `expf`, **12,283,172 of
+16,777,216 elements, worst 11 ULP, reproducible**. The definition now names both
+mechanisms: a different operation *association*, or a different *evaluation of an
+equal expression*.
+
+**One selection policy, so one variant** — a fifth with identical semantics is a
+distinction no consumer can act on. **The FKC determinism spelling is unchanged
+(`same_hardware_bitwise`)**, asserted by `the_fidelity_rename_is_wire_invisible`,
+which pins the whole mapping because a rename breaking a *neighbour* would leave a
+single-variant assertion green.
+
+### `ulp_bound` no longer declines an expression whose exactness is by construction
+
+An expression built entirely from `BinaryOp::is_int_only` operators has no
+rounding step on any hardware, so a **non-CUDA** target now gets `0.0` where it got
+`INFINITY`, and `precision_of` rates it `("correctly_rounded", Some(0))` instead
+of `("approximate", None)`.
+
+⚠️ **Keyed on `is_int_only`, NOT on `ulp_sum(e) == 0`.** `unary_ulp` rates
+`Sqrt`/`Recip`/`Floor` at 0.0 and `binary_ulp` rates
+`Copysign`/`Nextafter`/`FmaxIeee` at 0.0 — **those zeros are IEEE claims about a
+target's float unit**, exactly the borrowed assertion the namespace gate exists to
+refuse. **A CUDA target is untouched**, asserted across four rating tiers.
+
+Found by baracuda while adopting 0.10.0, applying this repo's own rule: *a
+prescription that errs conservatively has no complainant.*
+
+### `Access::Contraction` is documented ALWAYS COMPUTED, and its premise is guarded
+
+"No predicate applies" is an answer; its absence read as an oversight. The K-fold
+is a sum over products and the variant carries **no operator field at all**.
+Guarded by an exhaustive match on `AccumSpec` — **0 exhaustive matches existed
+before, so a variant that falsifies the ruling used to compile with 0 errors, 0
+clippy warnings and 0 test failures.**
+
+### ⚠️ Why the emitters move at all
+
+`unpopped-cpu-c 0.9.0` and `unpopped-slang 0.7.0` **both require `unpopped =
+"0.10.0"`** — measured from their served manifests. For a 0.x crate `^0.10.0`
+**excludes 0.11.0**, so publishing `unpopped` alone would strand both emitters on
+the old line while every sibling moved. **`baracuda-cuda-emit` declares all four**,
+so it would then resolve two `unpopped` versions into one graph — the two-artifacts
+defect this release exists to close.
+
+**Source of both emitters is byte-identical to their published versions. They move
+because a dependency did, and then again because of the unification above.**
+
+⚠️ **This section was headed *"Why three crates and not one"* until the
+unification, and the count was correct when written.** The unification made it
+five, and **a heading carrying a stale number is the artifact a reader trusts
+most** — it was found by a reviewer's nitpick about an unrelated count two
+sections above, which is the only reason anyone re-read this one.
 
 ## 2026-09-06 — `unpopped-vocab 0.4.0` · `unpopped 0.10.0` · `unpopped-cpu-c 0.9.0` · `unpopped-slang 0.7.0`
 
