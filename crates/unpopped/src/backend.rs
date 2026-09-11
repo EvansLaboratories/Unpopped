@@ -157,29 +157,47 @@ pub enum VariantFidelity {
     /// Deterministic for a fixed launch configuration and binary, but **not
     /// bit-identical to the default lowering**, and not directed either way.
     ///
-    /// # Two mechanisms, one selection policy
+    /// # What this names, and what it deliberately does NOT
     ///
-    /// 1. **A different operation association** — a split-K partial-sum tree vs
-    ///    the sequential fold. Floating-point add is non-associative, so the
-    ///    tree shape moves the bits.
-    /// 2. **A different evaluation of an equal expression** — caching a value in
-    ///    shared memory and reloading it where the default recomputes it. The
-    ///    association is *identical*; a compiler is free to evaluate two
-    ///    source-equal `expf` sites differently, and it does.
+    /// It names the class **extensionally** — deterministic on fixed hardware,
+    /// different bits from the default, undirected — and **asserts no mechanism**.
     ///
-    /// ⚠️ **This variant was named `DeterministicallyDivergent` until 2026-09-06,
-    /// and that name asserted mechanism 1 for every member of the class.**
-    /// baracuda measured mechanism 2: a `smemrow` variant differing from its base
-    /// on 12,283,172 of 16,777,216 elements, worst 11 ULP, reproducible, with the
-    /// reduction tree provably unchanged — and had to declare a fidelity whose
-    /// name would tell the next reader the tree had moved.
+    /// **The only mechanism with a measured instance is a different operation
+    /// association**: a split-K partial-sum tree vs the sequential fold.
+    /// Floating-point add is non-associative, so the tree shape moves the bits.
     ///
-    /// **The class is not widened by this; the name stopped excluding half of
-    /// it.** Both mechanisms are deterministic-on-fixed-hardware and undirected,
-    /// so both carry the same policy — *never selected silently, only through an
-    /// honest contract* — which is what a consumer actually matches on. **A fifth
-    /// variant with identical semantics would be a distinction nobody could act
-    /// on** (baracuda's argument, and it is the right one).
+    /// ⚠️ **A second mechanism is CONCEIVABLE and has NO measured instance:** a
+    /// different *evaluation of an equal expression* — caching a value in shared
+    /// memory where the default recomputes it, leaving the association identical.
+    /// **It is recorded here as a hypothesis, not as an observation.**
+    ///
+    /// # ⚠️ The history, because this doc once asserted the opposite
+    ///
+    /// This variant was named **`ReassociatedDeterministic`** until 2026-09-06.
+    /// The rename cited a baracuda measurement of a `smemrow` variant differing
+    /// from its base on 12,283,172 of 16,777,216 elements — **and that
+    /// measurement was RETRACTED on 2026-09-09 (baracuda#99, closed
+    /// `not_planned`): it had been taken against `variants[1]`, which is `prec`,
+    /// declared [`VariantFidelity::MorePrecise`], whose entire purpose is to
+    /// differ.** Measured against `smemrow`'s own kernel: **0 ULP over
+    /// 16,777,216 elements.** `smemrow` is `BitIdentical` and always was.
+    ///
+    /// ⚠️ **`unpopped 0.11.0` shipped with the retracted figure in this doc
+    /// block and in its CHANGELOG.** A published version is immutable, so that
+    /// copy stands and this correction reaches 0.12.0 onward.
+    ///
+    /// **The NAME is kept, and the reason is not inertia.** The old name asserted
+    /// a mechanism for every member of the class; this one asserts none.
+    /// **Removing an unsupported claim is not the same act as adding one** —
+    /// reverting would re-assert "every member is a reassociation" on evidence no
+    /// better than what was withdrawn. If the class turns out to be
+    /// reassociation-only, this name is *less specific than it could be*, which
+    /// is not the same as wrong.
+    ///
+    /// **A fifth variant would still be a distinction nobody could act on**
+    /// (baracuda's argument, and it survives the retraction untouched): every
+    /// member carries one policy — *never selected silently, only through an
+    /// honest contract*.
     ///
     /// The FKC determinism spelling is unchanged: `same_hardware_bitwise`.
     DeterministicallyDivergent,
