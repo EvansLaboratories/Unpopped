@@ -13,9 +13,22 @@ guessing.
   `git ls-tree -r --name-only origin/main -- fuel-kernels-source/kernels`,
   cross-checked against `git ls-files` on Fuel's local index (both = 147, the
   positive control the PM asked for). Content read via `git show
-  origin/main:<path>` into a scratch directory, never Fuel's working tree —
-  the fuel lane is busy and its checkout must not be touched or trusted as
-  current.
+  origin/main:<path>` into a scratch directory (**only** the 147 `.slang`
+  blobs were exported into it — no `.glsl`/`.metal` files were placed
+  alongside them), never Fuel's working tree — the fuel lane is busy and its
+  checkout must not be touched or trusted as current.
+- **Extension-filtered, and the harness says so.** The scratch directory this
+  run used held only `.slang` files, so the distinction didn't bite here —
+  but the harness itself now filters on the `.slang` extension explicitly and
+  prints `"N .slang files (of M files present)"`, not a bare file count. A
+  first version of the harness counted every file in the given directory
+  regardless of extension; pointed at a directory that also holds Fuel's
+  GLSL/Metal kernels (167 files total: 147 `.slang` + 20 `.glsl`), it would
+  have silently reported 171 (the actual total including Fuel's compiled
+  `.spv` outputs) as if it were the Slang count — the exact wrong number
+  already given out once elsewhere. Fixed before merge; the numbers in this
+  doc were measured against the clean, `.slang`-only scratch directory either
+  way, so they are unaffected.
 - **Harness**: `crates/unpopped/examples/slang_corpus_report.rs` (added in
   this PR), run as `cargo run --example slang_corpus_report --features
   convert -p unpopped -- <dir>`. For each file it calls `convert::SLANG`'s
@@ -31,6 +44,26 @@ guessing.
   "true of the instrument, false of the result": `lift`'s return value is a
   true fact about the scan attempt, not a true fact about the file). The
   harness calls all three and classifies from all three errors together.
+
+## Reading this result: two different questions, two different owners
+
+⚠️ **0/147 does not mean "Slang is 0% portable" and should not be read that
+way.** The 94-file "Unrecognized" bucket splits into two categories with
+different costs and different owners, and they must be kept separate rather
+than collapsed into the single headline number:
+
+- **(a) The recognizer correctly refusing constructs it does not model** — the
+  53-file residue bucket (`groupshared`/`InterlockedCompareExchange`/
+  `RWByteAddressBuffer`). This is the recognizer working as designed, the same
+  way it refuses shared-memory/atomic CUDA. Not a gap; not actionable by
+  changing the recognizer.
+- **(b) The recognizer failing to recognise things it could** — the largest
+  single cause is mundane, not deep: **44 of the 94 unrecognized files are
+  `NotElementwise` purely because Fuel names its buffers `out_buf`/`a_buf`/
+  `b_buf` while the `Frontend` hardcodes `output`/`inputK`.** A naming
+  convention mismatch is not an expressiveness limit. The remaining
+  unrecognized files add real structure on top of that (branching,
+  strided/broadcast rank, narrow-intrinsic calls) — see the breakdown below.
 
 ## Result: 0 of 147 accepted
 

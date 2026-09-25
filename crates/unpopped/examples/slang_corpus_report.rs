@@ -8,8 +8,11 @@
 //! reflects what actually happened, not an artifact of the combinator.
 //!
 //! Usage: `cargo run --example slang_corpus_report --features convert -- <dir>`
-//! `<dir>` holds `.slang` source files (any extension is accepted; only the
-//! directory's file count is reported as the population).
+//! `<dir>` is scanned for `.slang` files only — filtered by extension, not by
+//! "every file present". Non-`.slang` files in the directory (a corpus tree
+//! also holding `.glsl`/`.metal`/etc.) are counted and reported separately so
+//! a mismatch between "population measured" and "files in the directory" is
+//! visible in the output rather than silently absorbed into it.
 
 use std::env;
 use std::fs;
@@ -85,10 +88,16 @@ fn main() {
         .expect("usage: slang_corpus_report <dir-of-slang-files>");
     let dir = PathBuf::from(dir);
 
-    let mut entries: Vec<PathBuf> = fs::read_dir(&dir)
+    let all_files: Vec<PathBuf> = fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
         .map(|e| e.unwrap().path())
         .filter(|p| p.is_file())
+        .collect();
+    let total_files = all_files.len();
+
+    let mut entries: Vec<PathBuf> = all_files
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|ext| ext == "slang"))
         .collect();
     entries.sort();
 
@@ -114,7 +123,10 @@ fn main() {
         per_file.push((name, bucket, detail));
     }
 
-    println!("population: {population} files in {}", dir.display());
+    println!(
+        "population: {population} .slang files (of {total_files} files present) in {}",
+        dir.display()
+    );
     println!();
     println!("=== histogram ===");
     for (label, n) in &counts {
