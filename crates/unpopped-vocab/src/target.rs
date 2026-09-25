@@ -360,6 +360,34 @@ mod tests {
         }
     }
 
+    /// **Equivalence, not absence — the byte spellings `From<ArchSku>` emits
+    /// are unchanged by the reserved-id-block eviction.**
+    ///
+    /// `the_reserved_id_block_is_gone_not_just_renamed` proves the OLD code
+    /// path is gone; it says nothing about whether the NEW path (through
+    /// `TargetId::parse`) produces the same output. Those are different
+    /// properties, and only this one protects a downstream consumer:
+    /// `baracuda-cuda-emit` calls `structure_key(.., ArchSku::Sm89)` at 18+
+    /// sites, `structure_key` takes `impl Into<TargetId>`, and
+    /// `StructureKey::to_token` emits `self.target.as_str()` verbatim
+    /// (`structure_key.rs:1595` — no further transform), so THIS string is
+    /// the actual byte-match/dispatch-table key every one of those call
+    /// sites produces.
+    ///
+    /// The four expected strings are hardcoded literals, not derived via
+    /// `TargetId::parse` — comparing the new path's output to itself would be
+    /// vacuous by construction, proving only that the code agrees with
+    /// itself. This is the same standard the 2026-08-15 record set for
+    /// Vulkane's v3→v4 bump: byte-match against the fixed expected spelling,
+    /// never inferred from the refactor's intent.
+    #[test]
+    fn from_archsku_is_byte_stable_across_the_reserved_block_eviction() {
+        assert_eq!(TargetId::from(ArchSku::Sm80).as_str(), "cuda:sm80");
+        assert_eq!(TargetId::from(ArchSku::Sm89).as_str(), "cuda:sm89");
+        assert_eq!(TargetId::from(ArchSku::Sm90).as_str(), "cuda:sm90");
+        assert_eq!(TargetId::from(ArchSku::Sm90a).as_str(), "cuda:sm90a");
+    }
+
     /// A namespace this crate knows nothing about is accepted.
     ///
     /// The point of the whole change: §6.8-0004 puts the capability-set
