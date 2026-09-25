@@ -59,44 +59,24 @@
 //! under a namespace, and says byte-exact matching MUST NOT consult the
 //! registry. A generator that refused to *decode* an unregistered namespace
 //! would be reading a producer-side rule as a reader-side one.
+//!
+//! # The CUDA reserved id block — evicted 2026-09-25
+//!
+//! Until this date, the four `cuda:sm*` tokens were interned at fixed ids
+//! (0–3) as an optimization, so `From<ArchSku>` could be a const index rather
+//! than a lookup — the last CUDA-specific vocabulary in this neutral crate.
+//! Decided 2026-08-15 with Baracuda (who owns `cuda:` under §6.8-0004) to drop
+//! it; blocked until KISS's `conformance/registry/namespaces.json` repointed
+//! `cuda`'s `reference_implementation` from `unpopped-vocab` to
+//! `baracuda-cuda-vocab` (KISS#514, merged 2026-09-25 — removing the tokens
+//! before the repoint would have broken a PR-gated file). `From<ArchSku>` now
+//! goes through [`TargetId::parse`] like every other namespace's tokens, at
+//! registration time rather than on any hot path.
 
 use core::fmt;
 use std::sync::{OnceLock, RwLock};
 
 use crate::layout::ArchSku;
-
-/// The four CUDA tokens, interned at fixed ids so they are const-nameable and
-/// their byte spelling cannot drift.
-///
-/// Order is load-bearing: it defines the reserved id block, so a token may be
-/// **appended** but never reordered or removed. (Ids are process-local by
-/// contract — see the module docs — so this is about keeping [`ArchSku`]'s
-/// mapping total and cheap, not about wire stability, which the strings carry.)
-///
-/// # SCHEDULED FOR REMOVAL — decided 2026-08-15 with the `cuda` maintainer
-///
-/// **These four strings are the last CUDA vocabulary in this neutral crate**, and
-/// they are here purely as an optimization: they let `From<ArchSku>` be a const
-/// index instead of a lookup. That is a poor trade for a crate whose claim is
-/// neutrality, and Baracuda (who owns the `cuda:` vocabulary under §6.8-0004)
-/// agreed to **drop the block** — the conversion goes through
-/// [`TargetId::parse`] instead, at registration time rather than on any hot
-/// path.
-///
-/// It has not happened yet because the eviction must **lock-step with a registry
-/// repoint**: KISS's `conformance/registry/namespaces.json` names
-/// `unpopped-vocab` as the `cuda` namespace's `reference_implementation`, so
-/// removing the tokens before that pointer moves to `baracuda-cuda-vocab` breaks
-/// a PR-gated file. Sequencing is Baracuda's; this crate's side is four sites
-/// and no codec work — the `structure_key` codec stopped baking `ArchSku`
-/// entirely when `TargetId` landed.
-///
-/// The one thing that changes here when it goes: `From<ArchSku>` stops being a
-/// const index, and `id_values_are_process_local`'s
-/// `TargetId::from(ArchSku::Sm80).0 == 0` assertion goes with it — which is
-/// fine, since that test's own doc says ids are registration handles rather than
-/// stable names.
-const RESERVED: &[&str] = &["cuda:sm80", "cuda:sm89", "cuda:sm90", "cuda:sm90a"];
 
 /// An interned `target_capability` token (KISS-CLASSIFY §6.8).
 ///
@@ -172,9 +152,12 @@ impl std::error::Error for TargetError {}
 /// once per distinct target (a handful of times in a process), reads are
 /// frequent but short, and correctness here is worth more than contention that
 /// no realistic workload generates.
+///
+/// Starts empty — no namespace, including `cuda:`, is pre-seeded. Every token
+/// intern through [`TargetId::parse`] the first time it is requested.
 fn table() -> &'static RwLock<Vec<String>> {
     static TABLE: OnceLock<RwLock<Vec<String>>> = OnceLock::new();
-    TABLE.get_or_init(|| RwLock::new(RESERVED.iter().map(|s| (*s).to_string()).collect()))
+    TABLE.get_or_init(|| RwLock::new(Vec::new()))
 }
 
 impl TargetId {
@@ -323,19 +306,26 @@ fn validate(token: &str) -> Result<(), TargetError> {
 }
 
 impl From<ArchSku> for TargetId {
-    /// Infallible: the four CUDA tokens occupy the reserved id block, so this is
-    /// an index rather than a lookup and cannot fail or allocate.
+    /// Goes through [`TargetId::parse`], the same path every other
+    /// namespace's tokens take — `cuda:` no longer gets a reserved id block
+    /// (evicted 2026-09-25, see the module docs).
     ///
     /// This conversion is what keeps every existing CUDA call site compiling
     /// unchanged through the target-model opening — `structure_key(.., Sm89)`
     /// still works, because the parameter takes `impl Into<TargetId>`.
+    ///
+    /// The `expect` cannot panic: each arm is a hardcoded literal that already
+    /// satisfies `validate`'s grammar (one `:`, non-empty both sides, no
+    /// forbidden bytes) — asserted for all four by
+    /// `the_cuda_tokens_are_byte_identical_to_the_closed_enums`.
     fn from(a: ArchSku) -> Self {
-        Self(match a {
-            ArchSku::Sm80 => 0,
-            ArchSku::Sm89 => 1,
-            ArchSku::Sm90 => 2,
-            ArchSku::Sm90a => 3,
-        })
+        let token = match a {
+            ArchSku::Sm80 => "cuda:sm80",
+            ArchSku::Sm89 => "cuda:sm89",
+            ArchSku::Sm90 => "cuda:sm90",
+            ArchSku::Sm90a => "cuda:sm90a",
+        };
+        Self::parse(token).expect("a hardcoded cuda: token is always well-formed")
     }
 }
 
@@ -368,6 +358,34 @@ mod tests {
             // a key built from a parsed token equals one built from the enum.
             assert_eq!(TargetId::parse(want).unwrap(), TargetId::from(sku));
         }
+    }
+
+    /// **Equivalence, not absence — the byte spellings `From<ArchSku>` emits
+    /// are unchanged by the reserved-id-block eviction.**
+    ///
+    /// `the_reserved_id_block_is_gone_not_just_renamed` proves the OLD code
+    /// path is gone; it says nothing about whether the NEW path (through
+    /// `TargetId::parse`) produces the same output. Those are different
+    /// properties, and only this one protects a downstream consumer:
+    /// `baracuda-cuda-emit` calls `structure_key(.., ArchSku::Sm89)` at 18+
+    /// sites, `structure_key` takes `impl Into<TargetId>`, and
+    /// `StructureKey::to_token` emits `self.target.as_str()` verbatim
+    /// (`structure_key.rs:1595` — no further transform), so THIS string is
+    /// the actual byte-match/dispatch-table key every one of those call
+    /// sites produces.
+    ///
+    /// The four expected strings are hardcoded literals, not derived via
+    /// `TargetId::parse` — comparing the new path's output to itself would be
+    /// vacuous by construction, proving only that the code agrees with
+    /// itself. This is the same standard the 2026-08-15 record set for
+    /// Vulkane's v3→v4 bump: byte-match against the fixed expected spelling,
+    /// never inferred from the refactor's intent.
+    #[test]
+    fn from_archsku_is_byte_stable_across_the_reserved_block_eviction() {
+        assert_eq!(TargetId::from(ArchSku::Sm80).as_str(), "cuda:sm80");
+        assert_eq!(TargetId::from(ArchSku::Sm89).as_str(), "cuda:sm89");
+        assert_eq!(TargetId::from(ArchSku::Sm90).as_str(), "cuda:sm90");
+        assert_eq!(TargetId::from(ArchSku::Sm90a).as_str(), "cuda:sm90a");
     }
 
     /// A namespace this crate knows nothing about is accepted.
@@ -486,10 +504,33 @@ mod tests {
             second.0 > first.0,
             "ids are registration-ordered handles, not stable names"
         );
-        // Both sit past the reserved block, which is the part that IS stable —
-        // and is what lets `From<ArchSku>` be a const index rather than a lookup.
-        assert!(first.0 >= RESERVED.len() as u16);
-        assert_eq!(TargetId::from(ArchSku::Sm80).0, 0);
+    }
+
+    /// **Structural proof the reserved id block is gone, not merely renamed.**
+    ///
+    /// A behavioral test alone cannot tell "`From<ArchSku>` calls
+    /// `TargetId::parse`" apart from "`From<ArchSku>` still matches a
+    /// hardcoded index, and something unrelated also happens to call
+    /// `parse`" — both produce identical [`TargetId`] values for the four
+    /// known tokens, so `the_cuda_tokens_are_byte_identical_to_the_closed_enums`
+    /// would pass either way. This reads the source directly (the same
+    /// technique `unpopped-conformance`'s manifest guards use) so restoring
+    /// the removed reserved-array literal — even if every behavioral test
+    /// still passed — fails this one.
+    #[test]
+    fn the_reserved_id_block_is_gone_not_just_renamed() {
+        let src = include_str!("target.rs");
+        assert!(
+            !src.contains("\"cuda:sm80\", \"cuda:sm89\""),
+            "a reserved cuda: token array is back in target.rs — \
+             From<ArchSku> must go through TargetId::parse, not a fixed id block"
+        );
+        assert!(
+            src.contains("Self::parse(token)"),
+            "From<ArchSku> no longer visibly calls parse — the eviction's \
+             whole point is that cuda: tokens intern through the same path \
+             every other namespace's tokens do"
+        );
     }
 
     /// Validation happens before interning, so a bad token cannot enter the table.
