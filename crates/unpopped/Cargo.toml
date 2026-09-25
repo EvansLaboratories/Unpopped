@@ -75,5 +75,9 @@ kiss-ref-core = "0.2.3"
 kiss-ops-vocab = "0.2.3"
 kiss-classify-vocab = "0.2.3"
 
+[[example]]
+name = "slang_corpus_report"
+required-features = ["convert"]
+
 [lints]
 workspace = true
