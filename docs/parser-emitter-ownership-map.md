@@ -122,7 +122,14 @@ intended exception (a neutral core needs one dependency-free reference).
 
 ## 4. `docs/deferred.md` row 34 — restating the broken trigger
 
-Current text (row 34, `unpopped-cuda` sub-crate): trigger was *"the 0.2 trait
+**Superseded 2026-09-25**: Baracuda got a lane, corrected this section's
+scope (the donation is `parse_cuda`/`CUDA_RESIDUE`/the `CUDA` `Frontend`
+const only, not all of `convert.rs`, and not `lift.rs`), proposed a separate
+`baracuda-cuda-parse` crate rather than one bundled crate, and conditionally
+assented. The actual restated row is in `docs/deferred.md`; the proposal
+below is kept for its reasoning but is no longer the live text.
+
+Original text below (row 34, `unpopped-cuda` sub-crate): trigger was *"the 0.2 trait
 freeze"*, which the row's own text says **passed unmet** — 0.2 shipped
 2026-08-15 and `Backend`/`Lowering` took two more breaking changes since
 (0.4.0's `Result<Spelling, LowerError>`, 0.5.0's `DeclinedOp` split). A version
