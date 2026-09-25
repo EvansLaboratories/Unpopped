@@ -132,7 +132,7 @@ a claim about the whole surface, which nobody had checked. **Requires
 
 | what changed | migration |
 |---|---|
-| **Emitters left the core.** `unpopped::cpu_c` / `unpopped::slang` are gone. | Depend on `unpopped-cpu-c` / `unpopped-slang`. Both are **in-tree and unpublished** — see [`docs/deferred.md`](../../docs/deferred.md) §A for why, and the trigger. |
+| **Emitters left the core.** `unpopped::cpu_c` / `unpopped::slang` are gone. | Depend on `unpopped-cpu-c` / `unpopped-slang`. Both are **in-tree and published** — on crates.io since 0.1.0 (2026-08-19), now 0.3.0; see [`docs/deferred.md`](../../docs/deferred.md) §A for the publish history. |
 | **`Backend::supports_dtype` takes a `target: TargetId`.** | Add the parameter. **Ignoring it is a legitimate implementation** — it is the *storage* gate ("can this target spell the scalar type"), and arch-conditional *compute* gating belongs behind a capability manifest rather than in a transcribed table. See the note below. |
 | **`optimize` and `optimize_top_k` take a `dtype: ElementKind`.** | Pass the expression's compute dtype. It exists so folding rounds at the **device's** precision — folding an `f32` kernel's constants at `f64` diverges by 1 ULP on a chained fold. |
 | **`convert.rs`'s per-language wrappers are replaced by a `Frontend` descriptor.** | `CUDA` and `SLANG` are now *values*, not APIs. Four generic functions replace eight per-language ones. |
