@@ -25,7 +25,7 @@
 //! positive-controlled below, since a scanner that silently returns nothing
 //! would make every assertion here vacuous.
 
-use unpopped_vocab::{ElementKind, dtype_token};
+use unpopped_vocab::{ElementKind, dtype_numeric_kind, dtype_storage_bits, dtype_token};
 
 const MANIFEST: &str = include_str!("../kiss/dtype_manifest.json");
 
@@ -129,6 +129,53 @@ fn the_reserved_members_match_kiss() {
     }
 }
 
+/// **Width and kind, not just spelling** (KISS-CLASSIFY-6.1-0002/-0003).
+///
+/// The tests above compare token NAMES: the set, the reserved subset, the
+/// schema version. None of them check that a token's storage width or
+/// numeric kind agrees with KISS's — so a dtype whose NAME matches the
+/// ratified table while its WIDTH had silently drifted would pass every test
+/// above. That is exactly the shape of bug the sk4 `Complex64` meaning-flip
+/// could have been if it had shipped unversioned: same token, different
+/// width, nothing here to catch it.
+///
+/// [`dtype_storage_bits`] and [`dtype_numeric_kind`] are derived from the
+/// SAME real per-variant data the codec's own byte-width table
+/// (`dtype_size_bytes`) and token codec (`dtype_token`) use — not restated
+/// from a doc comment, which is another name for a name.
+#[test]
+fn the_manifest_storage_bits_and_kind_match_our_real_types() {
+    let rows = manifest_dtype_rows(MANIFEST);
+    assert_eq!(
+        rows.len(),
+        24,
+        "expected all 24 §6.1 dtype rows from the manifest; got {}",
+        rows.len()
+    );
+
+    for (token, kiss_kind, kiss_bits) in &rows {
+        let ek = ElementKind::ALL
+            .into_iter()
+            .find(|k| dtype_token(*k) == token)
+            .unwrap_or_else(|| panic!("manifest token `{token}` has no ElementKind in this build"));
+
+        assert_eq!(
+            u64::from(dtype_storage_bits(ek)),
+            *kiss_bits,
+            "`{token}`: KISS pins {kiss_bits} storage bits, this crate's real type is \
+             {} bits — a name match with a width divergence is the exact bug this \
+             test exists to catch",
+            dtype_storage_bits(ek)
+        );
+        assert_eq!(
+            dtype_numeric_kind(ek),
+            kiss_kind,
+            "`{token}`: KISS pins kind `{kiss_kind}`, this crate reports `{}`",
+            dtype_numeric_kind(ek)
+        );
+    }
+}
+
 /// Positive control on the extractor.
 ///
 /// Every assertion above compares two lists this file produced. If
@@ -207,6 +254,39 @@ fn reserved_tokens(src: &str) -> Vec<String> {
         }
     }
     out.sort();
+    out
+}
+
+/// `(token, kind, storage_bits)` for every `dtypes` row, in file order.
+///
+/// Same fixed row shape `reserved_tokens` relies on
+/// (`{"token": ..., "kind": ..., "storage_bits": ..., "reserved": ...}`), one
+/// row emitted per `storage_bits` field seen — which is also the positive
+/// control: if the manifest's shape ever changed and this scanner silently
+/// returned nothing, `the_manifest_storage_bits_and_kind_match_our_real_types`
+/// would fail its `rows.len() == 24` assertion loudly rather than passing
+/// vacuously against an empty comparison.
+fn manifest_dtype_rows(src: &str) -> Vec<(String, String, u64)> {
+    let mut out = Vec::new();
+    let mut token: Option<String> = None;
+    let mut kind: Option<String> = None;
+    for line in src.lines() {
+        let t = line.trim();
+        if let Some(v) = t.strip_prefix("\"token\": ") {
+            token = quoted_strings(v).into_iter().next();
+        } else if let Some(v) = t.strip_prefix("\"kind\": ") {
+            kind = quoted_strings(v).into_iter().next();
+        } else if let Some(v) = t.strip_prefix("\"storage_bits\": ") {
+            let bits: u64 = v
+                .trim_end_matches(',')
+                .trim()
+                .parse()
+                .unwrap_or_else(|_| panic!("non-numeric storage_bits: {v}"));
+            if let (Some(tok), Some(k)) = (token.take(), kind.take()) {
+                out.push((tok, k, bits));
+            }
+        }
+    }
     out
 }
 
