@@ -1358,27 +1358,65 @@ fn frame_work_class(operands: &[OperandDesc]) -> WorkClass {
     }
 }
 
-/// Byte size of a byte-addressable dtype, or `None` for sub-byte dtypes (which
-/// are treated as non-vectorizable in v1).
-fn dtype_size_bytes(dt: ElementKind) -> Option<u32> {
+/// The §6.1 storage bit width of every dtype, including the three sub-byte
+/// ones (`i4`/`u4`/`b1`) that `dtype_size_bytes` treats as byte-undefined.
+///
+/// This is the single source of truth `dtype_size_bytes` derives from (bytes
+/// = bits / 8, `None` below 8) and `tests/kiss_dtype_manifest.rs` checks
+/// against the vendored KISS manifest's `storage_bits` field — so a dtype
+/// whose NAME matches the ratified table while its WIDTH has silently
+/// drifted fails a running assertion instead of passing on spelling alone
+/// (KISS-CLASSIFY-6.1-0002).
+#[must_use]
+pub const fn dtype_storage_bits(dt: ElementKind) -> u32 {
     use ElementKind::{
         B1, Bf16, Bool, Complex64, Complex128, F8E6M2, F8E8M0, F16, F32, F32Strict, F64, Fp8E4M3FN,
         Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4, U8, U16, U32, U64,
     };
-    Some(match dt {
+    match dt {
+        B1 => 1,
+        I4 | U4 => 4,
         // The `fnuz` FP8 variants are RESERVED (no computation semantics at this
         // schema version) but their *storage* width is pinned by §6.1 all the
         // same — a reserved dtype is still a known dtype, and answering "how wide
         // is it" is not the same as agreeing to compute with it.
-        I8 | U8 | Bool | Fp8E4M3FN | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 => 1,
-        F16 | Bf16 | I16 | U16 => 2,
+        I8 | U8 | Bool | Fp8E4M3FN | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 => 8,
+        F16 | Bf16 | I16 | U16 => 16,
         // U32: 4-byte index dtype (the `indices` operand's vec-width side-channel;
         // never a compute operand). Same width class as I32.
-        F32 | F32Strict | I32 | U32 => 4,
-        F64 | I64 | U64 | Complex64 => 8,
-        Complex128 => 16,
-        I4 | U4 | B1 => return None,
-    })
+        F32 | F32Strict | I32 | U32 => 32,
+        F64 | I64 | U64 | Complex64 => 64,
+        Complex128 => 128,
+    }
+}
+
+/// Byte size of a byte-addressable dtype, or `None` for sub-byte dtypes (which
+/// are treated as non-vectorizable in v1).
+fn dtype_size_bytes(dt: ElementKind) -> Option<u32> {
+    let bits = dtype_storage_bits(dt);
+    if bits < 8 { None } else { Some(bits / 8) }
+}
+
+/// The §6.1 numeric kind of a dtype — `"float"`, `"int"`, `"uint"`, `"bool"`,
+/// or `"complex"` — spelled to match the vendored KISS manifest's `kind`
+/// field exactly, so `tests/kiss_dtype_manifest.rs` can assert it
+/// (KISS-CLASSIFY-6.1-0003). The MX scales (`f8e8m0`/`f8e6m2`) are kind
+/// `"float"`: unsigned exponent-scales, per §6.1-0013 — the unsigned property
+/// is a packing fact, not a distinct kind.
+#[must_use]
+pub const fn dtype_numeric_kind(dt: ElementKind) -> &'static str {
+    use ElementKind::{
+        B1, Bf16, Bool, Complex64, Complex128, F8E6M2, F8E8M0, F16, F32, F32Strict, F64, Fp8E4M3FN,
+        Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4, U8, U16, U32, U64,
+    };
+    match dt {
+        F16 | Bf16 | F32 | F32Strict | F64 | Fp8E4M3FN | Fp8E4M3FNUZ | Fp8E5M2 | Fp8E5M2FNUZ
+        | F8E8M0 | F8E6M2 => "float",
+        I8 | I16 | I32 | I64 | I4 => "int",
+        U8 | U16 | U32 | U64 | U4 | B1 => "uint",
+        Bool => "bool",
+        Complex64 | Complex128 => "complex",
+    }
 }
 
 // ===========================================================================
