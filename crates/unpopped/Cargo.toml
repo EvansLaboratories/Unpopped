@@ -43,7 +43,7 @@ libm = "0.2"
 # Fuel's dependency-free std-POD grammar crate (OpTag / OpAttrs / PatternNode) — the
 # §5 shared wire vocabulary. crates.io version dep so the default build resolves
 # without a Fuel checkout (an unpublished path/git dep breaks workspace resolution).
-fuel-kernel-seam-types = { version = "0.10.3", optional = true }
+fuel-kernel-seam-types = { version = "0.11.2", optional = true }
 # Human-readable / -writable IR text form (IR-hub Phase 3): the neutral `OpDef`
 # IR derives Serialize/Deserialize so an op can be authored/inspected/diffed as
 # pretty JSON and round-tripped (see `src/text.rs`, `op_to_text`/`op_from_text`).

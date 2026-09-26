@@ -56,9 +56,9 @@ dependencies = [
 
 [[package]]
 name = "fuel-kernel-seam-types"
-version = "0.10.3"
+version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0bab428122bc1b3077e3df9b1412c26d37a5abbc3485fa777365ce3dfc6c562"
+checksum = "899d59dadf58afe45c5cd5bc47413884ea9ff4be2784805ce4a4df905729d9eb"
 
 [[package]]
 name = "half"
