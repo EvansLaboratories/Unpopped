@@ -1359,7 +1359,7 @@ fn frame_work_class(operands: &[OperandDesc]) -> WorkClass {
 }
 
 /// The §6.1 storage bit width of every dtype, including the three sub-byte
-/// ones (`i4`/`u4`/`b1`) that [`dtype_size_bytes`] treats as byte-undefined.
+/// ones (`i4`/`u4`/`b1`) that `dtype_size_bytes` treats as byte-undefined.
 ///
 /// This is the single source of truth `dtype_size_bytes` derives from (bytes
 /// = bits / 8, `None` below 8) and `tests/kiss_dtype_manifest.rs` checks
