@@ -1372,3 +1372,20 @@ Two transferable pieces:
   changes.** The `--all-features` note was accurate when written and the `seam`
   module landed behind it later. Nothing re-read the exclusion in light of the
   new module, because an exclusion with a stated reason stops looking like a gap.
+
+**Superseded 2026-09-27: the `seam` module and feature are gone, not merely
+tested.** `unpopped::jit::seam` and the `fuel-kernel-seam-types` dependency it
+required are removed entirely — the crate's public API no longer names
+`fuel_kernel_seam_types::PatternNode` anywhere, so a seam-types major no
+longer forces an `unpopped` major (the mechanism this file's own §6.1-style
+history shows recurring: a `fuel-kernel-seam-types` 0.10.3 → 0.11.2 bump
+produced two incompatible `PatternNode` types in `baracuda-cuda-emit`'s
+dependency graph, resolved by dissolving the diamond rather than realigning
+it). The conversion (Fuel's `PatternNode`/`OpTag` → this crate's own,
+already-public `PatternNode`) moves to `baracuda-cuda-emit`, which already
+depends on `fuel-kernel-seam-types` directly. `tests/
+seam_reaches_core_synthesis.rs`'s five cases (happy path, recursion, the
+three typed declines) are ported to `tests/native_synthesize_reaches_core.rs`
+against the native `JitRequest`/`synthesize` entry point — the coverage
+transfers rather than disappearing, since that entry point had never been
+called directly by any test in this crate before this change.

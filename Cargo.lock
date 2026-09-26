@@ -55,12 +55,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fuel-kernel-seam-types"
-version = "0.10.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0bab428122bc1b3077e3df9b1412c26d37a5abbc3485fa777365ce3dfc6c562"
-
-[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -304,7 +298,6 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 name = "unpopped"
 version = "0.11.2"
 dependencies = [
- "fuel-kernel-seam-types",
  "kiss-classify-vocab",
  "kiss-ops-vocab",
  "kiss-ref-core",
