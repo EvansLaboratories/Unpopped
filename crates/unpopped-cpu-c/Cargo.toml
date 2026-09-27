@@ -22,7 +22,7 @@ unpopped-vocab = { workspace = true }
 # The oracle differential and the compile-and-run end-to-end suite live here now,
 # with the emitter they exercise. They were in `unpopped`'s test directory while
 # the emitter was in `unpopped`'s source.
-kiss-ref-core = "0.2.3"
+kiss-ref-core = "0.3.4"
 
 [lints]
 workspace = true

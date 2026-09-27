@@ -71,9 +71,9 @@ tree-sitter-slang = { version = "0.3", optional = true }
 # independent `structure_key` derivations byte-matching is conformance evidence about
 # the SPEC. A shared crate would make that agreement a tautology. Inert token tables
 # may be shared; derivations are not.
-kiss-ref-core = "0.2.3"
-kiss-ops-vocab = "0.2.3"
-kiss-classify-vocab = "0.2.3"
+kiss-ref-core = "0.3.4"
+kiss-ops-vocab = "0.3.4"
+kiss-classify-vocab = "0.3.4"
 
 [[example]]
 name = "slang_corpus_report"
