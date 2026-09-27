@@ -666,17 +666,23 @@ pub(crate) fn assert_close(name: &str, reference: &[f32], candidate: &[f32], rel
 
 /// `ElementKind` (Baracuda's dtype currency) -> `Dtype` (kiss-ref's), for the
 /// four int dtypes this differential covers. `I32`/`I64` are included even
-/// though only S8/U8 have dedicated tests below — the whole int lane
+/// though only I8/U8 have dedicated tests below — the whole int lane
 /// (`emitter_reduce_int`/`oracle_and_kiss_ref_int`/`assert_int_bits_eq`) is
 /// dtype-generic, so I32/I64 fall out "for free" (per the task's "reuse for
 /// I32/I64 if trivial").
+///
+/// `Dtype::I8`, not `S8`: kiss-ref-core respelled its signed-8-bit variant at
+/// its own sk4 cut (0.3.0, verified directly against that crate's source —
+/// `Dtype::S8` throughout 0.2.3, `Dtype::I8` throughout 0.3.0, and its new
+/// `complex.rs` module cites the sk4 total-width convention by clause
+/// number), the same de-vendoring respell this crate went through itself.
 fn to_kiss_int_dtype(dtype: ElementKind) -> Dtype {
     match dtype {
-        ElementKind::I8 => Dtype::S8,
+        ElementKind::I8 => Dtype::I8,
         ElementKind::U8 => Dtype::U8,
         ElementKind::I32 => Dtype::I32,
         ElementKind::I64 => Dtype::I64,
-        other => panic!("kiss_ref_diff: no int Dtype mapping for {other:?} (S8/U8/I32/I64 only)"),
+        other => panic!("kiss_ref_diff: no int Dtype mapping for {other:?} (I8/U8/I32/I64 only)"),
     }
 }
 
