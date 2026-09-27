@@ -34,7 +34,7 @@
 //! [`parse_slang`]), which is what makes moving them into per-target crates a
 //! move rather than a rewrite.
 
-use crate::ir::{Expr, OpDef, ReduceOp, ScalarExpr, UnaryOp};
+use crate::ir::{BinaryOp, Expr, OpDef, ReduceOp, ScalarExpr, UnaryOp};
 use crate::lift::{LiftError, Lifted, binary_fn, unary_fn};
 use tree_sitter::{Node, Parser, Tree};
 use unpopped_vocab::ElementKind;
@@ -705,8 +705,34 @@ impl<'a> Walk<'a> {
                     "-" => ScalarExpr::Sub(Box::new(le), Box::new(re)),
                     "*" => ScalarExpr::Mul(Box::new(le), Box::new(re)),
                     "/" => ScalarExpr::Div(Box::new(le), Box::new(re)),
+                    // Comparisons — never reachable as a store's own value
+                    // without `conditional_expression` below, which is the
+                    // only place a Cmp* result gets consumed (as a Select
+                    // condition). Kept here rather than duplicated: the
+                    // grammar parses `a < b` as an ordinary binary_expression
+                    // whether it sits inside `? :` or not.
+                    "==" => ScalarExpr::Binary(BinaryOp::CmpEq, Box::new(le), Box::new(re)),
+                    "!=" => ScalarExpr::Binary(BinaryOp::CmpNe, Box::new(le), Box::new(re)),
+                    "<" => ScalarExpr::Binary(BinaryOp::CmpLt, Box::new(le), Box::new(re)),
+                    "<=" => ScalarExpr::Binary(BinaryOp::CmpLe, Box::new(le), Box::new(re)),
+                    ">" => ScalarExpr::Binary(BinaryOp::CmpGt, Box::new(le), Box::new(re)),
+                    ">=" => ScalarExpr::Binary(BinaryOp::CmpGe, Box::new(le), Box::new(re)),
                     other => return Err(LiftError::Unrecognized(format!("operator '{other}'"))),
                 })
+            }
+            // `cond ? a : b` -> the IR's own ternary, ScalarExpr::Select —
+            // already spec'd (KISS-CLASSIFY, the dropout-scaling use) and
+            // already lowered by unpopped-cpu-c (F32/F32Strict/F64) and
+            // unpopped-slang; no Backend/Lowering change needed here.
+            "conditional_expression" => {
+                let cond = self.field(n, "condition")?;
+                let cons = self.field(n, "consequence")?;
+                let alt = self.field(n, "alternative")?;
+                Ok(ScalarExpr::Select(
+                    Box::new(self.expr(cond)?),
+                    Box::new(self.expr(cons)?),
+                    Box::new(self.expr(alt)?),
+                ))
             }
             "unary_expression" => {
                 let op = self.field(n, "operator")?;
@@ -1178,6 +1204,45 @@ mod tests {
         assert!(
             lift_elementwise(&CUDA, src, "two", F32).is_err(),
             "a name assigned twice must not be silently resolved to either value"
+        );
+    }
+
+    #[test]
+    fn a_ternary_lifts_to_select() {
+        // relu via `?:`: out[i] = in0[i] > 0.0f ? in0[i] : 0.0f.
+        let src = "__global__ void relu(const float* in0, float* out, long long n) {\n\
+            long long i = blockIdx.x*blockDim.x + threadIdx.x;\n\
+            for (; i < n; i += gridDim.x*blockDim.x) {\n\
+                out[i] = in0[i] > 0.0f ? in0[i] : 0.0f;\n\
+            }\n}";
+        let lifted = lift_elementwise(&CUDA, src, "relu", F32)
+            .expect("a ternary must lift to Select, not refuse as an unknown node");
+        assert_eq!(
+            lifted.op.body,
+            ScalarExpr::Select(
+                Box::new(ScalarExpr::Binary(
+                    crate::ir::BinaryOp::CmpGt,
+                    Box::new(ScalarExpr::Input(0)),
+                    Box::new(ScalarExpr::Const(0.0)),
+                )),
+                Box::new(ScalarExpr::Input(0)),
+                Box::new(ScalarExpr::Const(0.0)),
+            )
+        );
+    }
+
+    #[test]
+    fn slang_lifts_a_ternary_too() {
+        let src = "StructuredBuffer<float> input0;\n\
+            RWStructuredBuffer<float> output;\n\
+            [numthreads(256,1,1)]\n\
+            void clampz(uint3 tid : SV_DispatchThreadID){\n\
+                uint i = tid.x;\n\
+                output[i] = input0[i] < 0.0f ? 0.0f : input0[i];\n\
+            }";
+        assert!(
+            lift_elementwise(&SLANG, src, "clampz", F32).is_ok(),
+            "the conditional_expression arm must not be CUDA-specific"
         );
     }
 
