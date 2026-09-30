@@ -51,8 +51,8 @@
 // GPU/toolchain: RTX 4070 Laptop (sm_89), CUDA 13.3 / nvcc.
 //
 // Regeneration (from a VS dev shell) — dump the generated oracle .cu, then build:
-//   OFFSET_OUT=<outdir> cargo test -p unpopped dump_offset_sources -- --ignored --nocapture
-//   OFFSET_OUT=<outdir> cargo test -p unpopped dump_rope_pair_sources -- --ignored --nocapture
+//   OFFSET_OUT=<outdir> cargo test -p baracuda-cuda-emit dump_offset_sources -- --ignored --nocapture
+//   OFFSET_OUT=<outdir> cargo test -p baracuda-cuda-emit dump_rope_pair_sources -- --ignored --nocapture
 //   cp crates/unpopped/ondevice/offset_validate.cu <outdir>/
 //   nvcc -O3 -arch=sm_89 -std=c++17 \
 //        -I C:/Projects/baracuda/crates/baracuda-kernels-sys/kernels/include \

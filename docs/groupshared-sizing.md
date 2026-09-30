@@ -1,5 +1,10 @@
 # Sizing the `groupshared`/`__shared__` residue bucket
 
+> **Superseded in part (2026-09-29).** The claim that closing this bucket
+> needs the IR to model cooperation is withdrawn, and the scope question is
+> answered by `docs/idiom-lifting-design.md` §1a. See "What closing it
+> requires" below. The measurements in this note stand.
+
 Design note only — **no committed code changes.** Answers "what is the
 largest remaining error bucket in the Fuel corpus and what would it take to
 close it," measured against `origin/main` at `b91e4d6` (post-#25, unpopped
@@ -77,44 +82,50 @@ but it rescues at most 4 files (the `arg_reduce_any_dim` variants), not the
 corpus** — `ls` on the corpus shows no `_naive`, `_any_dim`, or otherwise
 unoptimized counterpart for `softmax`, `layer_norm`, `rms_norm`,
 `flash_attention`, `reduce` (plain), `matmul_q4_0_tiled`, or `qmatvec_q4_0`.
-For those, closing this bucket means the IR modeling the cooperative kernel
-itself, or nothing.
+For those, closing this bucket needs the parser to recognize the cooperative
+kernel and lift it to the intent it implements. It does **not** need the IR to
+model cooperation. See the next section.
 
-## What closing it for real would require (rough shape, not measured)
+## What closing it requires: corrected by `docs/idiom-lifting-design.md`
 
-Not prototyped — this is a structural sizing, same caveat as the
-strided/broadcast row in `docs/slang-second-blocker-sizing.md`. A
-groupshared/tree-reduction kernel is a different *category* from the
-current three (elementwise / reduction / scan), all of which assume each
-output is computed independently with no cross-thread synchronization:
+This section first said that closing the bucket needs *"a new IR shape
+modeling a fixed-size cooperative scratch buffer, a parametrized reduction
+tree, and an explicit barrier/phase ordering"*, because *"none of
+`ScalarExpr`/`OpDef`'s current variants represent cross-invocation
+communication"*. **That was wrong for most of the bucket, and the claim is
+withdrawn.** The second half is true, and it doesn't matter. The IR represents
+the *semantics* of these kernels without representing their cooperation, and
+the emitters already supply the cooperation as a schedule:
 
-- A new IR shape modeling a fixed-size cooperative scratch buffer, a
-  parametrized reduction tree, and an explicit barrier/phase ordering —
-  none of `ScalarExpr`/`OpDef`'s current variants represent
-  cross-invocation communication at all.
-- `Backend`/`Lowering` changes in **both** `unpopped-cpu-c` (emit an
-  equivalent to `__shared__`/barriers in portable C, or fall back to a
-  single-threaded oracle semantics) and `unpopped-slang` (emit
-  `groupshared`/`GroupMemoryBarrierWithGroupSync` faithfully) — not a
-  `convert.rs`-only change like #22 or #25.
-- A decision on whether the *workgroup size* (256 in `reduce.slang`) is a
-  kernel-baked constant, a dispatch parameter, or something the IR must
-  parametrize — none of which the current single-thread-semantics model has
-  an opinion on.
+- `Access::Reduction` / `Access::RowReduce` (`crates/unpopped/src/ir.rs:1616`,
+  `:1656`) already express reduce, softmax and rmsnorm. The `RowReduce` doc
+  names softmax and rmsnorm as instances.
+- `plan::Schedule::RowReduce` is documented as *"one block per output row
+  (warp-shuffle + shared-memory tree reduce)"*.
+- baracuda's CUDA emitter emits exactly that: `__shfl_down_sync` and a
+  `__shared__ smem[32]` tree, at `baracuda@ab2e0bf`
+  `crates/baracuda-cuda-emit/src/cuda.rs:4660-4700`.
 
-This is comparable in scope to the earlier seam-decoupling work (#18), not
-a same-night PR, and plausibly larger since it touches both backends' code
-generation rather than one crate's parsing.
+So for `reduce`, `reduce_last_dim`, `rms_norm_last_dim`, `softmax`,
+`arg_reduce_last_dim` and `layer_norm_last_dim`, the missing piece is a
+**parse-side idiom recognizer**, subject to the IR gaps named in the design
+doc §3.2 (e.g. RowReduce's single-input limit for the γ weight).
+- Emitter work remains for `unpopped-slang` and `unpopped-cpu-c`, which don't
+  yet emit a `RowReduce` schedule.
+- `flash_attention`, `matmul_q4_0_tiled` and `qmatvec_q4_0` need the design
+  doc's additions: `Access::Attention`, the block-dequant view, and mixed-dtype
+  `Contraction`.
+- The backward kernels were not assessed.
 
-## Recommendation
+## Recommendation, as superseded
 
-Do not build. Two independent, smaller items are available if wanted
-instead, both same-class as work already merged this session:
+The recommendation was *do not build; ask whether workgroup-cooperative
+kernels are in scope for the neutral IR*. That question is answered by the
+design in `docs/idiom-lifting-design.md` §1a, once it passes the PM gate:
+**the IR never models cooperation, and parsers lift cooperative source into
+the existing non-cooperative intent**. The `__shared__`/`__shfl`/barrier/
+`groupshared` residue refusal then means "no recognizer claims this", not
+"hand-optimized, therefore residue".
 
-1. Fix the `arg_reduce_any_dim` naive twin's `identifier` blocker (≤4 files,
-   PR-#22-sized).
-2. Ask CireSnave/PM whether workgroup-cooperative kernels are in scope for
-   Unpopped's neutral IR at all, before sizing further. If the answer is no,
-   this 36-file bucket is a correct, permanent refusal and the corpus's
-   ceiling for `convert.rs`-only work is effectively the remaining
-   `Unrecognized` buckets (90 files), not 147.
+The standalone item remains: the `arg_reduce_any_dim` naive twin's
+`identifier` blocker (≤4 files, PR-#22-sized).
