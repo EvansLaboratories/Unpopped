@@ -7,7 +7,7 @@
 // dtype_promote is a DE-DUPLICATION win (both sides compile to the same single
 // intrinsic — no speedup), so the validation is exhaustive bit-exactness.
 //
-//   DTYPE_OUT=<work> cargo test -p unpopped dump_dtype_promote_helper -- --ignored
+//   DTYPE_OUT=<work> cargo test -p baracuda-cuda-emit dump_dtype_promote_helper -- --ignored
 //   nvcc -O3 -arch=sm_89 -std=c++17 -Xcompiler "/Zc:preprocessor /std:c++17" \
 //        -I <work> -I crates/baracuda-kernels-sys/kernels/include \
 //        crates/unpopped/ondevice/dtype_promote_validate.cu -o <work>/dtype_promote_validate

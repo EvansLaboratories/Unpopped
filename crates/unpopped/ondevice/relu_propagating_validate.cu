@@ -22,7 +22,7 @@
 //
 // Regeneration (from a VS dev shell) — first dump the generated oracle .cu, then
 // build the harness beside them:
-//   RELU_OUT=<outdir> cargo test -p unpopped dump_relu_sources -- --ignored --nocapture
+//   RELU_OUT=<outdir> cargo test -p baracuda-cuda-emit dump_relu_sources -- --ignored --nocapture
 //   cp crates/unpopped/ondevice/relu_propagating_validate.cu <outdir>/
 //   nvcc -O3 -arch=sm_89 -std=c++17 \
 //        -I C:/Projects/baracuda/crates/baracuda-kernels-sys/kernels/include \
