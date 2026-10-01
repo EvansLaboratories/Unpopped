@@ -1276,6 +1276,15 @@ fn classify_vec_width(od: &OperandDesc, inner: Option<usize>, bcast: AxisMask) -
     }
     let ext = od.shape[inner].max(0) as u64;
     let align = u64::from(od.align_bytes);
+    // Zero divides everything, so `align % vbytes == 0` and `ext % v == 0` are
+    // vacuously true at 0 and would elect the WIDEST width. §6.5-0009: an
+    // unspecified alignment (`0`) MUST derive v1, and so MUST an E = 0 run.
+    // (`inner_axis` keeps E < 2 out today; the guard states the rule here
+    // rather than relying on that.) Pinned by
+    // `tests/zero_is_not_maximally_divisible.rs`.
+    if align == 0 || ext == 0 {
+        return VecWidth::Scalar;
+    }
     let dsz = u64::from(dsz);
     for &v in &[8u64, 4, 2] {
         let vbytes = v * dsz;
@@ -1290,9 +1299,17 @@ fn classify_vec_width(od: &OperandDesc, inner: Option<usize>, bcast: AxisMask) -
     VecWidth::Scalar
 }
 
+/// §6.5-0012: `d16` iff `E ≥ 16` and `E mod 16 = 0`, … else `da`, which covers
+/// odd `E`, `E = 1` and `E = 0`. The `E ≥ L` half is what keeps `0` (divisible by
+/// everything) out of `d16`. The per-operand path never passes `E < 2` (it goes
+/// through `inner_axis`), but the contraction's K bucket calls this on the raw K
+/// extent, so `K = 0` reached the ladder. Pinned by
+/// `tests/zero_is_not_maximally_divisible.rs`.
 fn div_bucket(extent: i64) -> DivBucket {
     let e = extent.max(0);
-    if e % 16 == 0 {
+    if e == 0 {
+        DivBucket::Any
+    } else if e % 16 == 0 {
         DivBucket::Div16
     } else if e % 8 == 0 {
         DivBucket::Div8
