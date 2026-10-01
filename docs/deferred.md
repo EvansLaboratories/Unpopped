@@ -88,7 +88,8 @@ rather than a cleanup commit.
 > deferral's clothes.* An item held on *"when the regen happens"* never fires if
 > the regen never happens.
 >
-> **Checkpoint: 2026-10-01. Owner: the portfolio PM** (accepts the regen; this
+> **Checkpoint: 2026-10-22** (moved from 2026-10-01 on the day it fired; the
+> reason and who agreed are in the test's doc comment and commit). **Owner: the portfolio PM** (accepts the regen; this
 > workspace drafts and implements it). **Enforced, not remembered** —
 > `crates/unpopped-conformance/tests/golden_regen_checkpoint.rs` goes red on that
 > date and says what to do. Proven to fire by moving the date into the past.
