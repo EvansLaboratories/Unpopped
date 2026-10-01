@@ -3,13 +3,19 @@
 Manual `nvcc` harnesses (not wired into `cargo test`) that launch the **generated**
 `.cu` kernels on the GPU and diff against a host/CPU reference — the checks that
 are catchable only on device. The `#include`d kernel names track the catalog cells
-in `bin/kernelgen.rs`; update both together.
+in baracuda's `crates/baracuda-cuda-emit/src/bin/kernelgen.rs`; update both together.
+
+⚠️ **The harnesses live here; everything that generates their input lives in
+baracuda.** The CUDA emitter, `kernelgen`, and every `dump_*` test named below
+moved to `baracuda-cuda-emit` in `b68116c` (2026-08-06). Until this was corrected,
+every run command here said `cargo test -p unpopped …`, which matched no test in
+this repo. Run the `cargo` steps from a baracuda checkout.
 
 **Run (Windows):** from a Visual Studio dev shell so `nvcc` finds `cl.exe`
 (`Enter-VsDevShell`), or an x64 Native Tools prompt. General shape:
 
 ```sh
-cargo run -p unpopped --bin kernelgen -- <outdir>   # generate the catalog .cu
+cargo run -p baracuda-cuda-emit --bin kernelgen -- <outdir>   # (baracuda checkout) generate the catalog .cu
 cp crates/unpopped/ondevice/<harness>.cu <outdir>/  # place harness beside them
 nvcc -O3 -arch=sm_89 <outdir>/<harness>.cu -o <outdir>/<harness> && <outdir>/<harness>
 ```
@@ -31,7 +37,7 @@ guard), then micro-benches both (compute-bound, REPEAT unravels/elem).
 Run (needs the bespoke include dir + the MSVC conforming preprocessor):
 
 ```sh
-UNRAVEL_OUT=<outdir> cargo test -p unpopped dump_coord_unravel_helper -- --ignored --nocapture
+UNRAVEL_OUT=<outdir> cargo test -p baracuda-cuda-emit dump_coord_unravel_helper -- --ignored --nocapture
 nvcc -O3 -arch=sm_89 -std=c++17 -Xcompiler "/Zc:preprocessor /std:c++17" \
      -I <outdir> -I crates/baracuda-kernels-sys/kernels/include \
      crates/unpopped/ondevice/unravel_bench.cu -o <outdir>/unravel_bench && <outdir>/unravel_bench
@@ -65,7 +71,7 @@ round-trip. The intrinsic pick is emitted from the same `promote_load_f32` /
 Run:
 
 ```sh
-DTYPE_OUT=<outdir> cargo test -p unpopped dump_dtype_promote_helper -- --ignored --nocapture
+DTYPE_OUT=<outdir> cargo test -p baracuda-cuda-emit dump_dtype_promote_helper -- --ignored --nocapture
 nvcc -O3 -arch=sm_89 -std=c++17 -Xcompiler "/Zc:preprocessor /std:c++17" \
      -I <outdir> -I crates/baracuda-kernels-sys/kernels/include \
      crates/unpopped/ondevice/dtype_promote_validate.cu -o <outdir>/dtype_promote_validate && <outdir>/dtype_promote_validate
@@ -93,7 +99,7 @@ inputs (signed-zero / ±Inf / NaN edge seeds), and bit-compares.
 Run:
 
 ```sh
-LIFT_OUT=<outdir> cargo test -p unpopped --lib lift::tests::dump_lift_roundtrip -- --ignored --nocapture
+LIFT_OUT=<outdir> cargo test -p baracuda-cuda-emit --test lift dump_lift_roundtrip -- --ignored --nocapture
 nvcc -O3 -arch=sm_89 -std=c++17 -I <outdir>      crates/unpopped/ondevice/lift_roundtrip_validate.cu -o <outdir>/lift_roundtrip_validate && <outdir>/lift_roundtrip_validate
 ```
 
@@ -126,7 +132,7 @@ source (all 256 i8 + 256 u8), each cast to all 8 destinations, plus curated
 Run:
 
 ```sh
-CAST_OUT=<outdir> cargo test -p unpopped dump_cast_helper -- --ignored --nocapture
+CAST_OUT=<outdir> cargo test -p baracuda-cuda-emit dump_cast_helper -- --ignored --nocapture
 nvcc -O3 -arch=sm_89 -std=c++17 -Xcompiler "/Zc:preprocessor /std:c++17"      -I <outdir> -I crates/baracuda-kernels-sys/kernels/include      crates/unpopped/ondevice/cast_validate.cu -o <outdir>/cast_validate && <outdir>/cast_validate
 ```
 
@@ -1180,7 +1186,7 @@ Regenerate the `.cu` sources with the library dump tool, then copy the harness
 beside them:
 
 ```sh
-SCAN_OUT=<outdir> cargo test -p unpopped dump_scan_sources -- --ignored --nocapture
+SCAN_OUT=<outdir> cargo test -p baracuda-cuda-emit dump_scan_sources -- --ignored --nocapture
 cp crates/unpopped/ondevice/scan_validate.cu <outdir>/
 nvcc -O3 -arch=sm_89 <outdir>/scan_validate.cu -o <outdir>/scan_validate && <outdir>/scan_validate
 ```
@@ -1393,7 +1399,7 @@ entry symbols distinct.
 **Regeneration:** these cells are **not** in the `bin/kernelgen.rs` catalog.
 
 ```sh
-WINDOW_OUT=<outdir> cargo test -p unpopped dump_window_sources -- --ignored --nocapture
+WINDOW_OUT=<outdir> cargo test -p baracuda-cuda-emit dump_window_sources -- --ignored --nocapture
 cp crates/unpopped/ondevice/window_validate.cu <outdir>/
 nvcc -O3 -arch=sm_89 <outdir>/window_validate.cu -o <outdir>/window_validate && <outdir>/window_validate
 ```
@@ -1513,7 +1519,7 @@ extreme for integers — all emitted **header-light** (`__int_as_float(0x7fc0000
 **Regeneration:** these cells are **not** in the `bin/kernelgen.rs` catalog.
 
 ```sh
-SORT_OUT=<outdir> cargo test -p unpopped dump_sort_sources -- --ignored --nocapture
+SORT_OUT=<outdir> cargo test -p baracuda-cuda-emit dump_sort_sources -- --ignored --nocapture
 cp crates/unpopped/ondevice/sort_validate.cu <outdir>/
 nvcc -O3 -arch=sm_89 <outdir>/sort_validate.cu -o <outdir>/sort_validate && <outdir>/sort_validate
 ```
@@ -1932,7 +1938,7 @@ raw output bytes to be **memcmp-identical**.
 committed harness is built beside them:
 
 ```sh
-RELU_OUT=<outdir> cargo test -p unpopped dump_relu_sources -- --ignored --nocapture
+RELU_OUT=<outdir> cargo test -p baracuda-cuda-emit dump_relu_sources -- --ignored --nocapture
 cp crates/unpopped/ondevice/relu_propagating_validate.cu <outdir>/
 nvcc -O3 -arch=sm_89 -std=c++17 \
      -I <kernels-sys>/kernels/include <outdir>/relu_propagating_validate.cu -o relu_propagating_validate
@@ -2027,8 +2033,8 @@ ABI comment. The proof is the high-edge memcheck cell (case 8).
 **Regeneration:**
 
 ```sh
-OFFSET_OUT=<outdir> cargo test -p unpopped dump_offset_sources -- --ignored --nocapture
-OFFSET_OUT=<outdir> cargo test -p unpopped dump_rope_pair_sources -- --ignored --nocapture
+OFFSET_OUT=<outdir> cargo test -p baracuda-cuda-emit dump_offset_sources -- --ignored --nocapture
+OFFSET_OUT=<outdir> cargo test -p baracuda-cuda-emit dump_rope_pair_sources -- --ignored --nocapture
 cp crates/unpopped/ondevice/offset_validate.cu <outdir>/
 nvcc -O3 -arch=sm_89 -std=c++17 \
      -I <kernels-sys>/kernels/include \
@@ -2216,7 +2222,7 @@ triu stored `-0.0` on masked negatives (84,489 accounted bit-diffs at
 `dump_select_sources` test (not the `bin/kernelgen.rs` catalog):
 
 ```text
-SELECT_OUT=<outdir> cargo test -p unpopped dump_select_sources -- --ignored --nocapture
+SELECT_OUT=<outdir> cargo test -p baracuda-cuda-emit dump_select_sources -- --ignored --nocapture
 ```
 
 then copy `select_validate.cu` beside them and compile like
@@ -2309,7 +2315,7 @@ Generate the two kernels with the `dump_dropout_sources` test, then copy the
 harness beside them:
 
 ```sh
-DROPOUT_OUT=<outdir> cargo test -p unpopped dump_dropout_sources -- --ignored --nocapture
+DROPOUT_OUT=<outdir> cargo test -p baracuda-cuda-emit dump_dropout_sources -- --ignored --nocapture
 cp crates/unpopped/ondevice/dropout_validate.cu <outdir>/
 # acceptance gate (bespoke header => conforming preprocessor + include path):
 nvcc -O3 -arch=sm_89 -std=c++17 -DWITH_BESPOKE \
@@ -2415,7 +2421,7 @@ f64 `_mo2_scalar` + `_mo2_strided_r2` alongside the f32 pair), then copy the har
 beside them and `nvcc`:
 
 ```
-DROPOUT_OUT=<outdir> cargo test -p unpopped dump_dropout_sources -- --ignored --nocapture
+DROPOUT_OUT=<outdir> cargo test -p baracuda-cuda-emit dump_dropout_sources -- --ignored --nocapture
 cp crates/unpopped/ondevice/dropout_f64_validate.cu <outdir>/
 # CPU-oracle build (headerless; PRIMARY gate + strided/determinism/f32-regression):
 nvcc -O3 -arch=sm_89 -std=c++17 -I <outdir> <outdir>/dropout_f64_validate.cu -o <outdir>/dropout_f64_validate
@@ -2494,7 +2500,7 @@ is uniform:
 
 Regenerate + build + run:
 ```
-IM2COL_OUT=<outdir> cargo test -p unpopped dump_im2col_sources -- --ignored --nocapture
+IM2COL_OUT=<outdir> cargo test -p baracuda-cuda-emit dump_im2col_sources -- --ignored --nocapture
 cp crates/unpopped/ondevice/im2col_validate.cu <outdir>/
 nvcc -O3 -arch=sm_89 -std=c++17 -Xcompiler "/Zc:preprocessor" \
      -I crates/baracuda-kernels-sys/kernels/include \

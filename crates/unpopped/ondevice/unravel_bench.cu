@@ -8,7 +8,7 @@
 //
 // Generate the helper, then compile from an x64 Native Tools shell (or pass
 // -ccbin to the MSVC host compiler):
-//   UNRAVEL_OUT=<work> cargo test -p unpopped dump_coord_unravel_helper -- --ignored --nocapture
+//   UNRAVEL_OUT=<work> cargo test -p baracuda-cuda-emit dump_coord_unravel_helper -- --ignored --nocapture
 //   nvcc -O3 -arch=sm_89 -std=c++17 -Xcompiler "/Zc:preprocessor /std:c++17" \
 //        -I <work> -I crates/baracuda-kernels-sys/kernels/include \
 //        crates/unpopped/ondevice/unravel_bench.cu -o <work>/unravel_bench

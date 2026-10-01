@@ -34,7 +34,7 @@
 //! [`parse_slang`]), which is what makes moving them into per-target crates a
 //! move rather than a rewrite.
 
-use crate::ir::{Expr, OpDef, ReduceOp, ScalarExpr, UnaryOp};
+use crate::ir::{BinaryOp, Expr, OpDef, ReduceOp, ScalarExpr, UnaryOp};
 use crate::lift::{LiftError, Lifted, binary_fn, unary_fn};
 use tree_sitter::{Node, Parser, Tree};
 use unpopped_vocab::ElementKind;
@@ -275,6 +275,8 @@ fn lift_store(
         idx_var,
         in_prefix,
         max_input: None,
+        locals: local_bindings(tree.root_node(), src),
+        resolving: Vec::new(),
     };
     let body = w.expr(rhs)?;
     let n_inputs = w.max_input.map_or(0, |m| m + 1);
@@ -308,6 +310,8 @@ fn lift_scan_store(
         idx_var,
         in_prefix,
         max_input: None,
+        locals: local_bindings(tree.root_node(), src),
+        resolving: Vec::new(),
     };
     let pre = w.expr(pre_node)?;
     let n_inputs = w.max_input.map_or(0, |m| m + 1);
@@ -381,6 +385,8 @@ fn lift_reduce_store(
         idx_var,
         in_prefix,
         max_input: None,
+        locals: local_bindings(tree.root_node(), src),
+        resolving: Vec::new(),
     };
     let body = w.expr(body_node)?;
     let n_inputs = w.max_input.map_or(0, |m| m + 1);
@@ -572,11 +578,108 @@ fn subscript_index(sub: Node, src: &str) -> Option<String> {
     Some(kids[0].utf8_text(src.as_bytes()).ok()?.to_string())
 }
 
+/// Names assigned exactly once in the whole tree, mapped to the single
+/// expression node that value came from: either a declaration's initializer
+/// (`TYPE x = <expr>;`) or the sole plain reassignment of an
+/// already-declared name (`x = <expr>;`, LHS a bare identifier, never a
+/// buffer subscript). A name assigned more than once — declared then
+/// reassigned, or reassigned more than once — is deliberately absent: this
+/// scan does not choose among competing definitions, it only recognizes the
+/// case where there is exactly one.
+///
+/// # Why this is safe where a blind text substitution was not
+///
+/// This is consulted in exactly one place — [`Walk::expr`]'s `identifier`
+/// arm, evaluating a name that appears as a VALUE inside the store's RHS
+/// expression. It never touches the store-shape scanners
+/// (`find_out_store`/`find_scalar_out_store`/`find_running_out_store`,
+/// `find_accumulation`) that run on the raw tree BEFORE a [`Walk`] exists —
+/// those look for `{out_name}[i] = <ident>` and `acc <op>= <expr>` by
+/// structural shape, never through this map, so a scan/reduction
+/// accumulator's own name cannot be silently resolved out from under them
+/// the way a global text substitution did (`docs/slang-second-blocker-sizing.md`).
+fn local_bindings<'t>(root: Node<'t>, src: &str) -> Vec<(String, Node<'t>)> {
+    let mut sites: Vec<(String, Node<'t>)> = Vec::new();
+    let mut mutations: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    collect_binding_sites(root, src, &mut sites, &mut mutations);
+
+    sites
+        .into_iter()
+        .filter(|(name, _)| mutations.get(name) == Some(&1))
+        .collect()
+}
+
+/// Every `(name, value-node)` a bare identifier is assigned at via a
+/// declaration's initializer or a plain (`=`) reassignment — candidate
+/// substitution values. `mutations` separately counts EVERY way a bare
+/// identifier's value changes, plain assignment included, but ALSO
+/// compound assignment (`+=`/`-=`/…) and increment/decrement (`++`/`--`),
+/// none of which contribute a candidate value but all of which must still
+/// disqualify a name from the single-assignment fast path.
+///
+/// Counting compound assignment is not optional: `float acc = 0.0f; ... acc
+/// += in0[i]; out[i] = acc;` declares `acc` exactly once by the narrower
+/// (declaration-or-`=`) count, so a scanner that only watched `=` would
+/// treat `acc` as "safely bound to 0.0" and let a scan's own running
+/// accumulator get folded into a bogus constant elementwise store — caught
+/// by `scan_reduction_elementwise_are_disjoint` failing exactly that way
+/// before this counter existed.
+fn collect_binding_sites<'t>(
+    n: Node<'t>,
+    src: &str,
+    sites: &mut Vec<(String, Node<'t>)>,
+    mutations: &mut std::collections::HashMap<String, u32>,
+) {
+    if n.kind() == "init_declarator"
+        && let (Some(decl), Some(value)) = (
+            n.child_by_field_name("declarator"),
+            n.child_by_field_name("value"),
+        )
+        && decl.kind() == "identifier"
+        && let Ok(name) = decl.utf8_text(src.as_bytes())
+    {
+        sites.push((name.to_string(), value));
+        *mutations.entry(name.to_string()).or_insert(0) += 1;
+    } else if n.kind() == "assignment_expression"
+        && let (Some(left), Some(op), Some(right)) = (
+            n.child_by_field_name("left"),
+            n.child_by_field_name("operator"),
+            n.child_by_field_name("right"),
+        )
+        && left.kind() == "identifier"
+        && let Ok(name) = left.utf8_text(src.as_bytes())
+    {
+        *mutations.entry(name.to_string()).or_insert(0) += 1;
+        if op.utf8_text(src.as_bytes()) == Ok("=") {
+            sites.push((name.to_string(), right));
+        }
+    } else if matches!(n.kind(), "update_expression")
+        && let Some(arg) = n.named_child(0)
+        && arg.kind() == "identifier"
+        && let Ok(name) = arg.utf8_text(src.as_bytes())
+    {
+        // `x++` / `--x` — no substitutable value, but still a mutation.
+        *mutations.entry(name.to_string()).or_insert(0) += 1;
+    }
+    let mut cursor = n.walk();
+    for child in n.named_children(&mut cursor) {
+        collect_binding_sites(child, src, sites, mutations);
+    }
+}
+
 struct Walk<'a> {
     src: &'a str,
     idx_var: String,
     in_prefix: &'a str,
     max_input: Option<u8>,
+    /// See [`local_bindings`]. Consulted only when [`Walk::expr`] hits a bare
+    /// `identifier` it cannot otherwise place — never used to rewrite source,
+    /// never touching the store/accumulator scanners.
+    locals: Vec<(String, Node<'a>)>,
+    /// Names currently being resolved through `locals`, so a self-referential
+    /// or mutually-referential binding declines as a typed miss instead of
+    /// recursing forever.
+    resolving: Vec<String>,
 }
 
 impl<'a> Walk<'a> {
@@ -602,8 +705,34 @@ impl<'a> Walk<'a> {
                     "-" => ScalarExpr::Sub(Box::new(le), Box::new(re)),
                     "*" => ScalarExpr::Mul(Box::new(le), Box::new(re)),
                     "/" => ScalarExpr::Div(Box::new(le), Box::new(re)),
+                    // Comparisons — never reachable as a store's own value
+                    // without `conditional_expression` below, which is the
+                    // only place a Cmp* result gets consumed (as a Select
+                    // condition). Kept here rather than duplicated: the
+                    // grammar parses `a < b` as an ordinary binary_expression
+                    // whether it sits inside `? :` or not.
+                    "==" => ScalarExpr::Binary(BinaryOp::CmpEq, Box::new(le), Box::new(re)),
+                    "!=" => ScalarExpr::Binary(BinaryOp::CmpNe, Box::new(le), Box::new(re)),
+                    "<" => ScalarExpr::Binary(BinaryOp::CmpLt, Box::new(le), Box::new(re)),
+                    "<=" => ScalarExpr::Binary(BinaryOp::CmpLe, Box::new(le), Box::new(re)),
+                    ">" => ScalarExpr::Binary(BinaryOp::CmpGt, Box::new(le), Box::new(re)),
+                    ">=" => ScalarExpr::Binary(BinaryOp::CmpGe, Box::new(le), Box::new(re)),
                     other => return Err(LiftError::Unrecognized(format!("operator '{other}'"))),
                 })
+            }
+            // `cond ? a : b` -> the IR's own ternary, ScalarExpr::Select —
+            // already spec'd (KISS-CLASSIFY, the dropout-scaling use) and
+            // already lowered by unpopped-cpu-c (F32/F32Strict/F64) and
+            // unpopped-slang; no Backend/Lowering change needed here.
+            "conditional_expression" => {
+                let cond = self.field(n, "condition")?;
+                let cons = self.field(n, "consequence")?;
+                let alt = self.field(n, "alternative")?;
+                Ok(ScalarExpr::Select(
+                    Box::new(self.expr(cond)?),
+                    Box::new(self.expr(cons)?),
+                    Box::new(self.expr(alt)?),
+                ))
             }
             "unary_expression" => {
                 let op = self.field(n, "operator")?;
@@ -669,10 +798,26 @@ impl<'a> Walk<'a> {
                     ))),
                 }
             }
-            "identifier" => Err(LiftError::Unrecognized(format!(
-                "identifier '{}'",
-                self.text(n)
-            ))),
+            "identifier" => {
+                let name = self.text(n).to_string();
+                let bound = self
+                    .locals
+                    .iter()
+                    .find(|(bn, _)| *bn == name)
+                    .map(|(_, v)| *v);
+                match bound {
+                    Some(_) if self.resolving.contains(&name) => Err(LiftError::Unrecognized(
+                        format!("identifier '{name}' (self-referential binding)"),
+                    )),
+                    Some(value) => {
+                        self.resolving.push(name.clone());
+                        let result = self.expr(value);
+                        self.resolving.pop();
+                        result
+                    }
+                    None => Err(LiftError::Unrecognized(format!("identifier '{name}'"))),
+                }
+            }
             other => Err(LiftError::Unrecognized(format!("node '{other}'"))),
         }
     }
@@ -1017,6 +1162,88 @@ mod tests {
             lift(&CUDA, scan, "x", F32).unwrap().op.access,
             crate::ir::Access::Scan { .. }
         ));
+    }
+
+    #[test]
+    fn a_single_assignment_local_is_resolved_before_the_store() {
+        // The shape a real Fuel kernel uses (cast_f32_to_f16.slang): declare,
+        // assign once, read once at the store. Before local-variable
+        // resolution this refused as `Unrecognized("identifier 'x'")`.
+        let src = "__global__ void cast(const float* in0, float* out, long long n) {\n\
+            long long i = blockIdx.x*blockDim.x + threadIdx.x;\n\
+            for (; i < n; i += gridDim.x*blockDim.x) {\n\
+                float x = in0[i];\n\
+                out[i] = x + 1.0f;\n\
+            }\n}";
+        let lifted = lift_elementwise(&CUDA, src, "cast", F32)
+            .expect("a single-assignment local must resolve, not refuse as an unknown identifier");
+        assert_eq!(
+            lifted.op.body,
+            ScalarExpr::Add(
+                Box::new(ScalarExpr::Input(0)),
+                Box::new(ScalarExpr::Const(1.0)),
+            )
+        );
+    }
+
+    #[test]
+    fn a_reassigned_local_is_not_resolved() {
+        // `x` is assigned twice (declaration, then a plain `=` reassignment)
+        // with no branch involved at all — the simplest possible case a
+        // single-assignment resolver must still decline, because picking
+        // either value would be a guess. Distinct from
+        // `scan_reduction_elementwise_are_disjoint`, which covers the
+        // COMPOUND-assignment (`+=`) shape of the same hazard.
+        let src = "__global__ void two(const float* in0, float* out, long long n) {\n\
+            long long i = blockIdx.x*blockDim.x + threadIdx.x;\n\
+            for (; i < n; i += gridDim.x*blockDim.x) {\n\
+                float x = in0[i];\n\
+                x = x + 1.0f;\n\
+                out[i] = x;\n\
+            }\n}";
+        assert!(
+            lift_elementwise(&CUDA, src, "two", F32).is_err(),
+            "a name assigned twice must not be silently resolved to either value"
+        );
+    }
+
+    #[test]
+    fn a_ternary_lifts_to_select() {
+        // relu via `?:`: out[i] = in0[i] > 0.0f ? in0[i] : 0.0f.
+        let src = "__global__ void relu(const float* in0, float* out, long long n) {\n\
+            long long i = blockIdx.x*blockDim.x + threadIdx.x;\n\
+            for (; i < n; i += gridDim.x*blockDim.x) {\n\
+                out[i] = in0[i] > 0.0f ? in0[i] : 0.0f;\n\
+            }\n}";
+        let lifted = lift_elementwise(&CUDA, src, "relu", F32)
+            .expect("a ternary must lift to Select, not refuse as an unknown node");
+        assert_eq!(
+            lifted.op.body,
+            ScalarExpr::Select(
+                Box::new(ScalarExpr::Binary(
+                    crate::ir::BinaryOp::CmpGt,
+                    Box::new(ScalarExpr::Input(0)),
+                    Box::new(ScalarExpr::Const(0.0)),
+                )),
+                Box::new(ScalarExpr::Input(0)),
+                Box::new(ScalarExpr::Const(0.0)),
+            )
+        );
+    }
+
+    #[test]
+    fn slang_lifts_a_ternary_too() {
+        let src = "StructuredBuffer<float> input0;\n\
+            RWStructuredBuffer<float> output;\n\
+            [numthreads(256,1,1)]\n\
+            void clampz(uint3 tid : SV_DispatchThreadID){\n\
+                uint i = tid.x;\n\
+                output[i] = input0[i] < 0.0f ? 0.0f : input0[i];\n\
+            }";
+        assert!(
+            lift_elementwise(&SLANG, src, "clampz", F32).is_ok(),
+            "the conditional_expression arm must not be CUDA-specific"
+        );
     }
 
     #[test]
