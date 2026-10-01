@@ -36,7 +36,16 @@
 /// Set 2026-10-01 when `unpopped 0.7.0` published (2026-09-02) and the window
 /// for a coordinated regen opened. **Owner: the portfolio PM**, who accepts the
 /// regen proposal; this workspace drafts and implements it.
-const REGEN_CHECKPOINT: (u32, u32, u32) = (2026, 10, 1);
+///
+/// **Moved 2026-10-01 → 2026-10-22** on the day it fired. Why: the PM was
+/// mid-triage on an unrelated multi-repo night, and did not have the context to
+/// responsibly accept a regen that breaks byte-identity goldens in both
+/// unpopped and baracuda's CUDA corpus without first reviewing the three
+/// changes. The regen also needs baracuda's lane (paused for budget) and
+/// device re-verification on the GPU rig. CireSnave is working his own decision
+/// backlog soon, and this should get a real look, not a rushed accept.
+/// **Agreed by: the portfolio PM, 2026-10-01.**
+const REGEN_CHECKPOINT: (u32, u32, u32) = (2026, 10, 22);
 
 /// Days since the Unix epoch for a civil date (proleptic Gregorian).
 ///
