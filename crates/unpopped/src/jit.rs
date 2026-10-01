@@ -320,11 +320,13 @@ pub fn synthesize(
     )
 }
 
-/// Core synthesis shared by [`synthesize`] (our [`PatternNode`] region) and the
-/// `seam` front-end (Fuel's `fuel_kernel_seam_types::PatternNode` region): op IR +
-/// its canonical recipe pattern → optimized kernel → on-demand compile → FKC
-/// contract + recipe + link row. The §5.1 inward optimizer runs on the *kernel*
-/// body; `derived` (the original region) carries the recipe.
+/// Core synthesis, factored out of [`synthesize`] so a caller converting from
+/// its own region grammar (e.g. Fuel's `fuel_kernel_seam_types::PatternNode`,
+/// converted at the caller's boundary to our [`PatternNode`] before calling
+/// [`synthesize`] — see `baracuda-cuda-emit`) reaches the identical path: op
+/// IR + its canonical recipe pattern → optimized kernel → on-demand compile →
+/// FKC contract + recipe + link row. The §5.1 inward optimizer runs on the
+/// *kernel* body; `derived` (the original region) carries the recipe.
 fn synthesize_op(
     op: OpDef,
     derived: PatternNode,
@@ -716,173 +718,6 @@ pub fn region_unary(op: &str) -> Option<UnaryOp> {
         "Step" => UnaryOp::Step,
         _ => return None,
     })
-}
-
-/// The direct-Rust §5 seam (`--features seam`): synthesize for a region in Fuel's
-/// frozen grammar (`fuel_kernel_seam_types`). Fuel owns the region grammar
-/// (`PatternNode`/`OpTag`); Baracuda owns the classifier input (`OperandDesc`).
-/// We convert Fuel's node to our internal node form and reuse the exact native
-/// `region_to_op` + core synthesis — no duplicated op logic.
-#[cfg(feature = "seam")]
-pub mod seam {
-    use super::*;
-    use fuel_kernel_seam_types::{OpTag, PatternNode as SeamNode};
-
-    /// Synthesize a kernel for a Fuel-chosen `region`. `operands` is the
-    /// inputs-then-output `OperandDesc` projection; `n_inputs = operands.len() - 1`.
-    ///
-    /// # Errors
-    /// See [`JitError`] — a malformed request, an op/dtype outside the
-    /// synthesizer's coverage (honest miss), or a compile failure.
-    #[allow(clippy::too_many_arguments)]
-    pub fn synthesize(
-        region: &SeamNode,
-        operands: &[OperandDesc],
-        op_category: OpCategory,
-        target: impl Into<TargetId>,
-        fused_op_id: &str,
-        max_compile_ms: u32,
-        backend: &dyn Backend,
-        compiler: &dyn Compiler,
-    ) -> Result<JitResponse, JitError> {
-        if operands.is_empty() || operands.len() > MAX_OPERANDS {
-            return Err(JitError::OperandArity {
-                n_inputs: 0,
-                operands: operands.len(),
-            });
-        }
-        if max_compile_ms == 0 {
-            return Err(JitError::Budget("max_compile_ms must be > 0".to_string()));
-        }
-        let dtype = operands[0].dtype;
-        if operands.iter().any(|o| o.dtype != dtype) {
-            return Err(JitError::MixedDtype);
-        }
-        let n_inputs = (operands.len() - 1) as u8;
-
-        let internal = to_internal(region)?;
-        let (op, derived) = region_to_op(&internal, n_inputs, fused_op_id, dtype)?;
-        synthesize_op(
-            op,
-            derived,
-            operands,
-            op_category,
-            target.into(),
-            max_compile_ms,
-            backend,
-            compiler,
-        )
-    }
-
-    /// Max region nesting the seam will convert — a trust-boundary guard so a
-    /// pathologically deep region from Fuel can't overflow the stack (an
-    /// uncatchable abort, not a catchable panic) during the recursive conversion.
-    /// Elementwise fusion regions are shallow; 64 is far above any real subgraph.
-    const MAX_REGION_DEPTH: u32 = 64;
-
-    /// Convert a Fuel `PatternNode` (region direction) to Baracuda's internal node
-    /// (op vocabulary mapped by name). An `OpTag` the synthesizer doesn't cover and
-    /// the matcher-only `SeeThrough`/`Any` are honest `UnsupportedOp` misses; a
-    /// region nested past [`MAX_REGION_DEPTH`] is declined before it can overflow.
-    fn to_internal(n: &SeamNode) -> Result<PatternNode, JitError> {
-        to_internal_at(n, 0)
-    }
-
-    fn to_internal_at(n: &SeamNode, depth: u32) -> Result<PatternNode, JitError> {
-        if depth > MAX_REGION_DEPTH {
-            return Err(JitError::UnsupportedOp(
-                "region nested past MAX_REGION_DEPTH".to_string(),
-            ));
-        }
-        match n {
-            SeamNode::Bind { index } => Ok(PatternNode::Bind(*index)),
-            SeamNode::Op { op, operands, .. } => {
-                let name =
-                    optag_name(*op).ok_or_else(|| JitError::UnsupportedOp(format!("{op:?}")))?;
-                let ops = operands
-                    .iter()
-                    .map(|o| to_internal_at(o, depth + 1))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(PatternNode::Op {
-                    op: name.to_string(),
-                    operands: ops,
-                    consumers: None,
-                    extract: Vec::new(),
-                })
-            }
-            SeamNode::SeeThrough { .. } => Err(JitError::UnsupportedOp("SeeThrough".to_string())),
-            SeamNode::Any => Err(JitError::UnsupportedOp("Any".to_string())),
-        }
-    }
-
-    /// `OpTag` → Baracuda's emitter op-name (what `region_to_op` parses). `None`
-    /// for any tag outside the increment-1 synthesizer coverage.
-    fn optag_name(op: OpTag) -> Option<&'static str> {
-        Some(match op {
-            OpTag::Add => "Add",
-            OpTag::Sub => "Sub",
-            OpTag::Mul => "Mul",
-            OpTag::Div => "Div",
-            OpTag::Maximum => "Maximum",
-            OpTag::Minimum => "Minimum",
-            OpTag::Pow => "Pow",
-            OpTag::Rem => "Rem",
-            OpTag::Neg => "Neg",
-            OpTag::Abs => "Abs",
-            OpTag::Sqr => "Sqr",
-            OpTag::Sqrt => "Sqrt",
-            OpTag::Rsqrt => "Rsqrt",
-            OpTag::Recip => "Recip",
-            OpTag::Exp => "Exp",
-            OpTag::Log => "Log",
-            OpTag::Sin => "Sin",
-            OpTag::Cos => "Cos",
-            OpTag::Tanh => "Tanh",
-            OpTag::Sigmoid => "Sigmoid",
-            OpTag::Silu => "Silu",
-            OpTag::GeluErf => "GeluErf",
-            OpTag::Relu => "Relu",
-            OpTag::Erf => "Erf",
-            OpTag::Step => "Step",
-            OpTag::Floor => "Floor",
-            OpTag::Ceil => "Ceil",
-            OpTag::Round => "Round",
-            OpTag::Sign => "Sign",
-            OpTag::AddScalar => "AddScalar",
-            OpTag::MulScalar => "MulScalar",
-            // Comparisons (→ U8 mask): mapped so a comparison NESTED in a float
-            // region synthesizes (inline 0.0/1.0 mask — the relu-backward
-            // `Mul(dy, Gt(x, z))` shape); a region ROOTED at one is declined
-            // typed by `region_to_op` (hetero U8 output — see its docs).
-            OpTag::Equal => "Equal",
-            OpTag::Ne => "Ne",
-            OpTag::Lt => "Lt",
-            OpTag::Le => "Le",
-            OpTag::Gt => "Gt",
-            OpTag::Ge => "Ge",
-            // Where (select/mask; dispatch spelling is bare "Where", NOT
-            // Elementwise-suffixed): maps to the ternary Select — operand
-            // order (cond, a, b) matches Fuel's. A cmp-cond region ([Gt,
-            // Where]) passes the interior-cmp carve-out and reaches
-            // `derive_pattern`, whose v1 SelectUnsupported typed miss is the
-            // decline (the Where advert is withheld — see pattern.rs); a
-            // bound-cond region declines typed in `synth_op` under BOTH
-            // projections (U8 cond → MixedDtype upstream; uniform all-T →
-            // the bound-cond gate).
-            OpTag::Where => "Where",
-            // Op::Gelu (tanh), PowI/Clamp, MaskedFill, reductions,
-            // MatMul, shape/layout, indexing, LogSoftmaxLastDim — not
-            // synthesized. OpTag::Iota (0.10.2 "value source") is ALSO
-            // declined here even though the IR now has `ScalarExpr::Coord`
-            // (increment 0d): a Fuel Iota is a graph node whose axis rides
-            // `OpAttrs.axis`, and this converter drops attrs — mapping it
-            // axis-less would synthesize the wrong coordinate. Typed decline
-            // (UnsupportedOp("Iota")), never a panic — pinned by
-            // `iota_region_declines_typed`; the attrs-aware Coord bridge is
-            // the follow-up.
-            _ => return None,
-        })
-    }
 }
 
 #[cfg(test)]

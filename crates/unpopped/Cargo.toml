@@ -1,6 +1,6 @@
 [package]
 name = "unpopped"
-version = "0.11.6"
+version = "0.12.0"
 description = "A vendor-neutral kernel generator: the backend-agnostic IR, plan, transform pipeline, contracts and dispatch artifacts, plus the `Backend` and `Compiler` traits a target implements. Ships a portable-C99 reference backend and a CPU oracle, so it builds and self-tests with no device, no driver, and no vendor dependency. Device backends live under their own vendor identity and depend on this crate — the CUDA emitter, its NVRTC compiler and the Fuel synthesizer live in `baracuda-cuda-emit`. Pre-1.0 and moving; pin exact versions."
 edition.workspace = true
 rust-version.workspace = true
@@ -19,14 +19,6 @@ readme = "README.md"
 # since it names a single file and this crate is dual-licensed.
 
 [features]
-# Wire Fuel's frozen kernel-seam grammar (`fuel_kernel_seam_types::PatternNode`) as
-# the neutral seam front-end's JIT region type. The live-call envelope
-# (`fuel_kernel_seam::Synthesizer`, `BaracudaSynthesizer`) lives in
-# `baracuda-cuda-emit`, so this crate keeps only the `-types` grammar dep.
-#
-# OFF by default: it is a consumer-specific protocol dep, and the default build of
-# a vendor-neutral generator carries no consumer's vocabulary.
-seam = ["dep:fuel-kernel-seam-types"]
 # The source-language CONVERTERS (IR-hub Phase 4): tree-sitter frontends that lift
 # existing CUDA / Slang kernels into the neutral IR. Optional so the published
 # default build stays lean — the grammars compile C via the `cc` crate; enable with
@@ -40,10 +32,6 @@ unpopped-vocab = { workspace = true }
 # so it remains a valid differential oracle. Replaces the v1 ~1e-7 rational that was
 # too loose to reference an f32/f64 erf/gelu kernel (adversarial review).
 libm = "0.2"
-# Fuel's dependency-free std-POD grammar crate (OpTag / OpAttrs / PatternNode) — the
-# §5 shared wire vocabulary. crates.io version dep so the default build resolves
-# without a Fuel checkout (an unpublished path/git dep breaks workspace resolution).
-fuel-kernel-seam-types = { version = "0.10.3", optional = true }
 # Human-readable / -writable IR text form (IR-hub Phase 3): the neutral `OpDef`
 # IR derives Serialize/Deserialize so an op can be authored/inspected/diffed as
 # pretty JSON and round-tripped (see `src/text.rs`, `op_to_text`/`op_from_text`).
