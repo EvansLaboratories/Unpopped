@@ -15,9 +15,77 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## Unreleased
+## Unreleased — `0.14.0`
 
-*Nothing. The workspace matches the published `0.13.0`.*
+One breaking release that conforms `unpopped-vocab`'s structure-key derivation
+to KISS-Classify as of **KISS#517 + KISS#519** (`KISS@bc16715` plus the #519
+amendment). Tracking: #31.
+
+⚠️ **Wire-visible. Tokens change for the inputs below.** If you cache on the
+token, re-derive the affected entries rather than migrating them.
+
+**Every same-rank cell with ordinary strides keys exactly as in 0.13.0.** The
+KISS byte-match vectors and every pre-existing token test pass unchanged.
+
+### Which tokens change
+
+| Input | `0.13.0` | `0.14.0` | KISS-CLASSIFY |
+|---|---|---|---|
+| A lower-rank operand in a higher-rank cell, e.g. `[256]` with `[128,256]` | mask `00` | mask `01` (in frame coordinates) | §6.5-0014 (as amended by #519), §6.6-0008, §6.6-0013 |
+| An own extent-1, stride-0 axis where the frame is wider, e.g. `[1,256]` strides `[0,1]` | mask `00` | mask `01` | §6.6-0008 |
+| A trailing unit axis, e.g. `[4,1]` | `d4` (and possibly a packed width) | `da` / `v1` | §6.3-0011 |
+| A zero-extent innermost axis, e.g. `[8,0]` | `d8` | `da` / `v1` | §6.3-0011, §6.5-0012 |
+| A mixed-rank work class, e.g. `[2,64]` with `[64]` | `grid` (left-aligned frame: 4096) | `block` (right-aligned: 128) | §6.6-0013, §6.5-0010 |
+| A token naming `f8e6m2` | parsed and keyed | **typed decline** (`ReservedDtype`) | §6.1-0013 |
+
+**Unchanged on purpose:** a rank-deficient operand is still laid out from its
+**own** axes. It is not `br` and not forced to `v1` merely for lacking a frame
+axis. KISS#517's first text padded the layout too. That gave im2col's dense and
+strided rank-3 outputs the same token, which Unpopped's im2col gate caught.
+KISS#519 amended the clause.
+
+### New API: `try_structure_key` / `try_structure_key_token`
+
+§6.6-0021: a scale-type dtype (`f8e8m0`, `f8e6m2`) at operand 0 has no defined
+primary dtype, and derivation MUST decline. The new functions return
+`Result<_, DeriveDecline>` with `DeriveDecline::ScaleDtypeAtOperand0 { dtype }`.
+On every other input they return exactly what the infallible pair does.
+
+**`structure_key` / `structure_key_token` stay, undeprecated for now.** They key
+a scale-first list with the scale's dtype, which is non-conformant for that one
+input, and their docs say so. `#[deprecated]` arrives in the release that
+migrates this workspace's own ~200 call sites.
+
+A scale in any *other* operand slot (the sk4 sibling model) is unaffected.
+
+### Consumers in this workspace
+
+- **The im2col plan gate** now admits mask bit 0, the frame axis a rank-3 output
+  cannot span, and still requires the output's own layout to be dense.
+- **`contract::index_is_1d`:** a rank-deficient index tensor gathered along the
+  **last** axis now reads as a 1-D (broadcast) index. Its frame mask has the
+  leading bits set, where its empty own mask used to read as full-shape. This
+  is the right reading, but it changes the emitted contract for that input. No
+  in-tree test exercises a rank-deficient index.
+
+### Vendored KISS artifacts
+
+- Re-vendored from `KISS@bc16715`, verbatim; the files hash to KISS's blob IDs.
+- The Vulkan vocabulary moved 4 → 5. It was re-verified, not just re-pinned: v5
+  only adds `i16`/`i64`/`f64` arith names, and no vendored vector names them.
+- KISS's §6.8-0002 discriminating target-match pairs are now asserted.
+
+### Not in this release
+
+- The §6.6-0019 weight-role `<wdt>` (the `gem_weight_role_discriminator`
+  vector). It needs role hints in the derivation API, and has a separate ticket.
+- The stride-0 vs nonzero-stride unit-axis mask question (two tokens for one
+  broadcast meaning). The derivation follows the text literally, and KISS has
+  raised the question with the PM.
+
+**Cross-checked against an independent implementation:** the `[4,1]` token and
+the right-aligned work class match Fuel's own deriver, run on the same inputs.
+The #519 examples are pinned as goldens.
 
 ## Released
 
