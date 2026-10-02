@@ -11,10 +11,14 @@
 //!    extent at each axis is the max over operands *right-aligned*. Before this,
 //!    the work class aligned them left.
 //!
-//! **Held, not tested here:** §6.5-0014's frame-padded layout/mask. It treats
-//! every rank deficiency as a broadcast, which collides dense and strided im2col
-//! outputs under one token. KISS confirmed the gap is in the clause, and the
-//! ruling is pending (issue #31).
+//! 3. **§6.5-0014 as amended by KISS#519 (option C): the broadcast MASK is
+//!    computed over the frame**. Bit `i` is set iff frame axis `i` has extent
+//!    `> 1` and the operand's stride along it is `0`, where an axis the operand
+//!    lacks counts as stride `0`. The layout tag, vector width, divisibility and
+//!    the §6.5-0013 stride test still read the operand's *own* axes. The first
+//!    draft of the clause padded the layout too. That collided dense and strided
+//!    im2col outputs under one token, and KISS amended it after Unpopped's im2col
+//!    gate went red. The examples below are the amendment's own.
 //!
 //! # Cross-implementation goldens
 //!
@@ -100,4 +104,46 @@ fn a_leading_unit_axis_does_not_change_the_innermost() {
         tok(OpCategory::UnaryElementwise, &[x]),
         "sk4|une|f32|cuda:sm89|ix32|warp|r2|co/00/v4/d8/f|-"
     );
+}
+
+/// KISS#519 golden. `[256]` in frame `[128, 256]`: frame axis 0 is absent
+/// from the operand (stride 0, frame extent 128), so mask `01`. The layout
+/// reads its own axes (`co`), and the width is not forced to `v1`.
+#[test]
+fn the_mask_is_over_the_frame_but_the_layout_is_own_axes() {
+    let row = od(&[256], &[1]);
+    let full = od(&[128, 256], &[256, 1]);
+    let t = tok(OpCategory::BinaryElementwise, &[row, full, full]);
+    assert_eq!(sub(&t, 0), "co/01/v4/d16/f", "token was {t}");
+    assert_eq!(sub(&t, 1), "co/00/v4/d16/f", "token was {t}");
+}
+
+/// KISS#519 golden. `[1, 256]` with stride `[0, 1]`: its own extent-1 axis 0 is
+/// stride 0 and the frame extent there is 128, so the bit is set (§6.6-0008),
+/// although the operand's own axis is unit.
+#[test]
+fn an_own_unit_axis_of_stride_zero_sets_its_bit_when_the_frame_is_wider() {
+    let row = od(&[1, 256], &[0, 1]);
+    let full = od(&[128, 256], &[256, 1]);
+    let t = tok(OpCategory::BinaryElementwise, &[row, full, full]);
+    assert_eq!(sub(&t, 0), "co/01/v4/d16/f", "token was {t}");
+}
+
+/// KISS#519 goldens, the case that forced the amendment: a rank-3 operand in a
+/// rank-4 frame. Dense and strided must now be DISTINGUISHABLE (`co` vs `st`),
+/// though both carry mask `01` for the absent frame axis.
+#[test]
+fn dense_and_strided_rank_deficient_operands_no_longer_collide() {
+    let frame = od(&[8, 4, 16, 64], &[4096, 1024, 64, 1]);
+    let dense = od(&[4, 16, 64], &[1024, 64, 1]);
+    let strided = od(&[4, 16, 64], &[2048, 128, 2]);
+    let td = tok(OpCategory::BinaryElementwise, &[frame, dense, frame]);
+    let ts = tok(OpCategory::BinaryElementwise, &[frame, strided, frame]);
+    assert_eq!(sub(&td, 1), "co/01/v4/d16/f", "token was {td}");
+    assert_eq!(sub(&ts, 1), "st/01/v1/d16/f", "token was {ts}");
+}
+
+/// The operand sub-key at position `i` of a token.
+fn sub(token: &str, i: usize) -> &str {
+    token.split('|').nth(7).unwrap().split(';').nth(i).unwrap()
 }

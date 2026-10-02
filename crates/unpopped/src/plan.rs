@@ -3592,10 +3592,20 @@ fn validate_im2col(
 
     // G3 — output rank-3 forward-dense. Only LAYOUT is keyed (the expanded extent
     // [N, C*kh*kw, oH*oW] is a runtime precondition), so the gate admits the
-    // expansion so long as the output is empty-bcast forward-dense contiguous.
+    // expansion so long as the output is forward-dense contiguous.
+    //
+    // Mask bit 0 is ALLOWED, and only bit 0. Since unpopped-vocab 0.14.0 the key's
+    // broadcast mask is over the iteration frame (KISS-CLASSIFY §6.5-0014 as
+    // amended by KISS#519). The rank-3 output does not span frame axis 0 of the
+    // rank-4 frame, so that bit is set whenever N > 1. It records "absent from
+    // this frame axis", not "broadcast along one of its own axes". Density is
+    // what `contig` reads, and `contig` reads the output's OWN axes, so a strided
+    // output is `st` and still rejected here. A bit on frame axes 1..=3 would be
+    // a genuine own-axis broadcast, and is rejected.
     let out = key.operands[1];
+    let own_axis_broadcast = (1..4).any(|a| out.bcast.is_set(a));
     assert!(
-        out.bcast.is_empty() && out.contig == Contiguity::Contig && !out.flipped,
+        !own_axis_broadcast && out.contig == Contiguity::Contig && !out.flipped,
         "Im2Col '{name}': output must be forward-dense contiguous (empty broadcast, \
          not flipped) — the [N, C*kh*kw, oH*oW] column matrix is written densely"
     );

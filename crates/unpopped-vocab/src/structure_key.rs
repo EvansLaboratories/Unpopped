@@ -851,7 +851,7 @@ pub fn structure_key(
     let mut max_off: i64 = 0;
     let frame = Frame::of(operands);
     for (slot, od) in keys.iter_mut().zip(operands.iter()).take(n) {
-        *slot = derive_operand_key(od);
+        *slot = derive_operand_key(od, &frame);
         max_off = max_off.max(max_touched_offset(od));
     }
 
@@ -1302,28 +1302,36 @@ fn inner_axis(od: &OperandDesc) -> Option<usize> {
 ///   `inner_axis` (extent `> 1`) served both, so `[4,1]` read `d4` off axis 0
 ///   instead of `da` off axis 1.
 ///
-/// ⚠️ **Not yet applied: §6.5-0014's frame-padded view.** It would derive the
-/// layout tag and mask of a lower-rank operand over its axes padded to the frame.
-/// It is HELD (issue #31) because it treats every rank deficiency as a
-/// broadcast. For im2col's rank-3 output, or a gather index tensor, that makes
-/// the operand `br`, and the layout tag then never reads its own strides, so a
-/// dense and a strided operand share a token. That question is with KISS.
-/// Layout and mask here still read the operand's own axes.
-fn derive_operand_key(od: &OperandDesc) -> OperandKey {
+/// * **The broadcast mask is over the frame** (§6.5-0014 as amended by
+///   KISS#519, §6.6-0008, §6.6-0013). Bit `i` is set iff frame axis `i` has
+///   extent `> 1` and the operand's stride along it is `0`. A frame axis the
+///   operand lacks (right alignment) counts as stride `0`, and an own extent-1
+///   stride-0 axis sets its bit when the frame is wider there.
+/// * **Everything else reads the operand's own axes**, including the
+///   own-axis broadcast that the layout tag (§6.5-0002 step 1) and the vector
+///   width (§6.5-0009(a), §6.5-0013) test. A rank-deficient operand is therefore
+///   NOT `br` and NOT forced to `v1` merely for lacking a frame axis.
+///
+/// KISS's first draft of §6.5-0014 padded the *layout* too. That made a rank-3
+/// im2col output `br`, so a dense and a strided output shared a token. KISS
+/// amended the clause after Unpopped's im2col gate went red on it.
+fn derive_operand_key(od: &OperandDesc, frame: &Frame) -> OperandKey {
     let rank = od.rank as usize;
 
-    // Broadcast mask: extent-> 1 axes with stride 0.
-    let mut bcast = AxisMask::EMPTY;
+    // OWN-axis broadcast: the operand's own extent-> 1 axes with stride 0. This
+    // is what layout and vector width test; it is not the key's mask.
+    let mut own_bcast = AxisMask::EMPTY;
     for d in 0..rank {
         if od.shape[d] > 1 && od.strides[d] == 0 {
-            bcast.set(d as u8);
+            own_bcast.set(d as u8);
         }
     }
+    let bcast = frame.broadcast_mask(od);
     let flipped = od.strides[..rank].iter().any(|&s| s < 0);
 
-    let contig = classify_contiguity(od, bcast, inner_axis(od));
+    let contig = classify_contiguity(od, own_bcast, inner_axis(od));
     let innermost = (od.rank as usize).checked_sub(1);
-    let vec_width = classify_vec_width(od, innermost, bcast);
+    let vec_width = classify_vec_width(od, innermost, own_bcast);
     let inner_div = match innermost {
         Some(d) => div_bucket(od.shape[d]),
         None => DivBucket::Any,
@@ -1476,6 +1484,23 @@ impl Frame {
             }
         }
         Self { rank, extents }
+    }
+
+    /// The key's broadcast mask for `od`, in frame coordinates (§6.6-0008 over
+    /// the frame, §6.6-0013 right alignment): bit `i` iff frame axis `i` has
+    /// extent `> 1` and `od`'s stride there is `0`, an absent axis counting as
+    /// stride `0`.
+    fn broadcast_mask(&self, od: &OperandDesc) -> AxisMask {
+        let r = od.rank as usize;
+        let off = self.rank.saturating_sub(r);
+        let mut m = AxisMask::EMPTY;
+        for i in 0..self.rank {
+            let stride = if i < off { 0 } else { od.strides[i - off] };
+            if self.extents[i] > 1 && stride == 0 {
+                m.set(i as u8);
+            }
+        }
+        m
     }
 
     fn work_class(&self) -> WorkClass {
