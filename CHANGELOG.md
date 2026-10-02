@@ -15,7 +15,19 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## Unreleased — `0.14.0`
+## Unreleased
+
+*Nothing. The workspace matches the published `0.14.0`.*
+
+## Released
+
+⚠️ **What reached crates.io, read from its API on 2026-10-02:** `0.11.0`
+(2026-09-11), `0.12.0` (2026-10-01), `0.13.0` (2026-10-01), `0.14.0` (2026-10-02), for all four
+published crates. **`0.11.1`–`0.11.6` existed only in the workspace and were
+never published.** A consumer went straight from `0.11.0` to `0.12.0`, so
+everything those intermediate numbers carried is listed under `0.12.0`.
+
+## 2026-10-02 — everything at `0.14.0`
 
 One breaking release that conforms `unpopped-vocab`'s structure-key derivation
 to KISS-Classify as of **KISS#517 + KISS#519** (`KISS@bc16715` plus the #519
@@ -87,13 +99,12 @@ A scale in any *other* operand slot (the sk4 sibling model) is unaffected.
 the right-aligned work class match Fuel's own deriver, run on the same inputs.
 The #519 examples are pinned as goldens.
 
-## Released
-
-⚠️ **What reached crates.io, read from its API on 2026-10-02:** `0.11.0`
-(2026-09-11), `0.12.0` (2026-10-01), `0.13.0` (2026-10-01), for all four
-published crates. **`0.11.1`–`0.11.6` existed only in the workspace and were
-never published.** A consumer went straight from `0.11.0` to `0.12.0`, so
-everything those intermediate numbers carried is listed under `0.12.0`.
+> **About the merge commit.** `9574050`, the squash of #32, is titled *"(DRAFT) …
+> awaiting baracuda + Fuel sign-off"*. The squash took the PR's title as it stood
+> before the sign-offs arrived. Both had landed before the merge, and both are
+> recorded on #32: Fuel's by its own re-run (fuel#285), baracuda's as relayed by
+> the portfolio PM. Published 2026-10-02 07:43–07:44Z from that commit, in the order
+> `unpopped-vocab` → `unpopped` → `unpopped-cpu-c` → `unpopped-slang`.
 
 ## 2026-10-01 — everything at `0.13.0`
 
