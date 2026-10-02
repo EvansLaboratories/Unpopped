@@ -832,6 +832,13 @@ impl OperandDesc {
 /// This is the single canonical key function — Fuel calls it rather than
 /// reimplementing the derivation, so telemetry and the build matrix join on the
 /// same token.
+///
+/// ⚠️ **Not conformant for one input; prefer [`try_structure_key`].** This
+/// cannot decline. For a scale-type dtype (`f8e8m0`/`f8e6m2`) at operand 0,
+/// KISS-CLASSIFY §6.6-0021 requires a decline, and this keys it with the
+/// scale's dtype instead. It will be `#[deprecated]` in the release that migrates
+/// this workspace's own callers (about 200 sites at 0.14.0). Every other input
+/// derives exactly what `try_structure_key` does.
 #[must_use]
 pub fn structure_key(
     op: OpCategory,
@@ -1190,6 +1197,13 @@ fn derive_reduce_axes(op: OpCategory, operands: &[OperandDesc]) -> AxisMask {
 /// let token = structure_key_token(OpCategory::BinaryElementwise, &[a, a, a], ArchSku::Sm89);
 /// assert!(token.starts_with("sk4|bin|f32|cuda:sm89|"));
 /// ```
+///
+/// ⚠️ **Not conformant for one input; prefer [`try_structure_key_token`].** This
+/// cannot decline. For a scale-type dtype (`f8e8m0`/`f8e6m2`) at operand 0,
+/// KISS-CLASSIFY §6.6-0021 requires a decline, and this keys it with the
+/// scale's dtype instead. It will be `#[deprecated]` in the release that migrates
+/// this workspace's own callers (about 200 sites at 0.14.0). Every other input
+/// gives exactly what `try_structure_key_token` does.
 #[must_use]
 pub fn structure_key_token(
     op: OpCategory,
@@ -1197,6 +1211,81 @@ pub fn structure_key_token(
     target: impl Into<TargetId>,
 ) -> String {
     structure_key(op, operands, target).to_token()
+}
+
+/// Why a `structure_key` derivation declined. It is returned by
+/// [`try_structure_key`] and [`try_structure_key_token`], never by panicking
+/// (§6.8-0004).
+///
+/// `#[non_exhaustive]`: a later clause that adds a derivation-time decline is a
+/// new variant, not a breaking change.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DeriveDecline {
+    /// KISS-CLASSIFY §6.6-0021: operand 0 has a **scale-type** dtype (`f8e8m0`
+    /// or `f8e6m2`). `structure_key.dtype` is defined only where operand 0 carries
+    /// an element value dtype, so there is no correct primary dtype to emit. A
+    /// deriver MUST NOT substitute another operand's dtype or the scale's own
+    /// spelling. A scale remains valid in any *other* operand slot (the sk4
+    /// sibling model).
+    ScaleDtypeAtOperand0 {
+        /// The scale dtype found at operand 0.
+        dtype: ElementKind,
+    },
+}
+
+impl core::fmt::Display for DeriveDecline {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ScaleDtypeAtOperand0 { dtype } => write!(
+                f,
+                "operand 0 has scale-type dtype {:?}, which has no defined                  structure_key.dtype (KISS-CLASSIFY §6.6-0021)",
+                dtype
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DeriveDecline {}
+
+/// The **conformant** derivation: [`structure_key`], except that it declines
+/// where KISS-CLASSIFY requires a decline instead of a key.
+///
+/// Today that is one case, §6.6-0021: a scale-type dtype at operand 0. On every
+/// input that does not decline, the result is identical to [`structure_key`]'s,
+/// so migrating to this changes no token
+/// (`tests/a_scale_dtype_is_never_the_primary_dtype.rs`).
+///
+/// # Errors
+///
+/// [`DeriveDecline::ScaleDtypeAtOperand0`] if operand 0's dtype is `f8e8m0` or
+/// `f8e6m2`.
+pub fn try_structure_key(
+    op: OpCategory,
+    operands: &[OperandDesc],
+    target: impl Into<TargetId>,
+) -> Result<StructureKey, DeriveDecline> {
+    // No let-chain: the declared MSRV is 1.85, and let-chains need 1.88.
+    if let Some(dtype @ (ElementKind::F8E8M0 | ElementKind::F8E6M2)) =
+        operands.first().map(|o| o.dtype)
+    {
+        return Err(DeriveDecline::ScaleDtypeAtOperand0 { dtype });
+    }
+    Ok(structure_key(op, operands, target))
+}
+
+/// [`try_structure_key`], returning the wire token. This is the conformant
+/// replacement for [`structure_key_token`].
+///
+/// # Errors
+///
+/// As [`try_structure_key`].
+pub fn try_structure_key_token(
+    op: OpCategory,
+    operands: &[OperandDesc],
+    target: impl Into<TargetId>,
+) -> Result<String, DeriveDecline> {
+    try_structure_key(op, operands, target).map(|k| k.to_token())
 }
 
 /// Innermost non-unit axis of an operand, or `None` if the operand is all
