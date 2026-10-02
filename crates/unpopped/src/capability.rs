@@ -232,20 +232,57 @@ impl TargetCapabilities {
 }
 
 /// Per-compute-capability limits for CUDA, transcribed from NVIDIA's
-/// *Technical Specifications per Compute Capability*.
+/// per-compute-capability tables.
 ///
 /// **Keyed by capability, not by part.** Every `sm_89` device has these
 /// per-SM limits whatever its SM count, which is why `multiprocessor_count` is
 /// `None` here and must be queried.
 ///
 /// Returns `None` for a capability this table does not carry. **Deliberately
-/// not "the nearest row"**: Blackwell and later are absent because their figures
-/// are not transcribed here, and answering with an Ada row would be a wrong
-/// answer wearing a right one's clothes.
+/// not "the nearest row"**: answering an absent capability with a neighbour's
+/// figures would be a wrong answer wearing a right one's clothes.
+///
+/// # Sources: two NVIDIA editions, because CUDA 13 dropped the older archs
+///
+/// Re-transcribed 2026-10-02 by parsing the HTML tables, with `colspan`
+/// expansion and column labels read, never positionally guessed:
+///
+/// * **(A)** *CUDA Programming Guide*, appendix "Compute Capabilities", Tables
+///   30 (SM info) and 31 (memory), docs.nvidia.com, "Last updated on Sep 10,
+///   2026" (page sha256 `6d1b79c6...`). It covers 7.5, 8.0, 8.6, 8.7, 8.9, 9.0,
+///   10.0, 10.3, 10.7, 11.0 and 12.x, and **nothing older**.
+/// * **(B)** *CUDA C++ Programming Guide* 12.9.1 (archive), "Technical
+///   Specifications per Compute Capability", "Last updated on Jun 09, 2025"
+///   (page sha256 `06499a0c...`). It is used for **6.1, 7.0 and 7.2 only**,
+///   which (A) no longer lists.
+///
+/// The four shared constants below (1024 threads/block, 64 K registers/SM,
+/// 255 registers/thread, warp 32) hold in every row of both sources.
+///
+/// **(A) and (B) disagree on 12.x blocks/SM**: (B) gives 32 for 12.0, (A) gives
+/// 24 for 12.x. The row uses **(A)**, NVIDIA's later statement. A launcher must
+/// query the device anyway (see [`TargetCapabilities`]). The figures here decide
+/// what to *offer*, not what to *run*.
+///
+/// # Verified how
+///
+/// | rows | the installed toolkit (CUDA 13.3) accepts the arch | verified on hardware |
+/// |---|---|---|
+/// | 8.9 | yes | yes (RTX 4070, the only GPU on the build box) |
+/// | 7.5, 8.0, 8.6, 8.7, 9.0, 10.0, 10.3, 11.0, 12.0, 12.1 | yes | no, compile-level only |
+/// | 6.1, 7.0, 7.2 | **no** (CUDA 13.3's `nvcc --list-gpu-arch` starts at `compute_75`); **yes in CUDA 12.9.2**, installed user-local beside it: its `nvcc --list-gpu-arch` lists `compute_61`/`70`/`72`, and its NVRTC compiles sm_61/sm_70 cubins (measured 2026-10-02). Its `nvcc` cannot build on this machine (Visual Studio 18's STL needs CUDA 13.2+), so a full `nvcc` build belongs on a Linux runner | no; 6.1 awaits the P40 |
+///
+/// **Deliberately absent**, and `None`:
+/// * **10.7**: in (A), but CUDA 13.3 does not accept `compute_107`.
+/// * **8.8**: CUDA 13.3 accepts `compute_88`, but neither source tabulates it.
+/// * Anything below 6.1: out of scope (the sm_61-through-latest ruling).
 #[must_use]
 pub fn cuda_capabilities(major: u32, minor: u32) -> Option<TargetCapabilities> {
     // smem_block, smem_sm, warps_sm, blocks_sm
     let (smem_block, smem_sm, warps_sm, blocks_sm) = match (major, minor) {
+        // (B) 12.9.1: 48 KB/block, 96 KB/SM, 64 warps, 32 blocks.
+        (6, 1) => (49_152, 98_304, 64, 32),
+        // (B) 12.9.1: 96 KB/block, 96 KB/SM, 64 warps, 32 blocks.
         (7, 0) | (7, 2) => (98_304, 98_304, 64, 32),
         (7, 5) => (65_536, 65_536, 32, 16),
         (8, 0) => (166_912, 167_936, 64, 32),
@@ -253,6 +290,13 @@ pub fn cuda_capabilities(major: u32, minor: u32) -> Option<TargetCapabilities> {
         (8, 7) => (166_912, 167_936, 48, 16),
         (8, 9) => (101_376, 102_400, 48, 24),
         (9, 0) => (232_448, 233_472, 64, 32),
+        // (A): 227 KB/block, 228 KB/SM, 64 warps, 32 blocks.
+        (10, 0) | (10, 3) => (232_448, 233_472, 64, 32),
+        // (A): 227 KB/block, 228 KB/SM, 48 warps, 24 blocks.
+        (11, 0) => (232_448, 233_472, 48, 24),
+        // (A) "12.x": 99 KB/block, 100 KB/SM, 48 warps, 24 blocks (see the
+        // (A)/(B) disagreement on blocks above).
+        (12, 0) | (12, 1) => (101_376, 102_400, 48, 24),
         _ => return None,
     };
     Some(TargetCapabilities {
@@ -333,16 +377,93 @@ mod tests {
     /// memory still compiles and still runs.
     #[test]
     fn an_unknown_capability_is_none_rather_than_a_neighbour() {
+        // 10.7 is in NVIDIA's table but the installed toolkit rejects it; 8.8 is
+        // the reverse. Both are deliberately absent, and their neighbours
+        // (10.3, 8.9) are present, so a nearest-row fallback would answer.
         assert!(
-            cuda_capabilities(10, 0).is_none(),
-            "Blackwell is not transcribed"
+            cuda_capabilities(10, 7).is_none(),
+            "10.7: no toolkit accepts it here"
         );
-        assert!(cuda_capabilities(12, 0).is_none());
         assert!(
-            cuda_capabilities(6, 1).is_none(),
-            "Pascal is not transcribed"
+            cuda_capabilities(8, 8).is_none(),
+            "8.8: no NVIDIA table row"
         );
         assert!(cuda_capabilities(8, 5).is_none(), "8.5 does not exist");
+        assert!(
+            cuda_capabilities(6, 0).is_none(),
+            "below 6.1 is out of scope"
+        );
+        assert!(
+            cuda_capabilities(13, 0).is_none(),
+            "a future arch is not guessed"
+        );
+        // Positive control: the same calls succeed for rows that exist.
+        assert!(cuda_capabilities(10, 3).is_some() && cuda_capabilities(8, 9).is_some());
+    }
+
+    /// The rows added 2026-10-02, pinned to the transcribed source values, so a
+    /// later edit to any of them is a deliberate, visible change. See the source
+    /// notes on [`cuda_capabilities`].
+    #[test]
+    fn the_sm61_through_sm121_rows_match_their_sources() {
+        // (cap, smem/block, smem/SM, warps/SM, blocks/SM)
+        let rows = [
+            ((6, 1), 49_152, 98_304, 64, 32),    // (B) 12.9.1
+            ((10, 0), 232_448, 233_472, 64, 32), // (A)
+            ((10, 3), 232_448, 233_472, 64, 32), // (A)
+            ((11, 0), 232_448, 233_472, 48, 24), // (A)
+            ((12, 0), 101_376, 102_400, 48, 24), // (A) "12.x"
+            ((12, 1), 101_376, 102_400, 48, 24), // (A) "12.x"
+        ];
+        for ((maj, min), sb, ss, w, b) in rows {
+            let c = cuda_capabilities(maj, min)
+                .unwrap_or_else(|| panic!("{maj}.{min} must be in the table"));
+            assert_eq!(
+                (
+                    c.max_shared_mem_per_block,
+                    c.max_shared_mem_per_sm,
+                    c.max_warps_per_sm,
+                    c.max_blocks_per_sm
+                ),
+                (sb, ss, w, b),
+                "{maj}.{min}"
+            );
+            // The four shared constants hold in every row of both sources.
+            assert_eq!(
+                (
+                    c.max_threads_per_block,
+                    c.regs_per_sm,
+                    c.max_regs_per_thread,
+                    c.warp_size
+                ),
+                (1024, 65_536, 255, 32),
+                "{maj}.{min}"
+            );
+        }
+    }
+
+    /// The tokens these rows are reached by: `sm61` has two digits, `sm100` to
+    /// `sm121` have three. Each must resolve to its own row, not a parse
+    /// neighbour (`sm120` is not `sm12` plus a trailing zero).
+    #[test]
+    fn new_tokens_resolve_to_their_own_rows() {
+        for (tok, maj, min) in [
+            ("cuda:sm61", 6, 1),
+            ("cuda:sm100", 10, 0),
+            ("cuda:sm103", 10, 3),
+            ("cuda:sm110", 11, 0),
+            ("cuda:sm120", 12, 0),
+            ("cuda:sm121", 12, 1),
+        ] {
+            let t = TargetId::parse(tok).expect("grammar-valid token");
+            assert!(capabilities_for(t).is_some(), "{tok} must resolve");
+            assert_eq!(capabilities_for(t), cuda_capabilities(maj, min), "{tok}");
+        }
+        let absent = TargetId::parse("cuda:sm107").unwrap();
+        assert!(
+            capabilities_for(absent).is_none(),
+            "sm107 is deliberately absent"
+        );
     }
 
     /// ⚠️ The table is NOT monotonic in the architecture number, and sm_89 is the

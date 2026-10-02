@@ -15,9 +15,35 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## Unreleased
+## Unreleased — `0.14.1`
 
-*Nothing. The workspace matches the published `0.14.0`.*
+### `cuda_capabilities` / `capabilities_for` cover sm_61 through sm_121 (additive)
+
+These rows were missing, so they returned `None`. Each is now transcribed from
+NVIDIA's own tables, parsed from the HTML rather than copied by hand. The
+sources and the verification state are recorded on `cuda_capabilities`:
+
+| New rows | Source | Toolkit accepts the arch | Verified on hardware |
+|---|---|---|---|
+| 6.1 | CUDA C++ Programming Guide **12.9.1** | CUDA 12.9 (NVRTC); not 13.x | no (awaits a P40) |
+| 10.0, 10.3, 11.0, 12.0, 12.1 | CUDA Programming Guide (13.x edition), Sep 10, 2026 | CUDA 13.3 | no, compile-level only |
+
+**Every existing row was re-checked against the same sources and is
+unchanged.**
+
+**Deliberately absent:**
+- **10.7**: NVIDIA tabulates it, but CUDA 13.3 doesn't accept it.
+- **8.8**: CUDA 13.3 accepts it, but neither table has it.
+- Anything below 6.1.
+
+**The two NVIDIA editions disagree on 12.x resident blocks per SM.** The CUDA
+12.9.1 edition says 32 and the current edition says 24. The row uses **24**,
+the later figure. A launcher must query the device regardless.
+
+This is part of CireSnave's ruling that baracuda supports sm_61 through the
+latest architecture via Unpopped's CUDA parse/emit. Nothing in Unpopped's IR is
+arch-specific. These rows only inform which schedule variants are worth
+offering.
 
 ## Released
 
