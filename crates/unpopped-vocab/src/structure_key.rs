@@ -842,6 +842,7 @@ pub fn structure_key(
     let n = operands.len().min(MAX_OPERANDS);
     let mut keys = [OperandKey::default(); MAX_OPERANDS];
     let mut max_off: i64 = 0;
+    let frame = Frame::of(operands);
     for (slot, od) in keys.iter_mut().zip(operands.iter()).take(n) {
         *slot = derive_operand_key(od);
         max_off = max_off.max(max_touched_offset(od));
@@ -859,7 +860,7 @@ pub fn structure_key(
     // The WORK class is FRAME-MAX across ALL operands (§6.5-0010/§6.6-0013),
     // NOT operand-0 alone — orthogonal axes, computed from different reads.
     let dtype = operands.first().map_or(ElementKind::F32, |p| p.dtype);
-    let work = frame_work_class(operands);
+    let work = frame.work_class();
     // Raw iteration rank = the widest operand rank (output rank for elementwise).
     let rank = operands.iter().map(|o| o.rank).max().unwrap_or(0);
 
@@ -1204,25 +1205,37 @@ fn inner_axis(od: &OperandDesc) -> Option<usize> {
     (0..od.rank as usize).rev().find(|&d| od.shape[d] > 1)
 }
 
+/// One operand's sub-key. Two different axis notions feed it, by rule:
+///
+/// * **Layout tag** uses the innermost active *non-unit* axis (§6.5-0002).
+/// * **Vector width and divisibility** read axis `rank − 1`, even at extent `1`
+///   or `0` (§6.3-0011: *"no non-unit exclusion"*). Before 0.14.0 one
+///   `inner_axis` (extent `> 1`) served both, so `[4,1]` read `d4` off axis 0
+///   instead of `da` off axis 1.
+///
+/// ⚠️ **Not yet applied: §6.5-0014's frame-padded view.** It would derive the
+/// layout tag and mask of a lower-rank operand over its axes padded to the frame.
+/// It is HELD (issue #31) because it treats every rank deficiency as a
+/// broadcast. For im2col's rank-3 output, or a gather index tensor, that makes
+/// the operand `br`, and the layout tag then never reads its own strides, so a
+/// dense and a strided operand share a token. That question is with KISS.
+/// Layout and mask here still read the operand's own axes.
 fn derive_operand_key(od: &OperandDesc) -> OperandKey {
     let rank = od.rank as usize;
 
     // Broadcast mask: extent-> 1 axes with stride 0.
     let mut bcast = AxisMask::EMPTY;
-    let mut flipped = false;
     for d in 0..rank {
         if od.shape[d] > 1 && od.strides[d] == 0 {
             bcast.set(d as u8);
         }
-        if od.strides[d] < 0 {
-            flipped = true;
-        }
     }
+    let flipped = od.strides[..rank].iter().any(|&s| s < 0);
 
-    let inner = inner_axis(od);
-    let contig = classify_contiguity(od, bcast, inner);
-    let vec_width = classify_vec_width(od, inner, bcast);
-    let inner_div = match inner {
+    let contig = classify_contiguity(od, bcast, inner_axis(od));
+    let innermost = (od.rank as usize).checked_sub(1);
+    let vec_width = classify_vec_width(od, innermost, bcast);
+    let inner_div = match innermost {
         Some(d) => div_bucket(od.shape[d]),
         None => DivBucket::Any,
     };
@@ -1347,31 +1360,46 @@ fn max_touched_offset(od: &OperandDesc) -> i64 {
 /// numel is `64` (block), but the frame is `max(8,8,8)·max(8,4096,4096) =
 /// 8·4096 = 32768` (grid). Reading operand-0 alone mislabels it block; frame-max
 /// (and Fuel's deriver, and the KISS golden) say grid.
-fn frame_work_class(operands: &[OperandDesc]) -> WorkClass {
-    let max_rank = operands.iter().map(|o| o.rank as usize).max().unwrap_or(0);
-    let mut numel: i64 = 1;
-    for d in 0..max_rank {
-        // Per-axis frame extent = max across operands (absent axis ⇒ extent 1,
-        // the rank-aligned broadcast identity).
-        let frame_d = operands
-            .iter()
-            .map(|o| {
-                if d < o.rank as usize {
-                    o.shape[d].max(0)
-                } else {
-                    1
-                }
-            })
-            .max()
-            .unwrap_or(1);
-        numel = numel.saturating_mul(frame_d);
+///
+/// **Operands are RIGHT-aligned** (§6.6-0013): a rank-`r` operand occupies frame
+/// axes `[R − r, R − 1]`. Until 0.14.0 this aligned them LEFT, so `[2,64]` with
+/// `[64]` counted `64·64 = 4096` (grid) instead of `2·64 = 128` (block). Same-rank
+/// cells, the common case, were unaffected. Pinned by
+/// `tests/mixed_rank_frames_and_the_innermost_axis.rs`.
+struct Frame {
+    /// Iteration rank `R`: the widest operand rank (§6.6-0006).
+    rank: usize,
+    /// Per-axis frame extent: the max over operands present at that axis, after
+    /// right alignment. The widest operand covers every axis, so no axis is
+    /// left at its initial `0` unless every operand there has extent `0`.
+    extents: [i64; MAX_RANK],
+}
+
+impl Frame {
+    fn of(operands: &[OperandDesc]) -> Self {
+        let rank = operands.iter().map(|o| o.rank as usize).max().unwrap_or(0);
+        let mut extents = [0i64; MAX_RANK];
+        for o in operands {
+            let r = o.rank as usize;
+            let off = rank - r;
+            for d in 0..r {
+                extents[off + d] = extents[off + d].max(o.shape[d].max(0));
+            }
+        }
+        Self { rank, extents }
     }
-    if numel <= 32 {
-        WorkClass::OneWarp
-    } else if numel <= 1024 {
-        WorkClass::OneBlock
-    } else {
-        WorkClass::GridStride
+
+    fn work_class(&self) -> WorkClass {
+        let numel = self.extents[..self.rank]
+            .iter()
+            .fold(1i64, |n, &e| n.saturating_mul(e));
+        if numel <= 32 {
+            WorkClass::OneWarp
+        } else if numel <= 1024 {
+            WorkClass::OneBlock
+        } else {
+            WorkClass::GridStride
+        }
     }
 }
 
