@@ -17,9 +17,116 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ## Unreleased
 
-*Nothing. Everything that was here shipped in 0.11.0, below.*
+*Nothing beyond this file. The workspace is at `0.13.1`, which changes only this
+CHANGELOG: no crate's code or behaviour differs from `0.13.0`.*
 
 ## Released
+
+⚠️ **What reached crates.io, read from its API on 2026-10-02:** `0.11.0`
+(2026-09-11), `0.12.0` (2026-10-01), `0.13.0` (2026-10-01), for all four
+published crates. **`0.11.1`–`0.11.6` existed only in the workspace and were
+never published.** A consumer went straight from `0.11.0` to `0.12.0`, so
+everything those intermediate numbers carried is listed under `0.12.0`.
+
+## 2026-10-01 — everything at `0.13.0`
+
+### ⚠️ Structure keys change for two zero-valued inputs (wire-visible)
+
+Two derivations read zero as "maximally divisible", because zero passes every
+`x % n == 0` test. Both were live in `0.12.0` and both are fixed (#29):
+
+| Input | `0.12.0` derived | `0.13.0` derives | KISS-CLASSIFY |
+|---|---|---|---|
+| A contraction with `K = 0` (rank 2 or 3) | `k_div` `d16` | `da` | §6.5-0012, §6.6-0016 |
+| An operand with `align_bytes = 0` (unspecified alignment) | a packed width, e.g. `v4` | `v1` | §6.5-0009 |
+
+**Who is affected:** only callers who build those two inputs. Every other key is
+byte-identical; the full workspace and its KISS byte-match vectors pass
+unchanged. **If you cache on the token, a cached entry for either input was
+keyed under the wrong cell.** Re-derive it rather than migrating it.
+
+**Why it went unnoticed:** the per-operand sub-key reaches the divisibility
+ladder only through `inner_axis`, which picks an axis of extent `> 1`, so that
+path never passes `0`. The contraction path calls it on the raw K extent. An
+outside report of the K case was retracted on the strength of the per-operand
+path, and measuring through the public `structure_key` reversed the
+retraction. Pinned by `unpopped-vocab/tests/zero_is_not_maximally_divisible.rs`,
+whose three tests fail on `0.12.0`.
+
+**Deliberately not changed:** an operand whose innermost non-unit axis has
+extent `0` (e.g. `[8, 0]`) still derives from the outer axis (`d8`). Whether
+that is wrong depends on how KISS resolves its open "active axis" question for
+§6.3-0011.
+
+## 2026-10-01 — everything at `0.12.0`
+
+Covers `0.11.1`–`0.12.0`, none of which was published before this.
+
+### ⚠️ BREAKING — the `seam` feature and `unpopped::jit::seam` are removed
+
+`0.11.0` shipped an optional `seam` feature (`seam =
+["dep:fuel-kernel-seam-types"]`) and `#[cfg(feature = "seam")] pub mod seam` in
+`jit.rs`, which converted Fuel's `PatternNode` into this crate's. Both are gone,
+along with the `fuel-kernel-seam-types` dependency (#18).
+
+**Why:** this crate's public API named another project's type, so every major
+release of `fuel-kernel-seam-types` forced a major release of `unpopped`. It had
+already happened once. A `0.10.3` → `0.11.2` bump put two incompatible
+`PatternNode` types into `baracuda-cuda-emit`'s dependency graph.
+
+**Migrate:**
+- To synthesize from this crate's own `unpopped::pattern::PatternNode`, call the
+  native entry point `unpopped::jit::synthesize(&JitRequest, ..)` directly.
+- If you start from Fuel's `PatternNode`, the conversion now lives in
+  `baracuda-cuda-emit` (`src/seam.rs`, relocated near-verbatim). That crate
+  already depends on `fuel-kernel-seam-types` directly.
+- `--all-features` no longer turns on anything but `convert`.
+
+The five tests that reached synthesis only through the seam (happy path,
+recursion, three typed declines) now call the native entry point, in
+`tests/native_synthesize_reaches_core.rs`. Before this change, no test in the
+crate called that entry point directly.
+
+### `convert` (the CUDA/Slang lifter, off by default) lifts more
+
+- **Local variables resolve (#22).** A local that is assigned exactly once is
+  substituted into the lifted body. Compound assignments (`+=`) and `++`/`--` count
+  as further assignments, so a running accumulator is never mistaken for a
+  constant. The crate's own scan-vs-elementwise test caught a first draft that
+  missed them.
+- **Comparisons and the ternary operator lift (#25)** to `Cmp*` and `Select`.
+
+Both target constructs the lifter previously *refused*: an unresolved
+identifier, or an unrecognized comparison token. They are meant to widen what is
+accepted, not to change what an already-accepted kernel lifts to. That is the
+design intent. No before/after comparison over a corpus has been run to measure
+it.
+
+### `unpopped-vocab`: the `cuda:` reserved id block is gone (#15)
+
+The four `cuda:sm*` target tokens were interned at fixed ids `0`–`3`, the last
+CUDA-specific vocabulary in this neutral crate. They now intern like every
+other namespace's tokens, via `TargetId::parse`. **Only code that relied on a
+`TargetId`'s numeric value could notice, and that was always forbidden:** ids
+are process-local and never serialized. Tokens and `==` are unchanged.
+
+### Also in this range, with no behaviour change
+
+- **Doc comment correction (#8):** the `VariantFidelity::DeterministicallyDivergent`
+  doc comment no longer cites the retracted measurement (see the 0.11.0
+  correction below). The fix landed after `0.11.0` was packaged, so `0.12.0` is
+  the first published version to carry it.
+- **New tests that pin existing behaviour:**
+  - the one-version rule (#7);
+  - dtype `storage_bits`/`kind` checked against KISS's manifest (#16);
+  - `Complex64`'s width (#19).
+- **Dependencies:**
+  - lockfile refreshed to the latest in-range versions (#20);
+  - `kiss-ref-core`/`kiss-ops-vocab`/`kiss-classify-vocab` `0.3.4` (#24), a
+    dev-dependency only, never reaching consumers.
+- **Design and sizing docs:** #10–#12, #14, #26, #27. The
+  `golden_regen_checkpoint` date moved to 2026-10-22 (#28). CI's checkout
+  action moved to v7 (#9).
 
 ## 2026-09-09 — everything at `0.11.0`
 
