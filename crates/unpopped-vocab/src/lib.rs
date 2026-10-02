@@ -96,9 +96,9 @@ pub use shape_expr::{
 };
 pub use sku::{BackendKind, KernelSku, OpCategory};
 pub use structure_key::{
-    AccMp, AxisMask, Contiguity, ContractionKey, DivBucket, IdxWidth, MAX_OPERANDS, MAX_RANK,
-    MpCode, OperandDesc, OperandKey, STRUCTURE_KEY_VERSION, SizeClass, StructureKey, SymExtent,
-    SymKind, TokenDecline, VecWidth, WorkClass, dtype_numeric_kind, dtype_storage_bits,
-    dtype_token, structure_key, structure_key_token,
+    AccMp, AxisMask, Contiguity, ContractionKey, DeriveDecline, DivBucket, IdxWidth, MAX_OPERANDS,
+    MAX_RANK, MpCode, OperandDesc, OperandKey, STRUCTURE_KEY_VERSION, SizeClass, StructureKey,
+    SymExtent, SymKind, TokenDecline, VecWidth, WorkClass, dtype_numeric_kind, dtype_storage_bits,
+    dtype_token, structure_key, structure_key_token, try_structure_key, try_structure_key_token,
 };
 pub use target::{TargetError, TargetId};

@@ -832,6 +832,13 @@ impl OperandDesc {
 /// This is the single canonical key function — Fuel calls it rather than
 /// reimplementing the derivation, so telemetry and the build matrix join on the
 /// same token.
+///
+/// ⚠️ **Not conformant for one input; prefer [`try_structure_key`].** This
+/// cannot decline. For a scale-type dtype (`f8e8m0`/`f8e6m2`) at operand 0,
+/// KISS-CLASSIFY §6.6-0021 requires a decline, and this keys it with the
+/// scale's dtype instead. It will be `#[deprecated]` in the release that migrates
+/// this workspace's own callers (about 200 sites at 0.14.0). Every other input
+/// derives exactly what `try_structure_key` does.
 #[must_use]
 pub fn structure_key(
     op: OpCategory,
@@ -842,8 +849,9 @@ pub fn structure_key(
     let n = operands.len().min(MAX_OPERANDS);
     let mut keys = [OperandKey::default(); MAX_OPERANDS];
     let mut max_off: i64 = 0;
+    let frame = Frame::of(operands);
     for (slot, od) in keys.iter_mut().zip(operands.iter()).take(n) {
-        *slot = derive_operand_key(od);
+        *slot = derive_operand_key(od, &frame);
         max_off = max_off.max(max_touched_offset(od));
     }
 
@@ -859,7 +867,7 @@ pub fn structure_key(
     // The WORK class is FRAME-MAX across ALL operands (§6.5-0010/§6.6-0013),
     // NOT operand-0 alone — orthogonal axes, computed from different reads.
     let dtype = operands.first().map_or(ElementKind::F32, |p| p.dtype);
-    let work = frame_work_class(operands);
+    let work = frame.work_class();
     // Raw iteration rank = the widest operand rank (output rank for elementwise).
     let rank = operands.iter().map(|o| o.rank).max().unwrap_or(0);
 
@@ -1189,6 +1197,13 @@ fn derive_reduce_axes(op: OpCategory, operands: &[OperandDesc]) -> AxisMask {
 /// let token = structure_key_token(OpCategory::BinaryElementwise, &[a, a, a], ArchSku::Sm89);
 /// assert!(token.starts_with("sk4|bin|f32|cuda:sm89|"));
 /// ```
+///
+/// ⚠️ **Not conformant for one input; prefer [`try_structure_key_token`].** This
+/// cannot decline. For a scale-type dtype (`f8e8m0`/`f8e6m2`) at operand 0,
+/// KISS-CLASSIFY §6.6-0021 requires a decline, and this keys it with the
+/// scale's dtype instead. It will be `#[deprecated]` in the release that migrates
+/// this workspace's own callers (about 200 sites at 0.14.0). Every other input
+/// gives exactly what `try_structure_key_token` does.
 #[must_use]
 pub fn structure_key_token(
     op: OpCategory,
@@ -1198,31 +1213,126 @@ pub fn structure_key_token(
     structure_key(op, operands, target).to_token()
 }
 
+/// Why a `structure_key` derivation declined. It is returned by
+/// [`try_structure_key`] and [`try_structure_key_token`], never by panicking
+/// (§6.8-0004).
+///
+/// `#[non_exhaustive]`: a later clause that adds a derivation-time decline is a
+/// new variant, not a breaking change.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DeriveDecline {
+    /// KISS-CLASSIFY §6.6-0021: operand 0 has a **scale-type** dtype (`f8e8m0`
+    /// or `f8e6m2`). `structure_key.dtype` is defined only where operand 0 carries
+    /// an element value dtype, so there is no correct primary dtype to emit. A
+    /// deriver MUST NOT substitute another operand's dtype or the scale's own
+    /// spelling. A scale remains valid in any *other* operand slot (the sk4
+    /// sibling model).
+    ScaleDtypeAtOperand0 {
+        /// The scale dtype found at operand 0.
+        dtype: ElementKind,
+    },
+}
+
+impl core::fmt::Display for DeriveDecline {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ScaleDtypeAtOperand0 { dtype } => write!(
+                f,
+                "operand 0 has scale-type dtype {:?}, which has no defined                  structure_key.dtype (KISS-CLASSIFY §6.6-0021)",
+                dtype
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DeriveDecline {}
+
+/// The **conformant** derivation: [`structure_key`], except that it declines
+/// where KISS-CLASSIFY requires a decline instead of a key.
+///
+/// Today that is one case, §6.6-0021: a scale-type dtype at operand 0. On every
+/// input that does not decline, the result is identical to [`structure_key`]'s,
+/// so migrating to this changes no token
+/// (`tests/a_scale_dtype_is_never_the_primary_dtype.rs`).
+///
+/// # Errors
+///
+/// [`DeriveDecline::ScaleDtypeAtOperand0`] if operand 0's dtype is `f8e8m0` or
+/// `f8e6m2`.
+pub fn try_structure_key(
+    op: OpCategory,
+    operands: &[OperandDesc],
+    target: impl Into<TargetId>,
+) -> Result<StructureKey, DeriveDecline> {
+    // No let-chain: the declared MSRV is 1.85, and let-chains need 1.88.
+    if let Some(dtype @ (ElementKind::F8E8M0 | ElementKind::F8E6M2)) =
+        operands.first().map(|o| o.dtype)
+    {
+        return Err(DeriveDecline::ScaleDtypeAtOperand0 { dtype });
+    }
+    Ok(structure_key(op, operands, target))
+}
+
+/// [`try_structure_key`], returning the wire token. This is the conformant
+/// replacement for [`structure_key_token`].
+///
+/// # Errors
+///
+/// As [`try_structure_key`].
+pub fn try_structure_key_token(
+    op: OpCategory,
+    operands: &[OperandDesc],
+    target: impl Into<TargetId>,
+) -> Result<String, DeriveDecline> {
+    try_structure_key(op, operands, target).map(|k| k.to_token())
+}
+
 /// Innermost non-unit axis of an operand, or `None` if the operand is all
 /// size-≤1 axes (a scalar).
 fn inner_axis(od: &OperandDesc) -> Option<usize> {
     (0..od.rank as usize).rev().find(|&d| od.shape[d] > 1)
 }
 
-fn derive_operand_key(od: &OperandDesc) -> OperandKey {
+/// One operand's sub-key. Two different axis notions feed it, by rule:
+///
+/// * **Layout tag** uses the innermost active *non-unit* axis (§6.5-0002).
+/// * **Vector width and divisibility** read axis `rank − 1`, even at extent `1`
+///   or `0` (§6.3-0011: *"no non-unit exclusion"*). Before 0.14.0 one
+///   `inner_axis` (extent `> 1`) served both, so `[4,1]` read `d4` off axis 0
+///   instead of `da` off axis 1.
+///
+/// * **The broadcast mask is over the frame** (§6.5-0014 as amended by
+///   KISS#519, §6.6-0008, §6.6-0013). Bit `i` is set iff frame axis `i` has
+///   extent `> 1` and the operand's stride along it is `0`. A frame axis the
+///   operand lacks (right alignment) counts as stride `0`, and an own extent-1
+///   stride-0 axis sets its bit when the frame is wider there.
+/// * **Everything else reads the operand's own axes**, including the
+///   own-axis broadcast that the layout tag (§6.5-0002 step 1) and the vector
+///   width (§6.5-0009(a), §6.5-0013) test. A rank-deficient operand is therefore
+///   NOT `br` and NOT forced to `v1` merely for lacking a frame axis.
+///
+/// KISS's first draft of §6.5-0014 padded the *layout* too. That made a rank-3
+/// im2col output `br`, so a dense and a strided output shared a token. KISS
+/// amended the clause after Unpopped's im2col gate went red on it.
+fn derive_operand_key(od: &OperandDesc, frame: &Frame) -> OperandKey {
     let rank = od.rank as usize;
 
-    // Broadcast mask: extent-> 1 axes with stride 0.
-    let mut bcast = AxisMask::EMPTY;
-    let mut flipped = false;
+    // OWN-axis broadcast: the operand's own extent-> 1 axes with stride 0. This
+    // is what layout and vector width test; it is not the key's mask.
+    let mut own_bcast = AxisMask::EMPTY;
     for d in 0..rank {
         if od.shape[d] > 1 && od.strides[d] == 0 {
-            bcast.set(d as u8);
-        }
-        if od.strides[d] < 0 {
-            flipped = true;
+            own_bcast.set(d as u8);
         }
     }
+    let bcast = frame.broadcast_mask(od);
+    let flipped = od.strides[..rank].iter().any(|&s| s < 0);
 
-    let inner = inner_axis(od);
-    let contig = classify_contiguity(od, bcast, inner);
-    let vec_width = classify_vec_width(od, inner, bcast);
-    let inner_div = match inner {
+    let contig = classify_contiguity(od, own_bcast, inner_axis(od));
+    let innermost = (od.rank as usize).checked_sub(1);
+    let vec_width = classify_vec_width(od, innermost, own_bcast);
+    let inner_div = match innermost {
         Some(d) => div_bucket(od.shape[d]),
         None => DivBucket::Any,
     };
@@ -1347,31 +1457,63 @@ fn max_touched_offset(od: &OperandDesc) -> i64 {
 /// numel is `64` (block), but the frame is `max(8,8,8)·max(8,4096,4096) =
 /// 8·4096 = 32768` (grid). Reading operand-0 alone mislabels it block; frame-max
 /// (and Fuel's deriver, and the KISS golden) say grid.
-fn frame_work_class(operands: &[OperandDesc]) -> WorkClass {
-    let max_rank = operands.iter().map(|o| o.rank as usize).max().unwrap_or(0);
-    let mut numel: i64 = 1;
-    for d in 0..max_rank {
-        // Per-axis frame extent = max across operands (absent axis ⇒ extent 1,
-        // the rank-aligned broadcast identity).
-        let frame_d = operands
-            .iter()
-            .map(|o| {
-                if d < o.rank as usize {
-                    o.shape[d].max(0)
-                } else {
-                    1
-                }
-            })
-            .max()
-            .unwrap_or(1);
-        numel = numel.saturating_mul(frame_d);
+///
+/// **Operands are RIGHT-aligned** (§6.6-0013): a rank-`r` operand occupies frame
+/// axes `[R − r, R − 1]`. Until 0.14.0 this aligned them LEFT, so `[2,64]` with
+/// `[64]` counted `64·64 = 4096` (grid) instead of `2·64 = 128` (block). Same-rank
+/// cells, the common case, were unaffected. Pinned by
+/// `tests/mixed_rank_frames_and_the_innermost_axis.rs`.
+struct Frame {
+    /// Iteration rank `R`: the widest operand rank (§6.6-0006).
+    rank: usize,
+    /// Per-axis frame extent: the max over operands present at that axis, after
+    /// right alignment. The widest operand covers every axis, so no axis is
+    /// left at its initial `0` unless every operand there has extent `0`.
+    extents: [i64; MAX_RANK],
+}
+
+impl Frame {
+    fn of(operands: &[OperandDesc]) -> Self {
+        let rank = operands.iter().map(|o| o.rank as usize).max().unwrap_or(0);
+        let mut extents = [0i64; MAX_RANK];
+        for o in operands {
+            let r = o.rank as usize;
+            let off = rank - r;
+            for d in 0..r {
+                extents[off + d] = extents[off + d].max(o.shape[d].max(0));
+            }
+        }
+        Self { rank, extents }
     }
-    if numel <= 32 {
-        WorkClass::OneWarp
-    } else if numel <= 1024 {
-        WorkClass::OneBlock
-    } else {
-        WorkClass::GridStride
+
+    /// The key's broadcast mask for `od`, in frame coordinates (§6.6-0008 over
+    /// the frame, §6.6-0013 right alignment): bit `i` iff frame axis `i` has
+    /// extent `> 1` and `od`'s stride there is `0`, an absent axis counting as
+    /// stride `0`.
+    fn broadcast_mask(&self, od: &OperandDesc) -> AxisMask {
+        let r = od.rank as usize;
+        let off = self.rank.saturating_sub(r);
+        let mut m = AxisMask::EMPTY;
+        for i in 0..self.rank {
+            let stride = if i < off { 0 } else { od.strides[i - off] };
+            if self.extents[i] > 1 && stride == 0 {
+                m.set(i as u8);
+            }
+        }
+        m
+    }
+
+    fn work_class(&self) -> WorkClass {
+        let numel = self.extents[..self.rank]
+            .iter()
+            .fold(1i64, |n, &e| n.saturating_mul(e));
+        if numel <= 32 {
+            WorkClass::OneWarp
+        } else if numel <= 1024 {
+            WorkClass::OneBlock
+        } else {
+            WorkClass::GridStride
+        }
     }
 }
 

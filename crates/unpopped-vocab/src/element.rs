@@ -1154,6 +1154,13 @@ pub enum ElementKind {
     /// MX shared block **scale**, E6M2 — a finer-granularity sibling of
     /// [`F8E8M0`](Self::F8E8M0): +2 mantissa, −2 exponent, so less dynamic range.
     /// Also unsigned (`6 + 2 = 8`).
+    ///
+    /// **RESERVED since 0.14.0** (KISS-CLASSIFY §6.1-0013, KISS#517): recognized
+    /// on parse, and a typed decline in any `structure_key` dtype position. OCP-MX
+    /// v1.0 defines E8M0 as its only scale encoding, so no bit layout or
+    /// computation semantics are pinned for E6M2. Unpopped never computed with it
+    /// (the plan gate and every emitter already refused it); what changed is that
+    /// a *token* naming it now declines instead of keying.
     F8E6M2,
     /// FP8 E5M2, AMD `fnuz` variant (bias 16, no −0, no infinities) —
     /// **RESERVED**, token `e5m2fnuz`. Same terms as
@@ -1285,7 +1292,7 @@ impl ElementKind {
     /// reserved spelling is a future additive schema event.
     #[must_use]
     pub const fn is_reserved(self) -> bool {
-        matches!(self, Self::Fp8E4M3FNUZ | Self::Fp8E5M2FNUZ)
+        matches!(self, Self::Fp8E4M3FNUZ | Self::Fp8E5M2FNUZ | Self::F8E6M2)
     }
 }
 
