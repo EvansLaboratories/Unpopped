@@ -17,8 +17,7 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ## Unreleased
 
-*Nothing beyond this file. The workspace is at `0.13.1`, which changes only this
-CHANGELOG: no crate's code or behaviour differs from `0.13.0`.*
+*Nothing. The workspace matches the published `0.13.0`.*
 
 ## Released
 
