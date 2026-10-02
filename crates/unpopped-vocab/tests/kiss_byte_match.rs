@@ -121,14 +121,14 @@ fn the_vendored_artifacts_are_the_revisions_this_leg_was_written_against() {
         (
             "structure_key_vectors.json",
             VECTORS,
-            16_458_usize,
-            0x0279_76ca_a2ee_ca73_u64,
+            26_829_usize,
+            0x34fc_9e3e_52f9_19bc_u64,
         ),
         (
             "dtype_manifest.json",
             MANIFEST,
-            3_183_usize,
-            0x2401_3977_364a_8de2_u64,
+            3_182_usize,
+            0x1e77_fe7e_86f9_2de5_u64,
         ),
     ] {
         assert_eq!(
@@ -181,7 +181,7 @@ fn the_vendored_artifacts_are_the_revisions_this_leg_was_written_against() {
 fn the_namespace_vocabulary_versions_are_asserted() {
     // Object-valued, so the scalar reader does not apply — match the whole
     // block byte-exactly, which is also the strictest thing available.
-    for (ns, ver) in [("cuda", 1), ("vulkan", 4)] {
+    for (ns, ver) in [("cuda", 1), ("vulkan", 5)] {
         let needle = format!("\"{ns}\": {ver}");
         assert!(
             VECTORS.contains(&needle),
@@ -220,6 +220,8 @@ fn the_artifact_shape_is_pinned_so_any_new_field_is_loud() {
         "reserved_dtypes",
         "target_axis_note",
         "target_namespaces",
+        "target_match_note",
+        "target_match_vectors",
         "mapping_guard_note",
         "coverage_note",
         "positive_vectors",
@@ -280,7 +282,7 @@ fn the_artifact_shape_is_pinned_so_any_new_field_is_loud() {
 #[test]
 fn positive_vectors_round_trip_byte_exact() {
     let vectors = positives();
-    assert_eq!(vectors.len(), 20, "artifact positive-vector count changed");
+    assert_eq!(vectors.len(), 21, "artifact positive-vector count changed");
 
     let mut matched = Vec::new();
     let mut skipped = Vec::new();
@@ -662,6 +664,74 @@ fn declines() -> Vec<Decline> {
     out
 }
 
+/// **KISS-CLASSIFY §6.8-0002: target matching is byte-exact**, checked against
+/// KISS's own discriminating pairs (`target_match_vectors`, added to the artifact
+/// at KISS#517).
+///
+/// `TargetId` claims this property by construction: tokens are interned, so `==`
+/// on two ids *is* a byte comparison of their strings. These pairs are built to
+/// fool every forbidden shortcut (prefix, feature implication, case folding,
+/// member reordering, subset), so they test the claim rather than restate it.
+/// Each pair is checked twice: as bare `TargetId`s, and as whole parsed
+/// `StructureKey`s whose tokens differ only in field 3, so a key comparison
+/// that ignored the target would be caught too.
+///
+/// The matching is vocabulary-blind, as the clause requires: the reordered and
+/// subset Vulkan targets are non-canonical, and they must simply *not match*,
+/// which needs no namespace knowledge.
+#[test]
+fn target_match_vectors_are_byte_exact() {
+    use unpopped_vocab::TargetId;
+    let sec = section("\"target_match_vectors\"", Some("\"mapping_guard_note\""));
+    let mut rows = Vec::new();
+    let mut cur: [Option<String>; 6] = Default::default();
+    for line in sec.lines() {
+        for (i, k) in [
+            "name",
+            "left",
+            "right",
+            "expect_match",
+            "left_token",
+            "right_token",
+        ]
+        .iter()
+        .enumerate()
+        {
+            if let Some(v) = field(line, k) {
+                cur[i] = Some(v);
+            }
+        }
+        if line.trim().starts_with('}') {
+            if cur.iter().all(Option::is_some) {
+                let [n, l, r, e, lt, rt] = core::mem::take(&mut cur).map(Option::unwrap);
+                rows.push((n, l, r, e == "true", lt, rt));
+            }
+            cur = Default::default();
+        }
+    }
+    // Scanner control: all eight rows, with both verdicts present. A table of
+    // only `false` rows would be passed by a matcher that never matches.
+    assert_eq!(rows.len(), 8, "target_match_vectors row count changed");
+    assert_eq!(
+        rows.iter().filter(|r| r.3).count(),
+        2,
+        "expected two equal controls"
+    );
+
+    for (name, left, right, expect, lt, rt) in &rows {
+        let (a, b) = (TargetId::parse(left), TargetId::parse(right));
+        let got = matches!((&a, &b), (Ok(x), Ok(y)) if x == y);
+        assert_eq!(got, *expect, "{name}: TargetId match {left:?} vs {right:?}");
+
+        let (ka, kb) = (StructureKey::parse_token(lt), StructureKey::parse_token(rt));
+        let got_key = matches!((&ka, &kb), (Ok(x), Ok(y)) if x == y);
+        assert_eq!(
+            got_key, *expect,
+            "{name}: StructureKey match on tokens differing in field 3"
+        );
+    }
+}
+
 /// Positive control on the scanner.
 ///
 /// Every count and comparison above comes from these two functions. A scanner
@@ -672,13 +742,13 @@ fn declines() -> Vec<Decline> {
 fn the_artifact_scanner_actually_reads_the_vectors() {
     let pos = positives();
     let dec = declines();
-    assert_eq!(pos.len(), 20);
+    assert_eq!(pos.len(), 21);
     assert_eq!(dec.len(), 17);
 
     // Namespaces are tagged and split the way the artifact says.
     let vulkan = pos.iter().filter(|p| p.namespace == "vulkan").count();
     let cuda = pos.iter().filter(|p| p.namespace == "cuda").count();
-    assert_eq!((cuda, vulkan), (19, 1), "namespace split changed");
+    assert_eq!((cuda, vulkan), (20, 1), "namespace split changed");
 
     // Tokens and targets are non-empty and internally consistent: the tag must
     // agree with the token's own field 3, or the skip axis is being read from a

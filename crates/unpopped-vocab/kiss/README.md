@@ -7,16 +7,39 @@ vendoring better than retyping.
 
 | File | Source path in KISS | Vendored from commit |
 |---|---|---|
-| `dtype_manifest.json` | `conformance/corpus/dtype_manifest.json` | `19c3ad7f6924161e7b0fd8c7a5b88d9e194b5db7` |
-| `structure_key_vectors.json` | `conformance/corpus/structure_key_vectors.json` | `bea9416` (blob `c83b5b7faeca9638a396ba998de363e36b8bac98`) |
+| `dtype_manifest.json` | `conformance/corpus/dtype_manifest.json` | `bc16715eb04852e35baa59c86bb7fda0949c6cb7` (blob `af851db548f7cb6e05f63e0a6a03dee9c46b2e62`) |
+| `structure_key_vectors.json` | `conformance/corpus/structure_key_vectors.json` | `bc16715eb04852e35baa59c86bb7fda0949c6cb7` (blob `86b43dfcced3d0c7809f3872ba3445bce0e00b79`) |
 
 ### How this copy was taken
 
 Written with `git cat-file blob <commit>:<path> > <dest>`, **not** a checkout.
 A checkout on Windows can CRLF-translate, and the point of vendoring is that
-`diff` against the source is meaningful. Verified after writing:
-`sha256 = 619c834e563fb5bce565915b2d3f225cdf2e71ea803d04a6404ed1cedd29656e`,
-CRLF count 0 — both matching what the KISS maintainer cited.
+`diff` against the source is meaningful.
+
+**Re-vendored 2026-10-02 from KISS `bc16715`**, after KISS#517 merged. That PR
+reconciled KISS-Classify with Fuel's deriver (S1–S6, S15). Verified after writing:
+
+| File | sha256 | CR bytes | `git hash-object` = KISS blob |
+|---|---|---|---|
+| `dtype_manifest.json` | `ddf12ec4a4f5d873d4bee6d6bb48532f00320b6c45dee42fe09244c2d735cb94` | 0 | yes |
+| `structure_key_vectors.json` | `80fb85b3730df3f83b10506ae00473641ba8c9e42590555ae8cd91cd2353a36a` | 0 | yes |
+
+What the refresh carried, and how each part was handled:
+- **`f8e6m2` became reserved** (§6.1-0013). `ElementKind::is_reserved` now
+  includes it, so a token naming it is a typed decline. This is breaking, and is
+  why the refresh ships in 0.14.0, not a patch.
+- **Vulkan vocabulary 4 → 5.** This was re-verified, not just bumped. V-15 adds
+  three `<arith>` names (`i16`, `i64`, `f64`). This crate validates `vulkan:`
+  tokens by grammar only, and the one Vulkan positive vector names none of the
+  three. Every vector shared with the previous copy is byte-identical.
+- **`target_match_vectors`** (§6.8-0002 discriminating pairs) are now asserted
+  by `target_match_vectors_are_byte_exact`, as bare `TargetId`s and as whole keys.
+- **New positive vector `gem_weight_role_discriminator`** (§6.6-0019)
+  round-trips through the codec. Its *derivation* (weight-role `<wdt>`) is a
+  separate gap, tracked on #31, because `structure_key` takes no role hints.
+
+The previous copy (`dtype_manifest` from `19c3ad7`, vectors from `bea9416`) had
+`sha256 = 619c834e…656e` for the vectors file.
 
 The artifact is LF-clean and `.gitattributes`-enforced upstream, so a raw hash is
 stable across platforms. Two sibling artifacts (`dtype_manifest.json`,
