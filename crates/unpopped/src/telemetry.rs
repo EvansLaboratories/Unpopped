@@ -30,8 +30,8 @@ use std::collections::BTreeMap;
 use std::io::BufRead;
 
 use unpopped_vocab::{
-    ArchSku, DispatchTable, HwStamp, Implementor, ReportedCandidate, STRUCTURE_KEY_VERSION,
-    StructureKey, TargetError, TargetId, merge, reported_entry,
+    ArchSku, DispatchEntry, DispatchTable, HwStamp, Implementor, ReportedCandidate,
+    STRUCTURE_KEY_VERSION, StructureKey, TargetError, TargetId, merge, reported_entry,
 };
 
 /// Highest telemetry-envelope `schema` this build understands. A record with a
@@ -660,6 +660,52 @@ impl MergeReport {
     }
 }
 
+/// Whether [`merge`] would keep `entry` at all.
+///
+/// `merge` rejects a Reported row whose stamp target is not its key's target,
+/// and says nothing. This reads the gate's own answer back rather than
+/// restating its rule: `merge` into an empty table keeps the row exactly when
+/// the gate (and the finite-margin guard, which [`reported_entry`] already
+/// enforces) passes it.
+fn passes_merge_gate(entry: &DispatchEntry) -> bool {
+    let mut probe = DispatchTable::new();
+    merge(&mut probe, std::slice::from_ref(entry));
+    !probe.entries.is_empty()
+}
+
+/// A record's chosen implementation and its candidates as
+/// [`ReportedCandidate`]s. The chosen's latency is whichever candidate carries
+/// its [`ImplId`]; a candidate with an unknown backend is left out.
+fn reported_candidates(
+    rec: &DispatchRecord,
+    chosen_imp: Implementor,
+    chosen_entry: Option<String>,
+) -> (ReportedCandidate, Vec<ReportedCandidate>) {
+    let chosen_latency = rec
+        .candidates
+        .iter()
+        .find(|c| c.impl_id == rec.chosen)
+        .and_then(|c| c.latency_ns);
+    let chosen_rc = ReportedCandidate {
+        implementor: chosen_imp,
+        entry_point: chosen_entry,
+        latency_ns: chosen_latency,
+    };
+    let cand_rcs = rec
+        .candidates
+        .iter()
+        .filter_map(|c| {
+            let (implementor, entry_point) = resolve_impl(&c.impl_id)?;
+            Some(ReportedCandidate {
+                implementor,
+                entry_point,
+                latency_ns: c.latency_ns,
+            })
+        })
+        .collect();
+    (chosen_rc, cand_rcs)
+}
+
 /// [`merge_reports`], returning a [`MergeReport`] that counts every record by
 /// what happened to it, instead of dropping the ones it cannot use silently.
 pub fn merge_reports_counted(
@@ -695,43 +741,14 @@ pub fn merge_reports_counted(
             runtime_version: hw.driver_version.clone().unwrap_or_default(),
             captured_unix_s,
         };
-        // The chosen's latency is whichever candidate carries its ImplId.
-        let chosen_latency = rec
-            .candidates
-            .iter()
-            .find(|c| c.impl_id == rec.chosen)
-            .and_then(|c| c.latency_ns);
-        let chosen_rc = ReportedCandidate {
-            implementor: chosen_imp,
-            entry_point: chosen_entry,
-            latency_ns: chosen_latency,
-        };
-        let cand_rcs = rec
-            .candidates
-            .iter()
-            .filter_map(|c| {
-                let (implementor, entry_point) = resolve_impl(&c.impl_id)?;
-                Some(ReportedCandidate {
-                    implementor,
-                    entry_point,
-                    latency_ns: c.latency_ns,
-                })
-            })
-            .collect();
+        let (chosen_rc, cand_rcs) = reported_candidates(rec, chosen_imp, chosen_entry);
         let Some(entry) =
             reported_entry(rec.structure_key.clone(), chosen_rc, cand_rcs, Some(stamp))
         else {
             report.not_an_entry += 1;
             continue;
         };
-        // `merge` rejects a Reported row whose stamp target is not its key's
-        // target, and says nothing. Read the gate's own answer back, one row at
-        // a time, rather than restating its rule here: `merge` on an empty
-        // table keeps the row exactly when the gate (and the finite-margin
-        // guard, which `reported_entry` already enforces) passes it.
-        let mut probe = DispatchTable::new();
-        merge(&mut probe, std::slice::from_ref(&entry));
-        if probe.entries.is_empty() {
+        if !passes_merge_gate(&entry) {
             report.arch_gate_rejected += 1;
             continue;
         }
