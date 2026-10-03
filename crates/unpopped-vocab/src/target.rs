@@ -72,13 +72,26 @@
 //! before the repoint would have broken a PR-gated file). `From<ArchSku>` now
 //! goes through [`TargetId::parse`] like every other namespace's tokens, at
 //! registration time rather than on any hot path.
+//!
+//! # `TargetId` is the architecture identity — settled 2026-10-03
+//!
+//! Board #106 option C, approved by every affected lane with CireSnave's prior
+//! authorisation. **A target, CUDA architectures included, is named by a
+//! `TargetId`**, and every target-keyed API takes one. [`ArchSku`] is a
+//! baracuda-cutlass dispatch SKU, kept closed for that dispatch only. It is
+//! not a second spelling of the identity, and its variant list does not bound
+//! which architectures can be named. `cuda:sm61` and `cuda:sm100` parse here,
+//! and `unpopped`'s capability table has rows for them, although neither has
+//! an `ArchSku` variant. Code that needs an arch identity takes
+//! `impl Into<TargetId>` (or a `TargetId`), never an `ArchSku`.
 
 use core::fmt;
 use std::sync::{OnceLock, RwLock};
 
 use crate::layout::ArchSku;
 
-/// An interned `target_capability` token (KISS-CLASSIFY §6.8).
+/// An interned `target_capability` token (KISS-CLASSIFY §6.8), and the
+/// architecture identity for every target-keyed API (see the module docs).
 ///
 /// `Copy`, 2 bytes, and comparable with `==` — which by construction is the
 /// byte-exact match §6.8-0002 requires, since equal tokens intern to equal ids.
