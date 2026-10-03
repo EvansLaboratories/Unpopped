@@ -26,11 +26,12 @@
 //! surface. It is **panic-free**: every malformed line increments a skip counter
 //! and is dropped, never panics.
 
+use std::collections::BTreeMap;
 use std::io::BufRead;
 
 use unpopped_vocab::{
-    ArchSku, DispatchTable, HwStamp, Implementor, ReportedCandidate, STRUCTURE_KEY_VERSION,
-    StructureKey, merge, reported_entry,
+    ArchSku, DispatchEntry, DispatchTable, HwStamp, Implementor, ReportedCandidate,
+    STRUCTURE_KEY_VERSION, StructureKey, TargetError, TargetId, merge, reported_entry,
 };
 
 /// Highest telemetry-envelope `schema` this build understands. A record with a
@@ -561,6 +562,11 @@ fn parse_cc(v: &Json) -> Option<(u32, u32)> {
 /// `dispatch.rs` nor the GPU-linking bench crate — see the item-08 §3 decision.
 /// `arch_sku_maps_capabilities` pins it against the bench's cases so drift is
 /// caught in this suite.
+///
+/// This answers "which baracuda-cutlass dispatch cell", not "which target".
+/// Telemetry stamps a record with [`cuda_target_of`] instead: this map has
+/// no answer outside 8.x/9.x, and its 9.x answer (`sm90a`) is not the target
+/// Fuel keys a Hopper record with.
 #[must_use]
 pub fn arch_sku_of(major: u32, minor: u32) -> Option<ArchSku> {
     match (major, minor) {
@@ -585,67 +591,172 @@ pub fn resolve_impl(id: &ImplId) -> Option<(Implementor, Option<String>)> {
 
 /// Fold Fuel-reported dispatch wins into `table` through the FROZEN seams.
 ///
-/// Per record: a record with no hardware stamp or `compute_capability: None`, or
-/// a capability with no built [`ArchSku`], is **dropped** (stampless ⇒ dropped,
-/// not guessed). The stamp's `captured_unix_s` is **injected** by the caller (it
+/// Per record: a record with no hardware stamp or `compute_capability: None` is
+/// **dropped** (stampless ⇒ dropped, not guessed). Any capability is stamped
+/// with its own target, [`cuda_target_of`], so a capability no dispatch cell
+/// is built for still merges into its own bucket. Every drop is counted: call
+/// [`merge_reports_counted`] to read the counts. The stamp's
+/// `captured_unix_s` is **injected** by the caller (it
 /// is not on the wire). The chosen and each candidate are resolved to
 /// [`ReportedCandidate`]s (the chosen's latency read out of `candidates[]`), one
 /// [`reported_entry`] is built per record, and a **single** frozen [`merge`] folds
 /// them in — honoring Fuel's `chosen`, arch-gating on `compute_capability`, and
 /// respecting `MIN_FLIP_MARGIN`, all of which live in `dispatch.rs`.
 pub fn merge_reports(ingest: &Ingest, captured_unix_s: u64, table: &mut DispatchTable) {
+    let _ = merge_reports_counted(ingest, captured_unix_s, table);
+}
+
+/// The `cuda:` target a device with compute capability `major.minor` is named
+/// by: `cuda:sm{major}{minor}`, digits concatenated with no separator.
+///
+/// The rule is Baracuda's (it owns the `cuda:` vocabulary, KISS-Classify
+/// §6.8-0004), and it is byte for byte the rule Fuel keys its telemetry records
+/// with, which is what lets [`merge`]'s arch gate (stamp target == key target)
+/// accept them. No `a` suffix is ever minted: `sm90a` is a separate dispatch
+/// SKU, and a capability number does not say which SKU a part wants.
+///
+/// # Errors
+///
+/// [`TargetError`] if the token cannot be interned. Every `cuda:sm<digits>`
+/// token satisfies the §6.8-0001/0005 grammar, so in practice that is only
+/// [`TargetError::TableFull`].
+pub fn cuda_target_of(major: u32, minor: u32) -> Result<TargetId, TargetError> {
+    TargetId::parse(&format!("cuda:sm{major}{minor}"))
+}
+
+/// What [`merge_reports_counted`] did with each dispatch record.
+///
+/// Every record lands in exactly one bucket, so a record can never disappear
+/// without a count saying why.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MergeReport {
+    /// Records offered to [`merge`] and kept, keyed by the stamp's full target
+    /// token (an opaque bucket: an unknown future capability gets its own).
+    pub merged: BTreeMap<String, u64>,
+    /// No hardware stamp at all.
+    pub no_stamp: u64,
+    /// A stamp with `compute_capability: None` (a non-CUDA source).
+    pub no_capability: u64,
+    /// A capability no valid [`TargetId`] could be formed from.
+    pub bad_target: u64,
+    /// The chosen implementation's backend is unknown to [`resolve_impl`].
+    pub unresolved_impl: u64,
+    /// [`reported_entry`] declined the record (e.g. an unparseable key).
+    pub not_an_entry: u64,
+    /// Rejected by [`merge`]'s arch gate: the stamp's target is not the key's.
+    pub arch_gate_rejected: u64,
+}
+
+impl MergeReport {
+    /// Records that did not reach the table, summed over every reason.
+    #[must_use]
+    pub fn dropped(&self) -> u64 {
+        self.no_stamp
+            + self.no_capability
+            + self.bad_target
+            + self.unresolved_impl
+            + self.not_an_entry
+            + self.arch_gate_rejected
+    }
+}
+
+/// Whether [`merge`] would keep `entry` at all.
+///
+/// `merge` rejects a Reported row whose stamp target is not its key's target,
+/// and says nothing. This reads the gate's own answer back rather than
+/// restating its rule: `merge` into an empty table keeps the row exactly when
+/// the gate (and the finite-margin guard, which [`reported_entry`] already
+/// enforces) passes it.
+fn passes_merge_gate(entry: &DispatchEntry) -> bool {
+    let mut probe = DispatchTable::new();
+    merge(&mut probe, std::slice::from_ref(entry));
+    !probe.entries.is_empty()
+}
+
+/// A record's chosen implementation and its candidates as
+/// [`ReportedCandidate`]s. The chosen's latency is whichever candidate carries
+/// its [`ImplId`]; a candidate with an unknown backend is left out.
+fn reported_candidates(
+    rec: &DispatchRecord,
+    chosen_imp: Implementor,
+    chosen_entry: Option<String>,
+) -> (ReportedCandidate, Vec<ReportedCandidate>) {
+    let chosen_latency = rec
+        .candidates
+        .iter()
+        .find(|c| c.impl_id == rec.chosen)
+        .and_then(|c| c.latency_ns);
+    let chosen_rc = ReportedCandidate {
+        implementor: chosen_imp,
+        entry_point: chosen_entry,
+        latency_ns: chosen_latency,
+    };
+    let cand_rcs = rec
+        .candidates
+        .iter()
+        .filter_map(|c| {
+            let (implementor, entry_point) = resolve_impl(&c.impl_id)?;
+            Some(ReportedCandidate {
+                implementor,
+                entry_point,
+                latency_ns: c.latency_ns,
+            })
+        })
+        .collect();
+    (chosen_rc, cand_rcs)
+}
+
+/// [`merge_reports`], returning a [`MergeReport`] that counts every record by
+/// what happened to it, instead of dropping the ones it cannot use silently.
+pub fn merge_reports_counted(
+    ingest: &Ingest,
+    captured_unix_s: u64,
+    table: &mut DispatchTable,
+) -> MergeReport {
+    let mut report = MergeReport::default();
     let mut entries = Vec::new();
     for rec in &ingest.dispatches {
-        let Some(hw) = &rec.hw else { continue };
-        let Some((major, minor)) = hw.compute_capability else {
+        let Some(hw) = &rec.hw else {
+            report.no_stamp += 1;
             continue;
         };
-        let Some(arch) = arch_sku_of(major, minor) else {
+        let Some((major, minor)) = hw.compute_capability else {
+            report.no_capability += 1;
+            continue;
+        };
+        let Ok(target) = cuda_target_of(major, minor) else {
+            report.bad_target += 1;
             continue;
         };
         let Some((chosen_imp, chosen_entry)) = resolve_impl(&rec.chosen) else {
+            report.unresolved_impl += 1;
             continue;
         };
         let stamp = HwStamp {
-            // `arch_sku_of` reads a CUDA compute capability, so this path is
-            // CUDA-specific by construction and the conversion is exact. A
-            // non-CUDA telemetry source would build its own `TargetId` from its
-            // own probe rather than routing through a compute capability.
-            target: arch.into(),
+            // A compute capability is a CUDA notion, so this path is
+            // CUDA-specific by construction. A non-CUDA telemetry source would
+            // build its own `TargetId` from its own probe.
+            target,
             device_name: hw.hardware_sku.clone().unwrap_or_default(),
             runtime_version: hw.driver_version.clone().unwrap_or_default(),
             captured_unix_s,
         };
-        // The chosen's latency is whichever candidate carries its ImplId.
-        let chosen_latency = rec
-            .candidates
-            .iter()
-            .find(|c| c.impl_id == rec.chosen)
-            .and_then(|c| c.latency_ns);
-        let chosen_rc = ReportedCandidate {
-            implementor: chosen_imp,
-            entry_point: chosen_entry,
-            latency_ns: chosen_latency,
-        };
-        let cand_rcs = rec
-            .candidates
-            .iter()
-            .filter_map(|c| {
-                let (implementor, entry_point) = resolve_impl(&c.impl_id)?;
-                Some(ReportedCandidate {
-                    implementor,
-                    entry_point,
-                    latency_ns: c.latency_ns,
-                })
-            })
-            .collect();
-        if let Some(entry) =
+        let (chosen_rc, cand_rcs) = reported_candidates(rec, chosen_imp, chosen_entry);
+        let Some(entry) =
             reported_entry(rec.structure_key.clone(), chosen_rc, cand_rcs, Some(stamp))
-        {
-            entries.push(entry);
+        else {
+            report.not_an_entry += 1;
+            continue;
+        };
+        if !passes_merge_gate(&entry) {
+            report.arch_gate_rejected += 1;
+            continue;
         }
+        *report.merged.entry(target.as_str()).or_insert(0) += 1;
+        entries.push(entry);
     }
     merge(table, &entries);
+    report
 }
 
 // ===========================================================================
@@ -757,7 +868,7 @@ mod tests {
     use std::io::Cursor;
     use unpopped_vocab::{
         ArchSku, DispatchEntry, DispatchTable, ElementKind, HwStamp, Implementor, OpCategory,
-        OperandDesc, Provenance, ReportedCandidate, StructureKey, merge, reported_entry,
+        OperandDesc, Provenance, ReportedCandidate, StructureKey, TargetId, merge, reported_entry,
         structure_key, structure_key_token,
     };
 
@@ -960,6 +1071,161 @@ mod tests {
         assert_eq!(arch_sku_of(8, 6), Some(ArchSku::Sm80));
         assert_eq!(arch_sku_of(9, 0), Some(ArchSku::Sm90a));
         assert_eq!(arch_sku_of(7, 5), None);
+    }
+
+    /// A binary-elementwise f32 token built at an arbitrary target, so a record
+    /// for any capability can carry a key whose target its stamp must match.
+    fn ew_token_at(target: TargetId) -> String {
+        let a = OperandDesc::new(2, &[128, 256], &[256, 1], ElementKind::F32, 256);
+        structure_key_token(OpCategory::BinaryElementwise, &[a, a, a], target)
+    }
+
+    fn ew_line_at(token: &str, major: u32, minor: u32) -> String {
+        format!(
+            r#"{{"schema":1,"structure_key":"{token}","chosen":{{"backend":"gen","op":"add","dtypes":["f32"],"kernel_source":"k","kernel_revision_hash":"r"}},"candidates":[{{"impl_id":{{"backend":"gen","op":"add","dtypes":["f32"],"kernel_source":"k","kernel_revision_hash":"r"}},"latency_ns":100}}],"count":1,"hw":{{"compute_capability":[{major},{minor}],"hardware_sku":"dev","driver_version":"12.9"}}}}"#
+        )
+    }
+
+    #[test]
+    fn cuda_target_concatenates_capability_digits() {
+        // Baracuda's `cuda:` rule (it owns the namespace, §6.8-0004), relayed by
+        // the PM 2026-10-03. Hardcoded literals, never derived from the code
+        // under test. No `a` suffix anywhere: a capability does not say which
+        // SKU a part wants.
+        for ((major, minor), want) in [
+            ((6, 1), "cuda:sm61"),
+            ((7, 0), "cuda:sm70"),
+            ((7, 5), "cuda:sm75"),
+            ((8, 0), "cuda:sm80"),
+            ((8, 6), "cuda:sm86"),
+            ((8, 9), "cuda:sm89"),
+            ((9, 0), "cuda:sm90"),
+            ((10, 0), "cuda:sm100"),
+            ((12, 0), "cuda:sm120"),
+            ((12, 1), "cuda:sm121"),
+        ] {
+            assert_eq!(
+                cuda_target_of(major, minor).unwrap().as_str(),
+                want,
+                "{major}.{minor}"
+            );
+        }
+        // Byte-identical to today's stamp for the two capabilities whose
+        // mapping does not change.
+        assert_eq!(cuda_target_of(8, 0).unwrap(), ArchSku::Sm80.into());
+        assert_eq!(cuda_target_of(8, 9).unwrap(), ArchSku::Sm89.into());
+    }
+
+    /// The five capabilities `arch_sku_of` could not name used to be dropped
+    /// before the merge saw them. Each now merges into its own target's cell.
+    #[test]
+    fn merge_reports_keeps_capabilities_with_no_arch_sku() {
+        for (major, minor, token) in [
+            (6, 1, "cuda:sm61"),
+            (7, 0, "cuda:sm70"),
+            (7, 5, "cuda:sm75"),
+            (10, 0, "cuda:sm100"),
+            (12, 0, "cuda:sm120"),
+            (12, 1, "cuda:sm121"),
+        ] {
+            let target = TargetId::parse(token).unwrap();
+            let key = ew_token_at(target);
+            let mut table = DispatchTable::new();
+            let report =
+                merge_reports_counted(&ingest_str(&ew_line_at(&key, major, minor)), 7, &mut table);
+            let sk = StructureKey::from_token(&key).unwrap();
+            let e = table
+                .lookup(&sk)
+                .unwrap_or_else(|| panic!("{major}.{minor} report dropped"));
+            assert_eq!(e.measured_on.as_ref().map(|h| h.target), Some(target));
+            assert_eq!(report.merged.get(token), Some(&1), "{major}.{minor}");
+            assert_eq!(report.dropped(), 0, "{major}.{minor}");
+        }
+    }
+
+    /// The deliberate behaviour change: Fuel keys an H100 record `cuda:sm90`
+    /// (`fuel-dispatch` `arch_tag` → `map_arch_sku("90")` → `Sm90`), while the
+    /// old stamp said `cuda:sm90a`, so the arch gate rejected every one.
+    #[test]
+    fn merge_reports_now_merges_an_h100_report() {
+        let key = ew_token_at(ArchSku::Sm90.into());
+        let mut table = DispatchTable::new();
+        let report = merge_reports_counted(&ingest_str(&ew_line_at(&key, 9, 0)), 7, &mut table);
+        let sk = StructureKey::from_token(&key).unwrap();
+        assert!(table.lookup(&sk).is_some(), "an H100 report merges");
+        assert_eq!(report.merged.get("cuda:sm90"), Some(&1));
+        assert_eq!(report.arch_gate_rejected, 0);
+    }
+
+    /// Positive control for the arch gate: a record whose key names one target
+    /// and whose stamp names another is rejected inside `merge`, and is
+    /// COUNTED rather than vanishing.
+    #[test]
+    fn merge_reports_counts_arch_gate_rejects() {
+        // The old 9.0 mismatch, rebuilt by hand: key sm90a, device 9.0 (sm90).
+        let key = ew_token_at(ArchSku::Sm90a.into());
+        let mut table = DispatchTable::new();
+        let report = merge_reports_counted(&ingest_str(&ew_line_at(&key, 9, 0)), 7, &mut table);
+        let sk = StructureKey::from_token(&key).unwrap();
+        // The count agrees with what `merge` actually did: nothing landed.
+        assert!(table.lookup(&sk).is_none());
+        assert_eq!(report.arch_gate_rejected, 1);
+        assert!(report.merged.is_empty());
+        assert_eq!(report.dropped(), 1);
+    }
+
+    #[test]
+    fn merge_reports_counts_every_drop_reason() {
+        let tok = ew_token();
+        let stampless = format!(
+            r#"{{"schema":1,"structure_key":"{tok}","chosen":{{"backend":"gen","op":"add","dtypes":["f32"],"kernel_source":"k","kernel_revision_hash":"r"}},"candidates":[],"count":1}}"#
+        );
+        let no_cc = format!(
+            r#"{{"schema":1,"structure_key":"{tok}","chosen":{{"backend":"gen","op":"add","dtypes":["f32"],"kernel_source":"k","kernel_revision_hash":"r"}},"candidates":[],"count":1,"hw":{{"hardware_sku":"cpu","driver_version":"n/a"}}}}"#
+        );
+        let unknown_backend = format!(
+            r#"{{"schema":1,"structure_key":"{tok}","chosen":{{"backend":"rocm","op":"add","dtypes":["f32"],"kernel_source":"k","kernel_revision_hash":"r"}},"candidates":[],"count":1,"hw":{{"compute_capability":[8,9],"hardware_sku":"RTX 4070","driver_version":"13.3"}}}}"#
+        );
+        let good = ew_line_at(&tok, 8, 9);
+        let feed = [stampless, no_cc, unknown_backend, good].join("\n");
+        let mut table = DispatchTable::new();
+        let r = merge_reports_counted(&ingest_str(&feed), 7, &mut table);
+        assert_eq!(r.no_stamp, 1);
+        assert_eq!(r.no_capability, 1);
+        assert_eq!(r.unresolved_impl, 1);
+        assert_eq!(r.bad_target, 0);
+        assert_eq!(r.arch_gate_rejected, 0);
+        assert_eq!(r.merged.get("cuda:sm89"), Some(&1));
+        assert_eq!(r.dropped(), 3);
+        // `merge_reports` is the same fold with the report discarded.
+        let mut plain = DispatchTable::new();
+        merge_reports(&ingest_str(&feed), 7, &mut plain);
+        assert_eq!(plain, table);
+    }
+
+    /// Positive control: 8.0 output is byte-identical to today's (the 8.9
+    /// case is `merge_reports_composes_to_hand_built_reported_entry_and_merge`).
+    #[test]
+    fn merge_reports_sm80_output_is_unchanged() {
+        let key = ew_token_at(ArchSku::Sm80.into());
+        let mut via_bridge = DispatchTable::new();
+        merge_reports(&ingest_str(&ew_line_at(&key, 8, 0)), 7, &mut via_bridge);
+        let rc = ReportedCandidate {
+            implementor: Implementor::Generated,
+            entry_point: Some("k".to_string()),
+            latency_ns: Some(100),
+        };
+        let stamp = HwStamp {
+            target: ArchSku::Sm80.into(),
+            device_name: "dev".to_string(),
+            runtime_version: "12.9".to_string(),
+            captured_unix_s: 7,
+        };
+        let entry = reported_entry(Some(key), rc.clone(), vec![rc], Some(stamp)).unwrap();
+        let mut hand = DispatchTable::new();
+        merge(&mut hand, &[entry]);
+        assert_eq!(via_bridge, hand);
+        assert!(!hand.entries.is_empty(), "the control merged something");
     }
 
     #[test]

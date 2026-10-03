@@ -15,7 +15,34 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## Unreleased — `0.14.2`
+## Unreleased — `0.14.3`
+
+### Fixed: telemetry from any compute capability now merges, and every drop is counted
+
+**Behaviour change: H100 telemetry now counts.** `telemetry::merge_reports` used to
+stamp a record through `arch_sku_of`, which has answers only for 8.x and 9.x, and
+dropped every other capability before the merge saw it (sm_61, sm_70, sm_75,
+Blackwell). Its 9.x answer was `cuda:sm90a`, but Fuel keys a Hopper record
+`cuda:sm90`, so `merge`'s arch gate (stamp target == key target) rejected every
+H100 report as well. Both drops were silent.
+
+- **New `cuda_target_of(major, minor)`:** `cuda:sm{major}{minor}`, digits
+  concatenated, no `a` suffix. This is baracuda's `cuda:` rule (it owns the
+  namespace, §6.8-0004), and it is the same rule Fuel keys records with.
+  `merge_reports` stamps with it.
+- **Changed rows, on purpose:** 9.0 now stamps `cuda:sm90` (was `cuda:sm90a`), so
+  H100 reports keyed `cuda:sm90` now merge into the `cuda:sm90` cells, where
+  before they changed nothing. 8.6/8.7 now stamp `cuda:sm86`/`cuda:sm87` (was
+  `cuda:sm80`); Fuel builds no key for those today, so no live row changes.
+  6.x, 7.x, 10.x and 12.x now merge into their own targets. 8.0 and 8.9 are
+  byte-identical.
+- **New `merge_reports_counted`** returns a `MergeReport`: merged records per
+  full target token, plus counts for no stamp, no capability, an unformable
+  target, an unknown backend, a declined entry, and an arch-gate reject.
+  `merge_reports` is the same fold with the report discarded.
+- `arch_sku_of` is unchanged. It still answers "which cutlass dispatch cell".
+
+## Unreleased — `0.14.2 (docs only, never published)`
 
 ### Docs only: `TargetId` is the architecture identity; `ArchSku` is a cutlass dispatch SKU
 
@@ -34,9 +61,7 @@ No code, signature or behaviour change. This release records board #106 option C
 - **`docs/idiom-lifting-design.md` §6:** the planned `ArchSku::Sm61` breaking
   release is marked superseded. No variant is added. The capability row shipped in `0.14.1`.
 
-Known follow-up, not in this release: `telemetry::merge_reports` drops telemetry
-from any compute capability outside 8.x/9.x, because `arch_sku_of` maps only those.
-The fix waits on baracuda's capability-to-`cuda:`-token rule.
+The `telemetry::merge_reports` drop this entry listed as a follow-up is fixed in `0.14.3`.
 
 ## Released
 
