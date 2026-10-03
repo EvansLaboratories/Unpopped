@@ -615,6 +615,14 @@ pub fn merge_reports(ingest: &Ingest, captured_unix_s: u64, table: &mut Dispatch
 /// accept them. No `a` suffix is ever minted: `sm90a` is a separate dispatch
 /// SKU, and a capability number does not say which SKU a part wants.
 ///
+/// ⚠️ **Not injective in principle.** With no separator, `(1, 10)` and `(11, 0)`
+/// both give `cuda:sm110`. No CUDA capability has had a two-digit minor, so no
+/// real pair collides today. The format is not this crate's to fix: it is
+/// baracuda's `cuda:` vocabulary, and it must stay byte-identical to Fuel's
+/// key, or `merge`'s arch gate rejects every record again. If NVIDIA ever
+/// ships a minor of 10 or more, the namespace owner has to change the format,
+/// and Fuel and this function have to change in lockstep.
+///
 /// # Errors
 ///
 /// [`TargetError`] if the token cannot be interned. Every `cuda:sm<digits>`
