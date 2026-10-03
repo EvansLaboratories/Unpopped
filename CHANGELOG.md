@@ -15,7 +15,38 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## Unreleased — `0.14.1`
+## Unreleased — `0.14.2`
+
+### Docs only: `TargetId` is the architecture identity; `ArchSku` is a cutlass dispatch SKU
+
+No code, signature or behaviour change. This release records board #106 option C
+(2026-10-03), which every affected lane approved with CireSnave's prior authorisation:
+
+- **`TargetId` names every target, CUDA architectures included.** Any
+  architecture is spelled as a token (`cuda:sm61`, `cuda:sm100`, …) whether or not
+  `ArchSku` has a variant for it. The `unpopped-vocab::target` module docs and
+  `TargetId`'s doc now say so.
+- **`ArchSku` is re-scoped to a baracuda-cutlass dispatch SKU.** It stays closed
+  and exhaustive, with no new variants and no freeze. A missing variant is not a
+  missing architecture. Whether to add one (Blackwell `Sm100a`, say) is baracuda's
+  call, made for its cutlass dispatch. Its doc also lost a pointer to a ROADMAP that
+  this repo doesn't have.
+- **`docs/idiom-lifting-design.md` §6:** the planned `ArchSku::Sm61` breaking
+  release is marked superseded. No variant is added. The capability row shipped in `0.14.1`.
+
+Known follow-up, not in this release: `telemetry::merge_reports` drops telemetry
+from any compute capability outside 8.x/9.x, because `arch_sku_of` maps only those.
+The fix waits on baracuda's capability-to-`cuda:`-token rule.
+
+## Released
+
+⚠️ **What reached crates.io, read from its API on 2026-10-03:** `0.11.0`
+(2026-09-11), `0.12.0` (2026-10-01), `0.13.0` (2026-10-01), `0.14.0` (2026-10-02), `0.14.1`
+(2026-10-03), for all four published crates. **`0.11.1`–`0.11.6` existed only in the workspace and were
+never published.** A consumer went straight from `0.11.0` to `0.12.0`, so
+everything those intermediate numbers carried is listed under `0.12.0`.
+
+## 2026-10-03 — everything at `0.14.1`
 
 ### `cuda_capabilities` / `capabilities_for` cover sm_61 through sm_121 (additive)
 
@@ -44,14 +75,6 @@ This is part of CireSnave's ruling that baracuda supports sm_61 through the
 latest architecture via Unpopped's CUDA parse/emit. Nothing in Unpopped's IR is
 arch-specific. These rows only inform which schedule variants are worth
 offering.
-
-## Released
-
-⚠️ **What reached crates.io, read from its API on 2026-10-02:** `0.11.0`
-(2026-09-11), `0.12.0` (2026-10-01), `0.13.0` (2026-10-01), `0.14.0` (2026-10-02), for all four
-published crates. **`0.11.1`–`0.11.6` existed only in the workspace and were
-never published.** A consumer went straight from `0.11.0` to `0.12.0`, so
-everything those intermediate numbers carried is listed under `0.12.0`.
 
 ## 2026-10-02 — everything at `0.14.0`
 

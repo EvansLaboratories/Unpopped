@@ -30,12 +30,37 @@ pub enum LayoutSku {
     Rrr,
 }
 
-/// Compute capability bucket the selected kernel was compiled for.
+/// Compute capability bucket the selected kernel was compiled for — a
+/// **baracuda-cutlass dispatch SKU**, not an architecture identity.
+///
+/// # This is not how a target is named
+///
+/// The architecture identity is [`TargetId`](crate::TargetId), an open
+/// `<namespace>:<capability-set>` token (KISS-Classify §6.8). Every
+/// target-keyed API here takes it: [`fn@crate::structure_key`] (via
+/// `impl Into<TargetId>`), [`HwStamp::target`](crate::HwStamp::target),
+/// and `unpopped`'s `JitRequest::target`. Any CUDA architecture is spelled
+/// there (`cuda:sm61`, `cuda:sm100`, …), whether or not this enum has a
+/// variant for it. Settled 2026-10-03 as board #106 option C, approved by
+/// every affected lane with CireSnave's prior authorisation: `ArchSku`
+/// stays closed for baracuda's cutlass dispatch only, and the followers
+/// that took it as an arch identity (baracuda's NVRTC compiler, the seam
+/// request) move to `TargetId`.
+///
+/// So a missing variant is **not** a missing architecture. Whether a new
+/// arch gets a variant (Blackwell `Sm100a`, for example) is baracuda's
+/// call, made for its cutlass dispatch. It does not decide whether
+/// Unpopped can key, classify or JIT for that arch, and it never blocks
+/// that. `From<ArchSku> for TargetId` is the bridge for the variants that
+/// exist.
+///
+/// The remaining non-cutlass use is [`KernelSku::arch`](crate::KernelSku::arch),
+/// a separate decision recorded in `docs/deferred.md`.
 ///
 /// **Intentionally NOT `#[non_exhaustive]`** — the cutlass GEMM
 /// dispatchers exhaustively match on this enum to pick per-arch
-/// kernel SKUs; adding a new arch (Blackwell `Sm100a` is tracked in
-/// the ROADMAP) deserves to surface as a build break across every
+/// kernel SKUs; adding a new arch (Blackwell `Sm100a`, if baracuda
+/// wants one) deserves to surface as a build break across every
 /// match site so each can decide whether to JIT-forward or add a
 /// dedicated variant. New variants are a deliberate
 /// breaking-change event.

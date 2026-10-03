@@ -321,9 +321,9 @@ emitter-specific sub-crate"*, and CireSnave's parser/emitter correction quoted i
 `#[non_exhaustive]` (`convert.rs:120-121`), and baracuda builds it with a struct
 literal (`baracuda-cuda-parse/src/lib.rs:72`). The same is true of `Lifted`
 (`lift.rs:112-113`, `#[derive(Debug)]` only), so a new `hints` field breaks
-anyone who constructs one. Both belong in the same breaking release as
-`ArchSku::Sm61` (§6), not in a minor. Marking them `#[non_exhaustive]` in that
-release keeps later additions minor.
+anyone who constructs one. Both belong in a breaking release, not in a minor.
+(This once named the `ArchSku::Sm61` release, which option C dropped; see §6.)
+Marking them `#[non_exhaustive]` in that release keeps later additions minor.
 
 ### 4.3 Origin: where "I am not a plageurist" is enforced
 
@@ -442,18 +442,34 @@ memory `panic-text-is-a-cross-repo-api`.
 
 ## 6. How Sm61 enters the arch vocabulary
 
-Three separate surfaces, and **only two are Unpopped's**:
+> **Updated 2026-10-03: option C (board #106) settled this, and item 2 below is
+> superseded.** `TargetId` is the architecture identity. `ArchSku` stays closed
+> as a baracuda-cutlass dispatch SKU and gets **no** `Sm61` variant; the
+> followers that took it as an arch identity (baracuda's NVRTC compiler, the
+> seam request) move to `TargetId`. Item 3 shipped in `0.14.1` (#34). So
+> Unpopped's only remaining surface is the telemetry ingest follow-up named
+> under item 2.
+
+Three separate surfaces, and **only two were Unpopped's**:
 
 1. **The `cuda:sm61` token (vocabulary): baracuda's, not ours.**
    - `TargetId` validates grammar and never vocabulary (`target.rs` module doc,
      §6.8-0004). `cuda:sm61` satisfies §6.8-0001/0005 as `TargetId::parse`
-     (`target.rs:174`) implements them. That is a reading of the grammar; I did
-     not execute it.
+     in `target.rs` implements them. Since `0.14.1` this is executed:
+     `capability.rs`'s token test parses `cuda:sm61` and resolves it to its row.
    - The `cuda:` namespace's closed token set is owned by `baracuda-cuda-vocab`
      (`src/lib.rs:105-114`, `{sm80, sm89, sm90, sm90a}`). KISS#514 repointed
      `cuda`'s reference implementation there. baracuda adds `sm61`.
-2. **`ArchSku::Sm61` (`unpopped-vocab/src/layout.rs:43`): ours, and a breaking
-   change on purpose.**
+2. ~~**`ArchSku::Sm61` (in `unpopped-vocab/src/layout.rs`): ours, and a breaking
+   change on purpose.**~~ **Superseded by option C (2026-10-03): no variant is
+   added.** The followers below move to `TargetId` instead, which is the
+   "alternative" this item once argued against. The arguments are kept for the
+   record.
+   - One Unpopped follow-up remains: `telemetry::merge_reports` reads a compute
+     capability through `arch_sku_of`, which maps only 8.x and 9.x, so it drops
+     telemetry from every other arch. It will mint a `TargetId` from the
+     capability once baracuda (the `cuda:` namespace owner) publishes the
+     capability-to-token rule.
    - The enum is *"Intentionally NOT `#[non_exhaustive]` ... New variants are a
      deliberate breaking-change event."* Pre-1.0 that means **0.11.x → 0.12.0**,
      with the number allocated by the PM at gate time (CLAUDE.md §9).
@@ -467,7 +483,8 @@ Three separate surfaces, and **only two are Unpopped's**:
    - *Alternative, not recommended now:* stop growing `ArchSku` and move the
      followers to `TargetId`. That is the long-run direction `target.rs`
      documents, but it is a larger cross-repo migration than one variant.
-3. **The `cuda_capabilities(6, 1)` row (`capability.rs:246-256`): ours, additive.**
+3. **The `cuda_capabilities(6, 1)` row: ours, additive. Shipped in `0.14.1`
+   (#34)**, together with rows 10.0–12.1. The original plan follows.
    - The table starts at 7.0 and returns `None` for 6.1 today, by design (*"an
      unknown compute capability returns `None`, never a nearby row"*).
    - The row is transcribed from NVIDIA's *Technical Specifications per Compute
@@ -783,8 +800,10 @@ What's ready and what isn't, measured at `unpopped@b61a8be`:
    - baracuda: legs A and B for CUDA, since both the frontend and the emitter are
      theirs.
    - Leg C: with each runtime owner.
-6. **`ArchSku::Sm61` + the capability row (§6):** the 0.12.0 breaking event, gated
-   on baracuda-cuda-vocab adding `sm61`.
+6. ~~**`ArchSku::Sm61` + the capability row (§6):** the 0.12.0 breaking event, gated
+   on baracuda-cuda-vocab adding `sm61`.~~ The row shipped in `0.14.1` (#34).
+   `ArchSku::Sm61` is dropped by option C (2026-10-03, §6): no variant, no
+   breaking event.
 7. **Intent gaps (§3.2):** block-dequant `View`, RowReduce second input,
    mixed-dtype `Contraction`, and `Access::Attention` last.
 8. **Technique registry (§7):** the schema, `REGISTRY`, `verify_rows`, and the
