@@ -116,9 +116,9 @@ pub use shape::{
     windowed_extent,
 };
 pub use telemetry::{
-    Candidate, DispatchRecord, HwFingerprint, ImplId, Ingest, MissRecord, RankedCell,
-    TELEMETRY_SCHEMA_MAX, VariantVote, arch_sku_of, ingest_jsonl, merge_reports, rank_matrix,
-    resolve_impl, variant_votes,
+    Candidate, DispatchRecord, HwFingerprint, ImplId, Ingest, MergeReport, MissRecord, RankedCell,
+    TELEMETRY_SCHEMA_MAX, VariantVote, arch_sku_of, cuda_target_of, ingest_jsonl, merge_reports,
+    merge_reports_counted, rank_matrix, resolve_impl, variant_votes,
 };
 pub use text::{op_from_text, op_to_text};
 

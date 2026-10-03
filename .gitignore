@@ -1,4 +1,7 @@
 /target
+# A second target dir (an MSRV build, say) is still build output.
+target-msrv/
+target-*/
 **/*.rs.bk
 Cargo.lock.bak
 
