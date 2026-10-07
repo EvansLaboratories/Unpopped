@@ -88,11 +88,11 @@ Each milestone ends in an observable clearing event, named in its row.
 
 Split along the ruling:
 
-- **U1, Unpopped: per-sm plan decisions.** Make `plan.rs` read the target's capabilities instead of assuming sm_80+. For sm_61:
-  - f16 operands compute in f32;
-  - no `mma` lowering for `Contraction` (SIMT or dp4a);
-  - vector widths and shared-memory limits come from the 6.1 capability row.
-  Each decision gets a test that names `cuda:sm61` and `cuda:sm89` and shows they differ where they must.
+- **U1, Unpopped: per-sm plan decisions** (design approved by the PM 2026-10-07). An audit of `plan.rs` found one decision that must differ between sm_61 and sm_89 in Unpopped's domain: **16-bit float arithmetic**.
+  - NVIDIA's 12.9.1 throughput table gives sm_61 2 fp16 results per clock per SM against 128 for fp32. sm_89 does 128 for both.
+  - U1 adds the two rates to `TargetCapabilities`, and adds `KernelPlan::half_arith() -> HalfArith{Native,ViaF32}`, read from `key.target`. It is additive, and no golden moves: ViaF32 only when both rates are sourced and fp16 < fp32.
+  - baracuda's packed `__h*2` path (`cuda.rs:427`) honours ViaF32 in B1. It is bit-identical to the scalar float path by design, so this changes speed, not numerics.
+  - **Not U1's:** vector width comes from the key, and `max_vector_bytes` is 16 in every row. The plan sizes no shared memory. `mma` vs SIMT for `Contraction` is a feature fact owned by baracuda-cuda-vocab (`idiom-lifting-design` §6). The cuBLAS compute type is baracuda's. Both are in §6.
 - **U2, Unpopped: conversion coverage for Qwen3's ops.** baracuda's recorded sm_61 route is parse → Unpopped IR → emit. `convert.rs` lifts elementwise, reduction and scan today. Inventory which of RMSNorm, softmax, RoPE, SwiGLU, embedding (gather) and attention lift today, and close the gaps in priority order. GEMM can use cuBLAS (`DenseGemmPlan`), which supports sm_61 under CUDA 12.x, so it is not on this list unless the cuBLAS route fails.
 - **B1, baracuda: sm_61 emission and build.** An NVRTC sm_61 compile of every kernel M1 needs, through the 12.9 toolchain, and a decision on the hand-written kernels: an `sm61` build feature, or the emit route only. baracuda's README records the emit route as the plan.
 - Tests run on this box: compile-only for sm_61. The numerics of the emitted kernels can be checked on the 4070 by forcing the sm_61 *plan* and running it on sm_89. That is the same-GPU, two-path control from `idiom-lifting-design` §10, applied across plans.
@@ -165,7 +165,10 @@ On the P40, f16 compute is slow enough (§1) that every kernel computes in f32 t
 | P40 hardware not here | M4, M5, M6 | CireSnave |
 | No lane can run code on the LAN desktop (the P40 host) | the 4060 control in M1; M4, M5 | PM board (Q3) |
 | lightbulb refuses `qwen35` GGUF | M6, if the 27B-class model is Qwen3.5 | lightbulb |
-| `plan.rs` is arch-blind | M3 | Unpopped (U1) |
+| `plan.rs` is arch-blind (no 16-bit arithmetic decision per sm) | M3 | Unpopped (U1, in progress) |
+| f16 GEMM on sm_61 must use cuBLAS **f32 compute** (`DenseGemmPlan`); fp16 compute runs at 2 results per clock per SM | M3, M4 speed | baracuda (B1) |
+| `mma` needs sm_70+: `Contraction` on sm_61 must lower to SIMT or dp4a. This is a feature fact in baracuda-cuda-vocab | M3 | baracuda (B1) |
+| Whether `cuda_bf16.h` packed bf16 ops compile under NVRTC sm_61 | M3, if the model is bf16 | baracuda (B1) |
 | No sm_61 build or emit path proven | M3, M4 | baracuda (B1) |
 | lightbulb device index hardcoded to 0; fuel pin stale | M2 (pin), M6 (index) | lightbulb |
 | No CUDA CI runner anywhere | regression protection after each milestone | open: a self-hosted runner needs CireSnave |
