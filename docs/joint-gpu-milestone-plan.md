@@ -113,6 +113,15 @@ Split along the ruling:
 
 ### M6: Qwen 27B-class across cards — owners: **fuel** (split), **lightbulb** (serving); later
 
+- **The model is a different architecture from the bring-up model.** `PORTFOLIO-ROADMAP.md` (local-model plan, agreed with CireSnave 2026-09-27, lines 562-563) names Qwen/Qwen3.8-27B. Its arch is `qwen3_5`:
+  - hybrid, with 48 linear-attention layers and 16 full-attention layers;
+  - a native MTP head;
+  - hidden size 5120 and 64 layers;
+  - run quantized on 3 P40s.
+- That makes M6 a larger fuel and lightbulb item than the 0.6B bring-up:
+  - a `qwen3_5` model and loader (lightbulb refuses `qwen35` GGUF today);
+  - linear-attention kernels, a recurrent scan that M0–M5 never exercise. For Unpopped, the question is whether the `Scan` schedule can express it. That is not yet assessed.
+  - MTP decoding.
 - Memory arithmetic, for weights only, without KV cache:
   - 27B at f16 is about 54 GB, so three P40s;
   - at int8, about 27 GB, so two P40s;
