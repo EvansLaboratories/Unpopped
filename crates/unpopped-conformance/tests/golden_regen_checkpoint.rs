@@ -5,9 +5,10 @@
 //!
 //! `docs/deferred.md` Section B now holds one item, the f16/bf16 spelling seam.
 //! It is correctly deferred because it rewrites emitted text and, until
-//! baracuda shadows the four functions it moves, would break baracuda's physical
-//! CUDA corpus. It used to hold three items. The temp-binding pass and a Slang
-//! complex prelude moved to Section D on 2026-10-07 (see the constant below).
+//! baracuda shadows every cfamily function it calls that reaches a moving leaf
+//! (eleven, not four: see deferred.md's corrected surface table), would break
+//! baracuda's physical CUDA corpus. It used to hold three items. The
+//! temp-binding pass and a Slang complex prelude moved to Section D on 2026-10-07 (see the constant below).
 //!
 //! **They were gated on "a coordinated golden regen" with no owner and no date.**
 //! That is not a deferral. It is a permanent hold wearing a deferral's clothes:
