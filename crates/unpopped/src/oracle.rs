@@ -4415,7 +4415,10 @@ mod tests {
             let want = half::bf16::from_f32(x).to_bits();
             let got = f32_to_bf16_bits(x);
             if x.is_nan() {
-                assert!(bf16_to_f64(got).is_nan(), "encode NaN {x:?} gave {got:#06x}");
+                assert!(
+                    bf16_to_f64(got).is_nan(),
+                    "encode NaN {x:?} gave {got:#06x}"
+                );
             } else {
                 assert_eq!(got, want, "encode {x:e} ({:#010x})", x.to_bits());
             }

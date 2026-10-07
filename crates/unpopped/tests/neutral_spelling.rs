@@ -36,8 +36,8 @@
 //! why `the_half_codec_is_emitted_not_named` checks that a half reaches its codec.
 
 use unpopped::cfamily::{
-    cast_scalar, complex_helpers, demote_store_f32, half_helpers, narrow_load_fn,
-    narrow_store_fn, promote_load_f32, scalar_ctype,
+    cast_scalar, complex_helpers, demote_store_f32, half_helpers, narrow_load_fn, narrow_store_fn,
+    promote_load_f32, scalar_ctype,
 };
 use unpopped_vocab::ElementKind;
 
@@ -138,7 +138,11 @@ fn names_a_vendor(s: &str) -> bool {
 /// The halves, which reach the neutral module's own emitted codec.
 const HALVES: &[(ElementKind, &str, &str)] = &[
     (ElementKind::F16, "unpopped_f16_load", "unpopped_f16_store"),
-    (ElementKind::Bf16, "unpopped_bf16_load", "unpopped_bf16_store"),
+    (
+        ElementKind::Bf16,
+        "unpopped_bf16_load",
+        "unpopped_bf16_store",
+    ),
 ];
 
 /// Dtypes a neutral C-family backend computes on with no codec at all.
@@ -273,7 +277,10 @@ fn the_half_codec_is_emitted_not_named() {
         assert_eq!(demote_store_f32(dt, "x"), format!("{store}(x)"));
 
         let helpers = half_helpers(dt).unwrap_or_else(|| panic!("{dt:?} emits no codec"));
-        assert!(!names_a_vendor(helpers), "{dt:?} codec names a vendor:\n{helpers}");
+        assert!(
+            !names_a_vendor(helpers),
+            "{dt:?} codec names a vendor:\n{helpers}"
+        );
         for name in [load, store] {
             assert!(
                 helpers.contains(&format!(" {name}(")),
@@ -288,8 +295,16 @@ fn the_half_codec_is_emitted_not_named() {
     for dt in NEUTRAL_COMPUTE_DTYPES {
         assert_eq!(half_helpers(*dt), None, "{dt:?} is not a half");
         assert_eq!(narrow_load_fn(*dt), None, "{dt:?} needs no load codec");
-        assert_eq!(promote_load_f32(*dt, "x"), "x", "{dt:?} must widen to nothing");
-        assert_eq!(demote_store_f32(*dt, "x"), "x", "{dt:?} must narrow to nothing");
+        assert_eq!(
+            promote_load_f32(*dt, "x"),
+            "x",
+            "{dt:?} must widen to nothing"
+        );
+        assert_eq!(
+            demote_store_f32(*dt, "x"),
+            "x",
+            "{dt:?} must narrow to nothing"
+        );
     }
 }
 
@@ -311,10 +326,16 @@ fn cast_scalar_names_no_vendor_and_routes_halves_through_their_codec() {
                 "cast_scalar({from:?} -> {to:?}) emitted {out:?}, which names a vendor \
                  from the neutral module"
             );
-            assert!(out.contains('v'), "cast_scalar({from:?} -> {to:?}) dropped its operand");
+            assert!(
+                out.contains('v'),
+                "cast_scalar({from:?} -> {to:?}) dropped its operand"
+            );
             if from == to {
                 // A same-dtype cast moves the carrier unchanged, which is exact.
-                assert_eq!(out, "v", "cast_scalar({from:?} -> {to:?}) must be the identity");
+                assert_eq!(
+                    out, "v",
+                    "cast_scalar({from:?} -> {to:?}) must be the identity"
+                );
                 checked += 1;
                 continue;
             }

@@ -918,19 +918,14 @@ int main(void) {{
 /// producing the same bytes, which is what a differential is supposed to mean and
 /// what a shared decode table would quietly destroy.
 ///
-/// # Why FP8 got a lowering before f16/bf16, which have been "ready" longer
+/// # Why FP8 got a lowering before f16/bf16
 ///
-/// The f16/bf16 arms spell `__half2float` — a CUDA name emitted from the module
-/// that calls itself neutral, tripwired in
-/// `unpopped/tests/neutral_spelling.rs`. Fixing
-/// that means replacing a vendor intrinsic with an emitted software codec, which
-/// **rewrites every existing f16 golden including Baracuda's physical CUDA
-/// corpus**, so it is gated on a coordinated regen.
-///
-/// FP8 needs the same mechanism and has **no existing goldens to break**. So it
-/// goes first, and the seam it proves — `narrow_load_fn`/`narrow_store_fn`, one
-/// name over two strategies — is what the f16 arms move onto at the regen, with
-/// callers unchanged.
+/// Until 0.15.0 the f16/bf16 arms spelled `__half2float`, a CUDA name, and
+/// replacing it rewrote Baracuda's f16 goldens, so it waited on Baracuda's own
+/// shadow. FP8 had **no existing goldens to break**, so it went first, and the
+/// seam it proved — `narrow_load_fn`/`narrow_store_fn`, one name per dtype — is
+/// what the halves moved onto in 0.15.0 with callers unchanged
+/// (`half_kernels_round_trip_against_the_oracles_independent_codec`).
 /// KISS-OPS-6.16-0009, proved by executing the kernel rather than by reading it.
 ///
 /// A `max_prop` decomposes to comparison-and-`select` — **no arithmetic** — so
@@ -1236,13 +1231,17 @@ fn half_kernels_round_trip_against_the_oracles_independent_codec() {
         (
             "f16",
             ElementKind::F16,
-            [0x3C01u16, 0x3E00, 0x4200, 0x2E66, 0x3555, 0x63D0, 0x1400, 0xC700],
+            [
+                0x3C01u16, 0x3E00, 0x4200, 0x2E66, 0x3555, 0x63D0, 0x1400, 0xC700,
+            ],
         ),
         // The same values as bf16 patterns.
         (
             "bf16",
             ElementKind::Bf16,
-            [0x3F81u16, 0x3FC0, 0x4040, 0x3DCD, 0x3EAB, 0x447A, 0x3A80, 0xC0E0],
+            [
+                0x3F81u16, 0x3FC0, 0x4040, 0x3DCD, 0x3EAB, 0x447A, 0x3A80, 0xC0E0,
+            ],
         ),
     ] {
         for (leg, op, m) in [
@@ -1289,7 +1288,11 @@ fn half_kernels_round_trip_against_the_oracles_independent_codec() {
             let mut rounded = 0usize;
             for i in 0..actual.len() {
                 let (g, w) = (got[i], want[i]);
-                let ok = if w.is_nan() { g.is_nan() } else { g.to_bits() == w.to_bits() };
+                let ok = if w.is_nan() {
+                    g.is_nan()
+                } else {
+                    g.to_bits() == w.to_bits()
+                };
                 if !ok {
                     mismatches.push((a[i], b[i], actual[i], w));
                 }
@@ -1340,17 +1343,19 @@ fn a_narrow_float_predicate_stores_the_right_mask() {
 
     // (tag, dtype, C carrier, pattern count, the pattern of 1.0)
     for (tag, dt, carrier, pats, one) in [
-        ("e5m2", ElementKind::Fp8E5M2, "unsigned char", 256usize, 0x3Cu16),
+        (
+            "e5m2",
+            ElementKind::Fp8E5M2,
+            "unsigned char",
+            256usize,
+            0x3Cu16,
+        ),
         ("f16", ElementKind::F16, "unsigned short", 65536, 0x3C00),
         ("bf16", ElementKind::Bf16, "unsigned short", 65536, 0x3F80),
     ] {
         let n = pats as i64;
-        let op = OpDef::elementwise_pred(
-            "gt",
-            2,
-            &[dt],
-            input(0).binary(BinaryOp::CmpGt, input(1)),
-        );
+        let op =
+            OpDef::elementwise_pred("gt", 2, &[dt], input(0).binary(BinaryOp::CmpGt, input(1)));
         let d_in = OperandDesc::new(1, &[n], &[1], dt, 1);
         let d_out = OperandDesc::new(1, &[n], &[1], ElementKind::U8, 1);
         let operands = vec![d_in, d_in, d_out];
@@ -1405,7 +1410,10 @@ int main(void) {{
             .unwrap()
             .to_f64_vec();
         let trues = want.iter().filter(|w| **w == 1.0).count();
-        assert!(trues > pats / 8, "{tag}: the corpus must have true lanes, got {trues}");
+        assert!(
+            trues > pats / 8,
+            "{tag}: the corpus must have true lanes, got {trues}"
+        );
         let wrong: Vec<(usize, u8, f64)> = actual
             .iter()
             .zip(&want)

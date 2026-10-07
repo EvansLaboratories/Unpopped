@@ -76,38 +76,23 @@ plan, and it is the reason this file no longer needs to carry one.
 
 ---
 
-## B. Gated on a coordinated golden regen
+## B. Gated on a coordinated golden regen — EMPTY since 0.15.0
 
-These rewrite emitted text. Doing any of them quietly breaks byte-identity
-goldens *including Baracuda's physical CUDA corpus*, so they ride a regen event
-rather than a cleanup commit.
-
-> **⚠️ THIS SECTION NOW HAS A DATE AND AN OWNER.** It previously had neither, and
-> that is a defect rather than sequencing: *a gate whose trigger nobody is
-> responsible for pulling is not a deferral, it is a permanent hold wearing a
-> deferral's clothes.* An item held on *"when the regen happens"* never fires if
-> the regen never happens.
+> **✅ The last item, the f16/bf16 spelling seam, shipped in `0.15.0`.**
+> `cfamily::scalar_ctype(F16|Bf16)` is `unsigned short` (storage only), the
+> conversion is `cfamily::half_helpers`, emitted with the kernel and reached
+> through `narrow_load_fn`/`narrow_store_fn` like FP8, and
+> `half_load_intrinsic`/`half_store_intrinsic` are gone. CpuC computes f16/bf16.
 >
-> **Checkpoint: 2026-11-05** (moved from 2026-10-01 on the day it fired, then
-> from 2026-10-22 on 2026-10-07; the reasons and who agreed are in the test's doc
-> comment and commits).
+> It moved no baracuda byte: baracuda#154 (merged at `cb73745`) shadows all
+> eleven `cfamily` functions that reached the old half arms, and published
+> `baracuda-cuda-emit` 0.14.x pins `unpopped ^0.14`, which 0.15.0 does not
+> satisfy. The checkpoint test (`golden_regen_checkpoint.rs`) is deleted, as its
+> doc said to do when this shipped.
 >
-> **Split 2026-10-07 (PM ruling):** only the **f16/bf16 spelling seam** remains
-> here. It no longer needs a coordinated regen. It waits on baracuda's planned
-> closed-set local shadow of every cfamily function it calls that reaches a
-> moving leaf: **eleven, not four** (see the corrected surface table below; the
-> shadow is baracuda#154, open at `616ec8b`), after which it moves no baracuda byte. The temp-binding pass and
-> the Slang complex prelude moved to Section D. **Owner: the portfolio PM** (accepts the regen; this
-> workspace drafts and implements it). **Enforced, not remembered** —
-> `crates/unpopped-conformance/tests/golden_regen_checkpoint.rs` goes red on that
-> date and says what to do. Proven to fire by moving the date into the past.
->
-> When it reds, exactly one of: **schedule the regen** and do all three together,
-> or **move the date in a commit that says why it slipped and who agreed.** A
-> moved date with a reason is a live deferral; a moved date without one is this
-> defect returning.
->
-> The window opened when `unpopped 0.7.0` published on 2026-09-02.
+> The analysis below is kept as the record of WHY this shape was chosen. The
+> vulkan bf16 asymmetry in it still applies to the first backend that gates the
+> halves on a capability.
 
 ### Why FP8's shape is the RIGHT answer and not merely a working one
 
@@ -396,28 +381,11 @@ publish, not with it** — the `8f42471`-after-#46 precedent. Timing is theirs.
 for PR #46 — the precondition of this workspace's own `rsqrt` fix in `8f42471`.
 Forcing that fix created the pattern that later answered this question.)*
 
-- **The f16/bf16 spelling seam.** `cfamily::scalar_ctype` spells `__half` /
-  `__nv_bfloat16` and `cast_scalar` emits `__half2float`-class intrinsics from
-  the *neutral* module. Tripwired in `crates/unpopped/tests/neutral_spelling.rs`,
-  which fails in both directions.
-
-  **That tripwire lived in `unpopped-cpu-c/tests/` until 2026-08-20, and it
-  imports nothing from that crate** — only `unpopped::cfamily` and
-  `unpopped-vocab`. So the guard on `unpopped`'s own neutrality did not run when
-  you tested `unpopped`: `cargo test -p unpopped` went 7 suites / 433 tests →
-  **8 / 438** on moving it, measured before and after. A contributor iterating
-  with `-p unpopped`, or anyone depending on `unpopped` alone, got a green with
-  these five never executed.
-
-  Four separate doc references already gave the path as `unpopped`'s. **The
-  prose was right and the file was in the wrong place** — the inverse of the
-  three stale-claim defects found the same day, and a reminder that a
-  disagreement between a doc and the tree does not tell you which one moved.
-  **Trap for the implementer, found by running the seam as a mutation:** making
-  `scalar_ctype`/`half_load_intrinsic` return `None` does **not** make
-  `cast_scalar` decline — it drops into the arithmetic arm and emits `(float)v`
-  on a `__half`, trading a visible vendor leak for a silent numerical bug. The
-  neutral core must *refuse*, never fall through.
+- ~~**The f16/bf16 spelling seam.**~~ **Shipped in 0.15.0** (see the box at the
+  top of this section). The tripwire `crates/unpopped/tests/neutral_spelling.rs`
+  now pins the closed state: no dtype spells a vendor name, and the halves reach
+  a codec the kernel defines. The "decline, don't fall through" trap it recorded
+  is why the seam closed by spelling the halves rather than declining them.
 
 *(Moved to Section D on 2026-10-07: the temp-binding pass and the Slang complex prelude. See the note at the top of this section.)*
 
@@ -740,7 +708,7 @@ Forcing that fix created the pattern that later answered this question.)*
     because filing the whole thing as available made it look actionable when most
     of it was not — the mirror of Section B's ownerless gate, one section down.
 
-    **CpuC is 18/22 and its remaining two are f16/bf16 (Section B).** Slang is
+    **CpuC is 20/22, and its remaining two are the MX scales, declined by design** (f16/bf16 joined in 0.15.0). Slang is
     **6/22** after `u32`/`u64` landed (`6818679`); the rest sorts as:
 
     - **UNBLOCKED, this section:** `i8`/`u8`, `bool`, both FP8s, `i4`/`u4`/`b1`.
