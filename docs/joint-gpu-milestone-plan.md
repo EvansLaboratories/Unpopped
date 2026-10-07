@@ -120,7 +120,7 @@ Split along the ruling:
   - run quantized on 3 P40s.
 - That makes M6 a larger fuel and lightbulb item than the 0.6B bring-up:
   - a `qwen3_5` model and loader (lightbulb refuses `qwen35` GGUF today);
-  - linear-attention kernels, a recurrent scan that M0–M5 never exercise. For Unpopped, the question is whether the `Scan` schedule can express it. That is not yet assessed.
+  - linear-attention kernels, a recurrent scan that M0–M5 never exercise. **`Scan` cannot express it** (a scalar monoid per lane against a 128 × 128 matrix state per head). But decode composes from existing IR, with fuel holding the state, and chunked prefill composes except a 64 × 64 triangular solve, which has a token-by-token fallback. See `docs/qwen3_5-linear-attention-assessment.md`; nothing in it has been run yet.
   - MTP decoding.
 - Memory arithmetic, for weights only, without KV cache:
   - 27B at f16 is about 54 GB, so three P40s;
