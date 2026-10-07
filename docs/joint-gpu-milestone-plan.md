@@ -71,11 +71,11 @@ Each milestone ends in an observable clearing event, named in its row.
 - Controls: the harness must go red on a perturbed logit fixture and on a one-token swap.
 - **Clears when:** a fuel PR merges the fixture, the compare harness and the speed harness, with both controls shown red.
 - **Merged: fuel#317, `de4d370`, 2026-10-07T08:31Z.** Checkpoint: `unsloth/Qwen3-0.6B-GGUF`, `Q4_K_M`, so the **quantized tier** of §5.1 applies (`2e-2 · max|logit_ref|`, against this same-quantization CPU reference). The fixture is `fuel-transformers/tests/fixtures/qwen3_0_6b_cpu_reference.json`: 2 prompts × 32 greedy steps, the top-16 logits per step, and `max|logit|` over the full vocabulary. The harness, both controls and the `#[ignore]`d speed harness are in `fuel-transformers/tests/qwen3_cpu_yardstick.rs`.
-- **Two gaps against §5.1 found at `de4d370`; fuel's fix is fuel#318 (open, read at `1319633`, 2026-10-07):**
+- **Two gaps against §5.1 found at `de4d370`; fixed by fuel#318, merged 2026-10-07T10:28Z as `28b8a35` (squash of `1319633`, the head Unpopped reviewed):**
   1. **The calibration measured determinism, not reduction-order spread.** The original rerun used the same process, thread count and prompt. #318 reruns at `RAYON_NUM_THREADS=1` against the default, and the spread is still `0.0`. **That is structural, not a harness defect:** for this `Q4_K_M` model the heavy matmuls are `fuel-quantized` `k_quants::matmul` (`k_quants.rs:2312-2324`). It parallelises over output columns, and each output is one serial `vec_dot` over the whole K, so no thread count changes a sum's order. §5.1 is amended to a probe that can see a difference.
   2. **A real deviation could pass the compare unchecked.** A reference top-16 id was checked only if it was also in the *candidate's* top-16. **Fixed in #318:** a live candidate is looked up in its full logit row (`CandidateLogits::Full`). The stored-fixture path treats a missing id as `-∞`, which fails. Both controls exist: an id pushed out goes red, and a near-cutoff reorder stays green.
 
-  M1 numbers taken before #318 merges are provisional.
+  M1 numbers taken against a fuel ref before `28b8a35` are provisional.
 
 ### M1: sm_89 end to end through fuel — owners: **fuel**, then **baracuda** for kernel faults
 
@@ -192,14 +192,14 @@ On the P40, f16 compute is slow enough (§1) that every kernel computes in f32 t
 | P40 hardware not here | M4, M5, M6 | CireSnave |
 | No lane can run code on the LAN desktop (the P40 host) | the 4060 control in M1; M4, M5 | PM board (Q3) |
 | lightbulb refuses `qwen35` GGUF | M6, if the 27B-class model is Qwen3.5 | lightbulb |
-| `plan.rs` is arch-blind (no 16-bit arithmetic decision per sm) | M3 | Unpopped (U1, in progress) |
+| ~~`plan.rs` is arch-blind (no 16-bit arithmetic decision per sm)~~ **Cleared by U1 (#40)** | — | Unpopped |
 | f16 GEMM on sm_61 must use cuBLAS **f32 compute** (`DenseGemmPlan`); fp16 compute runs at 2 results per clock per SM | M3, M4 speed | baracuda (B1) |
 | `mma` needs sm_70+: `Contraction` on sm_61 must lower to SIMT or dp4a. This is a feature fact in baracuda-cuda-vocab | M3 | baracuda (B1) |
 | Whether `cuda_bf16.h` packed bf16 ops compile under NVRTC sm_61 | M3, if the model is bf16 | baracuda (B1) |
 | No sm_61 build or emit path proven | M3, M4 | baracuda (B1) |
 | lightbulb device index hardcoded to 0; fuel pin stale | M2 (pin), M6 (index) | lightbulb |
 | ~~A real Qwen3 checkpoint does not load (fuel GAP-279)~~ **Cleared for Qwen3-0.6B `Q4_K_M` by fuel#317 (`de4d370`)**; MoE and 27B not shown | — | fuel |
-| M0's compare can pass a real deviation (fixed in fuel#318, open). Its calibration cannot measure a reduction-order spread on a quantized model, so M1 must report `max|Δ|/bound` instead (§5.1, amended) | M1, M4 (trust in the compare verdict) | fuel |
+| ~~M0's compare can pass a real deviation~~ **Fixed by fuel#318 (`28b8a35`).** Its calibration cannot measure a reduction-order spread on a quantized model, so M1 must report `max|Δ|/bound` instead (§5.1, amended) | M1, M4 (trust in the compare verdict) | fuel |
 | No CUDA CI runner anywhere | regression protection after each milestone | open: a self-hosted runner needs CireSnave |
 
 ## 7. After this plan: AMD and Intel through Vulkan
