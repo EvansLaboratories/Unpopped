@@ -71,11 +71,11 @@ Each milestone ends in an observable clearing event, named in its row.
 - Controls: the harness must go red on a perturbed logit fixture and on a one-token swap.
 - **Clears when:** a fuel PR merges the fixture, the compare harness and the speed harness, with both controls shown red.
 - **Merged: fuel#317, `de4d370`, 2026-10-07T08:31Z.** Checkpoint: `unsloth/Qwen3-0.6B-GGUF`, `Q4_K_M`, so the **quantized tier** of §5.1 applies (`2e-2 · max|logit_ref|`, against this same-quantization CPU reference). The fixture is `fuel-transformers/tests/fixtures/qwen3_0_6b_cpu_reference.json`: 2 prompts × 32 greedy steps, the top-16 logits per step, and `max|logit|` over the full vocabulary. The harness, both controls and the `#[ignore]`d speed harness are in `fuel-transformers/tests/qwen3_cpu_yardstick.rs`.
-- ⚠️ **Two gaps against §5.1, open with fuel (read at `de4d370`, 2026-10-07):**
-  1. **The calibration measured determinism, not reduction-order spread.** The rerun is the same process, thread count and prompt, so the recorded spread is `0.0`, and "bound ≥ 4× spread" passes for any bound. §5.1 asks for a different reduction order or thread count. Until that runs, nothing has tested whether the `2e-2` bound is too tight.
-  2. **A real deviation can pass the compare unchecked.** A reference top-16 id is checked only if it is also in the *candidate's* top-16; otherwise it is skipped. A logit pushed out of the candidate's top-16 by more than the bound, with top-1 unchanged, passes. The candidate is a live run, so its full logits are available; only the stored reference needs truncating.
+- **Two gaps against §5.1 found at `de4d370`; fuel's fix is fuel#318 (open, read at `1319633`, 2026-10-07):**
+  1. **The calibration measured determinism, not reduction-order spread.** The original rerun used the same process, thread count and prompt. #318 reruns at `RAYON_NUM_THREADS=1` against the default, and the spread is still `0.0`. **That is structural, not a harness defect:** for this `Q4_K_M` model the heavy matmuls are `fuel-quantized` `k_quants::matmul` (`k_quants.rs:2312-2324`). It parallelises over output columns, and each output is one serial `vec_dot` over the whole K, so no thread count changes a sum's order. §5.1 is amended to a probe that can see a difference.
+  2. **A real deviation could pass the compare unchecked.** A reference top-16 id was checked only if it was also in the *candidate's* top-16. **Fixed in #318:** a live candidate is looked up in its full logit row (`CandidateLogits::Full`). The stored-fixture path treats a missing id as `-∞`, which fails. Both controls exist: an id pushed out goes red, and a near-cutoff reorder stays green.
 
-  M1 numbers taken before these close are provisional.
+  M1 numbers taken before #318 merges are provisional.
 
 ### M1: sm_89 end to end through fuel — owners: **fuel**, then **baracuda** for kernel faults
 
@@ -174,6 +174,13 @@ Compare **teacher-forced**: feed both runs the reference's tokens, so one near-t
 
 **Calibrate before trusting the numbers.** In M0, run the CPU reference twice with a different reduction order (or thread count). The bound must be at least 4× the spread that measures, or it is too tight to be stable; it must also go red on M0's perturbed-logit control, or it is too loose to mean anything. If either check fails, M0 replaces these numbers with measured ones, and the PR says so.
 
+**Amended 2026-10-07 (bounds unchanged): the CPU rerun cannot see a difference for a quantized model.** fuel's quantized matmul computes every output as one serial dot over K (see M0, gap 1), so a CPU-vs-CPU rerun at any thread count gives a spread of exactly 0, and "bound ≥ 4× spread" passes for every bound. The first run that really changes the reduction order is the GPU, because MMVQ splits K across a warp. So:
+
+- **M1 records the ratio `max|Δ| / bound`** at every step, and reports its maximum over all steps and prompts, next to pass/fail.
+- **A maximum above 0.25 means the bound is too tight to be stable.** This is the same 4× rule, applied to the first measured order change. The bound is then re-measured and the PR says so, as before.
+- **Optional CPU probe:** scalar against SIMD `vec_dot`, if fuel-quantized can force the scalar path. That is a real CPU reduction-order change.
+- **The "too loose" side is unchanged:** the perturbed-logit control must still go red.
+
 On the P40, f16 compute is slow enough (§1) that every kernel computes in f32 there. So the f16-storage row applies to sm_61 unchanged.
 
 ## 6. Blockers
@@ -190,7 +197,7 @@ On the P40, f16 compute is slow enough (§1) that every kernel computes in f32 t
 | No sm_61 build or emit path proven | M3, M4 | baracuda (B1) |
 | lightbulb device index hardcoded to 0; fuel pin stale | M2 (pin), M6 (index) | lightbulb |
 | ~~A real Qwen3 checkpoint does not load (fuel GAP-279)~~ **Cleared for Qwen3-0.6B `Q4_K_M` by fuel#317 (`de4d370`)**; MoE and 27B not shown | — | fuel |
-| M0's compare can pass a real deviation, and its calibration measured no reduction-order spread (see M0) | M1, M4 (trust in the compare verdict) | fuel |
+| M0's compare can pass a real deviation (fixed in fuel#318, open). Its calibration cannot measure a reduction-order spread on a quantized model, so M1 must report `max|Δ|/bound` instead (§5.1, amended) | M1, M4 (trust in the compare verdict) | fuel |
 | No CUDA CI runner anywhere | regression protection after each milestone | open: a self-hosted runner needs CireSnave |
 
 ## 7. After this plan: AMD and Intel through Vulkan
