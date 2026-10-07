@@ -62,6 +62,11 @@ tree-sitter-slang = { version = "0.3", optional = true }
 kiss-ref-core = "0.3.4"
 kiss-ops-vocab = "0.3.4"
 kiss-classify-vocab = "0.3.4"
+# `half`: a THIRD, independent f16/bf16 codec. The oracle's own codec
+# (`oracle::f32_to_f16_bits` and friends) is the reference the emitted C codec
+# (`cfamily::half_helpers`) is checked against bit for bit, so the oracle is
+# checked first against a codec it was not derived from.
+half = { workspace = true }
 
 [[example]]
 name = "slang_corpus_report"
