@@ -39,6 +39,26 @@ U1 of the joint P40 (sm_61) / RTX 4070 (sm_89) plan
   `Native`. That path is bit-identical to the scalar float path by design, so on
   the P40 this changes speed, not numerics.
 
+### Also in this change set (no API or emitted-byte change)
+
+These merged after `0.14.3` with no version change of their own, and ship under
+`0.14.4` (the PM's ruling, 2026-10-07: an unpublished number covers everything
+merged under it). The change set is #37–#51, except #49.
+
+- **Docs in the crate:** `telemetry::cuda_target_of` documents that its
+  `sm{major}{minor}` format is not injective in principle (#37).
+- **Tests:** `unpopped-vocab` pins what the frame broadcast mask says about
+  collapsed outputs (`a_collapsed_output_is_absent_not_broadcast.rs`, #38).
+  `unpopped` checks that every Qwen3 dense op plans and generates for
+  `cuda:sm61` (`qwen3_dense_ops_plan_for_sm61.rs`, U2, #42).
+  `unpopped-conformance`'s `golden_regen_checkpoint.rs` follows the
+  `docs/deferred.md` split and the 2026-11-05 checkpoint (#43, #45).
+- **Repository docs (not in any crate):** the joint P40 (sm_61) / RTX 4070
+  (sm_89) milestone plan, `docs/joint-gpu-milestone-plan.md` (#39, kept current
+  in #41, #46, #47, #48, #50, #51); `docs/deferred.md` Section B split, with the
+  f16/bf16 shadow surface counted as eleven functions (#43, #45); and the
+  qwen3_5 linear-attention assessment (#44).
+
 ## Released
 
 ⚠️ **What reached crates.io, read from its API on 2026-10-03:** `0.11.0`
