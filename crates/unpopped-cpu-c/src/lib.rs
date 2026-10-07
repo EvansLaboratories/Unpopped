@@ -719,10 +719,11 @@ mod tests {
     }
 
     #[test]
-    fn declines_f16_via_supports_dtype() {
-        // The documented v1 decline: no CPU half codec yet.
-        assert!(!CpuC.supports_dtype(ElementKind::F16, ArchSku::Sm89.into()));
-        assert!(!CpuC.supports_dtype(ElementKind::Bf16, ArchSku::Sm89.into()));
+    fn supports_the_halves_and_the_real_compute_dtypes() {
+        // The halves were the documented v1 decline ("no CPU half codec yet")
+        // until 0.15.0 gave them one (`cfamily::half_helpers`).
+        assert!(CpuC.supports_dtype(ElementKind::F16, ArchSku::Sm89.into()));
+        assert!(CpuC.supports_dtype(ElementKind::Bf16, ArchSku::Sm89.into()));
         // The real compute dtypes are supported. `U32` is among them now: it
         // was previously excluded as "index/address only", a restriction
         // inherited from the CUDA backend on circular reasoning.

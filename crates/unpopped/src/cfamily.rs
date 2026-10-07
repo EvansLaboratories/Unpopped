@@ -598,6 +598,11 @@ pub fn sub_byte_store_fn(kind: ElementKind) -> Option<&'static str> {
     }
 }
 
+/// Stub: the f16/bf16 codec, not written yet.
+pub fn half_helpers(_kind: ElementKind) -> Option<&'static str> {
+    None
+}
+
 /// The load-side widening function for a NARROW FLOAT dtype: a vendor intrinsic
 /// for f16/bf16, an emitted software helper for FP8, `None` for everything else.
 ///
