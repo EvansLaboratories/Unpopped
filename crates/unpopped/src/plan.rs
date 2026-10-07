@@ -272,7 +272,65 @@ pub struct KernelPlan<'a> {
     pub out_base_offset: BaseOffset,
 }
 
+/// Whether to compute 16-bit floats (f16, bf16) with **native** 16-bit
+/// arithmetic on the plan's target, or promote them to f32.
+///
+/// This is a per-target **speed** decision, not a numerics one. An emitter
+/// whose native 16-bit spelling is bit-identical to its f32 round-trip (as
+/// baracuda-cuda-emit's packed pair path is designed to be) produces the same
+/// bits either way. What changes is the clock cost: on sm_61 (the P40), NVIDIA
+/// tabulates 2 fp16 results per clock per SM against fp32's 128.
+///
+/// Returned by [`KernelPlan::half_arith`] and [`half_arith_for`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HalfArith {
+    /// Native 16-bit arithmetic is allowed. This is the answer whenever the
+    /// rates are unknown, because it is what every emitter did before this
+    /// decision existed, so no emitted byte moves for an unsourced target.
+    Native,
+    /// The target's sourced fp16 rate is below its fp32 rate: compute 16-bit
+    /// floats in f32 and skip any native 16-bit (packed) arithmetic.
+    ViaF32,
+}
+
+/// The [`HalfArith`] decision for `target`.
+///
+/// Returns [`HalfArith::ViaF32`] **only** when both arithmetic rates are sourced
+/// ([`crate::capability::TargetCapabilities::fp16_results_per_clk_per_sm`] and
+/// its fp32 sibling) and the fp16 rate is lower. An unknown target, an unsourced
+/// column, or a non-CUDA namespace returns [`HalfArith::Native`], today's
+/// behaviour.
+///
+/// bf16 follows the same answer. NVIDIA's table has no bf16 row except
+/// footnote 3 on 8.0/8.6 (128). Below sm_80, bf16 has no native arithmetic
+/// for a promotion to lose.
+#[must_use]
+pub fn half_arith_for(target: unpopped_vocab::TargetId) -> HalfArith {
+    let Some(caps) = crate::capability::capabilities_for(target) else {
+        return HalfArith::Native;
+    };
+    match (
+        caps.fp16_results_per_clk_per_sm,
+        caps.fp32_results_per_clk_per_sm,
+    ) {
+        (Some(f16), Some(f32)) if f16 < f32 => HalfArith::ViaF32,
+        _ => HalfArith::Native,
+    }
+}
+
 impl KernelPlan<'_> {
+    /// The per-target 16-bit float arithmetic decision for this plan's
+    /// `key.target`. See [`HalfArith`] and [`half_arith_for`].
+    ///
+    /// A method rather than a field: `KernelPlan` is not `#[non_exhaustive]`,
+    /// and emitters build it as a struct literal, so a new field would break
+    /// every one of them. The target is already in `key`.
+    #[must_use]
+    pub fn half_arith(&self) -> HalfArith {
+        half_arith_for(self.key.target)
+    }
+
     /// All output bodies in order — `body` (output 0) then `extra_out_bodies`.
     /// One element for a single-output plan; the multi-output emitter interns
     /// these together for cross-body CSE, and the backstop walks gate every one.
@@ -6494,5 +6552,64 @@ mod select_gate_validate {
             "all-Input select at a V4 cell must vectorize, got {:?}",
             plan.schedule
         );
+    }
+}
+
+#[cfg(test)]
+mod half_arith_tests {
+    //! U1 of the joint P40/RTX 4070 plan (`docs/joint-gpu-milestone-plan.md`): the
+    //! first plan decision that differs by sm.
+    use super::{HalfArith, build_plan, half_arith_for};
+    use crate::ir::{OpDef, input};
+    use unpopped_vocab::{ElementKind, OpCategory, OperandDesc, TargetId, structure_key};
+
+    fn t(tok: &str) -> TargetId {
+        TargetId::parse(tok).expect("grammar-valid token")
+    }
+
+    /// The P40 promotes; the Ampere and Ada parts keep native 16-bit math.
+    #[test]
+    fn sm61_promotes_and_sm80_sm89_stay_native() {
+        assert_eq!(half_arith_for(t("cuda:sm61")), HalfArith::ViaF32);
+        assert_eq!(half_arith_for(t("cuda:sm80")), HalfArith::Native);
+        assert_eq!(half_arith_for(t("cuda:sm89")), HalfArith::Native);
+    }
+
+    /// Unsourced means today's behaviour. 8.7, 10.3, 11.0 and 12.1 have resource
+    /// rows but no throughput column. sm107 has no row at all, and a `vulkan:`
+    /// token is outside the CUDA table.
+    #[test]
+    fn unsourced_targets_stay_native() {
+        for tok in [
+            "cuda:sm87",
+            "cuda:sm103",
+            "cuda:sm110",
+            "cuda:sm121",
+            "cuda:sm107",
+            "vulkan:spirv1.6",
+        ] {
+            assert_eq!(half_arith_for(t(tok)), HalfArith::Native, "{tok}");
+        }
+        // Positive control: the resource rows for the four sourced-less CUDA
+        // capabilities DO exist, so `Native` here comes from the missing rate,
+        // not from a missing row.
+        for tok in ["cuda:sm87", "cuda:sm103", "cuda:sm110", "cuda:sm121"] {
+            assert!(
+                crate::capability::capabilities_for(t(tok)).is_some(),
+                "{tok}"
+            );
+        }
+    }
+
+    /// The method a backend actually calls reads the plan's own `key.target`.
+    /// One f16 op, keyed for two targets, must disagree.
+    #[test]
+    fn the_plan_method_reads_its_key_target() {
+        let op = OpDef::elementwise("relu_f16", 1, &[ElementKind::F16], input(0).relu());
+        let a = OperandDesc::new(1, &[1024], &[1], ElementKind::F16, 256);
+        let k61 = structure_key(OpCategory::UnaryElementwise, &[a, a], t("cuda:sm61"));
+        let k89 = structure_key(OpCategory::UnaryElementwise, &[a, a], t("cuda:sm89"));
+        assert_eq!(build_plan(&op, &k61).half_arith(), HalfArith::ViaF32);
+        assert_eq!(build_plan(&op, &k89).half_arith(), HalfArith::Native);
     }
 }

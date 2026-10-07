@@ -2,7 +2,10 @@
 //!
 //! # Why this exists
 //!
-//! Unpopped **chooses nothing** hardware-dependent today. A caller hands
+//! Unpopped chooses **one** hardware-dependent thing: [`crate::plan::HalfArith`],
+//! which reads this table's arithmetic-throughput figures to decide whether
+//! 16-bit floats compute natively or in f32 (it promotes only on sm_61). Every
+//! other decision is still the caller's. A caller hands
 //! [`crate::generate`] a finished [`unpopped_vocab::StructureKey`] — `vec_width` included — and
 //! the plan gate honours it. That is the right default (the key names the
 //! *request*, and a key that named one particular answer could not be compared
@@ -152,6 +155,19 @@ pub struct TargetCapabilities {
     /// cross-compile genuinely does not know it, and defaulting would invent a
     /// number that an occupancy calculation would then trust.
     pub multiprocessor_count: Option<u32>,
+    /// 16-bit floating-point add/multiply/multiply-add **results per clock per
+    /// SM**: NVIDIA's *Throughput of Native Arithmetic Instructions* table.
+    /// `None` when the table has no column for this capability, and always
+    /// `None` from [`Self::from_queried`]: no driver attribute reports it.
+    ///
+    /// Read it only next to [`Self::fp32_results_per_clk_per_sm`]. The ratio
+    /// is the fact: sm_61 (the P40) does 2 against fp32's 128, so f16 math
+    /// there is ~64x slower than computing in f32. See
+    /// [`crate::plan::HalfArith`].
+    pub fp16_results_per_clk_per_sm: Option<u32>,
+    /// 32-bit floating-point add/multiply/multiply-add results per clock per
+    /// SM, from the same table and with the same `None` rules.
+    pub fp32_results_per_clk_per_sm: Option<u32>,
 }
 
 impl TargetCapabilities {
@@ -185,7 +201,21 @@ impl TargetCapabilities {
             max_blocks_per_sm,
             max_vector_bytes,
             multiprocessor_count,
+            fp16_results_per_clk_per_sm: None,
+            fp32_results_per_clk_per_sm: None,
         }
+    }
+
+    /// Attach arithmetic throughput a caller knows from a source of its own.
+    ///
+    /// [`Self::from_queried`] leaves both rates `None` because no driver
+    /// attribute reports them. A caller that has a sourced figure for its part
+    /// supplies it here, and a guess must not be.
+    #[must_use]
+    pub fn with_arith_throughput(mut self, fp16: Option<u32>, fp32: Option<u32>) -> Self {
+        self.fp16_results_per_clk_per_sm = fp16;
+        self.fp32_results_per_clk_per_sm = fp32;
+        self
     }
 
     /// The widest [`VecWidth`] legal for `elem_bytes`-sized elements here.
@@ -299,6 +329,7 @@ pub fn cuda_capabilities(major: u32, minor: u32) -> Option<TargetCapabilities> {
         (12, 0) | (12, 1) => (101_376, 102_400, 48, 24),
         _ => return None,
     };
+    let (fp16, fp32) = cuda_arith_throughput(major, minor);
     Some(TargetCapabilities {
         max_threads_per_block: 1024,
         max_shared_mem_per_block: smem_block,
@@ -310,7 +341,41 @@ pub fn cuda_capabilities(major: u32, minor: u32) -> Option<TargetCapabilities> {
         max_blocks_per_sm: blocks_sm,
         max_vector_bytes: 16,
         multiprocessor_count: None,
+        fp16_results_per_clk_per_sm: fp16,
+        fp32_results_per_clk_per_sm: fp32,
     })
+}
+
+/// `(fp16, fp32)` add/multiply/multiply-add results per clock per SM.
+///
+/// # Source
+///
+/// Every number is from source **(B)** of [`cuda_capabilities`]: *CUDA C++
+/// Programming Guide* 12.9.1, "Throughput of Native Arithmetic Instructions
+/// (Number of Results per Clock Cycle per Multiprocessor)", page sha256
+/// `06499a0c6bfc6925cf54c76f6ba86a4986a081c44c602e10d4ef3b4f33a33865`. It was
+/// read 2026-10-07 by parsing the HTML table with `colspan` expansion. The
+/// table's columns are `5.0,5.2 | 5.3 | 6.0 | 6.1 | 6.2 | 7.x | 8.0 | 8.6 |
+/// 8.9 | 9.0 | 10.0 | 12.0`.
+///
+/// * The `7.x` column is applied to 7.0, 7.2 and 7.5.
+/// * The 8.0 and 8.6 fp16 cells read `256` with footnote 3: *"128 for
+///   `__nv_bfloat16`"*. The figure here is the fp16 one.
+/// * **No column, so `(None, None)`:** 8.7, 10.3, 11.0 and 12.1. The table
+///   is not stretched to a neighbour, for the same reason the resource rows
+///   are not (see [`TargetCapabilities`]).
+fn cuda_arith_throughput(major: u32, minor: u32) -> (Option<u32>, Option<u32>) {
+    match (major, minor) {
+        (6, 1) => (Some(2), Some(128)),                    // (B) col 6.1
+        (7, 0) | (7, 2) | (7, 5) => (Some(128), Some(64)), // (B) col 7.x
+        (8, 0) => (Some(256), Some(64)),                   // (B) col 8.0
+        (8, 6) => (Some(256), Some(128)),                  // (B) col 8.6
+        (8, 9) => (Some(128), Some(128)),                  // (B) col 8.9
+        (9, 0) => (Some(256), Some(128)),                  // (B) col 9.0
+        (10, 0) => (Some(256), Some(128)),                 // (B) col 10.0
+        (12, 0) => (Some(256), Some(128)),                 // (B) col 12.0
+        _ => (None, None),
+    }
 }
 
 /// Capabilities for a `cuda:sm<NN>` target token, when the table carries it.
@@ -440,6 +505,51 @@ mod tests {
                 "{maj}.{min}"
             );
         }
+    }
+
+    /// Every arithmetic-throughput figure, pinned to the source column it was
+    /// transcribed from: (B), page sha256 `06499a0c…`, the "Throughput of Native
+    /// Arithmetic Instructions" table. See [`cuda_arith_throughput`].
+    #[test]
+    fn arith_throughput_matches_its_source_columns() {
+        // (cap, fp16, fp32, source column)
+        let rows = [
+            ((6, 1), Some(2), Some(128), "6.1"),
+            ((7, 0), Some(128), Some(64), "7.x"),
+            ((7, 2), Some(128), Some(64), "7.x"),
+            ((7, 5), Some(128), Some(64), "7.x"),
+            ((8, 0), Some(256), Some(64), "8.0"),
+            ((8, 6), Some(256), Some(128), "8.6"),
+            ((8, 9), Some(128), Some(128), "8.9"),
+            ((9, 0), Some(256), Some(128), "9.0"),
+            ((10, 0), Some(256), Some(128), "10.0"),
+            ((12, 0), Some(256), Some(128), "12.0"),
+            // No column in (B): unsourced, not borrowed from a neighbour.
+            ((8, 7), None, None, "-"),
+            ((10, 3), None, None, "-"),
+            ((11, 0), None, None, "-"),
+            ((12, 1), None, None, "-"),
+        ];
+        for ((maj, min), f16, f32, col) in rows {
+            let c = cuda_capabilities(maj, min)
+                .unwrap_or_else(|| panic!("{maj}.{min} must have a resource row"));
+            assert_eq!(
+                (c.fp16_results_per_clk_per_sm, c.fp32_results_per_clk_per_sm),
+                (f16, f32),
+                "{maj}.{min} (source column {col})"
+            );
+        }
+        // A queried device knows no rate until a caller supplies a sourced one.
+        let q = TargetCapabilities::from_queried(1024, 1, 1, 1, 1, 32, 1, 1, 16, None);
+        assert_eq!(
+            (q.fp16_results_per_clk_per_sm, q.fp32_results_per_clk_per_sm),
+            (None, None)
+        );
+        let q = q.with_arith_throughput(Some(2), Some(128));
+        assert_eq!(
+            (q.fp16_results_per_clk_per_sm, q.fp32_results_per_clk_per_sm),
+            (Some(2), Some(128))
+        );
     }
 
     /// The tokens these rows are reached by: `sm61` has two digits, `sm100` to
