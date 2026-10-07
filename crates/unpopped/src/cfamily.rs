@@ -12,54 +12,31 @@
 //! harness. It is the module the standalone kernel generator (Unpopped) keeps
 //! when the CUDA-specific emitter is later carved into its own crate.
 //!
-//! # KNOWN WART / follow-up: the f16/bf16 arms are NOT neutral
+//! # f16/bf16 are neutral since 0.15.0
 //!
-//! `scalar_ctype`'s `F16`/`Bf16` arms return the NVIDIA type spellings `__half`
-//! / `__nv_bfloat16`, and the half load/store tail (`half_load_intrinsic`,
-//! `half_store_intrinsic`, `promote_load_f32`, `demote_store_f32`, and
-//! `cast_scalar`'s half arms) emits `__half2float`-class CUDA intrinsics. No
-//! neutral backend exercises them — CpuC declines f16/bf16 (`supports_dtype`)
-//! and Slang never calls them — so nothing here is tested by a neutral golden.
-//! That makes them a **silent-wrong-output hazard**: the first non-CUDA backend
-//! that supports f16 (Vulkane's SPIR-V backend is the live case) calls a
-//! neutral-looking API and gets `__half` spelled into its output.
+//! Until 0.15.0 `scalar_ctype` spelled `F16`/`Bf16` as NVIDIA's `__half` /
+//! `__nv_bfloat16`, and the half load/store tail emitted `__half2float`-class
+//! CUDA intrinsics: public API, in a module documented as neutral.
 //!
-//! **Reachability, stated precisely** (this doc previously said "reachable ONLY
-//! from the CUDA backend", which is true of the plan-driven paths and understates
-//! the rest):
+//! The halves now have FP8's shape. [`scalar_ctype`] answers the STORAGE
+//! question only (`unsigned short`, the 16-bit carrier), and the conversion is a
+//! software codec emitted into the kernel ([`half_helpers`]), reached through the
+//! same [`narrow_load_fn`] / [`narrow_store_fn`] names FP8 uses. A backend with
+//! native halves (CUDA's `__half`) spells them itself; baracuda keeps a closed
+//! local shadow of every function here that used to reach the half arms.
 //!
-//! - The **plan-driven** paths ([`out_ctype_of`], [`store_expr_of`],
-//!   [`param_ctype`]) genuinely are gated. `supports_dtype` rejects f16/bf16 for
-//!   `plan.dtype`, and `plan.out_dtype_of(j)` cannot smuggle one in either —
-//!   `plan::assert_valid_out_dtype` admits only `U8`/`I32`/`I64` as hetero output
-//!   dtypes, so a divergent output dtype is never a half.
-//! - The **free functions are ungated public API**. [`scalar_ctype`],
-//!   [`cast_scalar`], [`promote_load_f32`], [`demote_store_f32`] and both
-//!   `half_*_intrinsic` take a bare `ElementKind` with no plan and no backend to
-//!   gate them. This crate publishes to crates.io, so "reachable" means reachable
-//!   by any third party who reads the word "neutral" above and believes it.
-//!
-//! **FOLLOW-UP (deliberately deferred out of the byte-identity-critical
-//! extraction move): abstract the f16/bf16 ctype and the half load/store
-//! intrinsics behind the `Backend` trait**, so a non-CUDA f16 backend supplies
-//! its own spelling and cfamily's neutral core declines f16 rather than
-//! mis-spelling it. This is a breaking signature change on spellers the CUDA
-//! backend calls at ~66 sites, so it belongs in the 0.2 batch alongside the other
-//! `Backend` trait changes, and lands with the `unpopped-cuda` carve that gives
-//! the removed spellings a home.
-//!
-//! `tests/neutral_spelling.rs` holds the tripwires: gap pins that fail when the
-//! seam lands (so the fix must acknowledge itself), a live guard that fails if a
-//! *new* vendor spelling enters this module, and — important for the implementer
-//! — the reason the seam must **decline** rather than fall through to a default
-//! arm, which would trade this visible leak for a silent numerical bug.
-//!
+//! `tests/neutral_spelling.rs` holds the tripwires: no dtype spells a vendor
+//! name, and the codec names the halves use are names the helpers define.
 
 use crate::ir::{ArithOp, BinaryOp, ScalarExpr, UnaryOp, is_admissible_int_reduction_operand};
 use crate::plan::KernelPlan;
 use unpopped_vocab::ElementKind;
 
-/// CUDA scalar type for a dtype, or `None` if the backend can't lower it yet.
+/// The C **storage** type for a dtype, or `None` if this module can't spell it.
+///
+/// For a narrow float (FP8, f16, bf16) this is the carrier, not a compute type:
+/// the value is computed at `float` through the dtype's emitted codec
+/// ([`narrow_load_fn`] / [`narrow_store_fn`]).
 /// `U8` (increment 0b) is the comparison-predicate mask dtype — `unsigned char`
 /// per the FKC §5 Bool→U8 pinning — and, since increment 0c, an audited
 /// COMPUTE dtype (wrapping mod-256 C semantics), same class as the i32/i64
@@ -69,15 +46,17 @@ pub fn scalar_ctype(dt: ElementKind) -> Option<&'static str> {
     Some(match dt {
         ElementKind::F32 | ElementKind::F32Strict => "float",
         ElementKind::F64 => "double",
-        ElementKind::F16 => "__half",
-        ElementKind::Bf16 => "__nv_bfloat16",
+        // The halves are STORED as 16 bits and COMPUTED as a float, exactly
+        // like FP8 one width down. The codec is `half_helpers`, emitted with the
+        // kernel. (`__half` / `__nv_bfloat16` until 0.15.0: CUDA names in a
+        // module that calls itself neutral.)
+        ElementKind::F16 | ElementKind::Bf16 => "unsigned short",
         ElementKind::I32 => "int",
         ElementKind::I64 => "long long",
         ElementKind::I8 => "signed char",
         ElementKind::U8 => "unsigned char",
         // KISS-Classify §6.1 widths that have exact, portable C spellings. No
-        // vendor intrinsic and no packing is involved, so unlike the f16/bf16
-        // arms above these are genuinely neutral.
+        // vendor intrinsic and no packing is involved.
         ElementKind::I16 => "short",
         ElementKind::U16 => "unsigned short",
         // U32 is the gather/scatter INDEX-operand ctype (`unsigned int`) — a
@@ -154,87 +133,172 @@ pub fn out_ctype_of<'c>(plan: &KernelPlan<'_>, j: usize, ctype: &'c str) -> &'c 
     }
 }
 
-/// The store expression for output `j`'s lowered body root. A uniform output
-/// (`out_dtype_of(j) == plan.dtype`) stores the root unchanged **except for the
-/// FP8 pair**, whose codec call is applied here rather than by the body lowering
-/// (f16/bf16 arrive already demoted -- see the branch comment). A u8 keep-mask output converts the exact 0.0/1.0 predicate
-/// (lowered in the COMPUTE dtype `plan.dtype`) to `unsigned char` — exact by
-/// construction (the G1 plan gate + G5 backstop pin the body root to a `Cmp*`).
-/// The conversion is applied HERE at the store site, per output, **never baked
-/// into the shared DAG node**: for dropout the same compute-dtype `Cmp*` temp is
-/// consumed by output 0 inside a `Select` (tested `!= 0.0f`) AND stored as
-/// `(unsigned char)` by output 1, so a cast on the shared node would corrupt
-/// output 0's value (mutation M9). f16/bf16 re-promote first: the root lowered in
-/// the house promote-demote convention is the demoted `__float2half(<pred_f32>)`,
-/// and 1.0/0.0 round-trip f32→half→f32 bit-exactly, so the conversion pair is
-/// value-exact (and folded by ptxas). `store_expr_of(plan, 0, root)` is
-/// byte-identical to the pre-generalization `store_expr`.
+/// The store expression for output `j`'s lowered body root.
+///
+/// A uniform output (`out_dtype_of(j) == plan.dtype`) stores the root unchanged,
+/// **except for a narrow float** (FP8, f16, bf16), whose body was computed at
+/// `float`: its root is an f32 value and the store applies the dtype's codec.
+///
+/// A u8 keep-mask output converts the exact 0.0/1.0 predicate to
+/// `unsigned char` — exact by construction (the G1 plan gate + G5 backstop pin
+/// the body root to a `Cmp*`). The conversion is applied HERE at the store site,
+/// per output, **never baked into the shared DAG node**: for dropout the same
+/// compute-dtype `Cmp*` temp is consumed by output 0 inside a `Select` (tested
+/// `!= 0.0f`) AND stored as `(unsigned char)` by output 1, so a cast on the shared
+/// node would corrupt output 0's value (mutation M9).
 pub fn store_expr_of(plan: &KernelPlan<'_>, j: usize, root: String) -> String {
     let d = plan.out_dtype_of(j);
     if d == plan.dtype {
         // A UNIFORM cell still needs a store conversion when the dtype is a
-        // NARROW FLOAT: its body was lowered at `float` (the leaf promoted), so
-        // the root is an f32 expression and the destination is the packed
-        // storage type. Returning it unchanged would let C's implicit
-        // float->unsigned char conversion TRUNCATE the value instead of encoding
-        // it — `1.5f` stored as `1`, silently, with no diagnostic.
+        // NARROW FLOAT: its body was lowered at `float` (the leaf decoded), so
+        // the root is an f32 expression and the destination is the integer
+        // carrier. Returning it unchanged would let C's implicit conversion
+        // TRUNCATE the value instead of encoding it — `1.5f` stored as `1`,
+        // silently, with no diagnostic.
         //
-        // ONLY the FP8 pair. `demote_store_f32` is NOT the identity for four
-        // dtypes -- the FP8 pair and, via `half_store_intrinsic`, f16/bf16 -- and
-        // the halves arrive here **already demoted**: the house promote-demote
-        // convention lowers an f16 body root as `__float2half(<f32 expr>)`, as
-        // this function's own doc states. Applying it again emits
-        // `__float2half(__float2half(x))`.
+        // Exactly ONE encode. `313a798` once applied this to roots that were
+        // already encoded (the f16 house convention of the time, `__float2half`
+        // at the body root) and shipped `__float2half(__float2half(x))` in 0.2.0:
+        // numerically the identity, so only byte goldens saw it.
+        // `tests/store_demotes_once.rs` counts the codec for all four.
         //
-        // That regressed in 313a798 and shipped in 0.2.0. It is numerically the
-        // identity for representable values, so there is no result-level symptom
-        // -- only byte-identity goldens catch it, and ten of Baracuda's f16 ones
-        // did.
-        //
-        // The asymmetry is real rather than an oversight: an f16 store intrinsic
-        // is applied by the BODY lowering at the root, while an FP8 codec call is
-        // applied HERE at the store site. So the uniform branch must demote for
-        // exactly the dtypes whose body lowering did not.
-        //
-        // Written as an explicit match rather than `demote_store_f32` minus the
-        // halves, so a new narrow dtype is a decision at this site instead of
-        // inheriting whichever behaviour `narrow_store_fn` happens to have.
+        // Written as an explicit match, so a new narrow dtype is a decision at
+        // this site instead of inheriting whatever `narrow_store_fn` does.
         return match d {
-            ElementKind::Fp8E4M3FN | ElementKind::Fp8E5M2 => demote_store_f32(d, &root),
+            ElementKind::Fp8E4M3FN
+            | ElementKind::Fp8E5M2
+            | ElementKind::F16
+            | ElementKind::Bf16 => demote_store_f32(d, &root),
             _ => root,
         };
     }
     // The hetero elementwise store is exactly the U8 keep-mask (a `Cmp*`
     // predicate, pinned by `assert_valid_out_dtype`; the bincount-I32 scatter
     // narrows itself via `scatter_combine_store`, never through here). The
-    // per-element narrowing is the shared [`cast_scalar`] routine — one source of
-    // truth with the generated cast helper ([`emit_cast_helper`]). BYTE-IDENTICAL
-    // to the prior hand-inlined forms: `cast_scalar(F16, U8, r)` =
-    // `(unsigned char)__half2float(r)`, `(Bf16, U8)` =
-    // `(unsigned char)__bfloat162float(r)`, every other `(_, U8)` =
-    // `(unsigned char)r`.
-    cast_scalar(plan.dtype, d, &root)
+    // per-element conversion is the shared [`cast_scalar`] routine — one source of
+    // truth with the generated cast helper ([`emit_cast_helper`]).
+    //
+    // ⚠️ Convert FROM what the root IS, not from `plan.dtype`. A narrow float's
+    // body was computed at `float`, so its root is the f32 `0.0`/`1.0`, not a
+    // storage pattern. Converting from `plan.dtype` decodes it first and feeds
+    // `1.0f` to the codec as the pattern `1` — a tiny subnormal — so every true
+    // lane stored `0`. Live for FP8 until 0.15.0
+    // (`a_narrow_float_predicate_stores_the_right_mask`).
+    let from = if narrow_load_fn(plan.dtype).is_some() {
+        ElementKind::F32
+    } else {
+        plan.dtype
+    };
+    cast_scalar(from, d, &root)
 }
 
-/// The f16/bf16 → f32 widening intrinsic (`__half2float` / `__bfloat162float`),
-/// or `None` for a dtype loaded without one. The ONE place the generator names
-/// the half→float promotion — shared by the inline load sites and the generated
-/// dtype-promote helper (`emit_dtype_promote_helper`).
-pub fn half_load_intrinsic(kind: ElementKind) -> Option<&'static str> {
+/// Portable-C source for the f16/bf16 codec helpers a kernel needs, or `None`
+/// for a dtype that needs none.
+///
+/// The halves have FP8's shape ([`fp8_helpers`]): STORED in a 16-bit carrier
+/// (`unsigned short`), COMPUTED as `float`, converted by a decode on load and an
+/// encode on store emitted with the kernel. Portable C99, no vendor intrinsic
+/// anywhere. A backend with native halves spells its own; this is the default
+/// for one without.
+///
+/// # Correctness over cleverness, as for FP8
+///
+/// FP8's encoder searches every pattern for the nearest. A 16-bit format has too
+/// many patterns for that, so these encoders round arithmetically, but in a form
+/// a reader can check: scaling by a power of two (`ldexpf`, `frexpf`) is exact,
+/// so the ONLY rounding is the one written out — `floorf`, then
+/// round-half-to-even on the remainder. No bit-twiddling.
+///
+/// Checked bit for bit through a real C compiler against the oracle's
+/// independently written codec (`half_kernels_round_trip_against_the_oracles_
+/// independent_codec` in `unpopped-cpu-c`), which is itself checked against the
+/// `half` crate. NaN encodes as the canonical quiet NaN; its payload is not kept.
+pub fn half_helpers(kind: ElementKind) -> Option<&'static str> {
     match kind {
-        ElementKind::F16 => Some("__half2float"),
-        ElementKind::Bf16 => Some("__bfloat162float"),
-        _ => None,
+        ElementKind::F16 => Some(
+            r"
+/* IEEE-754 binary16 (KISS-CLASSIFY 6.1): 1 sign, 5 exp (bias 15), 10 mantissa.
+   Max finite 65504; subnormals down to 2^-24; IEEE infinities and NaN. */
+static float unpopped_f16_load(unsigned short h) {
+    int   sign = (h >> 15) & 1;
+    int   exp  = (h >> 10) & 0x1F;
+    int   mant = h & 0x3FF;
+    float mag;
+    if (exp == 0) {
+        mag = ldexpf((float)mant, -24);
+    } else if (exp == 0x1F) {
+        mag = mant == 0 ? INFINITY : NAN;
+    } else {
+        mag = ldexpf((float)(mant | 0x400), exp - 25);
     }
+    return sign ? -mag : mag;
 }
-
-/// The f32 → f16/bf16 narrowing intrinsic (`__float2half` / `__float2bfloat16`),
-/// or `None` for a dtype stored without one. Counterpart of
-/// [`half_load_intrinsic`].
-pub fn half_store_intrinsic(kind: ElementKind) -> Option<&'static str> {
-    match kind {
-        ElementKind::F16 => Some("__float2half"),
-        ElementKind::Bf16 => Some("__float2bfloat16"),
+static unsigned short unpopped_f16_store(float x) {
+    unsigned short sign;
+    float a, q, f;
+    int e = 0, sub;
+    if (x != x) { return 0x7E00; }                    /* NaN */
+    sign = (x < 0.0f || (x == 0.0f && 1.0f / x < 0.0f)) ? 0x8000 : 0x0000;
+    a = x < 0.0f ? -x : x;
+    if (a >= 65520.0f) { return (unsigned short)(sign | 0x7C00); } /* rounds past 65504 */
+    /* `sub`, not `e == 0`: frexpf gives e == 0 for every a in [0.5, 1). */
+    sub = a < 6.103515625e-05f;                       /* below 2^-14 */
+    if (sub) {
+        q = ldexpf(a, 24);                            /* in units of 2^-24 */
+    } else {
+        frexpf(a, &e);                                /* a in [2^(e-1), 2^e) */
+        q = ldexpf(a, 11 - e);                        /* in [1024, 2048) */
+    }
+    f = floorf(q);
+    if (q - f > 0.5f || (q - f == 0.5f && ((long)f & 1))) { f += 1.0f; }
+    if (sub) { return (unsigned short)(sign | (unsigned short)f); } /* 1024 = 2^-14 */
+    /* f == 2048 carries into the exponent field, which is the right encoding. */
+    return (unsigned short)(sign | (((e + 14) << 10) + ((int)f - 1024)));
+}
+",
+        ),
+        ElementKind::Bf16 => Some(
+            r"
+/* bfloat16 (KISS-CLASSIFY 6.1): the top half of binary32 — 1 sign, 8 exp
+   (bias 127), 7 mantissa. Same range as float; IEEE infinities and NaN. */
+static float unpopped_bf16_load(unsigned short h) {
+    int   sign = (h >> 15) & 1;
+    int   exp  = (h >> 7) & 0xFF;
+    int   mant = h & 0x7F;
+    float mag;
+    if (exp == 0) {
+        mag = ldexpf((float)mant, -133);
+    } else if (exp == 0xFF) {
+        mag = mant == 0 ? INFINITY : NAN;
+    } else {
+        mag = ldexpf((float)(mant | 0x80), exp - 134);
+    }
+    return sign ? -mag : mag;
+}
+static unsigned short unpopped_bf16_store(float x) {
+    unsigned short sign;
+    float a, q, f;
+    int e = 0, sub;
+    if (x != x) { return 0x7FC0; }                    /* NaN */
+    sign = (x < 0.0f || (x == 0.0f && 1.0f / x < 0.0f)) ? 0x8000 : 0x0000;
+    a = x < 0.0f ? -x : x;
+    if (a >= ldexpf(511.0f, 119)) { return (unsigned short)(sign | 0x7F80); } /* (2-2^-8)*2^127 */
+    /* `sub`, not `e == 0`: frexpf gives e == 0 for every a in [0.5, 1). */
+    sub = a < ldexpf(1.0f, -126);
+    if (sub) {
+        q = ldexpf(a, 133);                           /* in units of 2^-133 */
+    } else {
+        frexpf(a, &e);                                /* a in [2^(e-1), 2^e) */
+        q = ldexpf(a, 8 - e);                         /* in [128, 256) */
+    }
+    f = floorf(q);
+    if (q - f > 0.5f || (q - f == 0.5f && ((long)f & 1))) { f += 1.0f; }
+    if (sub) { return (unsigned short)(sign | (unsigned short)f); } /* 128 = 2^-126 */
+    /* f == 256 carries into the exponent field, which is the right encoding. */
+    return (unsigned short)(sign | (((e + 126) << 7) + ((int)f - 128)));
+}
+",
+        ),
         _ => None,
     }
 }
@@ -249,41 +313,18 @@ pub fn half_store_intrinsic(kind: ElementKind) -> Option<&'static str> {
 /// not a native type but a decode on load and an encode on store. These helpers
 /// are that, in portable C99 with no vendor intrinsic anywhere.
 ///
-/// # This is the neutral seam the f16/bf16 arms still need
+/// # The neutral seam, first proven here
 ///
-/// `half_load_intrinsic` spells `__half2float` — a CUDA name emitted from a
-/// module that calls itself neutral, tripwired in `tests/neutral_spelling.rs`.
-/// The fix for that is exactly this shape: emit a software codec instead of
-/// naming a vendor's. FP8 gets it first because it has **no existing goldens to
-/// break**, so the pattern can be proven here and then applied to f16/bf16 at the
-/// coordinated regen event that arm is gated on.
+/// FP8 got this shape first because it had **no existing goldens to break**. The
+/// halves adopted it in 0.15.0 ([`half_helpers`]), once baracuda had shadowed the
+/// functions that reached the old `__half2float` spelling.
 ///
-/// ## What the f16 gate actually is — measured, not assumed
-///
-/// The CUDA peer reports its emitter consumes `scalar_ctype` (taking
-/// `F16 → "__half"` as its kernel's scalar type) but **not**
-/// `half_load_intrinsic` — it spells `__half2float`/`__bfloat162float` itself.
-/// Confirmed from this side: `half_load_intrinsic`'s and
-/// `half_store_intrinsic`'s only non-test callers are the `_ =>` fallback arms
-/// of `narrow_load_fn`/`narrow_store_fn` below. So the coupling is one function:
-/// changing `scalar_ctype(F16)` to `unsigned short` is a **type** break for that
-/// consumer (`__half2float` will not accept it), not a byte-level diff.
-///
-/// ## And the override is a family, not a name
-///
-/// The same peer notes an intrinsic-carrying backend needs to substitute four
-/// things together — scalar ctype, load/promote, store/demote, and the packed
-/// pair type (`__half2`) — and that the fourth is not a fourth string: a packed
-/// pair processes two lanes per element, so it reshapes the emit loop rather
-/// than renaming anything in it. Any seam here that takes a set of names and
-/// not an arity will look correct and quietly fail to express that path.
-///
-/// The general form this points at is broader than the halves: *a backend may
-/// substitute the whole spelling family, and its arity, for any dtype whose
-/// target has a native one, with this module supplying the portable default.*
-/// Complex looks like a settled case only because its portable default already
-/// works — the same peer would spell it `cuFloatComplex` + `cuCmulf`, which is
-/// structurally the f16 situation with a working fallback underneath.
+/// The general form is broader than either: *a backend may substitute the whole
+/// spelling family, and its arity, for any dtype whose target has a native one,
+/// with this module supplying the portable default.* An intrinsic-carrying backend
+/// substitutes four things together — scalar ctype, load, store, and a packed pair
+/// type (`__half2`) — and the fourth reshapes the emit loop rather than renaming
+/// anything in it.
 ///
 /// # Correctness over cleverness in the encoder
 ///
@@ -598,24 +639,21 @@ pub fn sub_byte_store_fn(kind: ElementKind) -> Option<&'static str> {
     }
 }
 
-/// Stub: the f16/bf16 codec, not written yet.
-pub fn half_helpers(_kind: ElementKind) -> Option<&'static str> {
-    None
-}
-
-/// The load-side widening function for a NARROW FLOAT dtype: a vendor intrinsic
-/// for f16/bf16, an emitted software helper for FP8, `None` for everything else.
+/// The load-side widening function for a NARROW FLOAT dtype — the emitted
+/// codec's decode ([`fp8_helpers`], [`half_helpers`]) — or `None` for everything
+/// else.
 ///
-/// The two strategies sit behind one name deliberately. A narrow float is a
-/// narrow float — stored small, computed at f32 — and how the conversion is
-/// spelled is a property of the dtype, not of the call site. That is what lets
-/// the f16/bf16 arms move from intrinsic to emitted helper later without any
-/// caller changing.
+/// One name for every narrow float, deliberately: stored small, computed at f32,
+/// and how the conversion is spelled is a property of the dtype, not of the call
+/// site. That is what let the halves move from CUDA intrinsics to an emitted
+/// codec in 0.15.0 without any caller changing.
 pub fn narrow_load_fn(kind: ElementKind) -> Option<&'static str> {
     match kind {
         ElementKind::Fp8E4M3FN => Some("unpopped_f8e4m3fn_load"),
         ElementKind::Fp8E5M2 => Some("unpopped_f8e5m2_load"),
-        _ => half_load_intrinsic(kind),
+        ElementKind::F16 => Some("unpopped_f16_load"),
+        ElementKind::Bf16 => Some("unpopped_bf16_load"),
+        _ => None,
     }
 }
 
@@ -624,11 +662,13 @@ pub fn narrow_store_fn(kind: ElementKind) -> Option<&'static str> {
     match kind {
         ElementKind::Fp8E4M3FN => Some("unpopped_f8e4m3fn_store"),
         ElementKind::Fp8E5M2 => Some("unpopped_f8e5m2_store"),
-        _ => half_store_intrinsic(kind),
+        ElementKind::F16 => Some("unpopped_f16_store"),
+        ElementKind::Bf16 => Some("unpopped_bf16_store"),
+        _ => None,
     }
 }
 
-/// Widen a loaded `inner` expression to `float`: the half/bf16 intrinsic, else
+/// Widen a loaded `inner` expression to `float`: the narrow float's decode, else
 /// the value unchanged (already ≥ f32, or an integer loaded natively).
 pub fn promote_load_f32(kind: ElementKind, inner: &str) -> String {
     match narrow_load_fn(kind) {
@@ -637,8 +677,8 @@ pub fn promote_load_f32(kind: ElementKind, inner: &str) -> String {
     }
 }
 
-/// Narrow a `float`-valued `inner` expression to the storage dtype: the
-/// half/bf16 intrinsic, else the value unchanged (the caller adds any cast).
+/// Narrow a `float`-valued `inner` expression to the storage dtype: the narrow
+/// float's encode, else the value unchanged (the caller adds any cast).
 pub fn demote_store_f32(kind: ElementKind, inner: &str) -> String {
     match narrow_store_fn(kind) {
         Some(f) => format!("{f}({inner})"),
@@ -647,15 +687,14 @@ pub fn demote_store_f32(kind: ElementKind, inner: &str) -> String {
 }
 
 /// A single element-wise dtype-cast expression — the value of `expr` (of dtype
-/// `from`) converted to dtype `to`, with the house f16/bf16 float-detour
-/// convention. The ONE place the generator spells a per-element conversion
+/// `from`) converted to dtype `to`, with the narrow-float detour through `float`. The ONE place the generator spells a per-element conversion
 /// between two scalar dtypes, shared by the inline hetero store
 /// ([`store_expr_of`]) and the generated cast helper (`emit_cast_helper`), so
 /// the two can never drift.
 ///
 /// Mirrors `baracuda_cast.cuh`'s `cast_value<TIn, TOut>` (value-identical, not
 /// necessarily text-identical — the generated form uses C-style casts and the
-/// shared [`promote_load_f32`] / [`demote_store_f32`] intrinsic picks):
+/// shared [`promote_load_f32`] / [`demote_store_f32`] codec picks):
 ///   * `from == to` → identity (no cast).
 ///   * f16/bf16 → f16/bf16 (cross) → widen to `float`, then narrow.
 ///   * f16/bf16 → arithmetic → widen to `float`, then a C-style cast to the target.
