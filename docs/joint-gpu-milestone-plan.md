@@ -151,3 +151,14 @@ M2 + M4 ──► M6
 | No sm_61 build or emit path proven | M3, M4 | baracuda (B1) |
 | lightbulb device index hardcoded to 0; fuel pin stale | M2 (pin), M6 (index) | lightbulb |
 | No CUDA CI runner anywhere | regression protection after each milestone | open: a self-hosted runner needs CireSnave |
+
+## 7. After this plan: AMD and Intel through Vulkan
+
+Sequenced **after** M0–M5, in CireSnave's order, as relayed by the PM on 2026-10-07.
+The fuel lane's finding at fuel `6dfc8248` (kernel table vs shader sources):
+
+- 66 of 167 authored kernels ship embedded SPIR-V (39.5%).
+- Missing whole: `layer_norm`, `rms_norm`, `flash_attention` (and its backward), `scatter_add`, `concat`, `index_select`, the optimized matmul, and most non-f32 casts.
+- AMD and NVIDIA through Vulkan are live-verified on real hardware; Intel has no evidence.
+
+So AMD and Intel LLM support is gated on those missing kernels, not on architecture. Fuel's device auto-pick (`fuel-examples/src/lib.rs:71-91`) also does not include Vulkan.
