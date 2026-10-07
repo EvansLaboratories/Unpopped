@@ -81,7 +81,7 @@ Each milestone ends in an observable clearing event, named in its row.
 
 ### M2: sm_89 through lightbulb — owner: **lightbulb**
 
-- Bump the fuel git pin from `d90b481` to the ref M1 cleared at.
+- Move lightbulb's fuel dependency off the git pin (`d90b481`) to a **crates.io version** at or after the ref M1 cleared at. CireSnave's rule of 2026-10-07 (CLAUDE.md §9, *"Sources"*): cross-repo dependencies are crates.io versions, with no new `git =` dependencies. The known obstacle: crates.io `fuel-core` is an unrelated project (lightbulb `Cargo.toml:233-235`), so fuel must publish under names that are free. That is fuel's and lightbulb's to settle, through the PM.
 - Make the CUDA device index configurable per deployment (it is hardcoded to 0 today). This is not needed for one card per box, but it is needed the moment two cards share a box (M6).
 - API-level test: run M0's prompts through `POST /v1/chat/completions` with greedy parameters. The tokens must match the CPU fixture. tok/s comes from the harness, wall-clock over `usage.completion_tokens`, since the API has no timing field.
 - If the test crosses machines, security item 2 needs a Postgres-backed key. Loopback on the GPU box needs none.
