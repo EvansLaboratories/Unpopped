@@ -21,12 +21,14 @@ Qwen3.x comes first. A Qwen 27B-class model across cards comes later.
 
 ## 1. Where each project stands (measured 2026-10-07)
 
+> **Read every row as "the code exists", not "it works".** These rows come from reading code and from each lane's answers. The first real run (fuel M0, Qwen3-0.6B) refuted a "works today" claim. Treat every other capability below as unmeasured until M0, M1 or M4 shows it on a real checkpoint.
+
 | repo | ref read | relevant fact |
 |---|---|---|
 | unpopped | `29e8f68` | `cuda:sm61` parses and resolves to a sourced capability row (`capability.rs`, #34). Keys take `TargetId`, so an sm_61 key can be formed. **`plan.rs` never reads the target**: 0 hits for `TargetId`, while the same grep finds it in `jit.rs:34,72`. No plan decision is per-sm today. |
 | baracuda | `20139e5` | Hand-written kernels cover every dense Qwen3 op (GEMM, RMSNorm, RoPE incl. YaRN, SwiGLU, softmax, SDPA/flash with GQA, embedding, add), plus MoE. `baracuda-kernels-sys/build.rs:8-16` builds only `sm80`/`sm89`/`sm90a`. **No sm_61 target exists**, and PTX forward-compatibility never runs older. The README (437-455) records the sm_61-through-latest ruling and says sm_61 is in-progress Phase B, via parse → Unpopped → emit, not hand-written SIMT. NVRTC `arch_flag` already accepts `cuda:sm61` (`baracuda-cuda-emit/src/nvrtc.rs:150-170`), but only construction is tested. There is no CUDA CI runner, and no Qwen run or transformer-block run exists. |
-| fuel | `6dfc824` | Qwen3 models exist (`fuel-transformers/src/models/lazy_qwen3.rs`, `lazy_quantized_qwen3.rs`, `lazy_qwen3_moe.rs`), with CLIs in `fuel-lazy-examples/src/bin/` and `fuel-examples/examples/quantized-qwen3`. Backends: CPU, CUDA (via baracuda `alpha.81`), Vulkan, Metal. A ULP/relative/absolute compare harness exists (`fuel-dispatch/src/fkc/verify/ulp.rs`), but it is per-op, not per-model. The fuel lane reports **no model-level CPU-vs-CUDA parity test for Qwen3**; the pattern to copy is `fuel-model-llama/tests/paged_decode_parity.rs`. **No tok/s harness:** `quantized-qwen3/main.rs` times model load only, and `ROADMAP.md:869-880` lists an end-to-end tok/s harness as future work. `fuel-parallel` is a leaf crate that no model crate consumes. The fuel lane reports Qwen3 running end to end on CPU and CUDA today. That is a self-report; M0 and M1 are where it gets checked. Board #106 Step A merged (#310, `c02da348`). |
-| lightbulb | `fd44479` | It serves an OpenAI-compatible `POST /v1/chat/completions` and `/v1/completions`. Fuel is behind `--features fuel-engine`; the default engine is candlelight. Fuel is a **git pin `d90b481`**, not fuel's main. Qwen3 GGUF loads (`src/model_fuel/loader_gguf_qwen3.rs`). **The CUDA device index is hardcoded to 0** in both engines (`src/model_fuel/device.rs:24`, `src/model/parallel_model_manager.rs:265`). `src/multi_gpu/` is wired into nothing. The API has no timing field. Auth is off without `DATABASE_URL`, with a default bind of `0.0.0.0:8080`. Security item 2 (pending) will refuse a non-loopback bind without real auth. End-to-end tests use TinyLlama and are `#[ignore]`. |
+| fuel | `6dfc824` | Qwen3 models exist (`fuel-transformers/src/models/lazy_qwen3.rs`, `lazy_quantized_qwen3.rs`, `lazy_qwen3_moe.rs`): the code exists, but see below for whether a real checkpoint loads. CLIs are in `fuel-lazy-examples/src/bin/` and `fuel-examples/examples/quantized-qwen3`. Backends: CPU, CUDA (via baracuda `alpha.81`), Vulkan, Metal. A ULP/relative/absolute compare harness exists (`fuel-dispatch/src/fkc/verify/ulp.rs`), but it is per-op, not per-model. The fuel lane reports **no model-level CPU-vs-CUDA parity test for Qwen3**; the pattern to copy is `fuel-model-llama/tests/paged_decode_parity.rs`. **No tok/s harness:** `quantized-qwen3/main.rs` times model load only, and `ROADMAP.md:869-880` lists an end-to-end tok/s harness as future work. `fuel-parallel` is a leaf crate that no model crate consumes. **A real Qwen3 checkpoint does not load today** (fuel M0 run, 2026-10-07). Qwen3-0.6B GGUF fails with `attn_q.weight has 2097152 elements, expected 1048576`, because Qwen3 decouples `head_dim` from `hidden_size / num_heads` (0.6B: 16 × 128 = 2048, not 1024). This is fuel GAP-279 (forward guard) plus a loader bug in the quantized path. An earlier report that fuel runs Qwen3 end to end held only for synthetic configs. Board #106 Step A merged (#310, `c02da348`). |
+| lightbulb | `fd44479` | It serves an OpenAI-compatible `POST /v1/chat/completions` and `/v1/completions`. Fuel is behind `--features fuel-engine`; the default engine is candlelight. Fuel is a **git pin `d90b481`**, not fuel's main. A Qwen3 GGUF loader exists (`src/model_fuel/loader_gguf_qwen3.rs`), but loading a real checkpoint through it is unmeasured; it runs on fuel, whose real-checkpoint load fails today (fuel row). **The CUDA device index is hardcoded to 0** in both engines (`src/model_fuel/device.rs:24`, `src/model/parallel_model_manager.rs:265`). `src/multi_gpu/` is wired into nothing. The API has no timing field. Auth is off without `DATABASE_URL`, with a default bind of `0.0.0.0:8080`. Security item 2 (pending) will refuse a non-loopback bind without real auth. End-to-end tests use TinyLlama and are `#[ignore]`. |
 
 ### Hardware
 
@@ -71,6 +73,7 @@ Each milestone ends in an observable clearing event, named in its row.
 
 ### M1: sm_89 end to end through fuel — owners: **fuel**, then **baracuda** for kernel faults
 
+- **Depends on fuel GAP-279** and the quantized-loader fix: a real Qwen3 checkpoint must load first (fuel row, §1). Fuel is fixing it together with M0.
 - Run M0's model on the RTX 4070 through the fuel CUDA backend, then the M0 compare and speed harnesses.
 - Any kernel mismatch goes to baracuda with the op name and the inputs.
 - Do the 4060 on the LAN desktop too, once someone can reach it (Q3). Two cards of the same sm make a cheap control on driver and box effects.
@@ -78,7 +81,7 @@ Each milestone ends in an observable clearing event, named in its row.
 
 ### M2: sm_89 through lightbulb — owner: **lightbulb**
 
-- Bump the fuel git pin from `d90b481` to the ref M1 cleared at.
+- Move lightbulb's fuel dependency off the git pin (`d90b481`) to a **crates.io version** at or after the ref M1 cleared at. CireSnave's rule of 2026-10-07 (CLAUDE.md §9, *"Sources"*): cross-repo dependencies are crates.io versions, with no new `git =` dependencies. The known obstacle: crates.io `fuel-core` is an unrelated project (lightbulb `Cargo.toml:233-235`), so fuel must publish under names that are free. That is fuel's and lightbulb's to settle, through the PM.
 - Make the CUDA device index configurable per deployment (it is hardcoded to 0 today). This is not needed for one card per box, but it is needed the moment two cards share a box (M6).
 - API-level test: run M0's prompts through `POST /v1/chat/completions` with greedy parameters. The tokens must match the CPU fixture. tok/s comes from the harness, wall-clock over `usage.completion_tokens`, since the API has no timing field.
 - If the test crosses machines, security item 2 needs a Postgres-backed key. Loopback on the GPU box needs none.
@@ -93,7 +96,7 @@ Split along the ruling:
   - U1 adds the two rates to `TargetCapabilities`, and adds `KernelPlan::half_arith() -> HalfArith{Native,ViaF32}`, read from `key.target`. It is additive, and no golden moves: ViaF32 only when both rates are sourced and fp16 < fp32.
   - baracuda's packed `__h*2` path (`cuda.rs:427`) honours ViaF32 in B1. It is bit-identical to the scalar float path by design, so this changes speed, not numerics.
   - **Not U1's:** vector width comes from the key, and `max_vector_bytes` is 16 in every row. The plan sizes no shared memory. `mma` vs SIMT for `Contraction` is a feature fact owned by baracuda-cuda-vocab (`idiom-lifting-design` §6). The cuBLAS compute type is baracuda's. Both are in §6.
-- **U2, Unpopped: conversion coverage for Qwen3's ops.** baracuda's recorded sm_61 route is parse → Unpopped IR → emit. `convert.rs` lifts elementwise, reduction and scan today. Inventory which of RMSNorm, softmax, RoPE, SwiGLU, embedding (gather) and attention lift today, and close the gaps in priority order. GEMM can use cuBLAS (`DenseGemmPlan`), which supports sm_61 under CUDA 12.x, so it is not on this list unless the cuBLAS route fails.
+- **U2, Unpopped: the Qwen3 op set as IR, planned for sm_61.** This was corrected 2026-10-07 by baracuda's `docs/sm61-parse-emit-gap-analysis.md`. The sm_61 route is IR → `baracuda-cuda-emit` (plain scalar CUDA, with no tensor-core, async-copy or dp4a intrinsics) → NVRTC. It is not a parse of the hand-written kernels, so parse coverage is not the question. U2 is a test showing that every Qwen3 dense op Unpopped's IR can express plans and generates for `cuda:sm61` on the same schedule as `cuda:sm89`, differing only in `half_arith`: residual add and SwiGLU (f32, f16), RMSNorm, two-stage softmax, a RoPE pair lane, embedding, and matmul. **Attention has no IR node** (`Access::Attention`, `idiom-lifting-design` §11). For bring-up it composes from `Contraction` + `RowReduce` softmax + `Contraction`. GEMM can also use cuBLAS (`DenseGemmPlan`).
 - **B1, baracuda: sm_61 emission and build.** An NVRTC sm_61 compile of every kernel M1 needs, through the 12.9 toolchain, and a decision on the hand-written kernels: an `sm61` build feature, or the emit route only. baracuda's README records the emit route as the plan.
 - Tests run on this box: compile-only for sm_61. The numerics of the emitted kernels can be checked on the 4070 by forcing the sm_61 *plan* and running it on sm_89. That is the same-GPU, two-path control from `idiom-lifting-design` §10, applied across plans.
 - **Clears when:** every op in M0's model has an sm_61 artifact that NVRTC accepts, and the sm_61-plan-on-sm_89 run passes M0's compare.
@@ -110,6 +113,15 @@ Split along the ruling:
 
 ### M6: Qwen 27B-class across cards — owners: **fuel** (split), **lightbulb** (serving); later
 
+- **The model is a different architecture from the bring-up model.** `PORTFOLIO-ROADMAP.md` (local-model plan, agreed with CireSnave 2026-09-27, lines 562-563) names Qwen/Qwen3.8-27B. Its arch is `qwen3_5`:
+  - hybrid, with 48 linear-attention layers and 16 full-attention layers;
+  - a native MTP head;
+  - hidden size 5120 and 64 layers;
+  - run quantized on 3 P40s.
+- That makes M6 a larger fuel and lightbulb item than the 0.6B bring-up:
+  - a `qwen3_5` model and loader (lightbulb refuses `qwen35` GGUF today);
+  - linear-attention kernels, a recurrent scan that M0–M5 never exercise. For Unpopped, the question is whether the `Scan` schedule can express it. That is not yet assessed.
+  - MTP decoding.
 - Memory arithmetic, for weights only, without KV cache:
   - 27B at f16 is about 54 GB, so three P40s;
   - at int8, about 27 GB, so two P40s;
@@ -171,6 +183,7 @@ On the P40, f16 compute is slow enough (§1) that every kernel computes in f32 t
 | Whether `cuda_bf16.h` packed bf16 ops compile under NVRTC sm_61 | M3, if the model is bf16 | baracuda (B1) |
 | No sm_61 build or emit path proven | M3, M4 | baracuda (B1) |
 | lightbulb device index hardcoded to 0; fuel pin stale | M2 (pin), M6 (index) | lightbulb |
+| A real Qwen3 checkpoint does not load (fuel GAP-279: `head_dim` decoupled from `hidden_size / num_heads`, plus a quantized-loader bug) | M0, M1 (so everything downstream) | fuel (in progress) |
 | No CUDA CI runner anywhere | regression protection after each milestone | open: a self-hosted runner needs CireSnave |
 
 ## 7. After this plan: AMD and Intel through Vulkan
