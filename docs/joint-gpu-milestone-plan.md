@@ -35,7 +35,7 @@ Qwen3.x comes first. A Qwen 27B-class model across cards comes later.
 | RTX 4070 Laptop | 89 | PM laptop (this box) | every lane on this box; baracuda verifies there today |
 | RTX 4060, 8 GB | 89 | LAN desktop 192.168.4.23 | **no lane today** (baracuda reports no access) |
 | Radeon VII | (AMD) | LAN desktop | irrelevant to CUDA; relevant later to Vulkan/Slang |
-| P40, 24 GB | 61 | not yet arrived | — |
+| P40, 24 GB | 61 | not yet arrived; host will be the LAN desktop (PM, 2026-10-07) | — (Q3) |
 
 Two hardware facts shape the sm_61 path:
 
@@ -133,20 +133,38 @@ M2 + M4 ──► M6
 - **Start now, in parallel:** M0 (fuel), U1 and U2 (Unpopped), B1 (baracuda), and lightbulb's device-index work.
 - The critical path is M0, then M1, then M4. M4 waits on hardware no lane controls.
 
-## 5. Questions for CireSnave (routed through the PM)
+## 5. Decisions (PM, 2026-10-07) and what stays open
 
-- **Q1: the models.** Which Qwen3.x size and format for M0? Which "27B-class" model for M6, and which quantization? lightbulb refuses `qwen35` checkpoints today (`src/gguf/mod.rs:1034`), so a Qwen3.5 choice adds work.
-- **Q2: the P40s.** When do they arrive, which box do they go in, and how are they cooled (the P40 is a passive datacenter card)? Driver and toolkit on that box: is a 12.x toolchain beside 13.x acceptable?
-- **Q3: LAN access.** How should a lane reach 192.168.4.23 (SSH, a remote runner, or a lane on that box)? No lane can reach it today.
-- **Q4: the tolerance.** Is "within tolerance" a per-dtype logit bound plus greedy-token identity (this plan's proposal), or something else?
+- **Assignments:** M0 → fuel. U1 and U2 → Unpopped (U1 starts now). B1 → baracuda, after its registry-build PR. Device-index work → lightbulb.
+- **Q1, models. Decided:** the first model is the smallest Qwen3 *dense* model that exercises the real op set (bring-up), with the 27B-class model later. Fuel picks the checkpoint in M0 and names it in its PR.
+  - **Added to M6:** lightbulb refuses `qwen35` GGUF (`src/gguf/mod.rs:1034`). If the 27B-class model is Qwen3.5, M6 needs that refusal replaced by a real loader first. Owner: lightbulb, with fuel for the model.
+- **Q2, toolchain and host.** Decided: CUDA 12.9.2 at `C:\Users\cires\AppData\Local\cuda-toolkits\12.9.2` (beside 13.3) is the sm_61 toolchain, and the P40 host is the LAN desktop. Open, and CireSnave's, tracked by the PM: P40 arrival and cooling.
+- **Q3, LAN access. Open,** on the PM's board. Until it's answered, lanes reach the desktop only through its HTTP endpoints. M4 cannot run before this is answered.
+- **Q4, tolerance. Decided:** a per-dtype logit bound plus greedy-token identity over a fixed prompt set. The numeric bounds are proposed below.
+
+### 5.1 Proposed tolerance bounds (Q4)
+
+Compare **teacher-forced**: feed both runs the reference's tokens, so one near-tie cannot cascade into a whole divergent continuation. At each step, over the full vocabulary:
+
+| weights / compute | logit bound, per step | basis |
+|---|---|---|
+| f32 / f32 | `max|Δ| ≤ 1e-3 · max|logit_ref|` | reduction order is the only difference |
+| f16 or bf16 storage / f32 accumulate | `max|Δ| ≤ 2e-2 · max|logit_ref|` | rounding of intermediate activations to 16 bits between layers |
+| quantized (int8, 4-bit) | the same as f16, **against a CPU reference that uses the same quantized weights** | quantization error belongs to the model, not the device; comparing with an unquantized reference measures the wrong thing |
+
+**Greedy-token identity:** for every prompt, the first 32 greedily generated tokens are identical to the reference's. A divergence is excused only at a step where the reference's top-1/top-2 margin is below that step's logit bound (a real tie). Excused steps are reported by count, and more than 1 per prompt fails.
+
+**Calibrate before trusting the numbers.** In M0, run the CPU reference twice with a different reduction order (or thread count). The bound must be at least 4× the spread that measures, or it is too tight to be stable; it must also go red on M0's perturbed-logit control, or it is too loose to mean anything. If either check fails, M0 replaces these numbers with measured ones, and the PR says so.
+
+On the P40, f16 compute is slow enough (§1) that every kernel computes in f32 there. So the f16-storage row applies to sm_61 unchanged.
 
 ## 6. Blockers
 
 | blocker | blocks | owner |
 |---|---|---|
 | P40 hardware not here | M4, M5, M6 | CireSnave |
-| No lane can reach the LAN desktop | the 4060 control in M1; M4 if the P40 goes there | CireSnave |
-| Model and quant not chosen | M0 (so everything) | CireSnave (Q1) |
+| No lane can run code on the LAN desktop (the P40 host) | the 4060 control in M1; M4, M5 | PM board (Q3) |
+| lightbulb refuses `qwen35` GGUF | M6, if the 27B-class model is Qwen3.5 | lightbulb |
 | `plan.rs` is arch-blind | M3 | Unpopped (U1) |
 | No sm_61 build or emit path proven | M3, M4 | baracuda (B1) |
 | lightbulb device index hardcoded to 0; fuel pin stale | M2 (pin), M6 (index) | lightbulb |
