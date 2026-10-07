@@ -15,7 +15,41 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## Unreleased — `0.14.3`
+## Unreleased — `0.14.4`
+
+### `HalfArith`: the first plan decision that differs by sm (additive)
+
+U1 of the joint P40 (sm_61) / RTX 4070 (sm_89) plan
+(`docs/joint-gpu-milestone-plan.md`). No emitted byte or golden moves.
+
+- **`TargetCapabilities` gains `fp16_results_per_clk_per_sm` and
+  `fp32_results_per_clk_per_sm`** (`Option<u32>`), transcribed from NVIDIA's
+  12.9.1 "Throughput of Native Arithmetic Instructions" table (page sha256
+  `06499a0c…`). sm_61 does 2 fp16 results per clock per SM against 128 for fp32;
+  sm_89 does 128 for both. The table has no column for 8.7, 10.3, 11.0 or 12.1,
+  so those are `None`. `from_queried` leaves both `None`, and
+  `with_arith_throughput` attaches sourced figures.
+- **`KernelPlan::half_arith()` and `half_arith_for(TargetId)` return `HalfArith`
+  (`Native` / `ViaF32`).** `ViaF32` is returned only when both rates are sourced
+  and fp16 < fp32, which today means sm_61 only. Everything else is `Native`,
+  the behaviour every emitter already has.
+- It is a method, not a `KernelPlan` field, because `KernelPlan` is not
+  `#[non_exhaustive]` and emitters build it by struct literal.
+- Consumer: baracuda-cuda-emit gates its packed native `__h*2` path on
+  `Native`. That path is bit-identical to the scalar float path by design, so on
+  the P40 this changes speed, not numerics.
+
+## Released
+
+⚠️ **What reached crates.io, read from its API on 2026-10-03:** `0.11.0`
+(2026-09-11), `0.12.0` (2026-10-01), `0.13.0` (2026-10-01), `0.14.0` (2026-10-02), `0.14.1`
+(2026-10-03), for all four published crates. `0.14.3` (2026-10-03) was confirmed
+from the same API on 2026-10-07; `0.14.2` was never published. **`0.11.1`–`0.11.6` existed only in the workspace and were
+never published.** A consumer went straight from `0.11.0` to `0.12.0`, so
+everything those intermediate numbers carried is listed under `0.12.0`.
+
+
+## 2026-10-03 — everything at `0.14.3`
 
 ### Fixed: telemetry from any compute capability now merges, and every drop is counted
 
@@ -42,7 +76,7 @@ H100 report as well. Both drops were silent.
   `merge_reports` is the same fold with the report discarded.
 - `arch_sku_of` is unchanged. It still answers "which cutlass dispatch cell".
 
-## Unreleased — `0.14.2 (docs only, never published)`
+## `0.14.2` (docs only, never published; its content shipped in `0.14.3`)
 
 ### Docs only: `TargetId` is the architecture identity; `ArchSku` is a cutlass dispatch SKU
 
@@ -62,14 +96,6 @@ No code, signature or behaviour change. This release records board #106 option C
   release is marked superseded. No variant is added. The capability row shipped in `0.14.1`.
 
 The `telemetry::merge_reports` drop this entry listed as a follow-up is fixed in `0.14.3`.
-
-## Released
-
-⚠️ **What reached crates.io, read from its API on 2026-10-03:** `0.11.0`
-(2026-09-11), `0.12.0` (2026-10-01), `0.13.0` (2026-10-01), `0.14.0` (2026-10-02), `0.14.1`
-(2026-10-03), for all four published crates. **`0.11.1`–`0.11.6` existed only in the workspace and were
-never published.** A consumer went straight from `0.11.0` to `0.12.0`, so
-everything those intermediate numbers carried is listed under `0.12.0`.
 
 ## 2026-10-03 — everything at `0.14.1`
 

@@ -110,7 +110,7 @@ pub use link::{LinkEntry, emit_link_registry, link_entry};
 pub use optimize::{optimize, optimize_top_k};
 pub use oracle::{Fidelity, TypedBuffer, compare, evaluate};
 pub use pattern::{PatternError, PatternNode, derive_pattern, to_fkc};
-pub use plan::{KernelPlan, PlanError, Schedule, build_plan};
+pub use plan::{HalfArith, KernelPlan, PlanError, Schedule, build_plan, half_arith_for};
 pub use shape::{
     SYMBOLIC, ShapeError, ShapeRuleForm, output_shape, pooled_axis_dim_expr, shape_rule_form,
     windowed_extent,
