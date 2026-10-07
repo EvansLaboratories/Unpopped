@@ -4315,6 +4315,115 @@ mod tests {
         assert!(bf16_to_f64(f32_to_bf16_bits(f32::NAN)).is_nan());
     }
 
+    /// The f32 inputs that decide a 16-bit encoder: every finite value of the
+    /// format, every midpoint between neighbours (the ties), one f32 ulp either
+    /// side of each midpoint, the overflow edges, and a pseudo-random sweep.
+    ///
+    /// `decode` turns a pattern into its exact value and `inf` is the format's
+    /// +infinity pattern. Midpoints of a 16-bit format need at most 12
+    /// significant bits, so every one is exact in f32 (asserted).
+    fn half_encoder_probes(decode: impl Fn(u16) -> f64, inf: u16) -> Vec<f32> {
+        let mut v = Vec::new();
+        for p in 0u16..inf {
+            let a = decode(p);
+            let b = decode(p + 1);
+            if !(a.is_finite() && b.is_finite()) {
+                continue;
+            }
+            let mid = ((a + b) / 2.0) as f32;
+            assert_eq!(f64::from(mid), (a + b) / 2.0, "midpoint not exact in f32");
+            for x in [a as f32, mid, f32::from_bits(mid.to_bits() + 1)] {
+                v.push(x);
+                v.push(-x);
+            }
+            if mid.to_bits() > 0 {
+                let below = f32::from_bits(mid.to_bits() - 1);
+                v.push(below);
+                v.push(-below);
+            }
+        }
+        // The overflow edges, by bits: f16's 65520 (the first value that rounds
+        // to infinity) and one ulp below it; bf16's equivalent, (2 - 2^-8) * 2^127.
+        for x in [
+            f32::from_bits(0x477F_E000),
+            f32::from_bits(0x477F_DFFF),
+            f32::from_bits(0x7F7F_8000),
+            f32::from_bits(0x7F7F_7FFF),
+            f32::MAX,
+            f32::INFINITY,
+            f32::MIN_POSITIVE,
+            f32::from_bits(1),
+            0.0,
+        ] {
+            v.push(x);
+            v.push(-x);
+        }
+        // A fixed LCG, so a failure reproduces.
+        let mut s: u32 = 0x2545_F491;
+        for _ in 0..1_000_000 {
+            s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            v.push(f32::from_bits(s));
+        }
+        v
+    }
+
+    /// The oracle's f16 codec agrees with the `half` crate on every probe.
+    ///
+    /// This oracle is what the emitted C codec (`cfamily::half_helpers`) is held
+    /// to bit for bit, and until now its only test was `half_codec_roundtrip`: a
+    /// loose round-trip on six values, which an encoder that truncates instead of
+    /// rounding also passes. Shown to discriminate: breaking ties-to-even
+    /// (`rem >= half`) fails at `0x38801000`.
+    #[test]
+    fn the_oracle_f16_codec_matches_an_independent_one() {
+        for p in 0u16..=0xFFFF {
+            let want = f64::from(half::f16::from_bits(p).to_f32());
+            let got = f16_to_f64(p);
+            assert!(
+                (want.is_nan() && got.is_nan()) || want.to_bits() == got.to_bits(),
+                "decode {p:#06x}: oracle {got}, half {want}"
+            );
+        }
+        let mut checked = 0usize;
+        for x in half_encoder_probes(f16_to_f64, 0x7C00) {
+            let want = half::f16::from_f32(x).to_bits();
+            let got = f32_to_f16_bits(x);
+            if x.is_nan() {
+                assert!(f16_to_f64(got).is_nan(), "encode NaN {x:?} gave {got:#06x}");
+            } else {
+                assert_eq!(got, want, "encode {x:e} ({:#010x})", x.to_bits());
+            }
+            checked += 1;
+        }
+        assert!(checked > 1_000_000, "only {checked} probes");
+    }
+
+    /// The same for bf16, whose ties sit at a different bit. Shown to
+    /// discriminate: rounding ties away from zero fails at `0x00008000`.
+    #[test]
+    fn the_oracle_bf16_codec_matches_an_independent_one() {
+        for p in 0u16..=0xFFFF {
+            let want = f64::from(half::bf16::from_bits(p).to_f32());
+            let got = bf16_to_f64(p);
+            assert!(
+                (want.is_nan() && got.is_nan()) || want.to_bits() == got.to_bits(),
+                "decode {p:#06x}: oracle {got}, half {want}"
+            );
+        }
+        let mut checked = 0usize;
+        for x in half_encoder_probes(bf16_to_f64, 0x7F80) {
+            let want = half::bf16::from_f32(x).to_bits();
+            let got = f32_to_bf16_bits(x);
+            if x.is_nan() {
+                assert!(bf16_to_f64(got).is_nan(), "encode NaN {x:?} gave {got:#06x}");
+            } else {
+                assert_eq!(got, want, "encode {x:e} ({:#010x})", x.to_bits());
+            }
+            checked += 1;
+        }
+        assert!(checked > 1_000_000, "only {checked} probes");
+    }
+
     // (`probe_classes_add_bit_exact_zeros` retired here — signed-zero add is now
     // referenced against kiss-ref in `kiss_ref_diff::tests::signed_zero_add_through_kiss_ref`.)
 
