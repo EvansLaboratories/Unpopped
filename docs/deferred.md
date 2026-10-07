@@ -94,8 +94,9 @@ rather than a cleanup commit.
 >
 > **Split 2026-10-07 (PM ruling):** only the **f16/bf16 spelling seam** remains
 > here. It no longer needs a coordinated regen. It waits on baracuda's planned
-> closed-set local shadow of the four functions it moves (not landed at baracuda
-> `20139e5`), after which it moves no baracuda byte. The temp-binding pass and
+> closed-set local shadow of every cfamily function it calls that reaches a
+> moving leaf: **eleven, not four** (see the corrected surface table below; the
+> shadow is baracuda#154, open at `616ec8b`), after which it moves no baracuda byte. The temp-binding pass and
 > the Slang complex prelude moved to Section D. **Owner: the portfolio PM** (accepts the regen; this
 > workspace drafts and implements it). **Enforced, not remembered** —
 > `crates/unpopped-conformance/tests/golden_regen_checkpoint.rs` goes red on that
@@ -224,15 +225,33 @@ all.** It moves purely by delegation, so *"which functions mention F16"* returns
 three and the true answer is four. **The surface is defined by the call graph,
 not by the token.**
 
+⚠️ **CORRECTED 2026-10-07: the table above is incomplete, and the list below
+was wrong.** Recomputed from the call graph at `facf5b1` while gating baracuda#154,
+which had been built to this table. **The surface is eleven functions:**
+
+| fn | how it reaches a moving leaf |
+|---|---|
+| the four above | as stated |
+| `half_load_intrinsic` / `half_store_intrinsic` | **they are the leaves** |
+| `narrow_load_fn` / `narrow_store_fn` | delegate to the two leaves for every non-FP8 dtype |
+| **`param_ctype`** | returns `scalar_ctype(plan.dtype)`: every kernel's parameter type |
+| **`out_ctype_of`** | `scalar_ctype(d)` whenever the output dtype differs from the plan's |
+| **`store_expr_of`** | the mixed-dtype branch ends in `cast_scalar` |
+
+**What was wrong:** the old list said `store_expr_of` "does not move". Only its
+same-dtype branch (the explicit FP8 match) holds still. Its mixed-dtype branch
+calls `cast_scalar`. And `param_ctype` and `out_ctype_of` were never in the
+table at all. The old note that a consumer "never calls" the four leaves was
+also false: the shadowed wrappers called them. **The same lesson as `cast_scalar`,
+one level further out:** the first table walked the call graph down from
+`scalar_ctype` but never up from it. Re-derive it with
+`git grep -w -E '<the 8 leaf and wrapper names>' -- crates/unpopped/src`, then
+take the enclosing function of each hit, and repeat until no new name appears.
+
 **DOES NOT move:**
 
-- `store_expr_of` — its match routes **only the FP8 pair** to `demote_store_f32`,
-  written as an explicit match precisely so it does not inherit whatever
-  `narrow_store_fn` happens to do. That deliberate choice is what keeps it still.
-- `dtype_tag` — spells the NAME (`"f16"`), not the storage.
-- `half_load_intrinsic` / `half_store_intrinsic` / `narrow_load_fn` /
-  `narrow_store_fn` — the leaves that actually change, but a consumer shadowing
-  the four wrappers above never calls them.
+- `dtype_tag`: it spells the NAME (`"f16"`), not the storage.
+- `param_args`: it takes the ctype as a string argument.
 
 ⚠️ **Caveat on the usage counts**, which matter to a consumer sizing the work:
 they come from `baracuda-cuda-emit-0.0.1-alpha.79`, **which pins
@@ -360,8 +379,8 @@ to re-grep fuel for it. **They will get `1` and read it as a call site.** A
 recorded zero with no explanation loses to a fresh grep returning one.
 
 **Baracuda's plan, recorded so the row says what actually happens:** a
-consumer-side local shadow, ~10 lines, byte-identical at adoption, extended to
-all four functions above — since `promote_load_f32`/`demote_store_f32` are the
+consumer-side local shadow, byte-identical at adoption, extended to all four
+functions above (**since corrected to eleven**: see the corrected surface table) — since `promote_load_f32`/`demote_store_f32` are the
 op-emission half rather than just the ctype string.
 
 ⚠️ **Their design note is the part worth keeping: the four shadows must form a
