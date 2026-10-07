@@ -1176,7 +1176,7 @@ int main(void) {{
         out[i] = 0xAAAAu;
     }}
     {}(in0, in1, out, {n});
-    for (i = 0; i < {n}; ++i) printf(\"%u\n\", (unsigned)out[i]);
+    for (i = 0; i < {n}; ++i) printf(\"%u\\n\", (unsigned)out[i]);
     return 0;
 }}
 ",
@@ -1318,6 +1318,108 @@ fn half_kernels_round_trip_against_the_oracles_independent_codec() {
                 );
             }
         }
+    }
+}
+
+/// **A narrow-float predicate stores the right 0/1 mask.**
+///
+/// A `Cmp*` body over a narrow float (FP8, and the halves since 0.15.0) is
+/// computed at `float`: the leaves decode, and the root is the f32 `0.0`/`1.0`.
+/// The U8 mask store must convert THAT. Converting it as if it were still in the
+/// storage dtype — `cast_scalar(plan.dtype, U8, root)`, which decodes first —
+/// feeds `1.0f` through the byte/half decoder as the pattern `1`, a tiny
+/// subnormal, and stores `0` for every true lane.
+#[test]
+fn a_narrow_float_predicate_stores_the_right_mask() {
+    let Some(cc) = find_compiler() else {
+        eprintln!("SKIP a_narrow_float_predicate_stores_the_right_mask: no host C compiler.");
+        return;
+    };
+    let dir: PathBuf = std::env::temp_dir().join("unpopped-e2e");
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    // (tag, dtype, C carrier, pattern count, the pattern of 1.0)
+    for (tag, dt, carrier, pats, one) in [
+        ("e5m2", ElementKind::Fp8E5M2, "unsigned char", 256usize, 0x3Cu16),
+        ("f16", ElementKind::F16, "unsigned short", 65536, 0x3C00),
+        ("bf16", ElementKind::Bf16, "unsigned short", 65536, 0x3F80),
+    ] {
+        let n = pats as i64;
+        let op = OpDef::elementwise_pred(
+            "gt",
+            2,
+            &[dt],
+            input(0).binary(BinaryOp::CmpGt, input(1)),
+        );
+        let d_in = OperandDesc::new(1, &[n], &[1], dt, 1);
+        let d_out = OperandDesc::new(1, &[n], &[1], ElementKind::U8, 1);
+        let operands = vec![d_in, d_in, d_out];
+        let key = structure_key(OpCategory::BinaryElementwise, &operands, ArchSku::Sm89);
+        let kernel = generate(&op, &key, &CpuC);
+
+        let src = format!(
+            "{}
+#include <stdio.h>
+
+static {carrier} in0[{n}], in1[{n}];
+static unsigned char out[{n}];
+
+int main(void) {{
+    long long i;
+    for (i = 0; i < {n}; ++i) {{ in0[i] = ({carrier})i; in1[i] = ({carrier}){one}u; out[i] = 0xAAu; }}
+    {}(in0, in1, out, {n});
+    for (i = 0; i < {n}; ++i) printf(\"%u\\n\", (unsigned)out[i]);
+    return 0;
+}}
+",
+            kernel.source, kernel.name
+        );
+        let c_file = dir.join(format!("pred_{tag}.c"));
+        let exe = dir.join(format!("pred_{tag}.exe"));
+        std::fs::write(&c_file, &src).expect("write");
+        cc.compile(&c_file, &exe, false)
+            .unwrap_or_else(|e| panic!("{tag}: compile: {e}\n{}", kernel.source));
+        let out = std::process::Command::new(&exe).output().expect("run");
+        assert!(out.status.success(), "{tag}: exited {:?}", out.status);
+        let actual: Vec<u8> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.trim().parse::<u8>().expect("non-integer"))
+            .collect();
+        assert_eq!(actual.len(), pats, "{tag}: printed {} lines", actual.len());
+
+        let a: Vec<u16> = (0..pats).map(|i| i as u16).collect();
+        let b: Vec<u16> = vec![one; pats];
+        let buf = |v: &[u16]| {
+            let bytes: Vec<u8> = if pats == 256 {
+                v.iter().map(|x| *x as u8).collect()
+            } else {
+                v.iter().flat_map(|x| x.to_le_bytes()).collect()
+            };
+            TypedBuffer::from_packed_bytes(dt, &[n], &bytes)
+        };
+        let plan = build_plan(&op, &key);
+        let want = evaluate(&plan, &operands, &[buf(&a), buf(&b)], &[])
+            .into_iter()
+            .next()
+            .unwrap()
+            .to_f64_vec();
+        let trues = want.iter().filter(|w| **w == 1.0).count();
+        assert!(trues > pats / 8, "{tag}: the corpus must have true lanes, got {trues}");
+        let wrong: Vec<(usize, u8, f64)> = actual
+            .iter()
+            .zip(&want)
+            .enumerate()
+            .filter(|(_, (g, w))| f64::from(**g) != **w)
+            .map(|(i, (g, w))| (i, *g, *w))
+            .take(6)
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "{tag}: the mask disagrees with the oracle; first (pattern, kernel, oracle): \
+             {wrong:?}\n{}",
+            kernel.source
+        );
     }
 }
 
