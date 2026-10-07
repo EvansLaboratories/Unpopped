@@ -64,40 +64,56 @@ fn row_broadcast(dt: ElementKind) -> OperandDesc {
 
 fn cases() -> Vec<Case> {
     let mut v = Vec::new();
-
     for dt in [F32, F16] {
-        // Residual add.
-        v.push(Case {
-            name: if dt == F32 {
-                "residual_add_f32"
-            } else {
-                "residual_add_f16"
-            },
-            op: OpDef::elementwise("residual_add", 2, &[dt], input(0) + input(1)),
-            key: Box::new(move |tg| {
-                let a = contig1(dt);
-                structure_key(OpCategory::BinaryElementwise, &[a, a, a], tg)
-            }),
-            schedule: |s| matches!(s, Schedule::Vectorized { .. } | Schedule::Scalar),
-        });
-        // SwiGLU: silu(gate) * up.
-        v.push(Case {
-            name: if dt == F32 {
-                "swiglu_f32"
-            } else {
-                "swiglu_f16"
-            },
-            op: OpDef::elementwise("swiglu", 2, &[dt], input(0).silu() * input(1)),
-            key: Box::new(move |tg| {
-                let a = contig1(dt);
-                structure_key(OpCategory::BinaryElementwise, &[a, a, a], tg)
-            }),
-            schedule: |s| matches!(s, Schedule::Vectorized { .. } | Schedule::Scalar),
-        });
+        v.push(residual_add(dt));
+        v.push(swiglu(dt));
     }
+    v.extend([rms_norm(), softmax(), rope_pair(), embedding(), matmul()]);
+    v
+}
 
-    // RMSNorm (also Qwen3's per-head q/k norm): x * w / sqrt(mean(x²) + eps).
-    v.push(Case {
+fn binary_elementwise_key(dt: ElementKind) -> Box<dyn Fn(TargetId) -> StructureKey> {
+    Box::new(move |tg| {
+        let a = contig1(dt);
+        structure_key(OpCategory::BinaryElementwise, &[a, a, a], tg)
+    })
+}
+
+fn vector_or_scalar(s: &Schedule) -> bool {
+    matches!(s, Schedule::Vectorized { .. } | Schedule::Scalar)
+}
+
+/// Residual add.
+fn residual_add(dt: ElementKind) -> Case {
+    Case {
+        name: if dt == F32 {
+            "residual_add_f32"
+        } else {
+            "residual_add_f16"
+        },
+        op: OpDef::elementwise("residual_add", 2, &[dt], input(0) + input(1)),
+        key: binary_elementwise_key(dt),
+        schedule: vector_or_scalar,
+    }
+}
+
+/// SwiGLU: silu(gate) * up.
+fn swiglu(dt: ElementKind) -> Case {
+    Case {
+        name: if dt == F32 {
+            "swiglu_f32"
+        } else {
+            "swiglu_f16"
+        },
+        op: OpDef::elementwise("swiglu", 2, &[dt], input(0).silu() * input(1)),
+        key: binary_elementwise_key(dt),
+        schedule: vector_or_scalar,
+    }
+}
+
+/// RMSNorm (also Qwen3's per-head q/k norm): x * w / sqrt(mean(x²) + eps).
+fn rms_norm() -> Case {
+    Case {
         name: "rms_norm_f32",
         op: OpDef::row_reduce(
             "rms_norm",
@@ -117,10 +133,12 @@ fn cases() -> Vec<Case> {
             )
         }),
         schedule: |s| matches!(s, Schedule::RowReduce { .. }),
-    });
+    }
+}
 
-    // Softmax: exp(x - max) / sum(exp(x - max)).
-    v.push(Case {
+/// Softmax: exp(x - max) / sum(exp(x - max)).
+fn softmax() -> Case {
+    Case {
         name: "softmax_f32",
         op: OpDef::row_reduce(
             "softmax",
@@ -140,11 +158,13 @@ fn cases() -> Vec<Case> {
         ),
         key: Box::new(|tg| structure_key(OpCategory::Softmax, &[stream(F32), stream(F32)], tg)),
         schedule: |s| matches!(s, Schedule::RowReduce { .. }),
-    });
+    }
+}
 
-    // RoPE, one lane of the rotate-half pair: x*cos + partner*sin, the partner
-    // read through a runtime base offset (baracuda's rope pair kernels).
-    v.push(Case {
+/// RoPE, one lane of the rotate-half pair: x*cos + partner*sin, the partner
+/// read through a runtime base offset (baracuda's rope pair kernels).
+fn rope_pair() -> Case {
+    Case {
         name: "rope_pair_f32",
         op: OpDef::elementwise(
             "rope_pair",
@@ -166,10 +186,12 @@ fn cases() -> Vec<Case> {
             structure_key(OpCategory::BinaryElementwise, &[a, a, a, a, a], tg)
         }),
         schedule: |_| true,
-    });
+    }
+}
 
-    // Token embedding: a gather on axis 0.
-    v.push(Case {
+/// Token embedding: a gather on axis 0.
+fn embedding() -> Case {
+    Case {
         name: "embedding_f32",
         op: OpDef::embedding("embedding", &[F32], ElementKind::I32),
         key: Box::new(|tg| {
@@ -179,10 +201,12 @@ fn cases() -> Vec<Case> {
             structure_key(OpCategory::BinaryElementwise, &[data, idx, out], tg)
         }),
         schedule: |s| matches!(s, Schedule::Strided),
-    });
+    }
+}
 
-    // The projections: x @ Wᵀ (weights stored [N, K]).
-    v.push(Case {
+/// The projections: x @ Wᵀ (weights stored [N, K]).
+fn matmul() -> Case {
+    Case {
         name: "matmul_f32",
         op: OpDef::contraction("matmul", &[F32], ContractionAxes::matmul(), reduced(0))
             .with_views(vec![View::Identity, View::Permute { perm: vec![1, 0] }]),
@@ -193,9 +217,7 @@ fn cases() -> Vec<Case> {
             structure_key(OpCategory::Gemm, &[lhs, rhs, out], tg)
         }),
         schedule: |s| matches!(s, Schedule::Contraction),
-    });
-
-    v
+    }
 }
 
 /// The headline: every case plans and generates for sm_61, on the same
