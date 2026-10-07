@@ -3,10 +3,11 @@
 //!
 //! # The failure mode this exists to prevent
 //!
-//! `docs/deferred.md` Section B holds three items — the f16/bf16 spelling seam,
-//! the temp-binding pass, and a Slang complex prelude — each correctly deferred
-//! because it rewrites emitted text and would break byte-identity goldens
-//! including baracuda's physical CUDA corpus.
+//! `docs/deferred.md` Section B now holds one item, the f16/bf16 spelling seam.
+//! It is correctly deferred because it rewrites emitted text and, until
+//! baracuda shadows the four functions it moves, would break baracuda's physical
+//! CUDA corpus. It used to hold three items. The temp-binding pass and a Slang
+//! complex prelude moved to Section D on 2026-10-07 (see the constant below).
 //!
 //! **They were gated on "a coordinated golden regen" with no owner and no date.**
 //! That is not a deferral. It is a permanent hold wearing a deferral's clothes:
@@ -45,7 +46,28 @@
 /// device re-verification on the GPU rig. CireSnave is working his own decision
 /// backlog soon, and this should get a real look, not a rushed accept.
 /// **Agreed by: the portfolio PM, 2026-10-01.**
-const REGEN_CHECKPOINT: (u32, u32, u32) = (2026, 10, 22);
+///
+/// **Moved 2026-10-22 → 2026-11-05, and the section split, 2026-10-07.** Why,
+/// measured at unpopped `6ff089d` and baracuda `20139e5`:
+///
+/// * The **f16/bf16 seam** no longer needs a coordinated regen. It waits on
+///   baracuda's own planned closed-set local shadow of `scalar_ctype`,
+///   `cast_scalar`, `promote_load_f32` and `demote_store_f32` (~10 lines,
+///   byte-identical at adoption). That has not landed: baracuda's `cuda.rs`
+///   imports all four from `unpopped::cfamily`, with no local definition. Once
+///   it lands, this change moves no baracuda byte and needs no GPU rig. The PM
+///   routed the shadow to baracuda as a B1-adjacent item to land before this date.
+/// * The **temp-binding pass** moved to Section D, with the trigger "before any
+///   multiply-referencing op is extended to 8/16-bit". It is the only item that
+///   would still move baracuda's bytes (shared `lower_node`), and its hazard is
+///   unreachable while the plan gate rejects those ops at integer dtypes.
+/// * The **Slang complex prelude** moved to Section D. `unpopped-slang` emits no
+///   complex kernel (0 hits for `c64`/`c128`/`complex` in its source; control:
+///   19 for `F16`), so it rewrites no existing byte. It is feature work.
+///
+/// **Agreed by: the portfolio PM, 2026-10-07.** Delete this file when the
+/// f16/bf16 change ships.
+const REGEN_CHECKPOINT: (u32, u32, u32) = (2026, 11, 5);
 
 /// Days since the Unix epoch for a civil date (proleptic Gregorian).
 ///
@@ -91,13 +113,12 @@ fn section_b_comes_back_to_the_pm_on_its_checkpoint_date() {
         today < checkpoint,
         "SECTION B'S GOLDEN REGEN IS DUE ({cy}-{cm:02}-{cd:02}; today is \
          {ty}-{tm:02}-{td:02}).\n\n\
-         Three items in docs/deferred.md Section B are held on a coordinated \
-         golden regen: the f16/bf16 spelling seam, the temp-binding pass, and a \
-         Slang complex prelude. Each rewrites emitted text and breaks \
-         byte-identity goldens including baracuda's CUDA corpus, so they ride \
-         one regen rather than three cleanup commits.\n\n\
+         docs/deferred.md Section B holds the f16/bf16 spelling seam. It \
+         rewrites emitted text, and it waits on baracuda's closed-set local \
+         shadow of scalar_ctype/cast_scalar/promote_load_f32/demote_store_f32, \
+         after which it moves no baracuda byte.\n\n\
          This is a DECISION POINT, not a bug. Either:\n  \
-         (1) schedule the regen, do the three together, and delete this file; or\n  \
+         (1) ship the f16/bf16 change (baracuda's shadow first) and delete this file; or\n  \
          (2) move REGEN_CHECKPOINT, in a commit that says why the window slipped \
          and who agreed.\n\n\
          NOT waiting on a decision — the shape is known. The override-mechanism \

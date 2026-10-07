@@ -88,8 +88,15 @@ rather than a cleanup commit.
 > deferral's clothes.* An item held on *"when the regen happens"* never fires if
 > the regen never happens.
 >
-> **Checkpoint: 2026-10-22** (moved from 2026-10-01 on the day it fired; the
-> reason and who agreed are in the test's doc comment and commit). **Owner: the portfolio PM** (accepts the regen; this
+> **Checkpoint: 2026-11-05** (moved from 2026-10-01 on the day it fired, then
+> from 2026-10-22 on 2026-10-07; the reasons and who agreed are in the test's doc
+> comment and commits).
+>
+> **Split 2026-10-07 (PM ruling):** only the **f16/bf16 spelling seam** remains
+> here. It no longer needs a coordinated regen. It waits on baracuda's planned
+> closed-set local shadow of the four functions it moves (not landed at baracuda
+> `20139e5`), after which it moves no baracuda byte. The temp-binding pass and
+> the Slang complex prelude moved to Section D. **Owner: the portfolio PM** (accepts the regen; this
 > workspace drafts and implements it). **Enforced, not remembered** —
 > `crates/unpopped-conformance/tests/golden_regen_checkpoint.rs` goes red on that
 > date and says what to do. Proven to fire by moving the date into the past.
@@ -261,7 +268,8 @@ shape with a rewrite cost.**
 **Slang complex is independent of all of it:** `unpopped-slang` names `Complex`
 nowhere, so it needs a prelude whether or not any override mechanism exists.
 
-**All three rows survive. The checkpoint is more justified, not less.**
+**All three rows survived that question (2026-09-02).** Two have since left this
+section (2026-10-07, see the box at the top): only the f16/bf16 row is still here.
 
 ⚠️ **THESE THREE ARE ONE MECHANISM, not three items.** Found 2026-09-02 by
 auditing this file's own row count, and it changes what the regen has to be.
@@ -391,22 +399,8 @@ Forcing that fix created the pattern that later answered this question.)*
   `cast_scalar` decline — it drops into the arithmetic arm and emits `(float)v`
   on a `__half`, trading a visible vendor leak for a silent numerical bug. The
   neutral core must *refuse*, never fall through.
-- **The temp-binding pass.** `Sqr`/`Relu` reference their operand twice,
-  `Gelu`/`Silu`/`Sign` three times, `Max`/`Min` four.
-  **It is only safe because of the op set, not because hoisting is safe.** All of
-  those are float-only (the plan gate rejects every `UnaryOp`, the float binary
-  fns and `Cmp*` at integer dtypes), and a float temp round-trips exactly. At
-  sub-`int` widths hoisting *changes results* — C promotes `char`/`short` to
-  `int`, so an inlined compound operand is un-truncated while a hoisted one is
-  truncated by its temp: `(in0+in1)>>in2` at u8 is `150` inlined, `22` hoisted.
-  Anyone extending these ops to 8/16-bit must settle truncation **first**.
-- **A Slang complex prelude (`c64`/`c128`).** CpuC implements complex as an
-  emitted **C prelude** — `typedef struct { float re, im; } unpopped_c64;` plus a
-  library of `unpopped_c64_add`/`_sub`/… statics. Slang needs a parallel prelude
-  in its own syntax. **That is a new emitted-text surface, so it changes bytes
-  for every complex kernel and belongs to the regen event rather than to dtype
-  coverage.** Filed here on the PM's ruling 2026-08-27, bundled with the
-  f16/bf16 seam so one dated regen discharges three held items rather than two.
+
+*(Moved to Section D on 2026-10-07: the temp-binding pass and the Slang complex prelude. See the note at the top of this section.)*
 
 ---
 
@@ -655,6 +649,31 @@ Forcing that fix created the pattern that later answered this question.)*
 ---
 
 ## D. Ordinary engineering — unblocked, just not done
+
+- **Moved here from Section B, 2026-10-07 (PM ruling).** Neither needs the regen:
+  - **The temp-binding pass.** `Sqr`/`Relu` reference their operand twice,
+    `Gelu`/`Silu`/`Sign` three times, `Max`/`Min` four.
+    **It is only safe because of the op set, not because hoisting is safe.** All of
+    those are float-only (the plan gate rejects every `UnaryOp`, the float binary
+    fns and `Cmp*` at integer dtypes), and a float temp round-trips exactly. At
+    sub-`int` widths hoisting *changes results* — C promotes `char`/`short` to
+    `int`, so an inlined compound operand is un-truncated while a hoisted one is
+    truncated by its temp: `(in0+in1)>>in2` at u8 is `150` inlined, `22` hoisted.
+    Anyone extending these ops to 8/16-bit must settle truncation **first**.
+
+    **Trigger:** before any multiply-referencing op (`Sqr`, `Relu`, `Gelu`, `Silu`,
+    `Sign`, `Max`, `Min`) is extended to 8- or 16-bit dtypes. It is the only one of
+    the old three Section B items that would still move baracuda's bytes (it lives
+    in the shared `lower_node`), and until then its hazard is unreachable.
+  - **A Slang complex prelude (`c64`/`c128`).** CpuC implements complex as an
+    emitted **C prelude** — `typedef struct { float re, im; } unpopped_c64;` plus a
+    library of `unpopped_c64_add`/`_sub`/… statics. Slang needs a parallel prelude
+    in its own syntax. It is a new emitted-text surface, **but no existing byte
+    moves:** `unpopped-slang` emits no complex kernel today (0 hits for
+    `c64`/`c128`/`complex` in its source at `6ff089d`; control: 19 for `F16`). It
+    was filed under the regen on the PM's ruling of 2026-08-27, on the assumption
+    that it rewrote goldens, and moved here when that measured false. It is feature
+    work with no current consumer.
 
 - **The catalog / server mode — RETIRED, not deferred.** It had no consumer.
   Measured 2026-08-14: [`catalog.md`](catalog.md) never named a requesting party
