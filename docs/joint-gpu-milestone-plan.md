@@ -177,7 +177,9 @@ Compare **teacher-forced**: feed both runs the reference's tokens, so one near-t
 **Amended 2026-10-07 (bounds unchanged): the CPU rerun cannot see a difference for a quantized model.** fuel's quantized matmul computes every output as one serial dot over K (see M0, gap 1), so a CPU-vs-CPU rerun at any thread count gives a spread of exactly 0, and "bound ≥ 4× spread" passes for every bound. The first run that really changes the reduction order is the GPU, because MMVQ splits K across a warp. So:
 
 - **M1 records the ratio `max|Δ| / bound`** at every step, and reports its maximum over all steps and prompts, next to pass/fail.
-- **A maximum above 0.25 means the bound is too tight to be stable.** This is the same 4× rule, applied to the first measured order change. The bound is then re-measured and the PR says so, as before.
+- **At or below 0.25, the bound has the required 4× margin. Above 0.25, it is too tight.** This is the same 4× rule, applied to the first measured order change.
+- **Ratio above 0.25: investigate the kernel, or loosen the bound, never silently.** A loosened bound goes into this section with the measured ratio and the reason (PM ruling on #47, 2026-10-07).
+- **The ratio is an upper-bound reading, and it is labelled that way wherever it is quoted.** It measures the device under test against the reference, not independent noise, so a kernel error inflates it just as rounding does. Fuel's first M1 run prints only the global `max|Δ|`. It reports `global max|Δ| / (smallest per-step bound)`, which is an upper bound on the per-step maximum, and says so (PM ruling on #47, 2026-10-07).
 - **Optional CPU probe:** scalar against SIMD `vec_dot`, if fuel-quantized can force the scalar path. That is a real CPU reduction-order change.
 - **The "too loose" side is unchanged:** the perturbed-logit control must still go red.
 
