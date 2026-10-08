@@ -15,7 +15,7 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## Unreleased — `0.14.4`
+## 2026-10-08 — everything at `0.14.4`
 
 ### `HalfArith`: the first plan decision that differs by sm (additive)
 
@@ -64,7 +64,11 @@ merged under it). The change set is #37–#51, except #49.
 ⚠️ **What reached crates.io, read from its API on 2026-10-03:** `0.11.0`
 (2026-09-11), `0.12.0` (2026-10-01), `0.13.0` (2026-10-01), `0.14.0` (2026-10-02), `0.14.1`
 (2026-10-03), for all four published crates. `0.14.3` (2026-10-03) was confirmed
-from the same API on 2026-10-07; `0.14.2` was never published. **`0.11.1`–`0.11.6` existed only in the workspace and were
+from the same API on 2026-10-07; `0.14.2` was never published. `0.14.4` was
+published 2026-10-08 (`unpopped-vocab` 21:32:11Z, `unpopped` 21:33:14Z,
+`unpopped-cpu-c` 21:33:43Z, `unpopped-slang` 21:33:59Z, all `yanked=false`,
+read back from the crates.io API); `unpopped-conformance` is `publish = false`
+and stays absent. **`0.11.1`–`0.11.6` existed only in the workspace and were
 never published.** A consumer went straight from `0.11.0` to `0.12.0`, so
 everything those intermediate numbers carried is listed under `0.12.0`.
 

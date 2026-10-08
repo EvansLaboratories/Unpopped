@@ -27,17 +27,18 @@ them live inside the core.
 unpopped` builds with no emitter in its dependency graph. Cross-emitter evidence
 lives in `unpopped-conformance` so no emitter dev-depends on a sibling.
 
-The two reference emitters are **not yet published**, deliberately. Publishing
-them against a `Backend` trait known to be moving would hand a third party two
-breaking changes in a month, and *unreachable is a better first impression than
-unstable*. The trigger is the two `Backend` gaps above closing — see
+The two reference emitters are **published** — `unpopped-cpu-c` and
+`unpopped-slang` have been on crates.io since 0.1.0 (2026-08-19) and are at
+`0.14.4` (2026-10-08). They were held back once on the argument that a
+`Backend` trait known to be moving would hand a third party breaking changes;
+the hold was lifted four days later and the history is in
 [`docs/deferred.md`](docs/deferred.md) §A.
 
 | target | crate | owner |
 |---|---|---|
 | CUDA | [`baracuda-cuda-emit`](https://github.com/ciresnave/baracuda) | Baracuda |
-| CPU (C99) | `unpopped-cpu-c` (in-tree, unpublished) | Unpopped |
-| Slang | `unpopped-slang` (in-tree, unpublished) | Unpopped |
+| CPU (C99) | `unpopped-cpu-c` (in-tree, published) | Unpopped |
+| Slang | `unpopped-slang` (in-tree, published) | Unpopped |
 
 A project that originates an emitter may keep owning it — Baracuda's CUDA
 emitter is theirs, and stays theirs. The umbrella exists so a third party
