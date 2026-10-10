@@ -15,6 +15,36 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## Unreleased — `0.15.0` (breaking)
+
+### f16/bf16 take FP8's shape: a portable carrier and an emitted codec
+
+The last vendor spelling in the neutral `cfamily` module is gone. Ships only
+after `baracuda-cuda-emit` 0.14.4, whose local shadow (baracuda#154) keeps every
+CUDA byte it emits unchanged.
+
+- **`cfamily::scalar_ctype(F16 | Bf16)` returns `"unsigned short"`**, the
+  storage carrier, instead of `"__half"` / `"__nv_bfloat16"`.
+- **New `cfamily::half_helpers(ElementKind)`**: portable-C99 f16/bf16 codecs
+  (`unpopped_f16_load`/`_store`, `unpopped_bf16_load`/`_store`), emitted with
+  the kernel. Round to nearest, ties to even; NaN encodes as the canonical
+  quiet NaN. Checked bit for bit through a real C compiler against the oracle's
+  codec on all 65536 patterns and on 524288 products that need rounding; the
+  oracle's codec is itself checked against the `half` crate.
+- **`narrow_load_fn` / `narrow_store_fn` name the codec for the halves**, so
+  `promote_load_f32`, `demote_store_f32` and `cast_scalar` emit
+  `unpopped_f16_load(x)` where they emitted `__half2float(x)`.
+- **Removed: `cfamily::half_load_intrinsic` and `half_store_intrinsic`.**
+- **`store_expr_of` encodes a uniform half store once, at the store**, as for
+  FP8: a half body root is now a plain f32 expression.
+- **`unpopped-cpu-c` computes f16 and bf16.**
+- **Fix: a narrow-float predicate stored a wrong mask.** The U8 store of a
+  `Cmp*` body over FP8 decoded the f32 `0.0`/`1.0` root as if it were a storage
+  pattern, so every true lane stored `0`. Live in `unpopped-cpu-c` since FP8
+  support; `store_expr_of` now converts from what the root is.
+
+---
+
 ## Unreleased — `0.14.4`
 
 ### `HalfArith`: the first plan decision that differs by sm (additive)

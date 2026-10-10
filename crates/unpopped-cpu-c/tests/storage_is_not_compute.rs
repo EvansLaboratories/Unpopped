@@ -63,43 +63,26 @@ fn target() -> TargetId {
     ArchSku::Sm89.into()
 }
 
-/// **The two facts disagree for real dtypes**, which is what makes the
-/// distinction load-bearing rather than pedantic.
+/// Carrier plus an emitted codec is compute support: the dtypes CpuC computes
+/// on although C has no native type for them.
 ///
-/// If every dtype with a storage spelling were also computable, the old
-/// predicate would have been fine and this whole file would be ceremony. It is
-/// not: `f16` and `bf16` have carriers (`__half`, `__nv_bfloat16`) and CpuC
-/// cannot compute them.
-#[test]
-fn a_dtype_can_have_a_storage_spelling_and_no_compute_support() {
-    for dt in [ElementKind::F16, ElementKind::Bf16] {
-        assert!(
-            scalar_ctype(dt).is_some(),
-            "{dt:?} must HAVE a storage spelling, or this test proves nothing"
-        );
-        assert!(
-            !CpuC.supports_dtype(dt, target()),
-            "{dt:?} has a carrier and no CpuC codec — storage must not imply compute"
-        );
-    }
-}
-
-/// The converse control: the dtypes where carrier-plus-codec *does* mean compute
-/// support are admitted, so the allowlist is not simply refusing everything hard.
+/// The halves joined in 0.15.0. Until then they were this file's witness that a
+/// storage spelling does not imply compute support: they had a carrier
+/// (`__half`, `__nv_bfloat16`) and no CpuC codec. Now they spell `unsigned short`
+/// and carry `cfamily::half_helpers`, so they are admitted for the same reason
+/// FP8 is.
 #[test]
 fn a_carrier_plus_an_emitted_codec_is_compute_support() {
-    for dt in [
-        ElementKind::Fp8E4M3FN,
-        ElementKind::Fp8E5M2,
-        ElementKind::I4,
-        ElementKind::U4,
-        ElementKind::B1,
+    for (dt, carrier) in [
+        (ElementKind::Fp8E4M3FN, "unsigned char"),
+        (ElementKind::Fp8E5M2, "unsigned char"),
+        (ElementKind::I4, "unsigned char"),
+        (ElementKind::U4, "unsigned char"),
+        (ElementKind::B1, "unsigned char"),
+        (ElementKind::F16, "unsigned short"),
+        (ElementKind::Bf16, "unsigned short"),
     ] {
-        assert_eq!(
-            scalar_ctype(dt),
-            Some("unsigned char"),
-            "{dt:?} is carried in a byte"
-        );
+        assert_eq!(scalar_ctype(dt), Some(carrier), "{dt:?}'s carrier");
         assert!(
             CpuC.supports_dtype(dt, target()),
             "{dt:?} has a carrier AND an emitted codec, so CpuC computes it"
@@ -124,15 +107,13 @@ fn the_mx_scales_are_declined_by_design_not_for_want_of_a_codec() {
 
 /// **The admission set is pinned exactly**, so a widening is loud.
 ///
-/// This does NOT detect a revert to `scalar_ctype(dtype).is_some()` — measured,
-/// that mutation passes, because the two predicates agree on every dtype today
-/// (see the module header). What it detects is the set *changing*: a dtype added
-/// to the allowlist without its codec, or one silently dropped.
-///
-/// The `carrier_only` assertion is the one with teeth. It says the
-/// carrier-but-no-compute set is exactly the halves — so if a future dtype gains
-/// a `scalar_ctype` spelling and someone waves it into the allowlist, this
-/// fails and asks where the codec is.
+/// Since 0.15.0 the carrier set and the compute set are EQUAL: the halves were
+/// the only dtypes with a carrier and no CpuC codec, and they now have one. That
+/// does not make `supports_dtype` a storage check. It is still an exhaustive
+/// allowlist, and that compile-time property is what keeps a new carrier from
+/// being admitted silently (see the module header: no runtime test can separate
+/// the two predicates). What this test adds is the set itself, written out, so a
+/// dtype added to the allowlist without its codec, or one dropped, fails here.
 #[test]
 fn the_admission_set_is_pinned_so_a_widening_is_loud() {
     let has_carrier: Vec<ElementKind> = ElementKind::ALL
@@ -146,21 +127,41 @@ fn the_admission_set_is_pinned_so_a_widening_is_loud() {
         .filter(|&d| CpuC.supports_dtype(d, target()))
         .collect();
 
-    assert!(!has_carrier.is_empty() && !computes.is_empty(), "harness");
-    assert_ne!(
-        has_carrier, computes,
-        "if these sets were equal, `supports_dtype` would be a storage check \
-         wearing a compute name — which is exactly what it used to be"
-    );
-    // Specifically: the difference is the two halves.
+    let mut want = vec![
+        ElementKind::F32,
+        ElementKind::F32Strict,
+        ElementKind::F64,
+        ElementKind::F16,
+        ElementKind::Bf16,
+        ElementKind::I8,
+        ElementKind::U8,
+        ElementKind::I16,
+        ElementKind::U16,
+        ElementKind::I32,
+        ElementKind::U32,
+        ElementKind::I64,
+        ElementKind::U64,
+        ElementKind::Bool,
+        ElementKind::Fp8E4M3FN,
+        ElementKind::Fp8E5M2,
+        ElementKind::I4,
+        ElementKind::U4,
+        ElementKind::B1,
+        ElementKind::Complex64,
+        ElementKind::Complex128,
+    ];
+    let mut got = computes.clone();
+    want.sort_by_key(|d| format!("{d:?}"));
+    got.sort_by_key(|d| format!("{d:?}"));
+    assert_eq!(got, want, "CpuC's admission set changed");
+
     let carrier_only: Vec<ElementKind> = has_carrier
         .iter()
         .copied()
         .filter(|d| !computes.contains(d))
         .collect();
-    assert_eq!(
-        carrier_only,
-        vec![ElementKind::F16, ElementKind::Bf16],
-        "the carrier-but-no-compute set should be exactly the halves today"
+    assert!(
+        carrier_only.is_empty(),
+        "a dtype has a carrier and no CpuC compute: {carrier_only:?}. Either write its          codec and admit it, or record here why it is storage-only"
     );
 }

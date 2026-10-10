@@ -918,19 +918,14 @@ int main(void) {{
 /// producing the same bytes, which is what a differential is supposed to mean and
 /// what a shared decode table would quietly destroy.
 ///
-/// # Why FP8 got a lowering before f16/bf16, which have been "ready" longer
+/// # Why FP8 got a lowering before f16/bf16
 ///
-/// The f16/bf16 arms spell `__half2float` — a CUDA name emitted from the module
-/// that calls itself neutral, tripwired in
-/// `unpopped/tests/neutral_spelling.rs`. Fixing
-/// that means replacing a vendor intrinsic with an emitted software codec, which
-/// **rewrites every existing f16 golden including Baracuda's physical CUDA
-/// corpus**, so it is gated on a coordinated regen.
-///
-/// FP8 needs the same mechanism and has **no existing goldens to break**. So it
-/// goes first, and the seam it proves — `narrow_load_fn`/`narrow_store_fn`, one
-/// name over two strategies — is what the f16 arms move onto at the regen, with
-/// callers unchanged.
+/// Until 0.15.0 the f16/bf16 arms spelled `__half2float`, a CUDA name, and
+/// replacing it rewrote Baracuda's f16 goldens, so it waited on Baracuda's own
+/// shadow. FP8 had **no existing goldens to break**, so it went first, and the
+/// seam it proved — `narrow_load_fn`/`narrow_store_fn`, one name per dtype — is
+/// what the halves moved onto in 0.15.0 with callers unchanged
+/// (`half_kernels_round_trip_against_the_oracles_independent_codec`).
 /// KISS-OPS-6.16-0009, proved by executing the kernel rather than by reading it.
 ///
 /// A `max_prop` decomposes to comparison-and-`select` — **no arithmetic** — so
@@ -1135,6 +1130,304 @@ int main(void) {{
                 pats[i]
             );
         }
+    }
+}
+
+/// Raw 16-bit patterns as an oracle buffer of `dt`.
+fn half_buffer(dt: ElementKind, n: i64, bits: &[u16]) -> TypedBuffer {
+    let bytes: Vec<u8> = bits.iter().flat_map(|b| b.to_le_bytes()).collect();
+    TypedBuffer::from_packed_bytes(dt, &[n], &bytes)
+}
+
+/// Run a two-input 16-bit kernel whose inputs are built by C loops (the full
+/// pattern space is too large for literals): `in0[i] = i % 65536` and
+/// `in1[i] = M[i / 65536]`. Returns the inputs and the printed outputs.
+fn run_half_kernel(
+    cc: &CCompiler,
+    dir: &Path,
+    tag: &str,
+    kernel: &unpopped::backend::GeneratedKernel,
+    multipliers: &[u16],
+) -> (Vec<u16>, Vec<u16>, Vec<u16>) {
+    let k = multipliers.len();
+    let n = 65536 * k;
+    let m_lit = multipliers
+        .iter()
+        .map(|x| format!("{x}u"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let src = format!(
+        "{}
+#include <stdio.h>
+
+static unsigned short in0[{n}], in1[{n}], out[{n}];
+static const unsigned short M[{k}] = {{{m_lit}}};
+
+int main(void) {{
+    long long i;
+    for (i = 0; i < {n}; ++i) {{
+        in0[i] = (unsigned short)(i % 65536);
+        in1[i] = M[i / 65536];
+        out[i] = 0xAAAAu;
+    }}
+    {}(in0, in1, out, {n});
+    for (i = 0; i < {n}; ++i) printf(\"%u\\n\", (unsigned)out[i]);
+    return 0;
+}}
+",
+        kernel.source, kernel.name
+    );
+    let c_file = dir.join(format!("{tag}.c"));
+    let exe = dir.join(format!("{tag}.exe"));
+    std::fs::write(&c_file, &src).expect("write");
+    cc.compile(&c_file, &exe, false)
+        .unwrap_or_else(|e| panic!("{tag}: compile: {e}"));
+    let out = std::process::Command::new(&exe).output().expect("run");
+    assert!(out.status.success(), "{tag}: exited {:?}", out.status);
+    let actual: Vec<u16> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.trim().parse::<u16>().expect("non-integer"))
+        .collect();
+    assert_eq!(actual.len(), n, "{tag}: printed {} lines", actual.len());
+    let a: Vec<u16> = (0..n).map(|i| (i % 65536) as u16).collect();
+    let b: Vec<u16> = (0..n).map(|i| multipliers[i / 65536]).collect();
+    (a, b, actual)
+}
+
+/// **f16 and bf16 round through a real C compiler, against the oracle's
+/// independent codec, bit for bit.**
+///
+/// The emitted codec (`cfamily::half_helpers`) and the oracle's
+/// (`oracle::f32_to_f16_bits` and friends, itself checked against the `half`
+/// crate) were written separately, so agreement is two readings of IEEE-754
+/// binary16 / bfloat16 producing the same bits.
+///
+/// # Both directions, because a codec tested one way is half tested
+///
+/// - **Decode, exhaustively:** every one of the 65536 patterns `+ 0`. The sum is
+///   exact, so this isolates the decode, and the store of an exactly
+///   representable value.
+/// - **Encode, at values that need rounding:** every pattern times a set of
+///   multipliers. A 16-bit product has at most 22 significant bits, so it is
+///   exact in f32 and the ONLY rounding is the encode: round down, round up,
+///   exact ties, overflow to infinity and underflow into subnormals all occur.
+///   An `x + 0` corpus alone cannot catch an encoder that truncates, because
+///   every value it stores is already representable.
+#[test]
+fn half_kernels_round_trip_against_the_oracles_independent_codec() {
+    let Some(cc) = find_compiler() else {
+        eprintln!(
+            "SKIP half_kernels_round_trip_against_the_oracles_independent_codec: \
+             no host C compiler."
+        );
+        return;
+    };
+    let dir: PathBuf = std::env::temp_dir().join("unpopped-e2e");
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    for (tag, dt, mults) in [
+        // 1+2^-10, 1.5, 3, 0.1 (rounded), 1/3 (rounded), 1000, 2^-10, -7.
+        (
+            "f16",
+            ElementKind::F16,
+            [
+                0x3C01u16, 0x3E00, 0x4200, 0x2E66, 0x3555, 0x63D0, 0x1400, 0xC700,
+            ],
+        ),
+        // The same values as bf16 patterns.
+        (
+            "bf16",
+            ElementKind::Bf16,
+            [
+                0x3F81u16, 0x3FC0, 0x4040, 0x3DCD, 0x3EAB, 0x447A, 0x3A80, 0xC0E0,
+            ],
+        ),
+    ] {
+        for (leg, op, m) in [
+            (
+                "decode",
+                OpDef::elementwise("addh", 2, &[dt], input(0) + input(1)),
+                vec![0u16],
+            ),
+            (
+                "encode",
+                OpDef::elementwise("mulh", 2, &[dt], input(0) * input(1)),
+                mults.to_vec(),
+            ),
+        ] {
+            let tag = format!("half_{tag}_{leg}");
+            let n = 65536 * m.len() as i64;
+            let d = OperandDesc::new(1, &[n], &[1], dt, 2);
+            let operands = vec![d; 3];
+            let key = structure_key(OpCategory::BinaryElementwise, &operands, ArchSku::Sm89);
+            let kernel = generate(&op, &key, &CpuC);
+            assert!(
+                kernel.source.contains("unsigned short")
+                    && !kernel.source.contains("__half")
+                    && !kernel.source.contains("__nv_"),
+                "{tag}: a half must be stored as unsigned short with a portable codec:\n{}",
+                kernel.source
+            );
+
+            let (a, b, actual) = run_half_kernel(&cc, &dir, &tag, &kernel, &m);
+            let plan = build_plan(&op, &key);
+            let want = evaluate(
+                &plan,
+                &operands,
+                &[half_buffer(dt, n, &a), half_buffer(dt, n, &b)],
+                &[],
+            )
+            .into_iter()
+            .next()
+            .unwrap()
+            .to_f64_vec();
+            let got = half_buffer(dt, n, &actual).to_f64_vec();
+
+            let mut mismatches = Vec::new();
+            let mut rounded = 0usize;
+            for i in 0..actual.len() {
+                let (g, w) = (got[i], want[i]);
+                let ok = if w.is_nan() {
+                    g.is_nan()
+                } else {
+                    g.to_bits() == w.to_bits()
+                };
+                if !ok {
+                    mismatches.push((a[i], b[i], actual[i], w));
+                }
+                if leg == "encode" {
+                    let exact = half_buffer(dt, 1, &[a[i]]).to_f64_vec()[0]
+                        * half_buffer(dt, 1, &[b[i]]).to_f64_vec()[0];
+                    if exact.is_finite() && exact != w {
+                        rounded += 1;
+                    }
+                }
+            }
+            assert!(
+                mismatches.is_empty(),
+                "{tag}: {} of {} outputs disagree with the oracle; first (a, b, kernel, \
+                 oracle): {:04X?}",
+                mismatches.len(),
+                actual.len(),
+                &mismatches[..mismatches.len().min(6)]
+            );
+            if leg == "encode" {
+                // The encode leg has to actually round, or it is the decode leg again.
+                assert!(
+                    rounded > 100_000,
+                    "{tag}: only {rounded} products needed rounding, so the encoder \
+                     was barely exercised"
+                );
+            }
+        }
+    }
+}
+
+/// **A narrow-float predicate stores the right 0/1 mask.**
+///
+/// A `Cmp*` body over a narrow float (FP8, and the halves since 0.15.0) is
+/// computed at `float`: the leaves decode, and the root is the f32 `0.0`/`1.0`.
+/// The U8 mask store must convert THAT. Converting it as if it were still in the
+/// storage dtype — `cast_scalar(plan.dtype, U8, root)`, which decodes first —
+/// feeds `1.0f` through the byte/half decoder as the pattern `1`, a tiny
+/// subnormal, and stores `0` for every true lane.
+#[test]
+fn a_narrow_float_predicate_stores_the_right_mask() {
+    let Some(cc) = find_compiler() else {
+        eprintln!("SKIP a_narrow_float_predicate_stores_the_right_mask: no host C compiler.");
+        return;
+    };
+    let dir: PathBuf = std::env::temp_dir().join("unpopped-e2e");
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    // (tag, dtype, C carrier, pattern count, the pattern of 1.0)
+    for (tag, dt, carrier, pats, one) in [
+        (
+            "e5m2",
+            ElementKind::Fp8E5M2,
+            "unsigned char",
+            256usize,
+            0x3Cu16,
+        ),
+        ("f16", ElementKind::F16, "unsigned short", 65536, 0x3C00),
+        ("bf16", ElementKind::Bf16, "unsigned short", 65536, 0x3F80),
+    ] {
+        let n = pats as i64;
+        let op =
+            OpDef::elementwise_pred("gt", 2, &[dt], input(0).binary(BinaryOp::CmpGt, input(1)));
+        let d_in = OperandDesc::new(1, &[n], &[1], dt, 1);
+        let d_out = OperandDesc::new(1, &[n], &[1], ElementKind::U8, 1);
+        let operands = vec![d_in, d_in, d_out];
+        let key = structure_key(OpCategory::BinaryElementwise, &operands, ArchSku::Sm89);
+        let kernel = generate(&op, &key, &CpuC);
+
+        let src = format!(
+            "{}
+#include <stdio.h>
+
+static {carrier} in0[{n}], in1[{n}];
+static unsigned char out[{n}];
+
+int main(void) {{
+    long long i;
+    for (i = 0; i < {n}; ++i) {{ in0[i] = ({carrier})i; in1[i] = ({carrier}){one}u; out[i] = 0xAAu; }}
+    {}(in0, in1, out, {n});
+    for (i = 0; i < {n}; ++i) printf(\"%u\\n\", (unsigned)out[i]);
+    return 0;
+}}
+",
+            kernel.source, kernel.name
+        );
+        let c_file = dir.join(format!("pred_{tag}.c"));
+        let exe = dir.join(format!("pred_{tag}.exe"));
+        std::fs::write(&c_file, &src).expect("write");
+        cc.compile(&c_file, &exe, false)
+            .unwrap_or_else(|e| panic!("{tag}: compile: {e}\n{}", kernel.source));
+        let out = std::process::Command::new(&exe).output().expect("run");
+        assert!(out.status.success(), "{tag}: exited {:?}", out.status);
+        let actual: Vec<u8> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.trim().parse::<u8>().expect("non-integer"))
+            .collect();
+        assert_eq!(actual.len(), pats, "{tag}: printed {} lines", actual.len());
+
+        let a: Vec<u16> = (0..pats).map(|i| i as u16).collect();
+        let b: Vec<u16> = vec![one; pats];
+        let buf = |v: &[u16]| {
+            let bytes: Vec<u8> = if pats == 256 {
+                v.iter().map(|x| *x as u8).collect()
+            } else {
+                v.iter().flat_map(|x| x.to_le_bytes()).collect()
+            };
+            TypedBuffer::from_packed_bytes(dt, &[n], &bytes)
+        };
+        let plan = build_plan(&op, &key);
+        let want = evaluate(&plan, &operands, &[buf(&a), buf(&b)], &[])
+            .into_iter()
+            .next()
+            .unwrap()
+            .to_f64_vec();
+        let trues = want.iter().filter(|w| **w == 1.0).count();
+        assert!(
+            trues > pats / 8,
+            "{tag}: the corpus must have true lanes, got {trues}"
+        );
+        let wrong: Vec<(usize, u8, f64)> = actual
+            .iter()
+            .zip(&want)
+            .enumerate()
+            .filter(|(_, (g, w))| f64::from(**g) != **w)
+            .map(|(i, (g, w))| (i, *g, *w))
+            .take(6)
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "{tag}: the mask disagrees with the oracle; first (pattern, kernel, oracle): \
+             {wrong:?}\n{}",
+            kernel.source
+        );
     }
 }
 

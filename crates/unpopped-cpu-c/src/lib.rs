@@ -30,10 +30,9 @@
 //!
 //! ## v1 scope (honest boundary)
 //!
-//! - Dtypes: `F32`/`F32Strict`/`F64` + the integer compute dtypes
-//!   (`I32`/`I64`/`S8`/`U8`). `F16`/`Bf16` are DECLINED (no CPU half codec yet —
-//!   a documented limit; the oracle has one for a follow-up), as is the
-//!   `U32` index/address dtype (mirroring [`Backend::supports_dtype`]).
+//! - Dtypes: see [`Backend::supports_dtype`] for the exact allowlist. The
+//!   narrow floats (FP8, and `F16`/`Bf16` since 0.15.0) are stored in an integer
+//!   carrier and computed at `float` through a codec emitted with the kernel.
 //! - Schedules: only [`Schedule::Scalar`] (the scalar contiguous Elementwise
 //!   path). Every other schedule (Vectorized/Strided/Reduction/…) panics clearly
 //!   — AOT authoring is trusted, so a panic is the honest v1 boundary (the same
@@ -48,7 +47,7 @@ use unpopped::backend::{
 };
 use unpopped::cfamily::{
     assert_no_int_div_or_const, binary_f32, binary_f64, binary_int, complex_arith, complex_helpers,
-    dtype_tag, fp8_helpers, narrow_load_fn, out_ctype_of, param_args, param_ctype,
+    dtype_tag, fp8_helpers, half_helpers, narrow_load_fn, out_ctype_of, param_args, param_ctype,
     promote_load_f32, scalar_ctype, select_f32, select_f64, store_expr_of, sub_byte_helpers,
     sub_byte_load_fn, sub_byte_store_fn, unary_f32, unary_f64,
 };
@@ -76,9 +75,9 @@ impl Backend for CpuC {
         // This used to be `!matches!(F16 | Bf16) && scalar_ctype(dtype).is_some()`:
         // "has a C type spelling, minus two". That reads as a compute question
         // and is a **storage** question. `scalar_ctype` returns the CARRIER —
-        // `unsigned char` for FP8, bool and the sub-byte dtypes, `__half` for
-        // `f16`. Those spell how a value is *stored*, not whether this emitter
-        // can do arithmetic on it.
+        // `unsigned char` for FP8, bool and the sub-byte dtypes, `unsigned short`
+        // for the halves (`__half` until 0.15.0). Those spell how a value is
+        // *stored*, not whether this emitter can do arithmetic on it.
         //
         // It happened to be correct, for a reason the predicate never stated:
         // CpuC also emits software codecs (`fp8_helpers`, `sub_byte_helpers`,
@@ -119,16 +118,17 @@ impl Backend for CpuC {
             | ElementKind::U64
             | ElementKind::Bool => true,
             // Carrier + an emitted software codec, which is what makes the
-            // storage type sufficient for these and not for the halves.
+            // storage type sufficient for these. The halves joined in 0.15.0,
+            // when `cfamily::half_helpers` gave them one.
             ElementKind::Fp8E4M3FN
             | ElementKind::Fp8E5M2
+            | ElementKind::F16
+            | ElementKind::Bf16
             | ElementKind::I4
             | ElementKind::U4
             | ElementKind::B1
             | ElementKind::Complex64
             | ElementKind::Complex128 => true,
-            // Declined: no CPU half codec yet (v1 limit, not a design decision).
-            ElementKind::F16 | ElementKind::Bf16 => false,
             // Declined BY DESIGN: the MX shared block scales are sibling
             // operands (§6.1-0013), never an element compute dtype; and the
             // reserved `fnuz` pair must never lower at this schema version.
@@ -146,8 +146,8 @@ impl Backend for CpuC {
         if !self.supports_dtype(plan.dtype, plan.key.target) {
             return Err(LowerError::UnsupportedDtype {
                 dtype: plan.dtype,
-                detail: "cpu_c backend v1: f16/bf16 are declined (no CPU half codec yet); \
-                         f32/f64 + integer compute dtypes only"
+                detail: "cpu_c backend v1: not in this backend's compute allowlist \
+                         (see `CpuC::supports_dtype`)"
                     .to_string(),
             });
         }
@@ -212,11 +212,10 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> Result<GeneratedKernel
     // Portable C99: `<math.h>` supplies the transcendental atoms (expf/sqrtf/…),
     // the `Cmp`/`Rem` helpers, and the `NAN`/`INFINITY` macros `const_lit` emits.
     s.push_str("#include <math.h>\n\n");
-    // A NARROW FLOAT cell stores bytes and computes at f32, so its codec has to
-    // travel with the kernel. EMITTED rather than intrinsic-named: that is the
-    // whole difference between this and the f16/bf16 arms, which still spell
-    // `__half2float` from a module that calls itself neutral.
-    if let Some(helpers) = fp8_helpers(plan.dtype) {
+    // A NARROW FLOAT cell stores an integer carrier and computes at f32, so its
+    // codec has to travel with the kernel. EMITTED rather than intrinsic-named,
+    // which is what keeps this backend portable C.
+    if let Some(helpers) = fp8_helpers(plan.dtype).or_else(|| half_helpers(plan.dtype)) {
         s.push_str(helpers);
         s.push('\n');
     }
@@ -387,7 +386,7 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> Result<GeneratedKernel
 }
 
 /// Lower a unary op for `dtype` on the CPU — the twin of `baracuda_cuda_emit::cuda`'s
-/// `cuda_unary`, minus the f16/bf16 promote arms (declined in v1). f32/f64 route
+/// `cuda_unary`. A narrow float was decoded to `float` at the leaf, so f32/f64 route
 /// to the CpuC unary spellers ([`unary_f32_cpu`]/[`unary_f64_cpu`]); an integer
 /// dtype has no unary math (the ir admissibility table rejects it), so the panic
 /// is the emitter backstop.
@@ -397,7 +396,9 @@ fn cpu_unary(op: UnaryOp, x: String, dtype: ElementKind) -> Result<Spelling, Low
         ElementKind::F32
         | ElementKind::F32Strict
         | ElementKind::Fp8E4M3FN
-        | ElementKind::Fp8E5M2 => unary_f32_cpu(op, x),
+        | ElementKind::Fp8E5M2
+        | ElementKind::F16
+        | ElementKind::Bf16 => unary_f32_cpu(op, x),
         ElementKind::F64 => unary_f64_cpu(op, x),
         _ => {
             return Ok(Spelling::Declined(Decline::UnsupportedDtypeForOp {
@@ -433,7 +434,7 @@ fn unary_f64_cpu(op: UnaryOp, x: String) -> String {
 /// Lower a non-infix binary op for `dtype` on the CPU — REUSES the CUDA spellers
 /// verbatim (`powf`/`atan2f`/`copysignf`/`fmaxf`/`fmodf`/the `Cmp*` operators are
 /// all C99, and the int-op speller is raw C operators). Mirrors the shape of
-/// `cuda_binary` minus the f16/bf16 promote arms (declined in v1).
+/// `cuda_binary`; a narrow float was decoded to `float` at the leaf.
 fn cpu_binary(
     op: BinaryOp,
     a: String,
@@ -446,7 +447,9 @@ fn cpu_binary(
         ElementKind::F32
         | ElementKind::F32Strict
         | ElementKind::Fp8E4M3FN
-        | ElementKind::Fp8E5M2 => binary_f32(op, a, b),
+        | ElementKind::Fp8E5M2
+        | ElementKind::F16
+        | ElementKind::Bf16 => binary_f32(op, a, b),
         ElementKind::F64 => binary_f64(op, a, b),
         // Every integer dtype this backend admits routes to the raw-C operator
         // speller. `I16`/`U16` were missing here while `supports_dtype` accepted
@@ -719,10 +722,11 @@ mod tests {
     }
 
     #[test]
-    fn declines_f16_via_supports_dtype() {
-        // The documented v1 decline: no CPU half codec yet.
-        assert!(!CpuC.supports_dtype(ElementKind::F16, ArchSku::Sm89.into()));
-        assert!(!CpuC.supports_dtype(ElementKind::Bf16, ArchSku::Sm89.into()));
+    fn supports_the_halves_and_the_real_compute_dtypes() {
+        // The halves were the documented v1 decline ("no CPU half codec yet")
+        // until 0.15.0 gave them one (`cfamily::half_helpers`).
+        assert!(CpuC.supports_dtype(ElementKind::F16, ArchSku::Sm89.into()));
+        assert!(CpuC.supports_dtype(ElementKind::Bf16, ArchSku::Sm89.into()));
         // The real compute dtypes are supported. `U32` is among them now: it
         // was previously excluded as "index/address only", a restriction
         // inherited from the CUDA backend on circular reasoning.
