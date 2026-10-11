@@ -951,11 +951,25 @@ mod tests {
 
     #[test]
     fn cuda_lifts_unary_intrinsic() {
-        let src = "__global__ void k(const float* in0, float* out, long long n){ out[i] = __expf(in0[i]); }";
+        let src = "__global__ void k(const float* in0, float* out, long long n){ out[i] = expf(in0[i]); }";
         assert_eq!(
             cuda_body(src),
             ScalarExpr::Unary(UnaryOp::Exp, Box::new(ScalarExpr::Input(0)))
         );
+    }
+
+    #[test]
+    fn cuda_fast_math_intrinsics_refuse() {
+        for f in ["__expf", "__logf"] {
+            let src = format!(
+                "__global__ void k(const float* in0, float* out, long long n){{ out[i] = {f}(in0[i]); }}"
+            );
+            let err = lift_elementwise(&CUDA, &src, "x", F32).err();
+            assert!(
+                matches!(err, Some(LiftError::Unrecognized(_))),
+                "{f} must be Unrecognized, got {err:?}"
+            );
+        }
     }
 
     #[test]

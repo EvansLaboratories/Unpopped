@@ -433,10 +433,16 @@ impl Parser {
 }
 
 /// CUDA unary math intrinsic → [`UnaryOp`], or `None` (unrecognized → residue).
+///
+/// `__expf` / `__logf` are deliberately absent: they are CUDA's fast-math
+/// approximations, and the shared lowering spells `Exp`/`Log` as the accurate
+/// `expf`/`logf`. Lifting them to `Exp`/`Log` would strip a numerics-changing
+/// optimization silently (`docs/idiom-lifting-design.md` §2, rule 2), so they
+/// refuse until an `Approx` qualifier can carry the source's choice.
 pub(crate) fn unary_fn(name: &str) -> Option<UnaryOp> {
     Some(match name {
-        "expf" | "__expf" => UnaryOp::Exp,
-        "logf" | "__logf" => UnaryOp::Log,
+        "expf" => UnaryOp::Exp,
+        "logf" => UnaryOp::Log,
         "sqrtf" | "__fsqrt_rn" => UnaryOp::Sqrt,
         "rsqrtf" => UnaryOp::Rsqrt,
         "fabsf" | "fabs" | "abs" => UnaryOp::Abs,
@@ -497,11 +503,37 @@ mod tests {
 
     #[test]
     fn lifts_unary_intrinsic() {
-        let src = "__global__ void k(const float* in0, float* out, long long n){ out[i] = __expf(in0[i]); }";
+        let src = "__global__ void k(const float* in0, float* out, long long n){ out[i] = expf(in0[i]); }";
         assert_eq!(
             body(src),
             ScalarExpr::Unary(UnaryOp::Exp, Box::new(ScalarExpr::Input(0)))
         );
+    }
+
+    #[test]
+    fn fast_math_intrinsics_refuse_rather_than_become_the_accurate_function() {
+        // `__expf`/`__logf` differ from `expf`/`logf` by more than rounding, and
+        // a lift that re-emitted `expf` would silently change the numerics.
+        for f in ["__expf", "__logf"] {
+            let src = format!(
+                "__global__ void k(const float* in0, float* out, long long n){{ out[i] = {f}(in0[i]); }}"
+            );
+            let err = lift_elementwise(&src, "lifted", F32).err();
+            assert!(
+                matches!(err, Some(LiftError::Unrecognized(_))),
+                "{f} must be Unrecognized, got {err:?}"
+            );
+        }
+        // Positive control: the accurate spellings still lift.
+        for f in ["expf", "logf"] {
+            let src = format!(
+                "__global__ void k(const float* in0, float* out, long long n){{ out[i] = {f}(in0[i]); }}"
+            );
+            assert!(
+                lift_elementwise(&src, "lifted", F32).is_ok(),
+                "{f} must lift"
+            );
+        }
     }
 
     #[test]
