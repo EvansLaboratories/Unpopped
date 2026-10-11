@@ -15,6 +15,26 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## 2026-10-11 — everything at `0.15.0`
+
+### ⚠️ BREAKING — `__expf` / `__logf` no longer lift (they are `Unrecognized`)
+
+`unpopped::lift` and `unpopped::convert` (CUDA frontend) used to map CUDA's
+fast-math `__expf` and `__logf` to the exact `UnaryOp::Exp` / `Log`, which the
+shared lowering spells `expf` / `logf`. A lift-and-re-emit silently turned an
+approximation into the accurate function: a numerics change with no record
+(idiom-lifting rule 2, `docs/idiom-lifting-design.md` §2).
+
+- **What used to lift and now is `LiftError::Unrecognized`:** any kernel body
+  calling `__expf(x)` or `__logf(x)`. `expf` / `logf` are unchanged.
+- **No signature changed:** `unary_fn` is `pub(crate)`. Callers that matched
+  `Ok` from `lift_elementwise` on such source now get `Err`.
+- **Adopter action:** tests that pin the old mapping must expect
+  `Unrecognized` (baracuda's `baracuda-cuda-parse/tests/convert.rs:84` does).
+  Spell `expf` / `logf` if the exact function is what the kernel means.
+- **Interim shape:** an `Approx` qualifier (§4.3) is still the full fix and is
+  not in this release.
+
 ## 2026-10-11 — everything at `0.14.6` (CI only)
 
 ci: `cargo deny` job and `deny.toml`; every workflow `uses:` pinned by full
