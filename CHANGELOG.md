@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## 2026-10-11 — everything at `0.14.5` (docs only)
+
+docs: 0.14.4 published, stale claims corrected. No code, emitted byte or golden
+moves; the number changes because a pushed change changes the version.
+
+- `README.md` no longer says the emitters are unpublished (false since 2026-08-19).
+- `crates/unpopped/README.md` says the emitters are at 0.14.4, not 0.3.0.
+
 ## 2026-10-08 — everything at `0.14.4`
 
 ### `HalfArith`: the first plan decision that differs by sm (additive)
