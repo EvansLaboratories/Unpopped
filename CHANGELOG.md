@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## 2026-10-11 — everything at `0.14.6` (CI only)
+
+ci: `cargo deny` job and `deny.toml`; every workflow `uses:` pinned by full
+commit SHA. No code, emitted byte or golden moves; the number changes because a
+pushed change changes the version.
+
 ## 2026-10-11 — everything at `0.14.5` (docs only)
 
 docs: 0.14.4 published, stale claims corrected. No code, emitted byte or golden
