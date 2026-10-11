@@ -92,6 +92,13 @@ The backward kernels are unassessed.
 
 ## 2. Rule 2 already has a live violation in Unpopped
 
+> **Fixed (interim shape), this PR.** `unary_fn` no longer maps `__expf` /
+> `__logf`: both are `Unrecognized` in `lift.rs` and `convert.rs`, pinned by
+> `fast_math_intrinsics_refuse_rather_than_become_the_accurate_function` and
+> `cuda_fast_math_intrinsics_refuse`. Both fail if the old mapping is restored
+> (seeded mutation, run at the committed head). What follows describes the
+> defect as it stood; the `Approx` qualifier in §4.3 is still the full fix.
+
 `crates/unpopped/src/lift.rs:436-440`:
 
 ```rust
@@ -780,8 +787,10 @@ What's ready and what isn't, measured at `unpopped@b61a8be`:
 
 ## 11. What this implies, as sequenced work (not started; each is its own PR)
 
-1. **§2 fix:** stop stripping `__expf`/`__logf`. Coordinated with baracuda's
-   pinned test.
+1. **§2 fix:** ~~stop stripping `__expf`/`__logf`~~ done in Unpopped (interim:
+   they refuse). baracuda's pinned test
+   (`baracuda-cuda-parse/tests/convert.rs:84`) must move with the release that
+   takes it.
 2. **Numerics axes (§3.1):**
    - new `AccumSpec`/`ReductionAccum` variants;
    - the `Approx` qualifier;
