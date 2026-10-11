@@ -41,6 +41,11 @@ shadow keeps every CUDA byte `baracuda-cuda-emit` emits unchanged.
   `Cmp*` body over FP8 decoded the f32 `0.0`/`1.0` root as if it were a storage
   pattern, so every true lane stored `0`. Live in `unpopped-cpu-c` since FP8
   support; `store_expr_of` now converts from what the root is.
+- **kiss-ref `0.3.4` -> `0.4.0`** (`kiss-ref-core`, `kiss-ops-vocab`,
+  `kiss-classify-vocab`; KISS contract v3). Its enums are now
+  `#[non_exhaustive]`; the in-tree `kiss_ref_diff` test reference panics on a
+  `Monoid` it does not know rather than folding it as another. No published API
+  of ours changes. `unpopped-cpu-c` takes `kiss-ref-core 0.4.0` as well.
 
 ---
 
