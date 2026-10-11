@@ -1,0 +1,30 @@
+# cargo-deny configuration (same shape as SafeImage's, the portfolio's reference).
+# Read the job log: an advisory acknowledgement is the PM's call at gate, never a config edit.
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+
+[licenses]
+version = 2
+# Allow list, not a deny list: a new dependency with an unlisted licence fails the job.
+# Read from `cargo deny --all-features list` at a025fc7e (2026-10-11); to refresh it, rerun that
+# command rather than editing from memory. Every entry below is used by at least one crate.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "Unicode-3.0",
+    "Unlicense",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+# crates.io only: no git dependencies, no other registries.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
