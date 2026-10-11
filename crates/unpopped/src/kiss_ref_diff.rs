@@ -750,6 +750,9 @@ fn emitter_reduce_int(
                 (1i128 << bits) - 1
             }
         }
+        // `Monoid` is `#[non_exhaustive]` since kiss-ref 0.4.0: a monoid this
+        // reference does not know must fail loudly, never fold as something else.
+        other => panic!("emitter_reduce_int: unhandled monoid {other:?}"),
     };
 
     let rank = shape.len();
@@ -799,6 +802,7 @@ fn emitter_reduce_int(
                         acc
                     }
                 }
+                other => panic!("emitter_reduce_int: unhandled monoid {other:?}"),
             };
         }
         out.push(acc);

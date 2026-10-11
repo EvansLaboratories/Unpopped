@@ -475,10 +475,10 @@ tolerance. Out of scope until the oracle covers them.
 This is one of three known places where the neutral core encoded one backend's
 behavior. The other two:
 
-1. **f16/bf16 spelling** — the neutral `cfamily` module spells `__half` /
-   `__nv_bfloat16` and emits `__half2float`-class intrinsics. Tripwired in
-   `crates/unpopped/tests/neutral_spelling.rs`; the seam lands in the 0.2 batch
-   with the `unpopped-cuda` carve.
+1. **f16/bf16 spelling** — closed in 0.15.0. The neutral `cfamily` module
+   spells the halves as `unsigned short` and emits a portable codec
+   (`half_helpers`) instead of `__half` / `__half2float`. Tripwired in
+   `crates/unpopped/tests/neutral_spelling.rs`.
 2. **`effective_count_width`** — closed. It is a `Backend` trait method now
    (`backend.rs`), so `contract.rs` reaches it through the trait rather than
    through the CUDA emitter.

@@ -157,8 +157,9 @@ const MX_SCALE: &str = "MX shared-exponent scale (KISS-CLASSIFY 6.1-0013): a sib
 /// kind of fact again, and it is asserted separately below.
 const COVERAGE: &[(&str, ElementKind, Status, Status)] = &[
     // name          dtype                      CpuC   Slang
-    ("f16", ElementKind::F16, NotYet, NotYet),
-    ("bf16", ElementKind::Bf16, NotYet, NotYet),
+    // CpuC since 0.15.0: `unsigned short` carrier + `cfamily::half_helpers`.
+    ("f16", ElementKind::F16, Lowers, NotYet),
+    ("bf16", ElementKind::Bf16, Lowers, NotYet),
     ("f32", ElementKind::F32, Lowers, Lowers),
     ("f64", ElementKind::F64, Lowers, Lowers),
     ("i8", ElementKind::I8, Lowers, Blocked(SLANG_NARROW)),
