@@ -22,9 +22,9 @@ and are relayed here, not independently verified.
   PASS 35, FAIL 0, DECLINE-DIFFERS 0, SKIP 1. 10 carry `spec_golden`; the other
   21 positives are reference-deriver output, so agreement there is two derivers
   agreeing.
-- **Not covered:** a declared contraction. The weight role (§6.6-0019) is still
-  not an input (issue #31), and the batch role is undefined upstream
-  (KISS#543), which is the one skipped vector.
+- **Not covered:** a declared contraction. The weight role became a declared
+  input in `0.17.3`; the M/N/K roles are still positional (issue #31), and the
+  batch role is undefined upstream (KISS#543), which is the one skipped vector.
 - **Baracuda** regenerates its 3 sk4 test sites and 2 goldens once `0.17.0` is
   on crates.io, and fuel is blocked on the same (PM). The `[NOTICE]` went to
   the baracuda lane on merge, with a request for its harness table
@@ -39,7 +39,7 @@ and are relayed here, not independently verified.
 | R1.4 innermost axis of extent 0 (§6.3-0011, §6.5-0012) | **closed**: `[8,0]` derives `da`/`v1`, measured; KISS reads it the same way | `tests/mixed_rank_frames_and_the_innermost_axis.rs`, derivation vector `innermost_axis_extent_zero_is_axis_rank_minus_1` |
 | R1.6 target-match vector (§6.8-0002) | **closed**: `target_match_vectors` has been vendored and asserted since the `bc16715` copy | `kiss_byte_match.rs::target_match_vectors_are_byte_exact` |
 | KISS#543 batch role | **open upstream**; skips `decline_contraction_out_of_scope` | `tests/kiss_derivation_vectors.rs` |
-| §6.6-0019 weight role (`<wdt>`) | **open**; needs a role hint in the derivation input | issue #31; `CellFacts` (new in #58) is the seam it would extend |
+| §6.6-0019 weight role (`<wdt>`) | **closed** in `0.17.3`: `CellFacts::weight_operand`; `WeightRoleNotDeclared` is this crate's decline name, not KISS's | issue #31 stays open for M/N/K |
 | §6.6-0021 | the infallible `structure_key` still keys a scale dtype at operand 0; `try_structure_key` declines. Deprecating the infallible form means migrating ~200 callers, which the PM ruled is **not this lane** (bulk mechanical work, CireSnave's cost rule) | `CHANGELOG.md` |
 
 KISS `main` moves faster than this lane re-vendors. Re-vendor when KISS says a
@@ -47,14 +47,10 @@ blob changed, not on a schedule, and record the commit in `kiss/README.md`.
 
 ## 3. Next (none started; the PM assigns)
 
-1. **Weight-role `<wdt>`** (§6.6-0019, issue #31). Sent as an `[ASK]` design
-   note: which operand slot carries the weight must be a caller-declared fact,
-   not inferred from position or dtype. Extends `CellFacts`. **Measured at
-   `2a78c233`:** `Gemm [W:f8e4m3fn, x:f16, y:f16]` derives `<wdt>` = `f16` (the
-   activation), and `[x:f16, W:f8e4m3fn, y:f16]` derives `f8e4m3fn`. The keyer
-   reads operand 1, so a weight-on-the-left cell names the wrong dtype with no
-   signal. The M/N/K axis roles (§6.6-0016) are positional too, and the batch
-   role is KISS#543.
+1. **Explicit M/N/K axis roles** (§6.6-0016). The weight role is now declared
+   (`CellFacts::weight_operand`, ruled option A, `0.17.3`); M/N/K are still
+   inferred from `lhs`/`rhs`/`out` shapes, which §6.6-0016 forbids, and rank-3
+   needs the batch role that KISS#543 has not ruled (option B). Not started.
 2. **`Approx` qualifier** (`docs/idiom-lifting-design.md` §4.3): the full fix for
    `__expf` / `__logf`, which #57 only made refuse. Needs KISS-coordinated
    numerics axes.
