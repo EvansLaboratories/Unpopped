@@ -28,3 +28,8 @@ float8 = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# Parses the vendored KISS derivation vectors in `tests/kiss_derivation_vectors.rs`.
+# Dev-only: the crate's normal dependencies stay `half` and `float8`.
+serde_json = "1"
