@@ -73,31 +73,40 @@ enum Verdict {
     Skipped(&'static str),
 }
 
-fn run(v: &Value) -> Verdict {
-    let name = v["name"].as_str().expect("name");
-    if name == "decline_contraction_out_of_scope" {
-        return Verdict::Skipped("batch role undefined (KISS#543); reported, not asserted");
+impl Verdict {
+    /// The word the table prints.
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Pass => "PASS",
+            Self::Fail(_) => "FAIL",
+            Self::DeclineDiffers(_) => "DECLINE≠",
+            Self::Skipped(_) => "SKIP",
+        }
     }
-    let target = v["target"].as_str().expect("target");
-    assert_eq!(
-        target, "cuda:sm89",
-        "{name}: every vector is on cuda:sm89, which ArchSku::Sm89 spells"
-    );
 
+    /// Which tally the verdict counts toward: pass, fail, decline-differs, skip.
+    fn column(&self) -> usize {
+        match self {
+            Self::Pass => 0,
+            Self::Fail(_) => 1,
+            Self::DeclineDiffers(_) => 2,
+            Self::Skipped(_) => 3,
+        }
+    }
+}
+
+/// The operand descriptors a vector lists, in the call order it lists them.
+fn operands_of(name: &str, v: &Value) -> Vec<OperandDesc> {
+    let ints = |a: &Value| -> Vec<i64> {
+        a.as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_i64().unwrap())
+            .collect()
+    };
     let mut ops = Vec::new();
     for o in v["operands"].as_array().expect("operands") {
-        let extents: Vec<i64> = o["extents"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|x| x.as_i64().unwrap())
-            .collect();
-        let strides: Vec<i64> = o["strides"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|x| x.as_i64().unwrap())
-            .collect();
+        let (extents, strides) = (ints(&o["extents"]), ints(&o["strides"]));
         let mut d = OperandDesc::new(
             extents.len(),
             &extents,
@@ -119,7 +128,11 @@ fn run(v: &Value) -> Verdict {
         }
         ops.push(d);
     }
+    ops
+}
 
+/// The caller-declared facts a vector states (§6.6-0012).
+fn facts_of(name: &str, v: &Value) -> CellFacts {
     let mut facts = CellFacts::new();
     facts.contraction_declared = v["contraction_declared"].as_bool().unwrap();
     facts.index_declared = !v["index_operand"].is_null();
@@ -134,12 +147,28 @@ fn run(v: &Value) -> Verdict {
         "rm" => MpCode::Rm,
         other => panic!("{name}: unknown math_fidelity {other}"),
     };
+    facts
+}
 
-    let got = derive_structure_key_token(&ops, &facts, ArchSku::Sm89);
+fn run(v: &Value) -> Verdict {
+    let name = v["name"].as_str().expect("name");
+    if name == "decline_contraction_out_of_scope" {
+        return Verdict::Skipped("batch role undefined (KISS#543); reported, not asserted");
+    }
+    assert_eq!(
+        v["target"].as_str().expect("target"),
+        "cuda:sm89",
+        "{name}: every vector is on cuda:sm89, which ArchSku::Sm89 spells"
+    );
+
+    let got = derive_structure_key_token(&operands_of(name, v), &facts_of(name, v), ArchSku::Sm89);
     let want = v["value"].as_str().unwrap();
     match (v["expect"].as_str().unwrap(), got) {
         ("token", Ok(t)) if t == want => Verdict::Pass,
-        ("token", Ok(t)) => Verdict::Fail(format!("want {want}\n      got  {t}")),
+        ("token", Ok(t)) => Verdict::Fail(format!(
+            "want {want}
+      got  {t}"
+        )),
         ("token", Err(e)) => {
             Verdict::DeclineDiffers(format!("want {want}; declined {}", e.wire_name()))
         }
@@ -185,31 +214,16 @@ fn every_derivation_vector_matches() {
             " [spec_golden]"
         };
         let verdict = run(vec);
-        println!(
-            "{:<9} {name}{golden}",
-            match &verdict {
-                Verdict::Pass => "PASS",
-                Verdict::Fail(_) => "FAIL",
-                Verdict::DeclineDiffers(_) => "DECLINE≠",
-                Verdict::Skipped(_) => "SKIP",
-            }
-        );
+        println!("{:<9} {name}{golden}", verdict.label());
         match &verdict {
-            Verdict::Pass => counts[0] += 1,
+            Verdict::Pass => {}
             Verdict::Fail(why) | Verdict::DeclineDiffers(why) => {
                 println!("      {why}");
-                counts[if matches!(verdict, Verdict::Fail(_)) {
-                    1
-                } else {
-                    2
-                }] += 1;
                 bad.push(name.to_string());
             }
-            Verdict::Skipped(why) => {
-                println!("      {why}");
-                counts[3] += 1;
-            }
+            Verdict::Skipped(why) => println!("      {why}"),
         }
+        counts[verdict.column()] += 1;
     }
     println!(
         "PASS {} | FAIL {} | DECLINE-DIFFERS {} | SKIP {} (of {})",
