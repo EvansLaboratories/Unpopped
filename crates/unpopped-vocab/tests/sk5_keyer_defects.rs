@@ -218,3 +218,89 @@ fn a_written_operand_must_have_the_iteration_rank_to_be_pointwise() {
     let k = derive_structure_key(&same, &CellFacts::new(), ArchSku::Sm89).unwrap();
     assert_eq!(k.cell_class, CellClass::Ew1);
 }
+
+// ---- the weight role is declared, never inferred (§6.6-0019, issue #31) -----
+
+fn gemm_cell(weight_left: bool) -> [OperandDesc; 3] {
+    let f = |shape: &[i64], st: &[i64], dt| OperandDesc::new(2, shape, st, dt, 256);
+    let y = f(&[64, 32], &[32, 1], ElementKind::F16);
+    if weight_left {
+        // W[64,128] @ x[128,32]
+        [
+            f(&[64, 128], &[128, 1], ElementKind::Fp8E4M3FN),
+            f(&[128, 32], &[32, 1], ElementKind::F16),
+            y,
+        ]
+    } else {
+        // x[64,128] @ W[128,32]
+        [
+            f(&[64, 128], &[128, 1], ElementKind::F16),
+            f(&[128, 32], &[32, 1], ElementKind::Fp8E4M3FN),
+            y,
+        ]
+    }
+}
+
+fn wdt_of(token: &str) -> String {
+    // field 9 is `c<mnk>/<kdiv>[/b..]/<wdt>/<acc>/<out>/<mp>`; <wdt> is 4th from last.
+    let f9 = token.split('|').nth(9).expect("contraction field");
+    let parts: Vec<&str> = f9.split('/').collect();
+    parts[parts.len() - 4].to_string()
+}
+
+#[test]
+fn a_declared_weight_operand_names_the_weight_dtype_wherever_it_sits() {
+    // The cell the sk5 keyer got wrong: weight on the LEFT derived `<wdt>` = f16,
+    // the activation, because it read operand 1.
+    let left = gemm_cell(true);
+    let mut facts = CellFacts::new();
+    facts.contraction_declared = true;
+    facts.weight_operand = Some(0);
+    let t = unpopped_vocab::derive_structure_key_token(&left, &facts, ArchSku::Sm89).unwrap();
+    assert_eq!(wdt_of(&t), "f8e4m3fn", "{t}");
+
+    let right = gemm_cell(false);
+    facts.weight_operand = Some(1);
+    let t = unpopped_vocab::derive_structure_key_token(&right, &facts, ArchSku::Sm89).unwrap();
+    assert_eq!(wdt_of(&t), "f8e4m3fn", "{t}");
+
+    // Control: the declaration is what is read. The SAME weight-left operands
+    // with operand 1 declared name the activation, so a keyer that ignored the
+    // hint and happened to read slot 0 would fail the line above, and one that
+    // read slot 1 would fail this one's counterpart.
+    facts.weight_operand = Some(1);
+    let t = unpopped_vocab::derive_structure_key_token(&left, &facts, ArchSku::Sm89).unwrap();
+    assert_eq!(wdt_of(&t), "f16", "{t}");
+}
+
+#[test]
+fn a_declared_contraction_without_a_weight_operand_declines() {
+    let mut facts = CellFacts::new();
+    facts.contraction_declared = true;
+    assert_eq!(
+        derive_structure_key(&gemm_cell(true), &facts, ArchSku::Sm89),
+        Err(DeriveDecline::WeightRoleNotDeclared)
+    );
+    // A weight slot past the operand list is not a derivable contraction.
+    facts.weight_operand = Some(7);
+    assert_eq!(
+        derive_structure_key(&gemm_cell(true), &facts, ArchSku::Sm89),
+        Err(DeriveDecline::ContractionOutOfScope)
+    );
+}
+
+#[test]
+fn the_legacy_gemm_bridge_declares_operand_1_and_changes_no_token() {
+    // Weight on the right: the bridge's declaration matches the cell, so the
+    // token is what 0.17.0 derived.
+    let right = gemm_cell(false);
+    let t =
+        unpopped_vocab::try_structure_key_token(OpCategory::Gemm, &right, ArchSku::Sm89).unwrap();
+    assert_eq!(wdt_of(&t), "f8e4m3fn", "{t}");
+    // Weight on the left through the bridge still reads operand 1: documented,
+    // and the reason such callers move to `derive_structure_key`.
+    let left = gemm_cell(true);
+    let t =
+        unpopped_vocab::try_structure_key_token(OpCategory::Gemm, &left, ArchSku::Sm89).unwrap();
+    assert_eq!(wdt_of(&t), "f16", "{t}");
+}

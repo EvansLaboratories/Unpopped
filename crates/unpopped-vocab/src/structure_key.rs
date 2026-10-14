@@ -680,6 +680,13 @@ pub struct CellFacts {
     pub accumulator: Option<ElementKind>,
     /// The declared math-precision (§6.7-0013).
     pub math_fidelity: MpCode,
+    /// Which operand, in canonical order, carries the **weight role** of a
+    /// declared contraction (§6.6-0019): the operand whose dtype is the `<wdt>`
+    /// coordinate. It is a caller-declared fact and is never inferred from
+    /// operand position or dtype. [`derive_structure_key`] declines a declared
+    /// contraction that leaves it `None`
+    /// ([`DeriveDecline::WeightRoleNotDeclared`]).
+    pub weight_operand: Option<usize>,
 }
 
 impl CellFacts {
@@ -693,6 +700,7 @@ impl CellFacts {
             reduced_axes: AxisMask::EMPTY,
             accumulator: None,
             math_fidelity: MpCode::St,
+            weight_operand: None,
         }
     }
 
@@ -708,6 +716,14 @@ impl CellFacts {
         f.contraction_declared = matches!(op, OpCategory::Gemm);
         f.index_declared = matches!(op, OpCategory::Indexing | OpCategory::Embedding);
         f.reduced_axes = derive_reduce_axes(op, operands);
+        // The bridge DECLARES the weight to be operand 1 (`x @ W`, the rhs).
+        // This is the one positional read the legacy `op` argument keeps, so
+        // that no existing token changes; a caller whose weight is anywhere else
+        // (`W @ x`, a sibling-scale operand order) must use
+        // [`derive_structure_key`] and say which operand it is.
+        if f.contraction_declared && operands.len() >= 2 {
+            f.weight_operand = Some(1);
+        }
         f
     }
 }
@@ -1164,7 +1180,13 @@ fn derive_unchecked(operands: &[OperandDesc], facts: &CellFacts, target: TargetI
     let frame = Frame::of(operands);
 
     let contraction = if facts.contraction_declared {
-        derive_contraction(OpCategory::Gemm, operands)
+        // An undeclared weight falls back to operand 1 here, as the legacy
+        // bridge does; the conformant entry point declines it before this.
+        derive_contraction(
+            OpCategory::Gemm,
+            operands,
+            facts.weight_operand.unwrap_or(1),
+        )
     } else {
         None
     };
@@ -1346,12 +1368,21 @@ fn classify_mat_layout(od: &OperandDesc) -> Option<LayoutOrder> {
 /// facts instead of being rejected outright; a genuinely non-packed operand
 /// still declines (`None`) to sub-spec D. Any other shape/arity yields `None`
 /// — an honest "no contraction facts", never a guess.
-fn derive_contraction(op: OpCategory, operands: &[OperandDesc]) -> Option<ContractionKey> {
+fn derive_contraction(
+    op: OpCategory,
+    operands: &[OperandDesc],
+    weight: usize,
+) -> Option<ContractionKey> {
     // 3 operands = plain `[lhs, rhs, out]`; 4 = fused bias `[lhs, rhs, bias, out]`
     // (the per-column `[N]` bias the epilogue reads). The bias rides the existing
     // per-operand OperandKey list — it does NOT change the ContractionKey facts
     // (m/n/k/k_div), so the token is codec-compatible (no version bump).
     if op != OpCategory::Gemm || (operands.len() != 3 && operands.len() != 4) {
+        return None;
+    }
+    // The weight is a caller-declared operand, so it is untrusted input: it must
+    // name one of the inputs, never a slot past the list and never the output.
+    if weight + 1 >= operands.len() {
         return None;
     }
     let has_bias = operands.len() == 4;
@@ -1360,7 +1391,7 @@ fn derive_contraction(op: OpCategory, operands: &[OperandDesc]) -> Option<Contra
     // canonical operand spellings; `acc`/`mp` derive from the PRE-fold primary
     // dtype (the `F32Strict`-vs-`F32` distinction is exactly the `<mp>` input).
     let (wdt, acc, out_dt, mp) = (
-        canonical_dtype(rhs.dtype),
+        canonical_dtype(operands[weight].dtype),
         contraction_acc(lhs.dtype),
         canonical_dtype(out.dtype),
         contraction_mp(lhs.dtype),
@@ -1571,6 +1602,12 @@ pub enum DeriveDecline {
     /// contraction field cannot be derived from its operands (only plain
     /// `[lhs, rhs, out]` and bias `[lhs, rhs, bias, out]` rank-2/3 cells are).
     ContractionOutOfScope,
+    /// KISS-CLASSIFY §6.6-0019: contraction roles are declared but the weight
+    /// operand is not. `<wdt>` is the weight's dtype, and the weight is not
+    /// identified by position or dtype, so a deriver that guessed would emit a
+    /// well-formed token naming the wrong type. **Not in KISS's decline
+    /// vocabulary**: the wire name is this crate's.
+    WeightRoleNotDeclared,
 }
 
 impl DeriveDecline {
@@ -1584,6 +1621,7 @@ impl DeriveDecline {
             Self::CollapsedReduction => "CollapsedReduction",
             Self::ReducedAxisOutOfRange { .. } => "ReducedAxisOutOfRange",
             Self::ContractionOutOfScope => "ContractionOutOfScope",
+            Self::WeightRoleNotDeclared => "WeightRoleNotDeclared",
         }
     }
 }
@@ -1615,6 +1653,10 @@ impl core::fmt::Display for DeriveDecline {
                 f,
                 "contraction roles are declared but the contraction field cannot be \
                  derived from these operands (KISS-CLASSIFY §6.6-0016)"
+            ),
+            Self::WeightRoleNotDeclared => write!(
+                f,
+                "contraction roles are declared but the weight operand is not (KISS-CLASSIFY §6.6-0019)"
             ),
         }
     }
@@ -1651,8 +1693,13 @@ fn check_declines(operands: &[OperandDesc], facts: &CellFacts) -> Result<(), Der
             return Err(DeriveDecline::CollapsedReduction);
         }
     }
-    if facts.contraction_declared && derive_contraction(OpCategory::Gemm, operands).is_none() {
-        return Err(DeriveDecline::ContractionOutOfScope);
+    if facts.contraction_declared {
+        let Some(weight) = facts.weight_operand else {
+            return Err(DeriveDecline::WeightRoleNotDeclared);
+        };
+        if derive_contraction(OpCategory::Gemm, operands, weight).is_none() {
+            return Err(DeriveDecline::ContractionOutOfScope);
+        }
     }
     Ok(())
 }
