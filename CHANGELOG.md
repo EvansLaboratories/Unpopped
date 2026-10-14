@@ -15,7 +15,7 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## Unreleased — structure-key `sk5` (breaking; version allocated at gate)
+## Unreleased — `0.17.0` (breaking)
 
 Moves `STRUCTURE_KEY_VERSION` 4 → 5 and aligns the keyer with KISS-CLASSIFY at
 `KISS@ff12265` (KISS#535, KISS#536). **Every non-trivial token changes.** If you
@@ -108,7 +108,7 @@ no contraction field.
 
 ---
 
-## Unreleased — `0.16.0` (breaking)
+## `0.16.0` (breaking; published)
 
 ### f16/bf16 take FP8's shape: a portable carrier and an emitted codec
 
