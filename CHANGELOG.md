@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## Unreleased — `0.17.2`
+
+CI and docs only: `.github/CODEOWNERS` (`* @ciresnave`), a top-level
+`permissions: contents: read` in `verify.yml`, and `docs/glossary.md`. No code,
+token or API change.
+
+---
+
 ## Unreleased — `0.17.1`
 
 Docs only. Adds `ROADMAP.md` at the repository root: the queue, what each item

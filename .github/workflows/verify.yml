@@ -64,6 +64,15 @@ on:
   push:
   pull_request:
 
+# The token gets read access to the repository contents and nothing else. Every
+# job below checks out, builds and tests, and none of them writes to the forge,
+# so a job that needs more must say so itself rather than inherit it. Without
+# this block the token carries the repository's default, which is broader.
+# There are no service-container images in this workflow, so there is nothing
+# to pin by digest or waive (SUP-008's `unpinned-images`).
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
