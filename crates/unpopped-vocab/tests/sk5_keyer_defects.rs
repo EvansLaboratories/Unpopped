@@ -180,3 +180,41 @@ fn explicit_roles_put_operands_in_canonical_order() {
     assert_eq!(k.operands[1].contig, unpopped_vocab::Contiguity::Strided);
     assert_eq!(k.operands[2].contig, unpopped_vocab::Contiguity::Contig);
 }
+
+// ---- the class rules are ordered, and pointwise needs the frame rank --------
+
+#[test]
+fn an_index_role_outranks_a_reduced_axis_set() {
+    // §6.5-0015: contraction, then index, then reduction. A cell that declares
+    // both an index role and a reduced axis is `ndx`, and (§6.6-0017) its reduce
+    // field is then `-`, because the field is non-`-` iff the class is `rdc`.
+    let ops = [
+        od(&[4, 8], &[8, 1], ElementKind::F32),
+        od(&[4, 1], &[1, 1], ElementKind::F32),
+    ];
+    let mut f = reduced(&[1]);
+    f.index_declared = true;
+    let k = derive_structure_key(&ops, &f, ArchSku::Sm89).unwrap();
+    assert_eq!(k.cell_class, CellClass::Ndx);
+    assert_eq!(k.reduce_axes, AxisMask::EMPTY);
+    assert!(k.to_token().ends_with("|-"), "{}", k.to_token());
+}
+
+#[test]
+fn a_written_operand_must_have_the_iteration_rank_to_be_pointwise() {
+    // `[1,8]` in, `[8]` out: every extent is 1 or the frame extent, but the
+    // output is not the iteration rank, so §6.5-0015(4) does not hold.
+    let ops = [
+        od(&[1, 8], &[8, 1], ElementKind::F32),
+        od(&[8], &[1], ElementKind::F32),
+    ];
+    let k = derive_structure_key(&ops, &CellFacts::new(), ArchSku::Sm89).unwrap();
+    assert_eq!(k.cell_class, CellClass::Oth);
+    // Control: the same extents at the iteration rank are pointwise.
+    let same = [
+        od(&[1, 8], &[8, 1], ElementKind::F32),
+        od(&[1, 8], &[8, 1], ElementKind::F32),
+    ];
+    let k = derive_structure_key(&same, &CellFacts::new(), ArchSku::Sm89).unwrap();
+    assert_eq!(k.cell_class, CellClass::Ew1);
+}
