@@ -1019,9 +1019,13 @@ mod tests {
         // of this test built it by rewriting the prefix to the then-current
         // version, and the sk3->sk4 pass turned that into a no-op, so the fixture
         // silently stopped constructing a future token at all.
-        let future = ew_token().replacen("sk4|", "sk5|", 1);
+        // Derived from the constant, never spelled: the literal-prefix form of
+        // this fixture went stale on every schema bump (sk3->sk4, sk4->sk5).
+        let current = format!("sk{STRUCTURE_KEY_VERSION}|");
+        let future_prefix = format!("sk{}|", STRUCTURE_KEY_VERSION + 1);
+        let future = ew_token().replacen(&current, &future_prefix, 1);
         assert!(
-            future.starts_with("sk5|"),
+            future.starts_with(&future_prefix),
             "fixture must carry a FUTURE version"
         );
         let line = format!(

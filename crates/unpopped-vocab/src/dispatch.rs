@@ -448,10 +448,9 @@ pub fn reported_entry(
 #[must_use]
 pub fn seed_winner(key: &StructureKey) -> Option<(Implementor, &'static str)> {
     use crate::ElementKind;
-    use crate::sku::OpCategory;
-    use crate::structure_key::{Contiguity, VecWidth, WorkClass};
+    use crate::structure_key::{CellClass, Contiguity, VecWidth, WorkClass};
 
-    if key.op != OpCategory::Gemm {
+    if key.cell_class != CellClass::Ctr {
         return None;
     }
     // Large, aligned, vectorizable, half-precision GEMM is cuBLAS's home turf.

@@ -1037,12 +1037,16 @@ Forcing that fix created the pattern that later answered this question.)*
   guard will silently stop checking"* — and it needed the other repo's
   **visibility modifiers**, which are exactly what cannot be seen from here.
 
-  **3 · EXTERNAL WITHOUT A MECHANISM — one, and it is small.**
-  `KISS-CLASSIFY-6.8-0002`, asserted by `operand_facts_reach_the_key.rs` and
-  covered by **no vendored vector**. Of 6 clause IDs asserted across the vocab
-  tests, 5 appear in the 37 vendored vectors and this one does not. **Remedy is
-  cheap and not local: ask KISS for a vector exercising it**, which converts a
-  paraphrase into the same content-pinned mechanism the other five already have.
+  **3 · EXTERNAL WITHOUT A MECHANISM — closed.** `KISS-CLASSIFY-6.8-0002` was
+  the one clause asserted by `operand_facts_reach_the_key.rs` that no vendored
+  vector covered, and this item asked KISS for one. **The vector already
+  existed**: `target_match_vectors` (8 pairs: clause, axis, left, right,
+  expect_match, left_token, right_token; vocabulary-blind) has been in
+  `structure_key_vectors.json` since KISS#392 (2026-09-05), was vendored with
+  the `bc16715` copy, and is asserted by `target_match_vectors_are_byte_exact`
+  in `kiss_byte_match.rs`. The "ask KISS for one" remedy was written without
+  listing the file's keys, which is the same error as the next paragraph's
+  third item.
 
   ⚠️ **Three self-inflicted measurement errors during this sweep, all the same
   shape — a label that does not depend on what it labels.** An `echo "(empty…)"`

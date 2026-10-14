@@ -15,7 +15,100 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## Unreleased — `0.16.0` (breaking)
+## Unreleased — `0.17.0` (breaking)
+
+Moves `STRUCTURE_KEY_VERSION` 4 → 5 and aligns the keyer with KISS-CLASSIFY at
+`KISS@ff12265` (KISS#535, KISS#536). **Every non-trivial token changes.** If you
+cache on a token, re-derive; an `sk4` token is `UnsupportedSchemaVersion`.
+
+### What changes in the token
+
+| Field | `sk4` | `sk5` | KISS-CLASSIFY |
+|---|---|---|---|
+| Field 1 | 24 op-family codes (`bin`, `une`, `red`, `gem`, …) | the **derived** cell class: `ctr` `ndx` `rdc` `ew1` `ew2` `ew3` `oth` | §6.5-0006, §6.5-0015 |
+| Operand sub-key | five parts | five parts, plus `/dl` or `/dc` iff the operand carries a `quant` record | §6.3-0009a, §6.7-0004 |
+| Own extent-1 axis, non-zero stride, frame wider | mask bit clear | bit **set** (an own extent-1 axis counts as stride 0) | §6.6-0008, KISS#520 |
+| Innermost axis of a reduction | `v4` / `v8` when aligned | `v1` | §6.5-0009(b) |
+
+### ⚠️ BREAKING (API)
+
+- **`StructureKey::op: OpCategory` is replaced by `StructureKey::cell_class:
+  CellClass`.** The token no longer names an op family, so none can be recovered
+  from it. `seed_winner` reads `CellClass::Ctr`.
+- **`OperandKey` gains `dequant: Option<DequantForm>`; `OperandDesc` gains
+  `role: OperandRole` and `dequant_form: Option<DequantForm>`.** All three types
+  are `#[non_exhaustive]`; construct through `new` / `with_role` /
+  `with_dequant_form`. `OperandRole::Unspecified` keeps the pre-sk5 convention
+  (inputs, then the output), so existing callers key as before.
+- **`TokenDecline::UnknownOpFamily` is `UnknownCellClass`** (and its wire name),
+  and every retired sk4 op code lands there. New variants: `BadOperandSubKey`,
+  `BadDequantForm`, `ReduceNotGatedToRdc`, `RdcWithoutReduce`,
+  `ContractionPresenceMismatch` (§6.6-0017, §6.6-0010, §6.7-0004).
+- **`DeriveDecline` gains** `ReservedDtypeAtOperand0`, `CollapsedReduction`,
+  `ReducedAxisOutOfRange` and `ContractionOutOfScope`, with a `wire_name()` in
+  the KISS vocabulary.
+
+### New
+
+- **`derive_structure_key` / `derive_structure_key_token`** take `CellFacts`
+  (declared contraction roles, index role, reduced axes, accumulator,
+  math-fidelity) beside the operands, which is KISS's derivation input
+  (§6.6-0012), and put operands with roles in canonical order (§6.6-0014).
+  `structure_key` and `try_structure_key` keep their `op` argument and build
+  the facts from it through a bridge: `Gemm` declares contraction roles,
+  `Indexing`/`Embedding` an index role, a keepdim `Reduction` the axes it folded.
+  **That bridge is not an op-to-class table**; the class is still derived from
+  the operands.
+- **`CellClass`, `DequantForm`, `OperandRole`, `CellFacts`.**
+
+### Fixed: four keyer defects against KISS (measured by baracuda at `0.16.0`)
+
+Each is pinned through both the new and the legacy entry point in
+`tests/sk5_keyer_defects.rs`, and by KISS's vectors.
+
+| | Clause | `sk4` | `sk5` |
+|---|---|---|---|
+| (a) | §6.5-0009(b) | a reduced innermost axis derived `v4`/`v8` | `v1` |
+| (b) | §6.6-0009 | a collapsed reduction output was keyed as a non-reduction | typed decline `CollapsedReduction` |
+| (c) | §6.6-0009 | a reduced axis at or past the rank was keyed | typed decline `ReducedAxisOutOfRange` |
+| (d) | §6.1-0001 | a reserved dtype (`f8e4m3fnuz`, `f8e5m2fnuz`) at operand 0 was keyed | typed decline `ReservedDtypeAtOperand0` |
+
+**Not a defect, and left alone:** a reserved dtype at a *non-primary* operand
+still derives. Only operand 0 is a key position (§6.6-0015); KISS ruled this on
+2026-10-14 and the sk4 behaviour was right.
+
+### Conformance
+
+Against `kiss/structure_key_derivation_vectors.json` (36 vectors, blob
+`697aa543`): **35 PASS, 0 FAIL, 1 skipped**, run as
+`cargo test -p unpopped-vocab --test kiss_derivation_vectors -- --nocapture`.
+Only vectors with `spec_golden` are spec-anchored; the rest are
+reference-deriver output, so agreement there is two derivers agreeing. The one
+skip is `decline_contraction_out_of_scope`, which waits on a batch role that is
+undefined (KISS#543). The codec leg (`kiss_byte_match.rs`) passes 26 positive
+and 21 decline vectors. `[8,0]` derives `da` / `v1`, as KISS reads §6.3-0011.
+
+**Not covered:** a declared contraction. `ctr` cells are keyed as before from
+plain `[lhs, rhs, out]` and bias operand lists; the weight role (§6.6-0019) is
+still not an input (#31), and a declared contraction whose field cannot be
+derived is now a `ContractionOutOfScope` decline instead of a `gem` token with
+no contraction field.
+
+### Other
+
+- **Vendored from KISS `ff12265`:** `structure_key_vectors.json`,
+  `dtype_manifest.json` and the new `structure_key_derivation_vectors.json`. The
+  CRLF/LF re-vendor hold in `kiss/README.md` is lifted (KISS measured 0 CR bytes
+  from both generators).
+- **`unpopped-vocab` gains a dev-dependency, `serde_json`**, for the derivation
+  harness. Its normal dependencies are unchanged.
+- **Docs corrected:** the `[8,0]` "deliberately not changed" note below and the
+  `docs/deferred.md` "ask KISS for a target-match vector" remedy were both stale
+  (the vector has been vendored and asserted since the `bc16715` copy).
+
+---
+
+## `0.16.0` (breaking; published)
 
 ### f16/bf16 take FP8's shape: a portable carrier and an emitted codec
 
@@ -323,10 +416,13 @@ path, and measuring through the public `structure_key` reversed the
 retraction. Pinned by `unpopped-vocab/tests/zero_is_not_maximally_divisible.rs`,
 whose three tests fail on `0.12.0`.
 
-**Deliberately not changed:** an operand whose innermost non-unit axis has
-extent `0` (e.g. `[8, 0]`) still derives from the outer axis (`d8`). Whether
-that is wrong depends on how KISS resolves its open "active axis" question for
-§6.3-0011.
+**Not changed here, changed in `0.14.0`:** an operand whose innermost axis has
+extent `0` (e.g. `[8, 0]`) derives `da` / `v1` from axis `rank − 1`, not `d8`
+from the outer axis. KISS closed the "active axis" question for §6.3-0011
+(innermost active axis is axis `rank − 1`, no non-unit exclusion; §6.5-0012
+buckets `E = 0` as `da`). Measured at `0.16.0` and at sk5: `[8,0]` strides
+`[1,1]` keys `co/00/v1/da/f`, as KISS's
+`innermost_axis_extent_zero_is_axis_rank_minus_1` vector says.
 
 ## 2026-10-01 — everything at `0.12.0`
 

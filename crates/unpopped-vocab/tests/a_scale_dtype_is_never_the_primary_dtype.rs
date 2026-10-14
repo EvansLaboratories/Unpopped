@@ -41,7 +41,10 @@ fn a_scale_first_list_declines() {
 #[test]
 fn a_scale_as_a_sibling_still_keys() {
     let ops = [od(512, ElementKind::I4), od(16, ElementKind::F8E8M0)];
-    let key = try_structure_key(OpCategory::Gemm, &ops, ArchSku::Sm89)
+    // Not `Gemm`: a declared contraction whose field cannot be derived from two
+    // operands is a decline of its own (`ContractionOutOfScope`), which would
+    // answer a different question than this control asks.
+    let key = try_structure_key(OpCategory::Quantization, &ops, ArchSku::Sm89)
         .expect("a scale in a non-primary slot is valid");
     assert_eq!(key.dtype, ElementKind::I4);
 }

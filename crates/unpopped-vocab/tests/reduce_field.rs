@@ -18,7 +18,7 @@
 //! Every token below is KISS's, from `conformance/tests/structure_key_golden.rs`
 //! at `origin/main` = `19c3ad7`.
 
-use unpopped_vocab::{AxisMask, StructureKey};
+use unpopped_vocab::{AxisMask, CellClass, StructureKey};
 
 /// KISS's four reduce-field goldens, re-encoded byte-for-byte.
 ///
@@ -30,13 +30,13 @@ use unpopped_vocab::{AxisMask, StructureKey};
 fn the_four_reduce_spellings_round_trip_byte_for_byte() {
     let goldens = [
         // rank 2, trailing axis only  → `rlast` (§6.6-0009 case 3)
-        "sk4|red|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rlast",
+        "sk5|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rlast",
         // rank 2, every axis          → `rall`  (case 2)
-        "sk4|red|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall",
+        "sk5|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall",
         // rank 4, axes {1,3}          → `x0a`   (case 4 — neither all nor lone-trailing)
-        "sk4|red|f32|cuda:sm89|ix32|block|r4|co/00/v1/da/f;co/00/v1/da/f|x0a",
+        "sk5|rdc|f32|cuda:sm89|ix32|block|r4|co/00/v1/da/f;co/00/v1/da/f|x0a",
         // not a reduction             → `-`     (case 1)
-        "sk4|bin|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
+        "sk5|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
     ];
     for g in goldens {
         let key = StructureKey::from_token(g).unwrap_or_else(|| panic!("golden must decode: {g}"));
@@ -55,7 +55,7 @@ fn the_four_reduce_spellings_round_trip_byte_for_byte() {
 /// Golden: `a1_reduction_rank1_all_axes`.
 #[test]
 fn a_rank_1_reduction_spells_rall_not_rlast() {
-    let g = "sk4|red|f32|cuda:sm89|ix32|warp|r1|co/00/v1/d8/f;co/00/v1/da/f|rall";
+    let g = "sk5|rdc|f32|cuda:sm89|ix32|warp|r1|co/00/v1/d8/f;co/00/v1/da/f|rall";
     let key = StructureKey::from_token(g).expect("golden must decode");
     assert_eq!(key.rank, 1);
     assert_eq!(
@@ -78,7 +78,7 @@ fn a_rank_1_reduction_spells_rall_not_rlast() {
 /// someone happened to write a vector for is not a spelling rule.
 #[test]
 fn no_rank_spells_a_sentinel_case_as_a_bitmask() {
-    let base = "sk4|red|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
+    let base = "sk5|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
     let mut key = StructureKey::from_token(base).expect("stem must decode");
 
     for rank in 1..=8u8 {
@@ -124,7 +124,7 @@ fn no_rank_spells_a_sentinel_case_as_a_bitmask() {
 /// being wrong alone.
 #[test]
 fn encode_and_decode_agree_on_every_reachable_mask() {
-    let base = "sk4|red|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
+    let base = "sk5|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
     let mut key = StructureKey::from_token(base).expect("stem must decode");
 
     let mut saw = (false, false, false);
@@ -132,6 +132,13 @@ fn encode_and_decode_agree_on_every_reachable_mask() {
         key.rank = rank;
         for mask in 0..=all_axes(rank) {
             key.reduce_axes = AxisMask(mask);
+            // §6.6-0017: the reduce field is non-`-` iff the class is `rdc`, so
+            // the empty set belongs to a non-reduction class.
+            key.cell_class = if mask == 0 {
+                CellClass::Ew1
+            } else {
+                CellClass::Rdc
+            };
             let token = key.to_token();
             let back = StructureKey::from_token(&token)
                 .unwrap_or_else(|| panic!("encoder emitted a token the decoder refuses: {token}"));

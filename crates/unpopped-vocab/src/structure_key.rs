@@ -66,7 +66,15 @@ pub const MAX_OPERANDS: usize = 8;
 /// the FP8 spellings go variant-explicit (`e4m3` → `e4m3fn`; `e5m2` is already
 /// variant-explicit and unchanged; the AMD `e4m3fnuz`/`e5m2fnuz` spellings are
 /// reserved, unused). Non-gem cells change only the version prefix.
-pub const STRUCTURE_KEY_VERSION: u16 = 4;
+///
+/// v5 (KISS-CLASSIFY 6.5-0006/0015, 6.3-0009a, 6.6-0008; KISS#535/#536): the
+/// 24 op-family codes are **gone** and the field is the **derived** seven-class
+/// cell class (`ctr`/`ndx`/`rdc`/`ew1`/`ew2`/`ew3`/`oth`); an operand that
+/// carries a `quant` record appends `dl`/`dc` to its sub-key; and an own axis of
+/// extent 1 counts as stride 0 for the broadcast mask. None of the three is
+/// additive, so this is a schema event. `StructureKey::op` is replaced by
+/// [`StructureKey::cell_class`].
+pub const STRUCTURE_KEY_VERSION: u16 = 5;
 
 // ===========================================================================
 // Predicate axes
@@ -524,19 +532,190 @@ impl AccMp {
     }
 }
 
-/// Whether a cell of this op family carries the **contraction** group in the
-/// optional-trailing token slot (`gem`), as opposed to the non-contraction
-/// `(acc + mp)` field (everything else).
+/// Whether a cell of this class carries the **contraction** group in the
+/// optional-trailing token slot (`ctr`), as opposed to the non-contraction
+/// `(acc + mp)` field (every other class).
 ///
 /// The single source of truth for the tenth-field dispatch, deliberately shared
 /// by the encoder and the decoder. KISS-CLASSIFY-6.7-0013 resolves the
-/// nine-or-ten-field ambiguity "by the op-family code" — **not** by field count,
-/// and not by sniffing the payload's shape. A decoder that splits positionally
-/// on a fixed count breaks silently the moment a cell widens from nine fields to
-/// ten, and one that sniffs the payload would accept a contraction group on a
-/// `red` cell instead of declining it.
-const fn carries_contraction_field(op: OpCategory) -> bool {
-    matches!(op, OpCategory::Gemm)
+/// nine-or-ten-field ambiguity "by the cell-class code" — **not** by field
+/// count, and not by sniffing the payload's shape. A decoder that splits
+/// positionally on a fixed count breaks silently the moment a cell widens from
+/// nine fields to ten, and one that sniffs the payload would accept a
+/// contraction group on an `rdc` cell instead of declining it.
+const fn carries_contraction_field(class: CellClass) -> bool {
+    matches!(class, CellClass::Ctr)
+}
+
+/// The coarse **structural** class of a cell (KISS-CLASSIFY-6.5-0006), one of
+/// seven. It is **derived** (§6.5-0015), never supplied: it replaces the 24
+/// op-family codes of sk4, which named what the op *was* rather than what the
+/// cell *looks like*.
+///
+/// First match wins: `Ctr` if contraction roles are declared, else `Ndx` if an
+/// index role is declared, else `Rdc` if the reduced-axis set is non-empty,
+/// else `Ew1`/`Ew2`/`Ew3` for a pointwise cell with one/two/three input
+/// operands, else `Oth`. The class is total: there is no "cannot map" case.
+///
+/// A scan, a softmax and a unary activation over a same-shape input and output
+/// derive the **same** class (`Ew1`); telling them apart is the op identity's
+/// job, which is why a lookup carries it.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
+pub enum CellClass {
+    /// `ctr` — dense contraction (M/N/K roles declared).
+    Ctr,
+    /// `ndx` — indexed access (an index-operand role declared).
+    Ndx,
+    /// `rdc` — reduction (a non-empty reduced-axis set).
+    Rdc,
+    /// `ew1` — pointwise, one input operand.
+    Ew1,
+    /// `ew2` — pointwise, two input operands.
+    Ew2,
+    /// `ew3` — pointwise, three input operands.
+    Ew3,
+    /// `oth` — none of the above.
+    Oth,
+}
+
+impl CellClass {
+    /// The three-letter token code (§6.5-0006).
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Ctr => "ctr",
+            Self::Ndx => "ndx",
+            Self::Rdc => "rdc",
+            Self::Ew1 => "ew1",
+            Self::Ew2 => "ew2",
+            Self::Ew3 => "ew3",
+            Self::Oth => "oth",
+        }
+    }
+
+    /// The class a token code names, or `None` for anything outside the seven —
+    /// which includes every retired sk4 op-family code (`gem`, `une`, `red`, …).
+    #[must_use]
+    pub fn from_code(s: &str) -> Option<Self> {
+        Some(match s {
+            "ctr" => Self::Ctr,
+            "ndx" => Self::Ndx,
+            "rdc" => Self::Rdc,
+            "ew1" => Self::Ew1,
+            "ew2" => Self::Ew2,
+            "ew3" => Self::Ew3,
+            "oth" => Self::Oth,
+            _ => return None,
+        })
+    }
+}
+
+/// How a quantized operand's stored bits become values (KISS-CLASSIFY-6.3-0009a).
+/// Keyed from sk5 as the optional last component of the operand's sub-key:
+/// linear and codebook are not inter-substitutable. Never inferred from the
+/// quantization family.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
+pub enum DequantForm {
+    /// `dl` — an affine map of the stored integer and its block scale.
+    Linear,
+    /// `dc` — an index into a table of values the stored bits select.
+    Codebook,
+}
+
+impl DequantForm {
+    /// The token spelling (`dl` / `dc`).
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Linear => "dl",
+            Self::Codebook => "dc",
+        }
+    }
+}
+
+/// Whether an operand is read, written, or both (KISS-CLASSIFY-6.6-0014).
+///
+/// [`OperandRole::Unspecified`] is the pre-sk5 convention — *inputs followed by
+/// the output* — and is what [`OperandDesc::new`] produces. A cell whose
+/// operands are all `Unspecified` is taken in the order given, the last operand
+/// being the output. Any explicit role switches the cell to canonical ordering:
+/// inputs and in-place operands in call order, then outputs.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash)]
+#[non_exhaustive]
+pub enum OperandRole {
+    /// No role stated; positional (the last operand is the output).
+    #[default]
+    Unspecified,
+    /// Read only.
+    Input,
+    /// Written only.
+    Output,
+    /// Read and written (appears once, as an input).
+    InOut,
+}
+
+/// The caller-declared facts a cell class is derived from
+/// (KISS-CLASSIFY-6.6-0012), beside the operand descriptors.
+///
+/// These are facts **of the invocation**, taken from the op's own declared role
+/// and iteration-space facts, not categories; an implementation MUST NOT infer
+/// them from bare operand extents. `#[non_exhaustive]`; build with
+/// [`CellFacts::new`].
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
+pub struct CellFacts {
+    /// The M/N/K contraction axis roles are declared (§6.6-0016).
+    pub contraction_declared: bool,
+    /// An index-operand role is declared (§6.6-0012). Only its presence reaches
+    /// the class; the slot is not keyed.
+    pub index_declared: bool,
+    /// The reduced iteration-frame axes (§6.6-0009), bit `d` for frame axis `d`.
+    pub reduced_axes: AxisMask,
+    /// A declared accumulator dtype (§6.7-0013), or `None` to accumulate at the
+    /// compute dtype. This crate's own policy is "accumulate at the compute
+    /// dtype, bit-stable"; a caller whose cell does otherwise must say so, since
+    /// a wrong declaration separates keys that should collide.
+    pub accumulator: Option<ElementKind>,
+    /// The declared math-precision (§6.7-0013).
+    pub math_fidelity: MpCode,
+}
+
+impl CellFacts {
+    /// No declared facts: not a contraction, no index role, no reduced axes,
+    /// accumulating at the compute dtype with `st`.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            contraction_declared: false,
+            index_declared: false,
+            reduced_axes: AxisMask::EMPTY,
+            accumulator: None,
+            math_fidelity: MpCode::St,
+        }
+    }
+
+    /// The facts the pre-sk5 `op: OpCategory` argument implied. This is a bridge
+    /// for the legacy entry points, **not** an op-to-class table: only the three
+    /// declared facts are read from the op, and the class is still derived from
+    /// them and the operands (§6.5-0015). `Indexing`/`Embedding` declare an
+    /// index role; `Gemm` declares contraction roles; a keepdim `Reduction`
+    /// declares the axes its output folded to size 1.
+    #[must_use]
+    fn from_op(op: OpCategory, operands: &[OperandDesc]) -> Self {
+        let mut f = Self::new();
+        f.contraction_declared = matches!(op, OpCategory::Gemm);
+        f.index_declared = matches!(op, OpCategory::Indexing | OpCategory::Embedding);
+        f.reduced_axes = derive_reduce_axes(op, operands);
+        f
+    }
+}
+
+impl Default for CellFacts {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ===========================================================================
@@ -563,6 +742,9 @@ pub struct OperandKey {
     pub inner_div: DivBucket,
     /// `true` if any axis has a negative stride (a flipped / reversed view).
     pub flipped: bool,
+    /// The operand's dequantization form, iff it carries a `quant` record
+    /// (keyed from sk5, §6.3-0009a); `None` for every other operand.
+    pub dequant: Option<DequantForm>,
 }
 
 impl OperandKey {
@@ -581,7 +763,15 @@ impl OperandKey {
             vec_width,
             inner_div,
             flipped,
+            dequant: None,
         }
+    }
+
+    /// This sub-key with a `dequant_form` component (§6.3-0009a).
+    #[must_use]
+    pub const fn with_dequant(mut self, dequant: DequantForm) -> Self {
+        self.dequant = Some(dequant);
+        self
     }
 }
 
@@ -597,9 +787,10 @@ impl OperandKey {
 pub struct StructureKey {
     /// Schema version ([`STRUCTURE_KEY_VERSION`]).
     pub version: u16,
-    /// The op taxonomy this key was computed for (drives canonicalization
-    /// legality).
-    pub op: OpCategory,
+    /// The derived structural class of the cell (§6.5-0015). It replaces the
+    /// sk4 `op: OpCategory` field: the token no longer names an op family, so
+    /// none can be recovered from it.
+    pub cell_class: CellClass,
     /// Primary dtype (operand 0). Mixed-dtype ops fold per-operand dtype in a
     /// follow-up; v1 assumes a uniform operand dtype.
     pub dtype: ElementKind,
@@ -759,6 +950,11 @@ pub struct OperandDesc {
     pub align_bytes: u32,
     /// Symbolic-extent facts, if any axis is live-vs-capacity.
     pub symbolic: Option<SymExtent>,
+    /// Read/written role (§6.6-0014); [`OperandRole::Unspecified`] by default.
+    pub role: OperandRole,
+    /// The operand's `dequant_form`, iff it carries a `quant` record
+    /// (§6.3-0009a). Keyed from sk5.
+    pub dequant_form: Option<DequantForm>,
 }
 
 impl OperandDesc {
@@ -808,7 +1004,24 @@ impl OperandDesc {
             dtype,
             align_bytes,
             symbolic: None,
+            role: OperandRole::Unspecified,
+            dequant_form: None,
         })
+    }
+
+    /// This operand with a read/written role (§6.6-0014).
+    #[must_use]
+    pub const fn with_role(mut self, role: OperandRole) -> Self {
+        self.role = role;
+        self
+    }
+
+    /// This operand with a `dequant_form` (§6.3-0009a), marking it as one that
+    /// carries a `quant` record.
+    #[must_use]
+    pub const fn with_dequant_form(mut self, form: DequantForm) -> Self {
+        self.dequant_form = Some(form);
+        self
     }
 
     // NOTE: `from_tensor_ref` (build an OperandDesc from a borrowed device
@@ -833,25 +1046,147 @@ impl OperandDesc {
 /// reimplementing the derivation, so telemetry and the build matrix join on the
 /// same token.
 ///
-/// ⚠️ **Not conformant for one input; prefer [`try_structure_key`].** This
-/// cannot decline. For a scale-type dtype (`f8e8m0`/`f8e6m2`) at operand 0,
-/// KISS-CLASSIFY §6.6-0021 requires a decline, and this keys it with the
-/// scale's dtype instead. It will be `#[deprecated]` in the release that migrates
-/// this workspace's own callers (about 200 sites at 0.14.0). Every other input
-/// derives exactly what `try_structure_key` does.
+/// **The `op` argument no longer names a token field.** From sk5 the cell class
+/// is *derived* (§6.5-0015) from the operands and three declared facts; `op`
+/// only supplies those facts through a bridge (see [`CellFacts`]): `Gemm`
+/// declares contraction roles, `Indexing`/`Embedding` an index role, and a
+/// keepdim `Reduction` the axes its output folded. A caller that knows its
+/// facts should use [`derive_structure_key`], which takes them directly and can
+/// also state roles, accumulator and `dequant_form`.
+///
+/// ⚠️ **Not conformant for four inputs; prefer [`try_structure_key`].** This
+/// cannot decline, so it keys what §6.6-0021 / §6.1-0001 / §6.6-0009 require a
+/// decline for: a scale-type dtype or a reserved dtype at operand 0, a reduction
+/// whose output is collapsed instead of keepdim, and a reduced axis at or past
+/// the rank (whose bit it drops). It will be `#[deprecated]` in the release that
+/// migrates this workspace's own callers (about 200 sites at 0.14.0). Every
+/// other input derives exactly what `try_structure_key` does.
 #[must_use]
 pub fn structure_key(
     op: OpCategory,
     operands: &[OperandDesc],
     target: impl Into<TargetId>,
 ) -> StructureKey {
-    let target = target.into();
+    derive_unchecked(operands, &CellFacts::from_op(op, operands), target.into())
+}
+
+/// The canonical operand order (§6.6-0014): inputs and in-place operands in call
+/// order, then outputs. A cell whose operands are all [`OperandRole::Unspecified`]
+/// is taken as given (inputs followed by the output), borrowed without a copy.
+fn canonical_operands(operands: &[OperandDesc]) -> std::borrow::Cow<'_, [OperandDesc]> {
+    if operands.iter().all(|o| o.role == OperandRole::Unspecified) {
+        return std::borrow::Cow::Borrowed(operands);
+    }
+    let is_out = |o: &&OperandDesc| o.role == OperandRole::Output;
+    let mut v: Vec<OperandDesc> = operands.iter().filter(|o| !is_out(o)).copied().collect();
+    v.extend(operands.iter().filter(is_out).copied());
+    std::borrow::Cow::Owned(v)
+}
+
+/// `(is_input, is_written)` for operand `i` of a canonically-ordered cell.
+fn operand_use(operands: &[OperandDesc], i: usize) -> (bool, bool) {
+    if operands.iter().all(|o| o.role == OperandRole::Unspecified) {
+        // Pre-sk5 convention: the last operand is the output.
+        let last = i + 1 == operands.len();
+        return (!last, last);
+    }
+    match operands[i].role {
+        // A mixed cell takes an unstated operand as an input.
+        OperandRole::Unspecified | OperandRole::Input => (true, false),
+        OperandRole::Output => (false, true),
+        OperandRole::InOut => (true, true),
+    }
+}
+
+/// §6.5-0015: the cell class, from the descriptors and the declared facts. The
+/// first rule that holds decides; the derivation reads no op name.
+fn derive_cell_class(
+    operands: &[OperandDesc],
+    frame: &Frame,
+    facts: &CellFacts,
+    contraction_derived: bool,
+    reduced: AxisMask,
+) -> CellClass {
+    // (1) A declared contraction is `ctr` only where its contraction field can
+    // be derived; a cell whose field cannot be expressed continues down the
+    // rules instead of emitting a `ctr` token with no field to parse (the
+    // checked entry point declines it, §6.6-0016).
+    if facts.contraction_declared && contraction_derived {
+        return CellClass::Ctr;
+    }
+    // (2) index role, (3) a non-empty reduced-axis set.
+    if facts.index_declared {
+        return CellClass::Ndx;
+    }
+    if !reduced.is_empty() {
+        return CellClass::Rdc;
+    }
+    // (4) pointwise: at every frame axis every operand's extent (its own, or 1
+    // where it has no such axis) is 1 or the frame extent, and every written
+    // operand has exactly the frame extent at every axis and the frame rank.
+    let mut n_in = 0usize;
+    let mut pointwise = true;
+    for (i, o) in operands.iter().enumerate() {
+        let (is_in, is_written) = operand_use(operands, i);
+        n_in += usize::from(is_in);
+        let r = o.rank as usize;
+        if is_written && r != frame.rank {
+            pointwise = false;
+        }
+        let off = frame.rank.saturating_sub(r);
+        for a in 0..frame.rank {
+            let ext = if a < off { 1 } else { o.shape[a - off].max(0) };
+            if ext != 1 && ext != frame.extents[a] {
+                pointwise = false;
+            }
+            if is_written && ext != frame.extents[a] {
+                pointwise = false;
+            }
+        }
+    }
+    match (pointwise, n_in) {
+        (true, 1) => CellClass::Ew1,
+        (true, 2) => CellClass::Ew2,
+        (true, 3) => CellClass::Ew3,
+        // (5) includes a pointwise cell with no input operand and one with more
+        // than three.
+        _ => CellClass::Oth,
+    }
+}
+
+/// The derivation proper. Never declines: it is what [`structure_key`] always
+/// returned, with the sk5 class and facts. The decline checks live in
+/// [`check_declines`], which the conformant entry points run first.
+fn derive_unchecked(operands: &[OperandDesc], facts: &CellFacts, target: TargetId) -> StructureKey {
+    let canon = canonical_operands(operands);
+    let operands: &[OperandDesc] = &canon;
     let n = operands.len().min(MAX_OPERANDS);
+    let frame = Frame::of(operands);
+
+    let contraction = if facts.contraction_declared {
+        derive_contraction(OpCategory::Gemm, operands)
+    } else {
+        None
+    };
+    // Bits at or past the rank name no axis; the unchecked path drops them
+    // rather than key a set that cannot exist.
+    let in_range = AxisMask(facts.reduced_axes.0 & all_axes_mask(frame.rank as u8));
+    let class = derive_cell_class(operands, &frame, facts, contraction.is_some(), in_range);
+    // §6.6-0017: the reduce field is non-`-` iff the class is `rdc`.
+    let reduce_axes = if class == CellClass::Rdc {
+        in_range
+    } else {
+        AxisMask::EMPTY
+    };
+    // §6.5-0009(b): an operand whose innermost active axis is a reduced axis
+    // takes `v1`. The innermost frame axis is `rank - 1`, and every operand's
+    // own innermost axis lands there (right alignment, §6.6-0013).
+    let reduced_innermost = frame.rank > 0 && reduce_axes.is_set((frame.rank - 1) as u8);
+
     let mut keys = [OperandKey::default(); MAX_OPERANDS];
     let mut max_off: i64 = 0;
-    let frame = Frame::of(operands);
     for (slot, od) in keys.iter_mut().zip(operands.iter()).take(n) {
-        *slot = derive_operand_key(od, &frame);
+        *slot = derive_operand_key(od, &frame, reduced_innermost);
         max_off = max_off.max(max_touched_offset(od));
     }
 
@@ -871,9 +1206,21 @@ pub fn structure_key(
     // Raw iteration rank = the widest operand rank (output rank for elementwise).
     let rank = operands.iter().map(|o| o.rank).max().unwrap_or(0);
 
+    // The non-contraction `(acc + mp)` coordinate (§6.7-0013). A `ctr` cell's
+    // precision facts ride the contraction group; the two never coexist.
+    let acc_mp = if class == CellClass::Ctr {
+        None
+    } else {
+        AccMp::new(
+            dtype,
+            facts.accumulator.unwrap_or(dtype),
+            facts.math_fidelity,
+        )
+    };
+
     StructureKey {
         version: STRUCTURE_KEY_VERSION,
-        op,
+        cell_class: class,
         dtype,
         target,
         idx,
@@ -881,41 +1228,10 @@ pub fn structure_key(
         rank,
         n_operands: n as u8,
         operands: keys,
-        reduce_axes: derive_reduce_axes(op, operands),
-        contraction: derive_contraction(op, operands),
-        acc_mp: derive_acc_mp(op, dtype),
+        reduce_axes,
+        contraction,
+        acc_mp,
     }
-}
-
-/// The non-contraction `(acc + mp)` coordinate for a derived cell
-/// (KISS-CLASSIFY-6.7-0013).
-///
-/// §6.7-0013 does not impose a normative accumulator lattice on non-contraction
-/// cells the way §6.7-0006 does for `gem`. The field **declares** what the
-/// producer's cell actually does, so the derivation is this producer's policy —
-/// and a wrong declaration is worse than none, because it separates keys that
-/// should collide and collides keys that should separate.
-///
-/// **This generator's policy is: accumulate at the compute dtype, bit-stable.**
-/// Not an assumption — every schedule it can currently lower is elementwise.
-/// Both shipping emitters decline `Reduction`/`RowReduce`/`Scan`/`Contraction`
-/// outright, so there is no cell in which an accumulator could differ from its
-/// compute dtype, and no path that reduces a mantissa before computing.
-///
-/// It is written as a policy fed through [`AccMp::new`] rather than as a bare
-/// `None` on purpose: the day a reduction emitter lands with an `f32`
-/// accumulator over `f16` data, the change belongs *here*, and the field starts
-/// being emitted without anyone having to remember that this coordinate exists.
-/// A bare `None` would silently keep declaring "accumulates at compute dtype"
-/// after that stopped being true — and that declaration would be a lie the
-/// dispatch table acts on.
-fn derive_acc_mp(op: OpCategory, dtype: ElementKind) -> Option<AccMp> {
-    if carries_contraction_field(op) {
-        // A gem cell's precision facts ride the contraction group; the two
-        // fields never coexist, and they share one token slot.
-        return None;
-    }
-    AccMp::new(dtype, dtype, MpCode::St)
 }
 
 /// The key's canonical dtype: `F32Strict` folds to `F32` (sk3 D4 — the `f32s`
@@ -1195,7 +1511,7 @@ fn derive_reduce_axes(op: OpCategory, operands: &[OperandDesc]) -> AxisMask {
 /// // a [128, 256] row-major f32 (in, in, out) triple for a binary elementwise add.
 /// let a = OperandDesc::new(2, &[128, 256], &[256, 1], ElementKind::F32, 256);
 /// let token = structure_key_token(OpCategory::BinaryElementwise, &[a, a, a], ArchSku::Sm89);
-/// assert!(token.starts_with("sk4|bin|f32|cuda:sm89|"));
+/// assert!(token.starts_with("sk5|ew2|f32|cuda:sm89|"));
 /// ```
 ///
 /// ⚠️ **Not conformant for one input; prefer [`try_structure_key_token`].** This
@@ -1214,8 +1530,8 @@ pub fn structure_key_token(
 }
 
 /// Why a `structure_key` derivation declined. It is returned by
-/// [`try_structure_key`] and [`try_structure_key_token`], never by panicking
-/// (§6.8-0004).
+/// [`try_structure_key`], [`try_structure_key_token`] and
+/// [`derive_structure_key`], never by panicking (§6.8-0004).
 ///
 /// `#[non_exhaustive]`: a later clause that adds a derivation-time decline is a
 /// new variant, not a breaking change.
@@ -1232,6 +1548,44 @@ pub enum DeriveDecline {
         /// The scale dtype found at operand 0.
         dtype: ElementKind,
     },
+    /// KISS-CLASSIFY §6.1-0001: operand 0 — the key's dtype position — has a
+    /// **reserved** dtype (`f8e4m3fnuz`, `f8e5m2fnuz`). A reserved dtype at a
+    /// non-primary operand is not a key position (§6.6-0015) and derives.
+    ReservedDtypeAtOperand0 {
+        /// The reserved dtype found at operand 0.
+        dtype: ElementKind,
+    },
+    /// KISS-CLASSIFY §6.6-0009: a reduced-axis set is declared but a written
+    /// operand is not the iteration rank — a **collapsed** output instead of the
+    /// required keepdim form. Input `[2,2,4]` reducing axis 0 and reducing axis 1
+    /// both collapse to `[2,4]`, so the set is not recoverable from the operands
+    /// and a key would be a guess.
+    CollapsedReduction,
+    /// KISS-CLASSIFY §6.6-0009: a reduced axis at or past the iteration rank
+    /// names no axis.
+    ReducedAxisOutOfRange {
+        /// The lowest offending axis.
+        axis: u8,
+    },
+    /// KISS-CLASSIFY §6.6-0016: contraction roles are declared but this cell's
+    /// contraction field cannot be derived from its operands (only plain
+    /// `[lhs, rhs, out]` and bias `[lhs, rhs, bias, out]` rank-2/3 cells are).
+    ContractionOutOfScope,
+}
+
+impl DeriveDecline {
+    /// This verdict's spelling in the shared KISS decline vocabulary. Exhaustive
+    /// on purpose, as [`TokenDecline::wire_name`] is: no catch-all arm.
+    #[must_use]
+    pub const fn wire_name(&self) -> &'static str {
+        match self {
+            Self::ScaleDtypeAtOperand0 { .. } => "ScaleDtypeAtOperand0",
+            Self::ReservedDtypeAtOperand0 { .. } => "ReservedDtype",
+            Self::CollapsedReduction => "CollapsedReduction",
+            Self::ReducedAxisOutOfRange { .. } => "ReducedAxisOutOfRange",
+            Self::ContractionOutOfScope => "ContractionOutOfScope",
+        }
+    }
 }
 
 impl core::fmt::Display for DeriveDecline {
@@ -1239,8 +1593,28 @@ impl core::fmt::Display for DeriveDecline {
         match self {
             Self::ScaleDtypeAtOperand0 { dtype } => write!(
                 f,
-                "operand 0 has scale-type dtype {:?}, which has no defined                  structure_key.dtype (KISS-CLASSIFY §6.6-0021)",
-                dtype
+                "operand 0 has scale-type dtype {dtype:?}, which has no defined \
+                 structure_key.dtype (KISS-CLASSIFY §6.6-0021)"
+            ),
+            Self::ReservedDtypeAtOperand0 { dtype } => write!(
+                f,
+                "operand 0 has reserved dtype {dtype:?}, which must typed-decline \
+                 (KISS-CLASSIFY §6.1-0001)"
+            ),
+            Self::CollapsedReduction => write!(
+                f,
+                "a reduced-axis set is declared but a written operand is not the \
+                 iteration rank: keepdim form is required (KISS-CLASSIFY §6.6-0009)"
+            ),
+            Self::ReducedAxisOutOfRange { axis } => write!(
+                f,
+                "reduced axis {axis} is at or past the iteration rank \
+                 (KISS-CLASSIFY §6.6-0009)"
+            ),
+            Self::ContractionOutOfScope => write!(
+                f,
+                "contraction roles are declared but the contraction field cannot be \
+                 derived from these operands (KISS-CLASSIFY §6.6-0016)"
             ),
         }
     }
@@ -1248,30 +1622,102 @@ impl core::fmt::Display for DeriveDecline {
 
 impl std::error::Error for DeriveDecline {}
 
-/// The **conformant** derivation: [`structure_key`], except that it declines
-/// where KISS-CLASSIFY requires a decline instead of a key.
-///
-/// Today that is one case, §6.6-0021: a scale-type dtype at operand 0. On every
-/// input that does not decline, the result is identical to [`structure_key`]'s,
-/// so migrating to this changes no token
-/// (`tests/a_scale_dtype_is_never_the_primary_dtype.rs`).
-///
-/// # Errors
-///
-/// [`DeriveDecline::ScaleDtypeAtOperand0`] if operand 0's dtype is `f8e8m0` or
-/// `f8e6m2`.
-pub fn try_structure_key(
-    op: OpCategory,
-    operands: &[OperandDesc],
-    target: impl Into<TargetId>,
-) -> Result<StructureKey, DeriveDecline> {
+/// The declines of §6.1-0001, §6.6-0009, §6.6-0016 and §6.6-0021, in a fixed
+/// order. `operands` is canonically ordered.
+fn check_declines(operands: &[OperandDesc], facts: &CellFacts) -> Result<(), DeriveDecline> {
     // No let-chain: the declared MSRV is 1.85, and let-chains need 1.88.
     if let Some(dtype @ (ElementKind::F8E8M0 | ElementKind::F8E6M2)) =
         operands.first().map(|o| o.dtype)
     {
         return Err(DeriveDecline::ScaleDtypeAtOperand0 { dtype });
     }
-    Ok(structure_key(op, operands, target))
+    if let Some(dtype) = operands
+        .first()
+        .map(|o| o.dtype)
+        .filter(|d| d.is_reserved())
+    {
+        return Err(DeriveDecline::ReservedDtypeAtOperand0 { dtype });
+    }
+    let frame = Frame::of(operands);
+    let rank_bits = all_axes_mask(frame.rank as u8);
+    if facts.reduced_axes.0 & !rank_bits != 0 {
+        let axis = (facts.reduced_axes.0 & !rank_bits).trailing_zeros() as u8;
+        return Err(DeriveDecline::ReducedAxisOutOfRange { axis });
+    }
+    if !facts.reduced_axes.is_empty() {
+        let collapsed = (0..operands.len())
+            .any(|i| operand_use(operands, i).1 && operands[i].rank as usize != frame.rank);
+        if collapsed {
+            return Err(DeriveDecline::CollapsedReduction);
+        }
+    }
+    if facts.contraction_declared && derive_contraction(OpCategory::Gemm, operands).is_none() {
+        return Err(DeriveDecline::ContractionOutOfScope);
+    }
+    Ok(())
+}
+
+/// The **conformant** derivation from explicit declared facts (§6.6-0012).
+///
+/// Operands are put in canonical order (§6.6-0014) if any carries a role, the
+/// cell class is derived from them and `facts` (§6.5-0015), and every decline
+/// the spec requires is taken instead of keying.
+///
+/// # Errors
+///
+/// A [`DeriveDecline`]: a scale or reserved dtype at operand 0, a collapsed
+/// reduction output, a reduced axis out of range, or declared contraction roles
+/// whose field cannot be derived.
+pub fn derive_structure_key(
+    operands: &[OperandDesc],
+    facts: &CellFacts,
+    target: impl Into<TargetId>,
+) -> Result<StructureKey, DeriveDecline> {
+    let canon = canonical_operands(operands);
+    check_declines(&canon, facts)?;
+    Ok(derive_unchecked(&canon, facts, target.into()))
+}
+
+/// [`derive_structure_key`], returning the wire token.
+///
+/// # Errors
+///
+/// As [`derive_structure_key`].
+pub fn derive_structure_key_token(
+    operands: &[OperandDesc],
+    facts: &CellFacts,
+    target: impl Into<TargetId>,
+) -> Result<String, DeriveDecline> {
+    derive_structure_key(operands, facts, target).map(|k| k.to_token())
+}
+
+/// The **conformant** derivation: [`structure_key`], except that it declines
+/// where KISS-CLASSIFY requires a decline instead of a key.
+///
+/// The declines are those of [`DeriveDecline`]. On every input that does not
+/// decline, the result is identical to [`structure_key`]'s
+/// (`tests/a_scale_dtype_is_never_the_primary_dtype.rs`).
+///
+/// # Errors
+///
+/// A [`DeriveDecline`]; see [`derive_structure_key`]. Additionally, an
+/// `op == Reduction` cell whose output rank differs from its input's is a
+/// [`DeriveDecline::CollapsedReduction`]: it used to derive an empty reduced
+/// set and be keyed as a non-reduction, which §6.6-0009 forbids.
+pub fn try_structure_key(
+    op: OpCategory,
+    operands: &[OperandDesc],
+    target: impl Into<TargetId>,
+) -> Result<StructureKey, DeriveDecline> {
+    if op == OpCategory::Reduction
+        && operands.len() >= 2
+        && operands[0].rank != operands[operands.len() - 1].rank
+    {
+        // Operand 0's dtype declines outrank this one.
+        check_declines(operands, &CellFacts::new())?;
+        return Err(DeriveDecline::CollapsedReduction);
+    }
+    derive_structure_key(operands, &CellFacts::from_op(op, operands), target)
 }
 
 /// [`try_structure_key`], returning the wire token. This is the conformant
@@ -1315,7 +1761,7 @@ fn inner_axis(od: &OperandDesc) -> Option<usize> {
 /// KISS's first draft of §6.5-0014 padded the *layout* too. That made a rank-3
 /// im2col output `br`, so a dense and a strided output shared a token. KISS
 /// amended the clause after Unpopped's im2col gate went red on it.
-fn derive_operand_key(od: &OperandDesc, frame: &Frame) -> OperandKey {
+fn derive_operand_key(od: &OperandDesc, frame: &Frame, reduced_innermost: bool) -> OperandKey {
     let rank = od.rank as usize;
 
     // OWN-axis broadcast: the operand's own extent-> 1 axes with stride 0. This
@@ -1331,7 +1777,13 @@ fn derive_operand_key(od: &OperandDesc, frame: &Frame) -> OperandKey {
 
     let contig = classify_contiguity(od, own_bcast, inner_axis(od));
     let innermost = (od.rank as usize).checked_sub(1);
-    let vec_width = classify_vec_width(od, innermost, own_bcast);
+    // §6.5-0009(b): a reduced innermost axis is not a contiguous forward run a
+    // vector load can honour, so it derives `v1` before any other test.
+    let vec_width = if reduced_innermost {
+        VecWidth::Scalar
+    } else {
+        classify_vec_width(od, innermost, own_bcast)
+    };
     let inner_div = match innermost {
         Some(d) => div_bucket(od.shape[d]),
         None => DivBucket::Any,
@@ -1343,6 +1795,7 @@ fn derive_operand_key(od: &OperandDesc, frame: &Frame) -> OperandKey {
         vec_width,
         inner_div,
         flipped,
+        dequant: od.dequant_form,
     }
 }
 
@@ -1490,12 +1943,22 @@ impl Frame {
     /// the frame, §6.6-0013 right alignment): bit `i` iff frame axis `i` has
     /// extent `> 1` and `od`'s stride there is `0`, an absent axis counting as
     /// stride `0`.
+    ///
+    /// **An own axis of extent 1 counts as stride 0 whatever stride is
+    /// recorded** (KISS-CLASSIFY-6.6-0008, KISS#520, sk5): a size-1 axis is
+    /// walked once, so its recorded stride is not a fact about the access. Until
+    /// sk5 a non-zero recorded stride left the bit clear, so a keepdim reduction
+    /// output `[4,1]` derived `00` where the frame is `[4,8]`.
     fn broadcast_mask(&self, od: &OperandDesc) -> AxisMask {
         let r = od.rank as usize;
         let off = self.rank.saturating_sub(r);
         let mut m = AxisMask::EMPTY;
         for i in 0..self.rank {
-            let stride = if i < off { 0 } else { od.strides[i - off] };
+            let stride = if i < off || od.shape[i - off] == 1 {
+                0
+            } else {
+                od.strides[i - off]
+            };
             if self.extents[i] > 1 && stride == 0 {
                 m.set(i as u8);
             }
@@ -1682,13 +2145,27 @@ pub enum TokenDecline {
     /// mine differ" and "I could not parse this token" call for different
     /// responses from the sender.
     UnknownDtype,
-    /// The op-family field named a category this schema version has no code for.
+    /// The cell-class field named a code outside the seven of §6.5-0006 — which
+    /// includes every retired sk4 op-family code (`gem`, `une`, `red`, …).
     ///
     /// Split from [`Unrecognized`](Self::Unrecognized) for the same reason and
-    /// with a sharper consequence: the op family is what **decides which field
-    /// the tenth slot is** (§6.7-0013), so failing to recognize it means the
-    /// token cannot be interpreted at all rather than merely being unsupported.
-    UnknownOpFamily,
+    /// with a sharper consequence: the class is what **decides which field the
+    /// tenth slot is** (§6.7-0013), so failing to recognize it means the token
+    /// cannot be interpreted at all rather than merely being unsupported.
+    UnknownCellClass,
+    /// An operand sub-key has a part count other than five or six (§6.7-0004).
+    BadOperandSubKey,
+    /// An operand sub-key's sixth part is not `dl` / `dc` (§6.7-0004).
+    BadDequantForm,
+    /// The reduce field is non-`-` on a cell whose class is not `rdc`
+    /// (§6.6-0017).
+    ReduceNotGatedToRdc,
+    /// The class is `rdc` but the reduce field is `-`: the empty reduced set is
+    /// the not-a-reduction case (§6.6-0009, §6.6-0017).
+    RdcWithoutReduce,
+    /// The contraction field's presence does not match the class: it is present
+    /// iff the class is `ctr` (§6.6-0010).
+    ContractionPresenceMismatch,
     /// The `gem` contraction group is malformed — a bad math-precision code, a
     /// dtype slot outside the closed set, or too few components.
     ///
@@ -1743,7 +2220,12 @@ impl TokenDecline {
             Self::NonCanonicalReduceField => "NonCanonicalReduceField",
             Self::BadReduceField => "BadReduceField",
             Self::UnknownDtype => "UnknownDtype",
-            Self::UnknownOpFamily => "UnknownOpFamily",
+            Self::UnknownCellClass => "UnknownCellClass",
+            Self::BadOperandSubKey => "BadOperandSubKey",
+            Self::BadDequantForm => "BadDequantForm",
+            Self::ReduceNotGatedToRdc => "ReduceNotGatedToRdc",
+            Self::RdcWithoutReduce => "RdcWithoutReduce",
+            Self::ContractionPresenceMismatch => "ContractionPresenceMismatch",
             Self::BadContractionField => "BadContractionField",
         }
     }
@@ -1758,8 +2240,8 @@ impl StructureKey {
     /// (§6.6-0018) — so parsing yields the canonical `F32` twin, which
     /// re-emits the identical token.
     ///
-    /// Form: `sk<ver>|<op>|<dtype>|<arch>|<idx>|<work>|r<rank>|<op0>;…|<reduce>`
-    /// where each operand is `<contig>/<bcasthex>/<vec>/<div>/<flip>`; a gem
+    /// Form: `sk<ver>|<class>|<dtype>|<arch>|<idx>|<work>|r<rank>|<op0>;…|<reduce>`
+    /// where each operand is `<contig>/<bcasthex>/<vec>/<div>/<flip>[/<dq>]`; a `ctr`
     /// cell appends the contraction field
     /// `c<m><n><k>/<kdiv>[/b<class>][/ol<digits>][/or<digits>]/<wdt>/<acc>/<out>/<mp>`.
     #[must_use]
@@ -1782,12 +2264,18 @@ impl StructureKey {
                 div_code(o.inner_div),
                 if o.flipped { 'r' } else { 'f' },
             ));
+            // §6.7-0004: the optional sixth component, iff the operand carries
+            // a `quant` record.
+            if let Some(d) = o.dequant {
+                ops.push('/');
+                ops.push_str(d.code());
+            }
         }
         let reduce = reduce_field_code(self.reduce_axes, self.rank);
         let mut token = format!(
             "sk{}|{}|{}|{}|{}|{}|r{}|{}|{}",
             self.version,
-            op_code(self.op),
+            self.cell_class.code(),
             dtype_code(self.dtype),
             self.target.as_str(),
             idx_code(self.idx),
@@ -1800,8 +2288,8 @@ impl StructureKey {
         // OP FAMILY, never by which struct field happens to be populated —
         // encoder and decoder must agree on that question or a ten-field token
         // round-trips into a different key than it came from. §6.7-0013.
-        if !carries_contraction_field(self.op) {
-            // Non-gem: the `(acc + mp)` field. Re-derived through `AccMp::new`
+        if !carries_contraction_field(self.cell_class) {
+            // Non-`ctr`: the `(acc + mp)` field. Re-derived through `AccMp::new`
             // rather than trusted from the struct, so a caller who hand-built a
             // redundant all-default value cannot make us emit a token that our
             // own decoder is required to reject (rule (d)). Rules (b)/(c): both
@@ -1949,17 +2437,30 @@ impl StructureKey {
         // plausible, so a shapeless string is "not a token" rather than "your op
         // vocabulary differs from mine".
         if parts.len() == 9 || parts.len() == 10 {
-            let op = parts
+            let class = parts
                 .get(1)
-                .and_then(|s| op_from_code(s))
-                .ok_or(TokenDecline::UnknownOpFamily)?;
+                .and_then(|s| CellClass::from_code(s))
+                .ok_or(TokenDecline::UnknownCellClass)?;
             let dt = parts
                 .get(2)
                 .and_then(|s| dtype_from_code(s))
                 .ok_or(TokenDecline::UnknownDtype)?;
+            check_subkeys(parts.get(7).copied().unwrap_or(""))?;
+            // §6.6-0017: the reduce field is non-`-` iff the class is `rdc`.
+            let reduces = parts.get(8).is_some_and(|f| *f != "-");
+            if reduces && class != CellClass::Rdc {
+                return Err(TokenDecline::ReduceNotGatedToRdc);
+            }
+            if !reduces && class == CellClass::Rdc {
+                return Err(TokenDecline::RdcWithoutReduce);
+            }
+            // §6.6-0010: the contraction field is present iff the class is `ctr`.
+            if class == CellClass::Ctr && parts.len() == 9 {
+                return Err(TokenDecline::ContractionPresenceMismatch);
+            }
 
             if let Some(tenth) = parts.get(10 - 1).filter(|_| parts.len() == 10) {
-                if carries_contraction_field(op) {
+                if carries_contraction_field(class) {
                     attribute_bad_contraction(tenth)?;
                 } else {
                     parse_acc_mp(tenth, dt)?;
@@ -1988,7 +2489,7 @@ impl StructureKey {
         if version != STRUCTURE_KEY_VERSION {
             return None;
         }
-        let op = op_from_code(parts[1])?;
+        let class = CellClass::from_code(parts[1])?;
         let dtype = dtype_from_code(parts[2])?;
         // KISS-Classify §6.1-0001: a RESERVED dtype in ANY dtype position is a
         // typed decline. Recognizing the spelling (above) and refusing the key
@@ -2036,6 +2537,14 @@ impl StructureKey {
         }
 
         let reduce_axes = parse_reduce_field(parts[8], rank).ok()?;
+        // §6.6-0017 and §6.6-0010: the reduce field is non-`-` iff `rdc`, and the
+        // contraction field is present iff `ctr`.
+        if reduce_axes.is_empty() == (class == CellClass::Rdc) {
+            return None;
+        }
+        if (class == CellClass::Ctr) != (parts.len() == 10 && parts[9].starts_with('c')) {
+            return None;
+        }
 
         // The tenth field, dispatched by OP FAMILY (§6.7-0013) — mirroring
         // `to_token`. A non-gem cell's tenth field is the `(acc + mp)` field and
@@ -2043,10 +2552,10 @@ impl StructureKey {
         // there declines instead of decoding into geometry facts the cell does
         // not have.
         let acc_mp = match parts.get(9) {
-            Some(f) if !carries_contraction_field(op) => Some(parse_acc_mp(f, dtype).ok()?),
+            Some(f) if !carries_contraction_field(class) => Some(parse_acc_mp(f, dtype).ok()?),
             _ => None,
         };
-        let contraction = match parts.get(9).filter(|_| carries_contraction_field(op)) {
+        let contraction = match parts.get(9).filter(|_| carries_contraction_field(class)) {
             None => None,
             Some(f) => {
                 // sk3 grammar: `c<m><n><k>/<kdiv>[/b<class>][/ol<digits>]
@@ -2146,7 +2655,7 @@ impl StructureKey {
 
         Some(StructureKey {
             version,
-            op,
+            cell_class: class,
             dtype,
             target,
             idx,
@@ -2342,7 +2851,7 @@ mod contraction_key_tests {
 
     #[test]
     fn from_token_declines_reordered_and_duplicated_layout_order_components() {
-        let base = "sk4|gem|f32|cuda:sm89|ix32|grid|r2|\
+        let base = "sk5|ctr|f32|cuda:sm89|ix32|grid|r2|\
                     co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
         // `/or...` before `/ol...` violates the fixed emission order (batch,
         // then lhs_order, then rhs_order) the position-driven parser walks —
@@ -2368,7 +2877,7 @@ mod contraction_key_tests {
         // contraction's `0..rank`. `from_token` parses an untrusted wire token, so
         // malformed digits must decline rather than build an inconsistent key that
         // panics when the emitter indexes `perm()[d]`.
-        let r2 = "sk4|gem|f32|cuda:sm89|ix32|grid|r2|\
+        let r2 = "sk5|ctr|f32|cuda:sm89|ix32|grid|r2|\
                   co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
         // out-of-range digit (7 >= rank 2)
         assert_eq!(
@@ -2391,7 +2900,7 @@ mod contraction_key_tests {
         // A rank-3 (batched) cell with a rank-2 (2-digit) order — the `/bt/ol10`
         // case: a rank-2 LayoutOrder inside a rank-3 contraction would later panic
         // at `perm()[2]`. Must decline on the digit-count/rank mismatch.
-        let r3 = "sk4|gem|f32|cuda:sm89|ix32|grid|r3|\
+        let r3 = "sk5|ctr|f32|cuda:sm89|ix32|grid|r3|\
                   co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
         assert_eq!(
             StructureKey::from_token(&format!("{r3}|ctll/d16/bt/ol10/f32/f32/f32/rm")),
@@ -2652,7 +3161,7 @@ mod contraction_key_tests {
         let (st_tok, rm_tok) = (strict.to_token(), tf32.to_token());
         assert!(!st_tok.contains("f32s"), "no f32s spelling: {st_tok}");
         assert!(
-            st_tok.starts_with("sk4|gem|f32|"),
+            st_tok.starts_with("sk5|ctr|f32|"),
             "strict cell spells the canonical f32 dtype: {st_tok}"
         );
         assert!(
@@ -2704,7 +3213,7 @@ mod contraction_key_tests {
         );
         let (mt, ht) = (mixed.to_token(), homog.to_token());
         assert!(
-            mt.starts_with("sk4|gem|f8e4m3fn|"),
+            mt.starts_with("sk5|ctr|f8e4m3fn|"),
             "variant-explicit: {mt}"
         );
         assert!(
@@ -2722,7 +3231,7 @@ mod contraction_key_tests {
 
     #[test]
     fn from_token_declines_sk2_shaped_and_malformed_gem_precision_groups() {
-        let base = "sk4|gem|f32|cuda:sm89|ix32|grid|r2|\
+        let base = "sk5|ctr|f32|cuda:sm89|ix32|grid|r2|\
                     co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
         // The precision group is REQUIRED for an sk3 gem cell: the sk2 shapes
         // (`c<mnk>/<kdiv>` and `c<mnk>/<kdiv>/b<class>`) are typed declines.
@@ -2752,7 +3261,7 @@ mod contraction_key_tests {
             None
         );
         // The `f32s` retirement also holds at the token's DTYPE field.
-        let f32s_dtype = "sk4|gem|f32s|cuda:sm89|ix32|grid|r2|\
+        let f32s_dtype = "sk5|ctr|f32s|cuda:sm89|ix32|grid|r2|\
                           co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-|ctll/d16/f32/f32/f32/st";
         assert_eq!(StructureKey::from_token(f32s_dtype), None);
     }
@@ -2979,9 +3488,16 @@ mod contraction_key_tests {
 
 fn parse_operand(field: &str) -> Option<OperandKey> {
     let f: Vec<&str> = field.split('/').collect();
-    if f.len() != 5 {
+    if f.len() != 5 && f.len() != 6 {
         return None;
     }
+    // §6.7-0004: a sixth part must be `dl` or `dc`.
+    let dequant = match f.get(5) {
+        None => None,
+        Some(&"dl") => Some(DequantForm::Linear),
+        Some(&"dc") => Some(DequantForm::Codebook),
+        Some(_) => return None,
+    };
     let contig = match f[0] {
         "co" => Contiguity::Contig,
         "ic" => Contiguity::InnerContig,
@@ -3016,7 +3532,27 @@ fn parse_operand(field: &str) -> Option<OperandKey> {
         vec_width,
         inner_div,
         flipped,
+        dequant,
     })
+}
+
+/// The per-sub-key verdicts `parse_operand` collapses into `None`: a part count
+/// other than five or six is [`TokenDecline::BadOperandSubKey`], and a sixth
+/// part outside `{dl, dc}` is [`TokenDecline::BadDequantForm`] (§6.7-0004).
+fn check_subkeys(field: &str) -> Result<(), TokenDecline> {
+    if field.is_empty() {
+        return Ok(());
+    }
+    for sub in field.split(';') {
+        let f: Vec<&str> = sub.split('/').collect();
+        match f.len() {
+            5 => {}
+            6 if matches!(f[5], "dl" | "dc") => {}
+            6 => return Err(TokenDecline::BadDequantForm),
+            _ => return Err(TokenDecline::BadOperandSubKey),
+        }
+    }
+    Ok(())
 }
 
 const fn idx_code(v: IdxWidth) -> &'static str {
@@ -3442,68 +3978,6 @@ fn mp_from_code(s: &str) -> Option<MpCode> {
     })
 }
 
-fn op_code(v: OpCategory) -> &'static str {
-    match v {
-        OpCategory::Gemm => "gem",
-        OpCategory::UnaryElementwise => "une",
-        OpCategory::BinaryElementwise => "bin",
-        OpCategory::TernaryElementwise => "ter",
-        OpCategory::GatedActivation => "gat",
-        OpCategory::Reduction => "red",
-        OpCategory::Scan => "scn",
-        OpCategory::Normalization => "nrm",
-        OpCategory::Softmax => "sft",
-        OpCategory::Convolution => "cnv",
-        OpCategory::Pooling => "pol",
-        OpCategory::Attention => "att",
-        OpCategory::Indexing => "idx",
-        OpCategory::Embedding => "emb",
-        OpCategory::ShapeLayout => "shp",
-        OpCategory::Sorting => "srt",
-        OpCategory::Quantization => "qnt",
-        OpCategory::Random => "rnd",
-        OpCategory::Loss => "los",
-        OpCategory::SegmentOps => "seg",
-        OpCategory::Image => "img",
-        OpCategory::Fft => "fft",
-        OpCategory::Linalg => "lin",
-        OpCategory::Moe => "moe",
-        // Deliberately exhaustive (no `_` arm): `OpCategory` is the defining
-        // crate's own enum here, so a newly added category surfaces as a build
-        // break and forces a token code rather than silently encoding as "unk".
-    }
-}
-
-fn op_from_code(s: &str) -> Option<OpCategory> {
-    Some(match s {
-        "gem" => OpCategory::Gemm,
-        "une" => OpCategory::UnaryElementwise,
-        "bin" => OpCategory::BinaryElementwise,
-        "ter" => OpCategory::TernaryElementwise,
-        "gat" => OpCategory::GatedActivation,
-        "red" => OpCategory::Reduction,
-        "scn" => OpCategory::Scan,
-        "nrm" => OpCategory::Normalization,
-        "sft" => OpCategory::Softmax,
-        "cnv" => OpCategory::Convolution,
-        "pol" => OpCategory::Pooling,
-        "att" => OpCategory::Attention,
-        "idx" => OpCategory::Indexing,
-        "emb" => OpCategory::Embedding,
-        "shp" => OpCategory::ShapeLayout,
-        "srt" => OpCategory::Sorting,
-        "qnt" => OpCategory::Quantization,
-        "rnd" => OpCategory::Random,
-        "los" => OpCategory::Loss,
-        "seg" => OpCategory::SegmentOps,
-        "img" => OpCategory::Image,
-        "fft" => OpCategory::Fft,
-        "lin" => OpCategory::Linalg,
-        "moe" => OpCategory::Moe,
-        _ => return None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3534,7 +4008,12 @@ mod tests {
             TokenDecline::RedundantAccMpField,
             TokenDecline::NonCanonicalReduceField,
             TokenDecline::UnknownDtype,
-            TokenDecline::UnknownOpFamily,
+            TokenDecline::UnknownCellClass,
+            TokenDecline::BadOperandSubKey,
+            TokenDecline::BadDequantForm,
+            TokenDecline::ReduceNotGatedToRdc,
+            TokenDecline::RdcWithoutReduce,
+            TokenDecline::ContractionPresenceMismatch,
             TokenDecline::BadContractionField,
         ];
         let names: Vec<&str> = all.iter().map(TokenDecline::wire_name).collect();
@@ -3560,7 +4039,12 @@ mod tests {
                 "RedundantAccMpField",
                 "NonCanonicalReduceField",
                 "UnknownDtype",
-                "UnknownOpFamily",
+                "UnknownCellClass",
+                "BadOperandSubKey",
+                "BadDequantForm",
+                "ReduceNotGatedToRdc",
+                "RdcWithoutReduce",
+                "ContractionPresenceMismatch",
                 "BadContractionField",
             ],
             "wire names are a contract with the KISS conformance artifact"
@@ -3586,7 +4070,7 @@ mod tests {
     /// exercising the code it names.
     #[test]
     fn redundant_acc_mp_is_omitted_not_emitted() {
-        let g = "sk4|red|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
+        let g = "sk5|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
         let mut key = StructureKey::from_token(g).unwrap();
 
         // In-crate, the struct literal is permitted — so a redundant value can
@@ -3774,7 +4258,7 @@ mod tests {
         let parsed = StructureKey::from_token(&token).expect("round-trip parse");
         assert_eq!(k, parsed);
         // Token is human-greppable.
-        assert!(token.starts_with("sk4|bin|f32|cuda:sm89|"));
+        assert!(token.starts_with("sk5|ew2|f32|cuda:sm89|"));
     }
 
     #[test]
@@ -3788,7 +4272,7 @@ mod tests {
         let too_many = std::iter::repeat_n(op, MAX_OPERANDS + 1)
             .collect::<Vec<_>>()
             .join(";");
-        let token = format!("sk4|bin|f32|cuda:sm89|ix32|grid|r2|{too_many}|-");
+        let token = format!("sk5|ew2|f32|cuda:sm89|ix32|grid|r2|{too_many}|-");
         assert_eq!(
             StructureKey::from_token(&token),
             None,
@@ -3802,7 +4286,7 @@ mod tests {
         // malformed and MUST be a typed decline, not silently accepted (downstream
         // consumers index MAX_RANK-sized arrays with it).
         let token = format!(
-            "sk4|bin|f32|cuda:sm89|ix32|grid|r{}|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
+            "sk5|ew2|f32|cuda:sm89|ix32|grid|r{}|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
             MAX_RANK + 1
         );
         assert_eq!(
@@ -3852,14 +4336,14 @@ mod tests {
         // required no bump.) Pin the canonical f32 token verbatim so a future
         // reshuffle that perturbs it is caught.
         assert_eq!(
-            STRUCTURE_KEY_VERSION, 4,
-            "codec sits at the KISS-aligned schema version 4 (sk4 schema event)"
+            STRUCTURE_KEY_VERSION, 5,
+            "codec sits at the KISS-aligned schema version 5 (sk5 schema event)"
         );
         let a = od(&[128, 256], &[256, 1], ElementKind::F32, 256);
         let k = structure_key(OpCategory::BinaryElementwise, &[a, a, a], ArchSku::Sm89);
         assert_eq!(
             k.to_token(),
-            "sk4|bin|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
+            "sk5|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
             "the canonical f32 cell serializes to the KISS-aligned sk3 token"
         );
     }
@@ -3882,7 +4366,7 @@ mod tests {
         );
         let token = k.to_token();
         assert!(
-            token.starts_with("sk4|une|u32|"),
+            token.starts_with("sk5|ew1|u32|"),
             "the token spells u32: {token}"
         );
         let parsed = StructureKey::from_token(&token).expect("u32 token round-trips");
@@ -3933,7 +4417,7 @@ mod tests {
     /// identity — which is the only reason to have a `structure_key` at all.
     #[test]
     fn field_8_admits_exactly_one_spelling_per_reduced_set() {
-        let base = "sk4|bin|f32|cuda:sm89|ix32|grid|r3|\
+        let base = "sk5|rdc|f32|cuda:sm89|ix32|grid|r3|\
                     co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f";
 
         // The two sentinels resolve against `rank`.
@@ -3966,7 +4450,7 @@ mod tests {
 
         // Neither sentinel has a referent in a rank-0 space: `rlast` has no
         // trailing axis, and `rall` would name the empty set that `-` owns.
-        let r0 = "sk4|une|f32|cuda:sm89|ix32|grid|r0|co/00/v1/d16/f;co/00/v1/d16/f";
+        let r0 = "sk5|ew1|f32|cuda:sm89|ix32|grid|r0|co/00/v1/d16/f;co/00/v1/d16/f";
         assert_eq!(StructureKey::from_token(&format!("{r0}|rlast")), None);
         assert_eq!(StructureKey::from_token(&format!("{r0}|rall")), None);
         assert!(
@@ -4119,13 +4603,13 @@ mod tests {
         let _ = StructureKey::from_token(&"a".repeat(200_000));
         // Over-MAX_RANK rank — declines at the rank guard (never reaches operands).
         let _ = StructureKey::from_token(&format!(
-            "sk4|bin|f32|cuda:sm89|ix32|grid|r250|{}|-",
+            "sk5|ew2|f32|cuda:sm89|ix32|grid|r250|{}|-",
             "co/00/v4/d16/f;".repeat(50)
         ));
         // In-range rank + over-MAX_OPERANDS operand list — MUST reach parse_operand,
         // then decline gracefully.
         let _ = StructureKey::from_token(&format!(
-            "sk4|bin|f32|cuda:sm89|ix32|grid|r2|{}|-",
+            "sk5|ew2|f32|cuda:sm89|ix32|grid|r2|{}|-",
             "co/00/v1/d16/f;".repeat(50)
         ));
         // A valid gemm base with only its 10th (contraction) field corrupted —

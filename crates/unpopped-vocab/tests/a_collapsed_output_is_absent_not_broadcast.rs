@@ -71,14 +71,15 @@ fn an_aliasing_collapsed_output_is_broadcast_on_its_own_axes() {
 }
 
 /// Keepdim `[256,1]`: the reduced axis has extent 1, so it is never an own
-/// broadcast, and the layout is dense either way. Its frame bit follows the
-/// unit axis's *stride* (§6.6-0008: an own extent-1, stride-0 axis sets its bit
-/// where the frame is wider), so two allocations of the same dense output key
-/// differently. A gate that reads `bcast` here is reading a stride on a
-/// unit axis.
+/// broadcast, and the layout is dense either way. Its frame bit does **not**
+/// follow the unit axis's recorded stride: from sk5 an own axis of extent 1
+/// counts as stride 0 whatever stride is recorded, and its bit is set iff the
+/// frame extent there is `> 1` (KISS-CLASSIFY-6.6-0008, KISS#520). Under sk4 two
+/// allocations of the same dense output keyed differently (`[1,0]` set the bit,
+/// `[1,1]` did not); now they key identically, which is the point.
 #[test]
-fn a_keepdim_outputs_frame_bit_follows_its_unit_axis_stride() {
-    for (strides, mask) in [([1, 0], 0b10), ([1, 1], 0b00)] {
+fn a_keepdim_outputs_frame_bit_ignores_its_unit_axis_stride() {
+    for (strides, mask) in [([1, 0], 0b10), ([1, 1], 0b10)] {
         let k = key(
             OpCategory::Reduction,
             &[od(&ROW_SUM_IN, &[128, 1]), od(&[256, 1], &strides)],
