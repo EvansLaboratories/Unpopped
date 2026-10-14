@@ -15,6 +15,30 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## Unreleased — `0.17.3`: the weight role is declared (additive)
+
+**Fixed: `<wdt>` read operand 1 positionally**, which KISS-CLASSIFY-6.6-0019
+forbids. Measured at `0.17.0`: `Gemm [W:f8e4m3fn, x:f16, y:f16]` derived
+`<wdt>` = `f16` (the activation) while `[x:f16, W:f8e4m3fn, y:f16]` derived
+`f8e4m3fn`, so a weight-on-the-left cell got a well-formed, byte-stable token
+naming the wrong dtype.
+
+- **`CellFacts::weight_operand: Option<usize>`** names the weight operand (canonical
+  slot). `<wdt>` is that operand's dtype.
+- **`derive_structure_key` declines a declared contraction without it**:
+  `DeriveDecline::WeightRoleNotDeclared`. This name is this crate's, **not in
+  KISS's decline vocabulary**. `0.17.0`'s `derive_structure_key` silently read
+  operand 1 there; that API is one release old.
+- **The `op = Gemm` bridge declares operand 1 and says so**, so no token from
+  `structure_key` / `try_structure_key` changes. A caller whose weight is not the
+  rhs (`W @ x`, a sibling-scale operand order) moves to `derive_structure_key`.
+- **Out-of-range weight slot** is `ContractionOutOfScope`, not an index panic.
+
+Still positional: the M/N/K axis roles (§6.6-0016), and the batch role is
+undefined upstream (KISS#543).
+
+---
+
 ## Unreleased — `0.17.2`
 
 CI and docs only: `.github/CODEOWNERS` (`* @ciresnave`), a top-level
@@ -31,7 +55,7 @@ token or API change.
 
 ---
 
-## Unreleased — `0.17.0` (breaking)
+## `0.17.0` (breaking; shipped in `0.17.1`, never published on its own)
 
 Moves `STRUCTURE_KEY_VERSION` 4 → 5 and aligns the keyer with KISS-CLASSIFY at
 `KISS@ff12265` (KISS#535, KISS#536). **Every non-trivial token changes.** If you
