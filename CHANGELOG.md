@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## Unreleased — `0.17.1`
+
+Docs only. Adds `ROADMAP.md` at the repository root: the queue, what each item
+waits on, and the KISS items this lane consumes with their blobs. No code,
+token or API change.
+
+---
+
 ## Unreleased — `0.17.0` (breaking)
 
 Moves `STRUCTURE_KEY_VERSION` 4 → 5 and aligns the keyer with KISS-CLASSIFY at

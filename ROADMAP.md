@@ -1,7 +1,7 @@
 # Unpopped roadmap
 
 What this lane is doing, in what order, and **what each item waits on**. Read at
-`origin/main` `9bfeb90e` (0.16.0) on 2026-10-14; every row names the ref it was
+`origin/main` `2a78c233` (0.17.0) on 2026-10-14; every row names the ref it was
 read at, so re-read it before acting on it. History is in `CHANGELOG.md`;
 knowingly-undone work and its reasoning is `docs/deferred.md`. This file is the
 queue, not the archive: delete a row when it lands.
@@ -13,10 +13,10 @@ and are relayed here, not independently verified.
 
 | # | Item | State | Waits on |
 |---|---|---|---|
-| 1 | **sk5 keyer**: `STRUCTURE_KEY_VERSION` 4 → 5, derived seven-class `cell_class`, keyed `dequant_form`, extent-1 mask, and four keyer defects (reduced-innermost `v1`; collapsed reduction, out-of-range reduced axis and reserved dtype at operand 0 decline) | **#58** at `d37e4281`, all checks green, 0 threads | PM: version (breaking, pre-1.0, so the second number) and merge |
+| 1 | **Publish `0.17.0`** (sk5): `STRUCTURE_KEY_VERSION` 4 → 5, derived seven-class `cell_class`, keyed `dequant_form`, extent-1 mask, and four keyer defects | **merged** (#58, `2a78c233`) | PM publishes; baracuda takes it from crates.io, never from git or a path |
 | 2 | **Hygiene PR** (PM, from CodeRipper triage at coderipper `6d00540f`): `.github/CODEOWNERS` (`* @ciresnave`); pin every `uses:` in `verify.yml` to a full SHA with the version in a trailing comment; top-level `permissions: contents: read`; DOC-009 glossary (15 doc pages, threshold 10) | not started; docs and CI only, no behaviour change | nothing |
 
-### What #58 does and does not close
+### What #58 closed, and what it did not
 
 - **Measured** against KISS `ff12265` derivation vectors (blob `697aa543`, 36):
   PASS 35, FAIL 0, DECLINE-DIFFERS 0, SKIP 1. 10 carry `spec_golden`; the other
@@ -25,10 +25,11 @@ and are relayed here, not independently verified.
 - **Not covered:** a declared contraction. The weight role (§6.6-0019) is still
   not an input (issue #31), and the batch role is undefined upstream
   (KISS#543), which is the one skipped vector.
-- **Baracuda** regenerates its 3 sk4 test sites and 2 goldens after #58
-  merges, and fuel is blocked on the same (PM). On merge: `[NOTICE]` to the
-  baracuda lane and a request for its harness table
-  (`unpopped-vocab` + `serde_json`) as the independent measurement.
+- **Baracuda** regenerates its 3 sk4 test sites and 2 goldens once `0.17.0` is
+  on crates.io, and fuel is blocked on the same (PM). The `[NOTICE]` went to
+  the baracuda lane on merge, with a request for its harness table
+  (`unpopped-vocab` + `serde_json`): that is the independent measurement, since
+  21 of the 36 vectors are KISS reference output.
 
 ## 2. KISS items this lane consumes
 
@@ -44,11 +45,16 @@ and are relayed here, not independently verified.
 KISS `main` moves faster than this lane re-vendors. Re-vendor when KISS says a
 blob changed, not on a schedule, and record the commit in `kiss/README.md`.
 
-## 3. Next, once #58 merges (none started; the PM assigns)
+## 3. Next (none started; the PM assigns)
 
-1. **Weight-role `<wdt>`** (§6.6-0019, issue #31). Post as an `[ASK]` design
-   note first: which operand slot carries the weight must be a caller-declared
-   fact, not inferred from position or dtype. Extends `CellFacts`.
+1. **Weight-role `<wdt>`** (§6.6-0019, issue #31). Sent as an `[ASK]` design
+   note: which operand slot carries the weight must be a caller-declared fact,
+   not inferred from position or dtype. Extends `CellFacts`. **Measured at
+   `2a78c233`:** `Gemm [W:f8e4m3fn, x:f16, y:f16]` derives `<wdt>` = `f16` (the
+   activation), and `[x:f16, W:f8e4m3fn, y:f16]` derives `f8e4m3fn`. The keyer
+   reads operand 1, so a weight-on-the-left cell names the wrong dtype with no
+   signal. The M/N/K axis roles (§6.6-0016) are positional too, and the batch
+   role is KISS#543.
 2. **`Approx` qualifier** (`docs/idiom-lifting-design.md` §4.3): the full fix for
    `__expf` / `__logf`, which #57 only made refuse. Needs KISS-coordinated
    numerics axes.
