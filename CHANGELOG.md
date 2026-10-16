@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.20.2` — comments only: `rm` is a permission to round, never a requirement
+
+Two comments (the `from_op` bridge in `structure_key.rs`, and `tests/ctr_roles.rs`) said an `f32`
+contraction "rounds its inputs". KISS-OPS 6.17-0003 makes `rm` a permission (KISS#593); the comments now
+say so. No code, no key bytes, no API change. `ROADMAP.md` refreshed to 0.20.1.
+
 ## `0.20.1` — a contraction cell the plan cannot serve is a typed refusal, not a panic
 
 `try_build_plan` gains `check_contraction`: the `Access::Contraction` arm of the plan gate no longer
