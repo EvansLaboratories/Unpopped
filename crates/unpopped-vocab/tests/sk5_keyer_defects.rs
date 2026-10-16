@@ -13,7 +13,7 @@
 //! | (d) | §6.1-0001 | a reserved dtype at operand 0 was keyed |
 
 use unpopped_vocab::{
-    ArchSku, AxisMask, CellClass, CellFacts, ContractionAxes, DeriveDecline, ElementKind,
+    ArchSku, AxisMask, CellClass, CellFacts, ContractionRoles, DeriveDecline, ElementKind,
     OpCategory, OperandDesc, OperandRole, derive_structure_key, structure_key, try_structure_key,
 };
 
@@ -256,7 +256,7 @@ fn a_declared_weight_operand_names_the_weight_dtype_wherever_it_sits() {
     let mut facts = CellFacts::new();
     facts.contraction_declared = true;
     facts.weight_operand = Some(0);
-    facts.contraction_axes = Some(ContractionAxes::gemm(2, 0));
+    facts.contraction_roles = Some(ContractionRoles::gemm(2, 0));
     let t = unpopped_vocab::derive_structure_key_token(&left, &facts, ArchSku::Sm89).unwrap();
     assert_eq!(wdt_of(&t), "f8e4m3fn", "{t}");
 
@@ -286,10 +286,10 @@ fn a_declared_contraction_without_a_weight_operand_declines() {
     facts.weight_operand = Some(0);
     assert_eq!(
         derive_structure_key(&gemm_cell(true), &facts, ArchSku::Sm89),
-        Err(DeriveDecline::ContractionAxesNotDeclared)
+        Err(DeriveDecline::ContractionRolesNotDeclared)
     );
     // A weight slot past the operand list names no operand.
-    facts.contraction_axes = Some(ContractionAxes::gemm(2, 0));
+    facts.contraction_roles = Some(ContractionRoles::gemm(2, 0));
     facts.weight_operand = Some(7);
     assert_eq!(
         derive_structure_key(&gemm_cell(true), &facts, ArchSku::Sm89),

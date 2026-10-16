@@ -1,4 +1,4 @@
-//! The role-driven contraction derivation (`CellFacts::contraction_axes`, 0.19.0):
+//! The role-driven contraction derivation (`CellFacts::contraction_roles`, 0.19.0):
 //! what KISS's vectors do not pin, and the controls that make each null mean something.
 //!
 //! The vectors (`kiss_derivation_vectors.rs`) are the byte-match leg. These tests hold
@@ -6,7 +6,7 @@
 //! facts reach the token, and the list-capacity and rank limits decline by name.
 
 use unpopped_vocab::{
-    ArchSku, AxisRef, BatchRoleDecline, CellFacts, ContractionAxes, DeriveDecline, ElementKind,
+    ArchSku, AxisRef, BatchRoleDecline, CellFacts, ContractionRoles, DeriveDecline, ElementKind,
     MpCode, OperandDesc, OperandRole, derive_structure_key_token,
 };
 
@@ -23,15 +23,15 @@ fn gemm() -> [OperandDesc; 3] {
     ]
 }
 
-fn axes() -> ContractionAxes {
-    ContractionAxes::new(AxisRef::new(0, 0), AxisRef::new(1, 1), AxisRef::new(0, 1))
+fn axes() -> ContractionRoles {
+    ContractionRoles::new(AxisRef::new(0, 0), AxisRef::new(1, 1), AxisRef::new(0, 1))
 }
 
-fn facts(a: Option<ContractionAxes>) -> CellFacts {
+fn facts(a: Option<ContractionRoles>) -> CellFacts {
     let mut f = CellFacts::new();
     f.contraction_declared = true;
     f.weight_operand = Some(1);
-    f.contraction_axes = a;
+    f.contraction_roles = a;
     f
 }
 
@@ -52,7 +52,7 @@ fn roles_are_required_and_the_accumulator_defaults_to_the_compute_dtype() {
     // No roles, no key: they are never inferred from position.
     assert_eq!(
         key(&gemm(), &facts(None)),
-        Err(DeriveDecline::ContractionAxesNotDeclared)
+        Err(DeriveDecline::ContractionRolesNotDeclared)
     );
     // Declared roles, no accumulator: the compute dtype, operand 0's (§6.7-0006).
     let roles = key(&gemm(), &facts(Some(axes()))).unwrap();
@@ -72,7 +72,7 @@ fn the_legacy_op_bridge_declares_its_own_roles_and_keeps_its_bytes() {
     assert_eq!(tail(&t), "csss/d16/f16/f32/f16/st", "{t}");
     // ... and the same cell through the conformant entry, declaring the same facts,
     // is byte-identical: one behaviour, reached two ways.
-    let mut f = facts(Some(ContractionAxes::gemm(2, 0)));
+    let mut f = facts(Some(ContractionRoles::gemm(2, 0)));
     f.accumulator = Some(ElementKind::F32);
     assert_eq!(key(&gemm(), &f).unwrap(), t);
     // An f32 contraction rounds its inputs at the bridge (`rm`), as the GEMM
@@ -123,8 +123,8 @@ fn batched() -> [OperandDesc; 3] {
     ]
 }
 
-fn batched_axes() -> ContractionAxes {
-    ContractionAxes::new(AxisRef::new(0, 1), AxisRef::new(1, 2), AxisRef::new(0, 2))
+fn batched_axes() -> ContractionRoles {
+    ContractionRoles::new(AxisRef::new(0, 1), AxisRef::new(1, 2), AxisRef::new(0, 2))
 }
 
 #[test]
@@ -163,7 +163,7 @@ fn an_order_the_token_cannot_spell_at_rank_four_declines_and_its_identity_contro
     // [B0,B1,M,K] x [B0,B1,K,N] -> [B0,B1,M,N], batch axis 0 only.
     let rhs = od(&[2, 3, 16, 4], &[192, 64, 4, 1], ElementKind::F16);
     let out = od(&[2, 3, 8, 4], &[96, 32, 4, 1], ElementKind::F16);
-    let roles = ContractionAxes::new(AxisRef::new(0, 2), AxisRef::new(1, 3), AxisRef::new(0, 3))
+    let roles = ContractionRoles::new(AxisRef::new(0, 2), AxisRef::new(1, 3), AxisRef::new(0, 3))
         .with_batch_axes(&[0]);
     // Control: lhs row-major, identity order.
     let lhs = od(&[2, 3, 8, 16], &[384, 128, 16, 1], ElementKind::F16);
