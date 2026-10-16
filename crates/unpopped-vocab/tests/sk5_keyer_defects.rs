@@ -13,8 +13,8 @@
 //! | (d) | §6.1-0001 | a reserved dtype at operand 0 was keyed |
 
 use unpopped_vocab::{
-    ArchSku, AxisMask, CellClass, CellFacts, DeriveDecline, ElementKind, OpCategory, OperandDesc,
-    OperandRole, derive_structure_key, structure_key, try_structure_key,
+    ArchSku, AxisMask, CellClass, CellFacts, ContractionAxes, DeriveDecline, ElementKind,
+    OpCategory, OperandDesc, OperandRole, derive_structure_key, structure_key, try_structure_key,
 };
 
 fn od(shape: &[i64], strides: &[i64], dt: ElementKind) -> OperandDesc {
@@ -256,6 +256,7 @@ fn a_declared_weight_operand_names_the_weight_dtype_wherever_it_sits() {
     let mut facts = CellFacts::new();
     facts.contraction_declared = true;
     facts.weight_operand = Some(0);
+    facts.contraction_axes = Some(ContractionAxes::gemm(2, 0));
     let t = unpopped_vocab::derive_structure_key_token(&left, &facts, ArchSku::Sm89).unwrap();
     assert_eq!(wdt_of(&t), "f8e4m3fn", "{t}");
 
@@ -281,12 +282,22 @@ fn a_declared_contraction_without_a_weight_operand_declines() {
         derive_structure_key(&gemm_cell(true), &facts, ArchSku::Sm89),
         Err(DeriveDecline::WeightRoleNotDeclared)
     );
-    // A weight slot past the operand list is not a derivable contraction.
+    // The weight alone is not enough: the M/N/K axes are never inferred from position.
+    facts.weight_operand = Some(0);
+    assert_eq!(
+        derive_structure_key(&gemm_cell(true), &facts, ArchSku::Sm89),
+        Err(DeriveDecline::ContractionAxesNotDeclared)
+    );
+    // A weight slot past the operand list names no operand.
+    facts.contraction_axes = Some(ContractionAxes::gemm(2, 0));
     facts.weight_operand = Some(7);
     assert_eq!(
         derive_structure_key(&gemm_cell(true), &facts, ArchSku::Sm89),
-        Err(DeriveDecline::ContractionOutOfScope)
+        Err(DeriveDecline::WeightRoleOutOfRange { index: 7 })
     );
+    // Control: the same declarations with the weight in range derive.
+    facts.weight_operand = Some(0);
+    assert!(derive_structure_key(&gemm_cell(true), &facts, ArchSku::Sm89).is_ok());
 }
 
 #[test]

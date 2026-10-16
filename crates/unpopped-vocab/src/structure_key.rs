@@ -731,6 +731,22 @@ impl ContractionAxes {
         }
     }
 
+    /// The roles of the plain GEMM `[B.., M, K] . [B.., K, N] -> [B.., M, N]` of `rank`
+    /// axes per operand, whose `batch` leading axes are batch axes: M is axis `rank - 2` and
+    /// K axis `rank - 1` of operand 0, N is axis `rank - 1` of operand 1. This is a
+    /// **declaration the caller makes by calling it**, not an inference the keyer draws:
+    /// a caller whose operands are laid out otherwise names its own axes.
+    #[must_use]
+    pub fn gemm(rank: usize, batch: usize) -> Self {
+        let axes: Vec<usize> = (0..batch).collect();
+        Self::new(
+            AxisRef::new(0, rank.saturating_sub(2)),
+            AxisRef::new(1, rank.saturating_sub(1)),
+            AxisRef::new(0, rank.saturating_sub(1)),
+        )
+        .with_batch_axes(&axes)
+    }
+
     /// Declare the batch axes, in the order given (a repeat or an out-of-range entry is
     /// kept, so the derivation can decline it by name). An axis past `u8::MAX` is stored
     /// as `u8::MAX`, which is out of range for any frame.
@@ -858,12 +874,12 @@ pub struct CellFacts {
     /// ([`DeriveDecline::ScaleRoleOutOfRange`]) rather than ignore it.
     pub scale_operand: Option<usize>,
     /// The **M/N/K and batch axis roles** of a declared contraction (§6.6-0016,
-    /// §6.6-0023). `Some` selects the role-driven derivation: the contraction field is
-    /// read from these axes, not from operand positions, any rank derives, the declared
-    /// [`accumulator`](Self::accumulator) (default: operand 0's dtype, §6.7-0006) and
-    /// [`math_fidelity`](Self::math_fidelity) are keyed, and a malformed role is a typed
-    /// decline. `None` keeps this crate's pre-0.19 positional rank-2/3 derivation,
-    /// byte-for-byte, with its own accumulator and `<mp>` policy.
+    /// §6.6-0023). The contraction field is read from these axes, never from operand
+    /// positions; any rank derives; the declared [`accumulator`](Self::accumulator)
+    /// (default: operand 0's dtype, §6.7-0006) and [`math_fidelity`](Self::math_fidelity)
+    /// are keyed; a malformed role is a typed decline. [`derive_structure_key`] declines a
+    /// declared contraction that leaves it `None`
+    /// ([`DeriveDecline::ContractionAxesNotDeclared`]), as it does an undeclared weight.
     pub contraction_axes: Option<ContractionAxes>,
 }
 
@@ -903,6 +919,18 @@ impl CellFacts {
         // [`derive_structure_key`] and say which operand it is.
         if f.contraction_declared && operands.len() >= 2 {
             f.weight_operand = Some(1);
+            // ... and the plain GEMM's roles, accumulator and `<mp>`, as declarations
+            // the bridge makes for its caller (this crate's GEMM routing policy: an
+            // `f16` contraction accumulates at `f32`, a plain `f32` one rounds its
+            // inputs, `rm`). Only a cell the positional rank-2/3 deriver accepts gets
+            // them; any other keeps no roles and so no `ctr` field, as before.
+            if derive_contraction(OpCategory::Gemm, operands, 1).is_some() {
+                let rank = operands[0].rank as usize;
+                f.contraction_axes = Some(ContractionAxes::gemm(rank, rank - 2));
+                let primary = operands[0].dtype;
+                f.accumulator = Some(contraction_acc(primary));
+                f.math_fidelity = contraction_mp(primary);
+            }
         }
         f
     }
@@ -1364,10 +1392,8 @@ fn output_operand(operands: &[OperandDesc]) -> Option<usize> {
 }
 
 /// The contraction field of a declared contraction. `checked` is the conformant
-/// entry point: it turns every refusal into its typed decline and requires the
-/// weight role. Unchecked (the legacy bridge), an undeclared weight falls back to
-/// operand 1 and a scale index naming no operand, or a reserved scale dtype, is
-/// dropped rather than keyed.
+/// entry point: it requires the weight role and the M/N/K axes. Unchecked (the
+/// legacy bridge), an undeclared weight falls back to operand 1.
 fn contraction_key(
     operands: &[OperandDesc],
     facts: &CellFacts,
@@ -1378,24 +1404,14 @@ fn contraction_key(
         (None, true) => return Err(DeriveDecline::WeightRoleNotDeclared),
         (None, false) => 1,
     };
-    if let Some(axes) = facts.contraction_axes {
-        return contraction_from_axes(operands, facts, &axes, weight);
+    match facts.contraction_axes {
+        Some(axes) => contraction_from_axes(operands, facts, &axes, weight),
+        // Roles are never inferred from position. The unchecked path (the legacy
+        // `op` bridge) reaches here only for a cell the bridge declined to give
+        // roles, which derives no `ctr` field.
+        None if checked => Err(DeriveDecline::ContractionAxesNotDeclared),
+        None => Err(DeriveDecline::ContractionOutOfScope),
     }
-    let mut key = derive_contraction(OpCategory::Gemm, operands, weight)
-        .ok_or(DeriveDecline::ContractionOutOfScope)?;
-    // §6.6-0022: the scale operand's dtype, only on a `ctr` cell.
-    key.scale = match facts.scale_operand {
-        None => None,
-        Some(index) => match operands.get(index) {
-            None if checked => return Err(DeriveDecline::ScaleRoleOutOfRange { index }),
-            Some(od) if checked && od.dtype.is_reserved() => {
-                return Err(DeriveDecline::ReservedScaleDtype { dtype: od.dtype });
-            }
-            Some(od) if !od.dtype.is_reserved() => Some(od.dtype),
-            _ => None,
-        },
-    };
-    Ok(key)
 }
 
 /// The role-driven contraction field (§6.6-0016, -0019, -0022, -0023, §6.7-0006), in the
@@ -1942,6 +1958,11 @@ pub enum DeriveDecline {
         /// The reserved dtype found at the scale operand.
         dtype: ElementKind,
     },
+    /// KISS-CLASSIFY §6.6-0016: contraction roles are declared but the M/N/K axes
+    /// are not. They are not identified by operand position, so a deriver that
+    /// guessed would emit a well-formed token for the wrong cell. **Not in KISS's
+    /// decline vocabulary**: the wire name is this crate's.
+    ContractionAxesNotDeclared,
     /// KISS-CLASSIFY §6.6-0016: M, N or K names no operand axis, or two of them
     /// name the same one.
     ContractionAxisInvalid,
@@ -1982,6 +2003,7 @@ impl DeriveDecline {
             Self::ReservedScaleDtype { .. } | Self::ReservedContractionDtype { .. } => {
                 "ReservedDtype"
             }
+            Self::ContractionAxesNotDeclared => "ContractionAxesNotDeclared",
             Self::ContractionAxisInvalid => "ContractionAxisInvalid",
             Self::ContractionNoOutput => "ContractionNoOutput",
             Self::Batch(b) => b.wire_name(),
@@ -2029,6 +2051,10 @@ impl core::fmt::Display for DeriveDecline {
                 f,
                 "the scale operand has reserved dtype {dtype:?}, which must typed-decline \
                  (KISS-CLASSIFY §6.1-0001)"
+            ),
+            Self::ContractionAxesNotDeclared => write!(
+                f,
+                "contraction roles are declared but the M/N/K axes are not (KISS-CLASSIFY §6.6-0016)"
             ),
             Self::ContractionAxisInvalid => write!(
                 f,

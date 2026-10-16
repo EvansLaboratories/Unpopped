@@ -18,27 +18,40 @@ behaviour change, and a version check cannot see a tree that never bumped.
 ## `0.19.0` — the ctr stage of KISS 0.4.3: declared M/N/K and batch roles (BREAKING)
 
 KISS 0.4.3's 62 derivation vectors now byte-match (PASS 62, from 35 at 0.18.1; `KNOWN_GAP` is empty).
-No `STRUCTURE_KEY_VERSION` change: the token grammar is `sk6`'s, and **no existing caller's bytes
-change** — the new behaviour is opt-in through `CellFacts::contraction_axes`.
+No `STRUCTURE_KEY_VERSION` change: the token grammar is `sk6`'s.
 
-- **Added** `AxisRef`, `ContractionAxes` (M/N/K `{operand, axis}` plus batch axes, KISS-CLASSIFY-6.6-0016
-  and -0023), `BatchRoleDecline`, and the field `CellFacts::contraction_axes`.
-- **Role-driven derivation** when `contraction_axes` is `Some`: M/N/K size classes come from the declared
-  axes, not operand positions; the batch class is that of the **product** of the declared batch extents
-  (a declared extent-1 axis is batched; no batch axis, no `b<class>`, at any rank); **rank above 3
-  derives**; `<acc>` is the declared accumulator, else operand 0's dtype (§6.7-0006 — the weight's
-  only when the weight is operand 0, so a weight-first caller must declare it); `<mp>` is the
+**One derivation, role-driven.** A contraction's M/N/K and batch axes are *declared*
+(KISS-CLASSIFY-6.6-0016, -0023), never read from operand positions; the old positional rank-2/3
+deriver, which also hardcoded `<acc>`/`<mp>` from the lhs dtype and differed from the spec on 26 of the
+27 new vectors, is gone from the conformant path.
+
+- **Added** `AxisRef`, `ContractionAxes` (+ `ContractionAxes::gemm(rank, batch)` for the plain
+  `[B..,M,K].[B..,K,N]` declaration), `BatchRoleDecline`, `CellFacts::contraction_axes`.
+- **Derivation:** M/N/K size classes from the declared axes; the batch class is that of the **product**
+  of the declared batch extents (a declared extent-1 axis is batched; no batch axis, no `b<class>`, at any
+  rank); **rank above 3 derives**; `<acc>` is the declared accumulator, else operand 0's dtype (§6.7-0006;
+  the weight's only when the weight is operand 0, so a weight-first caller must declare it); `<mp>` is the
   declared `math_fidelity`.
-- **`None` keeps the positional rank-2/3 derivation byte-for-byte** (f16 accumulates at f32 there).
-- **New typed declines:** `ContractionAxisInvalid`, `WeightRoleOutOfRange`, `ContractionNoOutput`,
-  `Batch(BatchRoleDecline)` (`BatchAxisOutOfRange`, `BatchAxisDuplicate`,
+- **BREAKING — a declared contraction with no `contraction_axes` now declines**
+  (`DeriveDecline::ContractionAxesNotDeclared`, this crate's name, as `WeightRoleNotDeclared`). Callers of
+  `derive_structure_key{,_token}` that set `contraction_declared` must set the axes
+  (`ContractionAxes::gemm(rank, batch)` is the old positional meaning) and, **to keep their 0.18 bytes,
+  declare `accumulator` (`f16`/`bf16` -> `f32`, `i8` -> `i32`) and `math_fidelity` (`rm` for `f32`)**:
+  the spec default is operand 0's dtype and `st`, so an f16 cell undeclared now keys `.../f16/f16/f16/st`
+  where 0.18 keyed `.../f16/f32/f16/st`. Consumers that pin ctr goldens must regenerate them if they move
+  to the spec default.
+- **The legacy `op` bridge (`structure_key`, `try_structure_key*`) is unchanged in bytes**: it now
+  *declares* the positional GEMM roles, the `f32` accumulator and the `f32`->`rm` policy that it always
+  implied, and derives through the same role path (pinned by `tests/ctr_roles.rs` and the existing suite).
+- **New typed declines:** `ContractionAxesNotDeclared`, `ContractionAxisInvalid`, `WeightRoleOutOfRange`,
+  `ContractionNoOutput`, `Batch(BatchRoleDecline)` (`BatchAxisOutOfRange`, `BatchAxisDuplicate`,
   `BatchAxisOverlapsContractionRole`, `BatchAxisNotInOutput`, `BatchAxisNonPositiveExtent`),
-  `ReservedContractionDtype`.
-- **Breaking:** `DeriveDecline::ScaleRoleOutOfRange`'s wire name is now `RoleSlotOutOfRange` (KISS's
+  `ReservedContractionDtype`. `ScaleRoleOutOfRange`'s wire name is now `RoleSlotOutOfRange` (KISS's
   spelling, shared with the weight slot); the variant is unchanged.
 - **Not decided here:** the key says nothing about whether an emitter can bind these axes. The v1 CUDA
   emitter binds one outermost batch axis; an emitter must decline what it cannot bind (KISS keys any
-  declared batch axes, e.g. `ctr_rank4_one_batch_axis_declared`).
+  declared batch axes, e.g. `ctr_rank4_one_batch_axis_declared`). The old "batch must be storage-outermost"
+  decline is no longer a key-time decline.
 
 ## `0.18.1` — KISS 0.4.3's 62 derivation vectors are vendored; 27 are pinned as the known gap
 

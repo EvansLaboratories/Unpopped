@@ -8,8 +8,8 @@
 //! declines, and each has the control that makes its null mean something.
 
 use unpopped_vocab::{
-    ArchSku, CellFacts, DeriveDecline, ElementKind, OperandDesc, StructureKey, TokenDecline,
-    derive_structure_key, derive_structure_key_token,
+    ArchSku, CellFacts, ContractionAxes, DeriveDecline, ElementKind, OperandDesc, StructureKey,
+    TokenDecline, derive_structure_key, derive_structure_key_token,
 };
 
 fn od(shape: &[i64], strides: &[i64], dt: ElementKind) -> OperandDesc {
@@ -37,6 +37,10 @@ fn facts(scale: Option<usize>) -> CellFacts {
     f.contraction_declared = true;
     f.weight_operand = Some(1);
     f.scale_operand = scale;
+    f.contraction_axes = Some(ContractionAxes::gemm(2, 0));
+    // The sk5-era accumulator these pinned bytes were taken at; the spec default is
+    // operand 0's dtype (§6.7-0006), which would be bf16 here.
+    f.accumulator = Some(ElementKind::F32);
     f
 }
 

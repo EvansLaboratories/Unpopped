@@ -48,13 +48,50 @@ fn key(ops: &[OperandDesc], f: &CellFacts) -> Result<String, DeriveDecline> {
 }
 
 #[test]
-fn without_axes_the_positional_policy_is_unchanged_and_with_axes_the_spec_default_applies() {
-    // Positional (pre-0.19): an f16 contraction accumulates at f32, `st`.
-    let legacy = key(&gemm(), &facts(None)).unwrap();
-    assert_eq!(tail(&legacy), "csss/d16/f16/f32/f16/st", "{legacy}");
-    // Role-driven, no accumulator declared: the compute dtype, operand 0's (§6.7-0006).
+fn roles_are_required_and_the_accumulator_defaults_to_the_compute_dtype() {
+    // No roles, no key: they are never inferred from position.
+    assert_eq!(
+        key(&gemm(), &facts(None)),
+        Err(DeriveDecline::ContractionAxesNotDeclared)
+    );
+    // Declared roles, no accumulator: the compute dtype, operand 0's (§6.7-0006).
     let roles = key(&gemm(), &facts(Some(axes()))).unwrap();
     assert_eq!(tail(&roles), "csss/d16/f16/f16/f16/st", "{roles}");
+}
+
+#[test]
+fn the_legacy_op_bridge_declares_its_own_roles_and_keeps_its_bytes() {
+    // The bridge declares positional GEMM roles, an `f32` accumulator for `f16`
+    // and `st`: the bytes 0.18 derived, now from the one role-driven path.
+    let t = unpopped_vocab::try_structure_key_token(
+        unpopped_vocab::OpCategory::Gemm,
+        &gemm(),
+        ArchSku::Sm89,
+    )
+    .unwrap();
+    assert_eq!(tail(&t), "csss/d16/f16/f32/f16/st", "{t}");
+    // ... and the same cell through the conformant entry, declaring the same facts,
+    // is byte-identical: one behaviour, reached two ways.
+    let mut f = facts(Some(ContractionAxes::gemm(2, 0)));
+    f.accumulator = Some(ElementKind::F32);
+    assert_eq!(key(&gemm(), &f).unwrap(), t);
+    // An f32 contraction rounds its inputs at the bridge (`rm`), as the GEMM
+    // routing policy does; through the conformant entry that is a declaration.
+    let mut g = gemm();
+    for o in &mut g {
+        o.dtype = ElementKind::F32;
+    }
+    let bridged = unpopped_vocab::try_structure_key_token(
+        unpopped_vocab::OpCategory::Gemm,
+        &g,
+        ArchSku::Sm89,
+    )
+    .unwrap();
+    assert_eq!(tail(&bridged), "csss/d16/f32/f32/f32/rm", "{bridged}");
+    assert_eq!(
+        tail(&key(&g, &facts(Some(axes()))).unwrap()),
+        "csss/d16/f32/f32/f32/st"
+    );
 }
 
 #[test]
