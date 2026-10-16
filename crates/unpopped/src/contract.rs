@@ -2122,8 +2122,8 @@ mod tests {
 
     #[test]
     fn bundle_kisc_frames_each_admitted_contract_and_drops_the_heading() {
-        let c1 = "kernel: relu\nop_kind: ReluElementwise\naccept: sk5|ew1|f32\n".to_string();
-        let c2 = "kernel: add\nop_kind: AddElementwise\naccept: sk5|ew2|f32\n".to_string();
+        let c1 = "kernel: relu\nop_kind: ReluElementwise\naccept: sk6|ew1|f32\n".to_string();
+        let c2 = "kernel: add\nop_kind: AddElementwise\naccept: sk6|ew2|f32\n".to_string();
         let b = bundle_kisc("baracuda", "cuda", "rev0", &[c1.clone(), c2.clone()], false);
         // Provider front-matter still leads the file.
         assert!(b.starts_with("---\n"), "front matter leads: {b}");

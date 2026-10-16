@@ -117,7 +117,7 @@ as `cuda:sm89`. The namespace set is open; the capability vocabulary after the
 colon belongs to the namespace's maintainer.
 
 **Token.** The string wire form of a structure key, e.g.
-`sk5|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;…|-`. The only normative
+`sk6|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;…|-`. The only normative
 form; the in-memory struct is a permitted representation.
 
 **Vendored artifact.** A KISS file copied verbatim into `kiss/` so it can be
