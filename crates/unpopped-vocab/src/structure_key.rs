@@ -693,7 +693,7 @@ impl AxisRef {
     }
 }
 
-/// Capacity of [`ContractionAxes`]'s batch list: twice [`MAX_RANK`]. A list longer than
+/// Capacity of [`ContractionRoles`]'s batch list: twice [`MAX_RANK`]. A list longer than
 /// the frame rank must repeat or overrun an axis, and the first such entry sits at index
 /// `MAX_RANK` at the latest, so truncating at this capacity never changes which decline
 /// [`BatchRoleDecline`] reports.
@@ -704,10 +704,11 @@ const BATCH_CAP: usize = 2 * MAX_RANK;
 /// extent. M/N/K name an axis of an operand; each batch axis is an **iteration-frame**
 /// axis (right-aligned, §6.6-0013). The cell is batched iff the batch list is non-empty.
 ///
-/// Set it on [`CellFacts::contraction_axes`] to opt into the role-driven derivation.
+/// Set it on [`CellFacts::contraction_roles`]. Not to be confused with `unpopped::ir::ContractionAxes`,
+/// the *op's* per-input axis roles (`FreeM`/`ContractedK`/..): this names the axes of the *key*.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 #[non_exhaustive]
-pub struct ContractionAxes {
+pub struct ContractionRoles {
     /// The M axis.
     pub m: AxisRef,
     /// The N axis.
@@ -718,7 +719,7 @@ pub struct ContractionAxes {
     batch_len: u8,
 }
 
-impl ContractionAxes {
+impl ContractionRoles {
     /// Roles with no batch axis.
     #[must_use]
     pub const fn new(m: AxisRef, n: AxisRef, k: AxisRef) -> Self {
@@ -879,8 +880,8 @@ pub struct CellFacts {
     /// (default: operand 0's dtype, §6.7-0006) and [`math_fidelity`](Self::math_fidelity)
     /// are keyed; a malformed role is a typed decline. [`derive_structure_key`] declines a
     /// declared contraction that leaves it `None`
-    /// ([`DeriveDecline::ContractionAxesNotDeclared`]), as it does an undeclared weight.
-    pub contraction_axes: Option<ContractionAxes>,
+    /// ([`DeriveDecline::ContractionRolesNotDeclared`]), as it does an undeclared weight.
+    pub contraction_roles: Option<ContractionRoles>,
 }
 
 impl CellFacts {
@@ -896,7 +897,7 @@ impl CellFacts {
             math_fidelity: MpCode::St,
             weight_operand: None,
             scale_operand: None,
-            contraction_axes: None,
+            contraction_roles: None,
         }
     }
 
@@ -926,7 +927,7 @@ impl CellFacts {
             // them; any other keeps no roles and so no `ctr` field, as before.
             if derive_contraction(OpCategory::Gemm, operands, 1).is_some() {
                 let rank = operands[0].rank as usize;
-                f.contraction_axes = Some(ContractionAxes::gemm(rank, rank - 2));
+                f.contraction_roles = Some(ContractionRoles::gemm(rank, rank - 2));
                 let primary = operands[0].dtype;
                 f.accumulator = Some(contraction_acc(primary));
                 f.math_fidelity = contraction_mp(primary);
@@ -1404,12 +1405,12 @@ fn contraction_key(
         (None, true) => return Err(DeriveDecline::WeightRoleNotDeclared),
         (None, false) => 1,
     };
-    match facts.contraction_axes {
+    match facts.contraction_roles {
         Some(axes) => contraction_from_axes(operands, facts, &axes, weight),
         // Roles are never inferred from position. The unchecked path (the legacy
         // `op` bridge) reaches here only for a cell the bridge declined to give
         // roles, which derives no `ctr` field.
-        None if checked => Err(DeriveDecline::ContractionAxesNotDeclared),
+        None if checked => Err(DeriveDecline::ContractionRolesNotDeclared),
         None => Err(DeriveDecline::ContractionOutOfScope),
     }
 }
@@ -1428,7 +1429,7 @@ fn contraction_key(
 fn contraction_from_axes(
     operands: &[OperandDesc],
     facts: &CellFacts,
-    axes: &ContractionAxes,
+    axes: &ContractionRoles,
     weight: usize,
 ) -> Result<ContractionKey, DeriveDecline> {
     let frame = Frame::of(operands);
@@ -1649,7 +1650,7 @@ const fn contraction_mp(primary: ElementKind) -> MpCode {
 /// `operand_stride_binding` filters broadcast axes out before consuming `perm`.
 ///
 /// Role-agnostic: storage order derives from strides alone, so this takes no
-/// `AxisRole`/`ContractionAxes` argument (roles enter at the plan/emitter layer).
+/// `AxisRole`/`ContractionRoles` argument (roles enter at the plan/emitter layer).
 /// Rank-generic — subsumes both the rank-2 and rank-3 `dense` checks below: a
 /// canonical row-major operand's axes already sort into ascending order, so
 /// `perm` comes out as the identity permutation (byte-identity with the
@@ -1962,7 +1963,7 @@ pub enum DeriveDecline {
     /// are not. They are not identified by operand position, so a deriver that
     /// guessed would emit a well-formed token for the wrong cell. **Not in KISS's
     /// decline vocabulary**: the wire name is this crate's.
-    ContractionAxesNotDeclared,
+    ContractionRolesNotDeclared,
     /// KISS-CLASSIFY §6.6-0016: M, N or K names no operand axis, or two of them
     /// name the same one.
     ContractionAxisInvalid,
@@ -2003,7 +2004,7 @@ impl DeriveDecline {
             Self::ReservedScaleDtype { .. } | Self::ReservedContractionDtype { .. } => {
                 "ReservedDtype"
             }
-            Self::ContractionAxesNotDeclared => "ContractionAxesNotDeclared",
+            Self::ContractionRolesNotDeclared => "ContractionRolesNotDeclared",
             Self::ContractionAxisInvalid => "ContractionAxisInvalid",
             Self::ContractionNoOutput => "ContractionNoOutput",
             Self::Batch(b) => b.wire_name(),
@@ -2052,7 +2053,7 @@ impl core::fmt::Display for DeriveDecline {
                 "the scale operand has reserved dtype {dtype:?}, which must typed-decline \
                  (KISS-CLASSIFY §6.1-0001)"
             ),
-            Self::ContractionAxesNotDeclared => write!(
+            Self::ContractionRolesNotDeclared => write!(
                 f,
                 "contraction roles are declared but the M/N/K axes are not (KISS-CLASSIFY §6.6-0016)"
             ),

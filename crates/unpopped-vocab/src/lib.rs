@@ -96,8 +96,8 @@ pub use shape_expr::{
 };
 pub use sku::{BackendKind, KernelSku, OpCategory};
 pub use structure_key::{
-    AccMp, AxisMask, AxisRef, BatchRoleDecline, CellClass, CellFacts, Contiguity, ContractionAxes,
-    ContractionKey, DequantForm, DeriveDecline, DivBucket, IdxWidth, MAX_OPERANDS, MAX_RANK,
+    AccMp, AxisMask, AxisRef, BatchRoleDecline, CellClass, CellFacts, Contiguity, ContractionKey,
+    ContractionRoles, DequantForm, DeriveDecline, DivBucket, IdxWidth, MAX_OPERANDS, MAX_RANK,
     MpCode, OperandDesc, OperandKey, OperandRole, STRUCTURE_KEY_VERSION, SizeClass, StructureKey,
     SymExtent, SymKind, TokenDecline, VecWidth, WorkClass, derive_structure_key,
     derive_structure_key_token, dtype_numeric_kind, dtype_storage_bits, dtype_token, structure_key,

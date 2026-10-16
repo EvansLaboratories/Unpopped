@@ -23,7 +23,7 @@
 
 use serde_json::Value;
 use unpopped_vocab::{
-    ArchSku, AxisRef, CellFacts, ContractionAxes, DequantForm, ElementKind, MpCode, OperandDesc,
+    ArchSku, AxisRef, CellFacts, ContractionRoles, DequantForm, ElementKind, MpCode, OperandDesc,
     OperandRole, STRUCTURE_KEY_VERSION, derive_structure_key_token, dtype_token,
 };
 
@@ -154,8 +154,8 @@ fn facts_of(name: &str, v: &Value) -> CellFacts {
         let batch: Vec<usize> = c["batch_axes"].as_array().unwrap().iter().map(us).collect();
         facts.weight_operand = c["weight"].as_u64().map(|x| usize::try_from(x).unwrap());
         facts.scale_operand = c["scale"].as_u64().map(|x| usize::try_from(x).unwrap());
-        facts.contraction_axes = Some(
-            ContractionAxes::new(axis(&c["m"]), axis(&c["n"]), axis(&c["k"]))
+        facts.contraction_roles = Some(
+            ContractionRoles::new(axis(&c["m"]), axis(&c["n"]), axis(&c["k"]))
                 .with_batch_axes(&batch),
         );
     }

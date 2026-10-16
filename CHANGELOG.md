@@ -15,6 +15,20 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.20.0` — `ContractionAxes` (unpopped-vocab) is now `ContractionRoles` (BREAKING)
+
+`unpopped::ir::ContractionAxes` (the *op's* per-input axis roles) and `unpopped_vocab::ContractionAxes` (0.19.0's
+declared M/N/K and batch axes of the *key*) were two public types with one name. The vocab type is renamed, with
+what hangs off it, while the surface is new. No behaviour and no token byte changes.
+
+| 0.19.x | 0.20.0 |
+|---|---|
+| `unpopped_vocab::ContractionAxes` | `unpopped_vocab::ContractionRoles` (same API: `new`, `gemm`, `with_batch_axes`, `batch_axes`) |
+| `CellFacts::contraction_axes` | `CellFacts::contraction_roles` |
+| `DeriveDecline::ContractionAxesNotDeclared` (wire `ContractionAxesNotDeclared`) | `DeriveDecline::ContractionRolesNotDeclared` (wire `ContractionRolesNotDeclared`) |
+
+`unpopped::ir::ContractionAxes` is unchanged. The 0.19.0 entry below names the old spellings, as shipped.
+
 ## `0.19.1` — the derivation vectors are re-vendored from KISS `026feba` (63 vectors)
 
 Tests and docs only; no behaviour, API or token byte changes. KISS#592 corrected its `<acc>` warning
