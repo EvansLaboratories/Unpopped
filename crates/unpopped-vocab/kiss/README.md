@@ -9,10 +9,20 @@ vendoring better than retyping.
 |---|---|---|
 | `dtype_manifest.json` | `conformance/corpus/dtype_manifest.json` | `86196f7` (blob `ab50a92692ce92447913cd14d910c466cdf7e315`) |
 | `structure_key_vectors.json` | `conformance/corpus/structure_key_vectors.json` | `86196f7` (blob `019f646f607d068db4dfe23396fc817093b6f455`) |
-| `structure_key_derivation_vectors.json` | `conformance/corpus/structure_key_derivation_vectors.json` | `86196f7` (blob `393138b0540bfec0e81e78666ecf1c18f6c665f9`) |
+| `structure_key_derivation_vectors.json` | `conformance/corpus/structure_key_derivation_vectors.json` | `f88d389` (blob `c241ac6205a9c06afeccaf4d5251de3b5234f88a`) |
 
 `86196f7` is KISS `main` as read on 2026-10-16 (conformance 0.4.0). It is a single
 commit for all three files, so the table cannot name two different spec states.
+
+### Derivation vectors re-vendored 2026-10-16 from KISS `f88d389` (conformance 0.4.3)
+
+Only `structure_key_derivation_vectors.json` changed: 36 -> 62 vectors (15 `ctr` token vectors,
+12 role-hint declines, `decline_contraction_out_of_scope` removed). `git hash-object` of the
+copy equals the KISS blob `c241ac62…`; `structure_key_vectors.json` (`019f646f…`) and
+`dtype_manifest.json` are unchanged at `f88d389`. Rows above name `f88d389` for the derivation
+file and `86196f7` for the other two, whose blobs are identical at both commits.
+The 27 new vectors this keyer does not yet match are pinned by name in `KNOWN_GAP`
+(`tests/kiss_derivation_vectors.rs`); the test fails if one starts passing or a new one fails.
 
 ### Re-vendored 2026-10-16 from KISS `86196f7` (sk6)
 
