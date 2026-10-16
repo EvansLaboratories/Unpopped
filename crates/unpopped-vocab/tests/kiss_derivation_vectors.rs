@@ -23,8 +23,8 @@
 
 use serde_json::Value;
 use unpopped_vocab::{
-    ArchSku, CellFacts, DequantForm, ElementKind, MpCode, OperandDesc, OperandRole,
-    STRUCTURE_KEY_VERSION, derive_structure_key_token, dtype_token,
+    ArchSku, AxisRef, CellFacts, ContractionAxes, DequantForm, ElementKind, MpCode, OperandDesc,
+    OperandRole, STRUCTURE_KEY_VERSION, derive_structure_key_token, dtype_token,
 };
 
 const VECTORS: &str = include_str!("../kiss/structure_key_derivation_vectors.json");
@@ -68,35 +68,7 @@ fn dtype(name: &str) -> ElementKind {
 /// The ctr/role vectors KISS 0.4.3 added that this keyer does not yet match
 /// (KISS `f88d389`, the ctr derivation stage and the batch role, §6.6-0023).
 /// **This list is the work, not an allowance**: the follow-up PR empties it.
-const KNOWN_GAP: [&str; 27] = [
-    "ctr_gemm_small_m_large_nk",
-    "ctr_gemm_roles_swapped_m_and_n",
-    "ctr_k_divisibility_from_k_axis",
-    "ctr_accumulator_and_reduced_mantissa",
-    "ctr_rank3_batch_declared",
-    "ctr_rank3_batch_not_declared",
-    "ctr_batch_declared_extent_one",
-    "ctr_rank4_two_batch_axes_product",
-    "ctr_rank4_one_batch_axis_declared",
-    "ctr_rank4_no_batch_declared",
-    "ctr_quantized_scale_e8m0",
-    "ctr_quantized_scale_f16",
-    "ctr_quantized_no_scale_designated",
-    "ctr_weight_role_not_operand_one",
-    "ctr_weight_first_undeclared_accumulator_defaults_to_weight_dtype",
-    "decline_ctr_axis_roles_not_distinct",
-    "decline_ctr_axis_out_of_range",
-    "decline_ctr_axis_operand_out_of_range",
-    "decline_ctr_weight_slot_out_of_range",
-    "decline_ctr_scale_slot_out_of_range",
-    "decline_ctr_reserved_weight_dtype",
-    "decline_ctr_no_output_operand",
-    "decline_ctr_batch_axis_out_of_range",
-    "decline_ctr_batch_axis_duplicate",
-    "decline_ctr_batch_axis_is_an_mnk_axis",
-    "decline_ctr_batch_axis_not_in_output",
-    "decline_ctr_batch_axis_zero_extent",
-];
+const KNOWN_GAP: [&str; 0] = [];
 
 /// One vector's verdict, in the PM's three-way vocabulary.
 #[derive(Debug, PartialEq, Eq)]
@@ -174,12 +146,18 @@ fn facts_of(name: &str, v: &Value) -> CellFacts {
             .set(u8::try_from(a.as_u64().unwrap()).unwrap());
     }
     facts.accumulator = v["accumulator"].as_str().map(dtype);
-    // The vector's `contraction` object (KISS 0.4.3): only the roles this crate can
-    // express are mapped. The M/N/K `{operand, axis}` pairs and `batch_axes` have no
-    // `CellFacts` field yet; vectors that need them are in `KNOWN_GAP` below.
+    // The vector's `contraction` object (KISS 0.4.3): every declared role, M/N/K and
+    // batch included, so the role-driven derivation is what is measured.
     if let Some(c) = v["contraction"].as_object() {
+        let us = |x: &Value| usize::try_from(x.as_u64().unwrap()).unwrap();
+        let axis = |r: &Value| AxisRef::new(us(&r["operand"]), us(&r["axis"]));
+        let batch: Vec<usize> = c["batch_axes"].as_array().unwrap().iter().map(us).collect();
         facts.weight_operand = c["weight"].as_u64().map(|x| usize::try_from(x).unwrap());
         facts.scale_operand = c["scale"].as_u64().map(|x| usize::try_from(x).unwrap());
+        facts.contraction_axes = Some(
+            ContractionAxes::new(axis(&c["m"]), axis(&c["n"]), axis(&c["k"]))
+                .with_batch_axes(&batch),
+        );
     }
     facts.math_fidelity = match v["math_fidelity"].as_str().unwrap() {
         "st" => MpCode::St,

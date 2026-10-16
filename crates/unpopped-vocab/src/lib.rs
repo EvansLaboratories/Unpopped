@@ -96,11 +96,11 @@ pub use shape_expr::{
 };
 pub use sku::{BackendKind, KernelSku, OpCategory};
 pub use structure_key::{
-    AccMp, AxisMask, CellClass, CellFacts, Contiguity, ContractionKey, DequantForm, DeriveDecline,
-    DivBucket, IdxWidth, MAX_OPERANDS, MAX_RANK, MpCode, OperandDesc, OperandKey, OperandRole,
-    STRUCTURE_KEY_VERSION, SizeClass, StructureKey, SymExtent, SymKind, TokenDecline, VecWidth,
-    WorkClass, derive_structure_key, derive_structure_key_token, dtype_numeric_kind,
-    dtype_storage_bits, dtype_token, structure_key, structure_key_token, try_structure_key,
-    try_structure_key_token,
+    AccMp, AxisMask, AxisRef, BatchRoleDecline, CellClass, CellFacts, Contiguity, ContractionAxes,
+    ContractionKey, DequantForm, DeriveDecline, DivBucket, IdxWidth, MAX_OPERANDS, MAX_RANK,
+    MpCode, OperandDesc, OperandKey, OperandRole, STRUCTURE_KEY_VERSION, SizeClass, StructureKey,
+    SymExtent, SymKind, TokenDecline, VecWidth, WorkClass, derive_structure_key,
+    derive_structure_key_token, dtype_numeric_kind, dtype_storage_bits, dtype_token, structure_key,
+    structure_key_token, try_structure_key, try_structure_key_token,
 };
 pub use target::{TargetError, TargetId};

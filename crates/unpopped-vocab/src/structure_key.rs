@@ -674,6 +674,166 @@ pub enum OperandRole {
     InOut,
 }
 
+/// One axis of one operand, as a contraction role names it (KISS-CLASSIFY-6.6-0016):
+/// `operand` indexes the cell's operands in canonical order (the call order, whenever
+/// outputs come last, as in every KISS vector) and `axis` that operand's **own** axis.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct AxisRef {
+    /// The operand, in canonical order.
+    pub operand: usize,
+    /// The axis of that operand, outermost first.
+    pub axis: usize,
+}
+
+impl AxisRef {
+    /// Axis `axis` of operand `operand`.
+    #[must_use]
+    pub const fn new(operand: usize, axis: usize) -> Self {
+        Self { operand, axis }
+    }
+}
+
+/// Capacity of [`ContractionAxes`]'s batch list: twice [`MAX_RANK`]. A list longer than
+/// the frame rank must repeat or overrun an axis, and the first such entry sits at index
+/// `MAX_RANK` at the latest, so truncating at this capacity never changes which decline
+/// [`BatchRoleDecline`] reports.
+const BATCH_CAP: usize = 2 * MAX_RANK;
+
+/// The caller-declared **M, N, K and batch axis roles** of a dense contraction
+/// (KISS-CLASSIFY-6.6-0016 and -0023). Declared, never inferred from rank, position or
+/// extent. M/N/K name an axis of an operand; each batch axis is an **iteration-frame**
+/// axis (right-aligned, §6.6-0013). The cell is batched iff the batch list is non-empty.
+///
+/// Set it on [`CellFacts::contraction_axes`] to opt into the role-driven derivation.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
+pub struct ContractionAxes {
+    /// The M axis.
+    pub m: AxisRef,
+    /// The N axis.
+    pub n: AxisRef,
+    /// The K axis.
+    pub k: AxisRef,
+    batch: [u8; BATCH_CAP],
+    batch_len: u8,
+}
+
+impl ContractionAxes {
+    /// Roles with no batch axis.
+    #[must_use]
+    pub const fn new(m: AxisRef, n: AxisRef, k: AxisRef) -> Self {
+        Self {
+            m,
+            n,
+            k,
+            batch: [0; BATCH_CAP],
+            batch_len: 0,
+        }
+    }
+
+    /// The roles of the plain GEMM `[B.., M, K] . [B.., K, N] -> [B.., M, N]` of `rank`
+    /// axes per operand, whose `batch` leading axes are batch axes: M is axis `rank - 2` and
+    /// K axis `rank - 1` of operand 0, N is axis `rank - 1` of operand 1. This is a
+    /// **declaration the caller makes by calling it**, not an inference the keyer draws:
+    /// a caller whose operands are laid out otherwise names its own axes.
+    #[must_use]
+    pub fn gemm(rank: usize, batch: usize) -> Self {
+        let axes: Vec<usize> = (0..batch).collect();
+        Self::new(
+            AxisRef::new(0, rank.saturating_sub(2)),
+            AxisRef::new(1, rank.saturating_sub(1)),
+            AxisRef::new(0, rank.saturating_sub(1)),
+        )
+        .with_batch_axes(&axes)
+    }
+
+    /// Declare the batch axes, in the order given (a repeat or an out-of-range entry is
+    /// kept, so the derivation can decline it by name). An axis past `u8::MAX` is stored
+    /// as `u8::MAX`, which is out of range for any frame.
+    #[must_use]
+    pub fn with_batch_axes(mut self, axes: &[usize]) -> Self {
+        let n = axes.len().min(BATCH_CAP);
+        for (slot, &a) in self.batch.iter_mut().zip(&axes[..n]) {
+            *slot = u8::try_from(a).unwrap_or(u8::MAX);
+        }
+        self.batch_len = n as u8;
+        self
+    }
+
+    /// The declared batch axes, in declaration order.
+    pub fn batch_axes(&self) -> impl Iterator<Item = usize> + '_ {
+        self.batch[..usize::from(self.batch_len)]
+            .iter()
+            .map(|&a| usize::from(a))
+    }
+}
+
+/// Why a declared batch-axis role is refused (KISS-CLASSIFY-6.6-0023, §7.1-0002): a
+/// malformed hint is never silently ignored or dropped.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum BatchRoleDecline {
+    /// A batch axis is not an iteration-frame axis.
+    AxisOutOfRange,
+    /// The same axis is listed twice.
+    DuplicateAxis,
+    /// A batch axis is also an M, N or K axis.
+    OverlapsContractionRole,
+    /// A batch axis is absent from the output operand.
+    NotInOutput,
+    /// A batch axis has an extent below 1.
+    NonPositiveExtent,
+}
+
+impl BatchRoleDecline {
+    /// The spelling in the shared KISS decline vocabulary.
+    #[must_use]
+    pub const fn wire_name(&self) -> &'static str {
+        match self {
+            Self::AxisOutOfRange => "BatchAxisOutOfRange",
+            Self::DuplicateAxis => "BatchAxisDuplicate",
+            Self::OverlapsContractionRole => "BatchAxisOverlapsContractionRole",
+            Self::NotInOutput => "BatchAxisNotInOutput",
+            Self::NonPositiveExtent => "BatchAxisNonPositiveExtent",
+        }
+    }
+}
+
+/// §6.6-0023: the `b<class>` coordinate from the declared batch axes. Batched **iff**
+/// `batch_axes` is non-empty (a declared extent-1 axis is batched); the class is that of
+/// the **product** of the batch extents (§6.5-0008, saturating). `frame` are the
+/// iteration-frame extents, `mnk` the frame axes M, N, K land on, `out` the frame axes
+/// the output covers. The checks run per entry, in this order, so the first malformed
+/// entry names the decline.
+///
+/// A mirror of KISS's `derive_batch_class` (`conformance/src/structure_key.rs`), which is
+/// not a published crate; `tests/kiss_derivation_vectors.rs` is what keeps them agreeing.
+fn derive_batch_class(
+    frame: &[i64],
+    batch_axes: &[usize],
+    mnk: &[usize],
+    out: &[usize],
+) -> Result<Option<SizeClass>, BatchRoleDecline> {
+    let mut product: i64 = 1;
+    for (i, &axis) in batch_axes.iter().enumerate() {
+        let extent = *frame.get(axis).ok_or(BatchRoleDecline::AxisOutOfRange)?;
+        if batch_axes[..i].contains(&axis) {
+            return Err(BatchRoleDecline::DuplicateAxis);
+        }
+        if mnk.contains(&axis) {
+            return Err(BatchRoleDecline::OverlapsContractionRole);
+        }
+        if !out.contains(&axis) {
+            return Err(BatchRoleDecline::NotInOutput);
+        }
+        if extent < 1 {
+            return Err(BatchRoleDecline::NonPositiveExtent);
+        }
+        product = product.saturating_mul(extent);
+    }
+    Ok((!batch_axes.is_empty()).then(|| SizeClass::of(product)))
+}
+
 /// The caller-declared facts a cell class is derived from
 /// (KISS-CLASSIFY-6.6-0012), beside the operand descriptors.
 ///
@@ -713,6 +873,14 @@ pub struct CellFacts {
     /// error: [`derive_structure_key`] declines it
     /// ([`DeriveDecline::ScaleRoleOutOfRange`]) rather than ignore it.
     pub scale_operand: Option<usize>,
+    /// The **M/N/K and batch axis roles** of a declared contraction (§6.6-0016,
+    /// §6.6-0023). The contraction field is read from these axes, never from operand
+    /// positions; any rank derives; the declared [`accumulator`](Self::accumulator)
+    /// (default: operand 0's dtype, §6.7-0006) and [`math_fidelity`](Self::math_fidelity)
+    /// are keyed; a malformed role is a typed decline. [`derive_structure_key`] declines a
+    /// declared contraction that leaves it `None`
+    /// ([`DeriveDecline::ContractionAxesNotDeclared`]), as it does an undeclared weight.
+    pub contraction_axes: Option<ContractionAxes>,
 }
 
 impl CellFacts {
@@ -728,6 +896,7 @@ impl CellFacts {
             math_fidelity: MpCode::St,
             weight_operand: None,
             scale_operand: None,
+            contraction_axes: None,
         }
     }
 
@@ -750,6 +919,18 @@ impl CellFacts {
         // [`derive_structure_key`] and say which operand it is.
         if f.contraction_declared && operands.len() >= 2 {
             f.weight_operand = Some(1);
+            // ... and the plain GEMM's roles, accumulator and `<mp>`, as declarations
+            // the bridge makes for its caller (this crate's GEMM routing policy: an
+            // `f16` contraction accumulates at `f32`, a plain `f32` one rounds its
+            // inputs, `rm`). Only a cell the positional rank-2/3 deriver accepts gets
+            // them; any other keeps no roles and so no `ctr` field, as before.
+            if derive_contraction(OpCategory::Gemm, operands, 1).is_some() {
+                let rank = operands[0].rank as usize;
+                f.contraction_axes = Some(ContractionAxes::gemm(rank, rank - 2));
+                let primary = operands[0].dtype;
+                f.accumulator = Some(contraction_acc(primary));
+                f.math_fidelity = contraction_mp(primary);
+            }
         }
         f
     }
@@ -1200,32 +1381,146 @@ fn derive_cell_class(
 /// The derivation proper. Never declines: it is what [`structure_key`] always
 /// returned, with the sk5 class and facts. The decline checks live in
 /// [`check_declines`], which the conformant entry points run first.
+/// The index of the output operand of a canonically ordered cell: the first
+/// [`OperandRole::Output`] operand, or, when no operand states a role (the pre-sk5
+/// convention), the last. `None` when roles are stated and none is an output.
+fn output_operand(operands: &[OperandDesc]) -> Option<usize> {
+    if operands.iter().all(|o| o.role == OperandRole::Unspecified) {
+        return operands.len().checked_sub(1);
+    }
+    operands.iter().position(|o| o.role == OperandRole::Output)
+}
+
+/// The contraction field of a declared contraction. `checked` is the conformant
+/// entry point: it requires the weight role and the M/N/K axes. Unchecked (the
+/// legacy bridge), an undeclared weight falls back to operand 1.
+fn contraction_key(
+    operands: &[OperandDesc],
+    facts: &CellFacts,
+    checked: bool,
+) -> Result<ContractionKey, DeriveDecline> {
+    let weight = match (facts.weight_operand, checked) {
+        (Some(w), _) => w,
+        (None, true) => return Err(DeriveDecline::WeightRoleNotDeclared),
+        (None, false) => 1,
+    };
+    match facts.contraction_axes {
+        Some(axes) => contraction_from_axes(operands, facts, &axes, weight),
+        // Roles are never inferred from position. The unchecked path (the legacy
+        // `op` bridge) reaches here only for a cell the bridge declined to give
+        // roles, which derives no `ctr` field.
+        None if checked => Err(DeriveDecline::ContractionAxesNotDeclared),
+        None => Err(DeriveDecline::ContractionOutOfScope),
+    }
+}
+
+/// The role-driven contraction field (§6.6-0016, -0019, -0022, -0023, §6.7-0006), in the
+/// reference deriver's order of refusal: M/N/K axes, the weight then scale slots, the
+/// output operand, the batch roles, then the reserved dtypes. The size classes read each
+/// role axis's **own** operand extent; the batch class reads the frame.
+///
+/// `lhs_order` / `rhs_order` are this crate's own layout coordinates (not KISS's, absent
+/// from KISS's vectors): read from the operands that carry M and N. A non-packed layout or
+/// a non-identity order the token cannot spell at this rank is
+/// [`DeriveDecline::ContractionOutOfScope`]. The key says nothing about whether an emitter
+/// can bind these axes (the v1 CUDA emitter binds one outermost batch axis): that decline
+/// belongs to the emitter, because KISS keys any declared batch axes.
+fn contraction_from_axes(
+    operands: &[OperandDesc],
+    facts: &CellFacts,
+    axes: &ContractionAxes,
+    weight: usize,
+) -> Result<ContractionKey, DeriveDecline> {
+    let frame = Frame::of(operands);
+    let (m, n, k) = (axes.m, axes.n, axes.k);
+    if m == n || m == k || n == k {
+        return Err(DeriveDecline::ContractionAxisInvalid);
+    }
+    // The extent of a role axis and the frame axis it lands on (right-aligned).
+    let role = |r: AxisRef| -> Result<(i64, usize), DeriveDecline> {
+        let o = operands
+            .get(r.operand)
+            .ok_or(DeriveDecline::ContractionAxisInvalid)?;
+        let rank = o.rank as usize;
+        if r.axis >= rank {
+            return Err(DeriveDecline::ContractionAxisInvalid);
+        }
+        Ok((o.shape[r.axis], frame.rank - rank + r.axis))
+    };
+    let ((m_ext, m_fr), (n_ext, n_fr), (k_ext, k_fr)) = (role(m)?, role(n)?, role(k)?);
+    let weight_od = operands
+        .get(weight)
+        .ok_or(DeriveDecline::WeightRoleOutOfRange { index: weight })?;
+    let scale_od = facts
+        .scale_operand
+        .map(|index| {
+            operands
+                .get(index)
+                .ok_or(DeriveDecline::ScaleRoleOutOfRange { index })
+        })
+        .transpose()?;
+    let out = output_operand(operands)
+        .map(|i| &operands[i])
+        .ok_or(DeriveDecline::ContractionNoOutput)?;
+    let out_axes: Vec<usize> = (frame.rank - out.rank as usize..frame.rank).collect();
+    let batch_axes: Vec<usize> = axes.batch_axes().collect();
+    let batch = derive_batch_class(
+        &frame.extents[..frame.rank],
+        &batch_axes,
+        &[m_fr, n_fr, k_fr],
+        &out_axes,
+    )
+    .map_err(DeriveDecline::Batch)?;
+    for od in [weight_od, out] {
+        if od.dtype.is_reserved() {
+            return Err(DeriveDecline::ReservedContractionDtype { dtype: od.dtype });
+        }
+    }
+    if let Some(od) = scale_od.filter(|od| od.dtype.is_reserved()) {
+        return Err(DeriveDecline::ReservedScaleDtype { dtype: od.dtype });
+    }
+
+    // This crate's layout coordinates, from the operands that carry M and N.
+    let (lhs, rhs) = (&operands[m.operand], &operands[n.operand]);
+    let lhs_order = classify_mat_layout(lhs).ok_or(DeriveDecline::ContractionOutOfScope)?;
+    let rhs_order = classify_mat_layout(rhs).ok_or(DeriveDecline::ContractionOutOfScope)?;
+    // The token spells an order at rank 3 (batched) or 2 (not) only.
+    let spellable = if batch.is_some() { 3 } else { 2 };
+    for (od, order) in [(lhs, &lhs_order), (rhs, &rhs_order)] {
+        if !order.is_identity() && od.rank as usize != spellable {
+            return Err(DeriveDecline::ContractionOutOfScope);
+        }
+    }
+
+    let primary = operands.first().map_or(ElementKind::F32, |o| o.dtype);
+    Ok(ContractionKey {
+        m: SizeClass::of(m_ext),
+        n: SizeClass::of(n_ext),
+        k: SizeClass::of(k_ext),
+        k_div: div_bucket(k_ext),
+        batch,
+        lhs_order,
+        rhs_order,
+        wdt: canonical_dtype(weight_od.dtype),
+        // §6.7-0006: no declared accumulator is the compute dtype, which is operand
+        // 0's. In a weight-first call order that is the weight's: declare it.
+        acc: canonical_dtype(facts.accumulator.unwrap_or(primary)),
+        out: canonical_dtype(out.dtype),
+        mp: facts.math_fidelity,
+        scale: scale_od.map(|od| od.dtype),
+    })
+}
+
 fn derive_unchecked(operands: &[OperandDesc], facts: &CellFacts, target: TargetId) -> StructureKey {
     let canon = canonical_operands(operands);
     let operands: &[OperandDesc] = &canon;
     let n = operands.len().min(MAX_OPERANDS);
     let frame = Frame::of(operands);
 
+    // The unchecked path keys what it can and leaves a contraction it cannot
+    // derive to the non-`ctr` rules; the conformant entry point has declined it.
     let contraction = if facts.contraction_declared {
-        // An undeclared weight falls back to operand 1 here, as the legacy
-        // bridge does; the conformant entry point declines it before this.
-        derive_contraction(
-            OpCategory::Gemm,
-            operands,
-            facts.weight_operand.unwrap_or(1),
-        )
-        // §6.6-0022: the scale operand's dtype, only on a `ctr` cell. The
-        // conformant entry point has already declined an index naming no
-        // operand and a reserved scale dtype; the unchecked path drops both
-        // rather than key a coordinate its own codec would refuse.
-        .map(|mut c| {
-            c.scale = facts
-                .scale_operand
-                .and_then(|i| operands.get(i))
-                .map(|o| o.dtype)
-                .filter(|d| !d.is_reserved());
-            c
-        })
+        contraction_key(operands, facts, false).ok()
     } else {
         None
     };
@@ -1663,6 +1958,30 @@ pub enum DeriveDecline {
         /// The reserved dtype found at the scale operand.
         dtype: ElementKind,
     },
+    /// KISS-CLASSIFY §6.6-0016: contraction roles are declared but the M/N/K axes
+    /// are not. They are not identified by operand position, so a deriver that
+    /// guessed would emit a well-formed token for the wrong cell. **Not in KISS's
+    /// decline vocabulary**: the wire name is this crate's.
+    ContractionAxesNotDeclared,
+    /// KISS-CLASSIFY §6.6-0016: M, N or K names no operand axis, or two of them
+    /// name the same one.
+    ContractionAxisInvalid,
+    /// KISS-CLASSIFY §6.6-0019: the declared weight operand names no operand.
+    WeightRoleOutOfRange {
+        /// The declared operand index.
+        index: usize,
+    },
+    /// KISS-CLASSIFY §6.7-0006: a declared contraction has no output operand to
+    /// supply `<out>`.
+    ContractionNoOutput,
+    /// KISS-CLASSIFY §6.6-0023: a malformed batch-axis role.
+    Batch(BatchRoleDecline),
+    /// KISS-CLASSIFY §6.1-0001 at the `<wdt>` or `<out>` position: the weight or the
+    /// output operand has a **reserved** dtype.
+    ReservedContractionDtype {
+        /// The reserved dtype found.
+        dtype: ElementKind,
+    },
 }
 
 impl DeriveDecline {
@@ -1677,8 +1996,17 @@ impl DeriveDecline {
             Self::ReducedAxisOutOfRange { .. } => "ReducedAxisOutOfRange",
             Self::ContractionOutOfScope => "ContractionOutOfScope",
             Self::WeightRoleNotDeclared => "WeightRoleNotDeclared",
-            Self::ScaleRoleOutOfRange { .. } => "ScaleRoleOutOfRange",
-            Self::ReservedScaleDtype { .. } => "ReservedDtype",
+            // KISS spells a weight slot and a scale slot naming no operand alike.
+            Self::ScaleRoleOutOfRange { .. } | Self::WeightRoleOutOfRange { .. } => {
+                "RoleSlotOutOfRange"
+            }
+            Self::ReservedScaleDtype { .. } | Self::ReservedContractionDtype { .. } => {
+                "ReservedDtype"
+            }
+            Self::ContractionAxesNotDeclared => "ContractionAxesNotDeclared",
+            Self::ContractionAxisInvalid => "ContractionAxisInvalid",
+            Self::ContractionNoOutput => "ContractionNoOutput",
+            Self::Batch(b) => b.wire_name(),
         }
     }
 }
@@ -1724,6 +2052,33 @@ impl core::fmt::Display for DeriveDecline {
                 "the scale operand has reserved dtype {dtype:?}, which must typed-decline \
                  (KISS-CLASSIFY §6.1-0001)"
             ),
+            Self::ContractionAxesNotDeclared => write!(
+                f,
+                "contraction roles are declared but the M/N/K axes are not (KISS-CLASSIFY §6.6-0016)"
+            ),
+            Self::ContractionAxisInvalid => write!(
+                f,
+                "an M, N or K role names no operand axis, or two of them name the same one \
+                 (KISS-CLASSIFY §6.6-0016)"
+            ),
+            Self::WeightRoleOutOfRange { index } => write!(
+                f,
+                "the declared weight operand {index} names no operand (KISS-CLASSIFY §6.6-0019)"
+            ),
+            Self::ContractionNoOutput => write!(
+                f,
+                "a declared contraction has no output operand (KISS-CLASSIFY §6.7-0006)"
+            ),
+            Self::Batch(b) => write!(
+                f,
+                "malformed batch-axis role {} (KISS-CLASSIFY §6.6-0023)",
+                b.wire_name()
+            ),
+            Self::ReservedContractionDtype { dtype } => write!(
+                f,
+                "the weight or output operand has reserved dtype {dtype:?}, which must \
+                 typed-decline (KISS-CLASSIFY §6.1-0001)"
+            ),
         }
     }
 }
@@ -1760,20 +2115,7 @@ fn check_declines(operands: &[OperandDesc], facts: &CellFacts) -> Result<(), Der
         }
     }
     if facts.contraction_declared {
-        let Some(weight) = facts.weight_operand else {
-            return Err(DeriveDecline::WeightRoleNotDeclared);
-        };
-        if derive_contraction(OpCategory::Gemm, operands, weight).is_none() {
-            return Err(DeriveDecline::ContractionOutOfScope);
-        }
-        if let Some(index) = facts.scale_operand {
-            let Some(od) = operands.get(index) else {
-                return Err(DeriveDecline::ScaleRoleOutOfRange { index });
-            };
-            if od.dtype.is_reserved() {
-                return Err(DeriveDecline::ReservedScaleDtype { dtype: od.dtype });
-            }
-        }
+        contraction_key(operands, facts, true)?;
     }
     Ok(())
 }
