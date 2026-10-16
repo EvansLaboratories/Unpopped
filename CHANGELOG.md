@@ -15,6 +15,15 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.18.1` — KISS 0.4.3's 62 derivation vectors are vendored; 27 are pinned as the known gap
+
+Tests and docs only; no behaviour, API or token byte changes. `structure_key_derivation_vectors.json`
+is re-vendored from KISS `f88d389` (36 -> 62 vectors: 15 `ctr` token vectors, 12 role-hint declines;
+`decline_contraction_out_of_scope` removed) and the harness reads each vector's `contraction`
+object where `CellFacts` can express it. Measured: PASS 35 | FAIL 7 | DECLINE-DIFFERS 20. The 27 are
+named in `KNOWN_GAP` and asserted exactly, so the follow-up that implements the ctr stage (0.19.0,
+Breaking) has to empty the list.
+
 ## Unreleased — `0.18.0`: `sk6`, the scale dtype is keyed (BREAKING)
 
 **`STRUCTURE_KEY_VERSION` 5 → 6** (KISS#588, conformance 0.4.0,

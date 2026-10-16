@@ -38,7 +38,7 @@ and are relayed here, not independently verified.
 | `structure_key_vectors.json` blob `e5eec85c`, `structure_key_derivation_vectors.json` blob `697aa543`, `dtype_manifest.json` blob `24ff38f0` | vendored from KISS `ff12265`; the KISS lane measured the first two byte-identical at `64e0cd8` (0.2.40) | `crates/unpopped-vocab/kiss/` |
 | R1.4 innermost axis of extent 0 (§6.3-0011, §6.5-0012) | **closed**: `[8,0]` derives `da`/`v1`, measured; KISS reads it the same way | `tests/mixed_rank_frames_and_the_innermost_axis.rs`, derivation vector `innermost_axis_extent_zero_is_axis_rank_minus_1` |
 | R1.6 target-match vector (§6.8-0002) | **closed**: `target_match_vectors` has been vendored and asserted since the `bc16715` copy | `kiss_byte_match.rs::target_match_vectors_are_byte_exact` |
-| KISS#543 batch role | **open upstream**; skips `decline_contraction_out_of_scope` | `tests/kiss_derivation_vectors.rs` |
+| KISS#543 batch role | **ruled** (KISS 0.4.2, §6.6-0023); 27 of 62 vectors in `KNOWN_GAP` until the keyer implements it | `tests/kiss_derivation_vectors.rs` |
 | §6.6-0019 weight role (`<wdt>`) | **closed** in `0.17.3`: `CellFacts::weight_operand`; `WeightRoleNotDeclared` is this crate's decline name, not KISS's | issue #31 stays open for M/N/K |
 | §6.6-0021 | the infallible `structure_key` still keys a scale dtype at operand 0; `try_structure_key` declines. Deprecating the infallible form means migrating ~200 callers, which the PM ruled is **not this lane** (bulk mechanical work, CireSnave's cost rule) | `CHANGELOG.md` |
 
