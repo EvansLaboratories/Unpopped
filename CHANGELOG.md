@@ -15,7 +15,7 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## Unreleased — `0.18.0` (proposed; the PM allocates): `sk6`, the scale dtype is keyed (BREAKING)
+## Unreleased — `0.18.0`: `sk6`, the scale dtype is keyed (BREAKING)
 
 **`STRUCTURE_KEY_VERSION` 5 → 6** (KISS#588, conformance 0.4.0,
 KISS-CLASSIFY-6.6-0022). A quantized `ctr` cell keys the dtype of its designated
