@@ -206,7 +206,7 @@ fn the_artifact_is_the_one_this_leg_claims() {
     );
     assert_eq!(
         v["vectors"].as_array().unwrap().len(),
-        62,
+        63,
         "vector count changed"
     );
 }

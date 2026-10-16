@@ -9,10 +9,17 @@ vendoring better than retyping.
 |---|---|---|
 | `dtype_manifest.json` | `conformance/corpus/dtype_manifest.json` | `86196f7` (blob `ab50a92692ce92447913cd14d910c466cdf7e315`) |
 | `structure_key_vectors.json` | `conformance/corpus/structure_key_vectors.json` | `86196f7` (blob `019f646f607d068db4dfe23396fc817093b6f455`) |
-| `structure_key_derivation_vectors.json` | `conformance/corpus/structure_key_derivation_vectors.json` | `f88d389` (blob `c241ac6205a9c06afeccaf4d5251de3b5234f88a`) |
+| `structure_key_derivation_vectors.json` | `conformance/corpus/structure_key_derivation_vectors.json` | `026feba` (blob `ddf46e0897c23017c2fc45df9c65e8889925ff8b`) |
 
 `86196f7` is KISS `main` as read on 2026-10-16 (conformance 0.4.0). It is a single
 commit for all three files, so the table cannot name two different spec states.
+
+### Derivation vectors re-vendored 2026-10-16 from KISS `026feba` (conformance 0.4.4 proposed, #592)
+
+KISS#592 corrected the `<acc>` warning text (the default is operand 0's dtype, not the weight's):
+`ctr_weight_first_undeclared_accumulator_defaults_to_weight_dtype` is renamed `..._to_operand0_dtype` and
+`ctr_weight_second_undeclared_accumulator_defaults_to_operand0_dtype` is added (62 -> 63 vectors). Both
+match; the blob equals KISS's (`git hash-object`). The section below describes the `f88d389` copy.
 
 ### Derivation vectors re-vendored 2026-10-16 from KISS `f88d389` (conformance 0.4.3)
 

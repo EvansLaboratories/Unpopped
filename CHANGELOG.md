@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.19.1` — the derivation vectors are re-vendored from KISS `026feba` (63 vectors)
+
+Tests and docs only; no behaviour, API or token byte changes. KISS#592 corrected its `<acc>` warning
+(the undeclared default is operand 0's dtype, not the weight's): one vector is renamed
+(`ctr_weight_first_undeclared_accumulator_defaults_to_operand0_dtype`) and one added
+(`ctr_weight_second_undeclared_accumulator_defaults_to_operand0_dtype`). Measured: PASS 63 | FAIL 0 |
+DECLINE-DIFFERS 0 (of 63).
+
 ## `0.19.0` — the ctr stage of KISS 0.4.3: declared M/N/K and batch roles (BREAKING)
 
 KISS 0.4.3's 62 derivation vectors now byte-match (PASS 62, from 35 at 0.18.1; `KNOWN_GAP` is empty).
