@@ -412,6 +412,87 @@ pub enum PlanError {
         /// The gate's own explanation, verbatim — for diagnostics, never matching.
         detail: String,
     },
+    /// A contraction cell this crate's plan cannot serve: the op's axis roles, the
+    /// key's contraction facts, or both together say something v1 cannot lower.
+    /// Match on the [`ContractionDecline`], never on the text.
+    ///
+    /// Reachable by *requesting* a cell: a key derived with declared M/N/K and
+    /// batch roles (`unpopped_vocab::ContractionRoles`) can name a rank-4 cell, a
+    /// rank-3 cell with no batch axis, or a batch axis stored inside the matrix
+    /// axes, none of which an `OpDef` for the canonical matmul/batched matmul can
+    /// pair with.
+    UnservableContraction(ContractionDecline),
+}
+
+/// Why a contraction `(OpDef, structure_key)` pair is not servable
+/// ([`PlanError::UnservableContraction`]). Every case is a fact about the pair,
+/// checked once in [`try_build_plan`] so every emitter inherits it.
+///
+/// What this does **not** cover is each backend's own limits (a tile schedule, an
+/// accumulator spelling, a dtype list): those are the backend's decline.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ContractionDecline {
+    /// The op's role vectors are not a legal v1 contraction for the key's rank:
+    /// wrong length, not exactly one free/contracted role per operand, or rank
+    /// outside 2..=3 (v1 lowers one batch coordinate, so rank 4 and above, i.e. two
+    /// or more batch axes, cannot be emitted). The text is for diagnostics.
+    RolesInvalid {
+        /// The validator's own explanation, verbatim.
+        detail: String,
+    },
+    /// The key carries no contraction facts: it is not a `ctr` cell.
+    KeyHasNoContractionFacts,
+    /// The epilogue reads something other than the K-sum, constants and the fused
+    /// bias inputs.
+    EpilogueInadmissible,
+    /// The op has a `Batch` axis and the key declares no batch (or the reverse): the
+    /// key and the op describe different cells. A rank-3 key whose caller declared
+    /// no batch axis is the usual way to reach this.
+    BatchDisagrees {
+        /// The op's roles carry a `Batch` axis.
+        op_batched: bool,
+        /// The key's contraction facts carry a batch class.
+        key_batched: bool,
+    },
+    /// A real (non-broadcast) batch axis of this input is stored inside the matrix
+    /// axes. v1 binds the batch as the outermost storage stride, so no emitter can
+    /// address it.
+    BatchNotOutermost {
+        /// The input operand, 0 = lhs, 1 = rhs.
+        operand: usize,
+    },
+}
+
+impl std::fmt::Display for ContractionDecline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RolesInvalid { detail } => write!(f, "contraction roles: {detail}"),
+            Self::KeyHasNoContractionFacts => write!(
+                f,
+                "contraction cell must carry ContractionKey facts (a `ctr` key)"
+            ),
+            Self::EpilogueInadmissible => write!(
+                f,
+                "contraction: epilogue may read only Reduced(0), constants, and the \
+                 fused bias Input(2..n_inputs); got a disallowed leaf"
+            ),
+            Self::BatchDisagrees {
+                op_batched,
+                key_batched,
+            } => write!(
+                f,
+                "contraction: the op {} a Batch axis but the key {} a batch class",
+                if *op_batched { "has" } else { "has no" },
+                if *key_batched { "has" } else { "has no" }
+            ),
+            Self::BatchNotOutermost { operand } => write!(
+                f,
+                "contraction: input {operand}'s batch axis is stored inside the matrix axes \
+                 (v1 binds batch as the outermost storage stride)"
+            ),
+        }
+    }
 }
 
 impl std::fmt::Display for PlanError {
@@ -420,6 +501,7 @@ impl std::fmt::Display for PlanError {
             Self::InadmissibleOpAtDtype { detail, .. } | Self::InadmissibleOpInCell { detail } => {
                 write!(f, "{detail}")
             }
+            Self::UnservableContraction(d) => write!(f, "{d}"),
         }
     }
 }
@@ -433,6 +515,9 @@ impl std::error::Error for PlanError {}
 /// [`PlanError`] when an admissibility gate rejects the op/dtype pair.
 ///
 /// # Honest scope
+///
+/// (0.20.1: the contraction cell's gates are typed too, as [`ContractionDecline`]; the count
+/// below is the 0.6.0 reading.)
 ///
 /// This types **four** of the thirteen gates: the op/dtype admissibility ones a
 /// caller can trip by requesting a cell, and the ones the JIT's old pre-screen
@@ -479,6 +564,7 @@ pub fn try_build_plan<'a>(
     {
         check_row_reduce(stages, epilogue, op.n_inputs, key)?;
     }
+    check_contraction(op, key)?;
     Ok(build_plan_core(op, key))
 }
 
@@ -546,36 +632,11 @@ fn build_plan_core<'a>(op: &'a OpDef, key: &'a StructureKey) -> KernelPlan<'a> {
                 block: true,
             }
         }
-        Access::Contraction {
-            ref axes,
-            ref epilogue,
-            ..
-        } => {
-            // v1 admissibility: role-validated (general predicate over axis
-            // roles, not just the two canonical rank-2/rank-3 constructors),
-            // keyed with contraction facts and an epilogue over the K-sum
-            // (+ optional fused bias) only.
-            // Expected role-vector length = the StructureKey's operand rank, NOT
-            // `axes.*.len()` (which would make the length check vacuous). This
-            // rejects a malformed OpDef whose contraction role vectors disagree
-            // with the keyed operand rank before it can panic downstream.
-            let expect_rank = key.rank as usize;
-            if let Err(msg) = validate_contraction_roles(axes, expect_rank, expect_rank) {
-                panic!("contraction roles: {msg}");
-            }
-            assert!(
-                key.contraction.is_some(),
-                "contraction cell must carry ContractionKey facts (rank-2 dense \
-                 row-major [M,K]x[K,N]->[M,N]); got token {}",
-                key.to_token()
-            );
-            assert!(
-                contraction_epilogue_admissible(epilogue, op.n_inputs),
-                "contraction: epilogue may read only Reduced(0), constants, and the \
-                 fused bias Input(2..n_inputs); got a disallowed leaf"
-            );
-            Schedule::Contraction
-        }
+        // v1 admissibility (role-validated, keyed with contraction facts, an epilogue
+        // over the K-sum and the fused bias only, a batch the key and the op agree on and
+        // that is stored outermost) is `check_contraction`, which `try_build_plan` ran:
+        // the pair is a request, so its refusal is typed and lives once.
+        Access::Contraction { .. } => Schedule::Contraction,
         // Increment 6 SCAN: validate admissibility (mirrors the RowReduce arm's
         // `check_row_reduce` call), then derive the serial-fold BASE schedule
         // (`block: false`). The cooperative block-scan is produced separately by
@@ -911,6 +972,54 @@ pub(crate) fn validate_contraction_roles(
     }
     if lhs_batch != rhs_batch {
         return Err("lhs and rhs must share the same batch-axis count".into());
+    }
+    Ok(())
+}
+
+/// The contraction cell's admissibility, as a typed refusal: everything the
+/// `Access::Contraction` arm of `build_plan_core` used to assert, plus the two facts a
+/// key derived from declared roles can now get wrong against the op (`BatchDisagrees`)
+/// and against every emitter (`BatchNotOutermost`). Not a contraction: `Ok`.
+///
+/// Expected role-vector length is the key's rank, NOT `axes.*.len()` (which would make
+/// the length check vacuous): a malformed OpDef whose roles disagree with the keyed
+/// rank is refused here before it can panic downstream.
+fn check_contraction(op: &OpDef, key: &StructureKey) -> Result<(), PlanError> {
+    use crate::ir::AxisRole;
+    let Access::Contraction {
+        ref axes,
+        ref epilogue,
+        ..
+    } = op.access
+    else {
+        return Ok(());
+    };
+    let decline = |d| Err(PlanError::UnservableContraction(d));
+    let rank = key.rank as usize;
+    if let Err(detail) = validate_contraction_roles(axes, rank, rank) {
+        return decline(ContractionDecline::RolesInvalid { detail });
+    }
+    let Some(c) = key.contraction else {
+        return decline(ContractionDecline::KeyHasNoContractionFacts);
+    };
+    if !contraction_epilogue_admissible(epilogue, op.n_inputs) {
+        return decline(ContractionDecline::EpilogueInadmissible);
+    }
+    let op_batched = axes.lhs.contains(&AxisRole::Batch);
+    let key_batched = c.batch.is_some();
+    if op_batched != key_batched {
+        return decline(ContractionDecline::BatchDisagrees {
+            op_batched,
+            key_batched,
+        });
+    }
+    if key_batched {
+        // A broadcast (stride-0) batch axis occupies no storage, so it is exempt.
+        for (operand, order) in [(0, c.lhs_order), (1, c.rhs_order)] {
+            if !key.operands[operand].bcast.is_set(0) && order.perm()[0] != 0 {
+                return decline(ContractionDecline::BatchNotOutermost { operand });
+            }
+        }
     }
     Ok(())
 }
