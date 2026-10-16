@@ -7,12 +7,25 @@ vendoring better than retyping.
 
 | File | Source path in KISS | Vendored from commit |
 |---|---|---|
-| `dtype_manifest.json` | `conformance/corpus/dtype_manifest.json` | `ff12265` (blob `24ff38f068aa18be723c07d307c86ae572c1333f`) |
-| `structure_key_vectors.json` | `conformance/corpus/structure_key_vectors.json` | `ff12265` (blob `e5eec85c82754f030f1ee2f0ab4bf7829fa7e5d2`) |
-| `structure_key_derivation_vectors.json` | `conformance/corpus/structure_key_derivation_vectors.json` | `ff12265` (blob `697aa54370b51df0e26fe5fbd23ceca8419290c5`) |
+| `dtype_manifest.json` | `conformance/corpus/dtype_manifest.json` | `86196f7` (blob `ab50a92692ce92447913cd14d910c466cdf7e315`) |
+| `structure_key_vectors.json` | `conformance/corpus/structure_key_vectors.json` | `86196f7` (blob `019f646f607d068db4dfe23396fc817093b6f455`) |
+| `structure_key_derivation_vectors.json` | `conformance/corpus/structure_key_derivation_vectors.json` | `86196f7` (blob `393138b0540bfec0e81e78666ecf1c18f6c665f9`) |
 
-`ff12265` is KISS `main` as read on 2026-10-14 (KISS 0.2.39). It is a single
+`86196f7` is KISS `main` as read on 2026-10-16 (conformance 0.4.0). It is a single
 commit for all three files, so the table cannot name two different spec states.
+
+### Re-vendored 2026-10-16 from KISS `86196f7` (sk6)
+
+KISS#588 (conformance 0.4.0): `sk5` → `sk6`, scale dtype keyed for quantized `ctr`
+cells (§6.6-0022). Changed rows: KISS `docs/sk6-vector-changes.md`. Verified after
+writing (each `git hash-object` equals the KISS blob at `86196f7`; 0 CR bytes):
+
+| File | KISS blob | sha256 |
+|---|---|---|
+| `dtype_manifest.json` | `ab50a926…e315` | `2ee04def0ab925cda1eeb1346ead8f34b6a09a1f600fe4c3586092ed49145c03` |
+| `structure_key_vectors.json` | `019f646f…b455` | `1ddde78c3ca0d9f4fe18307bd11d93ef7d443612949769a9b9c7971de2d0b035` |
+| `structure_key_derivation_vectors.json` | `393138b0…f6c665f9` | `928379c18ee2631ac49542707e3b495751641eb468100b2400d7e78611a1124e` |
+
 
 ### Re-vendored 2026-10-14 from KISS `ff12265` (sk5)
 

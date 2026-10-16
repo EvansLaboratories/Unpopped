@@ -59,7 +59,7 @@ fn the_artifact_is_the_one_this_leg_claims() {
     for (key, want) in [
         ("\"schema\"", "kiss-structure-key-vectors-v1"),
         ("\"source_commit\"", "19c3ad7"),
-        ("\"token_prefix\"", "sk5"),
+        ("\"token_prefix\"", "sk6"),
         ("\"clause\"", "KISS-CLASSIFY-6.7"),
     ] {
         assert_eq!(
@@ -121,14 +121,14 @@ fn the_vendored_artifacts_are_the_revisions_this_leg_was_written_against() {
         (
             "structure_key_vectors.json",
             VECTORS,
-            30_368_usize,
-            0xb211_fddf_2ee5_bbf7_u64,
+            32_807_usize,
+            0x0d63_c3e8_02a1_51e8_u64,
         ),
         (
             "dtype_manifest.json",
             MANIFEST,
             3_182_usize,
-            0xde92_c3ba_b9da_8cd5_u64,
+            0x2492_bb47_2880_56e5_u64,
         ),
     ] {
         assert_eq!(
@@ -282,7 +282,7 @@ fn the_artifact_shape_is_pinned_so_any_new_field_is_loud() {
 #[test]
 fn positive_vectors_round_trip_byte_exact() {
     let vectors = positives();
-    assert_eq!(vectors.len(), 26, "artifact positive-vector count changed");
+    assert_eq!(vectors.len(), 28, "artifact positive-vector count changed");
 
     let mut matched = Vec::new();
     let mut skipped = Vec::new();
@@ -367,7 +367,7 @@ fn skips_fall_only_on_unimplemented_targets() {
 #[test]
 fn decline_vectors_produce_the_same_verdict() {
     let vectors = declines();
-    assert_eq!(vectors.len(), 21, "artifact decline-vector count changed");
+    assert_eq!(vectors.len(), 25, "artifact decline-vector count changed");
 
     let mut exact = 0;
     let mut failed = Vec::new();
@@ -548,7 +548,7 @@ fn earn_skip(v: &Positive) -> Result<(), String> {
 #[test]
 fn the_skip_control_can_fail() {
     // The substitute must itself be implemented.
-    let real = "sk5|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f|-";
+    let real = "sk6|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f|-";
     assert!(
         StructureKey::parse_token(real).is_ok(),
         "control target `{SUBSTITUTE_TARGET}` must be implemented, or every skip is free"
@@ -561,7 +561,7 @@ fn the_skip_control_can_fail() {
         target: "vulkan:whatever".into(),
         namespace: "vulkan".into(),
         // `zz` is not a valid `<mp>` code — broken independently of the target.
-        token: "sk5|ctr|f32|vulkan:whatever|ix32|grid|r2|\
+        token: "sk6|ctr|f32|vulkan:whatever|ix32|grid|r2|\
                 co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-|ctll/d16/f32/f32/f32/zz"
             .into(),
     };
@@ -742,19 +742,19 @@ fn target_match_vectors_are_byte_exact() {
 fn the_artifact_scanner_actually_reads_the_vectors() {
     let pos = positives();
     let dec = declines();
-    assert_eq!(pos.len(), 26);
-    assert_eq!(dec.len(), 21);
+    assert_eq!(pos.len(), 28);
+    assert_eq!(dec.len(), 25);
 
     // Namespaces are tagged and split the way the artifact says.
     let vulkan = pos.iter().filter(|p| p.namespace == "vulkan").count();
     let cuda = pos.iter().filter(|p| p.namespace == "cuda").count();
-    assert_eq!((cuda, vulkan), (25, 1), "namespace split changed");
+    assert_eq!((cuda, vulkan), (27, 1), "namespace split changed");
 
     // Tokens and targets are non-empty and internally consistent: the tag must
     // agree with the token's own field 3, or the skip axis is being read from a
     // label rather than from the data.
     for p in &pos {
-        assert!(p.token.starts_with("sk5|"), "{}: token malformed", p.name);
+        assert!(p.token.starts_with("sk6|"), "{}: token malformed", p.name);
         let field3 = p.token.split('|').nth(3).expect("target field");
         assert_eq!(field3, p.target, "{}: tag disagrees with token", p.name);
         assert!(
@@ -766,8 +766,8 @@ fn the_artifact_scanner_actually_reads_the_vectors() {
 
     // The payload-carrying declines are present and parsed as numbers.
     let with_payload: Vec<_> = dec.iter().filter(|d| d.got.is_some()).collect();
-    assert_eq!(with_payload.len(), 2, "expected two versioned declines");
+    assert_eq!(with_payload.len(), 3, "expected three versioned declines");
     let mut versions: Vec<i64> = with_payload.iter().filter_map(|d| d.got).collect();
     versions.sort_unstable();
-    assert_eq!(versions, [3, 9]);
+    assert_eq!(versions, [3, 5, 9]);
 }

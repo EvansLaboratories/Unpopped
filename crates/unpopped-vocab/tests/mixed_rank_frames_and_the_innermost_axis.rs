@@ -44,7 +44,7 @@ fn a_trailing_unit_axis_is_still_the_innermost_axis() {
     let x = od(&[4, 1], &[1, 1]);
     assert_eq!(
         tok(OpCategory::UnaryElementwise, &[x, x]),
-        "sk5|ew1|f32|cuda:sm89|ix32|warp|r2|co/00/v1/da/f;co/00/v1/da/f|-"
+        "sk6|ew1|f32|cuda:sm89|ix32|warp|r2|co/00/v1/da/f;co/00/v1/da/f|-"
     );
 }
 
@@ -56,7 +56,7 @@ fn a_zero_extent_innermost_axis_is_da_v1() {
     let x = od(&[8, 0], &[1, 1]);
     assert_eq!(
         tok(OpCategory::UnaryElementwise, &[x, x]),
-        "sk5|ew1|f32|cuda:sm89|ix32|warp|r2|co/00/v1/da/f;co/00/v1/da/f|-"
+        "sk6|ew1|f32|cuda:sm89|ix32|warp|r2|co/00/v1/da/f;co/00/v1/da/f|-"
     );
 }
 
@@ -91,7 +91,7 @@ fn same_rank_operands_are_unchanged() {
     let a = od(&[128, 256], &[256, 1]);
     assert_eq!(
         tok(OpCategory::BinaryElementwise, &[a, a, a]),
-        "sk5|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-"
+        "sk6|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-"
     );
 }
 
@@ -102,7 +102,7 @@ fn a_leading_unit_axis_does_not_change_the_innermost() {
     let x = od(&[1, 8], &[8, 1]);
     assert_eq!(
         tok(OpCategory::UnaryElementwise, &[x, x]),
-        "sk5|ew1|f32|cuda:sm89|ix32|warp|r2|co/00/v4/d8/f;co/00/v4/d8/f|-"
+        "sk6|ew1|f32|cuda:sm89|ix32|warp|r2|co/00/v4/d8/f;co/00/v4/d8/f|-"
     );
 }
 

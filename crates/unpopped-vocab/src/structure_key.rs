@@ -74,7 +74,7 @@ pub const MAX_OPERANDS: usize = 8;
 /// extent 1 counts as stride 0 for the broadcast mask. None of the three is
 /// additive, so this is a schema event. `StructureKey::op` is replaced by
 /// [`StructureKey::cell_class`].
-pub const STRUCTURE_KEY_VERSION: u16 = 5;
+pub const STRUCTURE_KEY_VERSION: u16 = 6;
 
 // ===========================================================================
 // Predicate axes
@@ -386,6 +386,14 @@ pub struct ContractionKey {
     pub out: ElementKind,
     /// Math-precision coordinate (D4) — the `f32s` replacement.
     pub mp: MpCode,
+    /// The dtype of the quantized weight's designated **scale operand**
+    /// (KISS-CLASSIFY-6.6-0022, `sk6`): the optional last coordinate
+    /// `q<dtype>`. `None` when the caller designates no scale operand, in which
+    /// case the coordinate is omitted — never empty, never a placeholder. A
+    /// closed-set, non-reserved §6.1 dtype; an `f8e8m0` scale and an `f16` scale
+    /// decode the same stored values to different numbers, so they are
+    /// different cells.
+    pub scale: Option<ElementKind>,
 }
 
 impl ContractionKey {
@@ -425,7 +433,17 @@ impl ContractionKey {
             acc,
             out,
             mp,
+            scale: None,
         }
+    }
+
+    /// Key the dtype of the quantized weight's scale operand (`/q<dtype>`,
+    /// KISS-CLASSIFY-6.6-0022). Opt-in like the other additive coordinates: a
+    /// cell with no designated scale operand omits it.
+    #[must_use]
+    pub const fn with_scale(mut self, scale: ElementKind) -> Self {
+        self.scale = Some(scale);
+        self
     }
 
     /// Make this a batched (rank-3) cell: `[B,M,K]·[B,K,N] → [B,M,N]`.
@@ -687,6 +705,14 @@ pub struct CellFacts {
     /// contraction that leaves it `None`
     /// ([`DeriveDecline::WeightRoleNotDeclared`]).
     pub weight_operand: Option<usize>,
+    /// Which operand, in canonical order, carries the **scale role** of a
+    /// quantized weight (§6.6-0022, `sk6`): the operand whose dtype is the
+    /// `q<dtype>` coordinate. A caller-declared fact, never inferred from
+    /// position or dtype (an `f16` scale is as legitimate as an `f8e8m0` one).
+    /// `None` omits the coordinate. An index naming no operand is a caller
+    /// error: [`derive_structure_key`] declines it
+    /// ([`DeriveDecline::ScaleRoleOutOfRange`]) rather than ignore it.
+    pub scale_operand: Option<usize>,
 }
 
 impl CellFacts {
@@ -701,6 +727,7 @@ impl CellFacts {
             accumulator: None,
             math_fidelity: MpCode::St,
             weight_operand: None,
+            scale_operand: None,
         }
     }
 
@@ -1187,6 +1214,18 @@ fn derive_unchecked(operands: &[OperandDesc], facts: &CellFacts, target: TargetI
             operands,
             facts.weight_operand.unwrap_or(1),
         )
+        // §6.6-0022: the scale operand's dtype, only on a `ctr` cell. The
+        // conformant entry point has already declined an index naming no
+        // operand and a reserved scale dtype; the unchecked path drops both
+        // rather than key a coordinate its own codec would refuse.
+        .map(|mut c| {
+            c.scale = facts
+                .scale_operand
+                .and_then(|i| operands.get(i))
+                .map(|o| o.dtype)
+                .filter(|d| !d.is_reserved());
+            c
+        })
     } else {
         None
     };
@@ -1434,6 +1473,7 @@ fn derive_contraction(
                 acc,
                 out: out_dt,
                 mp,
+                scale: None,
             })
         }
         3 => {
@@ -1486,6 +1526,7 @@ fn derive_contraction(
                 acc,
                 out: out_dt,
                 mp,
+                scale: None,
             })
         }
         _ => None,
@@ -1542,7 +1583,7 @@ fn derive_reduce_axes(op: OpCategory, operands: &[OperandDesc]) -> AxisMask {
 /// // a [128, 256] row-major f32 (in, in, out) triple for a binary elementwise add.
 /// let a = OperandDesc::new(2, &[128, 256], &[256, 1], ElementKind::F32, 256);
 /// let token = structure_key_token(OpCategory::BinaryElementwise, &[a, a, a], ArchSku::Sm89);
-/// assert!(token.starts_with("sk5|ew2|f32|cuda:sm89|"));
+/// assert!(token.starts_with("sk6|ew2|f32|cuda:sm89|"));
 /// ```
 ///
 /// ⚠️ **Not conformant for one input; prefer [`try_structure_key_token`].** This
@@ -1608,6 +1649,20 @@ pub enum DeriveDecline {
     /// well-formed token naming the wrong type. **Not in KISS's decline
     /// vocabulary**: the wire name is this crate's.
     WeightRoleNotDeclared,
+    /// KISS-CLASSIFY §6.6-0022: the declared scale-role operand names no
+    /// operand. A caller error that MUST NOT be silently ignored: dropping the
+    /// hint would key a quantized cell as if it had no scale. **Not in KISS's
+    /// decline vocabulary**: the wire name is this crate's.
+    ScaleRoleOutOfRange {
+        /// The declared operand index.
+        index: usize,
+    },
+    /// KISS-CLASSIFY §6.1-0001 at the `q<dtype>` position: the declared scale
+    /// operand has a **reserved** dtype, which the codec refuses to spell.
+    ReservedScaleDtype {
+        /// The reserved dtype found at the scale operand.
+        dtype: ElementKind,
+    },
 }
 
 impl DeriveDecline {
@@ -1622,6 +1677,8 @@ impl DeriveDecline {
             Self::ReducedAxisOutOfRange { .. } => "ReducedAxisOutOfRange",
             Self::ContractionOutOfScope => "ContractionOutOfScope",
             Self::WeightRoleNotDeclared => "WeightRoleNotDeclared",
+            Self::ScaleRoleOutOfRange { .. } => "ScaleRoleOutOfRange",
+            Self::ReservedScaleDtype { .. } => "ReservedDtype",
         }
     }
 }
@@ -1657,6 +1714,15 @@ impl core::fmt::Display for DeriveDecline {
             Self::WeightRoleNotDeclared => write!(
                 f,
                 "contraction roles are declared but the weight operand is not (KISS-CLASSIFY §6.6-0019)"
+            ),
+            Self::ScaleRoleOutOfRange { index } => write!(
+                f,
+                "the declared scale operand {index} names no operand (KISS-CLASSIFY §6.6-0022)"
+            ),
+            Self::ReservedScaleDtype { dtype } => write!(
+                f,
+                "the scale operand has reserved dtype {dtype:?}, which must typed-decline \
+                 (KISS-CLASSIFY §6.1-0001)"
             ),
         }
     }
@@ -1699,6 +1765,14 @@ fn check_declines(operands: &[OperandDesc], facts: &CellFacts) -> Result<(), Der
         };
         if derive_contraction(OpCategory::Gemm, operands, weight).is_none() {
             return Err(DeriveDecline::ContractionOutOfScope);
+        }
+        if let Some(index) = facts.scale_operand {
+            let Some(od) = operands.get(index) else {
+                return Err(DeriveDecline::ScaleRoleOutOfRange { index });
+            };
+            if od.dtype.is_reserved() {
+                return Err(DeriveDecline::ReservedScaleDtype { dtype: od.dtype });
+            }
         }
     }
     Ok(())
@@ -2390,6 +2464,12 @@ impl StructureKey {
                 dtype_code(c.out),
                 mp_code(c.mp),
             ));
+            // sk6 (§6.6-0022): the OPTIONAL last coordinate, `/q<dtype>`. `q`
+            // begins no dtype, `<mp>`, size or `b<class>` code, so its presence
+            // is unambiguous from its final position alone.
+            if let Some(s) = c.scale {
+                token.push_str(&format!("/q{}", dtype_code(s)));
+            }
         }
         token
     }
@@ -2616,7 +2696,18 @@ impl StructureKey {
                 // — a component in the wrong slot, or a leftover unrecognized
                 // one, is a typed decline, never a silent partial accept.
                 let rest = f.strip_prefix('c')?;
-                let comps: Vec<&str> = rest.split('/').collect();
+                let mut comps: Vec<&str> = rest.split('/').collect();
+                // sk6 (§6.6-0022): the optional LAST component `q<dtype>`. At
+                // most one is taken; a second one is left behind in the
+                // precision group, where it is not an `<mp>` and declines.
+                let scale = match comps.last().and_then(|c| c.strip_prefix('q')) {
+                    Some(s) => {
+                        let dt = reject_reserved(dtype_from_code(s)?)?;
+                        comps.pop();
+                        Some(dt)
+                    }
+                    None => None,
+                };
                 if comps.len() < 6 {
                     return None;
                 }
@@ -2696,6 +2787,7 @@ impl StructureKey {
                     acc: reject_reserved(dtype_from_code(prec[1])?)?,
                     out: reject_reserved(dtype_from_code(prec[2])?)?,
                     mp: mp_from_code(prec[3])?,
+                    scale,
                 })
             }
         };
@@ -2898,7 +2990,7 @@ mod contraction_key_tests {
 
     #[test]
     fn from_token_declines_reordered_and_duplicated_layout_order_components() {
-        let base = "sk5|ctr|f32|cuda:sm89|ix32|grid|r2|\
+        let base = "sk6|ctr|f32|cuda:sm89|ix32|grid|r2|\
                     co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
         // `/or...` before `/ol...` violates the fixed emission order (batch,
         // then lhs_order, then rhs_order) the position-driven parser walks —
@@ -2924,7 +3016,7 @@ mod contraction_key_tests {
         // contraction's `0..rank`. `from_token` parses an untrusted wire token, so
         // malformed digits must decline rather than build an inconsistent key that
         // panics when the emitter indexes `perm()[d]`.
-        let r2 = "sk5|ctr|f32|cuda:sm89|ix32|grid|r2|\
+        let r2 = "sk6|ctr|f32|cuda:sm89|ix32|grid|r2|\
                   co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
         // out-of-range digit (7 >= rank 2)
         assert_eq!(
@@ -2947,7 +3039,7 @@ mod contraction_key_tests {
         // A rank-3 (batched) cell with a rank-2 (2-digit) order — the `/bt/ol10`
         // case: a rank-2 LayoutOrder inside a rank-3 contraction would later panic
         // at `perm()[2]`. Must decline on the digit-count/rank mismatch.
-        let r3 = "sk5|ctr|f32|cuda:sm89|ix32|grid|r3|\
+        let r3 = "sk6|ctr|f32|cuda:sm89|ix32|grid|r3|\
                   co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
         assert_eq!(
             StructureKey::from_token(&format!("{r3}|ctll/d16/bt/ol10/f32/f32/f32/rm")),
@@ -3208,7 +3300,7 @@ mod contraction_key_tests {
         let (st_tok, rm_tok) = (strict.to_token(), tf32.to_token());
         assert!(!st_tok.contains("f32s"), "no f32s spelling: {st_tok}");
         assert!(
-            st_tok.starts_with("sk5|ctr|f32|"),
+            st_tok.starts_with("sk6|ctr|f32|"),
             "strict cell spells the canonical f32 dtype: {st_tok}"
         );
         assert!(
@@ -3260,7 +3352,7 @@ mod contraction_key_tests {
         );
         let (mt, ht) = (mixed.to_token(), homog.to_token());
         assert!(
-            mt.starts_with("sk5|ctr|f8e4m3fn|"),
+            mt.starts_with("sk6|ctr|f8e4m3fn|"),
             "variant-explicit: {mt}"
         );
         assert!(
@@ -3278,7 +3370,7 @@ mod contraction_key_tests {
 
     #[test]
     fn from_token_declines_sk2_shaped_and_malformed_gem_precision_groups() {
-        let base = "sk5|ctr|f32|cuda:sm89|ix32|grid|r2|\
+        let base = "sk6|ctr|f32|cuda:sm89|ix32|grid|r2|\
                     co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
         // The precision group is REQUIRED for an sk3 gem cell: the sk2 shapes
         // (`c<mnk>/<kdiv>` and `c<mnk>/<kdiv>/b<class>`) are typed declines.
@@ -3308,7 +3400,7 @@ mod contraction_key_tests {
             None
         );
         // The `f32s` retirement also holds at the token's DTYPE field.
-        let f32s_dtype = "sk5|ctr|f32s|cuda:sm89|ix32|grid|r2|\
+        let f32s_dtype = "sk6|ctr|f32s|cuda:sm89|ix32|grid|r2|\
                           co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-|ctll/d16/f32/f32/f32/st";
         assert_eq!(StructureKey::from_token(f32s_dtype), None);
     }
@@ -3900,7 +3992,20 @@ fn attribute_bad_contraction(field: &str) -> Result<(), TokenDecline> {
     let Some(rest) = field.strip_prefix('c') else {
         return Err(TokenDecline::BadContractionField);
     };
-    let comps: Vec<&str> = rest.split('/').collect();
+    let mut comps: Vec<&str> = rest.split('/').collect();
+    // The sk6 scale coordinate (§6.6-0022) is a dtype position like the others.
+    if let Some(s) = comps.last().and_then(|c| c.strip_prefix('q')) {
+        match dtype_from_code(s) {
+            None => return Err(TokenDecline::UnknownDtype),
+            Some(dt) if dt.is_reserved() => {
+                return Err(TokenDecline::ReservedDtype {
+                    spelling: s.to_string(),
+                });
+            }
+            Some(_) => {}
+        }
+        comps.pop();
+    }
     if comps.len() < 6 {
         return Err(TokenDecline::BadContractionField);
     }
@@ -4117,7 +4222,7 @@ mod tests {
     /// exercising the code it names.
     #[test]
     fn redundant_acc_mp_is_omitted_not_emitted() {
-        let g = "sk5|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
+        let g = "sk6|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
         let mut key = StructureKey::from_token(g).unwrap();
 
         // In-crate, the struct literal is permitted — so a redundant value can
@@ -4305,7 +4410,7 @@ mod tests {
         let parsed = StructureKey::from_token(&token).expect("round-trip parse");
         assert_eq!(k, parsed);
         // Token is human-greppable.
-        assert!(token.starts_with("sk5|ew2|f32|cuda:sm89|"));
+        assert!(token.starts_with("sk6|ew2|f32|cuda:sm89|"));
     }
 
     #[test]
@@ -4319,7 +4424,7 @@ mod tests {
         let too_many = std::iter::repeat_n(op, MAX_OPERANDS + 1)
             .collect::<Vec<_>>()
             .join(";");
-        let token = format!("sk5|ew2|f32|cuda:sm89|ix32|grid|r2|{too_many}|-");
+        let token = format!("sk6|ew2|f32|cuda:sm89|ix32|grid|r2|{too_many}|-");
         assert_eq!(
             StructureKey::from_token(&token),
             None,
@@ -4333,7 +4438,7 @@ mod tests {
         // malformed and MUST be a typed decline, not silently accepted (downstream
         // consumers index MAX_RANK-sized arrays with it).
         let token = format!(
-            "sk5|ew2|f32|cuda:sm89|ix32|grid|r{}|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
+            "sk6|ew2|f32|cuda:sm89|ix32|grid|r{}|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
             MAX_RANK + 1
         );
         assert_eq!(
@@ -4383,14 +4488,14 @@ mod tests {
         // required no bump.) Pin the canonical f32 token verbatim so a future
         // reshuffle that perturbs it is caught.
         assert_eq!(
-            STRUCTURE_KEY_VERSION, 5,
-            "codec sits at the KISS-aligned schema version 5 (sk5 schema event)"
+            STRUCTURE_KEY_VERSION, 6,
+            "codec sits at the KISS-aligned schema version 6 (sk6 schema event)"
         );
         let a = od(&[128, 256], &[256, 1], ElementKind::F32, 256);
         let k = structure_key(OpCategory::BinaryElementwise, &[a, a, a], ArchSku::Sm89);
         assert_eq!(
             k.to_token(),
-            "sk5|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
+            "sk6|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
             "the canonical f32 cell serializes to the KISS-aligned sk3 token"
         );
     }
@@ -4413,7 +4518,7 @@ mod tests {
         );
         let token = k.to_token();
         assert!(
-            token.starts_with("sk5|ew1|u32|"),
+            token.starts_with("sk6|ew1|u32|"),
             "the token spells u32: {token}"
         );
         let parsed = StructureKey::from_token(&token).expect("u32 token round-trips");
@@ -4464,7 +4569,7 @@ mod tests {
     /// identity — which is the only reason to have a `structure_key` at all.
     #[test]
     fn field_8_admits_exactly_one_spelling_per_reduced_set() {
-        let base = "sk5|rdc|f32|cuda:sm89|ix32|grid|r3|\
+        let base = "sk6|rdc|f32|cuda:sm89|ix32|grid|r3|\
                     co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f";
 
         // The two sentinels resolve against `rank`.
@@ -4497,7 +4602,7 @@ mod tests {
 
         // Neither sentinel has a referent in a rank-0 space: `rlast` has no
         // trailing axis, and `rall` would name the empty set that `-` owns.
-        let r0 = "sk5|ew1|f32|cuda:sm89|ix32|grid|r0|co/00/v1/d16/f;co/00/v1/d16/f";
+        let r0 = "sk6|ew1|f32|cuda:sm89|ix32|grid|r0|co/00/v1/d16/f;co/00/v1/d16/f";
         assert_eq!(StructureKey::from_token(&format!("{r0}|rlast")), None);
         assert_eq!(StructureKey::from_token(&format!("{r0}|rall")), None);
         assert!(
@@ -4650,13 +4755,13 @@ mod tests {
         let _ = StructureKey::from_token(&"a".repeat(200_000));
         // Over-MAX_RANK rank — declines at the rank guard (never reaches operands).
         let _ = StructureKey::from_token(&format!(
-            "sk5|ew2|f32|cuda:sm89|ix32|grid|r250|{}|-",
+            "sk6|ew2|f32|cuda:sm89|ix32|grid|r250|{}|-",
             "co/00/v4/d16/f;".repeat(50)
         ));
         // In-range rank + over-MAX_OPERANDS operand list — MUST reach parse_operand,
         // then decline gracefully.
         let _ = StructureKey::from_token(&format!(
-            "sk5|ew2|f32|cuda:sm89|ix32|grid|r2|{}|-",
+            "sk6|ew2|f32|cuda:sm89|ix32|grid|r2|{}|-",
             "co/00/v1/d16/f;".repeat(50)
         ));
         // A valid gemm base with only its 10th (contraction) field corrupted —

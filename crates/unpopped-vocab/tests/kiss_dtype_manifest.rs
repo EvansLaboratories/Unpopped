@@ -86,7 +86,7 @@ fn the_vendored_manifest_is_the_schema_version_we_implement() {
         "vendored manifest is from a different schema version than this build"
     );
     assert!(
-        MANIFEST.contains("\"token_prefix\": \"sk5\""),
+        MANIFEST.contains("\"token_prefix\": \"sk6\""),
         "manifest token prefix must be the one this codec emits"
     );
     assert!(

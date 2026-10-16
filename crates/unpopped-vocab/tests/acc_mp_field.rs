@@ -36,7 +36,7 @@ use unpopped_vocab::{AccMp, ElementKind, MpCode, StructureKey, TokenDecline};
 /// key would collide with — or separate from — cells it has no relation to.
 #[test]
 fn a_contraction_payload_on_a_reduction_cell_is_a_malformed_acc_mp_field() {
-    let stem = "sk5|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
+    let stem = "sk6|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
     let token = format!("{stem}|ctll/d16/f32/f32/f32/st");
 
     assert_eq!(
@@ -67,7 +67,7 @@ fn a_contraction_payload_on_a_reduction_cell_is_a_malformed_acc_mp_field() {
 /// a statement about `ctll/...` being unparseable everywhere.
 #[test]
 fn the_same_payload_is_the_contraction_group_on_a_gem_cell() {
-    let gem = "sk5|ctr|f32|cuda:sm89|ix32|grid|r2|\
+    let gem = "sk6|ctr|f32|cuda:sm89|ix32|grid|r2|\
                co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-|ctll/d16/f32/f32/f32/st";
     let key = StructureKey::from_token(gem).expect("a gem cell's tenth field is the contraction");
     assert!(
@@ -91,7 +91,7 @@ fn the_same_payload_is_the_contraction_group_on_a_gem_cell() {
 /// Golden: `test_classify_noncontraction_acc_mp_field`.
 #[test]
 fn a_deviating_accumulator_emits_both_slots() {
-    let g = "sk5|rdc|f16|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rlast|f32/st";
+    let g = "sk6|rdc|f16|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rlast|f32/st";
     let key = StructureKey::from_token(g).expect("golden must decode");
     assert_eq!(
         key.acc_mp,
@@ -110,7 +110,7 @@ fn a_deviating_accumulator_emits_both_slots() {
 /// field is a *separate* slot — the two are not alternatives.
 #[test]
 fn a_deviating_math_precision_alone_emits_the_field() {
-    let g = "sk5|ew1|f32|cuda:sm89|ix32|warp|r2|co/00/v4/d16/f;co/00/v4/d16/f|-|f32/rm";
+    let g = "sk6|ew1|f32|cuda:sm89|ix32|warp|r2|co/00/v4/d16/f;co/00/v4/d16/f|-|f32/rm";
     let key = StructureKey::from_token(g).expect("golden must decode");
     assert_eq!(
         key.acc_mp,
@@ -130,7 +130,7 @@ fn a_deviating_math_precision_alone_emits_the_field() {
 /// Golden: `sk4_noncontraction_acc_mp_omitted_when_default`.
 #[test]
 fn a_non_deviating_cell_omits_the_field_entirely() {
-    let g = "sk5|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
+    let g = "sk6|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
     let key = StructureKey::from_token(g).expect("golden must decode");
     assert_eq!(key.acc_mp, None);
 
@@ -158,7 +158,7 @@ fn a_non_deviating_cell_omits_the_field_entirely() {
 /// Golden: `sk4_noncontraction_acc_mp_rejects_redundant_default`.
 #[test]
 fn the_all_default_spelling_is_rejected_as_redundant() {
-    let stem = "sk5|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
+    let stem = "sk6|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
 
     assert_eq!(
         StructureKey::parse_token(&format!("{stem}|f32/st")),
@@ -213,7 +213,7 @@ fn a_redundant_field_is_unconstructible_from_outside_the_crate() {
     // moved: an assertion written where the value cannot be built would pass
     // without exercising the code it names.
 
-    let g = "sk5|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
+    let g = "sk6|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
     let mut key = StructureKey::from_token(g).unwrap();
 
     // Positive control: a genuinely deviating value DOES emit, so the refusal
@@ -241,7 +241,7 @@ fn a_redundant_field_is_unconstructible_from_outside_the_crate() {
 /// Golden: `sk4_noncontraction_acc_mp_declines`.
 #[test]
 fn malformed_acc_mp_fields_decline_with_distinct_typed_verdicts() {
-    let stem = "sk5|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
+    let stem = "sk6|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
 
     let cases: &[(&str, TokenDecline)] = &[
         // An accumulator outside the closed §6.1 set.
@@ -293,7 +293,7 @@ fn malformed_acc_mp_fields_decline_with_distinct_typed_verdicts() {
 /// was applied to the others.
 #[test]
 fn the_reserved_rule_reaches_the_accumulator_slot() {
-    let stem = "sk5|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
+    let stem = "sk6|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
     for spelling in ["f8e4m3fnuz", "f8e5m2fnuz"] {
         assert_eq!(
             StructureKey::parse_token(&format!("{stem}|{spelling}/rm")),

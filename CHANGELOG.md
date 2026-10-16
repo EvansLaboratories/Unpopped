@@ -15,7 +15,35 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## Unreleased — `0.17.3`: the weight role is declared (additive)
+## Unreleased — `0.18.0` (proposed; the PM allocates): `sk6`, the scale dtype is keyed (BREAKING)
+
+**`STRUCTURE_KEY_VERSION` 5 → 6** (KISS#588, conformance 0.4.0,
+KISS-CLASSIFY-6.6-0022). A quantized `ctr` cell keys the dtype of its designated
+scale operand as the optional last contraction coordinate `q<dtype>`
+(`…/st/qf8e8m0`, `…/st/qf16`). At `sk5` an `f8e8m0` and an `f16` scale derived
+one key although they decode the same stored values to different numbers.
+
+- **Every token changes its prefix** (`sk5|` → `sk6|`); an `sk5` token now parses
+  to `UnsupportedSchemaVersion { version: 5 }`. Re-derive, do not rewrite: stored
+  or announced tokens must be regenerated.
+- **`ContractionKey::scale: Option<ElementKind>`** (+ `with_scale`) and
+  **`CellFacts::scale_operand: Option<usize>`** (canonical slot, a declared role,
+  never inferred). `None` omits the coordinate; every existing caller derives the
+  same body as at `sk5`.
+- **New declines** in `derive_structure_key`: `ScaleRoleOutOfRange` (a hint naming
+  no operand is not silently dropped) and `ReservedScaleDtype`. Both names are
+  this crate's. The reader declines a `q` coordinate with an unknown dtype
+  (`UnknownDtype`), a reserved one (`ReservedDtype`), a second one, or one outside
+  a contraction field.
+- **Re-vendored from KISS `86196f7`** (conformance 0.4.0): vectors file 28
+  positive / 25 decline, derivation vectors unchanged in outcome (35 PASS, 1 SKIP).
+
+Not covered by KISS's derivation vectors (they exclude `ctr`, KISS#543): the
+derivation of `q<dtype>` is pinned only by `tests/sk6_scale_dtype.rs`.
+
+---
+
+## `0.17.3`: the weight role is declared (additive)
 
 **Fixed: `<wdt>` read operand 1 positionally**, which KISS-CLASSIFY-6.6-0019
 forbids. Measured at `0.17.0`: `Gemm [W:f8e4m3fn, x:f16, y:f16]` derived
