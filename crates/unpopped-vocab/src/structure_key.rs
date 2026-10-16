@@ -922,9 +922,10 @@ impl CellFacts {
             f.weight_operand = Some(1);
             // ... and the plain GEMM's roles, accumulator and `<mp>`, as declarations
             // the bridge makes for its caller (this crate's GEMM routing policy: an
-            // `f16` contraction accumulates at `f32`, a plain `f32` one rounds its
-            // inputs, `rm`). Only a cell the positional rank-2/3 deriver accepts gets
-            // them; any other keeps no roles and so no `ctr` field, as before.
+            // `f16` contraction accumulates at `f32`, a plain `f32` one permits
+            // rounding its inputs, `rm`). Only a cell the positional rank-2/3 deriver
+            // accepts gets them; any other keeps no roles and so no `ctr` field, as
+            // before.
             if derive_contraction(OpCategory::Gemm, operands, 1).is_some() {
                 let rank = operands[0].rank as usize;
                 f.contraction_roles = Some(ContractionRoles::gemm(rank, rank - 2));

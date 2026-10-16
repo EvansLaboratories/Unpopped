@@ -75,8 +75,9 @@ fn the_legacy_op_bridge_declares_its_own_roles_and_keeps_its_bytes() {
     let mut f = facts(Some(ContractionRoles::gemm(2, 0)));
     f.accumulator = Some(ElementKind::F32);
     assert_eq!(key(&gemm(), &f).unwrap(), t);
-    // An f32 contraction rounds its inputs at the bridge (`rm`), as the GEMM
-    // routing policy does; through the conformant entry that is a declaration.
+    // An f32 contraction declares `rm` at the bridge (a permission to round its
+    // inputs, never a requirement), as the GEMM routing policy does; through the
+    // conformant entry that is a declaration.
     let mut g = gemm();
     for o in &mut g {
         o.dtype = ElementKind::F32;
