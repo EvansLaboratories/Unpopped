@@ -15,6 +15,25 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.20.1` — a contraction cell the plan cannot serve is a typed refusal, not a panic
+
+`try_build_plan` gains `check_contraction`: the `Access::Contraction` arm of the plan gate no longer
+`assert!`s. A key derived from declared roles (`ContractionRoles`, 0.19.0) can name a cell no `OpDef` pairs
+with, so the refusal is reachable by *requesting* a cell and owes a typed decline (KISS-EMIT §6.8-0004).
+
+- **Added** `PlanError::UnservableContraction(ContractionDecline)` and `ContractionDecline`
+  (`RolesInvalid`, `KeyHasNoContractionFacts`, `EpilogueInadmissible`, `BatchDisagrees`,
+  `BatchNotOutermost`), both `#[non_exhaustive]`, so this is additive. The first three are the old
+  asserts, now typed; the last two are new: the op and the key disagree on whether the cell is batched
+  (e.g. a rank-3 key whose caller declared no batch axis), and a real batch axis stored inside the matrix
+  axes (the v1 emitters bind batch as the outermost stride; a broadcast batch axis is exempt). Rank 4 and
+  above is `RolesInvalid` (v1 lowers one batch coordinate).
+- **Behaviour:** `try_build_plan` / `try_generate` return `Err` where `build_plan` panicked; `build_plan` is
+  the same gate's panicking wrapper, with a similar message. `try_generate` maps it into
+  `LowerError::InadmissiblePlan`, so backends inherit the decline without code.
+- **Not covered, deliberately:** each backend's own limits (a tile schedule, an accumulator spelling, a
+  dtype list). Those remain the backend's decline.
+
 ## `0.20.0` — `ContractionAxes` (unpopped-vocab) is now `ContractionRoles` (BREAKING)
 
 `unpopped::ir::ContractionAxes` (the *op's* per-input axis roles) and `unpopped_vocab::ContractionAxes` (0.19.0's
