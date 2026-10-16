@@ -15,6 +15,31 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.19.0` — the ctr stage of KISS 0.4.3: declared M/N/K and batch roles (BREAKING)
+
+KISS 0.4.3's 62 derivation vectors now byte-match (PASS 62, from 35 at 0.18.1; `KNOWN_GAP` is empty).
+No `STRUCTURE_KEY_VERSION` change: the token grammar is `sk6`'s, and **no existing caller's bytes
+change** — the new behaviour is opt-in through `CellFacts::contraction_axes`.
+
+- **Added** `AxisRef`, `ContractionAxes` (M/N/K `{operand, axis}` plus batch axes, KISS-CLASSIFY-6.6-0016
+  and -0023), `BatchRoleDecline`, and the field `CellFacts::contraction_axes`.
+- **Role-driven derivation** when `contraction_axes` is `Some`: M/N/K size classes come from the declared
+  axes, not operand positions; the batch class is that of the **product** of the declared batch extents
+  (a declared extent-1 axis is batched; no batch axis, no `b<class>`, at any rank); **rank above 3
+  derives**; `<acc>` is the declared accumulator, else operand 0's dtype (§6.7-0006 — the weight's
+  only when the weight is operand 0, so a weight-first caller must declare it); `<mp>` is the
+  declared `math_fidelity`.
+- **`None` keeps the positional rank-2/3 derivation byte-for-byte** (f16 accumulates at f32 there).
+- **New typed declines:** `ContractionAxisInvalid`, `WeightRoleOutOfRange`, `ContractionNoOutput`,
+  `Batch(BatchRoleDecline)` (`BatchAxisOutOfRange`, `BatchAxisDuplicate`,
+  `BatchAxisOverlapsContractionRole`, `BatchAxisNotInOutput`, `BatchAxisNonPositiveExtent`),
+  `ReservedContractionDtype`.
+- **Breaking:** `DeriveDecline::ScaleRoleOutOfRange`'s wire name is now `RoleSlotOutOfRange` (KISS's
+  spelling, shared with the weight slot); the variant is unchanged.
+- **Not decided here:** the key says nothing about whether an emitter can bind these axes. The v1 CUDA
+  emitter binds one outermost batch axis; an emitter must decline what it cannot bind (KISS keys any
+  declared batch axes, e.g. `ctr_rank4_one_batch_axis_declared`).
+
 ## `0.18.1` — KISS 0.4.3's 62 derivation vectors are vendored; 27 are pinned as the known gap
 
 Tests and docs only; no behaviour, API or token byte changes. `structure_key_derivation_vectors.json`
