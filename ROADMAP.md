@@ -1,7 +1,7 @@
 # Unpopped roadmap
 
 What this lane is doing, in what order, and **what each item waits on**. Read at
-`origin/main` `2172526` (0.20.1) on 2026-10-16; every row names the ref it was
+`origin/main` `9323f6d` (0.20.2, plus #69 = 0.20.3) on 2026-10-17; every row names the ref it was
 read at, so re-read it before acting on it. History is in `CHANGELOG.md`;
 knowingly-undone work and its reasoning is `docs/deferred.md`. This file is the
 queue, not the archive: delete a row when it lands.
@@ -10,8 +10,8 @@ queue, not the archive: delete a row when it lands.
 
 | # | Item | State | Waits on |
 |---|---|---|---|
-| 1 | **Publish `0.20.1`** (and `0.19.1`): typed `PlanError::UnservableContraction` (#67); re-vendored derivation vectors (#65) | merged; `0.20.0` is published (PM read back) | PM publishes with the next code change |
-| 2 | **baracuda's second-deriver harness** against the 0.20.x keyer: the PM's acceptance test (15 `ctr` FAIL -> 0) | not this lane's to run | baracuda lane; on a pass, comment on and close **#31** (its M/N/K and batch roles are implemented) |
+| 1 | **Publish `0.20.3`** (with `0.20.1`, `0.20.2`, `0.19.1`): typed `PlanError::UnservableContraction` (#67); re-vendored derivation vectors (#65) | merged; `0.20.0` is published (PM read back) | PM publishes with the next code change |
+| 2 | **Run `emitted_slang_compiles_with_slangc` on the self-hosted runner** (CireSnave 5.1g/5.1h: an environment-bound test is run there, never ignored). It stays `#[ignore]` meanwhile: a documented, counted last resort. Owner: this lane. Detector: the runner job, once it exists (no hosted job can run it) | `slangc` exists on the PM's PC (`C:/VulkanSDK/1.4.350.0/Bin`) | PM: runner registered for Unpopped, which is a **PUBLIC** repo, so the **persistent** runner under 5.1h (push-to-main, schedule, dispatch; same-repo PRs only behind the environment gate; fork PRs never) + `slangc` on the `gh-runner` PATH. Then this lane adds the job and drops the attribute |
 
 ## 2. KISS items this lane consumes
 
