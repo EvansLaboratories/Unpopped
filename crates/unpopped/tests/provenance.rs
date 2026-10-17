@@ -11,11 +11,38 @@
 //! certifies nothing while looking green.
 
 mod common;
-use common::{OtherStub, StubBackend};
-use unpopped::backend::Backend;
+use common::StubBackend;
+use unpopped::backend::{Backend, GeneratedKernel, LowerError};
 use unpopped::ir::{OpDef, input};
+use unpopped::plan::KernelPlan;
 use unpopped::{generate, generate_variants};
-use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_key};
+use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, TargetId, structure_key};
+
+/// A second double whose only difference from [`StubBackend`] is its identity.
+///
+/// Exists so a test can prove a stamp *reports* the backend rather than
+/// returning a constant — a check that needs two backends and cannot be written
+/// with one.
+#[derive(Copy, Clone, Debug, Default)]
+pub struct OtherStub;
+
+impl Backend for OtherStub {
+    fn name(&self) -> &str {
+        "other_stub"
+    }
+    fn provider(&self) -> &str {
+        "someone-else"
+    }
+    fn supports_dtype(&self, _dtype: ElementKind, _target: TargetId) -> bool {
+        true
+    }
+    fn lower(&self, plan: &KernelPlan<'_>) -> Result<GeneratedKernel, LowerError> {
+        Ok(GeneratedKernel::new(
+            format!("other_{}", plan.op_name),
+            format!("/* other stub: {} */", plan.op_name),
+        ))
+    }
+}
 
 fn add_op() -> OpDef {
     OpDef::elementwise("add", 2, &[ElementKind::F32], input(0) + input(1))
