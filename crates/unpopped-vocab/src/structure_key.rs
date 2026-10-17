@@ -5528,6 +5528,7 @@ mod codec_and_helper_pins {
 mod codec_attribution_pins {
     //! Second batch from the 2026-10-17 audit of this file.
     use super::*;
+    use crate::{ArchSku, OpCategory};
 
     #[test]
     fn a_reserved_dtype_in_a_contraction_group_is_named_not_merely_malformed() {
@@ -5548,6 +5549,25 @@ mod codec_attribution_pins {
         }
         // Control: the same field with no reserved dtype is not attributed.
         assert_eq!(attribute_bad_contraction("ca/b/f32/f32/f32/st"), Ok(()));
+    }
+
+    #[test]
+    fn a_size_one_own_axis_counts_as_stride_zero_after_right_alignment() {
+        // `od.shape[i - off]` -> `i + off` in `broadcast_mask`: the own axis of a
+        // rank-1 `[1]` operand in a `[4, 8]` frame is axis 0 of the operand.
+        let wide = OperandDesc::new(2, &[4, 8], &[8, 1], ElementKind::F32, 256);
+        let one = OperandDesc::new(1, &[1], &[5], ElementKind::F32, 256);
+        let frame = Frame::of(&[wide, one]);
+        assert_eq!(frame.broadcast_mask(&one), AxisMask(0b11));
+    }
+
+    #[test]
+    fn a_token_with_exactly_max_operands_parses() {
+        // `fields.len() > MAX_OPERANDS` -> `>=`: the limit itself is legal.
+        let a = OperandDesc::new(1, &[64], &[1], ElementKind::F32, 256);
+        let ops = [a; MAX_OPERANDS];
+        let k = structure_key(OpCategory::BinaryElementwise, &ops, ArchSku::Sm89);
+        assert_eq!(StructureKey::from_token(&k.to_token()), Some(k));
     }
 
     #[test]
