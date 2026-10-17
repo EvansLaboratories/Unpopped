@@ -5111,3 +5111,1207 @@ mod codec_pins {
         assert_eq!(f32_to_f16_bits(-f32::NAN), 0xfe00);
     }
 }
+
+#[cfg(test)]
+mod scalar_math_pins {
+    //! Pins from the 2026-10-17 mutation audit of this file: the scalar evaluators.
+    //!
+    //! Reference values for the float ops are generated from Python's `math` (the
+    //! platform C library), which shares no code with the oracle's formulas.
+    use super::*;
+
+    fn close(got: f64, want: f64, tol: f64) -> bool {
+        (got - want).abs() <= tol * want.abs().max(1.0)
+    }
+
+    /// `(op, x, expected)` from Python's `math`, an implementation independent of the oracle.
+    const UNARY: &[(UnaryOp, f64, f64)] = &[
+        (UnaryOp::Neg, -3.5, 3.5),
+        (UnaryOp::Neg, -2.0, 2.0),
+        (UnaryOp::Neg, -1.0, 1.0),
+        (UnaryOp::Neg, -0.5, 0.5),
+        (UnaryOp::Neg, -0.25, 0.25),
+        (UnaryOp::Neg, 0.25, -0.25),
+        (UnaryOp::Neg, 0.5, -0.5),
+        (UnaryOp::Neg, 1.0, -1.0),
+        (UnaryOp::Neg, 1.5, -1.5),
+        (UnaryOp::Neg, 2.0, -2.0),
+        (UnaryOp::Neg, 3.5, -3.5),
+        (UnaryOp::Abs, -3.5, 3.5),
+        (UnaryOp::Abs, -2.0, 2.0),
+        (UnaryOp::Abs, -1.0, 1.0),
+        (UnaryOp::Abs, -0.5, 0.5),
+        (UnaryOp::Abs, -0.25, 0.25),
+        (UnaryOp::Abs, 0.25, 0.25),
+        (UnaryOp::Abs, 0.5, 0.5),
+        (UnaryOp::Abs, 1.0, 1.0),
+        (UnaryOp::Abs, 1.5, 1.5),
+        (UnaryOp::Abs, 2.0, 2.0),
+        (UnaryOp::Abs, 3.5, 3.5),
+        (UnaryOp::Sqr, -3.5, 12.25),
+        (UnaryOp::Sqr, -2.0, 4.0),
+        (UnaryOp::Sqr, -1.0, 1.0),
+        (UnaryOp::Sqr, -0.5, 0.25),
+        (UnaryOp::Sqr, -0.25, 0.0625),
+        (UnaryOp::Sqr, 0.25, 0.0625),
+        (UnaryOp::Sqr, 0.5, 0.25),
+        (UnaryOp::Sqr, 1.0, 1.0),
+        (UnaryOp::Sqr, 1.5, 2.25),
+        (UnaryOp::Sqr, 2.0, 4.0),
+        (UnaryOp::Sqr, 3.5, 12.25),
+        (UnaryOp::Sqrt, 0.25, 0.5),
+        (UnaryOp::Sqrt, 0.5, 0.7071067811865476),
+        (UnaryOp::Sqrt, 1.0, 1.0),
+        (UnaryOp::Sqrt, 1.5, 1.224744871391589),
+        (UnaryOp::Sqrt, 2.0, 1.4142135623730951),
+        (UnaryOp::Sqrt, 3.5, 1.8708286933869707),
+        (UnaryOp::Sqrt, 10.0, 3.1622776601683795),
+        (UnaryOp::Rsqrt, 0.25, 2.0),
+        (UnaryOp::Rsqrt, 0.5, 1.414213562373095),
+        (UnaryOp::Rsqrt, 1.0, 1.0),
+        (UnaryOp::Rsqrt, 1.5, 0.8164965809277261),
+        (UnaryOp::Rsqrt, 2.0, 0.7071067811865475),
+        (UnaryOp::Rsqrt, 3.5, 0.5345224838248488),
+        (UnaryOp::Rsqrt, 10.0, 0.31622776601683794),
+        (UnaryOp::Recip, -3.5, -0.2857142857142857),
+        (UnaryOp::Recip, -2.0, -0.5),
+        (UnaryOp::Recip, -1.0, -1.0),
+        (UnaryOp::Recip, -0.5, -2.0),
+        (UnaryOp::Recip, -0.25, -4.0),
+        (UnaryOp::Recip, 0.25, 4.0),
+        (UnaryOp::Recip, 0.5, 2.0),
+        (UnaryOp::Recip, 1.0, 1.0),
+        (UnaryOp::Recip, 1.5, 0.6666666666666666),
+        (UnaryOp::Recip, 2.0, 0.5),
+        (UnaryOp::Recip, 3.5, 0.2857142857142857),
+        (UnaryOp::Exp, -3.5, 0.0301973834223185),
+        (UnaryOp::Exp, -2.0, 0.1353352832366127),
+        (UnaryOp::Exp, -1.0, 0.36787944117144233),
+        (UnaryOp::Exp, -0.5, 0.6065306597126334),
+        (UnaryOp::Exp, -0.25, 0.7788007830714049),
+        (UnaryOp::Exp, 0.25, 1.2840254166877414),
+        (UnaryOp::Exp, 0.5, 1.6487212707001282),
+        (UnaryOp::Exp, 1.0, 2.718281828459045),
+        (UnaryOp::Exp, 1.5, 4.4816890703380645),
+        (UnaryOp::Exp, 2.0, 7.38905609893065),
+        (UnaryOp::Exp, 3.5, 33.11545195869231),
+        (UnaryOp::Log, 0.25, -1.3862943611198906),
+        (UnaryOp::Log, 0.5, -0.6931471805599453),
+        (UnaryOp::Log, 1.0, 0.0),
+        (UnaryOp::Log, 1.5, 0.4054651081081644),
+        (UnaryOp::Log, 2.0, 0.6931471805599453),
+        (UnaryOp::Log, 3.5, 1.252762968495368),
+        (UnaryOp::Log, 10.0, 2.302585092994046),
+        (UnaryOp::Tanh, -3.5, -0.9981778976111987),
+        (UnaryOp::Tanh, -2.0, -0.9640275800758169),
+        (UnaryOp::Tanh, -1.0, -0.7615941559557649),
+        (UnaryOp::Tanh, -0.5, -0.46211715726000974),
+        (UnaryOp::Tanh, -0.25, -0.24491866240370913),
+        (UnaryOp::Tanh, 0.25, 0.24491866240370913),
+        (UnaryOp::Tanh, 0.5, 0.46211715726000974),
+        (UnaryOp::Tanh, 1.0, 0.7615941559557649),
+        (UnaryOp::Tanh, 1.5, 0.9051482536448664),
+        (UnaryOp::Tanh, 2.0, 0.9640275800758169),
+        (UnaryOp::Tanh, 3.5, 0.9981778976111987),
+        (UnaryOp::Sigmoid, -3.5, 0.029312230751356305),
+        (UnaryOp::Sigmoid, -2.0, 0.11920292202211757),
+        (UnaryOp::Sigmoid, -1.0, 0.2689414213699951),
+        (UnaryOp::Sigmoid, -0.5, 0.3775406687981454),
+        (UnaryOp::Sigmoid, -0.25, 0.4378234991142019),
+        (UnaryOp::Sigmoid, 0.25, 0.5621765008857981),
+        (UnaryOp::Sigmoid, 0.5, 0.6224593312018546),
+        (UnaryOp::Sigmoid, 1.0, 0.7310585786300049),
+        (UnaryOp::Sigmoid, 1.5, 0.8175744761936437),
+        (UnaryOp::Sigmoid, 2.0, 0.8807970779778824),
+        (UnaryOp::Sigmoid, 3.5, 0.9706877692486438),
+        (UnaryOp::Relu, -3.5, 0.0),
+        (UnaryOp::Relu, -2.0, 0.0),
+        (UnaryOp::Relu, -1.0, 0.0),
+        (UnaryOp::Relu, -0.5, 0.0),
+        (UnaryOp::Relu, -0.25, 0.0),
+        (UnaryOp::Relu, 0.25, 0.25),
+        (UnaryOp::Relu, 0.5, 0.5),
+        (UnaryOp::Relu, 1.0, 1.0),
+        (UnaryOp::Relu, 1.5, 1.5),
+        (UnaryOp::Relu, 2.0, 2.0),
+        (UnaryOp::Relu, 3.5, 3.5),
+        (UnaryOp::Erf, -3.5, -0.9999992569016276),
+        (UnaryOp::Erf, -2.0, -0.9953222650189527),
+        (UnaryOp::Erf, -1.0, -0.8427007929497149),
+        (UnaryOp::Erf, -0.5, -0.5204998778130465),
+        (UnaryOp::Erf, -0.25, -0.27632639016823696),
+        (UnaryOp::Erf, 0.25, 0.27632639016823696),
+        (UnaryOp::Erf, 0.5, 0.5204998778130465),
+        (UnaryOp::Erf, 1.0, 0.8427007929497149),
+        (UnaryOp::Erf, 1.5, 0.9661051464753108),
+        (UnaryOp::Erf, 2.0, 0.9953222650189527),
+        (UnaryOp::Erf, 3.5, 0.9999992569016276),
+        (UnaryOp::Gelu, -3.5, -0.0008142017766243376),
+        (UnaryOp::Gelu, -2.0, -0.04550026389635843),
+        (UnaryOp::Gelu, -1.0, -0.15865525393145707),
+        (UnaryOp::Gelu, -0.5, -0.15426876936299347),
+        (UnaryOp::Gelu, -0.25, -0.10032341857926907),
+        (UnaryOp::Gelu, 0.25, 0.14967658142073093),
+        (UnaryOp::Gelu, 0.5, 0.3457312306370065),
+        (UnaryOp::Gelu, 1.0, 0.8413447460685428),
+        (UnaryOp::Gelu, 1.5, 1.399789198096713),
+        (UnaryOp::Gelu, 2.0, 1.9544997361036418),
+        (UnaryOp::Gelu, 3.5, 3.4991857982233756),
+        (UnaryOp::Silu, -3.5, -0.10259280762974707),
+        (UnaryOp::Silu, -2.0, -0.23840584404423515),
+        (UnaryOp::Silu, -1.0, -0.2689414213699951),
+        (UnaryOp::Silu, -0.5, -0.1887703343990727),
+        (UnaryOp::Silu, -0.25, -0.10945587477855047),
+        (UnaryOp::Silu, 0.25, 0.14054412522144952),
+        (UnaryOp::Silu, 0.5, 0.3112296656009273),
+        (UnaryOp::Silu, 1.0, 0.7310585786300049),
+        (UnaryOp::Silu, 1.5, 1.2263617142904655),
+        (UnaryOp::Silu, 2.0, 1.7615941559557649),
+        (UnaryOp::Silu, 3.5, 3.3974071923702533),
+        (UnaryOp::Sin, -3.5, 0.35078322768961984),
+        (UnaryOp::Sin, -2.0, -0.9092974268256817),
+        (UnaryOp::Sin, -1.0, -0.8414709848078965),
+        (UnaryOp::Sin, -0.5, -0.479425538604203),
+        (UnaryOp::Sin, -0.25, -0.24740395925452294),
+        (UnaryOp::Sin, 0.25, 0.24740395925452294),
+        (UnaryOp::Sin, 0.5, 0.479425538604203),
+        (UnaryOp::Sin, 1.0, 0.8414709848078965),
+        (UnaryOp::Sin, 1.5, 0.9974949866040544),
+        (UnaryOp::Sin, 2.0, 0.9092974268256817),
+        (UnaryOp::Sin, 3.5, -0.35078322768961984),
+        (UnaryOp::Cos, -3.5, -0.9364566872907963),
+        (UnaryOp::Cos, -2.0, -0.4161468365471424),
+        (UnaryOp::Cos, -1.0, 0.5403023058681398),
+        (UnaryOp::Cos, -0.5, 0.8775825618903728),
+        (UnaryOp::Cos, -0.25, 0.9689124217106447),
+        (UnaryOp::Cos, 0.25, 0.9689124217106447),
+        (UnaryOp::Cos, 0.5, 0.8775825618903728),
+        (UnaryOp::Cos, 1.0, 0.5403023058681398),
+        (UnaryOp::Cos, 1.5, 0.0707372016677029),
+        (UnaryOp::Cos, 2.0, -0.4161468365471424),
+        (UnaryOp::Cos, 3.5, -0.9364566872907963),
+        (UnaryOp::Floor, -3.5, -4.0),
+        (UnaryOp::Floor, -2.0, -2.0),
+        (UnaryOp::Floor, -1.0, -1.0),
+        (UnaryOp::Floor, -0.5, -1.0),
+        (UnaryOp::Floor, -0.25, -1.0),
+        (UnaryOp::Floor, 0.25, 0.0),
+        (UnaryOp::Floor, 0.5, 0.0),
+        (UnaryOp::Floor, 1.0, 1.0),
+        (UnaryOp::Floor, 1.5, 1.0),
+        (UnaryOp::Floor, 2.0, 2.0),
+        (UnaryOp::Floor, 3.5, 3.0),
+        (UnaryOp::Ceil, -3.5, -3.0),
+        (UnaryOp::Ceil, -2.0, -2.0),
+        (UnaryOp::Ceil, -1.0, -1.0),
+        (UnaryOp::Ceil, -0.5, 0.0),
+        (UnaryOp::Ceil, -0.25, 0.0),
+        (UnaryOp::Ceil, 0.25, 1.0),
+        (UnaryOp::Ceil, 0.5, 1.0),
+        (UnaryOp::Ceil, 1.0, 1.0),
+        (UnaryOp::Ceil, 1.5, 2.0),
+        (UnaryOp::Ceil, 2.0, 2.0),
+        (UnaryOp::Ceil, 3.5, 4.0),
+        (UnaryOp::Round, -2.5, -2.0),
+        (UnaryOp::Round, -1.5, -2.0),
+        (UnaryOp::Round, -0.5, 0.0),
+        (UnaryOp::Round, 0.5, 0.0),
+        (UnaryOp::Round, 1.5, 2.0),
+        (UnaryOp::Round, 2.5, 2.0),
+        (UnaryOp::Round, 3.2, 3.0),
+        (UnaryOp::Round, -3.7, -4.0),
+        (UnaryOp::Sign, -3.5, -1.0),
+        (UnaryOp::Sign, -2.0, -1.0),
+        (UnaryOp::Sign, -1.0, -1.0),
+        (UnaryOp::Sign, -0.5, -1.0),
+        (UnaryOp::Sign, -0.25, -1.0),
+        (UnaryOp::Sign, 0.25, 1.0),
+        (UnaryOp::Sign, 0.5, 1.0),
+        (UnaryOp::Sign, 1.0, 1.0),
+        (UnaryOp::Sign, 1.5, 1.0),
+        (UnaryOp::Sign, 2.0, 1.0),
+        (UnaryOp::Sign, 3.5, 1.0),
+        (UnaryOp::Step, -3.5, 0.0),
+        (UnaryOp::Step, -2.0, 0.0),
+        (UnaryOp::Step, -1.0, 0.0),
+        (UnaryOp::Step, -0.5, 0.0),
+        (UnaryOp::Step, -0.25, 0.0),
+        (UnaryOp::Step, 0.25, 1.0),
+        (UnaryOp::Step, 0.5, 1.0),
+        (UnaryOp::Step, 1.0, 1.0),
+        (UnaryOp::Step, 1.5, 1.0),
+        (UnaryOp::Step, 2.0, 1.0),
+        (UnaryOp::Step, 3.5, 1.0),
+        (UnaryOp::Erfc, -3.5, 1.9999992569016276),
+        (UnaryOp::Erfc, -2.0, 1.9953222650189528),
+        (UnaryOp::Erfc, -1.0, 1.842700792949715),
+        (UnaryOp::Erfc, -0.5, 1.5204998778130465),
+        (UnaryOp::Erfc, -0.25, 1.276326390168237),
+        (UnaryOp::Erfc, 0.25, 0.7236736098317631),
+        (UnaryOp::Erfc, 0.5, 0.4795001221869534),
+        (UnaryOp::Erfc, 1.0, 0.1572992070502851),
+        (UnaryOp::Erfc, 1.5, 0.033894853524689274),
+        (UnaryOp::Erfc, 2.0, 0.004677734981047265),
+        (UnaryOp::Erfc, 3.5, 7.430983723414126e-07),
+        (UnaryOp::Trunc, -3.5, -3.0),
+        (UnaryOp::Trunc, -2.0, -2.0),
+        (UnaryOp::Trunc, -1.0, -1.0),
+        (UnaryOp::Trunc, -0.5, 0.0),
+        (UnaryOp::Trunc, -0.25, 0.0),
+        (UnaryOp::Trunc, 0.25, 0.0),
+        (UnaryOp::Trunc, 0.5, 0.0),
+        (UnaryOp::Trunc, 1.0, 1.0),
+        (UnaryOp::Trunc, 1.5, 1.0),
+        (UnaryOp::Trunc, 2.0, 2.0),
+        (UnaryOp::Trunc, 3.5, 3.0),
+        (UnaryOp::Trunc, -2.7, -2.0),
+        (UnaryOp::Trunc, 2.7, 2.0),
+        (UnaryOp::Exp2, -3.5, 0.08838834764831845),
+        (UnaryOp::Exp2, -2.0, 0.25),
+        (UnaryOp::Exp2, -1.0, 0.5),
+        (UnaryOp::Exp2, -0.5, 0.7071067811865476),
+        (UnaryOp::Exp2, -0.25, 0.8408964152537145),
+        (UnaryOp::Exp2, 0.25, 1.189207115002721),
+        (UnaryOp::Exp2, 0.5, 1.4142135623730951),
+        (UnaryOp::Exp2, 1.0, 2.0),
+        (UnaryOp::Exp2, 1.5, 2.8284271247461903),
+        (UnaryOp::Exp2, 2.0, 4.0),
+        (UnaryOp::Exp2, 3.5, 11.313708498984761),
+        (UnaryOp::Expm1, -3.5, -0.9698026165776815),
+        (UnaryOp::Expm1, -2.0, -0.8646647167633873),
+        (UnaryOp::Expm1, -1.0, -0.6321205588285577),
+        (UnaryOp::Expm1, -0.5, -0.39346934028736663),
+        (UnaryOp::Expm1, -0.25, -0.22119921692859512),
+        (UnaryOp::Expm1, 0.25, 0.2840254166877415),
+        (UnaryOp::Expm1, 0.5, 0.6487212707001282),
+        (UnaryOp::Expm1, 1.0, 1.718281828459045),
+        (UnaryOp::Expm1, 1.5, 3.4816890703380645),
+        (UnaryOp::Expm1, 2.0, 6.38905609893065),
+        (UnaryOp::Expm1, 3.5, 32.11545195869231),
+        (UnaryOp::Log2, 0.25, -2.0),
+        (UnaryOp::Log2, 0.5, -1.0),
+        (UnaryOp::Log2, 1.0, 0.0),
+        (UnaryOp::Log2, 1.5, 0.5849625007211562),
+        (UnaryOp::Log2, 2.0, 1.0),
+        (UnaryOp::Log2, 3.5, 1.8073549220576042),
+        (UnaryOp::Log2, 10.0, 3.321928094887362),
+        (UnaryOp::Log10, 0.25, -0.6020599913279624),
+        (UnaryOp::Log10, 0.5, -0.3010299956639812),
+        (UnaryOp::Log10, 1.0, 0.0),
+        (UnaryOp::Log10, 1.5, 0.17609125905568124),
+        (UnaryOp::Log10, 2.0, 0.3010299956639812),
+        (UnaryOp::Log10, 3.5, 0.5440680443502757),
+        (UnaryOp::Log10, 10.0, 1.0),
+        (UnaryOp::Log1p, -0.5, -0.6931471805599453),
+        (UnaryOp::Log1p, 0.25, 0.22314355131420976),
+        (UnaryOp::Log1p, 1.0, 0.6931471805599453),
+        (UnaryOp::Log1p, 3.5, 1.5040773967762742),
+        (UnaryOp::Sinh, -3.5, -16.542627287635),
+        (UnaryOp::Sinh, -2.0, -3.6268604078470186),
+        (UnaryOp::Sinh, -1.0, -1.1752011936438014),
+        (UnaryOp::Sinh, -0.5, -0.5210953054937474),
+        (UnaryOp::Sinh, -0.25, -0.2526123168081683),
+        (UnaryOp::Sinh, 0.25, 0.2526123168081683),
+        (UnaryOp::Sinh, 0.5, 0.5210953054937474),
+        (UnaryOp::Sinh, 1.0, 1.1752011936438014),
+        (UnaryOp::Sinh, 1.5, 2.1292794550948173),
+        (UnaryOp::Sinh, 2.0, 3.6268604078470186),
+        (UnaryOp::Sinh, 3.5, 16.542627287635),
+        (UnaryOp::Cosh, -3.5, 16.572824671057315),
+        (UnaryOp::Cosh, -2.0, 3.7621956910836314),
+        (UnaryOp::Cosh, -1.0, 1.5430806348152437),
+        (UnaryOp::Cosh, -0.5, 1.1276259652063807),
+        (UnaryOp::Cosh, -0.25, 1.0314130998795732),
+        (UnaryOp::Cosh, 0.25, 1.0314130998795732),
+        (UnaryOp::Cosh, 0.5, 1.1276259652063807),
+        (UnaryOp::Cosh, 1.0, 1.5430806348152437),
+        (UnaryOp::Cosh, 1.5, 2.352409615243247),
+        (UnaryOp::Cosh, 2.0, 3.7621956910836314),
+        (UnaryOp::Cosh, 3.5, 16.572824671057315),
+        (UnaryOp::Tan, -3.5, -0.3745856401585947),
+        (UnaryOp::Tan, -2.0, 2.185039863261519),
+        (UnaryOp::Tan, -1.0, -1.5574077246549023),
+        (UnaryOp::Tan, -0.5, -0.5463024898437905),
+        (UnaryOp::Tan, -0.25, -0.25534192122103627),
+        (UnaryOp::Tan, 0.25, 0.25534192122103627),
+        (UnaryOp::Tan, 0.5, 0.5463024898437905),
+        (UnaryOp::Tan, 1.0, 1.5574077246549023),
+        (UnaryOp::Tan, 1.5, 14.101419947171719),
+        (UnaryOp::Tan, 2.0, -2.185039863261519),
+        (UnaryOp::Tan, 3.5, 0.3745856401585947),
+        (UnaryOp::Asin, -0.9, -1.1197695149986342),
+        (UnaryOp::Asin, -0.5, -0.5235987755982989),
+        (UnaryOp::Asin, -0.25, -0.25268025514207865),
+        (UnaryOp::Asin, 0.25, 0.25268025514207865),
+        (UnaryOp::Asin, 0.5, 0.5235987755982989),
+        (UnaryOp::Asin, 0.9, 1.1197695149986342),
+        (UnaryOp::Acos, -0.9, 2.6905658417935308),
+        (UnaryOp::Acos, -0.5, 2.0943951023931957),
+        (UnaryOp::Acos, -0.25, 1.8234765819369754),
+        (UnaryOp::Acos, 0.25, 1.318116071652818),
+        (UnaryOp::Acos, 0.5, 1.0471975511965979),
+        (UnaryOp::Acos, 0.9, 0.45102681179626236),
+        (UnaryOp::Atan, -3.5, -1.2924966677897853),
+        (UnaryOp::Atan, -2.0, -1.1071487177940904),
+        (UnaryOp::Atan, -1.0, -0.7853981633974483),
+        (UnaryOp::Atan, -0.5, -0.4636476090008061),
+        (UnaryOp::Atan, -0.25, -0.24497866312686414),
+        (UnaryOp::Atan, 0.25, 0.24497866312686414),
+        (UnaryOp::Atan, 0.5, 0.4636476090008061),
+        (UnaryOp::Atan, 1.0, 0.7853981633974483),
+        (UnaryOp::Atan, 1.5, 0.982793723247329),
+        (UnaryOp::Atan, 2.0, 1.1071487177940904),
+        (UnaryOp::Atan, 3.5, 1.2924966677897853),
+        (UnaryOp::Asinh, -3.5, -1.9657204716496515),
+        (UnaryOp::Asinh, -2.0, -1.4436354751788103),
+        (UnaryOp::Asinh, -1.0, -0.881373587019543),
+        (UnaryOp::Asinh, -0.5, -0.48121182505960347),
+        (UnaryOp::Asinh, -0.25, -0.24746646154726346),
+        (UnaryOp::Asinh, 0.25, 0.24746646154726346),
+        (UnaryOp::Asinh, 0.5, 0.48121182505960347),
+        (UnaryOp::Asinh, 1.0, 0.881373587019543),
+        (UnaryOp::Asinh, 1.5, 1.1947632172871094),
+        (UnaryOp::Asinh, 2.0, 1.4436354751788103),
+        (UnaryOp::Asinh, 3.5, 1.9657204716496515),
+        (UnaryOp::Acosh, 1.0, 0.0),
+        (UnaryOp::Acosh, 1.5, 0.9624236501192069),
+        (UnaryOp::Acosh, 2.0, 1.3169578969248166),
+        (UnaryOp::Acosh, 3.5, 1.9248473002384139),
+        (UnaryOp::Acosh, 10.0, 2.993222846126381),
+        (UnaryOp::Atanh, -0.9, -1.4722194895832204),
+        (UnaryOp::Atanh, -0.5, -0.5493061443340549),
+        (UnaryOp::Atanh, -0.25, -0.25541281188299536),
+        (UnaryOp::Atanh, 0.25, 0.25541281188299536),
+        (UnaryOp::Atanh, 0.5, 0.5493061443340549),
+        (UnaryOp::Atanh, 0.9, 1.4722194895832204),
+        (UnaryOp::Cbrt, -3.5, -1.5182944859378313),
+        (UnaryOp::Cbrt, -2.0, -1.259921049894873),
+        (UnaryOp::Cbrt, -1.0, -1.0),
+        (UnaryOp::Cbrt, -0.5, -0.7937005259840997),
+        (UnaryOp::Cbrt, -0.25, -0.6299605249474365),
+        (UnaryOp::Cbrt, 0.25, 0.6299605249474365),
+        (UnaryOp::Cbrt, 0.5, 0.7937005259840997),
+        (UnaryOp::Cbrt, 1.0, 1.0),
+        (UnaryOp::Cbrt, 1.5, 1.1447142425533319),
+        (UnaryOp::Cbrt, 2.0, 1.259921049894873),
+        (UnaryOp::Cbrt, 3.5, 1.5182944859378313),
+        (UnaryOp::Cbrt, 8.0, 2.0),
+        (UnaryOp::Cbrt, -27.0, -3.0),
+        (UnaryOp::Lgamma, -3.5, -1.3090066849930417),
+        (UnaryOp::Lgamma, -2.5, -0.05624371649767457),
+        (UnaryOp::Lgamma, -1.5, 0.8600470153764812),
+        (UnaryOp::Lgamma, -0.5, 1.265512123484645),
+        (UnaryOp::Lgamma, 0.25, 1.2880225246980772),
+        (UnaryOp::Lgamma, 0.5, 0.5723649429247004),
+        (UnaryOp::Lgamma, 1.0, 0.0),
+        (UnaryOp::Lgamma, 1.5, -0.12078223763524543),
+        (UnaryOp::Lgamma, 2.0, 0.0),
+        (UnaryOp::Lgamma, 3.5, 1.2009736023470738),
+        (UnaryOp::Lgamma, 10.0, 12.801827480081467),
+        (UnaryOp::Lgamma, 50.0, 144.5657439463449),
+    ];
+
+    /// `(op, a, b, expected)`, same provenance.
+    const BINARY: &[(BinaryOp, f64, f64, f64)] = &[
+        (BinaryOp::Max, -3.5, -2.0, -2.0),
+        (BinaryOp::Max, -3.5, -0.5, -0.5),
+        (BinaryOp::Max, -3.5, 0.5, 0.5),
+        (BinaryOp::Max, -3.5, 1.0, 1.0),
+        (BinaryOp::Max, -3.5, 2.0, 2.0),
+        (BinaryOp::Max, -3.5, 3.5, 3.5),
+        (BinaryOp::Max, -1.5, -2.0, -1.5),
+        (BinaryOp::Max, -1.5, -0.5, -0.5),
+        (BinaryOp::Max, -1.5, 0.5, 0.5),
+        (BinaryOp::Max, -1.5, 1.0, 1.0),
+        (BinaryOp::Max, -1.5, 2.0, 2.0),
+        (BinaryOp::Max, -1.5, 3.5, 3.5),
+        (BinaryOp::Max, -0.5, -2.0, -0.5),
+        (BinaryOp::Max, -0.5, -0.5, -0.5),
+        (BinaryOp::Max, -0.5, 0.5, 0.5),
+        (BinaryOp::Max, -0.5, 1.0, 1.0),
+        (BinaryOp::Max, -0.5, 2.0, 2.0),
+        (BinaryOp::Max, -0.5, 3.5, 3.5),
+        (BinaryOp::Max, 0.5, -2.0, 0.5),
+        (BinaryOp::Max, 0.5, -0.5, 0.5),
+        (BinaryOp::Max, 0.5, 0.5, 0.5),
+        (BinaryOp::Max, 0.5, 1.0, 1.0),
+        (BinaryOp::Max, 0.5, 2.0, 2.0),
+        (BinaryOp::Max, 0.5, 3.5, 3.5),
+        (BinaryOp::Max, 1.0, -2.0, 1.0),
+        (BinaryOp::Max, 1.0, -0.5, 1.0),
+        (BinaryOp::Max, 1.0, 0.5, 1.0),
+        (BinaryOp::Max, 1.0, 1.0, 1.0),
+        (BinaryOp::Max, 1.0, 2.0, 2.0),
+        (BinaryOp::Max, 1.0, 3.5, 3.5),
+        (BinaryOp::Max, 2.5, -2.0, 2.5),
+        (BinaryOp::Max, 2.5, -0.5, 2.5),
+        (BinaryOp::Max, 2.5, 0.5, 2.5),
+        (BinaryOp::Max, 2.5, 1.0, 2.5),
+        (BinaryOp::Max, 2.5, 2.0, 2.5),
+        (BinaryOp::Max, 2.5, 3.5, 3.5),
+        (BinaryOp::Max, 1.0, 1.0, 1.0),
+        (BinaryOp::Max, 2.0, 2.0, 2.0),
+        (BinaryOp::Min, -3.5, -2.0, -3.5),
+        (BinaryOp::Min, -3.5, -0.5, -3.5),
+        (BinaryOp::Min, -3.5, 0.5, -3.5),
+        (BinaryOp::Min, -3.5, 1.0, -3.5),
+        (BinaryOp::Min, -3.5, 2.0, -3.5),
+        (BinaryOp::Min, -3.5, 3.5, -3.5),
+        (BinaryOp::Min, -1.5, -2.0, -2.0),
+        (BinaryOp::Min, -1.5, -0.5, -1.5),
+        (BinaryOp::Min, -1.5, 0.5, -1.5),
+        (BinaryOp::Min, -1.5, 1.0, -1.5),
+        (BinaryOp::Min, -1.5, 2.0, -1.5),
+        (BinaryOp::Min, -1.5, 3.5, -1.5),
+        (BinaryOp::Min, -0.5, -2.0, -2.0),
+        (BinaryOp::Min, -0.5, -0.5, -0.5),
+        (BinaryOp::Min, -0.5, 0.5, -0.5),
+        (BinaryOp::Min, -0.5, 1.0, -0.5),
+        (BinaryOp::Min, -0.5, 2.0, -0.5),
+        (BinaryOp::Min, -0.5, 3.5, -0.5),
+        (BinaryOp::Min, 0.5, -2.0, -2.0),
+        (BinaryOp::Min, 0.5, -0.5, -0.5),
+        (BinaryOp::Min, 0.5, 0.5, 0.5),
+        (BinaryOp::Min, 0.5, 1.0, 0.5),
+        (BinaryOp::Min, 0.5, 2.0, 0.5),
+        (BinaryOp::Min, 0.5, 3.5, 0.5),
+        (BinaryOp::Min, 1.0, -2.0, -2.0),
+        (BinaryOp::Min, 1.0, -0.5, -0.5),
+        (BinaryOp::Min, 1.0, 0.5, 0.5),
+        (BinaryOp::Min, 1.0, 1.0, 1.0),
+        (BinaryOp::Min, 1.0, 2.0, 1.0),
+        (BinaryOp::Min, 1.0, 3.5, 1.0),
+        (BinaryOp::Min, 2.5, -2.0, -2.0),
+        (BinaryOp::Min, 2.5, -0.5, -0.5),
+        (BinaryOp::Min, 2.5, 0.5, 0.5),
+        (BinaryOp::Min, 2.5, 1.0, 1.0),
+        (BinaryOp::Min, 2.5, 2.0, 2.0),
+        (BinaryOp::Min, 2.5, 3.5, 2.5),
+        (BinaryOp::Min, 1.0, 1.0, 1.0),
+        (BinaryOp::Min, 2.0, 2.0, 2.0),
+        (BinaryOp::Pow, 0.5, -2.0, 4.0),
+        (BinaryOp::Pow, 0.5, -0.5, 1.4142135623730951),
+        (BinaryOp::Pow, 0.5, 0.5, 0.7071067811865476),
+        (BinaryOp::Pow, 0.5, 1.0, 0.5),
+        (BinaryOp::Pow, 0.5, 2.0, 0.25),
+        (BinaryOp::Pow, 0.5, 3.0, 0.125),
+        (BinaryOp::Pow, 1.0, -2.0, 1.0),
+        (BinaryOp::Pow, 1.0, -0.5, 1.0),
+        (BinaryOp::Pow, 1.0, 0.5, 1.0),
+        (BinaryOp::Pow, 1.0, 1.0, 1.0),
+        (BinaryOp::Pow, 1.0, 2.0, 1.0),
+        (BinaryOp::Pow, 1.0, 3.0, 1.0),
+        (BinaryOp::Pow, 2.5, -2.0, 0.16),
+        (BinaryOp::Pow, 2.5, -0.5, 0.6324555320336759),
+        (BinaryOp::Pow, 2.5, 0.5, 1.5811388300841898),
+        (BinaryOp::Pow, 2.5, 1.0, 2.5),
+        (BinaryOp::Pow, 2.5, 2.0, 6.25),
+        (BinaryOp::Pow, 2.5, 3.0, 15.625),
+        (BinaryOp::Pow, 4.0, -2.0, 0.0625),
+        (BinaryOp::Pow, 4.0, -0.5, 0.5),
+        (BinaryOp::Pow, 4.0, 0.5, 2.0),
+        (BinaryOp::Pow, 4.0, 1.0, 4.0),
+        (BinaryOp::Pow, 4.0, 2.0, 16.0),
+        (BinaryOp::Pow, 4.0, 3.0, 64.0),
+        (BinaryOp::Rem, -3.5, -2.0, -1.5),
+        (BinaryOp::Rem, -3.5, -0.5, -0.0),
+        (BinaryOp::Rem, -3.5, 0.5, 0.0),
+        (BinaryOp::Rem, -3.5, 1.0, 0.5),
+        (BinaryOp::Rem, -3.5, 2.0, 0.5),
+        (BinaryOp::Rem, -3.5, 3.5, 0.0),
+        (BinaryOp::Rem, -1.5, -2.0, -1.5),
+        (BinaryOp::Rem, -1.5, -0.5, -0.0),
+        (BinaryOp::Rem, -1.5, 0.5, 0.0),
+        (BinaryOp::Rem, -1.5, 1.0, 0.5),
+        (BinaryOp::Rem, -1.5, 2.0, 0.5),
+        (BinaryOp::Rem, -1.5, 3.5, 2.0),
+        (BinaryOp::Rem, -0.5, -2.0, -0.5),
+        (BinaryOp::Rem, -0.5, -0.5, -0.0),
+        (BinaryOp::Rem, -0.5, 0.5, 0.0),
+        (BinaryOp::Rem, -0.5, 1.0, 0.5),
+        (BinaryOp::Rem, -0.5, 2.0, 1.5),
+        (BinaryOp::Rem, -0.5, 3.5, 3.0),
+        (BinaryOp::Rem, 0.5, -2.0, -1.5),
+        (BinaryOp::Rem, 0.5, -0.5, -0.0),
+        (BinaryOp::Rem, 0.5, 0.5, 0.0),
+        (BinaryOp::Rem, 0.5, 1.0, 0.5),
+        (BinaryOp::Rem, 0.5, 2.0, 0.5),
+        (BinaryOp::Rem, 0.5, 3.5, 0.5),
+        (BinaryOp::Rem, 1.0, -2.0, -1.0),
+        (BinaryOp::Rem, 1.0, -0.5, -0.0),
+        (BinaryOp::Rem, 1.0, 0.5, 0.0),
+        (BinaryOp::Rem, 1.0, 1.0, 0.0),
+        (BinaryOp::Rem, 1.0, 2.0, 1.0),
+        (BinaryOp::Rem, 1.0, 3.5, 1.0),
+        (BinaryOp::Rem, 2.5, -2.0, -1.5),
+        (BinaryOp::Rem, 2.5, -0.5, -0.0),
+        (BinaryOp::Rem, 2.5, 0.5, 0.0),
+        (BinaryOp::Rem, 2.5, 1.0, 0.5),
+        (BinaryOp::Rem, 2.5, 2.0, 0.5),
+        (BinaryOp::Rem, 2.5, 3.5, 2.5),
+        (BinaryOp::RemTrunc, -3.5, -2.0, -1.5),
+        (BinaryOp::RemTrunc, -3.5, -0.5, -0.0),
+        (BinaryOp::RemTrunc, -3.5, 0.5, -0.0),
+        (BinaryOp::RemTrunc, -3.5, 1.0, -0.5),
+        (BinaryOp::RemTrunc, -3.5, 2.0, -1.5),
+        (BinaryOp::RemTrunc, -3.5, 3.5, -0.0),
+        (BinaryOp::RemTrunc, -1.5, -2.0, -1.5),
+        (BinaryOp::RemTrunc, -1.5, -0.5, -0.0),
+        (BinaryOp::RemTrunc, -1.5, 0.5, -0.0),
+        (BinaryOp::RemTrunc, -1.5, 1.0, -0.5),
+        (BinaryOp::RemTrunc, -1.5, 2.0, -1.5),
+        (BinaryOp::RemTrunc, -1.5, 3.5, -1.5),
+        (BinaryOp::RemTrunc, -0.5, -2.0, -0.5),
+        (BinaryOp::RemTrunc, -0.5, -0.5, -0.0),
+        (BinaryOp::RemTrunc, -0.5, 0.5, -0.0),
+        (BinaryOp::RemTrunc, -0.5, 1.0, -0.5),
+        (BinaryOp::RemTrunc, -0.5, 2.0, -0.5),
+        (BinaryOp::RemTrunc, -0.5, 3.5, -0.5),
+        (BinaryOp::RemTrunc, 0.5, -2.0, 0.5),
+        (BinaryOp::RemTrunc, 0.5, -0.5, 0.0),
+        (BinaryOp::RemTrunc, 0.5, 0.5, 0.0),
+        (BinaryOp::RemTrunc, 0.5, 1.0, 0.5),
+        (BinaryOp::RemTrunc, 0.5, 2.0, 0.5),
+        (BinaryOp::RemTrunc, 0.5, 3.5, 0.5),
+        (BinaryOp::RemTrunc, 1.0, -2.0, 1.0),
+        (BinaryOp::RemTrunc, 1.0, -0.5, 0.0),
+        (BinaryOp::RemTrunc, 1.0, 0.5, 0.0),
+        (BinaryOp::RemTrunc, 1.0, 1.0, 0.0),
+        (BinaryOp::RemTrunc, 1.0, 2.0, 1.0),
+        (BinaryOp::RemTrunc, 1.0, 3.5, 1.0),
+        (BinaryOp::RemTrunc, 2.5, -2.0, 0.5),
+        (BinaryOp::RemTrunc, 2.5, -0.5, 0.0),
+        (BinaryOp::RemTrunc, 2.5, 0.5, 0.0),
+        (BinaryOp::RemTrunc, 2.5, 1.0, 0.5),
+        (BinaryOp::RemTrunc, 2.5, 2.0, 0.5),
+        (BinaryOp::RemTrunc, 2.5, 3.5, 2.5),
+        (BinaryOp::Atan2, -3.5, -2.0, -2.0899424410414196),
+        (BinaryOp::Atan2, -3.5, -0.5, -1.7126933813990606),
+        (BinaryOp::Atan2, -3.5, 0.5, -1.4288992721907328),
+        (BinaryOp::Atan2, -3.5, 1.0, -1.2924966677897853),
+        (BinaryOp::Atan2, -3.5, 2.0, -1.0516502125483738),
+        (BinaryOp::Atan2, -3.5, 3.5, -0.7853981633974483),
+        (BinaryOp::Atan2, -1.5, -2.0, -2.498091544796509),
+        (BinaryOp::Atan2, -1.5, -0.5, -1.892546881191539),
+        (BinaryOp::Atan2, -1.5, 0.5, -1.2490457723982544),
+        (BinaryOp::Atan2, -1.5, 1.0, -0.982793723247329),
+        (BinaryOp::Atan2, -1.5, 2.0, -0.6435011087932844),
+        (BinaryOp::Atan2, -1.5, 3.5, -0.40489178628508343),
+        (BinaryOp::Atan2, -0.5, -2.0, -2.896613990462929),
+        (BinaryOp::Atan2, -0.5, -0.5, -2.356194490192345),
+        (BinaryOp::Atan2, -0.5, 0.5, -0.7853981633974483),
+        (BinaryOp::Atan2, -0.5, 1.0, -0.4636476090008061),
+        (BinaryOp::Atan2, -0.5, 2.0, -0.24497866312686414),
+        (BinaryOp::Atan2, -0.5, 3.5, -0.14189705460416394),
+        (BinaryOp::Atan2, 0.5, -2.0, 2.896613990462929),
+        (BinaryOp::Atan2, 0.5, -0.5, 2.356194490192345),
+        (BinaryOp::Atan2, 0.5, 0.5, 0.7853981633974483),
+        (BinaryOp::Atan2, 0.5, 1.0, 0.4636476090008061),
+        (BinaryOp::Atan2, 0.5, 2.0, 0.24497866312686414),
+        (BinaryOp::Atan2, 0.5, 3.5, 0.14189705460416394),
+        (BinaryOp::Atan2, 1.0, -2.0, 2.677945044588987),
+        (BinaryOp::Atan2, 1.0, -0.5, 2.0344439357957027),
+        (BinaryOp::Atan2, 1.0, 0.5, 1.1071487177940904),
+        (BinaryOp::Atan2, 1.0, 1.0, 0.7853981633974483),
+        (BinaryOp::Atan2, 1.0, 2.0, 0.4636476090008061),
+        (BinaryOp::Atan2, 1.0, 3.5, 0.27829965900511133),
+        (BinaryOp::Atan2, 2.5, -2.0, 2.2455372690184494),
+        (BinaryOp::Atan2, 2.5, -0.5, 1.7681918866447774),
+        (BinaryOp::Atan2, 2.5, 0.5, 1.373400766945016),
+        (BinaryOp::Atan2, 2.5, 1.0, 1.1902899496825317),
+        (BinaryOp::Atan2, 2.5, 2.0, 0.8960553845713439),
+        (BinaryOp::Atan2, 2.5, 3.5, 0.6202494859828215),
+        (BinaryOp::Copysign, -3.5, -2.0, -3.5),
+        (BinaryOp::Copysign, -3.5, -0.5, -3.5),
+        (BinaryOp::Copysign, -3.5, 0.5, 3.5),
+        (BinaryOp::Copysign, -3.5, 1.0, 3.5),
+        (BinaryOp::Copysign, -3.5, 2.0, 3.5),
+        (BinaryOp::Copysign, -3.5, 3.5, 3.5),
+        (BinaryOp::Copysign, -1.5, -2.0, -1.5),
+        (BinaryOp::Copysign, -1.5, -0.5, -1.5),
+        (BinaryOp::Copysign, -1.5, 0.5, 1.5),
+        (BinaryOp::Copysign, -1.5, 1.0, 1.5),
+        (BinaryOp::Copysign, -1.5, 2.0, 1.5),
+        (BinaryOp::Copysign, -1.5, 3.5, 1.5),
+        (BinaryOp::Copysign, -0.5, -2.0, -0.5),
+        (BinaryOp::Copysign, -0.5, -0.5, -0.5),
+        (BinaryOp::Copysign, -0.5, 0.5, 0.5),
+        (BinaryOp::Copysign, -0.5, 1.0, 0.5),
+        (BinaryOp::Copysign, -0.5, 2.0, 0.5),
+        (BinaryOp::Copysign, -0.5, 3.5, 0.5),
+        (BinaryOp::Copysign, 0.5, -2.0, -0.5),
+        (BinaryOp::Copysign, 0.5, -0.5, -0.5),
+        (BinaryOp::Copysign, 0.5, 0.5, 0.5),
+        (BinaryOp::Copysign, 0.5, 1.0, 0.5),
+        (BinaryOp::Copysign, 0.5, 2.0, 0.5),
+        (BinaryOp::Copysign, 0.5, 3.5, 0.5),
+        (BinaryOp::Copysign, 1.0, -2.0, -1.0),
+        (BinaryOp::Copysign, 1.0, -0.5, -1.0),
+        (BinaryOp::Copysign, 1.0, 0.5, 1.0),
+        (BinaryOp::Copysign, 1.0, 1.0, 1.0),
+        (BinaryOp::Copysign, 1.0, 2.0, 1.0),
+        (BinaryOp::Copysign, 1.0, 3.5, 1.0),
+        (BinaryOp::Copysign, 2.5, -2.0, -2.5),
+        (BinaryOp::Copysign, 2.5, -0.5, -2.5),
+        (BinaryOp::Copysign, 2.5, 0.5, 2.5),
+        (BinaryOp::Copysign, 2.5, 1.0, 2.5),
+        (BinaryOp::Copysign, 2.5, 2.0, 2.5),
+        (BinaryOp::Copysign, 2.5, 3.5, 2.5),
+        (BinaryOp::FmaxIeee, -3.5, -2.0, -2.0),
+        (BinaryOp::FmaxIeee, -3.5, -0.5, -0.5),
+        (BinaryOp::FmaxIeee, -3.5, 0.5, 0.5),
+        (BinaryOp::FmaxIeee, -3.5, 1.0, 1.0),
+        (BinaryOp::FmaxIeee, -3.5, 2.0, 2.0),
+        (BinaryOp::FmaxIeee, -3.5, 3.5, 3.5),
+        (BinaryOp::FmaxIeee, -1.5, -2.0, -1.5),
+        (BinaryOp::FmaxIeee, -1.5, -0.5, -0.5),
+        (BinaryOp::FmaxIeee, -1.5, 0.5, 0.5),
+        (BinaryOp::FmaxIeee, -1.5, 1.0, 1.0),
+        (BinaryOp::FmaxIeee, -1.5, 2.0, 2.0),
+        (BinaryOp::FmaxIeee, -1.5, 3.5, 3.5),
+        (BinaryOp::FmaxIeee, -0.5, -2.0, -0.5),
+        (BinaryOp::FmaxIeee, -0.5, -0.5, -0.5),
+        (BinaryOp::FmaxIeee, -0.5, 0.5, 0.5),
+        (BinaryOp::FmaxIeee, -0.5, 1.0, 1.0),
+        (BinaryOp::FmaxIeee, -0.5, 2.0, 2.0),
+        (BinaryOp::FmaxIeee, -0.5, 3.5, 3.5),
+        (BinaryOp::FmaxIeee, 0.5, -2.0, 0.5),
+        (BinaryOp::FmaxIeee, 0.5, -0.5, 0.5),
+        (BinaryOp::FmaxIeee, 0.5, 0.5, 0.5),
+        (BinaryOp::FmaxIeee, 0.5, 1.0, 1.0),
+        (BinaryOp::FmaxIeee, 0.5, 2.0, 2.0),
+        (BinaryOp::FmaxIeee, 0.5, 3.5, 3.5),
+        (BinaryOp::FmaxIeee, 1.0, -2.0, 1.0),
+        (BinaryOp::FmaxIeee, 1.0, -0.5, 1.0),
+        (BinaryOp::FmaxIeee, 1.0, 0.5, 1.0),
+        (BinaryOp::FmaxIeee, 1.0, 1.0, 1.0),
+        (BinaryOp::FmaxIeee, 1.0, 2.0, 2.0),
+        (BinaryOp::FmaxIeee, 1.0, 3.5, 3.5),
+        (BinaryOp::FmaxIeee, 2.5, -2.0, 2.5),
+        (BinaryOp::FmaxIeee, 2.5, -0.5, 2.5),
+        (BinaryOp::FmaxIeee, 2.5, 0.5, 2.5),
+        (BinaryOp::FmaxIeee, 2.5, 1.0, 2.5),
+        (BinaryOp::FmaxIeee, 2.5, 2.0, 2.5),
+        (BinaryOp::FmaxIeee, 2.5, 3.5, 3.5),
+        (BinaryOp::FminIeee, -3.5, -2.0, -3.5),
+        (BinaryOp::FminIeee, -3.5, -0.5, -3.5),
+        (BinaryOp::FminIeee, -3.5, 0.5, -3.5),
+        (BinaryOp::FminIeee, -3.5, 1.0, -3.5),
+        (BinaryOp::FminIeee, -3.5, 2.0, -3.5),
+        (BinaryOp::FminIeee, -3.5, 3.5, -3.5),
+        (BinaryOp::FminIeee, -1.5, -2.0, -2.0),
+        (BinaryOp::FminIeee, -1.5, -0.5, -1.5),
+        (BinaryOp::FminIeee, -1.5, 0.5, -1.5),
+        (BinaryOp::FminIeee, -1.5, 1.0, -1.5),
+        (BinaryOp::FminIeee, -1.5, 2.0, -1.5),
+        (BinaryOp::FminIeee, -1.5, 3.5, -1.5),
+        (BinaryOp::FminIeee, -0.5, -2.0, -2.0),
+        (BinaryOp::FminIeee, -0.5, -0.5, -0.5),
+        (BinaryOp::FminIeee, -0.5, 0.5, -0.5),
+        (BinaryOp::FminIeee, -0.5, 1.0, -0.5),
+        (BinaryOp::FminIeee, -0.5, 2.0, -0.5),
+        (BinaryOp::FminIeee, -0.5, 3.5, -0.5),
+        (BinaryOp::FminIeee, 0.5, -2.0, -2.0),
+        (BinaryOp::FminIeee, 0.5, -0.5, -0.5),
+        (BinaryOp::FminIeee, 0.5, 0.5, 0.5),
+        (BinaryOp::FminIeee, 0.5, 1.0, 0.5),
+        (BinaryOp::FminIeee, 0.5, 2.0, 0.5),
+        (BinaryOp::FminIeee, 0.5, 3.5, 0.5),
+        (BinaryOp::FminIeee, 1.0, -2.0, -2.0),
+        (BinaryOp::FminIeee, 1.0, -0.5, -0.5),
+        (BinaryOp::FminIeee, 1.0, 0.5, 0.5),
+        (BinaryOp::FminIeee, 1.0, 1.0, 1.0),
+        (BinaryOp::FminIeee, 1.0, 2.0, 1.0),
+        (BinaryOp::FminIeee, 1.0, 3.5, 1.0),
+        (BinaryOp::FminIeee, 2.5, -2.0, -2.0),
+        (BinaryOp::FminIeee, 2.5, -0.5, -0.5),
+        (BinaryOp::FminIeee, 2.5, 0.5, 0.5),
+        (BinaryOp::FminIeee, 2.5, 1.0, 1.0),
+        (BinaryOp::FminIeee, 2.5, 2.0, 2.0),
+        (BinaryOp::FminIeee, 2.5, 3.5, 2.5),
+        (BinaryOp::CmpEq, -3.5, -2.0, 0.0),
+        (BinaryOp::CmpEq, -3.5, -0.5, 0.0),
+        (BinaryOp::CmpEq, -3.5, 0.5, 0.0),
+        (BinaryOp::CmpEq, -3.5, 1.0, 0.0),
+        (BinaryOp::CmpEq, -3.5, 2.0, 0.0),
+        (BinaryOp::CmpEq, -3.5, 3.5, 0.0),
+        (BinaryOp::CmpEq, -1.5, -2.0, 0.0),
+        (BinaryOp::CmpEq, -1.5, -0.5, 0.0),
+        (BinaryOp::CmpEq, -1.5, 0.5, 0.0),
+        (BinaryOp::CmpEq, -1.5, 1.0, 0.0),
+        (BinaryOp::CmpEq, -1.5, 2.0, 0.0),
+        (BinaryOp::CmpEq, -1.5, 3.5, 0.0),
+        (BinaryOp::CmpEq, -0.5, -2.0, 0.0),
+        (BinaryOp::CmpEq, -0.5, -0.5, 1.0),
+        (BinaryOp::CmpEq, -0.5, 0.5, 0.0),
+        (BinaryOp::CmpEq, -0.5, 1.0, 0.0),
+        (BinaryOp::CmpEq, -0.5, 2.0, 0.0),
+        (BinaryOp::CmpEq, -0.5, 3.5, 0.0),
+        (BinaryOp::CmpEq, 0.5, -2.0, 0.0),
+        (BinaryOp::CmpEq, 0.5, -0.5, 0.0),
+        (BinaryOp::CmpEq, 0.5, 0.5, 1.0),
+        (BinaryOp::CmpEq, 0.5, 1.0, 0.0),
+        (BinaryOp::CmpEq, 0.5, 2.0, 0.0),
+        (BinaryOp::CmpEq, 0.5, 3.5, 0.0),
+        (BinaryOp::CmpEq, 1.0, -2.0, 0.0),
+        (BinaryOp::CmpEq, 1.0, -0.5, 0.0),
+        (BinaryOp::CmpEq, 1.0, 0.5, 0.0),
+        (BinaryOp::CmpEq, 1.0, 1.0, 1.0),
+        (BinaryOp::CmpEq, 1.0, 2.0, 0.0),
+        (BinaryOp::CmpEq, 1.0, 3.5, 0.0),
+        (BinaryOp::CmpEq, 2.5, -2.0, 0.0),
+        (BinaryOp::CmpEq, 2.5, -0.5, 0.0),
+        (BinaryOp::CmpEq, 2.5, 0.5, 0.0),
+        (BinaryOp::CmpEq, 2.5, 1.0, 0.0),
+        (BinaryOp::CmpEq, 2.5, 2.0, 0.0),
+        (BinaryOp::CmpEq, 2.5, 3.5, 0.0),
+        (BinaryOp::CmpEq, 1.0, 1.0, 1.0),
+        (BinaryOp::CmpEq, 2.0, 2.0, 1.0),
+        (BinaryOp::CmpNe, -3.5, -2.0, 1.0),
+        (BinaryOp::CmpNe, -3.5, -0.5, 1.0),
+        (BinaryOp::CmpNe, -3.5, 0.5, 1.0),
+        (BinaryOp::CmpNe, -3.5, 1.0, 1.0),
+        (BinaryOp::CmpNe, -3.5, 2.0, 1.0),
+        (BinaryOp::CmpNe, -3.5, 3.5, 1.0),
+        (BinaryOp::CmpNe, -1.5, -2.0, 1.0),
+        (BinaryOp::CmpNe, -1.5, -0.5, 1.0),
+        (BinaryOp::CmpNe, -1.5, 0.5, 1.0),
+        (BinaryOp::CmpNe, -1.5, 1.0, 1.0),
+        (BinaryOp::CmpNe, -1.5, 2.0, 1.0),
+        (BinaryOp::CmpNe, -1.5, 3.5, 1.0),
+        (BinaryOp::CmpNe, -0.5, -2.0, 1.0),
+        (BinaryOp::CmpNe, -0.5, -0.5, 0.0),
+        (BinaryOp::CmpNe, -0.5, 0.5, 1.0),
+        (BinaryOp::CmpNe, -0.5, 1.0, 1.0),
+        (BinaryOp::CmpNe, -0.5, 2.0, 1.0),
+        (BinaryOp::CmpNe, -0.5, 3.5, 1.0),
+        (BinaryOp::CmpNe, 0.5, -2.0, 1.0),
+        (BinaryOp::CmpNe, 0.5, -0.5, 1.0),
+        (BinaryOp::CmpNe, 0.5, 0.5, 0.0),
+        (BinaryOp::CmpNe, 0.5, 1.0, 1.0),
+        (BinaryOp::CmpNe, 0.5, 2.0, 1.0),
+        (BinaryOp::CmpNe, 0.5, 3.5, 1.0),
+        (BinaryOp::CmpNe, 1.0, -2.0, 1.0),
+        (BinaryOp::CmpNe, 1.0, -0.5, 1.0),
+        (BinaryOp::CmpNe, 1.0, 0.5, 1.0),
+        (BinaryOp::CmpNe, 1.0, 1.0, 0.0),
+        (BinaryOp::CmpNe, 1.0, 2.0, 1.0),
+        (BinaryOp::CmpNe, 1.0, 3.5, 1.0),
+        (BinaryOp::CmpNe, 2.5, -2.0, 1.0),
+        (BinaryOp::CmpNe, 2.5, -0.5, 1.0),
+        (BinaryOp::CmpNe, 2.5, 0.5, 1.0),
+        (BinaryOp::CmpNe, 2.5, 1.0, 1.0),
+        (BinaryOp::CmpNe, 2.5, 2.0, 1.0),
+        (BinaryOp::CmpNe, 2.5, 3.5, 1.0),
+        (BinaryOp::CmpNe, 1.0, 1.0, 0.0),
+        (BinaryOp::CmpNe, 2.0, 2.0, 0.0),
+        (BinaryOp::CmpLt, -3.5, -2.0, 1.0),
+        (BinaryOp::CmpLt, -3.5, -0.5, 1.0),
+        (BinaryOp::CmpLt, -3.5, 0.5, 1.0),
+        (BinaryOp::CmpLt, -3.5, 1.0, 1.0),
+        (BinaryOp::CmpLt, -3.5, 2.0, 1.0),
+        (BinaryOp::CmpLt, -3.5, 3.5, 1.0),
+        (BinaryOp::CmpLt, -1.5, -2.0, 0.0),
+        (BinaryOp::CmpLt, -1.5, -0.5, 1.0),
+        (BinaryOp::CmpLt, -1.5, 0.5, 1.0),
+        (BinaryOp::CmpLt, -1.5, 1.0, 1.0),
+        (BinaryOp::CmpLt, -1.5, 2.0, 1.0),
+        (BinaryOp::CmpLt, -1.5, 3.5, 1.0),
+        (BinaryOp::CmpLt, -0.5, -2.0, 0.0),
+        (BinaryOp::CmpLt, -0.5, -0.5, 0.0),
+        (BinaryOp::CmpLt, -0.5, 0.5, 1.0),
+        (BinaryOp::CmpLt, -0.5, 1.0, 1.0),
+        (BinaryOp::CmpLt, -0.5, 2.0, 1.0),
+        (BinaryOp::CmpLt, -0.5, 3.5, 1.0),
+        (BinaryOp::CmpLt, 0.5, -2.0, 0.0),
+        (BinaryOp::CmpLt, 0.5, -0.5, 0.0),
+        (BinaryOp::CmpLt, 0.5, 0.5, 0.0),
+        (BinaryOp::CmpLt, 0.5, 1.0, 1.0),
+        (BinaryOp::CmpLt, 0.5, 2.0, 1.0),
+        (BinaryOp::CmpLt, 0.5, 3.5, 1.0),
+        (BinaryOp::CmpLt, 1.0, -2.0, 0.0),
+        (BinaryOp::CmpLt, 1.0, -0.5, 0.0),
+        (BinaryOp::CmpLt, 1.0, 0.5, 0.0),
+        (BinaryOp::CmpLt, 1.0, 1.0, 0.0),
+        (BinaryOp::CmpLt, 1.0, 2.0, 1.0),
+        (BinaryOp::CmpLt, 1.0, 3.5, 1.0),
+        (BinaryOp::CmpLt, 2.5, -2.0, 0.0),
+        (BinaryOp::CmpLt, 2.5, -0.5, 0.0),
+        (BinaryOp::CmpLt, 2.5, 0.5, 0.0),
+        (BinaryOp::CmpLt, 2.5, 1.0, 0.0),
+        (BinaryOp::CmpLt, 2.5, 2.0, 0.0),
+        (BinaryOp::CmpLt, 2.5, 3.5, 1.0),
+        (BinaryOp::CmpLt, 1.0, 1.0, 0.0),
+        (BinaryOp::CmpLt, 2.0, 2.0, 0.0),
+        (BinaryOp::CmpLe, -3.5, -2.0, 1.0),
+        (BinaryOp::CmpLe, -3.5, -0.5, 1.0),
+        (BinaryOp::CmpLe, -3.5, 0.5, 1.0),
+        (BinaryOp::CmpLe, -3.5, 1.0, 1.0),
+        (BinaryOp::CmpLe, -3.5, 2.0, 1.0),
+        (BinaryOp::CmpLe, -3.5, 3.5, 1.0),
+        (BinaryOp::CmpLe, -1.5, -2.0, 0.0),
+        (BinaryOp::CmpLe, -1.5, -0.5, 1.0),
+        (BinaryOp::CmpLe, -1.5, 0.5, 1.0),
+        (BinaryOp::CmpLe, -1.5, 1.0, 1.0),
+        (BinaryOp::CmpLe, -1.5, 2.0, 1.0),
+        (BinaryOp::CmpLe, -1.5, 3.5, 1.0),
+        (BinaryOp::CmpLe, -0.5, -2.0, 0.0),
+        (BinaryOp::CmpLe, -0.5, -0.5, 1.0),
+        (BinaryOp::CmpLe, -0.5, 0.5, 1.0),
+        (BinaryOp::CmpLe, -0.5, 1.0, 1.0),
+        (BinaryOp::CmpLe, -0.5, 2.0, 1.0),
+        (BinaryOp::CmpLe, -0.5, 3.5, 1.0),
+        (BinaryOp::CmpLe, 0.5, -2.0, 0.0),
+        (BinaryOp::CmpLe, 0.5, -0.5, 0.0),
+        (BinaryOp::CmpLe, 0.5, 0.5, 1.0),
+        (BinaryOp::CmpLe, 0.5, 1.0, 1.0),
+        (BinaryOp::CmpLe, 0.5, 2.0, 1.0),
+        (BinaryOp::CmpLe, 0.5, 3.5, 1.0),
+        (BinaryOp::CmpLe, 1.0, -2.0, 0.0),
+        (BinaryOp::CmpLe, 1.0, -0.5, 0.0),
+        (BinaryOp::CmpLe, 1.0, 0.5, 0.0),
+        (BinaryOp::CmpLe, 1.0, 1.0, 1.0),
+        (BinaryOp::CmpLe, 1.0, 2.0, 1.0),
+        (BinaryOp::CmpLe, 1.0, 3.5, 1.0),
+        (BinaryOp::CmpLe, 2.5, -2.0, 0.0),
+        (BinaryOp::CmpLe, 2.5, -0.5, 0.0),
+        (BinaryOp::CmpLe, 2.5, 0.5, 0.0),
+        (BinaryOp::CmpLe, 2.5, 1.0, 0.0),
+        (BinaryOp::CmpLe, 2.5, 2.0, 0.0),
+        (BinaryOp::CmpLe, 2.5, 3.5, 1.0),
+        (BinaryOp::CmpLe, 1.0, 1.0, 1.0),
+        (BinaryOp::CmpLe, 2.0, 2.0, 1.0),
+        (BinaryOp::CmpGt, -3.5, -2.0, 0.0),
+        (BinaryOp::CmpGt, -3.5, -0.5, 0.0),
+        (BinaryOp::CmpGt, -3.5, 0.5, 0.0),
+        (BinaryOp::CmpGt, -3.5, 1.0, 0.0),
+        (BinaryOp::CmpGt, -3.5, 2.0, 0.0),
+        (BinaryOp::CmpGt, -3.5, 3.5, 0.0),
+        (BinaryOp::CmpGt, -1.5, -2.0, 1.0),
+        (BinaryOp::CmpGt, -1.5, -0.5, 0.0),
+        (BinaryOp::CmpGt, -1.5, 0.5, 0.0),
+        (BinaryOp::CmpGt, -1.5, 1.0, 0.0),
+        (BinaryOp::CmpGt, -1.5, 2.0, 0.0),
+        (BinaryOp::CmpGt, -1.5, 3.5, 0.0),
+        (BinaryOp::CmpGt, -0.5, -2.0, 1.0),
+        (BinaryOp::CmpGt, -0.5, -0.5, 0.0),
+        (BinaryOp::CmpGt, -0.5, 0.5, 0.0),
+        (BinaryOp::CmpGt, -0.5, 1.0, 0.0),
+        (BinaryOp::CmpGt, -0.5, 2.0, 0.0),
+        (BinaryOp::CmpGt, -0.5, 3.5, 0.0),
+        (BinaryOp::CmpGt, 0.5, -2.0, 1.0),
+        (BinaryOp::CmpGt, 0.5, -0.5, 1.0),
+        (BinaryOp::CmpGt, 0.5, 0.5, 0.0),
+        (BinaryOp::CmpGt, 0.5, 1.0, 0.0),
+        (BinaryOp::CmpGt, 0.5, 2.0, 0.0),
+        (BinaryOp::CmpGt, 0.5, 3.5, 0.0),
+        (BinaryOp::CmpGt, 1.0, -2.0, 1.0),
+        (BinaryOp::CmpGt, 1.0, -0.5, 1.0),
+        (BinaryOp::CmpGt, 1.0, 0.5, 1.0),
+        (BinaryOp::CmpGt, 1.0, 1.0, 0.0),
+        (BinaryOp::CmpGt, 1.0, 2.0, 0.0),
+        (BinaryOp::CmpGt, 1.0, 3.5, 0.0),
+        (BinaryOp::CmpGt, 2.5, -2.0, 1.0),
+        (BinaryOp::CmpGt, 2.5, -0.5, 1.0),
+        (BinaryOp::CmpGt, 2.5, 0.5, 1.0),
+        (BinaryOp::CmpGt, 2.5, 1.0, 1.0),
+        (BinaryOp::CmpGt, 2.5, 2.0, 1.0),
+        (BinaryOp::CmpGt, 2.5, 3.5, 0.0),
+        (BinaryOp::CmpGt, 1.0, 1.0, 0.0),
+        (BinaryOp::CmpGt, 2.0, 2.0, 0.0),
+        (BinaryOp::CmpGe, -3.5, -2.0, 0.0),
+        (BinaryOp::CmpGe, -3.5, -0.5, 0.0),
+        (BinaryOp::CmpGe, -3.5, 0.5, 0.0),
+        (BinaryOp::CmpGe, -3.5, 1.0, 0.0),
+        (BinaryOp::CmpGe, -3.5, 2.0, 0.0),
+        (BinaryOp::CmpGe, -3.5, 3.5, 0.0),
+        (BinaryOp::CmpGe, -1.5, -2.0, 1.0),
+        (BinaryOp::CmpGe, -1.5, -0.5, 0.0),
+        (BinaryOp::CmpGe, -1.5, 0.5, 0.0),
+        (BinaryOp::CmpGe, -1.5, 1.0, 0.0),
+        (BinaryOp::CmpGe, -1.5, 2.0, 0.0),
+        (BinaryOp::CmpGe, -1.5, 3.5, 0.0),
+        (BinaryOp::CmpGe, -0.5, -2.0, 1.0),
+        (BinaryOp::CmpGe, -0.5, -0.5, 1.0),
+        (BinaryOp::CmpGe, -0.5, 0.5, 0.0),
+        (BinaryOp::CmpGe, -0.5, 1.0, 0.0),
+        (BinaryOp::CmpGe, -0.5, 2.0, 0.0),
+        (BinaryOp::CmpGe, -0.5, 3.5, 0.0),
+        (BinaryOp::CmpGe, 0.5, -2.0, 1.0),
+        (BinaryOp::CmpGe, 0.5, -0.5, 1.0),
+        (BinaryOp::CmpGe, 0.5, 0.5, 1.0),
+        (BinaryOp::CmpGe, 0.5, 1.0, 0.0),
+        (BinaryOp::CmpGe, 0.5, 2.0, 0.0),
+        (BinaryOp::CmpGe, 0.5, 3.5, 0.0),
+        (BinaryOp::CmpGe, 1.0, -2.0, 1.0),
+        (BinaryOp::CmpGe, 1.0, -0.5, 1.0),
+        (BinaryOp::CmpGe, 1.0, 0.5, 1.0),
+        (BinaryOp::CmpGe, 1.0, 1.0, 1.0),
+        (BinaryOp::CmpGe, 1.0, 2.0, 0.0),
+        (BinaryOp::CmpGe, 1.0, 3.5, 0.0),
+        (BinaryOp::CmpGe, 2.5, -2.0, 1.0),
+        (BinaryOp::CmpGe, 2.5, -0.5, 1.0),
+        (BinaryOp::CmpGe, 2.5, 0.5, 1.0),
+        (BinaryOp::CmpGe, 2.5, 1.0, 1.0),
+        (BinaryOp::CmpGe, 2.5, 2.0, 1.0),
+        (BinaryOp::CmpGe, 2.5, 3.5, 0.0),
+        (BinaryOp::CmpGe, 1.0, 1.0, 1.0),
+        (BinaryOp::CmpGe, 2.0, 2.0, 1.0),
+    ];
+
+    #[test]
+    fn every_unary_op_matches_the_reference_values() {
+        for &(op, x, want) in UNARY {
+            let tol = if op == UnaryOp::Lgamma { 1e-10 } else { 1e-12 };
+            let got = unary_op_f64(op, x);
+            assert!(close(got, want, tol), "{op:?}({x}) = {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn every_binary_op_matches_the_reference_values() {
+        for &(op, a, b, want) in BINARY {
+            let got = binary_op_f64(op, a, b);
+            assert!(
+                close(got, want, 1e-12),
+                "{op:?}({a}, {b}) = {got}, want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn unary_special_values_keep_their_semantics() {
+        // Relu keeps -0.0 and propagates NaN; Sign and Step send NaN to 0.
+        assert_eq!(
+            unary_op_f64(UnaryOp::Relu, -0.0).to_bits(),
+            (-0.0f64).to_bits()
+        );
+        assert!(unary_op_f64(UnaryOp::Relu, f64::NAN).is_nan());
+        assert_eq!(unary_op_f64(UnaryOp::Sign, f64::NAN), 0.0);
+        assert_eq!(unary_op_f64(UnaryOp::Sign, 0.0), 0.0);
+        assert_eq!(unary_op_f64(UnaryOp::Step, 0.0), 0.0);
+        assert_eq!(unary_op_f64(UnaryOp::Step, f64::NAN), 0.0);
+        assert_eq!(unary_op_f64(UnaryOp::Round, 2.5), 2.0);
+        assert_eq!(unary_op_f64(UnaryOp::Round, 3.5), 4.0);
+    }
+
+    #[test]
+    fn max_and_min_propagate_nan_and_keep_a_on_signed_zero_ties() {
+        let neg = -0.0f64;
+        let pos = 0.0f64;
+        assert_eq!(
+            binary_op_f64(BinaryOp::Max, neg, pos).to_bits(),
+            neg.to_bits()
+        );
+        assert_eq!(
+            binary_op_f64(BinaryOp::Max, pos, neg).to_bits(),
+            pos.to_bits()
+        );
+        assert_eq!(
+            binary_op_f64(BinaryOp::Min, neg, pos).to_bits(),
+            neg.to_bits()
+        );
+        assert_eq!(
+            binary_op_f64(BinaryOp::Min, pos, neg).to_bits(),
+            pos.to_bits()
+        );
+        for op in [BinaryOp::Max, BinaryOp::Min] {
+            assert!(binary_op_f64(op, f64::NAN, 1.0).is_nan(), "{op:?} a");
+            assert!(binary_op_f64(op, 1.0, f64::NAN).is_nan(), "{op:?} b");
+        }
+        assert_eq!(binary_op_f64(BinaryOp::FmaxIeee, f64::NAN, 1.0), 1.0);
+        assert_eq!(binary_op_f64(BinaryOp::FminIeee, 1.0, f64::NAN), 1.0);
+        for op in [
+            BinaryOp::CmpEq,
+            BinaryOp::CmpLt,
+            BinaryOp::CmpLe,
+            BinaryOp::CmpGt,
+            BinaryOp::CmpGe,
+        ] {
+            assert_eq!(binary_op_f64(op, f64::NAN, 1.0), 0.0, "{op:?}");
+        }
+        assert_eq!(binary_op_f64(BinaryOp::CmpNe, f64::NAN, 1.0), 1.0);
+    }
+
+    #[test]
+    fn next_after_steps_one_ulp_toward_the_target() {
+        let one = 1.0f64;
+        let eps = f64::EPSILON;
+        assert_eq!(next_after_f64(one, 2.0), one + eps);
+        assert_eq!(next_after_f64(one, 0.0), one - eps / 2.0);
+        assert_eq!(next_after_f64(-one, -2.0), -(one + eps));
+        assert_eq!(next_after_f64(-one, 0.0), -(one - eps / 2.0));
+        assert_eq!(next_after_f64(0.0, 1.0).to_bits(), 1);
+        assert_eq!(next_after_f64(0.0, -1.0).to_bits(), 1 | (1u64 << 63));
+        assert_eq!(next_after_f64(-0.0, 1.0).to_bits(), 1);
+        assert_eq!(next_after_f64(1.0, 1.0), 1.0);
+        assert_eq!(next_after_f64(0.0, -0.0).to_bits(), (-0.0f64).to_bits());
+        assert!(next_after_f64(f64::NAN, 1.0).is_nan());
+        assert!(next_after_f64(1.0, f64::NAN).is_nan());
+
+        let one = 1.0f32;
+        let eps = f32::EPSILON;
+        assert_eq!(next_after_f32(one, 2.0), one + eps);
+        assert_eq!(next_after_f32(one, 0.0), one - eps / 2.0);
+        assert_eq!(next_after_f32(-one, -2.0), -(one + eps));
+        assert_eq!(next_after_f32(-one, 0.0), -(one - eps / 2.0));
+        assert_eq!(next_after_f32(0.0, 1.0).to_bits(), 1);
+        assert_eq!(next_after_f32(0.0, -1.0).to_bits(), 1 | (1u32 << 31));
+        assert_eq!(next_after_f32(1.0, 1.0), 1.0);
+        assert!(next_after_f32(f32::NAN, 1.0).is_nan());
+        assert!(next_after_f32(1.0, f32::NAN).is_nan());
+    }
+
+    #[test]
+    fn integer_bitwise_and_shift_ops_wrap_at_the_promotion_width() {
+        use BinaryOp::*;
+        let i = ElementKind::I32;
+        assert_eq!(binary_op_int(BitAnd, 0b1100, 0b1010, i), 0b1000);
+        assert_eq!(binary_op_int(BitOr, 0b1100, 0b1010, i), 0b1110);
+        assert_eq!(binary_op_int(BitXor, 0b1100, 0b1010, i), 0b0110);
+        assert_eq!(binary_op_int(Shl, 1, 0, i), 1);
+        assert_eq!(binary_op_int(Shl, 1, 31, i), i128::from(i32::MIN));
+        assert_eq!(
+            binary_op_int(Shl, 1, 32, i),
+            0,
+            "b == width is out of range"
+        );
+        assert_eq!(binary_op_int(Shl, 1, -1, i), 0);
+        assert_eq!(
+            binary_op_int(Shr, -8, 1, i),
+            -4,
+            "arithmetic on a signed operand"
+        );
+        assert_eq!(binary_op_int(Shr, -8, 32, i), -1);
+        assert_eq!(binary_op_int(Shr, 8, 32, i), 0);
+        assert_eq!(binary_op_int(Shr, -1, 31, i), -1);
+        assert_eq!(binary_op_int(Shr, 8, 3, i), 1);
+        let u = ElementKind::U32;
+        assert_eq!(binary_op_int(Shl, 1, 31, u), 1 << 31, "zero-extended");
+        assert_eq!(
+            binary_op_int(Shr, 1 << 31, 31, u),
+            1,
+            "logical on an unsigned operand"
+        );
+        assert_eq!(binary_op_int(Shl, 1, 32, u), 0);
+        let l = ElementKind::I64;
+        assert_eq!(binary_op_int(Shl, 1, 32, l), 1 << 32);
+        assert_eq!(binary_op_int(Shl, 1, 63, l), i128::from(i64::MIN));
+        assert_eq!(binary_op_int(Shl, 1, 64, l), 0);
+        assert_eq!(binary_op_int(Shl, 1, 63, ElementKind::U64), 1 << 63);
+        // 8-bit dtypes promote to int: no wrap at 8 bits during the op.
+        assert_eq!(binary_op_int(Shl, 200, 1, ElementKind::U8), 400);
+        for (a, b) in [(0, 0), (0, 5), (5, 0), (5, 7)] {
+            assert_eq!(
+                binary_op_int(LogicalAnd, a, b, i),
+                i128::from(a != 0 && b != 0)
+            );
+            assert_eq!(
+                binary_op_int(LogicalOr, a, b, i),
+                i128::from(a != 0 || b != 0)
+            );
+            assert_eq!(
+                binary_op_int(LogicalXor, a, b, i),
+                i128::from((a != 0) != (b != 0))
+            );
+        }
+    }
+
+    #[test]
+    fn wrapping_extends_per_signedness() {
+        assert_eq!(wrap_bits(255, 8), -1);
+        assert_eq!(wrap_bits(127, 8), 127);
+        assert_eq!(wrap_bits(128, 8), -128);
+        assert_eq!(wrap_bits(i128::MAX, 128), i128::MAX);
+        assert_eq!(wrap_bits(-5, 200), -5);
+        assert_eq!(wrap_for(0xFFFF_FFFF, 32, ElementKind::I32), -1);
+        assert_eq!(wrap_for(-1, 32, ElementKind::U32), 0xFFFF_FFFF);
+        assert_eq!(wrap_for(-1, 64, ElementKind::U64), i128::from(u64::MAX));
+        assert_eq!(wrap_for(-1, 128, ElementKind::U64), -1);
+    }
+
+    #[test]
+    fn integer_extremes_are_the_dtype_limits() {
+        use ElementKind::*;
+        let table: &[(ElementKind, i128, i128)] = &[
+            (I8, i128::from(i8::MIN), i128::from(i8::MAX)),
+            (I16, i128::from(i16::MIN), i128::from(i16::MAX)),
+            (I32, i128::from(i32::MIN), i128::from(i32::MAX)),
+            (I64, i128::from(i64::MIN), i128::from(i64::MAX)),
+            (U8, 0, 255),
+            (Bool, 0, 255),
+            (U16, 0, i128::from(u16::MAX)),
+            (U32, 0, i128::from(u32::MAX)),
+            (U64, 0, i128::from(u64::MAX)),
+        ];
+        for &(dt, lo, hi) in table {
+            assert_eq!(int_extreme(dt, true), lo, "{dt:?} most negative");
+            assert_eq!(int_extreme(dt, false), hi, "{dt:?} most positive");
+        }
+    }
+
+    #[test]
+    fn dense_strides_are_row_major() {
+        assert_eq!(dense_strides(&[2, 3, 4]), vec![12, 4, 1]);
+        assert_eq!(dense_strides(&[5]), vec![1]);
+        assert_eq!(dense_strides(&[]), Vec::<i64>::new());
+    }
+
+    #[test]
+    fn a_buffer_reports_emptiness_and_sub_byte_packing() {
+        assert!(TypedBuffer::from_f64_as(ElementKind::F32, &[0], &[]).is_empty());
+        assert!(!TypedBuffer::from_f64_as(ElementKind::F32, &[1], &[1.0]).is_empty());
+        assert!(is_sub_byte(ElementKind::I4));
+        assert!(is_sub_byte(ElementKind::B1));
+        assert!(!is_sub_byte(ElementKind::U8));
+        assert!(!is_sub_byte(ElementKind::F16));
+    }
+
+    #[test]
+    fn elements_are_stored_at_their_own_offset() {
+        // `i * sz` -> `i / sz` in `from_f64_as`: the second f32 lands at byte 4.
+        let b = TypedBuffer::from_f64_as(ElementKind::F32, &[3], &[1.0, 2.0, 3.0]);
+        let mut want = Vec::new();
+        for v in [1.0f32, 2.0, 3.0] {
+            want.extend_from_slice(&v.to_le_bytes());
+        }
+        assert_eq!(b.bytes, want);
+    }
+
+    #[test]
+    fn sub_byte_writes_touch_only_their_own_bits() {
+        // 4-bit: low nibble first, a write keeps the neighbour.
+        let mut b = [0u8; 2];
+        write_elem(&mut b, 0, ElementKind::U4, 0xF);
+        write_elem(&mut b, 1, ElementKind::U4, 0x3);
+        assert_eq!(b, [0x3F, 0]);
+        write_elem(&mut b, 0, ElementKind::U4, 0x5);
+        assert_eq!(b, [0x35, 0]);
+        write_elem(&mut b, 1, ElementKind::U4, 0xA);
+        assert_eq!(b, [0xA5, 0]);
+        write_elem(&mut b, 2, ElementKind::U4, 0x7);
+        write_elem(&mut b, 3, ElementKind::U4, 0x1);
+        assert_eq!(b, [0xA5, 0x17]);
+        // The value is masked to the nibble.
+        let mut m = [0u8; 1];
+        write_elem(&mut m, 0, ElementKind::U4, 0x1F);
+        assert_eq!(m, [0x0F]);
+        // 1-bit: LSB first, a clear leaves the others.
+        let mut bits = [0u8; 2];
+        for i in [0usize, 2, 3, 8, 9] {
+            write_elem(&mut bits, i, ElementKind::B1, 1);
+        }
+        assert_eq!(bits, [0b0000_1101, 0b0000_0011]);
+        write_elem(&mut bits, 2, ElementKind::B1, 0);
+        assert_eq!(bits, [0b0000_1001, 0b0000_0011]);
+        let mut hi = [0u8; 1];
+        write_elem(&mut hi, 7, ElementKind::B1, 0b11);
+        assert_eq!(hi, [0x80], "masked to one bit");
+        for i in 0..16 {
+            let want = u128::from(i == 0 || i == 3 || i == 8 || i == 9);
+            assert_eq!(read_elem(&bits, i, ElementKind::B1), want, "bit {i}");
+        }
+        assert_eq!(read_elem(&[0xA5], 0, ElementKind::U4), 0x5);
+        assert_eq!(read_elem(&[0xA5], 1, ElementKind::U4), 0xA);
+    }
+}
