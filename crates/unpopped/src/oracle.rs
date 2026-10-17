@@ -6789,4 +6789,157 @@ mod fold_pins {
         let sum = window(ReduceOp::Sum, t, 3, 1, 1, 1, 1, false, 4, 4, i32in(2, &s));
         assert_eq!(i32s(&sum), [3, 6, 9, 7, 30, 60, 90, 70]);
     }
+
+    fn bits(v: &[f32]) -> Vec<u32> {
+        v.iter().map(|x| x.to_bits()).collect()
+    }
+
+    #[test]
+    fn float_max_and_min_keep_the_first_of_two_equal_zeros() {
+        // `-0.0 == 0.0`, so a strict compare keeps the first one seen; `>=`/`<=` would
+        // overwrite it and flip the sign of the result.
+        let f = ElementKind::F32;
+        let neg_first = [-0.0f32, 0.0];
+        let pos_first = [0.0f32, -0.0];
+        let red = |op, d: &[f32]| f32s(&reduce(op, f, f32in(1, d), 1, 2));
+        assert_eq!(bits(&red(ReduceOp::Max, &neg_first)), [(-0.0f32).to_bits()]);
+        assert_eq!(bits(&red(ReduceOp::Min, &pos_first)), [0.0f32.to_bits()]);
+
+        let row = |op, d: &[f32]| row_reduce_one(op, f32in(1, d), 1, 2);
+        assert_eq!(
+            bits(&row(ReduceOp::Max, &neg_first))[0],
+            (-0.0f32).to_bits()
+        );
+        assert_eq!(bits(&row(ReduceOp::Min, &pos_first))[0], 0.0f32.to_bits());
+
+        let sc = |op, d: &[f32]| {
+            let o = OpDef::scan_simple("s", &[f], op, 1, false, false);
+            let ind = desc(&[1, 2], &[2, 1], f);
+            let k = key(OpCategory::Scan, &[ind, ind]);
+            let plan = build_plan(&o, &k);
+            f32s(&evaluate(&plan, &[ind, ind], &[f32in(1, d)], &[]).remove(0))
+        };
+        assert_eq!(
+            bits(&sc(ReduceOp::Max, &neg_first)),
+            [(-0.0f32).to_bits(); 2]
+        );
+        assert_eq!(bits(&sc(ReduceOp::Min, &pos_first)), [0.0f32.to_bits(); 2]);
+
+        // Two taps per window, stride one: windows (x0,x1) and (x1,x2) of each row.
+        let win = |op, d: &[f32]| {
+            let two = [d, d].concat();
+            f32s(&window(
+                op,
+                f,
+                2,
+                1,
+                1,
+                0,
+                0,
+                false,
+                3,
+                2,
+                TypedBuffer::from_f32(&[2, 3], &two),
+            ))
+        };
+        let neg_pos_neg = [-0.0f32, 0.0, -0.0];
+        let pos_neg_pos = [0.0f32, -0.0, 0.0];
+        let first_of_each = [-0.0f32, 0.0, -0.0, 0.0];
+        assert_eq!(
+            bits(&win(ReduceOp::Max, &neg_pos_neg)),
+            bits(&first_of_each)
+        );
+        let first_of_each = [0.0f32, -0.0, 0.0, -0.0];
+        assert_eq!(
+            bits(&win(ReduceOp::Min, &pos_neg_pos)),
+            bits(&first_of_each)
+        );
+    }
+
+    #[test]
+    fn an_average_window_over_only_padding_is_zero_not_nan() {
+        // Two taps three apart with two cells of padding each side: the middle output's
+        // taps (-1 and 2) both miss the two-element row, so its divisor would be 0.
+        let f = ElementKind::F32;
+        let got = f32s(&window(
+            ReduceOp::Mean,
+            f,
+            2,
+            1,
+            3,
+            2,
+            2,
+            false,
+            2,
+            3,
+            TypedBuffer::from_f32(&[2, 2], &[5.0, 7.0, 1.0, 3.0]),
+        ));
+        assert_eq!(got, [7.0, 0.0, 5.0, 3.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn a_per_row_scalar_operand_is_read_once_per_row_in_every_role_based_op() {
+        // `last` (the feature axis) is what tells a per-row scalar ([rows,k] with strides
+        // [1,0]) from a per-column weight; the scalar must be indexed by row.
+        let f = ElementKind::F32;
+        let ind = desc(&[2, 4], &[4, 1], f);
+        let rs = desc(&[2, 4], &[1, 0], f);
+        let k = key(OpCategory::Softmax, &[ind, rs, ind]);
+        let per_row = TypedBuffer::from_f32(&[2], &[100.0, 200.0]);
+        let x = TypedBuffer::from_f32(&[2, 4], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+        let want = [101.0, 102.0, 103.0, 104.0, 205.0, 206.0, 207.0, 208.0];
+
+        let rr = OpDef::row_reduce(
+            "rr",
+            2,
+            &[f, f],
+            vec![ReduceStage {
+                pre: input(0).0,
+                op: ReduceOp::Sum,
+            }],
+            input(0) + input(1),
+        );
+        let plan = build_plan(&rr, &k);
+        let got = evaluate(&plan, &[ind, rs, ind], &[x.clone(), per_row.clone()], &[]);
+        assert_eq!(f32s(&got[0]), want);
+
+        let k = key(OpCategory::Scan, &[ind, rs, ind]);
+        let sc = OpDef::scan(
+            "s",
+            2,
+            &[f, f],
+            ReduceOp::Sum,
+            1,
+            false,
+            false,
+            input(0) + input(1),
+            reduced(0),
+        );
+        let plan = build_plan(&sc, &k);
+        let got = evaluate(&plan, &[ind, rs, ind], &[x.clone(), per_row.clone()], &[]);
+        assert_eq!(
+            f32s(&got[0]),
+            [101.0, 203.0, 306.0, 410.0, 205.0, 411.0, 618.0, 826.0]
+        );
+
+        let k = key(OpCategory::Pooling, &[ind, rs, ind]);
+        let wi = OpDef::window(
+            "w",
+            2,
+            &[f, f],
+            ReduceOp::Sum,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            false,
+            input(0),
+            reduced(0) + input(1),
+        );
+        let plan = build_plan(&wi, &k);
+        let got = evaluate(&plan, &[ind, rs, ind], &[x, per_row], &[]);
+        assert_eq!(f32s(&got[0]), want);
+    }
 }
