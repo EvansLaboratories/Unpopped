@@ -6184,6 +6184,9 @@ mod scalar_math_pins {
         );
         assert_eq!(binary_op_int(Shr, -8, 32, i), -1);
         assert_eq!(binary_op_int(Shr, 8, 32, i), 0);
+        // `a < 0` -> `<=`: a zero operand shifted out of range stays zero.
+        assert_eq!(binary_op_int(Shr, 0, 32, i), 0);
+        assert_eq!(binary_op_int(Shr, 0, -1, i), 0);
         assert_eq!(binary_op_int(Shr, -1, 31, i), -1);
         assert_eq!(binary_op_int(Shr, 8, 3, i), 1);
         let u = ElementKind::U32;
