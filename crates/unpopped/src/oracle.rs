@@ -4979,3 +4979,135 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod codec_pins {
+    //! Pins from the 2026-10-17 mutation audit of this file: the narrow-float encoders.
+    //!
+    //! The fp8 encoders are checked against the DECODERS, which the audit found already
+    //! pinned: for every adjacent pair of representable magnitudes the exact midpoint
+    //! ties to the even pattern, a hair above rounds up and a hair below rounds down.
+    //! The f16 encoder is checked against the `half` crate, a third codec.
+    use super::*;
+
+    fn up(x: f64) -> f64 {
+        f64::from_bits(x.to_bits() + 1)
+    }
+    fn down(x: f64) -> f64 {
+        f64::from_bits(x.to_bits() - 1)
+    }
+
+    /// Walks adjacent magnitude patterns `0..=max_pat`, checking the three rounding
+    /// cases at each midpoint, the exact value, and the sign.
+    fn check_fp8(encode: fn(f64) -> u8, decode: fn(u8) -> f64, max_pat: u8) {
+        for pat in 0..=max_pat {
+            let v = decode(pat);
+            assert_eq!(encode(v), pat, "exact {pat:#04x}");
+            assert_eq!(encode(-v), 0x80 | pat, "negative {pat:#04x}");
+            if pat == max_pat {
+                continue;
+            }
+            let next = decode(pat + 1);
+            let mid = (v + next) / 2.0;
+            let even = if pat % 2 == 0 { pat } else { pat + 1 };
+            assert_eq!(encode(mid), even, "tie at {pat:#04x}");
+            assert_eq!(encode(-mid), 0x80 | even, "negative tie at {pat:#04x}");
+            assert_eq!(encode(up(mid)), pat + 1, "above tie at {pat:#04x}");
+            assert_eq!(encode(down(mid)), pat, "below tie at {pat:#04x}");
+        }
+    }
+
+    #[test]
+    fn e4m3fn_rounds_to_nearest_even_on_every_adjacent_pair() {
+        check_fp8(f64_to_fp8_e4m3fn_bits, fp8_e4m3fn_to_f64, 0x7e);
+    }
+
+    #[test]
+    fn e5m2_rounds_to_nearest_even_on_every_adjacent_pair() {
+        check_fp8(f64_to_fp8_e5m2_bits, fp8_e5m2_to_f64, 0x7b);
+    }
+
+    #[test]
+    fn e4m3fn_saturates_and_keeps_a_nan_sign() {
+        assert_eq!(f64_to_fp8_e4m3fn_bits(448.0), 0x7e);
+        assert_eq!(f64_to_fp8_e4m3fn_bits(449.0), 0x7e);
+        assert_eq!(f64_to_fp8_e4m3fn_bits(1.0e9), 0x7e);
+        assert_eq!(f64_to_fp8_e4m3fn_bits(f64::INFINITY), 0x7e);
+        assert_eq!(f64_to_fp8_e4m3fn_bits(f64::NEG_INFINITY), 0xfe);
+        assert_eq!(f64_to_fp8_e4m3fn_bits(f64::NAN), 0x7f);
+        assert_eq!(f64_to_fp8_e4m3fn_bits(-f64::NAN), 0xff);
+    }
+
+    #[test]
+    fn e5m2_overflows_to_infinity_at_the_halfway_point_and_keeps_a_nan_sign() {
+        assert_eq!(f64_to_fp8_e5m2_bits(57344.0), 0x7b);
+        assert_eq!(f64_to_fp8_e5m2_bits(down(61440.0)), 0x7b);
+        assert_eq!(f64_to_fp8_e5m2_bits(61440.0), 0x7c);
+        assert_eq!(f64_to_fp8_e5m2_bits(1.0e9), 0x7c);
+        assert_eq!(f64_to_fp8_e5m2_bits(f64::INFINITY), 0x7c);
+        assert_eq!(f64_to_fp8_e5m2_bits(f64::NEG_INFINITY), 0xfc);
+        assert_eq!(f64_to_fp8_e5m2_bits(f64::NAN), 0x7f);
+        assert_eq!(f64_to_fp8_e5m2_bits(-f64::NAN), 0xff);
+    }
+
+    #[test]
+    fn f16_encoder_agrees_with_the_half_crate() {
+        let mut probes: Vec<f32> = Vec::new();
+        for bits in 0u16..0x7bff {
+            let v = half::f16::from_bits(bits).to_f32();
+            probes.push(v);
+            probes.push(-v);
+            let next = half::f16::from_bits(bits + 1).to_f32();
+            let mid = ((f64::from(v) + f64::from(next)) / 2.0) as f32;
+            for p in [
+                mid,
+                f32::from_bits(mid.to_bits() + 1),
+                f32::from_bits(mid.to_bits() - 1),
+            ] {
+                probes.push(p);
+                probes.push(-p);
+            }
+        }
+        // Overflow edge and underflow edge, either side of each rounding boundary.
+        for v in [
+            65504.0f32,
+            65519.0,
+            65520.0,
+            65536.0,
+            1.0e10,
+            2.0f32.powi(-24),
+            2.0f32.powi(-25),
+            2.0f32.powi(-26),
+        ] {
+            probes.push(v);
+            probes.push(f32::from_bits(v.to_bits() + 1));
+            probes.push(f32::from_bits(v.to_bits() - 1));
+            probes.push(-v);
+        }
+        let mut x = 0x9e37_79b9u32;
+        for _ in 0..200_000 {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            let f = f32::from_bits(x);
+            if !f.is_nan() {
+                probes.push(f);
+            }
+        }
+        for f in probes {
+            if f.is_nan() {
+                continue;
+            }
+            assert_eq!(
+                f32_to_f16_bits(f),
+                half::f16::from_f32(f).to_bits(),
+                "{f:e} ({:#010x})",
+                f.to_bits()
+            );
+        }
+        assert_eq!(f32_to_f16_bits(f32::INFINITY), 0x7c00);
+        assert_eq!(f32_to_f16_bits(f32::NEG_INFINITY), 0xfc00);
+        assert_eq!(f32_to_f16_bits(f32::NAN) & 0x7fff, 0x7e00);
+        assert_eq!(f32_to_f16_bits(-f32::NAN), 0xfe00);
+    }
+}
