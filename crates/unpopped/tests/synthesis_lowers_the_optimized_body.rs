@@ -61,7 +61,7 @@ fn lowered_body(region: PatternNode) -> String {
         region,
         n_inputs: 1,
         op_category: OpCategory::UnaryElementwise,
-        operands: vec![operand.clone(), operand],
+        operands: vec![operand, operand],
         target: TargetId::parse("cuda:sm89").expect("a hardcoded token is well-formed"),
         fused_op_id: "fused_neg".to_string(),
         budget: JitBudget {

@@ -5287,6 +5287,7 @@ mod contraction_mutation_pins {
     }
 }
 
+#[cfg(test)]
 mod codec_and_helper_pins {
     //! Pins found by the 2026-10-17 mutation audit of this whole file: each test kills
     //! a mutant the suite let survive, named in its comment.
@@ -5525,6 +5526,7 @@ mod codec_and_helper_pins {
     }
 }
 
+#[cfg(test)]
 mod codec_attribution_pins {
     //! Second batch from the 2026-10-17 audit of this file.
     use super::*;
