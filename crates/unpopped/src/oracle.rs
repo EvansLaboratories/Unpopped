@@ -5125,6 +5125,9 @@ mod scalar_math_pins {
     }
 
     /// `(op, x, expected)` from Python's `math`, an implementation independent of the oracle.
+    // Reference outputs that happen to equal a named constant (sqrt(2), e, ln 2) are
+    // still table data, not a use of the constant.
+    #[allow(clippy::approx_constant)]
     const UNARY: &[(UnaryOp, f64, f64)] = &[
         (UnaryOp::Neg, -3.5, 3.5),
         (UnaryOp::Neg, -2.0, 2.0),
@@ -5512,6 +5515,9 @@ mod scalar_math_pins {
     ];
 
     /// `(op, a, b, expected)`, same provenance.
+    // Reference outputs that happen to equal a named constant (sqrt(2), e, ln 2) are
+    // still table data, not a use of the constant.
+    #[allow(clippy::approx_constant)]
     const BINARY: &[(BinaryOp, f64, f64, f64)] = &[
         (BinaryOp::Max, -3.5, -2.0, -2.0),
         (BinaryOp::Max, -3.5, -0.5, -0.5),
