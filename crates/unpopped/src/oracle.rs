@@ -3647,7 +3647,6 @@ mod tests {
         Deferred,
     }
 
-    #[allow(dead_code)]
     fn coverage(a: &Access) -> Coverage {
         match a {
             Access::Elementwise

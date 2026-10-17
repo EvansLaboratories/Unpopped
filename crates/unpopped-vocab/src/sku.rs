@@ -204,8 +204,8 @@ pub enum BackendKind {
 /// `low-5 = slices, high-3 = variant` convention. Each helper takes a
 /// raw slice count in `0..=18` and returns the encoded discriminant.
 ///
-/// ```ignore
-/// use baracuda_kernels_types::{BackendKind, sku::ozaki_slices};
+/// ```
+/// use unpopped_vocab::{BackendKind, sku::ozaki_slices};
 ///
 /// // Original ozIMMU at S=8 (Phase 44b default — equivalent to
 /// // passing `slices: 8` directly).

@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.20.3` — tests and docs only: two `allow(dead_code)` and one ignored doctest removed
+
+CireSnave 5.1g (`#[ignore]` and `#[allow(dead_code)]` are last resorts). `oracle.rs` `coverage`: spurious allow
+removed. `tests/common`: `OtherStub` moved into `provenance.rs`, its only user, so the shared module no longer
+needs a crate-wide `allow(dead_code)`. `sku.rs` `ozaki_slices`: the ```` ```ignore ```` example (it named a crate
+we do not depend on) is a real doctest. No code, no key bytes, no API change. One `#[ignore]` remains
+(`emitted_slang_compiles_with_slangc`), a documented last resort: see `ROADMAP.md` row 1.
+
 ## `0.20.2` — comments only: `rm` is a permission to round, never a requirement
 
 Two comments (the `from_op` bridge in `structure_key.rs`, and `tests/ctr_roles.rs`) said an `f32`
