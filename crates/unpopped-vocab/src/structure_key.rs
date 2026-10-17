@@ -5286,3 +5286,241 @@ mod contraction_mutation_pins {
         );
     }
 }
+
+mod codec_and_helper_pins {
+    //! Pins found by the 2026-10-17 mutation audit of this whole file: each test kills
+    //! a mutant the suite let survive, named in its comment.
+    use super::*;
+    use crate::{ArchSku, ElementKind, OpCategory};
+
+    fn od(shape: &[i64], strides: &[i64]) -> OperandDesc {
+        OperandDesc::new(shape.len(), shape, strides, ElementKind::F32, 256)
+    }
+
+    #[test]
+    fn every_dtype_spelling_round_trips_through_the_codec() {
+        // Deleting any `dtype_from_code` arm turns a spelled dtype into "unknown".
+        use ElementKind::*;
+        for dt in [
+            F16,
+            Bf16,
+            F32,
+            F64,
+            I8,
+            I16,
+            I32,
+            I64,
+            U8,
+            U16,
+            U32,
+            U64,
+            Bool,
+            I4,
+            U4,
+            B1,
+            Complex64,
+            Complex128,
+            F8E6M2,
+            F8E8M0,
+            Fp8E4M3FN,
+            Fp8E4M3FNUZ,
+            Fp8E5M2,
+            Fp8E5M2FNUZ,
+        ] {
+            assert_eq!(dtype_from_code(dtype_code(dt)), Some(dt), "{dt:?}");
+        }
+    }
+
+    #[test]
+    fn every_divisibility_spelling_round_trips() {
+        // Deleting a `div_from_code` arm (d8, d4, d2, da) makes the bucket unparseable.
+        for (code, d) in [
+            ("d16", DivBucket::Div16),
+            ("d8", DivBucket::Div8),
+            ("d4", DivBucket::Div4),
+            ("d2", DivBucket::Div2),
+            ("da", DivBucket::Any),
+        ] {
+            assert_eq!(div_code(d), code);
+            assert_eq!(div_from_code(code), Some(d), "{code}");
+        }
+    }
+
+    #[test]
+    fn every_contiguity_and_divisibility_parses_in_an_operand_field() {
+        // `parse_operand` repeats the contiguity and divisibility tables; deleting
+        // `ic`, `st` or `d2` there rejects a field the writer emits.
+        for contig in ["co", "ic", "st", "br"] {
+            for div in ["d16", "d8", "d4", "d2", "da"] {
+                let field = format!("{contig}/00/v1/{div}/f");
+                assert!(parse_operand(&field).is_some(), "{field}");
+            }
+        }
+    }
+
+    #[test]
+    fn axis_mask_ignores_axis_8_and_above() {
+        // `axis < 8` -> `<=`: shifting a u8 by 8 overflows.
+        let mut m = AxisMask::EMPTY;
+        m.set(8);
+        assert_eq!(m, AxisMask::EMPTY);
+        assert!(!AxisMask(0xFF).is_set(8));
+        assert!(AxisMask(0x80).is_set(7));
+    }
+
+    #[test]
+    fn layout_orders_of_different_rank_or_permutation_differ() {
+        // `eq -> true`, and `&&` -> `||` (equal rank, different permutation).
+        assert_ne!(LayoutOrder::identity(2), LayoutOrder::identity(3));
+        assert_ne!(LayoutOrder::from_perm(&[1, 0]), LayoutOrder::identity(2));
+        assert_eq!(
+            LayoutOrder::from_perm(&[1, 0]),
+            LayoutOrder::from_perm(&[1, 0])
+        );
+    }
+
+    #[test]
+    fn order_digits_decode_only_true_permutations() {
+        // `n == 0 || ..` -> `&&`: an empty order at rank 0.
+        assert_eq!(order_from_digits("", 0), None);
+        // `n > MAX_RANK` -> `==` / `>=`: a nine-axis order is out, an eight-axis one in.
+        assert_eq!(order_from_digits("012345678", 9), None);
+        assert_eq!(
+            order_from_digits("01234567", 8),
+            Some(LayoutOrder::identity(8))
+        );
+        // `1 << d` -> `1 >> d`: the duplicate check needs a distinct bit per digit.
+        assert_eq!(order_from_digits("11", 2), None);
+        assert_eq!(order_from_digits("22", 3), None);
+        assert_eq!(
+            order_from_digits("10", 2),
+            Some(LayoutOrder::from_perm(&[1, 0]))
+        );
+    }
+
+    #[test]
+    fn try_new_bounds_rank_and_slice_lengths() {
+        let f = ElementKind::F32;
+        let long = [1i64; 9];
+        // `rank > MAX_RANK` -> `>=`: rank 8 is legal, rank 9 is not.
+        assert!(OperandDesc::try_new(8, &long, &long, f, 4).is_some());
+        assert!(OperandDesc::try_new(9, &long, &long, f, 4).is_none());
+        // Each `||` term alone, and `<` -> `>`: a too-short shape, a too-short stride list.
+        assert!(OperandDesc::try_new(3, &[1, 2], &[1, 1, 1], f, 4).is_none());
+        assert!(OperandDesc::try_new(3, &[1, 2, 3], &[1, 1], f, 4).is_none());
+        assert!(OperandDesc::try_new(2, &[1, 2, 3], &[1, 1, 1], f, 4).is_some());
+    }
+
+    #[test]
+    fn only_a_gemm_declares_a_weight() {
+        // `contraction_declared && len >= 2` -> `||`.
+        let a = od(&[8, 16], &[16, 1]);
+        let b = od(&[16, 4], &[4, 1]);
+        let c = od(&[8, 4], &[4, 1]);
+        assert_eq!(
+            CellFacts::from_op(OpCategory::BinaryElementwise, &[a, b, c]).weight_operand,
+            None
+        );
+        assert_eq!(
+            CellFacts::from_op(OpCategory::Gemm, &[a]).weight_operand,
+            None
+        );
+        assert_eq!(
+            CellFacts::from_op(OpCategory::Gemm, &[a, b, c]).weight_operand,
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn a_declared_weight_must_name_an_input() {
+        // `weight + 1 >= len` -> `-` / `*`: the output slot is not a weight.
+        let a = od(&[8, 16], &[16, 1]);
+        let b = od(&[16, 4], &[4, 1]);
+        let c = od(&[8, 4], &[4, 1]);
+        assert!(derive_contraction(OpCategory::Gemm, &[a, b, c], 1).is_some());
+        assert!(derive_contraction(OpCategory::Gemm, &[a, b, c], 2).is_none());
+        assert!(derive_contraction(OpCategory::Gemm, &[a, b, c], 3).is_none());
+    }
+
+    #[test]
+    fn reduce_axes_are_derived_only_for_a_keepdim_reduction() {
+        let x = od(&[4, 8], &[8, 1]);
+        let keep = od(&[4, 1], &[1, 1]);
+        assert_eq!(
+            derive_reduce_axes(OpCategory::Reduction, &[x, keep]),
+            AxisMask(0b10)
+        );
+        // `op != Reduction || ..` -> `&&`: another op over the same shapes derives nothing.
+        assert_eq!(
+            derive_reduce_axes(OpCategory::BinaryElementwise, &[x, keep]),
+            AxisMask::EMPTY
+        );
+        // `len < 2` -> `>`: three operands are still a reduction (input first, output last).
+        assert_eq!(
+            derive_reduce_axes(OpCategory::Reduction, &[x, x, keep]),
+            AxisMask(0b10)
+        );
+        // `shape > 1` -> `>=`: an input axis of extent 1 is not a reduced axis.
+        let thin = od(&[4, 1], &[1, 1]);
+        assert_eq!(
+            derive_reduce_axes(OpCategory::Reduction, &[thin, keep]),
+            AxisMask::EMPTY
+        );
+    }
+
+    #[test]
+    fn inner_axis_is_the_last_axis_of_extent_above_one() {
+        // `-> Some(1)`, and `> 1` -> `>= 1`.
+        assert_eq!(inner_axis(&od(&[4, 1], &[1, 1])), Some(0));
+        assert_eq!(inner_axis(&od(&[3, 4], &[4, 1])), Some(1));
+        assert_eq!(inner_axis(&od(&[4], &[1])), Some(0));
+        assert_eq!(inner_axis(&od(&[1, 1], &[1, 1])), None);
+    }
+
+    #[test]
+    fn a_rank_1_operand_is_right_aligned_in_the_frame() {
+        // `i - off` -> `i + off`: the operand's own axis for frame axis i is i - off.
+        let wide = od(&[4, 8], &[8, 1]);
+        let bias_bcast = od(&[8], &[0]);
+        let bias_dense = od(&[8], &[1]);
+        let frame = Frame::of(&[wide, bias_bcast]);
+        // The absent leading axis counts as stride 0; the stride-0 own axis is axis 1.
+        assert_eq!(frame.broadcast_mask(&bias_bcast), AxisMask(0b11));
+        assert_eq!(frame.broadcast_mask(&bias_dense), AxisMask(0b01));
+    }
+
+    #[test]
+    fn an_out_of_range_reduced_axis_is_reported_at_its_own_position() {
+        // `&` -> `|` in the reported axis: bit 0 is in range at rank 2, bit 2 is not.
+        let a = od(&[4, 8], &[8, 1]);
+        let mut facts = CellFacts::new();
+        facts.reduced_axes = AxisMask(0b101);
+        assert_eq!(
+            derive_structure_key(&[a, a], &facts, ArchSku::Sm89),
+            Err(DeriveDecline::ReducedAxisOutOfRange { axis: 2 })
+        );
+    }
+
+    #[test]
+    fn a_decline_displays_something() {
+        // `fmt -> Ok(Default::default())` writes nothing.
+        let s = DeriveDecline::ReducedAxisOutOfRange { axis: 2 }.to_string();
+        assert!(s.contains('2'), "{s}");
+    }
+
+    #[test]
+    fn a_64_bit_index_cell_and_a_rank_8_cell_round_trip_through_a_token() {
+        // Deleting the `ix64` arm; `rank > MAX_RANK` -> `>=`.
+        let t = "sk6|ew1|f32|cuda:sm89|ix64|grid|r1|co/00/v1/da/f|-";
+        let k = StructureKey::from_token(t).expect("ix64 parses");
+        assert_eq!(k.to_token(), t);
+        let shape = [2i64; 8];
+        let mut strides = [1i64; 8];
+        for i in (0..7).rev() {
+            strides[i] = strides[i + 1] * 2;
+        }
+        let a = OperandDesc::new(8, &shape, &strides, ElementKind::F32, 256);
+        let k8 = structure_key(OpCategory::UnaryElementwise, &[a, a], ArchSku::Sm89);
+        assert_eq!(StructureKey::from_token(&k8.to_token()), Some(k8));
+    }
+}
