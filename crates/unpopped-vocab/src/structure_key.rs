@@ -5524,3 +5524,36 @@ mod codec_and_helper_pins {
         assert_eq!(StructureKey::from_token(&k8.to_token()), Some(k8));
     }
 }
+
+mod codec_attribution_pins {
+    //! Second batch from the 2026-10-17 audit of this file.
+    use super::*;
+
+    #[test]
+    fn a_reserved_dtype_in_a_contraction_group_is_named_not_merely_malformed() {
+        // `Some(dt) if dt.is_reserved()` -> `false` falls through to `Ok`, so the
+        // decline loses its §6.1-0001 attribution. One reserved spelling per slot.
+        for field in [
+            "ca/b/f8e4m3fnuz/f32/f32/st",
+            "ca/b/f32/f8e4m3fnuz/f32/st",
+            "ca/b/f32/f32/f8e4m3fnuz/st",
+        ] {
+            assert_eq!(
+                attribute_bad_contraction(field),
+                Err(TokenDecline::ReservedDtype {
+                    spelling: "f8e4m3fnuz".to_string()
+                }),
+                "{field}"
+            );
+        }
+        // Control: the same field with no reserved dtype is not attributed.
+        assert_eq!(attribute_bad_contraction("ca/b/f32/f32/f32/st"), Ok(()));
+    }
+
+    #[test]
+    fn a_reduced_set_at_rank_zero_has_no_sentinel_spelling() {
+        // `rank > 0` -> `>=`: at rank 0 the sentinel arithmetic underflows.
+        assert_eq!(reduce_field_code(AxisMask(0b1), 0), "x01");
+        assert_eq!(reduce_field_code(AxisMask::EMPTY, 0), "-");
+    }
+}
