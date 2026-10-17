@@ -5115,3 +5115,174 @@ mod tests {
         let _ = StructureKey::from_token(&gp.join("|"));
     }
 }
+
+#[cfg(test)]
+mod contraction_mutation_pins {
+    //! Pins found by the 2026-10-17 mutation audit of the contraction checks: each test
+    //! kills a mutant the suite let survive, named in its comment.
+    use super::*;
+    use crate::{ArchSku, ElementKind, OpCategory};
+
+    #[test]
+    fn the_accumulator_lattice_is_f64_i32_f32() {
+        // Deleting the `F64` arm or the integer arm falls through to `f32`.
+        assert_eq!(contraction_acc(ElementKind::F64), ElementKind::F64);
+        for dt in [
+            ElementKind::I8,
+            ElementKind::U8,
+            ElementKind::I4,
+            ElementKind::U4,
+            ElementKind::B1,
+        ] {
+            assert_eq!(contraction_acc(dt), ElementKind::I32, "{dt:?}");
+        }
+        for dt in [ElementKind::F32, ElementKind::F16, ElementKind::Bf16] {
+            assert_eq!(contraction_acc(dt), ElementKind::F32, "{dt:?}");
+        }
+    }
+
+    #[test]
+    fn the_legacy_bridge_keys_an_f64_gemm_at_an_f64_accumulator() {
+        let lhs = OperandDesc::new(2, &[8, 16], &[16, 1], ElementKind::F64, 256);
+        let rhs = OperandDesc::new(2, &[16, 4], &[4, 1], ElementKind::F64, 256);
+        let out = OperandDesc::new(2, &[8, 4], &[4, 1], ElementKind::F64, 256);
+        let key = structure_key(OpCategory::Gemm, &[lhs, rhs, out], ArchSku::Sm89);
+        let c = key.contraction.expect("a dense f64 gemm is a contraction");
+        assert_eq!(c.acc, ElementKind::F64);
+    }
+
+    #[test]
+    fn the_legacy_bridge_derives_no_contraction_from_five_operands() {
+        // `||` -> `&&` on the arity gate: five operands is neither `[lhs, rhs, out]`
+        // nor `[lhs, rhs, bias, out]`, and must not read the fifth as the output.
+        let lhs = OperandDesc::new(2, &[8, 16], &[16, 1], ElementKind::F32, 256);
+        let rhs = OperandDesc::new(2, &[16, 4], &[4, 1], ElementKind::F32, 256);
+        let out = OperandDesc::new(2, &[8, 4], &[4, 1], ElementKind::F32, 256);
+        let bias = OperandDesc::new(1, &[4], &[1], ElementKind::F32, 256);
+        let key = structure_key(
+            OpCategory::Gemm,
+            &[lhs, rhs, bias, bias, out],
+            ArchSku::Sm89,
+        );
+        assert!(key.contraction.is_none(), "five operands are no gemm shape");
+    }
+
+    fn od(shape: &[i64], strides: &[i64]) -> OperandDesc {
+        OperandDesc::new(shape.len(), shape, strides, ElementKind::F32, 256)
+    }
+
+    fn gemm_has_contraction(lhs: OperandDesc, rhs: OperandDesc, out: OperandDesc) -> bool {
+        structure_key(OpCategory::Gemm, &[lhs, rhs, out], ArchSku::Sm89)
+            .contraction
+            .is_some()
+    }
+
+    #[test]
+    fn the_legacy_bridge_refuses_a_gemm_whose_operand_ranks_disagree() {
+        // `||` -> `&&` on the rank-agreement gate: either of rhs/out alone differing.
+        let (lhs, rhs, out) = (
+            od(&[8, 16], &[16, 1]),
+            od(&[16, 4], &[4, 1]),
+            od(&[8, 4], &[4, 1]),
+        );
+        assert!(
+            gemm_has_contraction(lhs, rhs, out),
+            "control: agreeing ranks"
+        );
+        let rhs3 = od(&[16, 4, 1], &[4, 1, 1]);
+        assert!(!gemm_has_contraction(lhs, rhs3, out), "rhs rank differs");
+        let out3 = od(&[8, 4, 1], &[4, 1, 1]);
+        assert!(!gemm_has_contraction(lhs, rhs, out3), "out rank differs");
+    }
+
+    #[test]
+    fn the_legacy_bridge_refuses_a_rank_2_output_that_is_not_dense_row_major() {
+        // `&&` -> `||` in `dense`: each stride wrong alone.
+        let (lhs, rhs) = (od(&[8, 16], &[16, 1]), od(&[16, 4], &[4, 1]));
+        assert!(
+            gemm_has_contraction(lhs, rhs, od(&[8, 4], &[4, 1])),
+            "control"
+        );
+        assert!(
+            !gemm_has_contraction(lhs, rhs, od(&[8, 4], &[5, 1])),
+            "row stride"
+        );
+        assert!(
+            !gemm_has_contraction(lhs, rhs, od(&[8, 4], &[4, 2])),
+            "column stride"
+        );
+    }
+
+    #[test]
+    fn the_legacy_bridge_refuses_a_rank_3_gemm_one_disagreement_at_a_time() {
+        // Every term of the rank-3 refusal chain, failing alone while all the others
+        // hold: the chain is `||`, so each alone must refuse (a `||` -> `&&` mutant
+        // needs two to fail at once).
+        let lhs = od(&[2, 8, 16], &[128, 16, 1]);
+        let rhs = od(&[2, 16, 4], &[64, 4, 1]);
+        let out = od(&[2, 8, 4], &[32, 4, 1]);
+        assert!(
+            gemm_has_contraction(lhs, rhs, out),
+            "control: all terms hold"
+        );
+        assert!(
+            !gemm_has_contraction(lhs, od(&[3, 16, 4], &[64, 4, 1]), out),
+            "batch of lhs != batch of rhs"
+        );
+        assert!(
+            !gemm_has_contraction(lhs, od(&[2, 15, 4], &[60, 4, 1]), out),
+            "K of lhs != K of rhs"
+        );
+        assert!(
+            !gemm_has_contraction(lhs, rhs, od(&[3, 8, 4], &[32, 4, 1])),
+            "out batch != batch"
+        );
+        assert!(
+            !gemm_has_contraction(lhs, rhs, od(&[2, 7, 4], &[28, 4, 1])),
+            "out M != M"
+        );
+        assert!(
+            !gemm_has_contraction(lhs, rhs, od(&[2, 8, 5], &[40, 5, 1])),
+            "out N != N"
+        );
+    }
+
+    #[test]
+    fn the_legacy_bridge_refuses_a_fused_bias_that_is_not_a_dense_column_vector() {
+        // `||` -> `&&` in the bias check: each of rank, extent and stride wrong alone.
+        let (lhs, rhs, out) = (
+            od(&[8, 16], &[16, 1]),
+            od(&[16, 4], &[4, 1]),
+            od(&[8, 4], &[4, 1]),
+        );
+        let with_bias = |bias| {
+            structure_key(OpCategory::Gemm, &[lhs, rhs, bias, out], ArchSku::Sm89).contraction
+        };
+        assert!(
+            with_bias(od(&[4], &[1])).is_some(),
+            "control: dense [N] bias"
+        );
+        assert!(with_bias(od(&[4, 1], &[1, 1])).is_none(), "rank 2");
+        assert!(with_bias(od(&[5], &[1])).is_none(), "extent != N");
+        assert!(with_bias(od(&[4], &[2])).is_none(), "strided");
+    }
+
+    #[test]
+    fn the_legacy_bridge_refuses_a_rank_3_output_that_is_not_dense_row_major() {
+        // `&&` -> `||` in `dense3`, and `!dense3` as the last term: each stride alone.
+        let lhs = od(&[2, 8, 16], &[128, 16, 1]);
+        let rhs = od(&[2, 16, 4], &[64, 4, 1]);
+        assert!(
+            !gemm_has_contraction(lhs, rhs, od(&[2, 8, 4], &[31, 4, 1])),
+            "batch stride"
+        );
+        assert!(
+            !gemm_has_contraction(lhs, rhs, od(&[2, 8, 4], &[32, 5, 1])),
+            "row stride"
+        );
+        assert!(
+            !gemm_has_contraction(lhs, rhs, od(&[2, 8, 4], &[32, 4, 2])),
+            "column stride"
+        );
+    }
+}

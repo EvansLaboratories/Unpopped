@@ -15,6 +15,13 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.20.4` — tests only: mutation audit of the contraction and plan checks
+
+`cargo-mutants` 27.1.0 over `check_contraction`, `validate_contraction_roles`, `contraction_epilogue_admissible`,
+`ContractionDecline`/`PlanError`, `ContractionRoles`, the contraction keyer and the legacy bridge. Survivors became pin tests
+(`plan::contraction_check_pins`, `structure_key::contraction_mutation_pins`); the proven-equivalent ones are listed in the
+PR. No code, no key bytes, no API change.
+
 ## `0.20.3` — tests and docs only: two `allow(dead_code)` and one ignored doctest removed
 
 CireSnave 5.1g (`#[ignore]` and `#[allow(dead_code)]` are last resorts). `oracle.rs` `coverage`: spurious allow

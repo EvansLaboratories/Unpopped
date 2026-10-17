@@ -6722,3 +6722,89 @@ mod half_arith_tests {
         assert_eq!(build_plan(&op, &k89).half_arith(), HalfArith::Native);
     }
 }
+
+#[cfg(test)]
+mod contraction_check_pins {
+    //! Pins found by the 2026-10-17 mutation audit of the contraction checks: each test
+    //! kills a mutant the suite let survive, named in its comment.
+    use super::{contraction_epilogue_admissible as adm, validate_contraction_roles as roles};
+    use crate::ir::{AxisRole::*, ContractionAxes, ScalarExpr as E};
+
+    fn sel(c: E, a: E, b: E) -> E {
+        E::Select(Box::new(c), Box::new(a), Box::new(b))
+    }
+
+    #[test]
+    fn a_fused_bias_leaf_is_input_2_up_to_but_excluding_n_inputs() {
+        // `*i < n_inputs` -> `<=`: Input(n_inputs) is one past the last operand.
+        assert!(adm(&E::Input(2), 3));
+        assert!(!adm(&E::Input(3), 3), "Input(n_inputs) names no operand");
+        assert!(
+            !adm(&E::Input(2), 2),
+            "a bias-free contraction admits no Input"
+        );
+        assert!(!adm(&E::Input(1), 3), "rhs is consumed by the contraction");
+    }
+
+    #[test]
+    fn select_admits_only_when_all_three_children_do() {
+        // `&&` -> `||` on each of the two joins: a bad child in each position alone.
+        let ok = || E::Const(1.0);
+        let bad = || E::Input(0);
+        assert!(adm(&sel(ok(), ok(), ok()), 2));
+        assert!(!adm(&sel(bad(), ok(), ok()), 2), "bad condition");
+        assert!(!adm(&sel(ok(), bad(), ok()), 2), "bad then-arm");
+        assert!(!adm(&sel(ok(), ok(), bad()), 2), "bad else-arm");
+    }
+
+    #[test]
+    fn a_role_vector_of_the_wrong_length_names_its_length_on_either_side() {
+        // `||` -> `&&` on the length check: with only one side wrong the later checks
+        // would refuse it too, but under a different message.
+        let msg = "role vector length must equal operand rank";
+        let lhs_long = ContractionAxes {
+            lhs: vec![FreeM, ContractedK, Batch],
+            rhs: vec![ContractedK, FreeN],
+        };
+        assert_eq!(roles(&lhs_long, 2, 2).unwrap_err(), msg);
+        let rhs_long = ContractionAxes {
+            lhs: vec![FreeM, ContractedK],
+            rhs: vec![ContractedK, FreeN, Batch],
+        };
+        assert_eq!(roles(&rhs_long, 2, 2).unwrap_err(), msg);
+    }
+
+    #[test]
+    fn an_operand_without_a_contracted_k_is_refused_as_such_on_either_side() {
+        // `||` -> `&&` on the K-count check: with only one side lacking K the batch
+        // checks below would refuse it too, but under a different message.
+        let msg = "v1: exactly one ContractedK per operand (multi-group deferred)";
+        let lhs_no_k = ContractionAxes {
+            lhs: vec![FreeM, Batch],
+            rhs: vec![ContractedK, FreeN],
+        };
+        assert_eq!(roles(&lhs_no_k, 2, 2).unwrap_err(), msg);
+        let rhs_no_k = ContractionAxes {
+            lhs: vec![FreeM, ContractedK],
+            rhs: vec![Batch, FreeN],
+        };
+        assert_eq!(roles(&rhs_no_k, 2, 2).unwrap_err(), msg);
+    }
+
+    #[test]
+    fn a_rank_4_operand_on_either_side_is_refused_as_a_rank() {
+        // `||` -> `&&` on the rank check: the batch-count check would refuse a lone
+        // rank-4 side too, but as a batch disagreement, not as a rank.
+        let msg = "v1: contraction operands must be rank-2 or rank-3";
+        let lhs4 = ContractionAxes {
+            lhs: vec![Batch, Batch, FreeM, ContractedK],
+            rhs: vec![ContractedK, FreeN],
+        };
+        assert_eq!(roles(&lhs4, 4, 2).unwrap_err(), msg);
+        let rhs4 = ContractionAxes {
+            lhs: vec![FreeM, ContractedK],
+            rhs: vec![Batch, Batch, ContractedK, FreeN],
+        };
+        assert_eq!(roles(&rhs4, 2, 4).unwrap_err(), msg);
+    }
+}
