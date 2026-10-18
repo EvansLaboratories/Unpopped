@@ -15,6 +15,17 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.20.6` — fix: the Im2Col, Window and row-sort gates no longer read a size-1 axis as a broadcast
+
+`build_plan` panicked ("output must be forward-dense contiguous" / "input 0 must be a full dense tensor") for ordinary shapes:
+an Im2Col with batch 1 beside two or more channels, a single-channel batch (N ≥ 2, C = 1), a Window pooling a row to one
+element (a global pool), and a top-1 / arg-max row sort. The key's broadcast mask is over the iteration frame, and an own
+axis of extent 1 beside a wider frame axis counts as stride 0 there, so the gates' `bcast.is_empty()` clauses rejected dense
+tensors. The clauses are removed: `contig` already reads `Broadcast` for a genuine stride-0 axis of extent > 1, so the
+dense-layout clause alone rejects every operand that is not dense. Found while pinning `eval_im2col` (mutation audit of
+`oracle.rs`). Gates only loosen: every plan that built before still builds, and no key bytes change. The emitters have not been
+exercised on the newly admitted shapes.
+
 ## `0.20.5` — tests only: mutation audit of `structure_key.rs` and `oracle.rs`, clusters 1 and 2
 
 `cargo-mutants` 27.1.0. Two earlier test-only PRs merged to `main` **without a version bump**, so `main` stayed at `0.20.4`; their
