@@ -7052,3 +7052,153 @@ mod im2col_pins {
         run([2, 2, 4, 3], (2, 2), (1, 1), (1, 1), (1, 1), 5);
     }
 }
+
+#[cfg(test)]
+mod compare_pins {
+    //! Pins from the 2026-10-18 mutation audit of this file: `compare`.
+    //!
+    //! Every case states which message it expects, because `compare` returns the SAME `Err`
+    //! type for every rejection and a mutant that swaps one rejection for another still
+    //! returns `Err`.
+    use super::*;
+
+    fn tol(rel: f64, abs: f64) -> Fidelity {
+        Fidelity::Tolerant { rel, abs }
+    }
+
+    fn err(e: &TypedBuffer, a: &TypedBuffer, f: Fidelity) -> String {
+        compare(e, a, f).expect_err("expected a mismatch")
+    }
+
+    #[test]
+    fn a_bit_exact_mismatch_names_the_first_differing_element() {
+        let e = TypedBuffer::from_f32(&[3], &[1.0, 2.0, 3.0]);
+        let a = TypedBuffer::from_f32(&[3], &[1.0, 9.0, 3.0]);
+        let msg = err(&e, &a, Fidelity::BitExact);
+        assert!(msg.starts_with("bit-exact mismatch at element 1:"), "{msg}");
+        assert!(
+            msg.contains(&format!(
+                "0x{:x} vs 0x{:x}",
+                2.0f32.to_bits(),
+                9.0f32.to_bits()
+            )),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn equal_elements_with_unequal_bytes_report_a_byte_length_mismatch() {
+        let mut long = 1.0f32.to_le_bytes().to_vec();
+        long.extend_from_slice(&2.0f32.to_le_bytes());
+        let mut longer = long.clone();
+        longer.extend_from_slice(&[0, 0, 0, 0]);
+        let mk = |bytes: Vec<u8>| TypedBuffer::new(ElementKind::F32, vec![2], vec![1], bytes);
+        assert_eq!(
+            err(&mk(long), &mk(longer), Fidelity::BitExact),
+            "byte-length mismatch"
+        );
+    }
+
+    #[test]
+    fn complex_equal_infinities_match_and_unequal_ones_do_not() {
+        let inf = f32::INFINITY;
+        let a = TypedBuffer::from_complex64(&[1], &[(inf, 1.0)]);
+        assert!(compare(&a, &a, tol(0.0, 0.0)).is_ok());
+        let b = TypedBuffer::from_complex64(&[1], &[(1.0, 1.0)]);
+        // With a relative band an infinite operand would swallow any mismatch, so the
+        // rejection has to name the infinity, not fall through to the band test.
+        let msg = err(&a, &b, tol(0.5, 0.0));
+        assert!(msg.contains("infinity mismatch at element 0 (re)"), "{msg}");
+        let msg = err(&b, &a, tol(0.5, 0.0));
+        assert!(msg.contains("infinity mismatch at element 0 (re)"), "{msg}");
+        let c = TypedBuffer::from_complex64(&[1], &[(1.0, f32::NEG_INFINITY)]);
+        let msg = err(&b, &c, tol(0.5, 0.0));
+        assert!(msg.contains("infinity mismatch at element 0 (im)"), "{msg}");
+    }
+
+    #[test]
+    fn complex_nan_matches_only_nan() {
+        let nan = f32::NAN;
+        let a = TypedBuffer::from_complex64(&[1], &[(nan, 0.0)]);
+        let b = TypedBuffer::from_complex64(&[1], &[(1.0, 0.0)]);
+        assert!(compare(&a, &a, tol(0.0, 0.0)).is_ok());
+        assert!(compare(&a, &b, tol(1.0, 1.0)).is_err());
+        assert!(compare(&b, &a, tol(1.0, 1.0)).is_err());
+    }
+
+    #[test]
+    fn the_complex_band_is_abs_plus_rel_times_the_larger_magnitude_per_component() {
+        // |d| = 0.5, band = 0.1 + 0.01 * 100.5 = 1.105 for the real part.
+        let e = TypedBuffer::from_complex64(&[1], &[(100.0, 100.0)]);
+        let near = TypedBuffer::from_complex64(&[1], &[(100.5, 100.0)]);
+        assert!(compare(&e, &near, tol(0.01, 0.1)).is_ok());
+        let near_im = TypedBuffer::from_complex64(&[1], &[(100.0, 100.5)]);
+        assert!(compare(&e, &near_im, tol(0.01, 0.1)).is_ok());
+        // |d| = 2 is outside it, in either component, and the message names the part.
+        let far = TypedBuffer::from_complex64(&[1], &[(102.0, 100.0)]);
+        assert!(err(&e, &far, tol(0.01, 0.1)).contains("tolerance mismatch at element 0 (re)"));
+        let far_im = TypedBuffer::from_complex64(&[1], &[(100.0, 102.0)]);
+        assert!(err(&e, &far_im, tol(0.01, 0.1)).contains("(im)"));
+    }
+
+    #[test]
+    fn the_integer_band_is_abs_plus_rel_times_the_larger_magnitude() {
+        // |d| = 10, band = 1 + 0.01 * 1010 = 11.1.
+        let e = TypedBuffer::from_i32(&[1], &[1000]);
+        let a = TypedBuffer::from_i32(&[1], &[1010]);
+        assert!(compare(&e, &a, tol(0.01, 1.0)).is_ok());
+        assert!(compare(&a, &e, tol(0.01, 1.0)).is_ok());
+        // |d| = 12 is outside it.
+        let far = TypedBuffer::from_i32(&[1], &[1012]);
+        assert!(err(&e, &far, tol(0.01, 1.0)).contains("tolerance mismatch at element 0"));
+        assert!(compare(&e, &far, tol(0.0, 0.0)).is_err());
+    }
+
+    #[test]
+    fn mixed_int_and_float_buffers_compare_through_the_float_projection() {
+        // Both sides must be integer to take the exact path; one integer side is a float
+        // comparison, not a panic in `to_i128_vec`.
+        let i = TypedBuffer::from_i32(&[2], &[1, 2]);
+        let f = TypedBuffer::from_f32(&[2], &[1.0, 2.0]);
+        assert!(compare(&i, &f, tol(0.0, 0.0)).is_ok());
+        assert!(compare(&f, &i, tol(0.0, 0.0)).is_ok());
+    }
+
+    // A complex buffer against a real one is a misuse the comparator does not support. It must
+    // still go down the real projection (which refuses complex), not the component-wise path
+    // (whose own assertion would blame the real buffer instead).
+    #[test]
+    #[should_panic(expected = "raw_to_f64 on unsupported dtype")]
+    fn a_complex_expected_against_a_real_actual_takes_the_real_projection() {
+        let c = TypedBuffer::from_complex64(&[1], &[(1.0, 0.0)]);
+        let f = TypedBuffer::from_f32(&[1], &[1.0]);
+        let _ = compare(&c, &f, tol(0.0, 0.0));
+    }
+
+    #[test]
+    #[should_panic(expected = "raw_to_f64 on unsupported dtype")]
+    fn a_real_expected_against_a_complex_actual_takes_the_real_projection() {
+        let c = TypedBuffer::from_complex64(&[1], &[(1.0, 0.0)]);
+        let f = TypedBuffer::from_f32(&[1], &[1.0]);
+        let _ = compare(&f, &c, tol(0.0, 0.0));
+    }
+
+    #[test]
+    fn float_nan_matches_only_nan() {
+        let n = TypedBuffer::from_f32(&[1], &[f32::NAN]);
+        let one = TypedBuffer::from_f32(&[1], &[1.0]);
+        assert!(compare(&n, &n, tol(0.0, 0.0)).is_ok());
+        assert!(compare(&n, &one, tol(1.0, 1.0)).is_err());
+        assert!(compare(&one, &n, tol(1.0, 1.0)).is_err());
+    }
+
+    #[test]
+    fn the_float_band_is_abs_plus_rel_times_the_larger_magnitude() {
+        let e = TypedBuffer::from_f64(&[1], &[100.0]);
+        let near = TypedBuffer::from_f64(&[1], &[100.5]);
+        assert!(compare(&e, &near, tol(0.01, 0.1)).is_ok());
+        assert!(compare(&near, &e, tol(0.01, 0.1)).is_ok());
+        let far = TypedBuffer::from_f64(&[1], &[102.0]);
+        assert!(err(&e, &far, tol(0.01, 0.1)).contains("tolerance mismatch at element 0"));
+    }
+}
