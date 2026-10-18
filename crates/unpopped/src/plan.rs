@@ -3620,9 +3620,12 @@ fn validate_window(
     // The output is full-width forward-dense contiguous (a DOWNSAMPLED extent — the
     // caller sizes it via the window formula, a runtime precondition — but the same
     // layout class as the input's inner axis).
+    // Not `out.bcast`: the key's mask is over the iteration frame, so a size-1 own axis
+    // (a global pool, a top-1) beside a wider input reads as broadcast. `contig` is
+    // `Broadcast` for a genuine stride-0 axis of extent > 1, so it alone rejects those.
     let out = key.operands[n];
     assert!(
-        out.bcast.is_empty() && out.contig == Contiguity::Contig && !out.flipped,
+        out.contig == Contiguity::Contig && !out.flipped,
         "Window output must be full-width forward-dense contiguous (empty bcast, not flipped)"
     );
 
@@ -3750,11 +3753,6 @@ fn validate_im2col(
         !in0.flipped,
         "Im2Col '{name}': input 0 must not be reversed along an axis (a flipped view \
          reads mirrored/OOB source coords)"
-    );
-    assert!(
-        in0.bcast.is_empty(),
-        "Im2Col '{name}': input 0 must be a full dense tensor (no broadcast axis — \
-         every NCHW coordinate is read at a real stride)"
     );
 
     // G3 — output rank-3 forward-dense. Only LAYOUT is keyed (the expanded extent
@@ -3974,16 +3972,19 @@ fn validate_row_sort(
     // Output layout: full-width forward-dense contiguous. G3: output 0 (out for
     // Values/Indices, out_val for Both) always; and for Both, operand 2 (out_idx)
     // too — it is written forward-dense out_idx[base + r/p].
+    // Not `out.bcast`: the key's mask is over the iteration frame, so a size-1 own axis
+    // (a global pool, a top-1) beside a wider input reads as broadcast. `contig` is
+    // `Broadcast` for a genuine stride-0 axis of extent > 1, so it alone rejects those.
     let out0 = key.operands[n];
     assert!(
-        out0.bcast.is_empty() && out0.contig == Contiguity::Contig && !out0.flipped,
+        out0.contig == Contiguity::Contig && !out0.flipped,
         "OpDef '{name}': row_sort output must be forward-dense contiguous (empty \
          bcast, not flipped); the width may be < the input for a TopK cap"
     );
     if matches!(out, SortOut::Both) {
         let out_idx = key.operands[n + 1];
         assert!(
-            out_idx.bcast.is_empty() && out_idx.contig == Contiguity::Contig && !out_idx.flipped,
+            out_idx.contig == Contiguity::Contig && !out_idx.flipped,
             "OpDef '{name}': row_sort Both out_idx (operand 2) must be forward-dense \
              contiguous (empty bcast, not flipped); width may be < input for a TopK cap"
         );
@@ -5376,6 +5377,28 @@ mod window_gate_validate {
     }
 
     #[test]
+    fn a_window_that_pools_a_row_to_one_element_builds() {
+        // A global pool: the output row has extent 1 beside an input row of 128. The key's
+        // mask is over the iteration frame, so that size-1 own axis reads as broadcast
+        // though the output is a dense [256,1]; the gate must admit it.
+        let a = OperandDesc::new(2, &[256, 128], &[128, 1], ElementKind::F32, 256);
+        let o = OperandDesc::new(2, &[256, 1], &[1, 1], ElementKind::F32, 256);
+        let key = structure_key(OpCategory::UnaryElementwise, &[a, o], ArchSku::Sm89);
+        let p = pool(
+            ReduceOp::Mean,
+            ElementKind::F32,
+            1,
+            128,
+            128,
+            1,
+            0,
+            0,
+            false,
+        );
+        let _ = build_plan(&p, &key);
+    }
+
+    #[test]
     fn valid_window_builds_all_combines_and_geometry() {
         // Max/Min/Sum/Mean × a spread of stride/dilation/pad build; the schedule is
         // the pooling Window on the innermost axis (rank-1 = 1).
@@ -5828,6 +5851,19 @@ mod im2col_gate_validate {
     }
 
     #[test]
+    fn im2col_builds_a_single_channel_batch() {
+        // N = 2, C = 1: the input's channel axis has extent 1 beside a frame axis of 2
+        // (the output's batch axis lands there), so its mask bit is set though no axis is
+        // broadcast. Single-channel batches (MNIST-shaped) are ordinary.
+        let p = im2col((3, 3), (1, 1), (0, 0), (1, 1));
+        let a = OperandDesc::new(4, &[2, 1, 4, 4], &[16, 16, 4, 1], ElementKind::F32, 256);
+        let o = OperandDesc::new(3, &[2, 9, 4], &[36, 4, 1], ElementKind::F32, 256);
+        let key = structure_key(OpCategory::UnaryElementwise, &[a, o], ArchSku::Sm89);
+        let plan = build_plan(&p, &key);
+        assert!(matches!(plan.access, Access::Im2Col { .. }));
+    }
+
+    #[test]
     fn im2col_builds_every_dtype() {
         // A pure raw-bit gather is dtype-agnostic — f32/f64/f16/bf16/i32/i64 all build.
         for dt in [
@@ -5873,6 +5909,18 @@ mod im2col_gate_validate {
     fn im2col_rejects_rank3_input() {
         // A rank-3 input drops key.rank below 4 (the input is the widest operand).
         let a = OperandDesc::new(3, &[2, 3, 16], &[48, 16, 1], ElementKind::F32, 256);
+        let o = OperandDesc::new(3, &[2, 8, 8], &[64, 8, 1], ElementKind::F32, 256);
+        let key = structure_key(OpCategory::UnaryElementwise, &[a, o], ArchSku::Sm89);
+        let p = im2col((3, 3), (1, 1), (1, 1), (1, 1));
+        let _ = build_plan(&p, &key);
+    }
+
+    #[test]
+    #[should_panic(expected = "input 0 must be dense contiguous NCHW")]
+    fn im2col_rejects_a_broadcast_input() {
+        // A stride-0 axis of extent > 1 reads `Broadcast`, not `Contig`: the dense-input
+        // clause alone rejects it (the key's frame mask is not consulted).
+        let a = OperandDesc::new(4, &[2, 3, 4, 4], &[0, 16, 4, 1], ElementKind::F32, 256);
         let o = OperandDesc::new(3, &[2, 8, 8], &[64, 8, 1], ElementKind::F32, 256);
         let key = structure_key(OpCategory::UnaryElementwise, &[a, o], ArchSku::Sm89);
         let p = im2col((3, 3), (1, 1), (1, 1), (1, 1));
@@ -6429,6 +6477,14 @@ mod sort_gate_validate {
     // extent — there is NO plan-time `k_out <= k_in` assert (none is expressible;
     // the key carries no numeric extents); the shrink is admitted because the
     // layout gate is width-agnostic.
+    #[test]
+    fn a_top_one_cell_builds() {
+        // k = 1 (an arg-max): both outputs have extent 1 beside an input row of 128. The
+        // key's frame mask reads that size-1 own axis as broadcast; the outputs are dense.
+        let key = topk_key(ElementKind::F32, 1);
+        let _ = build_plan(&OpDef::row_topk("topk", ElementKind::F32), &key);
+    }
+
     #[test]
     fn topk_both_cell_builds() {
         for (sc, want_order) in [
