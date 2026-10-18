@@ -7459,3 +7459,106 @@ mod arith_pins {
         assert_eq!(steps(&chain(2).select(chain(3), chain(1))), 6);
     }
 }
+
+#[cfg(test)]
+mod encode_pins {
+    //! Pins from the 2026-10-18 mutation audit of this file: the storage encoders
+    //! (`encode_int`, `encode_float`, `encode_complex`, `encode_int_as_complex`), the
+    //! `Val::complex` projection and `unit_roundoff`.
+    use super::*;
+
+    #[test]
+    fn unit_roundoff_is_half_an_epsilon_of_the_compute_precision() {
+        let f64_u = 2f64.powi(-53);
+        let f32_u = 2f64.powi(-24);
+        assert_eq!(unit_roundoff(ElementKind::F64), f64_u);
+        assert_eq!(unit_roundoff(ElementKind::Complex128), f64_u);
+        // Every narrow float computes in f32, so it shares f32's roundoff.
+        for dt in [
+            ElementKind::F32,
+            ElementKind::Complex64,
+            ElementKind::F16,
+            ElementKind::Bf16,
+            ElementKind::Fp8E4M3FN,
+            ElementKind::Fp8E5M2,
+        ] {
+            assert_eq!(unit_roundoff(dt), f32_u, "{dt:?}");
+        }
+    }
+
+    #[test]
+    fn a_complex_pattern_has_the_real_part_low_and_the_imaginary_part_high() {
+        let c64 = encode_complex(1.5, -2.5, ElementKind::Complex64);
+        assert_eq!(c64 & 0xffff_ffff, u128::from(1.5f32.to_bits()));
+        assert_eq!(c64 >> 32, u128::from((-2.5f32).to_bits()));
+        let c128 = encode_complex(1.5, -2.5, ElementKind::Complex128);
+        assert_eq!(c128 & u128::from(u64::MAX), u128::from(1.5f64.to_bits()));
+        assert_eq!(c128 >> 64, u128::from((-2.5f64).to_bits()));
+        // A one-sided value shows each half is kept, not merged or swapped.
+        assert_eq!(
+            encode_complex(0.0, 1.0, ElementKind::Complex64),
+            u128::from(1.0f32.to_bits()) << 32
+        );
+        assert_eq!(
+            encode_complex(1.0, 0.0, ElementKind::Complex128),
+            u128::from(1.0f64.to_bits())
+        );
+    }
+
+    #[test]
+    fn an_integer_widens_to_a_complex_with_a_zero_imaginary_part() {
+        assert_eq!(
+            encode_int_as_complex(3, ElementKind::Complex64),
+            u128::from(3.0f32.to_bits())
+        );
+        assert_eq!(
+            encode_int_as_complex(-2, ElementKind::Complex128),
+            u128::from((-2.0f64).to_bits())
+        );
+    }
+
+    #[test]
+    fn val_complex_projects_each_raw_domain_to_a_pair() {
+        assert_eq!(
+            Val::Raw(u128::from(1.5f32.to_bits()), ElementKind::F32).complex(),
+            (1.5, 0.0)
+        );
+        assert_eq!(
+            Val::Raw(u128::from((-5i32) as u32), ElementKind::I32).complex(),
+            (-5.0, 0.0)
+        );
+        assert_eq!(
+            Val::Raw(
+                encode_complex(1.5, -2.5, ElementKind::Complex64),
+                ElementKind::Complex64
+            )
+            .complex(),
+            (1.5, -2.5)
+        );
+        assert_eq!(Val::Float(2.5).complex(), (2.5, 0.0));
+        assert_eq!(Val::Int(-7).complex(), (-7.0, 0.0));
+    }
+
+    #[test]
+    fn four_bit_and_one_bit_encoders_keep_only_their_own_bits() {
+        for dt in [ElementKind::I4, ElementKind::U4] {
+            assert_eq!(encode_int(-3, dt), 0xd, "{dt:?}");
+            assert_eq!(encode_int(0x1f, dt), 0xf, "{dt:?}");
+            assert_eq!(encode_int(0x10, dt), 0, "{dt:?}");
+            assert_eq!(encode_float(-3.0, dt), 0xd, "{dt:?}");
+            assert_eq!(encode_float(18.0, dt), 2, "{dt:?}");
+            assert_eq!(encode_float(3.0, dt), 3, "{dt:?}");
+        }
+        assert_eq!(encode_int(3, ElementKind::B1), 1);
+        assert_eq!(encode_int(2, ElementKind::B1), 0);
+        assert_eq!(encode_int(-1, ElementKind::B1), 1);
+    }
+
+    #[test]
+    fn a_one_bit_float_encoder_is_nonzero_ness() {
+        assert_eq!(encode_float(2.0, ElementKind::B1), 1);
+        assert_eq!(encode_float(-0.5, ElementKind::B1), 1);
+        assert_eq!(encode_float(0.0, ElementKind::B1), 0);
+        assert_eq!(encode_float(-0.0, ElementKind::B1), 0);
+    }
+}
