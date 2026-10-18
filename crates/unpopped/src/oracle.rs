@@ -7562,3 +7562,212 @@ mod encode_pins {
         assert_eq!(encode_float(-0.0, ElementKind::B1), 0);
     }
 }
+
+#[cfg(test)]
+mod plumbing_pins {
+    //! Pins from the 2026-10-18 mutation audit of this file: the value plumbing around
+    //! the evaluators (`raw_sign_masks`, `round_to_compute`, `unravel`, `store_val`,
+    //! `alloc_output`) and the `Neg` / `Abs` / `Select` arms of `eval`.
+    use super::*;
+    use crate::ir::{Expr, OpDef, UnaryOp, input, konst};
+    use crate::plan::build_plan;
+    use unpopped_vocab::{ArchSku, OpCategory, structure_key};
+
+    #[test]
+    fn only_the_narrow_floats_have_sign_masks() {
+        for dt in [ElementKind::Fp8E4M3FN, ElementKind::Fp8E5M2] {
+            assert_eq!(raw_sign_masks(dt), Some((0x80, 0x7f)), "{dt:?}");
+        }
+        for dt in [ElementKind::F16, ElementKind::Bf16] {
+            assert_eq!(raw_sign_masks(dt), Some((0x8000, 0x7fff)), "{dt:?}");
+        }
+        for dt in [ElementKind::F32, ElementKind::F64, ElementKind::I32] {
+            assert_eq!(raw_sign_masks(dt), None, "{dt:?}");
+        }
+    }
+
+    #[test]
+    fn round_to_compute_rounds_through_the_compute_dtype_and_leaves_f64_alone() {
+        // 0.1 is not an f32; the compute dtype's nearest value is what comes back.
+        assert_eq!(round_to_compute(0.1, ElementKind::F32), f64::from(0.1f32));
+        assert_eq!(
+            round_to_compute(0.1, ElementKind::F32Strict),
+            f64::from(0.1f32)
+        );
+        // Below f32's range the value underflows to zero; above f16's it overflows.
+        assert_eq!(round_to_compute(1e-60, ElementKind::F32), 0.0);
+        assert_eq!(round_to_compute(1e6, ElementKind::F16), f64::INFINITY);
+        assert_eq!(round_to_compute(1.00390625, ElementKind::Bf16), 1.0);
+        assert_eq!(round_to_compute(0.1, ElementKind::F64), 0.1);
+        assert_eq!(round_to_compute(1e-60, ElementKind::F64), 1e-60);
+    }
+
+    #[test]
+    fn unravel_is_last_axis_fastest() {
+        assert_eq!(unravel(0, &[2, 3]), vec![0, 0]);
+        assert_eq!(unravel(4, &[2, 3]), vec![1, 1]);
+        assert_eq!(unravel(5, &[2, 3]), vec![1, 2]);
+        assert_eq!(unravel(23, &[2, 3, 4]), vec![1, 2, 3]);
+        assert_eq!(unravel(17, &[2, 3, 4]), vec![1, 1, 1]);
+        assert_eq!(unravel(7, &[8]), vec![7]);
+    }
+
+    fn stored(v: Val, out: ElementKind) -> u128 {
+        let mut buf = vec![0u8; elem_size(out)];
+        store_val(v, out, &mut buf, 0);
+        read_elem(&buf, 0, out)
+    }
+
+    #[test]
+    fn a_raw_value_of_the_output_dtype_is_stored_verbatim() {
+        // A signaling NaN's payload cannot survive the f64 detour, only a verbatim move.
+        assert_eq!(
+            stored(Val::Raw(0x7c01, ElementKind::F16), ElementKind::F16),
+            0x7c01
+        );
+        assert_eq!(
+            stored(Val::Raw(0xfd, ElementKind::Fp8E5M2), ElementKind::Fp8E5M2),
+            0xfd
+        );
+    }
+
+    #[test]
+    fn a_raw_value_of_another_dtype_is_converted_not_moved() {
+        // f32 1.0 into an f16 slot is 0x3c00, not the f32 pattern truncated.
+        assert_eq!(
+            stored(
+                Val::Raw(u128::from(1.0f32.to_bits()), ElementKind::F32),
+                ElementKind::F16
+            ),
+            0x3c00
+        );
+        // An integer raw value into an integer slot wraps to the slot's width.
+        assert_eq!(stored(Val::Raw(300, ElementKind::I32), ElementKind::I8), 44);
+        // A float raw value into an integer slot goes through the float->integer path.
+        assert_eq!(
+            stored(
+                Val::Raw(u128::from(7.0f32.to_bits()), ElementKind::F32),
+                ElementKind::I32
+            ),
+            7
+        );
+    }
+
+    #[test]
+    fn a_real_value_stored_to_a_complex_dtype_gets_a_zero_imaginary_part() {
+        assert_eq!(
+            stored(Val::Float(2.5), ElementKind::Complex64),
+            u128::from(2.5f32.to_bits())
+        );
+        assert_eq!(
+            stored(Val::Int(3), ElementKind::Complex128),
+            u128::from(3.0f64.to_bits())
+        );
+        assert_eq!(
+            stored(Val::Complex(1.0, -2.0), ElementKind::Complex64),
+            encode_complex(1.0, -2.0, ElementKind::Complex64)
+        );
+    }
+
+    fn buf(dt: ElementKind, bits: &[u16]) -> TypedBuffer {
+        let bytes: Vec<u8> = if elem_size(dt) == 1 {
+            bits.iter().map(|&b| b as u8).collect()
+        } else {
+            bits.iter().flat_map(|b| b.to_le_bytes()).collect()
+        };
+        TypedBuffer::new(dt, vec![bits.len() as i64], vec![1], bytes)
+    }
+
+    fn run_unary(dt: ElementKind, op: UnaryOp, bits: &[u16]) -> Vec<u16> {
+        let e: Expr = input(0).unary(op);
+        let o = OpDef::elementwise("u", 1, &[dt], e);
+        let n = bits.len() as i64;
+        let d = OperandDesc::new(1, &[n], &[1], dt, 256);
+        let k = structure_key(OpCategory::UnaryElementwise, &[d, d], ArchSku::Sm89);
+        let plan = build_plan(&o, &k);
+        let out = evaluate(&plan, &[d, d], &[buf(dt, bits)], &[]);
+        (0..bits.len()).map(|i| out[0].bits_at(i) as u16).collect()
+    }
+
+    #[test]
+    fn neg_and_abs_edit_only_the_sign_bit_of_a_narrow_float() {
+        // (dtype, 1.0, -1.0, NaN with a payload, the same NaN negated)
+        let cases = [
+            (ElementKind::Fp8E5M2, 0x3c_u16, 0xbc_u16, 0x7d_u16, 0xfd_u16),
+            (ElementKind::F16, 0x3c00, 0xbc00, 0x7c01, 0xfc01),
+            (ElementKind::Bf16, 0x3f80, 0xbf80, 0x7f81, 0xff81),
+        ];
+        for (dt, one, neg_one, nan, neg_nan) in cases {
+            let ins = [one, neg_one, nan, neg_nan];
+            assert_eq!(
+                run_unary(dt, UnaryOp::Neg, &ins),
+                vec![neg_one, one, neg_nan, nan],
+                "neg {dt:?}"
+            );
+            assert_eq!(
+                run_unary(dt, UnaryOp::Abs, &ins),
+                vec![one, one, nan, nan],
+                "abs {dt:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn select_tests_the_condition_in_the_compute_dtype() {
+        // cond = in2 * in3; in f64 the product 1e-60 is nonzero, but in the compute dtype
+        // (f32) it underflows to zero, so the emitter's cast-then-compare picks the else arm.
+        let body = (input(2) * input(3)).select(input(0), input(1));
+        let o = OpDef::elementwise("sel", 4, &[ElementKind::F32], body);
+        let d = OperandDesc::new(1, &[5], &[1], ElementKind::F32, 256);
+        let k = structure_key(OpCategory::BinaryElementwise, &[d; 5], ArchSku::Sm89);
+        let plan = build_plan(&o, &k);
+        let f = |v: &[f32]| TypedBuffer::from_f32(&[5], v);
+        // conds: 1*1 (true), 0*1 (false), -0*1 (false), NaN*1 (true), 1e-30*1e-30 (false)
+        let ins = [
+            f(&[10.0; 5]),
+            f(&[20.0; 5]),
+            f(&[1.0, 0.0, -0.0, f32::NAN, 1e-30]),
+            f(&[1.0, 1.0, 1.0, 1.0, 1e-30]),
+        ];
+        let out = evaluate(&plan, &[d; 5], &ins, &[]);
+        let got: Vec<f32> = (0..5)
+            .map(|i| f32::from_bits(out[0].bits_at(i) as u32))
+            .collect();
+        assert_eq!(got, vec![10.0, 20.0, 20.0, 10.0, 20.0]);
+    }
+
+    #[test]
+    fn each_output_of_a_multi_output_op_gets_its_own_operand_layout() {
+        // One broadcast (stride-0) input beside two dense outputs: output 1's layout must
+        // come from its own descriptor, not from the input's.
+        let o = OpDef::elementwise_multi(
+            "two",
+            1,
+            &[ElementKind::F32],
+            vec![input(0) + konst(1.0), input(0) * konst(2.0)],
+        );
+        let i = OperandDesc::new(1, &[3], &[0], ElementKind::F32, 256);
+        let d = OperandDesc::new(1, &[3], &[1], ElementKind::F32, 256);
+        let k = structure_key(OpCategory::BinaryElementwise, &[i, d, d], ArchSku::Sm89);
+        let plan = build_plan(&o, &k);
+        let ins = [TypedBuffer::new(
+            ElementKind::F32,
+            vec![3],
+            vec![0],
+            4.0f32.to_le_bytes().to_vec(),
+        )];
+        let out = evaluate(&plan, &[i, d, d], &ins, &[]);
+        assert_eq!(out.len(), 2);
+        for b in &out {
+            assert_eq!(b.strides, vec![1]);
+            assert_eq!(b.shape, vec![3]);
+        }
+        let f = |b: &TypedBuffer| -> Vec<f32> {
+            (0..3)
+                .map(|i| f32::from_bits(b.bits_at(i) as u32))
+                .collect()
+        };
+        assert_eq!(f(&out[0]), vec![5.0; 3]);
+        assert_eq!(f(&out[1]), vec![8.0; 3]);
+    }
+}
