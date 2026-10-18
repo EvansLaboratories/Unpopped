@@ -7395,3 +7395,67 @@ mod binary_pins {
         }
     }
 }
+
+#[cfg(test)]
+mod arith_pins {
+    //! Pins from the 2026-10-18 mutation audit of this file: `arith_steps`.
+    //!
+    //! Every operand count is distinct (1, 2, 3, 5), so a sum that became a difference or a
+    //! product cannot land on the right total by coincidence.
+    use super::*;
+    use crate::ir::{BinaryOp, Expr, konst, param, reduced};
+    use crate::ir::{coord, input};
+
+    fn steps(e: &Expr) -> u32 {
+        arith_steps(&e.0)
+    }
+
+    /// An expression of exactly `n` arithmetic steps: a chain of square roots over a leaf.
+    fn chain(n: u32) -> Expr {
+        (0..n).fold(input(0), |e, _| e.sqrt())
+    }
+
+    #[test]
+    fn leaves_cost_nothing() {
+        for e in [input(0), konst(1.0), param(0), reduced(0), coord(0)] {
+            assert_eq!(steps(&e), 0);
+        }
+    }
+
+    #[test]
+    fn an_infix_node_costs_one_plus_both_operands() {
+        // 1 + 2 + 3 = 6 for each of the four infix ops, with the larger chain on either side.
+        for build in [
+            |a: Expr, b: Expr| a + b,
+            |a: Expr, b: Expr| a - b,
+            |a: Expr, b: Expr| a * b,
+            |a: Expr, b: Expr| a / b,
+        ] {
+            assert_eq!(steps(&build(chain(2), chain(3))), 6);
+            assert_eq!(steps(&build(chain(3), chain(2))), 6);
+        }
+    }
+
+    #[test]
+    fn a_named_binary_node_costs_one_plus_both_operands() {
+        for op in [BinaryOp::Max, BinaryOp::Pow, BinaryOp::Atan2] {
+            assert_eq!(steps(&chain(2).binary(op, chain(3))), 6, "{op:?}");
+            assert_eq!(steps(&chain(3).binary(op, chain(2))), 6, "{op:?}");
+        }
+    }
+
+    #[test]
+    fn a_unary_node_costs_one_plus_its_operand() {
+        assert_eq!(steps(&chain(1)), 1);
+        assert_eq!(steps(&chain(5)), 5);
+        assert_eq!(steps(&chain(3).sqrt()), 4);
+    }
+
+    #[test]
+    fn a_select_costs_only_its_three_subexpressions() {
+        // 1 + 2 + 3 = 6 with no step of its own.
+        assert_eq!(steps(&chain(1).select(chain(2), chain(3))), 6);
+        assert_eq!(steps(&chain(3).select(chain(1), chain(2))), 6);
+        assert_eq!(steps(&chain(2).select(chain(3), chain(1))), 6);
+    }
+}
