@@ -7771,3 +7771,181 @@ mod plumbing_pins {
         assert_eq!(f(&out[1]), vec![8.0; 3]);
     }
 }
+
+#[cfg(test)]
+mod walk_pins {
+    //! Pins from the 2026-10-18 mutation audit of this file: the index and layout
+    //! arithmetic of the walkers (`eval_row_sort`, `eval_elementwise` gather/scatter,
+    //! `eval_reduction`) and the dtype test in `required_fidelity`.
+    use super::*;
+    use crate::ir::{BinaryOp, OobPolicy, OpDef, ReduceOp, SortOrder, input};
+    use crate::plan::build_plan;
+    use unpopped_vocab::{ArchSku, AxisMask, OpCategory, structure_key};
+
+    fn desc(shape: &[i64], strides: &[i64], dt: ElementKind) -> OperandDesc {
+        OperandDesc::new(shape.len(), shape, strides, dt, 256)
+    }
+
+    fn f32s(b: &TypedBuffer) -> Vec<f32> {
+        (0..b.len())
+            .map(|i| f32::from_bits(b.bits_at(i) as u32))
+            .collect()
+    }
+
+    fn i32s(b: &TypedBuffer) -> Vec<i32> {
+        (0..b.len()).map(|i| b.bits_at(i) as u32 as i32).collect()
+    }
+
+    #[test]
+    fn a_top_k_sort_with_both_outputs_sizes_each_output_from_its_own_operand() {
+        // Two rows of five, keeping two: each output row is two wide, so the second row
+        // starts at element 2 of BOTH outputs. Sizing the index output from the input
+        // operand (width 5) would put row 1 at element 5.
+        let ind = desc(&[2, 5], &[5, 1], ElementKind::F32);
+        let vals = desc(&[2, 2], &[2, 1], ElementKind::F32);
+        let idxs = desc(&[2, 2], &[2, 1], ElementKind::I32);
+        let op = OpDef::row_sort_indices("both", ElementKind::F32, SortOrder::Desc);
+        let k = structure_key(OpCategory::Sorting, &[ind, vals, idxs], ArchSku::Sm89);
+        let out = evaluate(
+            &build_plan(&op, &k),
+            &[ind, vals, idxs],
+            &[TypedBuffer::from_f32(
+                &[2, 5],
+                &[3.0, 1.0, 4.0, 1.5, 9.0, 2.0, 8.0, 6.0, 7.0, 5.0],
+            )],
+            &[],
+        );
+        assert_eq!(out.len(), 2);
+        assert_eq!(f32s(&out[0]), vec![9.0, 4.0, 8.0, 7.0]);
+        assert_eq!(i32s(&out[1]), vec![4, 2, 1, 3]);
+    }
+
+    #[test]
+    fn a_skipping_gather_writes_nothing_for_an_index_outside_the_axis() {
+        // Extent 4: 3 and 0 are the in-range ends, -1 and 4 are the first indices outside.
+        let d = desc(&[1, 4], &[4, 1], ElementKind::F32);
+        let i = desc(&[1, 4], &[4, 1], ElementKind::I32);
+        let op = OpDef::gather(
+            "gs",
+            &[ElementKind::F32],
+            1,
+            OobPolicy::Skip,
+            ElementKind::I32,
+        );
+        let k = structure_key(OpCategory::UnaryElementwise, &[d, i, d], ArchSku::Sm89);
+        let out = evaluate(
+            &build_plan(&op, &k),
+            &[d, i, d],
+            &[
+                TypedBuffer::from_f32(&[1, 4], &[10.0, 20.0, 30.0, 40.0]),
+                TypedBuffer::new(
+                    ElementKind::I32,
+                    vec![1, 4],
+                    vec![4, 1],
+                    [3i32, -1, 4, 0]
+                        .iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .collect(),
+                ),
+            ],
+            &[],
+        );
+        assert_eq!(f32s(&out[0]), vec![40.0, 0.0, 0.0, 10.0]);
+    }
+
+    #[test]
+    fn a_scatter_walks_the_value_operand_even_when_the_index_is_longer() {
+        // The value operand (slot 0) has three elements; the index operand has four. The walk
+        // is over the value operand's extent, so the fourth index is never read.
+        let src = desc(&[1, 3], &[3, 1], ElementKind::I32);
+        let idx = desc(&[1, 4], &[4, 1], ElementKind::I32);
+        let dst = desc(&[1, 2], &[2, 1], ElementKind::I32);
+        let op = OpDef::scatter_add("sl", &[ElementKind::I32], 1, ElementKind::I32);
+        let k = structure_key(
+            OpCategory::UnaryElementwise,
+            &[src, idx, dst],
+            ArchSku::Sm89,
+        );
+        let ib = |shape: &[i64], v: &[i32]| {
+            TypedBuffer::new(
+                ElementKind::I32,
+                shape.to_vec(),
+                vec![shape[1], 1],
+                v.iter().flat_map(|x| x.to_le_bytes()).collect(),
+            )
+        };
+        let out = evaluate(
+            &build_plan(&op, &k),
+            &[src, idx, dst],
+            &[ib(&[1, 3], &[5, 6, 7]), ib(&[1, 4], &[0, 1, 0, 1])],
+            &[],
+        );
+        assert_eq!(i32s(&out[0]), vec![12, 6]);
+    }
+
+    fn sum_over_middle(keepdim: bool) -> Vec<f32> {
+        // [2,3,2] summed over axis 1: out[a][c] = sum_b data[a][b][c].
+        let ind = desc(&[2, 3, 2], &[6, 2, 1], ElementKind::F32);
+        let outd = if keepdim {
+            desc(&[2, 1, 2], &[2, 2, 1], ElementKind::F32)
+        } else {
+            desc(&[2, 2], &[2, 1], ElementKind::F32)
+        };
+        let op = OpDef::reduction_axes(
+            "mid",
+            1,
+            &[ElementKind::F32],
+            input(0),
+            ReduceOp::Sum,
+            AxisMask(0b010),
+            keepdim,
+        );
+        let k = structure_key(OpCategory::Reduction, &[ind, outd], ArchSku::Sm89);
+        let data: Vec<f32> = (1..=12).map(|v| v as f32).collect();
+        let out = evaluate(
+            &build_plan(&op, &k),
+            &[ind, outd],
+            &[TypedBuffer::from_f32(&[2, 3, 2], &data)],
+            &[],
+        );
+        f32s(&out[0])
+    }
+
+    #[test]
+    fn a_middle_axis_reduction_places_each_result_by_the_output_strides() {
+        let want = vec![9.0, 12.0, 27.0, 30.0];
+        assert_eq!(sum_over_middle(false), want, "collapsed");
+        assert_eq!(sum_over_middle(true), want, "keepdim");
+    }
+
+    #[test]
+    fn a_mask_output_beside_a_float_value_is_not_an_integer_cell() {
+        // The key dtype is f32 and output 0 is a u8 predicate mask: only one side is
+        // integer, so the cell is tolerance-compared, not bit-exact.
+        let op = OpDef::elementwise_multi_hetero(
+            "mask",
+            2,
+            &[ElementKind::F32],
+            vec![
+                (
+                    input(0).binary(BinaryOp::CmpLt, input(1)),
+                    Some(ElementKind::U8),
+                ),
+                (input(0) + input(1), None),
+            ],
+        );
+        let f = desc(&[4], &[1], ElementKind::F32);
+        let u = desc(&[4], &[1], ElementKind::U8);
+        let ops = [f, f, u, f];
+        let k = structure_key(OpCategory::BinaryElementwise, &ops, ArchSku::Sm89);
+        let plan = build_plan(&op, &k);
+        assert!(
+            matches!(
+                required_fidelity(&plan, &ops),
+                Some(Fidelity::Tolerant { .. })
+            ),
+            "{:?}",
+            required_fidelity(&plan, &ops)
+        );
+    }
+}
