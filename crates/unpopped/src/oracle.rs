@@ -7202,3 +7202,196 @@ mod compare_pins {
         assert!(err(&e, &far, tol(0.01, 0.1)).contains("tolerance mismatch at element 0"));
     }
 }
+
+#[cfg(test)]
+mod binary_pins {
+    //! Pins from the 2026-10-18 mutation audit of this file: `eval_binary`.
+    //!
+    //! The bit-preserving `Copysign` / `Max` / `Min` path on a narrow float moves the winner's
+    //! RAW bits, so every case here is read back as storage bits, not as a value: the `f64`
+    //! detour agrees with it on every ordinary number and loses only a NaN's payload and
+    //! (for a tie) which zero was kept.
+    use super::*;
+    use crate::ir::{OpDef, input};
+    use crate::plan::build_plan;
+    use unpopped_vocab::{ArchSku, OpCategory, structure_key};
+
+    // (dtype, 1.0, 2.0, -2.0, +0.0, -0.0, a NaN payload that `f64` cannot carry)
+    struct Fmt {
+        dt: ElementKind,
+        one: u16,
+        two: u16,
+        neg_two: u16,
+        pos_zero: u16,
+        neg_zero: u16,
+        nan: u16,
+        neg_nan: u16,
+    }
+
+    const FORMATS: [Fmt; 4] = [
+        // e5m2: s eeeee mm; NaN is exp 31, mantissa != 0 (0x7D, 0x7E, 0x7F).
+        Fmt {
+            dt: ElementKind::Fp8E5M2,
+            one: 0x3C,
+            two: 0x40,
+            neg_two: 0xC0,
+            pos_zero: 0x00,
+            neg_zero: 0x80,
+            nan: 0x7D,
+            neg_nan: 0xFD,
+        },
+        // e4m3fn: s eeee mmm; NaN is 0x7F only, so the NaN case is the single encoding.
+        Fmt {
+            dt: ElementKind::Fp8E4M3FN,
+            one: 0x38,
+            two: 0x40,
+            neg_two: 0xC0,
+            pos_zero: 0x00,
+            neg_zero: 0x80,
+            nan: 0x7F,
+            neg_nan: 0xFF,
+        },
+        // f16: a signaling NaN with a payload.
+        Fmt {
+            dt: ElementKind::F16,
+            one: 0x3C00,
+            two: 0x4000,
+            neg_two: 0xC000,
+            pos_zero: 0x0000,
+            neg_zero: 0x8000,
+            nan: 0x7C01,
+            neg_nan: 0xFC01,
+        },
+        // bf16: a signaling NaN with a payload.
+        Fmt {
+            dt: ElementKind::Bf16,
+            one: 0x3F80,
+            two: 0x4000,
+            neg_two: 0xC000,
+            pos_zero: 0x0000,
+            neg_zero: 0x8000,
+            nan: 0x7F81,
+            neg_nan: 0xFF81,
+        },
+    ];
+
+    fn buf(dt: ElementKind, bits: &[u16]) -> TypedBuffer {
+        let bytes: Vec<u8> = if elem_size(dt) == 1 {
+            bits.iter().map(|&b| b as u8).collect()
+        } else {
+            bits.iter().flat_map(|b| b.to_le_bytes()).collect()
+        };
+        TypedBuffer::new(dt, vec![bits.len() as i64], vec![1], bytes)
+    }
+
+    /// Run `build(input(0), input(1))` over the pairs and return the output storage bits.
+    fn run(
+        dt: ElementKind,
+        build: fn(crate::ir::Expr, crate::ir::Expr) -> crate::ir::Expr,
+        pairs: &[(u16, u16)],
+    ) -> Vec<u16> {
+        let op = OpDef::elementwise("b", 2, &[dt], build(input(0), input(1)));
+        let n = pairs.len() as i64;
+        let d = OperandDesc::new(1, &[n], &[1], dt, 256);
+        let k = structure_key(OpCategory::BinaryElementwise, &[d, d, d], ArchSku::Sm89);
+        let plan = build_plan(&op, &k);
+        let a: Vec<u16> = pairs.iter().map(|p| p.0).collect();
+        let b: Vec<u16> = pairs.iter().map(|p| p.1).collect();
+        let out = evaluate(&plan, &[d, d, d], &[buf(dt, &a), buf(dt, &b)], &[]);
+        (0..pairs.len()).map(|i| out[0].bits_at(i) as u16).collect()
+    }
+
+    fn copysign(a: crate::ir::Expr, b: crate::ir::Expr) -> crate::ir::Expr {
+        a.binary(BinaryOp::Copysign, b)
+    }
+
+    #[test]
+    fn copysign_takes_the_magnitude_of_a_and_the_sign_of_b_bit_for_bit() {
+        for f in &FORMATS {
+            let got = run(
+                f.dt,
+                copysign,
+                &[
+                    (f.one, f.neg_two),
+                    (f.neg_two, f.two),
+                    (f.two, f.two),
+                    (f.neg_two, f.neg_two),
+                    // The NaN's payload survives; only its sign comes from b.
+                    (f.nan, f.neg_two),
+                    (f.neg_nan, f.two),
+                ],
+            );
+            let neg_one = f.one | (f.neg_zero);
+            let pos_two = f.two;
+            assert_eq!(
+                got,
+                vec![neg_one, pos_two, f.two, f.neg_two, f.neg_nan, f.nan],
+                "{:?}",
+                f.dt
+            );
+        }
+    }
+
+    #[test]
+    fn max_picks_the_larger_operand_in_either_position() {
+        for f in &FORMATS {
+            let got = run(
+                f.dt,
+                |a, b| a.max(b),
+                &[
+                    (f.one, f.two),
+                    (f.two, f.one),
+                    (f.neg_two, f.one),
+                    (f.one, f.neg_two),
+                ],
+            );
+            assert_eq!(got, vec![f.two, f.two, f.one, f.one], "{:?}", f.dt);
+        }
+    }
+
+    #[test]
+    fn min_picks_the_smaller_operand_in_either_position() {
+        for f in &FORMATS {
+            let got = run(
+                f.dt,
+                |a, b| a.min(b),
+                &[
+                    (f.one, f.two),
+                    (f.two, f.one),
+                    (f.neg_two, f.one),
+                    (f.one, f.neg_two),
+                ],
+            );
+            assert_eq!(got, vec![f.one, f.one, f.neg_two, f.neg_two], "{:?}", f.dt);
+        }
+    }
+
+    #[test]
+    fn max_and_min_return_the_nan_operand_with_its_payload_in_either_position() {
+        for f in &FORMATS {
+            let pairs = [
+                (f.nan, f.one),
+                (f.one, f.nan),
+                (f.neg_nan, f.one),
+                (f.one, f.neg_nan),
+                // Two NaNs: the first one wins.
+                (f.nan, f.neg_nan),
+                (f.neg_nan, f.nan),
+            ];
+            let want = vec![f.nan, f.nan, f.neg_nan, f.neg_nan, f.nan, f.neg_nan];
+            assert_eq!(run(f.dt, |a, b| a.max(b), &pairs), want, "max {:?}", f.dt);
+            assert_eq!(run(f.dt, |a, b| a.min(b), &pairs), want, "min {:?}", f.dt);
+        }
+    }
+
+    #[test]
+    fn max_and_min_of_equal_values_keep_the_first_operand_bits() {
+        for f in &FORMATS {
+            // +0 and -0 compare equal, so the tie is decided by position and the bits show it.
+            let pairs = [(f.pos_zero, f.neg_zero), (f.neg_zero, f.pos_zero)];
+            let want = vec![f.pos_zero, f.neg_zero];
+            assert_eq!(run(f.dt, |a, b| a.max(b), &pairs), want, "max {:?}", f.dt);
+            assert_eq!(run(f.dt, |a, b| a.min(b), &pairs), want, "min {:?}", f.dt);
+        }
+    }
+}
