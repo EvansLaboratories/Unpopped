@@ -15,6 +15,13 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.20.7` — tests only: mutation audit of `oracle.rs`, cluster 3 (`eval_im2col`)
+
+`cargo-mutants` 27.1.0 over `eval_im2col`. `oracle::im2col_pins` checks the evaluator against a direct six-deep loop over
+(batch, channel, tap, output position) that never divides or takes a remainder, across non-square, strided, padded and
+dilated geometries, a non-zero buffer base offset, and size-1 batch and channel axes (admitted by the plan gate since 0.20.6).
+No code, no key bytes, no API change.
+
 ## `0.20.6` — fix: the Im2Col, Window and row-sort gates no longer read a size-1 axis as a broadcast
 
 `build_plan` panicked ("output must be forward-dense contiguous" / "input 0 must be a full dense tensor") for ordinary shapes:
