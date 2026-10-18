@@ -6943,3 +6943,112 @@ mod fold_pins {
         assert_eq!(f32s(&got[0]), want);
     }
 }
+
+#[cfg(test)]
+mod im2col_pins {
+    //! Pins from the 2026-10-17 mutation audit of this file: `eval_im2col`.
+    //!
+    //! The reference is a direct six-deep loop over (batch, channel, kernel tap, output
+    //! position) that never divides or takes a remainder, unlike the flat-index
+    //! decomposition in the oracle.
+    use super::*;
+    use crate::ir::OpDef;
+    use crate::plan::build_plan;
+    use unpopped_vocab::{ArchSku, OpCategory, structure_key};
+
+    fn desc(shape: &[i64], strides: &[i64], dt: ElementKind) -> OperandDesc {
+        OperandDesc::new(shape.len(), shape, strides, dt, 256)
+    }
+
+    fn run(
+        shape: [i64; 4],
+        kernel: (u8, u8),
+        stride: (u8, u8),
+        pad: (u8, u8),
+        dilation: (u8, u8),
+        base_offset: i64,
+    ) {
+        let [n, c, h, w] = shape;
+        let (kh, kw) = (i64::from(kernel.0), i64::from(kernel.1));
+        let o_h = (h + 2 * i64::from(pad.0) - i64::from(dilation.0) * (kh - 1) - 1)
+            / i64::from(stride.0)
+            + 1;
+        let o_w = (w + 2 * i64::from(pad.1) - i64::from(dilation.1) * (kw - 1) - 1)
+            / i64::from(stride.1)
+            + 1;
+        let dt = ElementKind::F32;
+        let ind = desc(&shape, &[c * h * w, h * w, w, 1], dt);
+        let outd = desc(
+            &[n, c * kh * kw, o_h * o_w],
+            &[c * kh * kw * o_h * o_w, o_h * o_w, 1],
+            dt,
+        );
+        let o = OpDef::im2col_2d("im2col", dt, kernel, stride, pad, dilation);
+        let k = structure_key(OpCategory::Convolution, &[ind, outd], ArchSku::Sm89);
+        let plan = build_plan(&o, &k);
+
+        // Element (nn, cc, y, x) holds a distinct value; the buffer starts `base_offset`
+        // elements before it.
+        let value =
+            |nn: i64, cc: i64, y: i64, x: i64| (((nn * c + cc) * h + y) * w + x) as f32 + 1.0;
+        let mut data = vec![-7.0f32; base_offset as usize];
+        for nn in 0..n {
+            for cc in 0..c {
+                for y in 0..h {
+                    for x in 0..w {
+                        data.push(value(nn, cc, y, x));
+                    }
+                }
+            }
+        }
+        let mut input = TypedBuffer::from_f32(&[data.len() as i64], &data);
+        input.shape = shape.to_vec();
+        input.base_offset = base_offset;
+
+        let got = evaluate(&plan, &[ind, outd], &[input], &[]).remove(0);
+        let got: Vec<f32> = (0..got.len())
+            .map(|i| f32::from_bits(got.bits_at(i) as u32))
+            .collect();
+
+        let mut want = Vec::new();
+        for nn in 0..n {
+            for cc in 0..c {
+                for ki in 0..kh {
+                    for kj in 0..kw {
+                        for oh in 0..o_h {
+                            for ow in 0..o_w {
+                                let y = oh * i64::from(stride.0) - i64::from(pad.0)
+                                    + ki * i64::from(dilation.0);
+                                let x = ow * i64::from(stride.1) - i64::from(pad.1)
+                                    + kj * i64::from(dilation.1);
+                                let inside = (0..h).contains(&y) && (0..w).contains(&x);
+                                want.push(if inside { value(nn, cc, y, x) } else { 0.0 });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            got, want,
+            "{shape:?} k{kernel:?} s{stride:?} p{pad:?} d{dilation:?}"
+        );
+    }
+
+    #[test]
+    fn im2col_unrolls_every_batch_channel_tap_and_position() {
+        // Every extent differs, so a swapped height/width or batch/channel stride is visible.
+        run([2, 3, 5, 4], (2, 3), (1, 1), (0, 0), (1, 1), 0);
+        run([2, 3, 5, 4], (3, 2), (2, 1), (1, 2), (1, 1), 0);
+        run([2, 2, 6, 5], (2, 2), (1, 2), (2, 1), (2, 3), 0);
+        run([2, 2, 7, 6], (3, 3), (3, 2), (1, 1), (2, 1), 0);
+        // Size-1 batch or channel axes (rejected by the plan gate before 0.20.6).
+        run([1, 2, 5, 4], (2, 2), (1, 1), (1, 0), (1, 1), 0);
+        run([2, 1, 5, 4], (3, 2), (2, 1), (0, 1), (1, 2), 0);
+    }
+
+    #[test]
+    fn im2col_reads_from_the_buffers_base_offset() {
+        run([2, 2, 4, 3], (2, 2), (1, 1), (1, 1), (1, 1), 5);
+    }
+}
