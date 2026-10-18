@@ -3761,18 +3761,17 @@ fn validate_im2col(
     // [N, C*kh*kw, oH*oW] is a runtime precondition), so the gate admits the
     // expansion so long as the output is forward-dense contiguous.
     //
-    // Mask bit 0 is ALLOWED, and only bit 0. Since unpopped-vocab 0.14.0 the key's
-    // broadcast mask is over the iteration frame (KISS-CLASSIFY §6.5-0014 as
-    // amended by KISS#519). The rank-3 output does not span frame axis 0 of the
-    // rank-4 frame, so that bit is set whenever N > 1. It records "absent from
-    // this frame axis", not "broadcast along one of its own axes". Density is
-    // what `contig` reads, and `contig` reads the output's OWN axes, so a strided
-    // output is `st` and still rejected here. A bit on frame axes 1..=3 would be
-    // a genuine own-axis broadcast, and is rejected.
+    // The key's `bcast` mask is NOT consulted. It is over the iteration frame
+    // (KISS-CLASSIFY §6.5-0014 as amended by KISS#519, §6.6-0008), so it also records
+    // "absent from this frame axis" (the rank-3 output never spans frame axis 0) and
+    // "own axis of extent 1 beside a wider frame" (N = 1 beside C > 1, or a 1x1 output
+    // beside a wider input). Neither is a broadcast, and a mask test rejected both.
+    // A genuine own-axis broadcast (extent > 1, stride 0) makes `contig` read
+    // `Broadcast`, and a strided output reads `Strided`/`InnerContig`, so the
+    // `contig == Contig` clause alone rejects every output that is not dense.
     let out = key.operands[1];
-    let own_axis_broadcast = (1..4).any(|a| out.bcast.is_set(a));
     assert!(
-        !own_axis_broadcast && out.contig == Contiguity::Contig && !out.flipped,
+        out.contig == Contiguity::Contig && !out.flipped,
         "Im2Col '{name}': output must be forward-dense contiguous (empty broadcast, \
          not flipped) — the [N, C*kh*kw, oH*oW] column matrix is written densely"
     );
@@ -5805,6 +5804,27 @@ mod im2col_gate_validate {
                 dilation: (2, 3),
             }
         );
+    }
+
+    #[test]
+    fn im2col_builds_when_an_own_axis_has_extent_one() {
+        // The key's broadcast mask is over the iteration frame, and a size-1 own axis
+        // counts as stride 0 wherever the frame is wider. Batch 1 beside two channels
+        // (frame axis 1 is max(N, C) = 2) and a 1x1 output beside a wider input (frame
+        // axis 3 is max(W, oH*oW)) are ordinary shapes, not broadcasts: the output is
+        // still dense, so the gate must admit them.
+        let p = im2col((3, 3), (1, 1), (0, 0), (1, 1));
+        let a = OperandDesc::new(4, &[1, 2, 3, 3], &[18, 9, 3, 1], ElementKind::F32, 256);
+        let o = OperandDesc::new(3, &[1, 18, 1], &[18, 1, 1], ElementKind::F32, 256);
+        let key = structure_key(OpCategory::UnaryElementwise, &[a, o], ArchSku::Sm89);
+        let plan = build_plan(&p, &key);
+        assert!(matches!(plan.access, Access::Im2Col { .. }));
+
+        let a = OperandDesc::new(4, &[1, 3, 4, 4], &[48, 16, 4, 1], ElementKind::F32, 256);
+        let o = OperandDesc::new(3, &[1, 27, 4], &[108, 4, 1], ElementKind::F32, 256);
+        let key = structure_key(OpCategory::UnaryElementwise, &[a, o], ArchSku::Sm89);
+        let plan = build_plan(&p, &key);
+        assert!(matches!(plan.access, Access::Im2Col { .. }));
     }
 
     #[test]
