@@ -15,6 +15,13 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.20.8` — tests only: mutation audit of `oracle.rs`, cluster 4 (`compare`)
+
+`cargo-mutants` 27.1.0 over `compare`. `oracle::compare_pins` checks which rejection each branch of the comparator returns (not just that it
+returns `Err`): the first differing element in bit-exact mode, the byte-length case, infinities and NaN in the complex and float paths, the
+tolerance band `abs + rel * max(|e|, |a|)` per component for complex, exactly for integers and in `f64` for floats, and that a mixed
+complex/real or int/float pair takes the real projection rather than the component-wise or exact-integer path. No code, no key bytes, no API change.
+
 ## `0.20.7` — tests only: mutation audit of `oracle.rs`, cluster 3 (`eval_im2col`)
 
 `cargo-mutants` 27.1.0 over `eval_im2col`. `oracle::im2col_pins` checks the evaluator against a direct six-deep loop over
