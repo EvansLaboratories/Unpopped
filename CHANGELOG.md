@@ -15,6 +15,13 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.20.13` — tests only: mutation audit of `oracle.rs`, cluster 9 (walkers' index arithmetic)
+
+`cargo-mutants` 27.1.0 over the evaluators' index and layout arithmetic. `oracle::walk_pins` pins a top-k row sort with both outputs (each output is sized from its own
+operand), a skipping gather (indices just outside the axis write nothing), a scatter whose index operand is longer than its value operand (the walk is over the value
+operand), a middle-axis reduction placed by the output strides (collapsed and keepdim), and `required_fidelity` for a u8 mask beside an f32 value (tolerant, not bit-exact).
+The three survivors left in these functions are equivalent and are listed with their reasons in the PR. No code, no key bytes, no API change.
+
 ## `0.20.12` — tests only: mutation audit of `oracle.rs`, cluster 8 (value plumbing)
 
 `cargo-mutants` 27.1.0 over the plumbing around the evaluators. `oracle::plumbing_pins` pins `raw_sign_masks` (narrow floats only), `round_to_compute`
