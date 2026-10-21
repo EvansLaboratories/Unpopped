@@ -203,8 +203,10 @@ pub enum UnaryOp {
     /// Logistic sigmoid `1/(1+e⁻ˣ)`.
     Sigmoid,
     /// Rectified linear unit `x < 0 ? 0 : x` — NaN-propagating, -0.0-preserving
-    /// (torch.relu convention; NOT `max(x, 0)`, which scrubs NaN and normalizes
-    /// -0.0). The distinguishing fact the `ReluElementwise` lift + the bespoke
+    /// (torch.relu convention; NOT IEEE `fmax(x, 0)` / [`BinaryOp::FmaxIeee`], which
+    /// scrubs NaN and normalizes -0.0. [`BinaryOp::Max`] is NaN-propagating and
+    /// keeps A on ties, so `Max(x, 0)` is bit-identical to this op).
+    /// The distinguishing fact the `ReluElementwise` lift + the bespoke
     /// propagating kernel rest on; every executable site (cuda.rs, optimize.rs
     /// const-fold) matches this spelling.
     Relu,
@@ -1492,7 +1494,7 @@ impl Expr {
         Expr(ScalarExpr::Unary(op, Box::new(self.0)))
     }
     /// ReLU `x < 0 ? 0 : x` — NaN-propagating, -0.0-preserving (torch.relu; NOT
-    /// `max(x, 0)`, which scrubs NaN). See [`UnaryOp::Relu`].
+    /// IEEE `fmax(x, 0)`, which scrubs NaN). See [`UnaryOp::Relu`].
     #[must_use]
     pub fn relu(self) -> Expr {
         self.unary(UnaryOp::Relu)
