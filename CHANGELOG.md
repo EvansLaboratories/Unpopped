@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.20.20` — docs only: the per-device decline design (`docs/design-per-device-decline.md`)
+
+A design note, no code, no key bytes, no API change. It separates four gaps (persistence of the ledger, plan-level decline, compiler-argument variants, staleness) and records the PM's rulings: one `ExactnessRecord` type gaining `kernel_hash`, `compiler_version`, `coverage` and `emitter_version` in a 0.21 Breaking minor; `Declined` a typed value the adopter chooses what to do with; Fuel owns the ledger location and applying a variant. `Unmeasured` stays distinct from `Flushes`. The stamp carries `slangc` arguments but not its version, so today a compiler upgrade does not invalidate an `Exact` record.
+
 ## `0.20.19` — additive: a device that flushes subnormals declines Exact (`MeasuredOn`, `*_measured`, `*_with_exactness`)
 
 `contract::MeasuredOn { stamp, ledger, dtype }` with `ulp_bound_measured` and `precision_of_measured`; `contract_with_exactness` and `oracle::required_fidelity_with_exactness`. The existing functions are unchanged and delegate with `None` (`AccuracyKey` keeps its shape: a lifetime parameter on it would break every caller). A `Flushes` record for the body on exactly the stamp declines the bound on any namespace (a CUDA relu stops claiming `correctly_rounded`); an `Exact` record admits a non-CUDA body only if the table rates every operator 0 (agreeing with a reference that has an error budget is not correct rounding); no record changes nothing, so an unmeasured device cannot claim Exact. A stamp for another target than the cell's is ignored. Exhaustive 2^32 exists only for unary f32 bodies: a binary or f64 body is admitted only by a measured run, and nothing is extrapolated.
