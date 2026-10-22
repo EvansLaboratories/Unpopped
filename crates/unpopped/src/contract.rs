@@ -30,6 +30,7 @@
 //! (the contract is withheld) rather than a bundle-poisoning unknown name.
 
 use crate::backend::GeneratedKernel;
+use crate::exactness::{DeviceStamp, ExactnessLedger, ExactnessVerdict};
 use crate::ir::{BinaryOp, ExprDag, NodeId, OobPolicy, OpDef, ScalarExpr, UnaryOp};
 use crate::pattern::{PatternNode, derive_pattern, to_fkc};
 use unpopped_vocab::{Contiguity, ElementKind, StructureKey, TargetId, VecWidth};
@@ -297,6 +298,21 @@ pub fn contract(
     key: &StructureKey,
     kernel: &GeneratedKernel,
     backend: &dyn crate::backend::Backend,
+) -> Option<String> {
+    contract_with_exactness(op, key, kernel, backend, None)
+}
+
+/// [`contract`], with what a device measured: `measured` is the stamp of the device the kernel
+/// will run on and a ledger of exhaustive runs. A `Flushes` record for this body on that stamp
+/// withdraws the `correctly_rounded` claim; a stamp for another target is ignored. See
+/// [`AccuracyKey::measured_on`] for exactly what a ledger can and cannot change.
+#[must_use]
+pub fn contract_with_exactness(
+    op: &OpDef,
+    key: &StructureKey,
+    kernel: &GeneratedKernel,
+    backend: &dyn crate::backend::Backend,
+    measured: Option<(&DeviceStamp, &ExactnessLedger)>,
 ) -> Option<String> {
     // Skip a cell whose dtype has no FKC §5 base-dtype spelling — an unbindable
     // contract would corrupt the planner's honest miss signal (§4.3).
@@ -706,7 +722,11 @@ pub fn contract(
 
     let out_idx = key.n_operands.saturating_sub(1) as usize;
     let params = params_used(&op.body);
-    let (prec_mode, prec_ulp) = precision_of(&op.body, &AccuracyKey::for_target(key.target));
+    let (prec_mode, prec_ulp) = precision_of_measured(
+        &op.body,
+        &AccuracyKey::for_target(key.target),
+        MeasuredOn::for_target(measured, key.target, key.dtype).as_ref(),
+    );
 
     let mut s = String::from("```fkc\n");
     s.push_str(&format!("kernel: {}_{}\n", op.name, cell_suffix(key)));
@@ -1290,6 +1310,61 @@ impl AccuracyKey {
     }
 }
 
+/// What an exhaustive run on one device said about bodies at one dtype: a [`DeviceStamp`], the
+/// [`ExactnessLedger`] to read, and the dtype being asked about. Pass it to
+/// [`ulp_bound_measured`] / [`precision_of_measured`] with the [`AccuracyKey`] for the same
+/// target. (A separate type rather than a field of [`AccuracyKey`], so that type keeps its
+/// shape: a lifetime parameter on it breaks every caller that names it.)
+///
+/// # What a ledger changes, and what it cannot
+///
+/// - A [`ExactnessVerdict::Flushes`] record for the body on exactly this stamp **declines** the
+///   bound (no finite bound, so no Exact claim and no fidelity band), on any namespace.
+/// - An [`ExactnessVerdict::Exact`] record admits a bound of 0 **only on a non-CUDA target and
+///   only for a body whose operators the table rates 0** (the correctly-rounded ones): an Exact
+///   run proves "bit-identical to a correctly-rounded reference", which says nothing about an
+///   operator with a vendor error budget. On CUDA the table already answers.
+/// - No record (another stamp, another driver or argument set, another body, another dtype)
+///   changes nothing: a non-CUDA float body still declines.
+///
+/// Exhaustive 2^32 testing exists only for unary f32 bodies. A binary or f64 body has a record
+/// only if someone ran a measurement for it; without one it declines, and nothing is
+/// extrapolated from a unary result.
+///
+/// `dtype` is what the caller is asking about: [`AccuracyKey`] carries no dtype, so a lookup
+/// would otherwise apply an f32 record to an f16 plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MeasuredOn<'a> {
+    /// The device, driver and compiler arguments the kernel will run with.
+    pub stamp: &'a DeviceStamp,
+    /// The measurements to read.
+    pub ledger: &'a ExactnessLedger,
+    /// The dtype being asked about.
+    pub dtype: ElementKind,
+}
+
+impl<'a> MeasuredOn<'a> {
+    /// What the ledger says about `e` on this stamp, or `None` if nothing was measured there.
+    fn verdict_for(&self, e: &ScalarExpr) -> Option<ExactnessVerdict> {
+        self.ledger.lookup(self.stamp, e, self.dtype)
+    }
+
+    /// The pair the `*_with_exactness` entry points take, applied only when the stamp names
+    /// `target`: a stamp for another target is not a measurement of this one.
+    pub(crate) fn for_target(
+        measured: Option<(&'a DeviceStamp, &'a ExactnessLedger)>,
+        target: TargetId,
+        dtype: ElementKind,
+    ) -> Option<Self> {
+        let (stamp, ledger) = measured?;
+        (stamp.hw.target == target).then_some(Self {
+            stamp,
+            ledger,
+            dtype,
+        })
+    }
+}
+
 /// Whether every operator in `e` is exact on **any** conforming target, so its
 /// ULP bound is target-independent and may be stated without an accuracy table.
 ///
@@ -1365,6 +1440,22 @@ fn is_exact_on_every_target(e: &ScalarExpr) -> bool {
 /// change and therefore a coordination call rather than a quiet patch. Recorded
 /// here, at the number itself, so it is met by anyone who reaches for it.
 pub fn ulp_bound(e: &ScalarExpr, key: &AccuracyKey) -> f64 {
+    ulp_bound_measured(e, key, None)
+}
+
+/// [`ulp_bound`], reading what a device measured. See [`MeasuredOn`] for exactly what that can
+/// and cannot change; with `None` this is [`ulp_bound`].
+pub fn ulp_bound_measured(
+    e: &ScalarExpr,
+    key: &AccuracyKey,
+    measured: Option<&MeasuredOn<'_>>,
+) -> f64 {
+    // A measurement that saw a mismatch on this device outranks every table: the body is not
+    // exact here, whatever the namespace's table says.
+    let verdict = measured.and_then(|m| m.verdict_for(e));
+    if verdict == Some(ExactnessVerdict::Flushes) {
+        return f64::INFINITY;
+    }
     // ⚠️ THE TABLE BELOW IS CUDA'S. Handing it to another target asserts CUDA's
     // accuracy for hardware nobody measured, and the band is TIGHTER than a
     // conforming implementation may need — so the failure is a conforming kernel
@@ -1392,7 +1483,11 @@ pub fn ulp_bound(e: &ScalarExpr, key: &AccuracyKey) -> f64 {
     // borrowed assertion the namespace gate exists to refuse. Keying on the
     // summed rating would re-admit every one of them.
     if key.target.namespace() != "cuda" {
-        return if is_exact_on_every_target(e) {
+        // An Exact run on this device proves the body matches a correctly-rounded reference, so
+        // it admits exactly the bodies the table rates 0 and no others (an operator with an
+        // error budget is not made correctly rounded by agreeing with a reference that has one).
+        let measured_exact = verdict == Some(ExactnessVerdict::Exact) && ulp_sum(e) == 0.0;
+        return if is_exact_on_every_target(e) || measured_exact {
             0.0
         } else {
             f64::INFINITY
@@ -1620,7 +1715,17 @@ fn cmp_dispatch_op_kind(body: &ScalarExpr) -> &'static str {
 
 #[doc(hidden)]
 pub fn precision_of(body: &ScalarExpr, key: &AccuracyKey) -> (&'static str, Option<u32>) {
-    let u = ulp_bound(body, key);
+    precision_of_measured(body, key, None)
+}
+
+/// [`precision_of`], reading what a device measured. See [`MeasuredOn`].
+#[doc(hidden)]
+pub fn precision_of_measured(
+    body: &ScalarExpr,
+    key: &AccuracyKey,
+    measured: Option<&MeasuredOn<'_>>,
+) -> (&'static str, Option<u32>) {
+    let u = ulp_bound_measured(body, key, measured);
     if u <= 0.0 {
         ("correctly_rounded", Some(0))
     } else if u.is_infinite() {
