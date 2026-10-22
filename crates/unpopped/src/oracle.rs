@@ -3174,6 +3174,21 @@ pub enum Fidelity {
 /// the caller must decide, and cannot be handed a bound that does not exist.
 #[must_use]
 pub fn required_fidelity(plan: &KernelPlan<'_>, operands: &[OperandDesc]) -> Option<Fidelity> {
+    required_fidelity_with_exactness(plan, operands, None)
+}
+
+/// [`required_fidelity`], with what a device measured: a `Flushes` record for the plan's body on
+/// `measured`'s stamp yields `None` (no claim), as an unknown target does. A stamp for another
+/// target than the plan's is ignored. See [`crate::contract::MeasuredOn`].
+#[must_use]
+pub fn required_fidelity_with_exactness(
+    plan: &KernelPlan<'_>,
+    operands: &[OperandDesc],
+    measured: Option<(
+        &crate::exactness::DeviceStamp,
+        &crate::exactness::ExactnessLedger,
+    )>,
+) -> Option<Fidelity> {
     // Integer, bool and sub-byte cells are EXACT on both sides: the emitter's
     // arithmetic wraps at the C width and the oracle models that wrapping in
     // `i128`, so there is no rounding for a tolerance to absorb. Bit-exact is
@@ -3190,9 +3205,10 @@ pub fn required_fidelity(plan: &KernelPlan<'_>, operands: &[OperandDesc]) -> Opt
     // is 3 ULP against CUDA `expf`'s 2 — this band is too tight to be met, and a
     // conforming kernel fails a comparison it should pass. See `ulp_bound`'s
     // "KNOWN LIMIT" section; closing it needs a per-target accuracy seam.
-    let ulp = crate::contract::ulp_bound(
+    let ulp = crate::contract::ulp_bound_measured(
         plan.body,
         &crate::contract::AccuracyKey::for_target(plan.key.target),
+        crate::contract::MeasuredOn::for_target(measured, plan.key.target, plan.dtype).as_ref(),
     );
     if !ulp.is_finite() {
         return None;
