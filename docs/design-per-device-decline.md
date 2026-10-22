@@ -3,6 +3,7 @@
 Status: **accepted 2026-10-22** with the PM's rulings (section 8). Written against Unpopped
 `origin/main` `ed8ccbd` (0.20.19) and unpopped-harness `origin/main` `4a48c4d` (0.0.7; f64 screens in
 #8). Roadmap row 3's tail. Nothing here is implemented; section 7 is the order.
+
 ## 1. What exists, and the gap
 
 Exists (0.20.19 + harness 0.0.5): the harness runs a kernel on a device and emits an
