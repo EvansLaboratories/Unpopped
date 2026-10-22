@@ -15,7 +15,7 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## `0.20.17` — additive: `unpopped::exactness`, the record of what a device measured (version is a placeholder; the PM allocates it)
+## `0.20.18` — additive: `unpopped::exactness`, the record of what a device measured (PM-allocated)
 
 New `DeviceStamp` (an `HwStamp` plus driver version and compiler arguments), `ExactnessRecord`, `ExactnessVerdict { Exact, Flushes }`, `ExactnessLedger::lookup` and `body_key` (dtype + the IR's serde-JSON, pinned by a test). Nothing reads a ledger yet: the next change wires it into `AccuracyKey` so a `Flushes` record declines Exact. Records apply to exactly their stamp, body and dtype; a changed driver or argument set matches nothing; disagreeing records resolve to `Flushes`. Exhaustive 2^32 exists only for unary f32 bodies, so a binary or f64 body has a record only if a measured run exists, and is declined otherwise (no extrapolation).
 
