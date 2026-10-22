@@ -1,5 +1,7 @@
 # Harness family: an Unpopped test-and-profile proposal
 
+**Status 2026-10-22:** built and moved to `ThinkersJournal/unpopped-harness` (cpu-c, CUDA and Vulkan targets). "What exists" below is the 2026-10-18 snapshot, kept as written.
+
 From: Unpopped lane. For: Portfolio PM. Date: 2026-10-18. Requested by CireSnave (Eric).
 
 ## What CireSnave asked for (his words, 2026-10-18)
