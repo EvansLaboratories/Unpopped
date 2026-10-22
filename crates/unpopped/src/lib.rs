@@ -69,6 +69,7 @@ pub mod contract;
 #[cfg(feature = "convert")]
 pub mod convert;
 pub mod dispatch_artifact;
+pub mod exactness;
 pub mod ir;
 pub mod jit;
 pub mod kisc;
@@ -96,6 +97,7 @@ mod kiss_ref_diff;
 pub use backend::{Backend, GeneratedKernel, Variant, VariantFidelity};
 pub use contract::{bundle, bundle_kisc, contract, front_matter};
 pub use dispatch_artifact::{emit_dispatch_table, parse_dispatch_table};
+pub use exactness::{DeviceStamp, ExactnessLedger, ExactnessRecord, ExactnessVerdict, body_key};
 pub use ir::{
     Access, AccumSpec, AxisRole, ContractionAxes, DagNode, Expr, ExprDag, NodeId, OpDef, ReduceOp,
     ReduceStage, ReductionAccum, ScalarExpr, SortOrder, SortOut, UnaryOp, coord, input, konst,
