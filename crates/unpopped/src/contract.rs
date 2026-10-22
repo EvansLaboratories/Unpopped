@@ -305,7 +305,7 @@ pub fn contract(
 /// [`contract`], with what a device measured: `measured` is the stamp of the device the kernel
 /// will run on and a ledger of exhaustive runs. A `Flushes` record for this body on that stamp
 /// withdraws the `correctly_rounded` claim; a stamp for another target is ignored. See
-/// [`AccuracyKey::measured_on`] for exactly what a ledger can and cannot change.
+/// [`MeasuredOn`] for exactly what a ledger can and cannot change.
 #[must_use]
 pub fn contract_with_exactness(
     op: &OpDef,

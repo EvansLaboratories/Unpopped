@@ -3179,7 +3179,7 @@ pub fn required_fidelity(plan: &KernelPlan<'_>, operands: &[OperandDesc]) -> Opt
 
 /// [`required_fidelity`], with what a device measured: a `Flushes` record for the plan's body on
 /// `measured`'s stamp yields `None` (no claim), as an unknown target does. A stamp for another
-/// target than the plan's is ignored. See [`crate::contract::AccuracyKey::measured_on`].
+/// target than the plan's is ignored. See [`crate::contract::MeasuredOn`].
 #[must_use]
 pub fn required_fidelity_with_exactness(
     plan: &KernelPlan<'_>,
