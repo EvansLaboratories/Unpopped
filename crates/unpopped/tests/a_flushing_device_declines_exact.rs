@@ -239,36 +239,31 @@ fn a_binary_body_with_no_record_is_declined_whatever_the_unary_records_say() {
 
 // --- the two places an Exact claim is made -------------------------------------------------
 
+/// The mode the relu cell's contract declares, given one device's stamp and ledger.
+fn relu_contract_mode(s: &DeviceStamp, l: &ExactnessLedger) -> &'static str {
+    let c = contract_with_exactness(
+        &relu_op(),
+        &cell(vk()),
+        &kernel(),
+        &StubBackend,
+        Some((s, l)),
+    )
+    .expect("a contract");
+    declared_mode(&c)
+}
+
 #[test]
 fn the_emitted_contract_withdraws_correct_rounding_from_a_flushing_device() {
-    let op = relu_op();
-    let k = cell(vk());
-    let s = stamp(vk(), "24.1", &[]);
+    let unmeasured =
+        contract(&relu_op(), &cell(vk()), &kernel(), &StubBackend).expect("a contract");
+    let s = stamp(vk(), "24.1", &PRESERVE);
     let flush = ledger_of(
         &s,
         &relu_body(),
         ElementKind::F32,
         ExactnessVerdict::Flushes,
     );
-    let preserve_stamp = stamp(vk(), "24.1", &PRESERVE);
-    let exact = ledger_of(
-        &preserve_stamp,
-        &relu_body(),
-        ElementKind::F32,
-        ExactnessVerdict::Exact,
-    );
-
-    let unmeasured = contract(&op, &k, &kernel(), &StubBackend).expect("a contract");
-    let flushed = contract_with_exactness(&op, &k, &kernel(), &StubBackend, Some((&s, &flush)))
-        .expect("a contract");
-    let preserved = contract_with_exactness(
-        &op,
-        &k,
-        &kernel(),
-        &StubBackend,
-        Some((&preserve_stamp, &exact)),
-    )
-    .expect("a contract");
+    let exact = ledger_of(&s, &relu_body(), ElementKind::F32, ExactnessVerdict::Exact);
 
     assert_eq!(
         declared_mode(&unmeasured),
@@ -276,33 +271,28 @@ fn the_emitted_contract_withdraws_correct_rounding_from_a_flushing_device() {
         "unmeasured declines"
     );
     assert_eq!(
-        declared_mode(&flushed),
+        relu_contract_mode(&s, &flush),
         "approximate",
         "a flushing device declines"
     );
     assert_eq!(
-        declared_mode(&preserved),
+        relu_contract_mode(&s, &exact),
         "correctly_rounded",
         "control: a preserving measurement admits it, or the rows above prove nothing"
     );
+}
 
-    // A stamp for another target is not a measurement of this cell.
+/// A stamp for another target is not a measurement of this cell.
+#[test]
+fn the_emitted_contract_ignores_a_stamp_for_another_target() {
     let other = stamp(unpopped_vocab::ArchSku::Sm89.into(), "555.1", &PRESERVE);
-    let other_ledger = ledger_of(
+    let exact = ledger_of(
         &other,
         &relu_body(),
         ElementKind::F32,
         ExactnessVerdict::Exact,
     );
-    let foreign = contract_with_exactness(
-        &op,
-        &k,
-        &kernel(),
-        &StubBackend,
-        Some((&other, &other_ledger)),
-    )
-    .expect("a contract");
-    assert_eq!(declared_mode(&foreign), "approximate");
+    assert_eq!(relu_contract_mode(&other, &exact), "approximate");
 }
 
 #[test]
