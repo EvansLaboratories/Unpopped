@@ -1,7 +1,7 @@
 # Unpopped roadmap
 
 What this lane is doing, in what order, and **what each item waits on**. Read at
-`origin/main` `f58012d4` (0.20.20) on 2026-10-23; every row names the ref it was
+`origin/main` `c6ca534` (0.22.0) on 2026-10-23; every row names the ref it was
 read at, so re-read it before acting on it. History is in `CHANGELOG.md`;
 knowingly-undone work and its reasoning is `docs/deferred.md`. This file is the
 queue, not the archive: delete a row when it lands.
@@ -10,7 +10,6 @@ queue, not the archive: delete a row when it lands.
 
 | # | Item | State | Waits on |
 |---|---|---|---|
-| 1 | **Publish `0.20.3`** (with `0.20.1`, `0.20.2`, `0.19.1`): typed `PlanError::UnservableContraction` (#67); re-vendored derivation vectors (#65) | merged; `0.20.0` is published (PM read back) | PM publishes with the next code change |
 | 2 | **Run `emitted_slang_compiles_with_slangc` on the self-hosted runner** (CireSnave 5.1g/5.1h: an environment-bound test is run there, never ignored). It stays `#[ignore]` meanwhile: a documented, counted last resort. Owner: this lane. Detector: the runner job, once it exists (no hosted job can run it) | `slangc` exists on the PM's PC (`C:/VulkanSDK/1.4.350.0/Bin`) | PM: runner registered for Unpopped, which is a **PUBLIC** repo, so the **ephemeral** runner (mandatory for public repos; persistent is private-only) under 5.1h (push-to-main, schedule, dispatch; same-repo PRs only behind the environment gate; fork PRs never run on the runner, so fork code is never executed there) + `slangc` on the `gh-runner` PATH. Then this lane adds the job and drops the attribute |
 | 3 | **Harness family**: external test/profile harnesses wrapping Unpopped, now in its own public repo `ThinkersJournal/unpopped-harness` (crate `unpopped-harness` 0.0.3 at `843e285`; lanes cannot push there, the PM pushes by SHA; protection requires verify / cargo deny / SPDX). Targets: cpu-c (reference), CUDA, Vulkan (Slang). Done and measured there: exhaustive 2^32 f32 relu on all three; CUDA `Max(x,0)` == Relu; Slang relu is exact on AMD 610M and RTX 4070 only with `-denorm-mode-fp32 preserve` (Unpopped#84; PM ruling 2026-10-21: a kernel whose measured result flushes declines Exact). Design: `docs/harness-family.md`. Owner: this lane | Next tracks (binary ops, f64, chains on Vulkan, timing) are this lane's call. GPU and Vulkan tests need a self-hosted runner (PM list) |
 
@@ -34,12 +33,6 @@ blob changed, not on a schedule, and record the commit in `kiss/README.md`.
    numerics axes.
 2. **Re-vendor on KISS change**, with the derivation vectors re-run
    (`cargo test -p unpopped-vocab --test kiss_derivation_vectors -- --nocapture`).
-3. **#6 (PR open, 0.22.0): `Backend::supports_dtype` returns a three-state enum** (`Supported` /
-   `Unsupported` / `NotExpressible`; PM ruling under CireSnave's delegation, on the
-   issue). Scheduled, not parked. Breaking trait change, so it ships in the next
-   Breaking minor (0.22; 0.21.0 shipped without it); baracuda's CUDA emitter moves in the
-   same release. vulkane (who raised it) confirms
-   the variant names before the PR merges.
 
 ## 4. Held or blocked
 
