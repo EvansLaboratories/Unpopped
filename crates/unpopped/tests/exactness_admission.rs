@@ -344,10 +344,13 @@ fn the_wire_form_starts_with_the_schema_and_spells_coverage_as_the_harness_does(
     let text = l.to_jsonl();
     let first = text.lines().next().unwrap();
     assert!(
-        first.starts_with(r#"{"schema":"unpopped-exactness-ledger/1","target":"vulkan:"#),
+        first.starts_with("{\"schema\":\"unpopped-exactness-ledger/1\",\"target\":\"vulkan:"),
         "schema first: {first}"
     );
-    assert!(first.contains(r#""coverage":{"kind":"exhaustive","seed":null,"tuples":4294967296}"#));
+    assert!(
+        first
+            .contains("\"coverage\":{\"kind\":\"exhaustive\",\"seed\":null,\"tuples\":4294967296}")
+    );
 }
 
 #[test]
@@ -360,7 +363,7 @@ fn a_malformed_line_is_counted_with_its_number_and_never_dropped_silently() {
     )
     .to_line();
     let unknown = good.replace("exactness-ledger/1", "exactness-ledger/2");
-    let no_hash = good.replace(r#""kernel_hash":"sha256:aa","#, "");
+    let no_hash = good.replace("\"kernel_hash\":\"sha256:aa\",", "");
     let text = format!("{good}\n\nnot json\n{unknown}\n{no_hash}\n{good}\n");
     let read = ExactnessLedger::parse_jsonl(&text);
     assert_eq!(read.ledger.len(), 2, "control: both good lines read");
@@ -401,7 +404,7 @@ fn a_field_this_version_does_not_know_survives_a_round_trip() {
     assert!(read.rejected.is_empty());
     let written = read.ledger.to_jsonl();
     assert!(
-        written.contains(r#""added_later":{"x":1}"#),
+        written.contains("\"added_later\":{\"x\":1}"),
         "a newer writer's field was dropped: {written}"
     );
     let _ = ExactnessRecord::parse_line(written.trim_end()).expect("and it still parses");
@@ -410,7 +413,7 @@ fn a_field_this_version_does_not_know_survives_a_round_trip() {
 #[test]
 fn a_target_that_does_not_parse_is_a_counted_line_not_a_panic() {
     let good = rec(&stamp(&[]), ExactnessVerdict::Exact, HASH, exhaustive()).to_line();
-    let bad = good.replace(r#""target":"vulkan:"#, r#""target":"nonamespace"#);
+    let bad = good.replace("\"target\":\"vulkan:", "\"target\":\"nonamespace");
     assert_ne!(bad, good, "the mutation applied");
     let read = ExactnessLedger::parse_jsonl(&bad);
     assert_eq!(read.rejected, vec![(1, LineError::Field("target"))]);
@@ -421,12 +424,12 @@ fn a_target_that_does_not_parse_is_a_counted_line_not_a_panic() {
 #[test]
 fn a_line_the_harness_wrote_before_the_schema_moved_still_reads() {
     let line = concat!(
-        r#"{"schema":"unpopped-exactness-ledger/1","target":"vulkan:sg64.ops-abr.arith-f16.cm-none","#,
-        r#""device_name":"AMD Radeon 610M","runtime_version":"1.3.280","driver_version":"24.1","#,
-        r#""compiler_args":["-denorm-mode-fp32","preserve"],"compiler_version":"slangc 2026.4","#,
-        r#""key":"f32:{\"Unary\":[\"Relu\",{\"Input\":0}]}","verdict":"exact","kernel_hash":"sha256:aa","#,
-        r#""emitter_version":"unpopped-slang 0.20.19","#,
-        r#""coverage":{"kind":"exhaustive","seed":null,"tuples":4294967296},"captured_unix_s":7}"#
+        "{\"schema\":\"unpopped-exactness-ledger/1\",\"target\":\"vulkan:sg64.ops-abr.arith-f16.cm-none\",",
+        "\"device_name\":\"AMD Radeon 610M\",\"runtime_version\":\"1.3.280\",\"driver_version\":\"24.1\",",
+        "\"compiler_args\":[\"-denorm-mode-fp32\",\"preserve\"],\"compiler_version\":\"slangc 2026.4\",",
+        "\"key\":\"f32:{\\\"Unary\\\":[\\\"Relu\\\",{\\\"Input\\\":0}]}\",\"verdict\":\"exact\",\"kernel_hash\":\"sha256:aa\",",
+        "\"emitter_version\":\"unpopped-slang 0.20.19\",",
+        "\"coverage\":{\"kind\":\"exhaustive\",\"seed\":null,\"tuples\":4294967296},\"captured_unix_s\":7}"
     );
     let r = ExactnessRecord::parse_line(line).expect("a harness-0.0.9 line reads");
     assert_eq!(r.verdict, ExactnessVerdict::Exact);
