@@ -442,3 +442,20 @@ fn a_line_the_harness_wrote_before_the_schema_moved_still_reads() {
     assert_eq!(r.key, unpopped::body_key(&relu(), ElementKind::F32));
     assert_eq!(r.to_line(), line);
 }
+
+/// A stale kernel is not rescued by "use the arguments you already have": the record that went
+/// stale names those same arguments, so offering them back would loop the adopter.
+#[test]
+fn a_stale_kernel_is_not_offered_its_own_arguments() {
+    let s = stamp(&PRESERVE);
+    let l = ledger(vec![rec(&s, ExactnessVerdict::Exact, HASH, exhaustive())]);
+    assert_eq!(
+        admit(&l, &s, HASH, Requirement::Exact),
+        Admission::Admitted,
+        "control"
+    );
+    assert_eq!(
+        admit(&l, &s, "sha256:rebuilt", Requirement::Exact),
+        Admission::Declined(Withheld::StaleKernel)
+    );
+}
