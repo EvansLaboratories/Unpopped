@@ -19,7 +19,9 @@ use unpopped::backend::GeneratedKernel;
 use unpopped::contract::{
     AccuracyKey, MeasuredOn, contract, contract_with_exactness, precision_of, precision_of_measured,
 };
-use unpopped::exactness::{DeviceStamp, ExactnessLedger, ExactnessRecord, ExactnessVerdict};
+use unpopped::exactness::{
+    Coverage, DeviceStamp, ExactnessLedger, ExactnessRecord, ExactnessVerdict, Measured,
+};
 use unpopped::ir::{BinaryOp, OpDef, ScalarExpr, UnaryOp, input};
 use unpopped::oracle::{Fidelity, required_fidelity, required_fidelity_with_exactness};
 use unpopped::plan::build_plan;
@@ -28,6 +30,9 @@ use unpopped_vocab::{ElementKind, HwStamp, OpCategory, OperandDesc, StructureKey
 
 const VK: &str = "vulkan:sg64.ops-abr.arith-f16.cm-none";
 const PRESERVE: [&str; 2] = ["-denorm-mode-fp32", "preserve"];
+/// The hash of the kernel under test. Every record here names it, so these tests keep asking
+/// the question they always asked; `exactness_admission.rs` varies it.
+const HASH: &str = "sha256:00";
 
 fn vk() -> TargetId {
     TargetId::parse(VK).unwrap()
@@ -42,12 +47,30 @@ fn stamp(target: TargetId, driver: &str, args: &[&str]) -> DeviceStamp {
             captured_unix_s: 1,
         },
         driver,
+        "slangc 2026.4",
         args.iter().map(|s| (*s).to_string()).collect(),
     )
 }
 
 fn relu_body() -> ScalarExpr {
     ScalarExpr::Unary(UnaryOp::Relu, Box::new(ScalarExpr::Input(0)))
+}
+
+fn record(
+    stamp: &DeviceStamp,
+    body: &ScalarExpr,
+    dtype: ElementKind,
+    verdict: ExactnessVerdict,
+) -> ExactnessRecord {
+    ExactnessRecord::new(
+        stamp.clone(),
+        body,
+        dtype,
+        verdict,
+        HASH,
+        "unpopped-slang 0.21.0",
+        Coverage::exhaustive(1 << 32),
+    )
 }
 
 fn ledger_of(
@@ -57,7 +80,7 @@ fn ledger_of(
     verdict: ExactnessVerdict,
 ) -> ExactnessLedger {
     let mut l = ExactnessLedger::new();
-    l.push(ExactnessRecord::new(stamp.clone(), body, dtype, verdict));
+    l.push(record(stamp, body, dtype, verdict));
     l
 }
 
@@ -103,6 +126,7 @@ fn an_unmeasured_vulkan_float_body_declines_and_a_preserving_measurement_admits_
     let exact = ledger_of(&s, &body, ElementKind::F32, ExactnessVerdict::Exact);
     let m = MeasuredOn {
         stamp: &s,
+        kernel_hash: HASH,
         ledger: &exact,
         dtype: ElementKind::F32,
     };
@@ -126,6 +150,7 @@ fn a_flushing_measurement_declines_even_where_the_table_says_exact() {
     let flush = ledger_of(&s, &body, ElementKind::F32, ExactnessVerdict::Flushes);
     let m = MeasuredOn {
         stamp: &s,
+        kernel_hash: HASH,
         ledger: &flush,
         dtype: ElementKind::F32,
     };
@@ -145,14 +170,15 @@ fn a_flushing_measurement_outweighs_an_exact_one_on_the_same_stamp() {
     let body = relu_body();
     let s = stamp(vk(), "24.1", &PRESERVE);
     let mut l = ledger_of(&s, &body, ElementKind::F32, ExactnessVerdict::Exact);
-    l.push(ExactnessRecord::new(
-        s.clone(),
+    l.push(record(
+        &s,
         &body,
         ElementKind::F32,
         ExactnessVerdict::Flushes,
     ));
     let m = MeasuredOn {
         stamp: &s,
+        kernel_hash: HASH,
         ledger: &l,
         dtype: ElementKind::F32,
     };
@@ -172,6 +198,7 @@ fn a_record_for_another_driver_args_body_or_dtype_admits_nothing() {
     let ask = |stamp: &DeviceStamp, body: &ScalarExpr, dtype: ElementKind| {
         let m = MeasuredOn {
             stamp,
+            kernel_hash: HASH,
             ledger: &exact,
             dtype,
         };
@@ -207,6 +234,7 @@ fn an_exact_record_does_not_make_an_operator_with_an_error_budget_exact() {
     let l = ledger_of(&s, &exp, ElementKind::F32, ExactnessVerdict::Exact);
     let m = MeasuredOn {
         stamp: &s,
+        kernel_hash: HASH,
         ledger: &l,
         dtype: ElementKind::F32,
     };
@@ -228,6 +256,7 @@ fn a_binary_body_with_no_record_is_declined_whatever_the_unary_records_say() {
     let l = ledger_of(&s, &relu_body(), ElementKind::F32, ExactnessVerdict::Exact);
     let m = MeasuredOn {
         stamp: &s,
+        kernel_hash: HASH,
         ledger: &l,
         dtype: ElementKind::F32,
     };
@@ -246,7 +275,7 @@ fn relu_contract_mode(s: &DeviceStamp, l: &ExactnessLedger) -> &'static str {
         &cell(vk()),
         &kernel(),
         &StubBackend,
-        Some((s, l)),
+        Some(Measured::new(s, HASH, l)),
     )
     .expect("a contract");
     declared_mode(&c)
@@ -314,13 +343,13 @@ fn required_fidelity_makes_no_claim_for_a_flushing_device() {
     assert_eq!(required_fidelity(&plan, &ops), None, "unmeasured: no claim");
     assert!(
         matches!(
-            required_fidelity_with_exactness(&plan, &ops, Some((&s, &exact))),
+            required_fidelity_with_exactness(&plan, &ops, Some(Measured::new(&s, HASH, &exact))),
             Some(Fidelity::Tolerant { .. })
         ),
         "control: an Exact record admits the body (a finite band), or the next row proves nothing"
     );
     assert_eq!(
-        required_fidelity_with_exactness(&plan, &ops, Some((&s, &flush))),
+        required_fidelity_with_exactness(&plan, &ops, Some(Measured::new(&s, HASH, &flush))),
         None,
         "a flushing device: no claim"
     );

@@ -16,18 +16,23 @@
 //!
 //! # What a record is a measurement of
 //!
-//! A [`DeviceStamp`]: the device, the runtime, **the driver version and the compiler arguments**.
-//! A record is a measurement of a driver and a flag set, not of a chip, so a changed stamp is a
-//! different device and no record applies: Exact declines again until it is re-measured.
+//! A [`DeviceStamp`]: the device, the runtime, **the driver version, the compiler version and the
+//! compiler arguments**. A record is a measurement of a driver, a compiler and a flag set, not of
+//! a chip, so a changed stamp is a different device and no record applies: Exact declines again
+//! until it is re-measured.
+//!
+//! And of **one kernel as compiled**: [`ExactnessRecord::kernel_hash`] names what actually ran
+//! (SPIR-V for Vulkan, source for cpu-c). A record applies only to a kernel with the same hash, so
+//! re-emitting a body differently can never inherit the old `Exact`.
 //!
 //! # Coverage is exactly what was run, with no extrapolation
 //!
 //! A record names one body at one dtype. A `relu` record says nothing about `add`, and an f32
-//! record says nothing about f16. Exhaustive 2^32 testing only exists for **unary f32** bodies:
-//! a binary or f64 body has a record only if someone ran a measurement for it (a sampled run can
-//! never accept, so a sampled run produces a [`ExactnessVerdict::Flushes`] or nothing, never an
-//! [`ExactnessVerdict::Exact`]). With no record the answer is the one the contract gives without
-//! this module.
+//! record says nothing about f16. A record also says how much it covered
+//! ([`ExactnessRecord::coverage`]): **only an [`CoverageKind::Exhaustive`] run can admit**. A
+//! [`CoverageKind::Sampled`] `Exact` is kept (it is evidence) but admits nothing, and is reported
+//! as [`Withheld::SampledOnly`]. A sampled `Flushes` still declines, because one mismatch is a
+//! mismatch. With no record the answer is the one the contract gives without this module.
 //!
 //! # The body key
 //!
@@ -35,23 +40,39 @@
 //! (`NaN` and the infinities are tagged strings, so they key by identity). That text is a
 //! contract of this module: a test pins it, because **a key that changes silently drops every
 //! record** and nothing would say so.
+//!
+//! # Admission, and the file
+//!
+//! [`ExactnessLedger::admit`] turns a ledger, a stamp, the kernel's hash and the caller's
+//! [`Requirement`] into an [`Admission`], a typed value the adopter acts on: Unpopped decides and
+//! names, it never launches a kernel. [`AdmissionTally`] counts the safe failures, because a
+//! decline on "no record" is correct and otherwise invisible. The ledger reads and writes as JSON
+//! Lines ([`ExactnessLedger::parse_jsonl`], [`ExactnessLedger::to_jsonl`]); the schema is owned
+//! here and nowhere else, and an unreadable line is a counted [`LineError`], never a panic and
+//! never silently dropped. Design: `docs/design-per-device-decline.md`.
+
+use std::collections::BTreeMap;
+
+use serde_json::{Map, Value, json};
 
 use crate::ir::ScalarExpr;
-use unpopped_vocab::{ElementKind, HwStamp};
+use unpopped_vocab::{ElementKind, HwStamp, TargetId};
 
 /// What a measurement of one body on one device concluded.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ExactnessVerdict {
     /// Every input the run covered matched the reference bit for bit. Only an exhaustive run may
-    /// say this; the harness is the producer and the one that knows whether it was exhaustive.
+    /// admit (see [`CoverageKind`]); the harness is the producer and the one that knows whether
+    /// it was exhaustive.
     Exact,
     /// At least one input differed from the reference (a flushed subnormal, in the case that
     /// motivated this module). The body is **not** exact on this device with this stamp.
     Flushes,
 }
 
-/// The identity of what was measured: a device, a runtime, a driver and the compiler arguments.
+/// The identity of what was measured: a device, a runtime, a driver, a compiler and its
+/// arguments.
 ///
 /// Equality ignores [`HwStamp::captured_unix_s`]: when a measurement was taken says nothing
 /// about what it measured. Every other field must match for a record to apply.
@@ -61,6 +82,10 @@ pub struct DeviceStamp {
     pub hw: HwStamp,
     /// The driver / ICD version as the platform spells it. Opaque: compared, never parsed.
     pub driver_version: String,
+    /// The compiler's own version (for Slang, what `slangc -v` prints). Opaque. The arguments do
+    /// not carry it, and a compiler upgrade changes the code it emits, so it is part of the
+    /// identity.
+    pub compiler_version: String,
     /// The compiler arguments the kernel was built with (for Slang, the `slangc` arguments such
     /// as `-denorm-mode-fp32 preserve`). Order is part of the identity.
     pub compiler_args: Vec<String>,
@@ -69,22 +94,34 @@ pub struct DeviceStamp {
 impl DeviceStamp {
     /// Build a stamp.
     #[must_use]
-    pub fn new(hw: HwStamp, driver_version: impl Into<String>, compiler_args: Vec<String>) -> Self {
+    pub fn new(
+        hw: HwStamp,
+        driver_version: impl Into<String>,
+        compiler_version: impl Into<String>,
+        compiler_args: Vec<String>,
+    ) -> Self {
         Self {
             hw,
             driver_version: driver_version.into(),
+            compiler_version: compiler_version.into(),
             compiler_args,
         }
+    }
+
+    /// Whether `other` is the same device, runtime, driver and compiler, differing at most in the
+    /// compiler arguments: the relation under which one argument set can be offered for another.
+    fn same_device_and_compiler(&self, other: &Self) -> bool {
+        self.hw.target == other.hw.target
+            && self.hw.device_name == other.hw.device_name
+            && self.hw.runtime_version == other.hw.runtime_version
+            && self.driver_version == other.driver_version
+            && self.compiler_version == other.compiler_version
     }
 }
 
 impl PartialEq for DeviceStamp {
     fn eq(&self, other: &Self) -> bool {
-        self.hw.target == other.hw.target
-            && self.hw.device_name == other.hw.device_name
-            && self.hw.runtime_version == other.hw.runtime_version
-            && self.driver_version == other.driver_version
-            && self.compiler_args == other.compiler_args
+        self.same_device_and_compiler(other) && self.compiler_args == other.compiler_args
     }
 }
 
@@ -100,8 +137,57 @@ pub fn body_key(body: &ScalarExpr, dtype: ElementKind) -> String {
     format!("{}:{json}", unpopped_vocab::dtype_token(dtype))
 }
 
-/// One measurement: this body, at this dtype, on this stamp, concluded `verdict`.
+/// How much of the input space a run covered.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum CoverageKind {
+    /// Every input the body has at this dtype. The only coverage that can admit.
+    Exhaustive,
+    /// A subset (a stride screen, a seeded sample). Evidence of a mismatch, never of exactness.
+    Sampled,
+}
+
+/// What a run covered: how, how many inputs (or input tuples), and the sampler's seed if it had
+/// one.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct Coverage {
+    /// Exhaustive or sampled.
+    pub kind: CoverageKind,
+    /// Inputs (or tuples) compared.
+    pub tuples: u64,
+    /// The sampler's seed, for a sampled run that had one.
+    pub seed: Option<u64>,
+}
+
+impl Coverage {
+    /// An exhaustive run over `tuples` inputs.
+    #[must_use]
+    pub fn exhaustive(tuples: u64) -> Self {
+        Self {
+            kind: CoverageKind::Exhaustive,
+            tuples,
+            seed: None,
+        }
+    }
+
+    /// A sampled run over `tuples` inputs.
+    #[must_use]
+    pub fn sampled(tuples: u64, seed: Option<u64>) -> Self {
+        Self {
+            kind: CoverageKind::Sampled,
+            tuples,
+            seed,
+        }
+    }
+}
+
+/// One measurement: this body, at this dtype, on this stamp, concluded `verdict`, for the kernel
+/// with this hash.
+///
+/// `#[non_exhaustive]`: build one with [`ExactnessRecord::new`], so a future field is not a
+/// breaking change.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct ExactnessRecord {
     /// What was measured on.
     pub stamp: DeviceStamp,
@@ -109,21 +195,145 @@ pub struct ExactnessRecord {
     pub key: String,
     /// What the measurement concluded.
     pub verdict: ExactnessVerdict,
+    /// Hash of what actually ran (`sha256:<hex>` of the SPIR-V for Vulkan, of the source for
+    /// cpu-c). Opaque here: compared, never computed. A record applies only to a kernel with this
+    /// hash.
+    pub kernel_hash: String,
+    /// Which emitter produced the kernel (`"{crate} {version}"`). Audit only: it is not part of
+    /// the lookup, because the kernel hash already names what ran.
+    pub emitter_version: String,
+    /// How much of the input space the run covered.
+    pub coverage: Coverage,
+    /// Fields a newer writer added that this version does not know, kept so they are written back.
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl ExactnessRecord {
-    /// Record that `body` at `dtype` on `stamp` concluded `verdict`.
+    /// Record that `body` at `dtype` on `stamp` concluded `verdict`, for the kernel hashed
+    /// `kernel_hash` that `emitter_version` produced, over `coverage`.
     #[must_use]
     pub fn new(
         stamp: DeviceStamp,
         body: &ScalarExpr,
         dtype: ElementKind,
         verdict: ExactnessVerdict,
+        kernel_hash: impl Into<String>,
+        emitter_version: impl Into<String>,
+        coverage: Coverage,
     ) -> Self {
         Self {
             stamp,
             key: body_key(body, dtype),
             verdict,
+            kernel_hash: kernel_hash.into(),
+            emitter_version: emitter_version.into(),
+            coverage,
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
+/// Why a claim is withheld: the four ways a ledger fails to admit, kept apart because they have
+/// different remedies (measure, change flags, re-measure, run the full space).
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
+pub enum Withheld {
+    /// No record for this body, dtype and stamp. **Distinct from [`Withheld::Flushes`]**:
+    /// collapsing them hides that a device was never measured.
+    Unmeasured,
+    /// A record for this stamp and kernel saw a mismatch.
+    Flushes,
+    /// Records exist for this body and stamp, but for a kernel with another hash: the kernel was
+    /// re-emitted or rebuilt since it was measured.
+    StaleKernel,
+    /// The only `Exact` for this kernel is from a sampled run, which cannot admit.
+    SampledOnly,
+}
+
+/// What a ledger says about one body, kernel and stamp.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum Finding {
+    /// An exhaustive run on exactly this stamp and kernel matched bit for bit.
+    Exact,
+    /// Nothing admits; see [`Withheld`].
+    Withheld(Withheld),
+}
+
+/// What the caller needs, so that "no" can be either quiet or loud.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum Requirement {
+    /// Take the kernel regardless; only the claim in its contract depends on the ledger.
+    BestEffort,
+    /// The caller needs Exact: a kernel that cannot be shown Exact is declined, and a variant that
+    /// can be shown Exact is offered.
+    Exact,
+}
+
+/// A different argument set that a ledger says is Exact on the same device and compiler.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArgsOffer {
+    /// The compiler arguments to build with.
+    pub compiler_args: Vec<String>,
+    /// The hash the rebuilt kernel must have for the record to apply. Unpopped never builds the
+    /// kernel, so the adopter checks this after building; a different hash means the record does
+    /// not cover what was built.
+    pub kernel_hash: String,
+}
+
+/// The outcome of [`ExactnessLedger::admit`], a value the adopter acts on. Unpopped never
+/// turns a decline into an error.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum Admission {
+    /// An exhaustive measurement on this stamp and kernel says Exact.
+    Admitted,
+    /// [`Requirement::BestEffort`]: the kernel stays and runs, but its contract must not claim
+    /// Exact.
+    ClaimWithheld(Withheld),
+    /// [`Requirement::Exact`] and nothing shows this kernel Exact on this stamp, and no variant
+    /// does either.
+    Declined(Withheld),
+    /// [`Requirement::Exact`], this stamp does not admit, but the same device and compiler is
+    /// recorded Exact with these arguments.
+    UseArgs(ArgsOffer),
+}
+
+impl Admission {
+    /// The reason this was not [`Admission::Admitted`], for counting. `None` when admitted.
+    #[must_use]
+    pub fn withheld(&self) -> Option<Withheld> {
+        match self {
+            Admission::Admitted => None,
+            Admission::ClaimWithheld(w) | Admission::Declined(w) => Some(*w),
+            // A variant is offered because the stamp as asked did not admit.
+            Admission::UseArgs(_) => None,
+        }
+    }
+}
+
+/// What the `*_with_exactness` entry points read: the stamp of the device the kernel will run on,
+/// the hash of the kernel **as built**, and the ledger. The hash is the adopter's to supply because
+/// only the adopter has the compiled artifact; a record applies only to a kernel with the same hash.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct Measured<'a> {
+    /// The device, driver, compiler and arguments the kernel will run with.
+    pub stamp: &'a DeviceStamp,
+    /// Hash of the kernel as built (the same spelling the ledger's records use).
+    pub kernel_hash: &'a str,
+    /// The measurements to read.
+    pub ledger: &'a ExactnessLedger,
+}
+
+impl<'a> Measured<'a> {
+    /// Name what is about to run and what has been measured.
+    #[must_use]
+    pub fn new(stamp: &'a DeviceStamp, kernel_hash: &'a str, ledger: &'a ExactnessLedger) -> Self {
+        Self {
+            stamp,
+            kernel_hash,
+            ledger,
         }
     }
 }
@@ -141,7 +351,7 @@ impl ExactnessLedger {
         Self::default()
     }
 
-    /// Add a record. Records are never merged or replaced: see [`Self::lookup`].
+    /// Add a record. Records are never merged or replaced: see [`Self::find`].
     pub fn push(&mut self, record: ExactnessRecord) {
         self.records.push(record);
     }
@@ -158,33 +368,366 @@ impl ExactnessLedger {
         self.records.is_empty()
     }
 
-    /// What measurement says about `body` at `dtype` on exactly `stamp`, or `None` if nothing
-    /// was measured on that stamp.
+    /// The records, in the order they were pushed.
+    #[must_use]
+    pub fn records(&self) -> &[ExactnessRecord] {
+        &self.records
+    }
+
+    /// What measurement says about `body` at `dtype` for the kernel hashed `kernel_hash` on
+    /// exactly `stamp`.
     ///
-    /// **Disagreement resolves to [`ExactnessVerdict::Flushes`]**: if two records for the same
-    /// stamp and body disagree, one of the runs saw a mismatch, and a run that saw none does not
-    /// cancel it. A record for any other stamp (another device, driver, runtime or argument set)
+    /// A record counts only when its stamp **and** kernel hash match. Among those:
+    ///
+    /// - **A `Flushes` dominates**: if records disagree, one run saw a mismatch, and a run that
+    ///   saw none does not cancel it. This holds for a sampled run too.
+    /// - An `Exact` admits only from an exhaustive run; a sampled one is [`Withheld::SampledOnly`].
+    /// - Records for the body and stamp under another hash are [`Withheld::StaleKernel`].
+    ///
+    /// A record for any other stamp (another device, driver, runtime, compiler or argument set)
     /// is not consulted.
     #[must_use]
-    pub fn lookup(
+    pub fn find(
         &self,
         stamp: &DeviceStamp,
+        kernel_hash: &str,
         body: &ScalarExpr,
         dtype: ElementKind,
-    ) -> Option<ExactnessVerdict> {
+    ) -> Finding {
         let key = body_key(body, dtype);
-        let mut found = None;
+        let (mut exact, mut sampled, mut stale) = (false, false, false);
         for r in self
             .records
             .iter()
             .filter(|r| r.key == key && r.stamp == *stamp)
         {
-            if r.verdict == ExactnessVerdict::Flushes {
-                return Some(ExactnessVerdict::Flushes);
+            if r.kernel_hash != kernel_hash {
+                stale = true;
+                continue;
             }
-            found = Some(r.verdict);
+            match (r.verdict, r.coverage.kind) {
+                (ExactnessVerdict::Flushes, _) => return Finding::Withheld(Withheld::Flushes),
+                (ExactnessVerdict::Exact, CoverageKind::Exhaustive) => exact = true,
+                (ExactnessVerdict::Exact, CoverageKind::Sampled) => sampled = true,
+            }
         }
-        found
+        if exact {
+            Finding::Exact
+        } else if sampled {
+            Finding::Withheld(Withheld::SampledOnly)
+        } else if stale {
+            Finding::Withheld(Withheld::StaleKernel)
+        } else {
+            Finding::Withheld(Withheld::Unmeasured)
+        }
+    }
+
+    /// [`Self::find`] as the pair the contract reads: `Some(Exact)` only for [`Finding::Exact`],
+    /// `Some(Flushes)` only for a measured mismatch, and `None` for everything else. An unmeasured,
+    /// stale or sampled-only kernel therefore claims nothing, exactly as an empty ledger does.
+    #[must_use]
+    pub fn lookup(
+        &self,
+        stamp: &DeviceStamp,
+        kernel_hash: &str,
+        body: &ScalarExpr,
+        dtype: ElementKind,
+    ) -> Option<ExactnessVerdict> {
+        match self.find(stamp, kernel_hash, body, dtype) {
+            Finding::Exact => Some(ExactnessVerdict::Exact),
+            Finding::Withheld(Withheld::Flushes) => Some(ExactnessVerdict::Flushes),
+            Finding::Withheld(_) => None,
+        }
+    }
+
+    /// Decide what to do with this kernel on this stamp. See [`Admission`] and [`Requirement`].
+    ///
+    /// A variant is offered only under [`Requirement::Exact`], only from a record on the same
+    /// device, runtime, driver and compiler with different arguments, and only if that record
+    /// would itself admit (its own stamp and hash, exhaustive, not outweighed by a `Flushes`).
+    /// The first such record in ledger order wins, so the offer is deterministic.
+    #[must_use]
+    pub fn admit(
+        &self,
+        stamp: &DeviceStamp,
+        kernel_hash: &str,
+        body: &ScalarExpr,
+        dtype: ElementKind,
+        requirement: Requirement,
+    ) -> Admission {
+        let why = match self.find(stamp, kernel_hash, body, dtype) {
+            Finding::Exact => return Admission::Admitted,
+            Finding::Withheld(w) => w,
+        };
+        if requirement != Requirement::Exact {
+            return Admission::ClaimWithheld(why);
+        }
+        let key = body_key(body, dtype);
+        let offer = self.records.iter().find(|r| {
+            r.key == key
+                && r.verdict == ExactnessVerdict::Exact
+                && r.stamp.same_device_and_compiler(stamp)
+                && r.stamp.compiler_args != stamp.compiler_args
+                && self.find(&r.stamp, &r.kernel_hash, body, dtype) == Finding::Exact
+        });
+        match offer {
+            Some(r) => Admission::UseArgs(ArgsOffer {
+                compiler_args: r.stamp.compiler_args.clone(),
+                kernel_hash: r.kernel_hash.clone(),
+            }),
+            None => Admission::Declined(why),
+        }
+    }
+}
+
+/// Counts of the safe failures, per device stamp and reason. A kernel declined for want of a
+/// record looks identical to one declined after a failed measurement unless something counts the
+/// difference.
+#[derive(Clone, Debug, Default)]
+pub struct AdmissionTally {
+    counts: Vec<(DeviceStamp, Withheld, u64)>,
+}
+
+impl AdmissionTally {
+    /// An empty tally.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Count one decision on `stamp`. Admissions and offered variants count nothing: the tally is
+    /// of withheld claims, and an offer is reported by the value itself.
+    pub fn observe(&mut self, stamp: &DeviceStamp, admission: &Admission) {
+        if let Some(w) = admission.withheld() {
+            self.add(stamp, w);
+        }
+    }
+
+    /// Count one withheld claim on `stamp` for `why`. Use this for a decision that did not go
+    /// through [`ExactnessLedger::admit`] (the contract entry points withhold without an
+    /// [`Admission`]).
+    pub fn add(&mut self, stamp: &DeviceStamp, why: Withheld) {
+        match self
+            .counts
+            .iter_mut()
+            .find(|(s, w, _)| s == stamp && *w == why)
+        {
+            Some((_, _, n)) => *n += 1,
+            None => self.counts.push((stamp.clone(), why, 1)),
+        }
+    }
+
+    /// How many times `why` was counted on `stamp`.
+    #[must_use]
+    pub fn count(&self, stamp: &DeviceStamp, why: Withheld) -> u64 {
+        self.counts
+            .iter()
+            .find(|(s, w, _)| s == stamp && *w == why)
+            .map_or(0, |(_, _, n)| *n)
+    }
+
+    /// Every `(stamp, reason, count)`, in first-seen order.
+    #[must_use]
+    pub fn entries(&self) -> &[(DeviceStamp, Withheld, u64)] {
+        &self.counts
+    }
+
+    /// The total across every stamp and reason.
+    #[must_use]
+    pub fn total(&self) -> u64 {
+        self.counts.iter().map(|(_, _, n)| *n).sum()
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The file: JSON Lines, one record per line, `schema` first.
+// ---------------------------------------------------------------------------------------------
+
+/// The `schema` value this version writes and reads.
+pub const SCHEMA: &str = "unpopped-exactness-ledger/1";
+
+/// Why a line was not read.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum LineError {
+    /// The line is not a JSON object.
+    NotJson(String),
+    /// A well-formed line from a schema this version does not know.
+    UnknownSchema(String),
+    /// A required field is missing or has the wrong type.
+    Field(&'static str),
+}
+
+/// A ledger read from text, and the lines that were not read.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LedgerRead {
+    /// The records that parsed, in file order.
+    pub ledger: ExactnessLedger,
+    /// `(1-based line number, why)` for every non-blank line that was not read. Never empty by
+    /// omission: a line is either in `ledger` or here.
+    pub rejected: Vec<(usize, LineError)>,
+}
+
+impl ExactnessRecord {
+    /// The record as one JSON line, without its newline. `schema` is first and the order is
+    /// fixed; fields in [`Self::extra`] follow.
+    #[must_use]
+    pub fn to_line(&self) -> String {
+        let st = &self.stamp;
+        let verdict = match self.verdict {
+            ExactnessVerdict::Exact => "exact",
+            ExactnessVerdict::Flushes => "flushes",
+        };
+        let kind = match self.coverage.kind {
+            CoverageKind::Exhaustive => "exhaustive",
+            CoverageKind::Sampled => "sampled",
+        };
+        // serde_json's map is sorted, so the line is assembled field by field to keep `schema`
+        // first and the order stable.
+        let mut fields: Vec<(&str, Value)> = vec![
+            ("schema", json!(SCHEMA)),
+            ("target", json!(st.hw.target.as_str())),
+            ("device_name", json!(st.hw.device_name)),
+            ("runtime_version", json!(st.hw.runtime_version)),
+            ("driver_version", json!(st.driver_version)),
+            ("compiler_args", json!(st.compiler_args)),
+            ("compiler_version", json!(st.compiler_version)),
+            ("key", json!(self.key)),
+            ("verdict", json!(verdict)),
+            ("kernel_hash", json!(self.kernel_hash)),
+            ("emitter_version", json!(self.emitter_version)),
+            (
+                "coverage",
+                json!({
+                    "kind": kind,
+                    "tuples": self.coverage.tuples,
+                    "seed": self.coverage.seed,
+                }),
+            ),
+            ("captured_unix_s", json!(st.hw.captured_unix_s)),
+        ];
+        fields.extend(self.extra.iter().map(|(k, v)| (k.as_str(), v.clone())));
+        let body: Vec<String> = fields
+            .into_iter()
+            .map(|(k, v)| format!("{}:{v}", Value::from(k)))
+            .collect();
+        format!("{{{}}}", body.join(","))
+    }
+
+    /// Read one line written by [`Self::to_line`].
+    ///
+    /// # Errors
+    /// A [`LineError`] naming why: not JSON, a schema this version does not know, or the first
+    /// required field that is missing or mistyped.
+    pub fn parse_line(line: &str) -> Result<Self, LineError> {
+        let v: Value = serde_json::from_str(line).map_err(|e| LineError::NotJson(e.to_string()))?;
+        let Value::Object(mut m) = v else {
+            return Err(LineError::NotJson("not an object".into()));
+        };
+        match m.remove("schema") {
+            Some(Value::String(s)) if s == SCHEMA => {}
+            Some(Value::String(s)) => return Err(LineError::UnknownSchema(s)),
+            _ => return Err(LineError::Field("schema")),
+        }
+        let text = |m: &mut Map<String, Value>, f: &'static str| match m.remove(f) {
+            Some(Value::String(s)) => Ok(s),
+            _ => Err(LineError::Field(f)),
+        };
+        let target =
+            TargetId::parse(&text(&mut m, "target")?).map_err(|_| LineError::Field("target"))?;
+        let device_name = text(&mut m, "device_name")?;
+        let runtime_version = text(&mut m, "runtime_version")?;
+        let driver_version = text(&mut m, "driver_version")?;
+        let compiler_args = match m.remove("compiler_args") {
+            Some(Value::Array(a)) => a
+                .into_iter()
+                .map(|x| match x {
+                    Value::String(s) => Ok(s),
+                    _ => Err(LineError::Field("compiler_args")),
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            _ => return Err(LineError::Field("compiler_args")),
+        };
+        let compiler_version = text(&mut m, "compiler_version")?;
+        let key = text(&mut m, "key")?;
+        let verdict = match text(&mut m, "verdict")?.as_str() {
+            "exact" => ExactnessVerdict::Exact,
+            "flushes" => ExactnessVerdict::Flushes,
+            _ => return Err(LineError::Field("verdict")),
+        };
+        let kernel_hash = text(&mut m, "kernel_hash")?;
+        let emitter_version = text(&mut m, "emitter_version")?;
+        let coverage = match m.remove("coverage") {
+            Some(Value::Object(mut c)) => {
+                let kind = match c.remove("kind") {
+                    Some(Value::String(s)) if s == "exhaustive" => CoverageKind::Exhaustive,
+                    Some(Value::String(s)) if s == "sampled" => CoverageKind::Sampled,
+                    _ => return Err(LineError::Field("coverage.kind")),
+                };
+                let tuples = c
+                    .remove("tuples")
+                    .and_then(|t| t.as_u64())
+                    .ok_or(LineError::Field("coverage.tuples"))?;
+                let seed = match c.remove("seed") {
+                    None | Some(Value::Null) => None,
+                    Some(s) => Some(s.as_u64().ok_or(LineError::Field("coverage.seed"))?),
+                };
+                Coverage { kind, tuples, seed }
+            }
+            _ => return Err(LineError::Field("coverage")),
+        };
+        let captured_unix_s = m
+            .remove("captured_unix_s")
+            .and_then(|t| t.as_u64())
+            .ok_or(LineError::Field("captured_unix_s"))?;
+        Ok(Self {
+            stamp: DeviceStamp::new(
+                HwStamp {
+                    target,
+                    device_name,
+                    runtime_version,
+                    captured_unix_s,
+                },
+                driver_version,
+                compiler_version,
+                compiler_args,
+            ),
+            key,
+            verdict,
+            kernel_hash,
+            emitter_version,
+            coverage,
+            extra: m.into_iter().collect(),
+        })
+    }
+}
+
+impl ExactnessLedger {
+    /// Read JSON Lines. Blank lines are skipped; every other unreadable line is in
+    /// [`LedgerRead::rejected`] with its line number.
+    #[must_use]
+    pub fn parse_jsonl(text: &str) -> LedgerRead {
+        let mut read = LedgerRead::default();
+        for (i, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match ExactnessRecord::parse_line(line) {
+                Ok(r) => read.ledger.push(r),
+                Err(e) => read.rejected.push((i + 1, e)),
+            }
+        }
+        read
+    }
+
+    /// The ledger as JSON Lines, one record per line, each ending in a newline.
+    #[must_use]
+    pub fn to_jsonl(&self) -> String {
+        self.records.iter().fold(String::new(), |mut s, r| {
+            s.push_str(&r.to_line());
+            s.push('\n');
+            s
+        })
     }
 }
 
@@ -192,7 +735,6 @@ impl ExactnessLedger {
 mod tests {
     use super::*;
     use crate::ir::UnaryOp;
-    use unpopped_vocab::TargetId;
 
     fn stamp(driver: &str, args: &[&str], captured: u64) -> DeviceStamp {
         DeviceStamp::new(
@@ -203,12 +745,32 @@ mod tests {
                 captured_unix_s: captured,
             },
             driver,
+            "slangc 2026.4",
             args.iter().map(|s| (*s).to_string()).collect(),
         )
     }
 
     fn relu() -> ScalarExpr {
         ScalarExpr::Unary(UnaryOp::Relu, Box::new(ScalarExpr::Input(0)))
+    }
+
+    const H: &str = "sha256:aa";
+
+    fn rec(
+        s: &DeviceStamp,
+        verdict: ExactnessVerdict,
+        hash: &str,
+        cov: Coverage,
+    ) -> ExactnessRecord {
+        ExactnessRecord::new(
+            s.clone(),
+            &relu(),
+            ElementKind::F32,
+            verdict,
+            hash,
+            "unpopped-slang 0.21.0",
+            cov,
+        )
     }
 
     /// The key text is a contract: a change here silently drops every stored record.
@@ -248,91 +810,22 @@ mod tests {
         let l = ExactnessLedger::new();
         assert!(l.is_empty());
         assert_eq!(
-            l.lookup(&stamp("24.1", &[], 1), &relu(), ElementKind::F32),
-            None
+            l.find(&stamp("24.1", &[], 1), H, &relu(), ElementKind::F32),
+            Finding::Withheld(Withheld::Unmeasured)
         );
     }
 
     #[test]
-    fn a_record_applies_to_exactly_its_stamp_body_and_dtype() {
+    fn the_capture_time_is_not_part_of_what_was_measured() {
         let s = stamp("24.1", &["-denorm-mode-fp32", "preserve"], 1);
         let mut l = ExactnessLedger::new();
-        l.push(ExactnessRecord::new(
-            s.clone(),
-            &relu(),
-            ElementKind::F32,
+        l.push(rec(
+            &s,
             ExactnessVerdict::Exact,
+            H,
+            Coverage::exhaustive(1 << 32),
         ));
-        assert_eq!(l.len(), 1);
-        assert_eq!(
-            l.lookup(&s, &relu(), ElementKind::F32),
-            Some(ExactnessVerdict::Exact)
-        );
-        // The capture time is not part of what was measured.
         let later = stamp("24.1", &["-denorm-mode-fp32", "preserve"], 99);
-        assert_eq!(
-            l.lookup(&later, &relu(), ElementKind::F32),
-            Some(ExactnessVerdict::Exact)
-        );
-        let neg = ScalarExpr::Unary(UnaryOp::Neg, Box::new(ScalarExpr::Input(0)));
-        assert_eq!(
-            l.lookup(&s, &neg, ElementKind::F32),
-            None,
-            "a relu run says nothing of neg"
-        );
-        assert_eq!(
-            l.lookup(&s, &relu(), ElementKind::F16),
-            None,
-            "an f32 run says nothing of f16"
-        );
-    }
-
-    /// The known-bad control for the stamp: a measurement of one driver is not a measurement of
-    /// the next, and a different flag set is a different kernel.
-    #[test]
-    fn a_changed_driver_or_flag_set_is_a_different_device() {
-        let s = stamp("24.1", &["-denorm-mode-fp32", "preserve"], 1);
-        let mut l = ExactnessLedger::new();
-        l.push(ExactnessRecord::new(
-            s,
-            &relu(),
-            ElementKind::F32,
-            ExactnessVerdict::Exact,
-        ));
-        let new_driver = stamp("24.2", &["-denorm-mode-fp32", "preserve"], 1);
-        let no_flag = stamp("24.1", &[], 1);
-        assert_eq!(l.lookup(&new_driver, &relu(), ElementKind::F32), None);
-        assert_eq!(l.lookup(&no_flag, &relu(), ElementKind::F32), None);
-    }
-
-    #[test]
-    fn disagreeing_records_resolve_to_flushes_in_either_order() {
-        let s = stamp("24.1", &[], 1);
-        for flip in [false, true] {
-            let mut l = ExactnessLedger::new();
-            let exact = ExactnessRecord::new(
-                s.clone(),
-                &relu(),
-                ElementKind::F32,
-                ExactnessVerdict::Exact,
-            );
-            let flush = ExactnessRecord::new(
-                s.clone(),
-                &relu(),
-                ElementKind::F32,
-                ExactnessVerdict::Flushes,
-            );
-            if flip {
-                l.push(flush);
-                l.push(exact);
-            } else {
-                l.push(exact);
-                l.push(flush);
-            }
-            assert_eq!(
-                l.lookup(&s, &relu(), ElementKind::F32),
-                Some(ExactnessVerdict::Flushes)
-            );
-        }
+        assert_eq!(l.find(&later, H, &relu(), ElementKind::F32), Finding::Exact);
     }
 }
