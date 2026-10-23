@@ -144,3 +144,15 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check advisories licenses bans sources
+
+  # PUBLISHED-VS-WORKSPACE DIVERGENCE (issue #4, the class). An in-tree build resolves the
+  # workspace crates by path and a consumer resolves only the registry, so a commit made to a
+  # version AFTER it was published is invisible to both. This job fetches each published crate at the
+  # version Cargo.toml declares and fails if its `src/` differs. A version not on the registry yet
+  # passes (it cannot have diverged from itself); a registry or network error fails. The script
+  # carries its own known-bad control: an injected line must move the differing count 0 -> 1.
+  divergence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: bash tools/published_divergence.sh

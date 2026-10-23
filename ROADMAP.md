@@ -36,18 +36,10 @@ blob changed, not on a schedule, and record the commit in `kiss/README.md`.
    (`cargo test -p unpopped-vocab --test kiss_derivation_vectors -- --nocapture`).
 3. **#6: `Backend::supports_dtype` returns a three-state enum** (`Supported` /
    `Unsupported` / `NotExpressible`; PM ruling under CireSnave's delegation, on the
-   issue). Scheduled, not parked. Breaking trait change, so it ships in the 0.21
-   Breaking minor with the per-device-decline record (`docs/design-per-device-decline.md`);
-   baracuda's CUDA emitter moves in the same release. vulkane (who raised it) confirms
+   issue). Scheduled, not parked. Breaking trait change, so it ships in the next
+   Breaking minor (0.22; 0.21.0 shipped without it); baracuda's CUDA emitter moves in the
+   same release. vulkane (who raised it) confirms
    the variant names before the PR merges.
-4. **#4: CI gate for published-vs-workspace divergence** (the class). Owner: this lane;
-   nothing external is needed. The issue's own closing condition is a CI job that fetches
-   each published crate and fails when `src/` differs from the workspace member at the same
-   version (`diff -rq --strip-trailing-cr`, with an injected-line control in the job). Not
-   yet written: `verify.yml` has no such job. Re-measured at `origin/main` `f58012d4` on
-   2026-10-23: 0 of 4 crates differ against published 0.20.19 (tree is 0.20.20; `src/` identical);
-   control (one injected line) moves the count 0 to 1. The instance is clean; the class is
-   not closed, so the issue stays open until the job exists.
 
 ## 4. Held or blocked
 
