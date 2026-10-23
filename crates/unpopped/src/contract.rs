@@ -30,7 +30,7 @@
 //! (the contract is withheld) rather than a bundle-poisoning unknown name.
 
 use crate::backend::GeneratedKernel;
-use crate::exactness::{DeviceStamp, ExactnessLedger, ExactnessVerdict};
+use crate::exactness::{DeviceStamp, ExactnessLedger, ExactnessVerdict, Measured};
 use crate::ir::{BinaryOp, ExprDag, NodeId, OobPolicy, OpDef, ScalarExpr, UnaryOp};
 use crate::pattern::{PatternNode, derive_pattern, to_fkc};
 use unpopped_vocab::{Contiguity, ElementKind, StructureKey, TargetId, VecWidth};
@@ -303,8 +303,9 @@ pub fn contract(
 }
 
 /// [`contract`], with what a device measured: `measured` is the stamp of the device the kernel
-/// will run on and a ledger of exhaustive runs. A `Flushes` record for this body on that stamp
-/// withdraws the `correctly_rounded` claim; a stamp for another target is ignored. See
+/// will run on, the hash of the kernel as built, and a ledger of runs. A `Flushes` record for this
+/// body on that stamp and kernel withdraws the `correctly_rounded` claim; a stamp for another
+/// target is ignored. See
 /// [`MeasuredOn`] for exactly what a ledger can and cannot change.
 #[must_use]
 pub fn contract_with_exactness(
@@ -312,7 +313,7 @@ pub fn contract_with_exactness(
     key: &StructureKey,
     kernel: &GeneratedKernel,
     backend: &dyn crate::backend::Backend,
-    measured: Option<(&DeviceStamp, &ExactnessLedger)>,
+    measured: Option<Measured<'_>>,
 ) -> Option<String> {
     // Skip a cell whose dtype has no FKC §5 base-dtype spelling — an unbindable
     // contract would corrupt the planner's honest miss signal (§4.3).
@@ -1311,14 +1312,14 @@ impl AccuracyKey {
 }
 
 /// What an exhaustive run on one device said about bodies at one dtype: a [`DeviceStamp`], the
-/// [`ExactnessLedger`] to read, and the dtype being asked about. Pass it to
+/// hash of the kernel as built, the [`ExactnessLedger`] to read, and the dtype being asked about. Pass it to
 /// [`ulp_bound_measured`] / [`precision_of_measured`] with the [`AccuracyKey`] for the same
 /// target. (A separate type rather than a field of [`AccuracyKey`], so that type keeps its
 /// shape: a lifetime parameter on it breaks every caller that names it.)
 ///
 /// # What a ledger changes, and what it cannot
 ///
-/// - A [`ExactnessVerdict::Flushes`] record for the body on exactly this stamp **declines** the
+/// - A [`ExactnessVerdict::Flushes`] record for the body on exactly this stamp and kernel hash **declines** the
 ///   bound (no finite bound, so no Exact claim and no fidelity band), on any namespace.
 /// - An [`ExactnessVerdict::Exact`] record admits a bound of 0 **only on a non-CUDA target and
 ///   only for a body whose operators the table rates 0** (the correctly-rounded ones): an Exact
@@ -1337,6 +1338,8 @@ impl AccuracyKey {
 pub struct MeasuredOn<'a> {
     /// The device, driver and compiler arguments the kernel will run with.
     pub stamp: &'a DeviceStamp,
+    /// Hash of the kernel as built: a record applies only to the kernel it measured.
+    pub kernel_hash: &'a str,
     /// The measurements to read.
     pub ledger: &'a ExactnessLedger,
     /// The dtype being asked about.
@@ -1346,20 +1349,22 @@ pub struct MeasuredOn<'a> {
 impl<'a> MeasuredOn<'a> {
     /// What the ledger says about `e` on this stamp, or `None` if nothing was measured there.
     fn verdict_for(&self, e: &ScalarExpr) -> Option<ExactnessVerdict> {
-        self.ledger.lookup(self.stamp, e, self.dtype)
+        self.ledger
+            .lookup(self.stamp, self.kernel_hash, e, self.dtype)
     }
 
     /// The pair the `*_with_exactness` entry points take, applied only when the stamp names
     /// `target`: a stamp for another target is not a measurement of this one.
     pub(crate) fn for_target(
-        measured: Option<(&'a DeviceStamp, &'a ExactnessLedger)>,
+        measured: Option<Measured<'a>>,
         target: TargetId,
         dtype: ElementKind,
     ) -> Option<Self> {
-        let (stamp, ledger) = measured?;
-        (stamp.hw.target == target).then_some(Self {
-            stamp,
-            ledger,
+        let m = measured?;
+        (m.stamp.hw.target == target).then_some(Self {
+            stamp: m.stamp,
+            kernel_hash: m.kernel_hash,
+            ledger: m.ledger,
             dtype,
         })
     }

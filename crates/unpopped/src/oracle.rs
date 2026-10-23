@@ -3184,10 +3184,7 @@ pub fn required_fidelity(plan: &KernelPlan<'_>, operands: &[OperandDesc]) -> Opt
 pub fn required_fidelity_with_exactness(
     plan: &KernelPlan<'_>,
     operands: &[OperandDesc],
-    measured: Option<(
-        &crate::exactness::DeviceStamp,
-        &crate::exactness::ExactnessLedger,
-    )>,
+    measured: Option<crate::exactness::Measured<'_>>,
 ) -> Option<Fidelity> {
     // Integer, bool and sub-byte cells are EXACT on both sides: the emitter's
     // arithmetic wraps at the C width and the oracle models that wrapping in
