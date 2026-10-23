@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.22.2` — CI only: advisory CodeRipper portfolio check
+
+Adds a non-blocking `portfolio` job (reusable workflow `ciresnave/coderipper`, pinned by SHA). No code, no API change.
+
 ## `0.22.1` — docs only: ROADMAP drops the landed rows (#6, the `0.20.3` publish)
 
 No code, no API change.
