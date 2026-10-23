@@ -208,67 +208,48 @@ fn a_flushing_default_offers_the_preserving_arguments() {
     );
 }
 
-#[test]
-fn an_offer_must_itself_admit_and_must_be_the_same_device_and_compiler() {
+/// A ledger with a flushing default and a variant record built by `variant`, asked for Exact.
+fn offer_for(variant: Vec<ExactnessRecord>) -> Admission {
     let default = stamp(&[]);
-    let preserve = stamp(&PRESERVE);
-    let ask = |l: &ExactnessLedger| admit(l, &default, HASH, Requirement::Exact);
-    let flush_default = rec(&default, ExactnessVerdict::Flushes, HASH, exhaustive());
+    let mut records = vec![rec(&default, ExactnessVerdict::Flushes, HASH, exhaustive())];
+    records.extend(variant);
+    admit(&ledger(records), &default, HASH, Requirement::Exact)
+}
 
-    // Control: the offer exists when the variant record is sound.
-    let sound = ledger(vec![
-        flush_default.clone(),
-        rec(
-            &preserve,
-            ExactnessVerdict::Exact,
-            "sha256:pp",
-            exhaustive(),
-        ),
-    ]);
-    assert!(matches!(ask(&sound), Admission::UseArgs(_)));
+fn variant_exact(s: &DeviceStamp, cov: Coverage) -> ExactnessRecord {
+    rec(s, ExactnessVerdict::Exact, "sha256:pp", cov)
+}
 
-    // Sampled-only variant: it cannot admit, so it is not offered.
-    let sampled = ledger(vec![
-        flush_default.clone(),
-        rec(
-            &preserve,
-            ExactnessVerdict::Exact,
-            "sha256:pp",
-            Coverage::sampled(10, None),
-        ),
-    ]);
-    assert_eq!(ask(&sampled), Admission::Declined(Withheld::Flushes));
+#[test]
+fn a_sound_variant_record_is_offered() {
+    let p = stamp(&PRESERVE);
+    assert!(matches!(
+        offer_for(vec![variant_exact(&p, exhaustive())]),
+        Admission::UseArgs(_)
+    ));
+}
 
-    // Variant outweighed by its own Flushes.
-    let contradicted = ledger(vec![
-        flush_default.clone(),
-        rec(
-            &preserve,
-            ExactnessVerdict::Exact,
-            "sha256:pp",
-            exhaustive(),
-        ),
-        rec(
-            &preserve,
-            ExactnessVerdict::Flushes,
-            "sha256:pp",
-            exhaustive(),
-        ),
-    ]);
-    assert_eq!(ask(&contradicted), Admission::Declined(Withheld::Flushes));
+/// Each of the next three has the control above beside it: the same ledger with a sound record.
+#[test]
+fn a_sampled_only_variant_cannot_admit_so_it_is_not_offered() {
+    let p = stamp(&PRESERVE);
+    let r = offer_for(vec![variant_exact(&p, Coverage::sampled(10, None))]);
+    assert_eq!(r, Admission::Declined(Withheld::Flushes));
+}
 
-    // Variant measured under another compiler: a different device for this purpose.
-    let other_compiler = stamp_with("slangc 2026.5", &PRESERVE);
-    let wrong_compiler = ledger(vec![
-        flush_default,
-        rec(
-            &other_compiler,
-            ExactnessVerdict::Exact,
-            "sha256:pp",
-            exhaustive(),
-        ),
-    ]);
-    assert_eq!(ask(&wrong_compiler), Admission::Declined(Withheld::Flushes));
+#[test]
+fn a_variant_outweighed_by_its_own_flushes_is_not_offered() {
+    let p = stamp(&PRESERVE);
+    let flush = rec(&p, ExactnessVerdict::Flushes, "sha256:pp", exhaustive());
+    let r = offer_for(vec![variant_exact(&p, exhaustive()), flush]);
+    assert_eq!(r, Admission::Declined(Withheld::Flushes));
+}
+
+#[test]
+fn a_variant_measured_under_another_compiler_is_a_different_device() {
+    let other = stamp_with("slangc 2026.5", &PRESERVE);
+    let r = offer_for(vec![variant_exact(&other, exhaustive())]);
+    assert_eq!(r, Admission::Declined(Withheld::Flushes));
 }
 
 #[test]
@@ -333,7 +314,7 @@ fn the_precision_claim_follows_the_kernel_hash() {
 // --- the file --------------------------------------------------------------------------------
 
 #[test]
-fn the_file_round_trips_and_a_known_good_line_is_pinned() {
+fn the_file_round_trips() {
     let s = stamp(&PRESERVE);
     let l = ledger(vec![
         rec(&s, ExactnessVerdict::Exact, HASH, exhaustive()),
@@ -348,8 +329,19 @@ fn the_file_round_trips_and_a_known_good_line_is_pinned() {
     let read = ExactnessLedger::parse_jsonl(&text);
     assert!(read.rejected.is_empty());
     assert_eq!(read.ledger, l);
-    // The wire form is a contract with the harness that wrote its lines before this schema moved
-    // here, so a line it wrote must keep reading.
+}
+
+/// The wire form is a contract with the harness that wrote its lines before this schema moved
+/// here, so the first field and the coverage spelling are pinned.
+#[test]
+fn the_wire_form_starts_with_the_schema_and_spells_coverage_as_the_harness_does() {
+    let l = ledger(vec![rec(
+        &stamp(&PRESERVE),
+        ExactnessVerdict::Exact,
+        HASH,
+        exhaustive(),
+    )]);
+    let text = l.to_jsonl();
     let first = text.lines().next().unwrap();
     assert!(
         first.starts_with(r#"{"schema":"unpopped-exactness-ledger/1","target":"vulkan:"#),

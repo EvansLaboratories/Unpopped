@@ -629,69 +629,18 @@ impl ExactnessRecord {
             Some(Value::String(s)) => return Err(LineError::UnknownSchema(s)),
             _ => return Err(LineError::Field("schema")),
         }
-        let text = |m: &mut Map<String, Value>, f: &'static str| match m.remove(f) {
-            Some(Value::String(s)) => Ok(s),
-            _ => Err(LineError::Field(f)),
-        };
-        let target =
-            TargetId::parse(&text(&mut m, "target")?).map_err(|_| LineError::Field("target"))?;
-        let device_name = text(&mut m, "device_name")?;
-        let runtime_version = text(&mut m, "runtime_version")?;
-        let driver_version = text(&mut m, "driver_version")?;
-        let compiler_args = match m.remove("compiler_args") {
-            Some(Value::Array(a)) => a
-                .into_iter()
-                .map(|x| match x {
-                    Value::String(s) => Ok(s),
-                    _ => Err(LineError::Field("compiler_args")),
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-            _ => return Err(LineError::Field("compiler_args")),
-        };
-        let compiler_version = text(&mut m, "compiler_version")?;
-        let key = text(&mut m, "key")?;
-        let verdict = match text(&mut m, "verdict")?.as_str() {
+        let stamp = take_stamp(&mut m)?;
+        let key = take_text(&mut m, "key")?;
+        let verdict = match take_text(&mut m, "verdict")?.as_str() {
             "exact" => ExactnessVerdict::Exact,
             "flushes" => ExactnessVerdict::Flushes,
             _ => return Err(LineError::Field("verdict")),
         };
-        let kernel_hash = text(&mut m, "kernel_hash")?;
-        let emitter_version = text(&mut m, "emitter_version")?;
-        let coverage = match m.remove("coverage") {
-            Some(Value::Object(mut c)) => {
-                let kind = match c.remove("kind") {
-                    Some(Value::String(s)) if s == "exhaustive" => CoverageKind::Exhaustive,
-                    Some(Value::String(s)) if s == "sampled" => CoverageKind::Sampled,
-                    _ => return Err(LineError::Field("coverage.kind")),
-                };
-                let tuples = c
-                    .remove("tuples")
-                    .and_then(|t| t.as_u64())
-                    .ok_or(LineError::Field("coverage.tuples"))?;
-                let seed = match c.remove("seed") {
-                    None | Some(Value::Null) => None,
-                    Some(s) => Some(s.as_u64().ok_or(LineError::Field("coverage.seed"))?),
-                };
-                Coverage { kind, tuples, seed }
-            }
-            _ => return Err(LineError::Field("coverage")),
-        };
-        let captured_unix_s = m
-            .remove("captured_unix_s")
-            .and_then(|t| t.as_u64())
-            .ok_or(LineError::Field("captured_unix_s"))?;
+        let kernel_hash = take_text(&mut m, "kernel_hash")?;
+        let emitter_version = take_text(&mut m, "emitter_version")?;
+        let coverage = take_coverage(&mut m)?;
         Ok(Self {
-            stamp: DeviceStamp::new(
-                HwStamp {
-                    target,
-                    device_name,
-                    runtime_version,
-                    captured_unix_s,
-                },
-                driver_version,
-                compiler_version,
-                compiler_args,
-            ),
+            stamp,
             key,
             verdict,
             kernel_hash,
@@ -700,6 +649,72 @@ impl ExactnessRecord {
             extra: m.into_iter().collect(),
         })
     }
+}
+
+fn take_text(m: &mut Map<String, Value>, f: &'static str) -> Result<String, LineError> {
+    match m.remove(f) {
+        Some(Value::String(s)) => Ok(s),
+        _ => Err(LineError::Field(f)),
+    }
+}
+
+fn take_u64(m: &mut Map<String, Value>, f: &'static str) -> Result<u64, LineError> {
+    m.remove(f)
+        .and_then(|t| t.as_u64())
+        .ok_or(LineError::Field(f))
+}
+
+fn take_args(m: &mut Map<String, Value>) -> Result<Vec<String>, LineError> {
+    let Some(Value::Array(a)) = m.remove("compiler_args") else {
+        return Err(LineError::Field("compiler_args"));
+    };
+    a.into_iter()
+        .map(|x| match x {
+            Value::String(s) => Ok(s),
+            _ => Err(LineError::Field("compiler_args")),
+        })
+        .collect()
+}
+
+/// The device, runtime, driver, compiler and arguments fields, and the capture time.
+fn take_stamp(m: &mut Map<String, Value>) -> Result<DeviceStamp, LineError> {
+    let target =
+        TargetId::parse(&take_text(m, "target")?).map_err(|_| LineError::Field("target"))?;
+    let device_name = take_text(m, "device_name")?;
+    let runtime_version = take_text(m, "runtime_version")?;
+    let driver_version = take_text(m, "driver_version")?;
+    let compiler_args = take_args(m)?;
+    let compiler_version = take_text(m, "compiler_version")?;
+    let captured_unix_s = take_u64(m, "captured_unix_s")?;
+    let hw = HwStamp {
+        target,
+        device_name,
+        runtime_version,
+        captured_unix_s,
+    };
+    Ok(DeviceStamp::new(
+        hw,
+        driver_version,
+        compiler_version,
+        compiler_args,
+    ))
+}
+
+fn take_coverage(m: &mut Map<String, Value>) -> Result<Coverage, LineError> {
+    let Some(Value::Object(mut c)) = m.remove("coverage") else {
+        return Err(LineError::Field("coverage"));
+    };
+    let kind = match c.remove("kind") {
+        Some(Value::String(s)) if s == "exhaustive" => CoverageKind::Exhaustive,
+        Some(Value::String(s)) if s == "sampled" => CoverageKind::Sampled,
+        _ => return Err(LineError::Field("coverage.kind")),
+    };
+    let tuples = take_u64(&mut c, "tuples").map_err(|_| LineError::Field("coverage.tuples"))?;
+    let seed = match c.remove("seed") {
+        None | Some(Value::Null) => None,
+        Some(s) => Some(s.as_u64().ok_or(LineError::Field("coverage.seed"))?),
+    };
+    Ok(Coverage { kind, tuples, seed })
 }
 
 impl ExactnessLedger {
