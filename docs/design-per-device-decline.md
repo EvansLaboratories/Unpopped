@@ -2,7 +2,7 @@
 
 Status: **accepted 2026-10-22** with the PM's rulings (section 8). Written against Unpopped
 `origin/main` `ed8ccbd` (0.20.19) and unpopped-harness `origin/main` `4a48c4d` (0.0.7; f64 screens in
-#8). Roadmap row 3's tail. Nothing here is implemented; section 7 is the order.
+#8). Roadmap row 3's tail. Section 7 is the order: step 1 is harness 0.0.9 (merged), step 2 is Unpopped 0.21.0 (record, `Admission`, ledger file, tally); step 3 is Fuel's.
 
 ## 1. What exists, and the gap
 

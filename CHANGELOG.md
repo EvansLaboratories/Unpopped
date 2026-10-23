@@ -15,6 +15,20 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.21.0` — BREAKING: the per-device decline (`ExactnessRecord` names what it was baked against; `Admission`; the ledger file)
+
+Step 2 of `docs/design-per-device-decline.md`, with the PM's rulings of 2026-10-22. Pre-1.0, so the second number is the major.
+
+**Breaking, all in `unpopped::exactness` and its readers:**
+- `DeviceStamp::new(hw, driver, compiler_version, compiler_args)` and a new `DeviceStamp::compiler_version`, part of the stamp's identity: a `slangc` upgrade now invalidates a record (it did not before; the arguments do not carry the version).
+- `ExactnessRecord` is `#[non_exhaustive]` and gains `kernel_hash`, `emitter_version`, `coverage` (`Coverage { kind: Exhaustive | Sampled, tuples, seed }`) and `extra` (fields a newer writer added, kept on write). `ExactnessRecord::new` takes `kernel_hash`, `emitter_version`, `coverage`.
+- A record applies only to a kernel with the same `kernel_hash`, and **only an `Exhaustive` `Exact` admits**: a sampled `Exact` is kept as evidence and admits nothing (it did before; the module docs always said it could not). A sampled `Flushes` still declines.
+- `ExactnessLedger::lookup(stamp, kernel_hash, body, dtype)` takes the hash. `contract_with_exactness` and `required_fidelity_with_exactness` take `Option<Measured>` (`Measured::new(stamp, kernel_hash, ledger)`) instead of a `(stamp, ledger)` pair, and `MeasuredOn` gains `kernel_hash`.
+
+**Added:** `ExactnessLedger::find` (`Finding::Exact | Withheld(Unmeasured | Flushes | StaleKernel | SampledOnly)`; `Unmeasured` stays distinct from `Flushes`); `ExactnessLedger::admit(stamp, kernel_hash, body, dtype, Requirement)` returning a typed `Admission { Admitted, ClaimWithheld(..), Declined(..), UseArgs(ArgsOffer) }` that Unpopped never turns into an error (the adopter chooses; Fuel owns the ledger location, measure-on-first-run and applying `UseArgs`); `AdmissionTally` (the reporter for the safe failure, per stamp and reason); and the ledger file, JSON Lines, schema `unpopped-exactness-ledger/1`, owned here (`ExactnessRecord::to_line` / `parse_line`, `ExactnessLedger::to_jsonl` / `parse_jsonl`). An unreadable line is a counted `LineError` with its line number, never a panic and never dropped silently; unknown fields round-trip. The wire form is the one `unpopped-harness` 0.0.9 already writes, pinned by a test with a literal line.
+
+**Not here:** `emitter_version` is still a string the producer supplies (Unpopped cannot ask a `Backend` its version; a `Backend` method is a candidate for a later release), and `Backend::supports_dtype` (#6) is its own PR in this release line. `unpopped-harness` moves to this record in its own PR.
+
 ## `0.20.21` — docs only: `ROADMAP.md` schedules #6 and #4
 
 No code, no API change. #6 (three-state `supports_dtype`) is scheduled into the 0.21 Breaking minor; #4 stays open until `verify.yml` runs the published-vs-workspace comparison, which is now a roadmap row.
