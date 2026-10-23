@@ -1,7 +1,7 @@
 # Unpopped roadmap
 
 What this lane is doing, in what order, and **what each item waits on**. Read at
-`origin/main` `9323f6d` (0.20.2, plus #69 = 0.20.3) on 2026-10-17; every row names the ref it was
+`origin/main` `f58012d4` (0.20.20) on 2026-10-23; every row names the ref it was
 read at, so re-read it before acting on it. History is in `CHANGELOG.md`;
 knowingly-undone work and its reasoning is `docs/deferred.md`. This file is the
 queue, not the archive: delete a row when it lands.
@@ -27,13 +27,27 @@ queue, not the archive: delete a row when it lands.
 KISS `main` moves faster than this lane re-vendors. Re-vendor when KISS says a
 blob changed, not on a schedule, and record the commit in `kiss/README.md`.
 
-## 3. Next (none unblocked; the PM assigns)
+## 3. Next
 
 1. **`Approx` qualifier** (`docs/idiom-lifting-design.md` §4.3): the full fix for
    `__expf` / `__logf`, which #57 only made refuse. Needs KISS-coordinated
    numerics axes.
 2. **Re-vendor on KISS change**, with the derivation vectors re-run
    (`cargo test -p unpopped-vocab --test kiss_derivation_vectors -- --nocapture`).
+3. **#6: `Backend::supports_dtype` returns a three-state enum** (`Supported` /
+   `Unsupported` / `NotExpressible`; PM ruling under CireSnave's delegation, on the
+   issue). Scheduled, not parked. Breaking trait change, so it ships in the 0.21
+   Breaking minor with the per-device-decline record (`docs/design-per-device-decline.md`);
+   baracuda's CUDA emitter moves in the same release. vulkane (who raised it) confirms
+   the variant names before the PR merges.
+4. **#4: CI gate for published-vs-workspace divergence** (the class). Owner: this lane;
+   nothing external is needed. The issue's own closing condition is a CI job that fetches
+   each published crate and fails when `src/` differs from the workspace member at the same
+   version (`diff -rq --strip-trailing-cr`, with an injected-line control in the job). Not
+   yet written: `verify.yml` has no such job. Re-measured at `origin/main` `f58012d4` on
+   2026-10-23: 0 of 4 crates differ against published 0.20.19 (tree is 0.20.20; `src/` identical);
+   control (one injected line) moves the count 0 to 1. The instance is clean; the class is
+   not closed, so the issue stays open until the job exists.
 
 ## 4. Held or blocked
 
@@ -44,7 +58,6 @@ blob changed, not on a schedule, and record the commit in `kiss/README.md`.
 | Moving `ArchSku` into `baracuda-cuda-vocab` | PM says go |
 | Groupshared / cooperative scope call (`docs/groupshared-sizing.md`) | CireSnave or PM |
 | CpuC declines `Select` for every narrow float | parity gap, not a bug; no owner |
-| Open issues #4 (published-vs-workspace divergence, the class), #6 (`supports_dtype` has three states) | design decisions, not scheduled |
 
 ## 5. Standing constraints
 
