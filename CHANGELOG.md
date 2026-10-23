@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.22.0` — BREAKING: `Backend::supports_dtype` returns `DtypeSupport` (closes #6)
+
+`fn supports_dtype(&self, dtype, target) -> bool` becomes `-> DtypeSupport`: `Supported` / `Unsupported` (the device or this backend lacks it: change hardware) / `NotExpressible` (the target's vocabulary cannot say: wait for a spec). `bool` reported both refusals as `false`. The enum is `#[non_exhaustive]`; `DtypeSupport::is_supported()` is the old answer for a caller that only needs to know whether to emit. **Migration:** change the return type; `true` becomes `Supported`, `false` becomes `Unsupported` unless the refusal is "the vocabulary has no token to say" (then `NotExpressible`). A wrong guess between the two declines identically; only the remedy differs. Callers: `.is_supported()`.
+
+In tree: `unpopped-cpu-c` has no vocabulary-gated refusals (the MX scales and `fnuz` pair are `Unsupported` by design). `unpopped-slang`: `i8`/`u8`/`bool` on a target without the `i8` arith token is `Unsupported`; `i16`/`u16` on a target without an `i16` token is `NotExpressible`, because the published `<arith>` vocabulary names no 16-bit arithmetic token (Vulkane's finding: *silence, not denial*). Out of tree: baracuda's CUDA emitter moves in the same release. Variant names are proposed here; Vulkane (who raised it) confirms before merge.
+
 ## `0.21.1` — CI only: the published-vs-workspace divergence gate (closes #4)
 
 No code, no API change. `tools/published_divergence.sh` and a `divergence` job in `verify.yml`: for each publishable crate whose declared version is already on the registry, the registry's `src/` must equal the workspace's (`diff -rq --strip-trailing-cr`). A version not yet published passes as unreleased; a registry or network failure fails. The decision uses the sparse index, because `static.crates.io` answers 403 for a file that does not exist. The script runs its own control first (an injected line moves the differing count 0 to 1) and prints its population. Verified locally at `f0f25620`: 4 compared, 0 differ; a line appended to `unpopped-vocab` makes it exit 1; a bumped, unpublished `unpopped-slang` is reported unreleased.

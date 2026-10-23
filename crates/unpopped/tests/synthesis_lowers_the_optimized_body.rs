@@ -14,7 +14,7 @@
 
 use std::sync::Mutex;
 
-use unpopped::backend::{Backend, GeneratedKernel, LowerError};
+use unpopped::backend::{Backend, DtypeSupport, GeneratedKernel, LowerError};
 use unpopped::jit::{JitBudget, JitRequest, StubCompiler, synthesize};
 use unpopped::pattern::PatternNode;
 use unpopped::plan::KernelPlan;
@@ -31,8 +31,8 @@ impl Backend for Recorder {
     fn provider(&self) -> &str {
         "unpopped-test"
     }
-    fn supports_dtype(&self, _dtype: ElementKind, _target: TargetId) -> bool {
-        true
+    fn supports_dtype(&self, _dtype: ElementKind, _target: TargetId) -> DtypeSupport {
+        DtypeSupport::Supported
     }
     fn lower(&self, plan: &KernelPlan<'_>) -> Result<GeneratedKernel, LowerError> {
         self.0

@@ -353,7 +353,7 @@ fn synthesize_op(
     // Bool/S8/Complex Add region would then panic in `scalar_ctype` during
     // `generate`. Decline it here instead (the Synthesizer trait must never
     // unwind across the boundary).
-    if !backend.supports_dtype(dtype, key.target) {
+    if !backend.supports_dtype(dtype, key.target).is_supported() {
         return Err(JitError::UnsupportedDtype);
     }
     let kernel_op = OpDef {

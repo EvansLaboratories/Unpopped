@@ -84,7 +84,7 @@ fn a_carrier_plus_an_emitted_codec_is_compute_support() {
     ] {
         assert_eq!(scalar_ctype(dt), Some(carrier), "{dt:?}'s carrier");
         assert!(
-            CpuC.supports_dtype(dt, target()),
+            CpuC.supports_dtype(dt, target()).is_supported(),
             "{dt:?} has a carrier AND an emitted codec, so CpuC computes it"
         );
     }
@@ -97,11 +97,11 @@ fn a_carrier_plus_an_emitted_codec_is_compute_support() {
 #[test]
 fn the_mx_scales_are_declined_by_design_not_for_want_of_a_codec() {
     for dt in [ElementKind::F8E8M0, ElementKind::F8E6M2] {
-        assert!(!CpuC.supports_dtype(dt, target()));
+        assert!(!CpuC.supports_dtype(dt, target()).is_supported());
     }
     // The reserved fnuz pair must never lower at this schema version either.
     for dt in [ElementKind::Fp8E4M3FNUZ, ElementKind::Fp8E5M2FNUZ] {
-        assert!(!CpuC.supports_dtype(dt, target()));
+        assert!(!CpuC.supports_dtype(dt, target()).is_supported());
     }
 }
 
@@ -124,7 +124,7 @@ fn the_admission_set_is_pinned_so_a_widening_is_loud() {
     let computes: Vec<ElementKind> = ElementKind::ALL
         .iter()
         .copied()
-        .filter(|&d| CpuC.supports_dtype(d, target()))
+        .filter(|&d| CpuC.supports_dtype(d, target()).is_supported())
         .collect();
 
     let mut want = vec![

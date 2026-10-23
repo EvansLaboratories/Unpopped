@@ -50,7 +50,7 @@
 //! that asked. That test had been naming this defect from inside another
 //! project's suite for months, correctly, and nobody read it as a bug report.
 
-use unpopped::backend::{Backend, GeneratedKernel, LowerError};
+use unpopped::backend::{Backend, DtypeSupport, GeneratedKernel, LowerError};
 use unpopped::ir::{OpDef, ReduceOp, ReduceStage, input, reduced};
 use unpopped::plan::KernelPlan;
 use unpopped::try_generate;
@@ -66,8 +66,8 @@ impl Backend for Spells {
     fn provider(&self) -> &str {
         "unpopped-tests"
     }
-    fn supports_dtype(&self, _dtype: ElementKind, _target: TargetId) -> bool {
-        true
+    fn supports_dtype(&self, _dtype: ElementKind, _target: TargetId) -> DtypeSupport {
+        DtypeSupport::Supported
     }
     fn lower(&self, _plan: &KernelPlan<'_>) -> Result<GeneratedKernel, LowerError> {
         Ok(GeneratedKernel::new(
@@ -164,8 +164,8 @@ fn the_same_entry_point_declines_an_unspellable_dtype_typed() {
         fn provider(&self) -> &str {
             "unpopped-tests"
         }
-        fn supports_dtype(&self, _dtype: ElementKind, _target: TargetId) -> bool {
-            false
+        fn supports_dtype(&self, _dtype: ElementKind, _target: TargetId) -> DtypeSupport {
+            DtypeSupport::Unsupported
         }
         fn lower(&self, plan: &KernelPlan<'_>) -> Result<GeneratedKernel, LowerError> {
             Err(LowerError::UnsupportedDtype {

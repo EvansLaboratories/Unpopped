@@ -25,7 +25,7 @@
 // that binary (`OtherStub` is in `provenance.rs`).
 #![allow(unreachable_pub)]
 
-use unpopped::backend::{Backend, GeneratedKernel, LowerError};
+use unpopped::backend::{Backend, DtypeSupport, GeneratedKernel, LowerError};
 use unpopped::plan::KernelPlan;
 use unpopped_vocab::{ElementKind, TargetId};
 
@@ -41,8 +41,8 @@ impl Backend for StubBackend {
     fn provider(&self) -> &str {
         "unpopped-test"
     }
-    fn supports_dtype(&self, _dtype: ElementKind, _target: TargetId) -> bool {
-        true
+    fn supports_dtype(&self, _dtype: ElementKind, _target: TargetId) -> DtypeSupport {
+        DtypeSupport::Supported
     }
     fn lower(&self, plan: &KernelPlan<'_>) -> Result<GeneratedKernel, LowerError> {
         // The name embeds the dtype so a test can tell two cells apart without

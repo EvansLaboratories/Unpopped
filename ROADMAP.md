@@ -34,7 +34,7 @@ blob changed, not on a schedule, and record the commit in `kiss/README.md`.
    numerics axes.
 2. **Re-vendor on KISS change**, with the derivation vectors re-run
    (`cargo test -p unpopped-vocab --test kiss_derivation_vectors -- --nocapture`).
-3. **#6: `Backend::supports_dtype` returns a three-state enum** (`Supported` /
+3. **#6 (PR open, 0.22.0): `Backend::supports_dtype` returns a three-state enum** (`Supported` /
    `Unsupported` / `NotExpressible`; PM ruling under CireSnave's delegation, on the
    issue). Scheduled, not parked. Breaking trait change, so it ships in the next
    Breaking minor (0.22; 0.21.0 shipped without it); baracuda's CUDA emitter moves in the

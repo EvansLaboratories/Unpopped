@@ -49,7 +49,7 @@
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Mutex;
 
-use unpopped::backend::{Backend, GeneratedKernel, LowerError};
+use unpopped::backend::{Backend, DtypeSupport, GeneratedKernel, LowerError};
 use unpopped::ir::{BinaryOp, Expr, OpDef, ReduceOp, ReduceStage, coord, input, reduced};
 use unpopped::plan::KernelPlan;
 use unpopped::try_generate;
@@ -104,8 +104,8 @@ impl Backend for SpellsAll {
     fn provider(&self) -> &str {
         "unpopped-tests"
     }
-    fn supports_dtype(&self, _dtype: ElementKind, _target: TargetId) -> bool {
-        true
+    fn supports_dtype(&self, _dtype: ElementKind, _target: TargetId) -> DtypeSupport {
+        DtypeSupport::Supported
     }
     fn lower(&self, _plan: &KernelPlan<'_>) -> Result<GeneratedKernel, LowerError> {
         Ok(GeneratedKernel::new(
