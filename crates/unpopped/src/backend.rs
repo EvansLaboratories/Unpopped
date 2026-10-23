@@ -428,8 +428,9 @@ pub enum Spelling {
 /// unsatisfiable by an unrelated failure.
 ///
 /// `#[non_exhaustive]`: `NotExpressible` is deliberately here from the start so the
-/// `supports_dtype` third state — supported / unsupported / **not expressible** —
-/// has a home when it is designed, without a second breaking change.
+/// `supports_dtype` third state — supported / unsupported / **not expressible**
+/// ([`DtypeSupport`]) — had a home before it was designed, without a second
+/// breaking change.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Decline {
@@ -450,8 +451,8 @@ pub enum Decline {
         why: String,
     },
     /// The target language cannot express this at all, at any dtype — distinct
-    /// from "this backend has not implemented it". Reserved for the
-    /// `supports_dtype` third state.
+    /// from "this backend has not implemented it". The decline-side twin of
+    /// [`DtypeSupport::NotExpressible`].
     NotExpressible {
         /// Diagnostics only. Never match on this.
         why: String,
@@ -547,6 +548,42 @@ impl std::error::Error for LowerError {
     }
 }
 
+/// What a [`Backend`] says about spelling one dtype on one target.
+///
+/// **Three states, because `bool` collapsed two facts that need different
+/// remedies** (issue #6, raised by Vulkane): "the device lacks it" and "this
+/// vocabulary version cannot say" both read `false`, so a consumer could not tell
+/// a permanent hardware limit from a temporary gap in a namespace vocabulary.
+/// [`AccuracyKey`](crate::contract::AccuracyKey) and `required_fidelity` already
+/// set the precedent of saying "undecided" rather than collapsing it.
+///
+/// `#[non_exhaustive]` so a fourth honest answer is not another breaking change;
+/// out-of-crate matchers carry a wildcard arm, and should treat an unknown state
+/// as not-supported.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DtypeSupport {
+    /// The backend can spell this dtype on this target. Emit.
+    Supported,
+    /// The target (or this backend's own scope) lacks it. The remedy is
+    /// different hardware or a different backend; waiting on a spec will not help.
+    Unsupported,
+    /// The target's vocabulary version has no way to say whether it is available.
+    /// **Absence of a token here is silence, not denial.** The remedy is a
+    /// vocabulary bump from the namespace's maintainer, not new hardware.
+    NotExpressible,
+}
+
+impl DtypeSupport {
+    /// `true` only for [`DtypeSupport::Supported`]. The old `bool` answer, for a
+    /// caller that only needs to know whether to emit — an unknown future state
+    /// is treated as not supported.
+    #[must_use]
+    pub fn is_supported(self) -> bool {
+        matches!(self, DtypeSupport::Supported)
+    }
+}
+
 /// Lowers a neutral [`crate::plan::KernelPlan`] to concrete kernel source.
 pub trait Backend {
     /// Short backend identifier / target language (e.g. `"cuda"`, `"cpu_c"`,
@@ -581,6 +618,14 @@ pub trait Backend {
     /// is a typed decline, not a lowering panic. (AOT op authoring is trusted,
     /// so `lower` itself may still panic on a dtype it can't spell.)
     ///
+    /// # Three answers ([`DtypeSupport`])
+    ///
+    /// This returned `bool` until 0.22.0. Answer [`DtypeSupport::NotExpressible`]
+    /// only when the *target's vocabulary* cannot say (wait for a spec); answer
+    /// [`DtypeSupport::Unsupported`] when the device or this backend lacks it
+    /// (change hardware or backend). When unsure which, `Unsupported` is the safe
+    /// answer: both decline, and only the remedy differs.
+    ///
     /// # Why `target` is here
     ///
     /// This used to be `fn supports_dtype(&self, dtype) -> bool` — no target —
@@ -609,7 +654,7 @@ pub trait Backend {
     /// So: the mechanism is here now; a backend that has capability data may
     /// condition on it today, and the remaining declines are honest ones about
     /// missing *data* rather than a missing *parameter*.
-    fn supports_dtype(&self, dtype: ElementKind, target: TargetId) -> bool;
+    fn supports_dtype(&self, dtype: ElementKind, target: TargetId) -> DtypeSupport;
     /// The count-unit width the backend's emitter actually builds for `plan`:
     /// `1` means the kernel's `n` argument counts **elements** (a scalar
     /// lowering); `w > 1` means it counts `w`-element **vectors** (a vectorized

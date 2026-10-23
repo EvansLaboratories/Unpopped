@@ -12,7 +12,7 @@
 
 mod common;
 use common::StubBackend;
-use unpopped::backend::{Backend, GeneratedKernel, LowerError};
+use unpopped::backend::{Backend, DtypeSupport, GeneratedKernel, LowerError};
 use unpopped::ir::{OpDef, input};
 use unpopped::plan::KernelPlan;
 use unpopped::{generate, generate_variants};
@@ -33,8 +33,8 @@ impl Backend for OtherStub {
     fn provider(&self) -> &str {
         "someone-else"
     }
-    fn supports_dtype(&self, _dtype: ElementKind, _target: TargetId) -> bool {
-        true
+    fn supports_dtype(&self, _dtype: ElementKind, _target: TargetId) -> DtypeSupport {
+        DtypeSupport::Supported
     }
     fn lower(&self, plan: &KernelPlan<'_>) -> Result<GeneratedKernel, LowerError> {
         Ok(GeneratedKernel::new(

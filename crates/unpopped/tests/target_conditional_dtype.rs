@@ -16,7 +16,7 @@
 //! This file supplies the backend that does act on it, and checks the answer
 //! changes with the target and nothing else.
 
-use unpopped::backend::{Backend, GeneratedKernel, LowerError};
+use unpopped::backend::{Backend, DtypeSupport, GeneratedKernel, LowerError};
 use unpopped::ir::{OpDef, input};
 use unpopped::plan::KernelPlan;
 use unpopped::try_generate;
@@ -40,16 +40,26 @@ impl Backend for CapabilityAware {
         "unpopped-test"
     }
 
-    fn supports_dtype(&self, dtype: ElementKind, target: TargetId) -> bool {
+    fn supports_dtype(&self, dtype: ElementKind, target: TargetId) -> DtypeSupport {
+        let yes = |b: bool| {
+            if b {
+                DtypeSupport::Supported
+            } else {
+                DtypeSupport::Unsupported
+            }
+        };
         match dtype {
-            ElementKind::F16 => target.capability_set().contains("arith-f16"),
-            ElementKind::F32 => true,
-            _ => false,
+            ElementKind::F16 => yes(target.capability_set().contains("arith-f16")),
+            ElementKind::F32 => DtypeSupport::Supported,
+            _ => DtypeSupport::Unsupported,
         }
     }
 
     fn lower(&self, plan: &KernelPlan<'_>) -> Result<GeneratedKernel, LowerError> {
-        if !self.supports_dtype(plan.dtype, plan.key.target) {
+        if !self
+            .supports_dtype(plan.dtype, plan.key.target)
+            .is_supported()
+        {
             return Err(LowerError::UnsupportedDtype {
                 dtype: plan.dtype,
                 detail: format!("no {:?} on target {}", plan.dtype, plan.key.target.as_str()),
@@ -73,14 +83,30 @@ fn one_dtype_two_targets_two_answers() {
     let capable = TargetId::parse("vulkan:sg64.ops-abr.arith-f16.cm-none").unwrap();
     let incapable = TargetId::parse("vulkan:sg64.ops-abr.cm-none").unwrap();
 
-    assert!(CapabilityAware.supports_dtype(ElementKind::F16, capable));
-    assert!(!CapabilityAware.supports_dtype(ElementKind::F16, incapable));
+    assert!(
+        CapabilityAware
+            .supports_dtype(ElementKind::F16, capable)
+            .is_supported()
+    );
+    assert!(
+        !CapabilityAware
+            .supports_dtype(ElementKind::F16, incapable)
+            .is_supported()
+    );
 
     // And `f32` is unconditional, so the two targets agree on it — which shows
     // the difference above is about the DTYPE-target pair, not about one of the
     // targets being rejected wholesale.
-    assert!(CapabilityAware.supports_dtype(ElementKind::F32, capable));
-    assert!(CapabilityAware.supports_dtype(ElementKind::F32, incapable));
+    assert!(
+        CapabilityAware
+            .supports_dtype(ElementKind::F32, capable)
+            .is_supported()
+    );
+    assert!(
+        CapabilityAware
+            .supports_dtype(ElementKind::F32, incapable)
+            .is_supported()
+    );
 }
 
 /// The target the backend sees is the one the KEY carries.

@@ -94,7 +94,7 @@ mod text;
 #[cfg(test)]
 mod kiss_ref_diff;
 
-pub use backend::{Backend, GeneratedKernel, Variant, VariantFidelity};
+pub use backend::{Backend, DtypeSupport, GeneratedKernel, Variant, VariantFidelity};
 pub use contract::{bundle, bundle_kisc, contract, front_matter};
 pub use dispatch_artifact::{emit_dispatch_table, parse_dispatch_table};
 pub use exactness::{

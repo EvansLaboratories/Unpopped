@@ -42,8 +42,8 @@
 //!   excludes every complex case.
 
 use unpopped::backend::{
-    Backend, Decline, DeclinedOp, GeneratedKernel, LowerError, Lowering, Spelling, const_lit,
-    lower_dag, lower_dag_all,
+    Backend, Decline, DeclinedOp, DtypeSupport, GeneratedKernel, LowerError, Lowering, Spelling,
+    const_lit, lower_dag, lower_dag_all,
 };
 use unpopped::cfamily::{
     assert_no_int_div_or_const, binary_f32, binary_f64, binary_int, complex_arith, complex_helpers,
@@ -69,7 +69,7 @@ impl Backend for CpuC {
         "unpopped"
     }
 
-    fn supports_dtype(&self, dtype: ElementKind, _target: TargetId) -> bool {
+    fn supports_dtype(&self, dtype: ElementKind, _target: TargetId) -> DtypeSupport {
         // # An ALLOWLIST of what this backend can COMPUTE — not a storage check
         //
         // This used to be `!matches!(F16 | Bf16) && scalar_ctype(dtype).is_some()`:
@@ -116,7 +116,7 @@ impl Backend for CpuC {
             | ElementKind::U32
             | ElementKind::I64
             | ElementKind::U64
-            | ElementKind::Bool => true,
+            | ElementKind::Bool => DtypeSupport::Supported,
             // Carrier + an emitted software codec, which is what makes the
             // storage type sufficient for these. The halves joined in 0.15.0,
             // when `cfamily::half_helpers` gave them one.
@@ -128,14 +128,14 @@ impl Backend for CpuC {
             | ElementKind::U4
             | ElementKind::B1
             | ElementKind::Complex64
-            | ElementKind::Complex128 => true,
+            | ElementKind::Complex128 => DtypeSupport::Supported,
             // Declined BY DESIGN: the MX shared block scales are sibling
             // operands (§6.1-0013), never an element compute dtype; and the
             // reserved `fnuz` pair must never lower at this schema version.
             ElementKind::F8E8M0
             | ElementKind::F8E6M2
             | ElementKind::Fp8E4M3FNUZ
-            | ElementKind::Fp8E5M2FNUZ => false,
+            | ElementKind::Fp8E5M2FNUZ => DtypeSupport::Unsupported,
         }
     }
 
@@ -143,7 +143,10 @@ impl Backend for CpuC {
         // Dtype guard. This is now the ONE place the cpu_c legality surface is
         // stated — the JIT no longer keeps its own copy (it used to pre-check
         // against a CUDA-derived table applied to every backend).
-        if !self.supports_dtype(plan.dtype, plan.key.target) {
+        if !self
+            .supports_dtype(plan.dtype, plan.key.target)
+            .is_supported()
+        {
             return Err(LowerError::UnsupportedDtype {
                 dtype: plan.dtype,
                 detail: "cpu_c backend v1: not in this backend's compute allowlist \
@@ -725,8 +728,14 @@ mod tests {
     fn supports_the_halves_and_the_real_compute_dtypes() {
         // The halves were the documented v1 decline ("no CPU half codec yet")
         // until 0.15.0 gave them one (`cfamily::half_helpers`).
-        assert!(CpuC.supports_dtype(ElementKind::F16, ArchSku::Sm89.into()));
-        assert!(CpuC.supports_dtype(ElementKind::Bf16, ArchSku::Sm89.into()));
+        assert!(
+            CpuC.supports_dtype(ElementKind::F16, ArchSku::Sm89.into())
+                .is_supported()
+        );
+        assert!(
+            CpuC.supports_dtype(ElementKind::Bf16, ArchSku::Sm89.into())
+                .is_supported()
+        );
         // The real compute dtypes are supported. `U32` is among them now: it
         // was previously excluded as "index/address only", a restriction
         // inherited from the CUDA backend on circular reasoning.
@@ -740,7 +749,7 @@ mod tests {
             ElementKind::U32,
         ] {
             assert!(
-                CpuC.supports_dtype(dt, ArchSku::Sm89.into()),
+                CpuC.supports_dtype(dt, ArchSku::Sm89.into()).is_supported(),
                 "{dt:?} should be supported"
             );
         }
