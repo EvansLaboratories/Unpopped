@@ -33,6 +33,11 @@ blob changed, not on a schedule, and record the commit in `kiss/README.md`.
    numerics axes.
 2. **Re-vendor on KISS change**, with the derivation vectors re-run
    (`cargo test -p unpopped-vocab --test kiss_derivation_vectors -- --nocapture`).
+3. **CodeRipper SUP-004** (portfolio check, advisory; baseline on `21e6279a`): `crates/unpopped/tests/the_declaration_form_is_a_seam.rs:337` reads `../../../docs/normative-seams.md`, outside its crate, so the test cannot run from the packaged `.crate`. Fix: make the test not need a file outside the crate (vendor the text it checks into the crate, or `include_str!` from inside it).
+4. **CodeRipper lint-suppression** (baseline: 37 `#[allow(..)]` without a reason: 32 in `crates/unpopped` (`optimize.rs` 10, `oracle.rs` 6, `plan.rs` 5, `ir.rs` 3, `shape.rs` 2, tests 5, `capability.rs` 1), 4 in `unpopped-cpu-c` tests, 1 in `unpopped-vocab` tests): give each a `reason = "..."`. Do not delete an allow to silence the rule.
+5. **CodeRipper licence, holder** (baseline: `LICENSE-MIT` names a person as copyright holder; the same text is in the four `crates/*/LICENSE-MIT` copies): PM instruction 2026-10-24 is holder "Eric Evans", EvansLaboratories. Exact wording to be confirmed by the PM before editing.
+6. **CodeRipper licence, SPDX** (baseline: 104 of 105 source files carry no `SPDX-License-Identifier` in their first 15 lines, first hit `crates/unpopped-conformance/src/lib.rs:1`): add the identifier matching `license` in Cargo.toml, enumerating files from `git ls-files`.
+7. **CodeRipper rules that did not run** (baseline: `reachability`, `unused-return-values`, `unused-parameters` failed on a virtual workspace root): fixed upstream by coderipper#127; this PR repins to it. Re-read the next run for new findings and add one row per rule.
 
 ## 4. Held or blocked
 
