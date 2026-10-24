@@ -422,14 +422,11 @@ Forcing that fix created the pattern that later answered this question.)*
   did not read `oracle::required_fidelity`** — the half only they could supply,
   handing back the half only we could.
 
-  **Carried forward as a live defect rather than closed clean:** `ulp_bound` sums
-  a **CUDA** per-op table and neither it nor `required_fidelity` takes a target,
-  so the band is CUDA's accuracy for every backend. Vulkan's `exp` is 3 ULP
-  against CUDA `expf`'s 2, so **a conforming Vulkan kernel fails a comparison it
-  should pass.** Latent today (the only caller is `unpopped-cpu-c`'s test), live
-  the moment a Vulkan backend compares through it. Needs a per-target accuracy
-  seam — see `ulp_bound`'s own KNOWN LIMIT. **Owner: this workspace. Party:
-  vulkane.**
+  **Was carried forward as a live defect; the target axis is now closed
+  (95d2ed6):** `ulp_bound` takes an `AccuracyKey { target }`, and a target with
+  no accuracy table gets no band, not CUDA's. Still open: the dtype and
+  precision-mode axes and a Vulkan table — see `ulp_bound`'s KNOWN LIMIT.
+  **Owner: this workspace. Party: vulkane.**
 - ~~**What `VariantFidelity::BitIdentical` means across backends**~~ — **ANSWERED
   2026-08-15: bit-identical to the default lowering of the same cell, in the same
   backend, at the same version.** The two horns were the right pair and the left

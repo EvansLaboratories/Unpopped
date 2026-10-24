@@ -124,7 +124,7 @@ bump; expect more than one breaking `0.x`.
 
 ## Migrating `0.1.0` → `0.2.0`
 
-Eight public breaks, listed because the first adopter was told "zero code
+Nine public breaks, listed because the first adopter was told "zero code
 changes" and hit two of them in `cargo check`. That characterisation was wrong:
 it generalised from four *vocabulary* questions that were answered accurately to
 a claim about the whole surface, which nobody had checked. **Requires
@@ -132,7 +132,7 @@ a claim about the whole surface, which nobody had checked. **Requires
 
 | what changed | migration |
 |---|---|
-| **Emitters left the core.** `unpopped::cpu_c` / `unpopped::slang` are gone. | Depend on `unpopped-cpu-c` / `unpopped-slang`. Both are **in-tree and published** — on crates.io since 0.1.0 (2026-08-19), now 0.14.4; see [`docs/deferred.md`](../../docs/deferred.md) §A for the publish history. |
+| **Emitters left the core.** `unpopped::cpu_c` / `unpopped::slang` are gone. | Depend on `unpopped-cpu-c` / `unpopped-slang`. Both are **in-tree and published** — on crates.io since 0.1.0 (2026-08-19), versions on crates.io; see [`docs/deferred.md`](../../docs/deferred.md) §A for the publish history. |
 | **`Backend::supports_dtype` takes a `target: TargetId`.** | Add the parameter. **Ignoring it is a legitimate implementation** — it is the *storage* gate ("can this target spell the scalar type"), and arch-conditional *compute* gating belongs behind a capability manifest rather than in a transcribed table. See the note below. |
 | **`Backend::supports_dtype` returns `DtypeSupport`, not `bool` (0.22.0).** | Return `Supported`, `Unsupported` (device or backend lacks it) or `NotExpressible` (the target vocabulary cannot say). Callers use `.is_supported()` for the old answer. |
 | **`optimize` and `optimize_top_k` take a `dtype: ElementKind`.** | Pass the expression's compute dtype. It exists so folding rounds at the **device's** precision — folding an `f32` kernel's constants at `f64` diverges by 1 ULP on a chained fold. |
