@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.22.3` — docs and CI only: CodeRipper baseline rows, repin portfolio.yml to 30e012b7
+
+No code, no API change.
+
 ## `0.22.2` — CI only: advisory CodeRipper portfolio check
 
 Adds a non-blocking `portfolio` job (reusable workflow `ciresnave/coderipper`, pinned by SHA). No code, no API change.
