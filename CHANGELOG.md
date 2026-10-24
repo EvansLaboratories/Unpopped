@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.22.14` — `unpopped-slang` spells NaN and infinity constants as Slang, not C macros
+
+A body carrying a NaN or infinity constant used to emit `INFINITY` / `NAN`, which Slang does not define: `slangc` failed with `undefined identifier 'INFINITY'`. Found 2026-10-24 by the harness's C14 probe (`|x| == +inf` on a Vulkan device); the crate docs had recorded it as a known seam follow-up, which is no reason to leave it. The `constant` seam now uses `slang_const`: NaN, +inf and -inf become `asfloat(0x7fc00000u)`, `asfloat(0x7f800000u)` and `asfloat(0xff800000u)`; finite constants still go through `const_lit` unchanged, so no existing golden moves. Tests: `non_finite_constants_are_not_spelled_as_c_macros` (fails with the old spelling; verified by restoring it), and the `slangc`-gated `emitted_slang_compiles_with_slangc` gains a NaN/+inf/-inf kernel (run locally with `slangc` 1.4.350.0: ok).
+
 ## `0.22.13` — ROADMAP section 6 records the PM's rulings on the audit calls
 
 Docs only. Calls 1, 2, 4, 6, 8, 9, 11 are parked and keep their rows; call 5 (N2) is parked on KISS's recommendation with a new unblocker row (C14, measure a Vulkan device's float-controls); call 3 (`vec_width`) waits on baracuda #252, then this lane writes the plan; call 10 is deferred; call 7 is still to be asked. E2 gains `copysign`/`nextafter` (harness 0.0.15), P6 the binary and ternary corpora, and C15 records #104.
