@@ -68,7 +68,7 @@ was not found in `git log`, `CHANGELOG.md` or the tree, which is not proof of ab
 | ID | Work | Source | Status |
 |---|---|---|---|
 | E1 | `unpopped-cpu-c` and `unpopped-slang` accept only `Schedule::Scalar`; Vectorized, Strided, Reduction, RowReduce, Contraction, Scan, Window, RowSort, Im2Col are listed "follow-ups" | groupshared-sizing:113; slang `lib.rs:52,330`; cpu-c `lib.rs:37,186` | open. parked by the PM 2026-10-24 (was Call 1; the row stays recorded): how far the reference emitters should grow |
-| E2 | Slang declines 8 unary ops, "need polyfills": erf, gelu, erfc, asinh, acosh, atanh, cbrt, lgamma (measured by harness 0.0.14; cpu-c and cuda emit all 39); and 2 binary ops, `copysign` and `nextafter` (harness 0.0.15; cpu-c and cuda emit all 15) | Slang decline text; harness CHANGELOG 0.0.14, 0.0.15 | open |
+| E2 | Slang declines 8 unary ops, "need polyfills": erf, gelu, erfc, asinh, acosh, atanh, cbrt, lgamma (measured by harness 0.0.14; cpu-c and cuda emit all 39); and 2 binary ops, `copysign` and `nextafter` (harness 0.0.15; cpu-c and cuda emit all 15) | Slang decline text; harness CHANGELOG 0.0.14, 0.0.15 | open. The Slang `INFINITY`/`NAN` constant spelling is fixed (#106, 0.22.14); the declined ops here are a different gap |
 | E3 | Slang preludes for c64/c128, both FP8s, i4/u4/b1, f16/bf16: the 9 `NotYet` cells, "no current consumer" | deferred:655,678-710; `dtype_lowering_coverage.rs:162-193` | open, no consumer |
 | E4 | Slang has no recorded NaN-ternary (N2) survival check; every new target needs its own | conformance:115-124; deferred:1059 | open |
 | E5 | `GeneratedKernel` has no structured ABI manifest and `source` is a `String`, not a word stream (SPIR-V `[u32]`); "editor's position, open to challenge" | README:58-64; `backend.rs:97-110` | open, no demand yet |
@@ -116,7 +116,7 @@ was not found in `git log`, `CHANGELOG.md` or the tree, which is not proof of ab
 | C11 | Panic text as a cross-repo API, REPORTED and not re-measured | normative-seams:205-209 | open |
 | C12 | Per-device decline step 3: adopter integration (ledger location, measure-on-first-run, apply `UseArgs`) | design-per-device-decline:113,121-123 | held(Fuel) |
 | C13 | Derivation vectors, weight role, contraction roles | kiss/README, §2 | **done**, #64, #66, 0.17.3 |
-| C14 | Measure a Vulkan device's float-controls (`SignedZeroInfNan`) NaN behaviour with the harness: the unblocker for C2 (no spec text until some device is measured not preserving NaN; Vulkan is unmeasured) | PM [FIX] 2026-10-24; conformance OPEN-4:449-461 | open, unblocked (harness Vulkan target exists) |
+| C14 | Measure a Vulkan device's NaN, infinity and signed-zero behaviour with the harness: the unblocker for C2 | PM [FIX] 2026-10-24; conformance OPEN-4:449-461 | **done**, `unpopped-harness` 0.0.16 (#16): AMD Radeon 610M and RTX 4070 Laptop both 0 mismatches over all 2^32 f32 inputs on `isnan`, `isinf` and `zero_sign`. Neither is measured NOT preserving, so C2 stays parked. Not measured: the device's claimed `shaderSignedZeroInfNanPreserveFloat32` (`vulkane` 0.16 does not expose it), other devices, f16/f64 |
 | C15 | `f8e6m2` was counted usable (22 vs KISS's 21 usable, 3 reserved) | KISS-CLASSIFY-6.1-0001 | **done**, #104 (0.22.12) |
 
 ### 6.4 Ownership, parsers and the cross-project plan
