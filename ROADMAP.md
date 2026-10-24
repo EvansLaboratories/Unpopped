@@ -78,7 +78,7 @@ was not found in `git log`, `CHANGELOG.md` or the tree, which is not proof of ab
 | E9 | `cpu_end_to_end` tests the first C compiler found, not every one | deferred:1336; `cpu_end_to_end.rs:84` | open |
 | E10 | `k <= 1024` row-sort bound is in doc strings only; `validate_row_sort` does not check it | deferred:1245 | open, "not a defect" per the doc |
 | E11 | Oracle cannot tell `Skip` from `ZeroFill` (`alloc_output` zeroes) | deferred:919 | open, recorded limitation |
-| E12 | Slang front end: re-run `slang_corpus_report` on a current Fuel snapshot (no before/after has run since #22/#25) | slang-corpus-sizing:143-151; CHANGELOG ~802 | open, unblocked |
+| E12 | Slang front end: re-run `slang_corpus_report` on a current Fuel snapshot | slang-corpus-sizing:143-151; CHANGELOG ~802 | **done** 2026-10-24 (Unpopped 0.22.14 on fuel `ac29b53c9`, 147 `.slang` files read from `git archive` of Fuel's `origin/main`): **0 accepted**. 94 Unrecognized (44 NotElementwise, 18 read of a buffer not named `inputK`, 18 unknown call, 14 unknown identifier); 53 Inexpressible (36 `groupshared`, 16 `InterlockedCompareExchange`, 1 `RWByteAddressBuffer`). Fuel's kernels use their own binding layout, so 0 is this front end's yield on Fuel as-is, the baseline for E13, not a defect. First measurement since #22/#25 |
 | E13 | Slang front end: declared-type buffer-role discovery (4/147 yield), strided/broadcast access (up to 70/147 files), more idioms | slang-naming:103-105; slang-second-blocker:106-127; corpus:127-141 | open. parked by the PM 2026-10-24 (was Call 6; the row stays recorded): worth the cost at that yield? |
 
 ### 6.2 Idiom lifting and the IR (`docs/idiom-lifting-design.md`)
