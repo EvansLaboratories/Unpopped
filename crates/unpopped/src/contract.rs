@@ -1413,12 +1413,12 @@ fn is_exact_on_every_target(e: &ScalarExpr) -> bool {
 /// contract passes kernels the contract promises are tighter, and a tighter one
 /// fails kernels that honour it.
 ///
-/// # KNOWN LIMIT: these are CUDA's numbers, and this function is neutral
+/// # KNOWN LIMIT: the table is CUDA's; the target axis is closed, dtype and mode are not
 ///
 /// `unary_ulp` and `binary_ulp` are documented as *"Per-op **CUDA** f32 ULP
-/// error"*, and nothing in this chain takes a backend or a target — even though
-/// [`contract`] is handed a `&dyn Backend` and could ask. So every precision
-/// claim this crate makes is CUDA's, for every backend: the emitted contract's
+/// error"*. Before [`AccuracyKey`] nothing in this chain took a target; it now
+/// does, and a namespace with no table yields an unknown bound, not CUDA's. What
+/// is still CUDA's is the table itself, and so the precision claims drawn from it: the emitted contract's
 /// `max_ulp`, its `audited: true` (justified in-file as *"the bounds are
 /// declared against CUDA vendor ULP tiers"*), and
 /// [`crate::oracle::required_fidelity`]'s comparison band.
@@ -1442,9 +1442,10 @@ fn is_exact_on_every_target(e: &ScalarExpr) -> bool {
 /// `required_fidelity` compares against a band too tight to be met. Both fail in
 /// the unsafe direction.
 ///
-/// Closing it needs a per-target accuracy seam, which is a `Backend`-surface
-/// change and therefore a coordination call rather than a quiet patch. Recorded
-/// here, at the number itself, so it is met by anyone who reaches for it.
+/// The per-target seam is [`AccuracyKey`] (the target axis is closed). Still open:
+/// its dtype and precision-mode axes, and a Vulkan accuracy table, so a Vulkan
+/// target currently gets no band rather than a wrong one. Recorded here, at the
+/// number itself, so it is met by anyone who reaches for it.
 pub fn ulp_bound(e: &ScalarExpr, key: &AccuracyKey) -> f64 {
     ulp_bound_measured(e, key, None)
 }

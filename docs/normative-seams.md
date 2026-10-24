@@ -142,10 +142,10 @@ EARNED its claim?"). **The deciding evidence is structural: the input is
 
 ⚠️ **Two live constraints inside it:**
 
-- **`ulp_bound` sums a CUDA per-op table and takes no target**, so the band is
-  CUDA's accuracy **for every backend**. Vulkan's `exp` is 3 ULP against CUDA
-  `expf`'s 2 → **a conforming Vulkan kernel fails a comparison it should pass.**
-  Latent today (only caller is a CpuC test).
+- **`ulp_bound` sums a CUDA per-op table; since 95d2ed6 it takes an
+  `AccuracyKey { target }`**, and a target with no table gets no band instead of
+  CUDA's. Open: the dtype and precision-mode axes, and a Vulkan table (a Vulkan
+  kernel has no band until one exists).
 - **REPORTED by vulkane, labelled by them as hypothesis not measurement:** Vulkan
   states precision requirements **per instruction AND per precision mode**, some
   ops *correctly rounded* with no ULP bound at all. **`ulp_bound` is one scalar per

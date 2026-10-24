@@ -269,12 +269,13 @@ and is no longer.
    `Fidelity` it is handed, so the original consequence — *"did it pass at a
    tolerance whoever wrote the test chose?"* — survives for any caller that does
    not ask. The derivation exists; using it is not enforced.
-2. ⚠️ **The band is CUDA's for every backend.** `contract::ulp_bound` sums a
-   **CUDA** per-op ULP table and neither it nor `required_fidelity` takes a
-   target. Vulkan's `exp` is 3 ULP against CUDA `expf`'s 2, so **a conforming
-   Vulkan kernel fails a comparison it should pass.** Latent today — the only
-   caller is `unpopped-cpu-c`'s test — and live the moment a Vulkan backend
-   compares through it.
+2. ⚠️ **The band was CUDA's for every backend; the target axis is now closed.**
+   `contract::ulp_bound` takes an `AccuracyKey { target }` (commit 95d2ed6), and a
+   target with no accuracy table gets NO band, not CUDA's. The table is still
+   CUDA's, and the dtype and precision-mode axes are still absent, so a Vulkan
+   target has no band at all until someone fills one in from the spec's prose
+   appendix. (The paragraph that stood here claimed `ulp_bound` takes no target;
+   that was true until 95d2ed6.)
 
    **This is [OPEN-4](#open-4-n2-is-not-achievable-on-every-target-and-the-standard-must-say-so)
    on a second axis.** OPEN-4 is *NaN propagation is target-conditional*; this is

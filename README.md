@@ -14,8 +14,8 @@ Unpopped. Unpopped depends on no backend, no driver, and no vendor crate.
 
 | Crate | Status | What it is |
 |---|---|---|
-| [`unpopped`](crates/unpopped) | published 0.2.0 | The generator: the neutral IR, the transform pipeline, the `Backend` and `Compiler` traits, a portable-C99 reference backend, and the CPU oracle. |
-| [`unpopped-vocab`](crates/unpopped-vocab) | published 0.3.0 | The driver-free classifier vocabulary: dtype hierarchy, `DeviceRepr`, dispatch tags, the `StructureKey` classifier key, dispatch tables. |
+| [`unpopped`](crates/unpopped) | published (version: crates.io) | The generator: the neutral IR, the transform pipeline, the `Backend` and `Compiler` traits, a portable-C99 reference backend, and the CPU oracle. |
+| [`unpopped-vocab`](crates/unpopped-vocab) | published (version: crates.io) | The driver-free classifier vocabulary: dtype hierarchy, `DeviceRepr`, dispatch tags, the `StructureKey` classifier key, dispatch tables. |
 
 ## Emitters
 
@@ -29,7 +29,7 @@ lives in `unpopped-conformance` so no emitter dev-depends on a sibling.
 
 The two reference emitters are **published** — `unpopped-cpu-c` and
 `unpopped-slang` have been on crates.io since 0.1.0 (2026-08-19) and are at
-`0.14.4` (2026-10-08). They were held back once on the argument that a
+current versions on crates.io. They were held back once on the argument that a
 `Backend` trait known to be moving would hand a third party breaking changes;
 the hold was lifted four days later and the history is in
 [`docs/deferred.md`](docs/deferred.md) §A.

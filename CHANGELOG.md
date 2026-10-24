@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.22.11` — spec-to-roadmap audit; the docs stop saying `ulp_bound` takes no target
+
+Docs and one comment only; no behaviour change. `ROADMAP.md` gains section 6: 60 rows for every undone item found in 23 spec/design docs and not already a row (open / held / done with the PR; 11 need a CireSnave or PM call). `ulp_bound` has taken an `AccuracyKey { target }` since 95d2ed6, but `docs/conformance.md`, `docs/normative-seams.md`, `docs/deferred.md` and the KNOWN LIMIT comment on `ulp_bound` still said the band is CUDA's for every backend; the claims are replaced, not caveated, and the open dtype and precision-mode axes are stated. The README stops quoting versions (it said `unpopped` 0.2.0, `unpopped-vocab` 0.3.0, emitters 0.14.4 against a 0.22.x workspace) and counts nine migration rows, not eight. `ROADMAP.md` section 4 now says moving `ArchSku` waits on baracuda's registry repoint first.
+
 ## `0.22.10` — the two published library crates are declared public API to CodeRipper (`public_api_crates`)
 
 `reachability` counts callers inside one crate, so it listed 179 `pub` items of `unpopped` (98) and `unpopped-vocab` (81) that adopters and this workspace's test crates call. A new workspace-root `.coderipper.toml` declares both packages under `[reachability] public_api_crates`, one entry each with its reason, instead of 179 per-item waivers. All 179 are now printed `[declared-public]` with that reason and none fails the run (measured at coderipper `d14a22b6`, `check reachability --workspace`). This declares, it does not prove: a `pub` item with no caller anywhere is declared public too. No code change, no API change.
