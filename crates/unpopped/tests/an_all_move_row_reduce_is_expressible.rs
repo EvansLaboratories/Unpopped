@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! **Is a RowReduce whose stages AND epilogue are all moves CONSTRUCTIBLE?**
 //!
 //! Asked by baracuda 2026-09-06, and the answer decides whether a gap in their

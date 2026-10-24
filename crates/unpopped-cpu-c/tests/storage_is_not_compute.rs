@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! **A storage spelling must never imply compute support.**
 //!
 //! # Where this came from

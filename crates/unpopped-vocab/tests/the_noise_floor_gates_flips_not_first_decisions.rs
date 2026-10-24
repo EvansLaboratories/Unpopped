@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! ⚠️ **`MIN_FLIP_MARGIN` gates a FLIP of an existing decision. It does not gate
 //! the FIRST decision for a cell.**
 //!

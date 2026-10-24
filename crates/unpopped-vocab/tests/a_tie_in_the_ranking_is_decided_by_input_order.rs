@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! **Ranking a cell must not depend on the order the caller pushed candidates —
 //! including on an exact tie, which is where it used to.**
 //!

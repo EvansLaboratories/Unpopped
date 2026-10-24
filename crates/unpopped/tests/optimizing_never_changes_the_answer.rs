@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Optimizing must not change the answer — checked on the values where a
 //! rewrite *can* change it, which is the only place it ever does.
 //!

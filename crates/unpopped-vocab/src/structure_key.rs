@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Structure-class keying for AOT kernel specialization.
 //!
 //! A [`StructureKey`] is the canonical identity of an *input/output layout

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Cross-emitter conformance evidence — no library surface, only tests.
 //!
 //! # Why this crate exists

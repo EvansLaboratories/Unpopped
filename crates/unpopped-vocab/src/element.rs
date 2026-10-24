@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Element types and trait hierarchy shared across baracuda kernel
 //! wrappers.
 //!

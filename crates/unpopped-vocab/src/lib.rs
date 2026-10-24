@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! # unpopped-vocab
 //!
 //! The **driver-free classifier vocabulary** for kernel generation: the

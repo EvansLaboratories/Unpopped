@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Production code refuses. It does not warn, and it does not print.
 //!
 //! # Why this is a gate rather than a habit

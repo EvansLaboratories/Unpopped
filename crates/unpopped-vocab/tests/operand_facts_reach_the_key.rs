@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Tripwire: which [`OperandDesc`] fields actually reach the structure key.
 //!
 //! `OperandDesc` carries one optional fact bundle — `symbolic` — that **nothing

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! `2*pad <= span` is not an internal validation — it is a contract two emitters
 //! rest on, and relaxing it makes dead code in another repository go live.
 //!

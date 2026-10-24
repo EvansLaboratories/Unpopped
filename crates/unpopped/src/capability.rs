@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! What a target *can do*, as the numbers a schedule chooser needs.
 //!
 //! # Why this exists

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Field 8, the reduce spec — KISS-CLASSIFY-6.6-0009 / KISS-CLASSIFY-6.7-0005.
 //!
 //! # Why this file exists

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! KISC self-delimiting contract framing (KISS-Contract §2.8 / §6.11).
 //!
 //! A KISC document is a **structured/text** frame — not a binary envelope: a

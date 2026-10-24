@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Backend abstraction — the one language-specific seam.
 //!
 //! Everything else in the crate (the [`crate::ir`] op IR and the schedule

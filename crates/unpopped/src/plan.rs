@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Language-agnostic kernel plan — the schedule decision.
 //!
 //! [`build_plan`] turns an [`OpDef`] + a [`StructureKey`] cell into a neutral

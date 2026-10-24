@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! KISS-OPS-6.16-0009: a narrow-float body that only MOVES must not round.
 //!
 //! # The defect this pins, as it shipped

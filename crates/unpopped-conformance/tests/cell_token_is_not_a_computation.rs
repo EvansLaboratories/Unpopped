@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! A cell token names **what was asked for**. It cannot name **what runs**.
 //!
 //! `structure_key(op_category, operands, target)` takes no op body. Two

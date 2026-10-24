@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The §6.20 output-shape oracle: derive an op's concrete output shape from its
 //! **input** operand shapes plus its `Access` attributes.
 //!

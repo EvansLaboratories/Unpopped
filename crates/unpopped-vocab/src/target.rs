@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Open target identity — `<namespace>:<capability-set>`, interned.
 //!
 //! # What this replaces, and why the closed enum had to go

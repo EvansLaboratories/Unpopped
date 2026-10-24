@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The op **algorithm** IR — a small, backend-agnostic tensor expression.
 //!
 //! An op is the *pure function* computed at each output coordinate ([`OpDef`]),

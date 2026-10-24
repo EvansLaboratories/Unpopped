@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! **A uniform narrow-float store must encode exactly once — and this path has
 //! no in-tree emitter that would show a double encode.**
 //!

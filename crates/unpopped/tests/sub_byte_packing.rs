@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! `i4` / `u4` / `b1` — the packing is KISS's, and it is checked against the
 //! **byte layout**, not just against a round-trip.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The neutral driver spells no constant and no special float value — behaviourally.
 //!
 //! Backs **KISS-EMIT-6.4-0001** (constant spelling) and **KISS-EMIT-6.4-0002**

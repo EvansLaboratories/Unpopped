@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Every dtype the plan gate ADMITS, the oracle can evaluate.
 //!
 //! # The gap this closes, and how it hid

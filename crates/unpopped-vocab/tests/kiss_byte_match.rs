@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The KISS `structure_key` byte-match leg — KISS-CLASSIFY-6.7.
 //!
 //! This crate is one of three independent token-tier derivers (KISS's reference,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! `bool` is its own numeric kind, not a spelling of `u8`.
 //!
 //! KISS-CLASSIFY §6.1: a 1-byte truth value where `0` is false, **any non-zero

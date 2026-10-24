@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The `DeviceRepr` marker trait: types with a stable, ABI-compatible layout
 //! suitable for being laid out in GPU-visible memory.
 //!

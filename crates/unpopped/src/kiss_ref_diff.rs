@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! In-tree Baracuda ↔ kiss-ref differential converter + comparators — the
 //! oracle→kiss-ref consolidation's test machinery. Ported verbatim (converter +
 //! comparators) from the standalone `tools/kiss-ref-diff` harness, which is the

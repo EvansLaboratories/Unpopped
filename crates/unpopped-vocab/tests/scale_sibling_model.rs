@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! A block's shared scale is a **sibling operand**, and that is what closes the
 //! quantization key collision (sk4 §3.2).
 //!

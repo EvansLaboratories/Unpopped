@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Emit a complete Fuel **FKC kernel contract** from an op + its structure cell.
 //!
 //! Where [`crate::pattern`] derives only the `pattern:` block (for a fused op),

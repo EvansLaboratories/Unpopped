@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Every Qwen3 dense op that Unpopped's IR can express plans for `cuda:sm61`
 //! exactly as it does for `cuda:sm89`, except for [`HalfArith`].
 //!

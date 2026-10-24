@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! This crate's §6.1 dtype vocabulary == KISS's, checked against the vendored
 //! machine-readable manifest rather than against a reading of the prose table.
 //!

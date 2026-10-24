@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! KISS-CLASSIFY §6.6-0021 (KISS#517): a scale-type dtype (`f8e8m0`, `f8e6m2`)
 //! at operand 0 has no defined `structure_key.dtype`, so derivation MUST decline,
 //! with a typed decline (§7.1-0002), *"rather than emit a token"*, and MUST NOT

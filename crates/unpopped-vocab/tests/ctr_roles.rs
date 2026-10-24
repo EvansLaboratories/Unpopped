@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The role-driven contraction derivation (`CellFacts::contraction_roles`, 0.19.0):
 //! what KISS's vectors do not pin, and the controls that make each null mean something.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The KISS `structure_key` **derivation** leg — KISS-CLASSIFY-6.6-0011.
 //!
 //! `kiss_byte_match.rs` proves the token *codec* agrees with KISS. This proves

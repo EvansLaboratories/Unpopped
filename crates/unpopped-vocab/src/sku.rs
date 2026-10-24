@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Generalized kernel SKU descriptor — covers every op category.
 //!
 //! Sibling to (and a generalization of) `baracuda_cutlass::GemmSku`. The

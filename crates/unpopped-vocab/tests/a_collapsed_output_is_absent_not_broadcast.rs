@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The frame broadcast mask cannot tell whether an output aliases. The
 //! operand's own layout tag can.
 //!

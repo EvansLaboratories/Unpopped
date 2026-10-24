@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The sk4 non-contraction `(acc + mp)` precision field — KISS-CLASSIFY-6.7-0013.
 //!
 //! # Why these tests are round-trips against literal bytes

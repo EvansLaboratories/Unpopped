@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! JIT-on-request synthesis — Baracuda as the **synthesizer** (Kernel-Seam §5).
 //!
 //! The division of labor is fixed by the constitution (§5.1): **Fuel is the

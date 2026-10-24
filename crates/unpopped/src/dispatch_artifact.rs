@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The **dispatch-table artifact** — the committed `@generated` routing table.
 //!
 //! [`emit_dispatch_table`] serializes a [`DispatchTable`] to a dependency-free

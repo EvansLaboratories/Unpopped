@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! **The caller-facing shape table must name every fold-shaped `Access`.**
 //!
 //! `ir.rs` carries two tables mapping `Access` shapes to the §6.16-0011 question:

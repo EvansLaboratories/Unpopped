@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! # unpopped
 //!
 //! Build-time generator that turns an op's **abstract IR** (the algorithm) plus

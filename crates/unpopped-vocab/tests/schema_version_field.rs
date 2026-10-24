@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The `sk<N>` version field: canonical form, and three distinct verdicts.
 //!
 //! KISS-CLASSIFY-6.7-0015 splits what a reader must say about a version field:
