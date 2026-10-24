@@ -449,8 +449,8 @@ fn the_mapping_guard_note_is_still_the_one_we_answered() {
 /// Found by mutation: misspelling `c128` as `c127` in the dtype codec leaves
 /// every assertion in this file green. The 20 positive vectors exercise exactly
 /// three dtypes in the dtype position (`f32`, `f16`, `f8e4m3fn`) and five
-/// anywhere at all, against a usable set of 22 — so a spelling divergence on any
-/// of the other 17 is invisible here.
+/// anywhere at all, against a usable set of 21 — so a spelling divergence on any
+/// of the other 16 is invisible here.
 ///
 /// That is not a defect in the vectors. A byte-match is a *token-grammar*
 /// instrument: it proves two implementations agree on field order, optional-field
