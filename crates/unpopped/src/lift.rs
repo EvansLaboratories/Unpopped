@@ -393,7 +393,9 @@ impl Parser {
             .strip_prefix("in")
             .and_then(|d| d.parse().ok())
             .ok_or_else(|| LiftError::Unrecognized(format!("read '{name}[..]' (not inK)")))?;
-        self.eat(&Tok::LBrack);
+        // The caller peeked `[` before dispatching here, so this consumes it.
+        let opened = self.eat(&Tok::LBrack);
+        debug_assert!(opened, "parse_input_ref is entered only on a peeked '['");
         match self.next() {
             Some(Tok::Ident(v)) if v == self.idx_var => {}
             other => {
@@ -412,7 +414,9 @@ impl Parser {
 
     // func '(' expr (',' expr)? ')'
     fn parse_call(&mut self, name: &str) -> Result<ScalarExpr, LiftError> {
-        self.eat(&Tok::LParen);
+        // The caller peeked `(` before dispatching here, so this consumes it.
+        let opened = self.eat(&Tok::LParen);
+        debug_assert!(opened, "parse_call is entered only on a peeked '('");
         let a = self.parse_expr()?;
         if self.eat(&Tok::Comma) {
             let b = self.parse_expr()?;

@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.22.9` — the lifter states that its two bracket-eats cannot fail (CodeRipper unused-return-values)
+
+`parse_input_ref` and `parse_call` discarded `eat`'s result; both are entered only after the caller peeked the token, so it always succeeds. The result is now bound and `debug_assert!`ed. No behaviour change in release, no API change.
+
 ## `0.22.8` — `tools/renamed_names_left_in_prose.py` declares its licence (CodeRipper SPDX, last file)
 
 One comment line. No code, no API change.
