@@ -172,7 +172,7 @@ answer different questions and a reader could easily think they conflict.
 
 `Fp8E4M3FNUZ` / `Fp8E5M2FNUZ` decline as **reserved**; `F8E8M0` / `F8E6M2` decline
 as **MX block scales**. **KISS §6.1 gives all four tokens** — recognition and
-usability are already distinguished there (24 recognized, 22 usable) — **but
+usability are already distinguished there (24 recognized, 21 usable, 3 reserved: KISS-CLASSIFY-6.1-0001) — **but
 "usable" and "has arithmetic semantics" are our reading, not a clause we cite.**
 
 ---

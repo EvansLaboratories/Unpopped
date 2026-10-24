@@ -333,7 +333,7 @@ fn quoted_strings(s: &str) -> Vec<String> {
 ///
 /// `kiss_byte_match.rs` compares real tokens and would catch a swap — but only
 /// for the dtypes its vectors exercise, recorded there as **3 in the dtype
-/// position and 5 anywhere, against 22 usable**. That note says the remainder is
+/// position and 5 anywhere, against 21 usable**. That note says the remainder is
 /// "caught by `kiss_dtype_manifest.rs` instead". For *membership* it is; for
 /// *mapping* it was not, until this test. Two tests, each sound for its own
 /// purpose, composing to leave ~19 dtypes where a swap was invisible to both.
