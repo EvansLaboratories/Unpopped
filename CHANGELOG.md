@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.22.7` — docs only: ROADMAP re-baselines CodeRipper on the repinned workflow
+
+No code, no API change.
+
 ## `0.22.6` — every `.rs` file declares its licence (CodeRipper licence/SPDX)
 
 One `// SPDX-License-Identifier: MIT OR Apache-2.0` line at the top of each of the 104 `.rs` files, matching `license` in Cargo.toml. No code, no API change.
