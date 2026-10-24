@@ -66,8 +66,9 @@ enum Status {
     /// operand") that described the implementation rather than a decision. All
     /// three were really `Blocked`, and all three now lower or are scheduled.
     ///
-    /// `f8e8m0`/`f8e6m2` are different in kind: KISS-CLASSIFY §6.1-0013 makes
-    /// them sibling-operand **scales**, never element value dtypes. That is a
+    /// `f8e8m0` is different in kind: KISS-CLASSIFY §6.1-0013 makes it a
+    /// sibling-operand **scale**, never an element value dtype (`f8e6m2` is the
+    /// same by name but is RESERVED, so it is not in this table at all). That is a
     /// statement about what the dtype IS, not about what we have built.
     ///
     /// A `ByDesign` entry should stay rare enough to be suspicious. The test
@@ -125,8 +126,9 @@ use Status::{Blocked, ByDesign, Lowers, NotYet};
 /// Eric.
 const SLANG_NARROW: &str = "i8/u8/i16/u16 are GATED, not refused: Slang spells them      (int8_t/uint8_t/int16_t/uint16_t) when the target advertises the matching arithmetic      capability — `i8` (shaderInt8) for the 8-bit pair, `i16` (shaderInt16) for the 16-bit      pair. Both tokens are signedness-agnostic, so u8 gates on i8 and u16 on i16. i16 became      expressible on 2026-09-02 with kiss-vulkan-vocab 0.4.0 / vulkane 0.14.0 (capability      vocabulary v5); it was an UNSHIPPED vocabulary, never a missing one. This row probes      cuda:sm89, which carries no <arith> field at all, so the refusal here is correct";
 
-/// `f8e8m0` and `f8e6m2` are the OCP Microscaling **scale** dtypes, and
-/// KISS-CLASSIFY §6.1-0013 is explicit about what that means: each is "the
+/// `f8e8m0` is an OCP Microscaling **scale** dtype (and `f8e6m2` its reserved
+/// sibling, which `the_reserved_dtypes_never_lower` covers), and
+/// KISS-CLASSIFY §6.1-0013 is explicit about what that means: it is "the
 /// per-block shared scale of an MX-encoded value operand, carried as a **sibling
 /// operand**, **never an element value dtype**." §6.2-0002 confirms it from the
 /// other side — its float special-value pinning lists `f8e4m3fn`/`f8e5m2` and
@@ -177,12 +179,6 @@ const COVERAGE: &[(&str, ElementKind, Status, Status)] = &[
     (
         "f8e8m0",
         ElementKind::F8E8M0,
-        ByDesign(MX_SCALE),
-        ByDesign(MX_SCALE),
-    ),
-    (
-        "f8e6m2",
-        ElementKind::F8E6M2,
         ByDesign(MX_SCALE),
         ByDesign(MX_SCALE),
     ),
@@ -255,7 +251,7 @@ fn the_coverage_table_matches_what_the_backends_actually_do() {
             }
         }
     }
-    println!("\nmeasured lowering coverage — CpuC {c_n}/22, Slang {s_n}/22");
+    println!("\nmeasured lowering coverage — CpuC {c_n}/21, Slang {s_n}/21");
     for w in &wrong {
         println!("   {w}");
     }
@@ -336,6 +332,7 @@ fn the_reserved_dtypes_never_lower() {
     for (name, dt) in [
         ("f8e4m3fnuz", ElementKind::Fp8E4M3FNUZ),
         ("f8e5m2fnuz", ElementKind::Fp8E5M2FNUZ),
+        ("f8e6m2", ElementKind::F8E6M2),
     ] {
         assert!(dt.is_reserved(), "{name} must be marked reserved");
         assert!(
@@ -353,7 +350,7 @@ fn the_reserved_dtypes_never_lower() {
 #[test]
 fn recognition_exceeds_lowering_and_the_gap_is_named() {
     let recognized = 24; // the closed §6.1 set, verified in unpopped-vocab
-    let usable = 22; // recognized minus the two reserved
+    let usable = 21; // recognized minus the three reserved (KISS-CLASSIFY-6.1-0001)
     assert_eq!(
         COVERAGE.len(),
         usable,
