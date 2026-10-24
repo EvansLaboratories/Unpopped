@@ -33,9 +33,8 @@ blob changed, not on a schedule, and record the commit in `kiss/README.md`.
    numerics axes.
 2. **Re-vendor on KISS change**, with the derivation vectors re-run
    (`cargo test -p unpopped-vocab --test kiss_derivation_vectors -- --nocapture`).
-3. **CodeRipper unused-return-values** (same run): `eat`'s return value is discarded at 2 of its 12 call sites, `crates/unpopped/src/lift.rs:301`. Read the two sites: use the result, or write `let _ =` with the reason the miss is correct.
-4. **CodeRipper reachability, 179 findings** (same run: 98 in `unpopped`, 81 in `unpopped-vocab`; `unpopped-cpu-c` and `unpopped-slang` set aside 10 and 12 reached by name from their tests): almost all are `pub` items of library crates with no caller inside the crate, which a consumer or a test reaches. Whether that is dead code or the rule's blind spot for a library's public API is a ruling for the PM and CodeRipper, not one this lane makes by deleting API. Nothing is silenced here. Ask is open.
-5. **CodeRipper rules that did not run: resolved.** `reachability`, `unused-return-values` and `unused-parameters` now run on all five members (coderipper#127, pin `30e012b7`); `unused-parameters` reports nothing. Delete this row when the PM confirms.
+3. **CodeRipper reachability, 179 findings** (same run: 98 in `unpopped`, 81 in `unpopped-vocab`; `unpopped-cpu-c` and `unpopped-slang` set aside 10 and 12 reached by name from their tests): almost all are `pub` items of library crates with no caller inside the crate, which a consumer or a test reaches. Whether that is dead code or the rule's blind spot for a library's public API is a ruling for the PM and CodeRipper, not one this lane makes by deleting API. Nothing is silenced here. Ask is open.
+4. **CodeRipper rules that did not run: resolved.** `reachability`, `unused-return-values` and `unused-parameters` now run on all five members (coderipper#127, pin `30e012b7`); `unused-parameters` reports nothing. Delete this row when the PM confirms.
 
 ## 4. Held or blocked
 
