@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.22.8` — `tools/renamed_names_left_in_prose.py` declares its licence (CodeRipper SPDX, last file)
+
+One comment line. No code, no API change.
+
 ## `0.22.7` — docs only: ROADMAP re-baselines CodeRipper on the repinned workflow
 
 No code, no API change.
