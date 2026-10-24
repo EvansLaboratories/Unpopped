@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.22.4` — test only: the `docs/` half of a seam guard moves to `unpopped-conformance` (CodeRipper SUP-004)
+
+`the_declaration_form_is_a_seam` read `../../../docs/normative-seams.md`, outside its crate and so outside the published `.crate`. The doc check is now `a_doc_discussing_plan_body_names_both_access_shapes` in the never-published conformance crate, with a control that it engages. No API change.
+
 ## `0.22.3` — docs and CI only: CodeRipper baseline rows, repin portfolio.yml to 30e012b7
 
 No code, no API change.

@@ -331,13 +331,11 @@ fn the_reduction_field_table_is_not_duplicated_in_prose() {
     // The invariant is not a phrase, because each round spelled it differently.
     // It is: you may not discuss what `plan.body` means at a reduction without
     // naming BOTH shapes, since every wrong version was true of exactly one.
-    for (name, text) in [
-        (
-            "docs/normative-seams.md",
-            include_str!("../../../docs/normative-seams.md"),
-        ),
-        ("src/ir.rs", src),
-    ] {
+    //
+    // The doc half of this guard lives in `unpopped-conformance`
+    // (`a_doc_discussing_plan_body_names_both_access_shapes`): a test in this
+    // crate cannot read `docs/`, which sits outside the published `.crate`.
+    for (name, text) in [("src/ir.rs", src)] {
         if !(text.contains("plan.body") && text.contains("epilogue")) {
             continue;
         }
