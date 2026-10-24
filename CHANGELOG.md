@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.22.15` — ROADMAP records the C14 Vulkan NaN measurement
+
+Docs only. C14 is done (`unpopped-harness` 0.0.16, #16): AMD Radeon 610M and RTX 4070 Laptop both show 0 mismatches over all 2^32 f32 inputs on the NaN, infinity and sign-of-zero probes, so no device is measured not preserving NaN and C2 (N2) stays parked. E2 notes that the Slang non-finite constant spelling is fixed (#106) and the declined ops are a different gap.
+
 ## `0.22.14` — `unpopped-slang` spells NaN and infinity constants as Slang, not C macros
 
 A body carrying a NaN or infinity constant used to emit `INFINITY` / `NAN`, which Slang does not define: `slangc` failed with `undefined identifier 'INFINITY'`. Found 2026-10-24 by the harness's C14 probe (`|x| == +inf` on a Vulkan device); the crate docs had recorded it as a known seam follow-up, which is no reason to leave it. The `constant` seam now uses `slang_const`: NaN, +inf and -inf become `asfloat(0x7fc00000u)`, `asfloat(0x7f800000u)` and `asfloat(0xff800000u)`; finite constants still go through `const_lit` unchanged, so no existing golden moves. Tests: `non_finite_constants_are_not_spelled_as_c_macros` (fails with the old spelling; verified by restoring it), and the `slangc`-gated `emitted_slang_compiles_with_slangc` gains a NaN/+inf/-inf kernel (run locally with `slangc` 1.4.350.0: ok).
