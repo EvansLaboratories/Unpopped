@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """Find identifiers a commit range DELETED from code but left named in prose.
 
 A rename that compiles is not a rename that is done. The compiler resolves every
