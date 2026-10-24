@@ -2835,7 +2835,10 @@ impl OpDef {
     /// `derive_pattern`) operates on the primary output expr unchanged. v1 rejects
     /// `Mean` (not a monoid) and asserts `axis == rank - 1` at `plan::validate_scan`.
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per declared parameter of the op; a builder would be a second spelling of the same fields"
+    )]
     pub fn scan(
         name: &str,
         n_inputs: u8,
@@ -2906,7 +2909,10 @@ impl OpDef {
     /// asserts `axis == rank - 1` and the window-param legality at
     /// `plan::validate_window`. See [`Access::Window`].
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per declared parameter of the op; a builder would be a second spelling of the same fields"
+    )]
     pub fn window(
         name: &str,
         n_inputs: u8,
@@ -2954,7 +2960,10 @@ impl OpDef {
     /// `post = reduced(0)` (the plain pool). `count_include_pad` picks the avg_pool
     /// divisor policy (ignored for Max/Min/Sum).
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per declared parameter of the op; a builder would be a second spelling of the same fields"
+    )]
     pub fn window_simple(
         name: &str,
         dtypes: &[ElementKind],

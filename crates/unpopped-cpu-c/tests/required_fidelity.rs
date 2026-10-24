@@ -227,9 +227,15 @@ fn the_derived_band_accepts_a_correct_result_and_rejects_a_perturbed_one() {
     // that does not exist.
     let _ = generate(&op, &key, &CpuC);
 
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "small index in 0..255, exact in f32"
+    )]
     let a: Vec<f32> = (0..255).map(|i| 0.5 + i as f32 * 0.031_25).collect();
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "small index in 0..255, exact in f32"
+    )]
     let b: Vec<f32> = (0..255).map(|i| 1.25 - i as f32 * 0.007_812_5).collect();
     let bufs = vec![
         TypedBuffer::from_f32(&[255], &a),
@@ -244,7 +250,10 @@ fn the_derived_band_accepts_a_correct_result_and_rejects_a_perturbed_one() {
     compare(&want, &want, fidelity).expect("a result must match itself");
 
     // Well OUTSIDE the band: must be rejected.
-    #[allow(clippy::cast_possible_truncation)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "narrowing to f32 is the point: the result is built at the kernel's precision"
+    )]
     let far: Vec<f32> = base
         .iter()
         .map(|v| (v * (1.0 + rel * 100.0)) as f32)
@@ -257,7 +266,10 @@ fn the_derived_band_accepts_a_correct_result_and_rejects_a_perturbed_one() {
 
     // Well INSIDE the band: must be accepted, or the band is too tight and
     // would reject correct kernels.
-    #[allow(clippy::cast_possible_truncation)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "narrowing to f32 is the point: the result is built at the kernel's precision"
+    )]
     let near: Vec<f32> = base
         .iter()
         .map(|v| (v * (1.0 + rel / 8.0)) as f32)

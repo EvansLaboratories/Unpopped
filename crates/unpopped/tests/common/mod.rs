@@ -23,7 +23,10 @@
 // `dead_code` is deliberately NOT allowed: every item here is used by every
 // binary that declares this module. A double only one binary needs lives in
 // that binary (`OtherStub` is in `provenance.rs`).
-#![allow(unreachable_pub)]
+#![allow(
+    unreachable_pub,
+    reason = "shared by several test binaries, so items are `pub` for them"
+)]
 
 use unpopped::backend::{Backend, DtypeSupport, GeneratedKernel, LowerError};
 use unpopped::plan::KernelPlan;

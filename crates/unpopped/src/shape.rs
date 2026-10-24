@@ -251,7 +251,10 @@ pub fn output_shape(op: &OpDef, input_shapes: &[Vec<i64>]) -> Result<Vec<i64>, S
         // unreachable — but `Access` grows over time (§6.20 tracks §6.13's
         // vocabulary), and it exists so a NEWLY ADDED variant is an honest miss
         // rather than a wrong shape or a silent compile-time gap.
-        #[allow(unreachable_patterns)]
+        #[allow(
+            unreachable_patterns,
+            reason = "catch-all kept so a newly added variant is an honest miss; unreachable until one is added"
+        )]
         _ => Err(ShapeError::NotDerivable {
             reason: "access variant not yet covered by the shape oracle",
         }),
@@ -438,7 +441,10 @@ pub fn shape_rule_form(op: &OpDef, input_shapes: &[Vec<i64>]) -> ShapeRuleForm {
         // unreachable — but `Access` grows over time (§6.20 tracks §6.13's
         // vocabulary), and it exists so a NEWLY ADDED variant is an honest miss
         // rather than a wrong classification or a silent compile-time gap.
-        #[allow(unreachable_patterns)]
+        #[allow(
+            unreachable_patterns,
+            reason = "catch-all kept so a newly added variant is an honest miss; unreachable until one is added"
+        )]
         _ => ShapeRuleForm::NotDerivable {
             reason: "access variant not yet covered by the shape oracle",
         },

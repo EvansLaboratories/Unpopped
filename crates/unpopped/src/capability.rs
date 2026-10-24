@@ -177,7 +177,10 @@ impl TargetCapabilities {
     /// attribute rather than to a table row, so it stays correct for parts that
     /// did not exist when this crate was written.
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per queried device limit; the constructor mirrors the driver query field for field"
+    )]
     pub fn from_queried(
         max_threads_per_block: u32,
         max_shared_mem_per_block: u32,
