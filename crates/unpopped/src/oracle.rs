@@ -1496,7 +1496,10 @@ fn erf(x: f64) -> f64 {
 fn lgamma(x: f64) -> f64 {
     use std::f64::consts::PI;
     // Reference Lanczos coefficients — kept at full published precision.
-    #[allow(clippy::excessive_precision)]
+    #[allow(
+        clippy::excessive_precision,
+        reason = "reference Lanczos coefficients kept at full published precision"
+    )]
     const G: [f64; 9] = [
         0.999_999_999_999_809_93,
         676.520_368_121_885_1,
@@ -2856,7 +2859,10 @@ fn scan_identity(sop: ReduceOp, dt: ElementKind) -> (f64, i128) {
 // E. Window (sliding-window pool; count_include_pad divisor).
 // ===========================================================================
 
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "`eval_window` is one linear evaluation of a window plan"
+)]
 fn eval_window(
     plan: &KernelPlan<'_>,
     operands: &[OperandDesc],
@@ -3220,7 +3226,10 @@ pub fn required_fidelity_with_exactness(
         return Some(Fidelity::BitExact);
     }
 
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "`steps` is a small step count, exact in f64"
+    )]
     let rel = (steps as f64 + 2.0 * ulp) * unit_roundoff(plan.dtype);
     Some(Fidelity::Tolerant { rel, abs: 0.0 })
 }
@@ -5140,7 +5149,10 @@ mod scalar_math_pins {
     /// `(op, x, expected)` from Python's `math`, an implementation independent of the oracle.
     // Reference outputs that happen to equal a named constant (sqrt(2), e, ln 2) are
     // still table data, not a use of the constant.
-    #[allow(clippy::approx_constant)]
+    #[allow(
+        clippy::approx_constant,
+        reason = "reference outputs that equal a named constant are table data, not a use of the constant"
+    )]
     const UNARY: &[(UnaryOp, f64, f64)] = &[
         (UnaryOp::Neg, -3.5, 3.5),
         (UnaryOp::Neg, -2.0, 2.0),
@@ -5530,7 +5542,10 @@ mod scalar_math_pins {
     /// `(op, a, b, expected)`, same provenance.
     // Reference outputs that happen to equal a named constant (sqrt(2), e, ln 2) are
     // still table data, not a use of the constant.
-    #[allow(clippy::approx_constant)]
+    #[allow(
+        clippy::approx_constant,
+        reason = "reference outputs that equal a named constant are table data, not a use of the constant"
+    )]
     const BINARY: &[(BinaryOp, f64, f64, f64)] = &[
         (BinaryOp::Max, -3.5, -2.0, -2.0),
         (BinaryOp::Max, -3.5, -0.5, -0.5),
@@ -6714,7 +6729,10 @@ mod fold_pins {
         );
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "test helper: one argument per window parameter"
+    )]
     fn window(
         op: ReduceOp,
         dt: ElementKind,

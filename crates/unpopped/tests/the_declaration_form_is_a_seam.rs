@@ -195,7 +195,10 @@ fn the_move_predicate_cannot_see_a_reduction_fold() {
 // routing change, not a behaviour change, and the predicate must keep answering
 // correctly for as long as it is exported. Scoped to this fn rather than the
 // file so an accidental new use elsewhere still warns.
-#[allow(deprecated)]
+#[allow(
+    deprecated,
+    reason = "calls the deprecated predicate while it stays exported; scoped to this fn so a new use elsewhere still warns"
+)]
 fn the_reduce_predicate_separates_a_max_fold_from_a_sum_fold() {
     use unpopped::ir::{ReduceOp, input, is_bit_move_reduce, is_bit_or_sign_move};
 
@@ -246,7 +249,10 @@ fn the_reduce_predicate_separates_a_max_fold_from_a_sum_fold() {
 // routing change, not a behaviour change, and the predicate must keep answering
 // correctly for as long as it is exported. Scoped to this fn rather than the
 // file so an accidental new use elsewhere still warns.
-#[allow(deprecated)]
+#[allow(
+    deprecated,
+    reason = "calls the deprecated predicate while it stays exported; scoped to this fn so a new use elsewhere still warns"
+)]
 fn the_element_expression_lives_in_a_different_field_per_access_shape() {
     use unpopped::ir::{OpDef, ReduceOp, input, is_bit_move_reduce, is_bit_or_sign_move};
     use unpopped_vocab::ElementKind;

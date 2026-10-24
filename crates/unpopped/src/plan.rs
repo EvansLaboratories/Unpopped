@@ -3134,7 +3134,10 @@ pub(crate) fn check_row_reduce(
     // so it is deliberately NOT tracked as a column.
     let mut is_col = [false; MAX_OPERANDS];
     let mut input0_streamed = false;
-    #[allow(clippy::needless_range_loop)]
+    #[allow(
+        clippy::needless_range_loop,
+        reason = "`i` is reported in the error and compared with 0 as well as indexing `key.operands`"
+    )]
     for i in 0..n {
         let o = key.operands[i];
         match rr_role(o, last) {
@@ -3367,7 +3370,10 @@ fn validate_scan(op: &OpDef, key: &StructureKey, axis: u8, reverse: bool, exclus
     // reversed operand keys |stride|-Contig + flipped and would read mirrored/OOB —
     // the reverse SCAN is the `reverse` flag, never a flipped operand).
     let mut input0_streamed = false;
-    #[allow(clippy::needless_range_loop)]
+    #[allow(
+        clippy::needless_range_loop,
+        reason = "`i` is reported in the error and compared with 0 as well as indexing `key.operands`"
+    )]
     for i in 0..n {
         let o = key.operands[i];
         match rr_role(o, last) {
@@ -3483,7 +3489,10 @@ fn validate_scan(op: &OpDef, key: &StructureKey, axis: u8, reverse: bool, exclus
 /// as RowReduce's `k`/`n_out` and `Coord`'s exact-integer extent bound. The output
 /// operand's LAYOUT (forward-dense contiguous, downsampled extent) IS keyed and is
 /// checked here.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one argument per declared window parameter"
+)]
 fn validate_window(
     op: &OpDef,
     key: &StructureKey,
@@ -3579,7 +3588,10 @@ fn validate_window(
     // row-streamed pooled tensor: `base = row*k_in` + the tap walk `idx = base+p`
     // assume a dense, forward inner axis, so it must be Contig and NOT flipped.
     let mut input0_streamed = false;
-    #[allow(clippy::needless_range_loop)]
+    #[allow(
+        clippy::needless_range_loop,
+        reason = "`i` is reported in the error and compared with 0 as well as indexing `key.operands`"
+    )]
     for i in 0..n {
         let o = key.operands[i];
         match rr_role(o, last) {
@@ -5350,7 +5362,10 @@ mod window_gate_validate {
     }
 
     // A plain single-input pool: size/stride/dilation/pad_lo/pad_hi/cip.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per declared window parameter"
+    )]
     fn pool(
         op: ReduceOp,
         dt: ElementKind,

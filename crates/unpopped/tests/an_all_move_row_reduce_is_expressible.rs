@@ -185,7 +185,10 @@ fn the_row_reduce_predicate_traces_every_stage() {
 /// This pins the difference so the prescription cannot silently come back.
 #[test]
 fn the_old_per_stage_prescription_disagrees_with_the_shape_predicate() {
-    #[allow(deprecated)]
+    #[allow(
+        deprecated,
+        reason = "pins the deprecated per-stage predicate against its replacement while it stays exported"
+    )]
     use unpopped::ir::is_bit_move_reduce;
     use unpopped::ir::{ReduceStage, is_bit_move_row_reduce_output};
 
@@ -199,7 +202,10 @@ fn the_old_per_stage_prescription_disagrees_with_the_shape_predicate() {
         op: ReduceOp::Min,
     };
 
-    #[allow(deprecated)]
+    #[allow(
+        deprecated,
+        reason = "pins the deprecated per-stage predicate against its replacement while it stays exported"
+    )]
     let per_stage_says =
         is_bit_move_reduce(stage0.op, &stage0.pre) && is_bit_move_reduce(stage1.op, &stage1.pre);
 

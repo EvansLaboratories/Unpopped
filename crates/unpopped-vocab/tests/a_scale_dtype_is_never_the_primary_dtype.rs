@@ -55,7 +55,10 @@ fn a_scale_as_a_sibling_still_keys() {
 fn the_try_path_matches_the_infallible_one_when_it_succeeds() {
     let a = OperandDesc::new(2, &[128, 256], &[256, 1], ElementKind::F32, 256);
     let ops = [a, a, a];
-    #[allow(deprecated)]
+    #[allow(
+        deprecated,
+        reason = "compares the deprecated infallible path against its replacement"
+    )]
     let old = structure_key(OpCategory::BinaryElementwise, &ops, ArchSku::Sm89);
     let new = try_structure_key(OpCategory::BinaryElementwise, &ops, ArchSku::Sm89)
         .expect("plain f32 elementwise keys");

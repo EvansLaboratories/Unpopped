@@ -290,7 +290,10 @@ impl Compute {
     fn round(self, v: f64) -> f64 {
         match self {
             // `as f32` is round-to-nearest-even, which is what the device does.
-            #[allow(clippy::cast_possible_truncation)]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "`as f32` is round-to-nearest-even, which is what the device does"
+            )]
             Self::F32 => f64::from(v as f32),
             Self::F64 => v,
         }
@@ -1097,7 +1100,10 @@ mod tests {
         let body = sqr(sqr(ScalarExpr::Const(c)));
 
         // What the device computes, written out step by step in f32.
-        #[allow(clippy::cast_possible_truncation)]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "`as f32` is the device's round-to-nearest-even, which is the behaviour under test"
+        )]
         let inner = (c as f32) * (c as f32);
         let device = f64::from(inner * inner);
 
@@ -1155,7 +1161,10 @@ mod tests {
             Box::new(k(c)),
         );
 
-        #[allow(clippy::cast_possible_truncation)]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "`as f32` is the device's round-to-nearest-even, which is the behaviour under test"
+        )]
         let device = f64::from((a as f32 + b as f32) + c as f32);
         let ScalarExpr::Const(got) = optimize(&body, F32) else {
             panic!("a fully-constant body must fold");
@@ -1189,7 +1198,10 @@ mod tests {
             Box::new(ScalarExpr::Const(a)),
             Box::new(ScalarExpr::Const(b)),
         );
-        #[allow(clippy::cast_possible_truncation)]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "`as f32` is the device's round-to-nearest-even, which is the behaviour under test"
+        )]
         let device = f64::from(a as f32 + b as f32);
         let ScalarExpr::Const(got) = optimize(&body, F32) else {
             panic!("must fold");
@@ -1204,7 +1216,10 @@ mod tests {
         let ScalarExpr::Const(lone) = optimize(&ScalarExpr::Const(0.1), F32) else {
             panic!("a Const stays a Const");
         };
-        #[allow(clippy::cast_possible_truncation)]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "`as f32` is the device's round-to-nearest-even, which is the behaviour under test"
+        )]
         let want = f64::from(0.1_f64 as f32);
         assert_eq!(lone.to_bits(), want.to_bits());
     }
@@ -1234,7 +1249,10 @@ mod tests {
         let neg = |a| ScalarExpr::Unary(UnaryOp::Neg, a);
         let sqr = |a| ScalarExpr::Unary(UnaryOp::Sqr, a);
 
-        #[allow(clippy::cast_possible_truncation)]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "`as f32` is the device's round-to-nearest-even, which is the behaviour under test"
+        )]
         let g = |v: f64| v as f32;
 
         // (name, body, the device's stepwise f32 answer)
@@ -1384,7 +1402,10 @@ mod tests {
             at_f64.to_bits(),
             "f32 and f64 Rem folding must differ here, or the case is not              discriminating"
         );
-        #[allow(clippy::cast_possible_truncation)]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "`as f32` is the device's round-to-nearest-even, which is the behaviour under test"
+        )]
         let rounded = f64::from(got as f32);
         assert_eq!(
             got.to_bits(),
@@ -1432,12 +1453,21 @@ mod tests {
             1e-30,
             -7.777_777_777_777_777,
         ] {
-            #[allow(clippy::cast_possible_truncation)]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "`as f32` is the device's round-to-nearest-even, which is the behaviour under test"
+            )]
             let r = f64::from(v as f32);
-            #[allow(clippy::cast_possible_truncation)]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "`as f32` is the device's round-to-nearest-even, which is the behaviour under test"
+            )]
             let neg_then_round = f64::from((-v) as f32);
             assert_eq!(neg_then_round.to_bits(), (-r).to_bits(), "neg is exact");
-            #[allow(clippy::cast_possible_truncation)]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "`as f32` is the device's round-to-nearest-even, which is the behaviour under test"
+            )]
             let abs_then_round = f64::from(v.abs() as f32);
             assert_eq!(abs_then_round.to_bits(), r.abs().to_bits(), "abs is exact");
         }
