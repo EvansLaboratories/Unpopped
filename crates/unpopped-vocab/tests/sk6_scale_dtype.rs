@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! `sk6`: the scale dtype of a quantized dense-contraction cell is keyed
 //! (KISS-CLASSIFY-6.6-0022), as the optional last contraction coordinate
 //! `q<dtype>`.

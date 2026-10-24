@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Reserved dtypes: recognized, distinguished, and refused.
 //!
 //! KISS-Classify §6.1-0001 imposes three separate obligations on the `fnuz` FP8

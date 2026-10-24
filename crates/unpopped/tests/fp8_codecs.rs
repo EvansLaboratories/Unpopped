@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! FP8 `f8e4m3fn` and `f8e5m2` — **every** one of the 256 bit patterns.
 //!
 //! # Why this file can prove what the others can only sample

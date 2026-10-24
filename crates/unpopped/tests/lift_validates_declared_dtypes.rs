@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! A lifted op's declared dtype list is an unvalidated caller input — until now.
 //!
 //! `lift_elementwise(src, name, dtypes)` takes the op's identity and its accepted

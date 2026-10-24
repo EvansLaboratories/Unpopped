@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! **A device whose measured result flushes subnormals does not get an Exact claim.**
 //!
 //! The `unpopped-harness` run of 2026-10-21 compared the Slang `relu` with the cpu-c reference over

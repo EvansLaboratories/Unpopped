@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The **recipe** — a kernel's neutral KISS-Ops Semantics op-DAG (KISS-Contract
 //! §2.3): the mandatory spine a recipe-verify importer runs to validate + register
 //! an op it does not already know, and the decomposition that resolves an op to the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! # CPU ORACLE (plan-interpreter) — v1
 //!
 //! An **independent** CPU interpreter that computes what a generated CUDA kernel

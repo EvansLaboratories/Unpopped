@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Zero is divisible by everything, so a modulo ladder must not read it as
 //! "maximally divisible". Two instances of that one defect, both reachable through
 //! the public `structure_key`:

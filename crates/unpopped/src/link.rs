@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The **link registry** — the `entry_point` → kernel roster the runtime binds.
 //!
 //! An FKC contract's `entry_point` is a *string*; to dispatch the kernel the

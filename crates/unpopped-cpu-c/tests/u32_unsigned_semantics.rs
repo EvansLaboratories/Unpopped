@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! `u32` arithmetic is modelled as **unsigned**, checked against Rust's own
 //! `u32` rather than against a C compiler.
 //!

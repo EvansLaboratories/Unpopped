@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Plan-layer *descriptors* shared across kernel families: caller
 //! preferences and the numerical-guarantee record every plan exposes.
 //!

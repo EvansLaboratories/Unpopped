@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Integer comparison is exact above 2⁵³ — the range where the `f64` projection
 //! stops being able to tell two values apart.
 //!

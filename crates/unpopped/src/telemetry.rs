@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Telemetry ingest (item 08 — Baracuda half of telemetry-driven variant
 //! selection).
 //!

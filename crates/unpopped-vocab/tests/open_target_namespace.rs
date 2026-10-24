@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! A non-CUDA target survives the whole `StructureKey` path.
 //!
 //! # Why this file exists separately from the target unit tests

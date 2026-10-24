@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! **CLOSED, and now pinned the other way.** `try_generate` returns a typed
 //! decline on a malformed `OpDef`, as KISS-EMIT §6.8-0004 requires.
 //!

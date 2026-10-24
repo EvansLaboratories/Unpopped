@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Derive a Fuel FKC `pattern:` block from an op's IR.
 //!
 //! For a *pattern-recognized* fused op (an elementwise epilogue Fuel discovers

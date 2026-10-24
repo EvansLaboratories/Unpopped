@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! **What a ledger may admit, what it must decline, and what the file keeps.**
 //!
 //! `docs/design-per-device-decline.md`, sections 2 to 5. Every row that must decline has its

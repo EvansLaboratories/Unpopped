@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! A test file must exercise the crate it lives in — unless it exercises no
 //! crate at all.
 //!

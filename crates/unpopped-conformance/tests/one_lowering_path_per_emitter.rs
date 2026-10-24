@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Each reference emitter dispatches exactly ONE schedule, and a second arm
 //! expires a nil that was measured against the first.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The workflow must not restate a version that already lives somewhere else.
 //!
 //! Two versions govern this workspace and they are different claims:

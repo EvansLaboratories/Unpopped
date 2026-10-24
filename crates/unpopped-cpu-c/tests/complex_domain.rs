@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Complex as a first-class oracle domain — `c64` and `c128`.
 //!
 //! # Why first-class rather than a pair of reals

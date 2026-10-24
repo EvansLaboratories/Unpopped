@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! **Every crate in this workspace must carry the SAME version number.**
 //!
 //! # The rule, quoted rather than paraphrased

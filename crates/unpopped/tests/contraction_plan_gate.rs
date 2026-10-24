@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! `try_build_plan` types every refusal of a contraction cell
 //! ([`PlanError::UnservableContraction`]), so every emitter inherits it and none panics.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! **`dtype_tag` feeds generated symbol names, and its safety rests on a prose
 //! precondition enforced nowhere.** This makes the precondition executable.
 //!

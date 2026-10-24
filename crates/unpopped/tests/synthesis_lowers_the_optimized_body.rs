@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! `synthesize` lowers the OPTIMIZED body, not the one the region spelled.
 //!
 //! # Why this file exists

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The native (`JitRequest`) entry point into synthesis — happy path,
 //! recursion, and the trust-boundary declines.
 //!

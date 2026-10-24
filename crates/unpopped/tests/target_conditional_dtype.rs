@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! A backend can answer `supports_dtype` *differently per target*.
 //!
 //! # Why this test exists at all

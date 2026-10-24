@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! **Census, not a fuzzer.** What `(OpDef, structure_key)` pairs do at the
 //! emitter boundary: lower, decline, or abort.
 //!

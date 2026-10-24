@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! **A bitwise expression has no rounding step on any hardware, so its zero ULP
 //! bound is not CUDA's to lend.**
 //!

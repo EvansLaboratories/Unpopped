@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! **All FOUR fold-shaped `Access` variants, not the two I happened to repair.**
 //!
 //! # Why this exists

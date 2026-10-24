@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Per-category op discriminant enums.
 //!
 //! Each op category (B, C, D, N, …) gets a `*Kind` enum whose variants

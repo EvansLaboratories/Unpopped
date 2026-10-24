@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The neutral C-family speller vocabulary must not name a vendor's types.
 //!
 //! `cfamily` is documented as "deliberately backend-neutral" and is the module

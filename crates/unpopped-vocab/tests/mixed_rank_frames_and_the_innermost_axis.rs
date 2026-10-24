@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! "Innermost" means axis `rank − 1`, and the work class counts the
 //! right-aligned frame: KISS-CLASSIFY as of KISS#517 (`KISS@bc16715`), tracked
 //! in issue #31.

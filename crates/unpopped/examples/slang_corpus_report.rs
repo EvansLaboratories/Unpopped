@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Sizing harness for the Slang parser-split job (PM task, 2026-09-25):
 //! runs `convert.rs`'s Slang [`Frontend`] over every source file in a
 //! directory and reports accepted-vs-refused, bucketed by [`LiftError`]

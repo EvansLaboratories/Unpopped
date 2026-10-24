@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! KISS-Ops §6.20 shape expressions — the shape-side oracle vocabulary.
 //!
 //! §6.13 pins each op's **value** behaviour; §6.20 pins the **shape** behaviour

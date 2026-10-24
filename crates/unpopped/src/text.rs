@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Human-readable / -writable **text form** for an [`OpDef`] (IR-hub Phase 3).
 //!
 //! The neutral IR ([`crate::ir`]) is authored via the Rust EDSL

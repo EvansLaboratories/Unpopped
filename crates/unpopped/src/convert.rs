@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! CUDA / Slang → IR converters (IR-hub Phase 4, `convert` feature) — the
 //! source-language side of the translation hub, built on **tree-sitter**.
 //!

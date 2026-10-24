@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The four keyer defects Baracuda measured against `unpopped-vocab` 0.16.0
 //! (sk4), each pinned through **both** entry points: the conformant
 //! [`derive_structure_key`] (explicit facts) and the legacy

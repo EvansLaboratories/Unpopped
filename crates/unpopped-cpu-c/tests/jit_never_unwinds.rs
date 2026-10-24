@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The JIT trust boundary must **decline**, never unwind.
 //!
 //! `jit.rs` states the rule outright: *"the Synthesizer trait must never unwind

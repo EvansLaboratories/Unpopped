@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The driver declares a hoisted temporary through a seam, not in C.
 //!
 //! # The leak this closes, and why nothing could see it

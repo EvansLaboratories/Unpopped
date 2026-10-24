@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Portable-C CPU lowering — the second backend (v1), proving the neutral
 //! [`unpopped::plan::KernelPlan`] IR is genuinely backend-agnostic.
 //!

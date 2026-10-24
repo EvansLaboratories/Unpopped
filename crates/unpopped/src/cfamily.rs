@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Shared **C-family scalar-op speller vocabulary** — the neutral scalar
 //! syntax (f32/f64/int math, the C ternary `select`, ctype names, and
 //! runtime-param spelling) that every C-family backend emits verbatim. These

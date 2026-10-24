@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! CUDA → IR frontend (Phase 4 spike) — the source-language side of the
 //! translation hub (`baracuda:docs/design/ir-translation-hub.md`).
 //!

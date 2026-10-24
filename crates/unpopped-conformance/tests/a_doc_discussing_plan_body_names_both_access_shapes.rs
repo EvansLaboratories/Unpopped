@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! `docs/normative-seams.md` may not discuss what `plan.body` means at a
 //! reduction without naming BOTH access shapes.
 //!

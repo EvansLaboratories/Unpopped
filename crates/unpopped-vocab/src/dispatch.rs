@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The **dispatch table** — the measured routing oracle for a cell.
 //!
 //! `baracuda:docs/design/kernel-specialization.md` §7 ("Excluding vendor-owned cells")

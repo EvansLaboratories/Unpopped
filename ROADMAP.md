@@ -33,8 +33,7 @@ blob changed, not on a schedule, and record the commit in `kiss/README.md`.
    numerics axes.
 2. **Re-vendor on KISS change**, with the derivation vectors re-run
    (`cargo test -p unpopped-vocab --test kiss_derivation_vectors -- --nocapture`).
-3. **CodeRipper licence, SPDX** (baseline: 104 of 105 source files carry no `SPDX-License-Identifier` in their first 15 lines, first hit `crates/unpopped-conformance/src/lib.rs:1`): add the identifier matching `license` in Cargo.toml, enumerating files from `git ls-files`.
-4. **CodeRipper rules that did not run** (baseline: `reachability`, `unused-return-values`, `unused-parameters` failed on a virtual workspace root): fixed upstream by coderipper#127; the workflow is repinned past it. Re-read the next run for new findings and add one row per rule.
+3. **CodeRipper rules that did not run** (baseline: `reachability`, `unused-return-values`, `unused-parameters` failed on a virtual workspace root): fixed upstream by coderipper#127; the workflow is repinned past it. Re-read the next run for new findings and add one row per rule.
 
 ## 4. Held or blocked
 

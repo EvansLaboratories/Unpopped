@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Inward algebraic optimizer — an e-graph over the op IR (Kernel-Seam §5.1).
 //!
 //! §5.1 charges the synthesizer with building the **best** kernel for the

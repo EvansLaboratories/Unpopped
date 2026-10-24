@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! What the FP8 **encoders** do, which nothing called until 2026-09-02.
 //!
 //! # The hole this closes

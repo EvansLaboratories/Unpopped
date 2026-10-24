@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Consumer-shaped end-to-end test: generate → compile → **launch** → compare.
 //!
 //! Every other test in this crate inspects the emitted *text*. This one runs it.

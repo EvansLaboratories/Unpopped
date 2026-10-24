@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! A generated kernel names what it was baked against.
 //!
 //! Every test here carries a **negative control** — that a kernel baked against a

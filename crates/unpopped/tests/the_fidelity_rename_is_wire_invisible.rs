@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! **Renaming `ReassociatedDeterministic` → `DeterministicallyDivergent` must not
 //! move a single byte a consumer parses.**
 //!

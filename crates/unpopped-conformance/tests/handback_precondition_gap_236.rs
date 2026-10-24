@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Shipping a kernel-handback provider requires Fuel's GAP-236 increment 2.
 //!
 //! # The hole this guards, stated as the measurement rather than the worry

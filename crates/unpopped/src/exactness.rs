@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Measured exactness: what an exhaustive run on one device said about one body.
 //!
 //! # Why this exists

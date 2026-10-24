@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! The derived comparison band is validated against real kernels, not asserted.
 //!
 //! # Why this file is in the emitter crate

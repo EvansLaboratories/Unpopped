@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! What this generator can actually **emit**, per dtype, per backend.
 //!
 //! # Why this is a test and not a line in a doc
