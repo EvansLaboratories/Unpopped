@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.22.13` — ROADMAP section 6 records the PM's rulings on the audit calls
+
+Docs only. Calls 1, 2, 4, 6, 8, 9, 11 are parked and keep their rows; call 5 (N2) is parked on KISS's recommendation with a new unblocker row (C14, measure a Vulkan device's float-controls); call 3 (`vec_width`) waits on baracuda #252, then this lane writes the plan; call 10 is deferred; call 7 is still to be asked. E2 gains `copysign`/`nextafter` (harness 0.0.15), P6 the binary and ternary corpora, and C15 records #104.
+
 ## `0.22.12` — `f8e6m2` is reserved, so there are 21 usable dtypes, not 22
 
 Tests and comments only; no library behaviour change. KISS reported (2026-10-24, KISS-CLASSIFY-6.1-0001): 24 recognized, **21 usable, 3 reserved** (`f8e4m3fnuz`, `f8e5m2fnuz`, `f8e6m2`). `ElementKind::is_reserved` already said so, but `dtype_lowering_coverage.rs` counted two reserved and 22 usable, and passed only because its table carried a row for the reserved `f8e6m2` (as `ByDesign(MX_SCALE)`). That row moves to `the_reserved_dtypes_never_lower`; the table is 21 rows and `usable = 21`. The same "22 usable" in `kiss_byte_match.rs`, `kiss_dtype_manifest.rs`, `docs/normative-seams.md` and `docs/deferred.md` is corrected (and "the other 17" becomes 16). `f8e8m0` stays the one scale-only usable dtype (6.1-0013). The move/compute boundary is still our reading, not a KISS clause (KISS states none; `docs/normative-seams.md` says so).
