@@ -52,6 +52,8 @@ blob changed, not on a schedule, and record the commit in `kiss/README.md`.
   the number at gate. Pre-1.0, a breaking change moves the second number.
 - kiss-ref enums are `#[non_exhaustive]` from 0.4.0: a new `match` over one
   needs a wildcard arm.
+- Do not build a pre-built variant cache (`jit.rs`, "a pre-built-variant cache can slot in")
+  without re-reading US8146066B2 (est. expiry 2030-07); see `docs/PATENT-SWEEP.md`.
 - `cargo public-api` and `cargo semver-checks` are not installed here; an API
   diff in a PR is "read, not a tool run".
 
