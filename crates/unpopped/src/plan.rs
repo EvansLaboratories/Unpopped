@@ -1952,7 +1952,7 @@ pub(crate) fn check_no_half_nextafter(op: &OpDef, dtype: ElementKind) -> Result<
             | ScalarExpr::Bitcast(a, _)
             | ScalarExpr::Qualified(a, _)
             | ScalarExpr::Extract(a, _) => walk(a),
-            ScalarExpr::Pack(xs) => xs.iter().any(|x| walk(x)),
+            ScalarExpr::Pack(xs) => xs.iter().any(walk),
             ScalarExpr::Binary(bop, a, b) => {
                 matches!(bop, BinaryOp::Nextafter) || walk(a) || walk(b)
             }
@@ -2845,7 +2845,7 @@ pub(crate) fn expr_contains_coord(e: &ScalarExpr) -> bool {
         | ScalarExpr::Bitcast(x, _)
         | ScalarExpr::Qualified(x, _)
         | ScalarExpr::Extract(x, _) => expr_contains_coord(x),
-        ScalarExpr::Pack(xs) => xs.iter().any(|x| expr_contains_coord(x)),
+        ScalarExpr::Pack(xs) => xs.iter().any(expr_contains_coord),
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
@@ -3266,7 +3266,7 @@ pub(crate) fn check_fma_admissibility(op: &OpDef, dtype: ElementKind) -> Result<
             | ScalarExpr::Bitcast(x, _)
             | ScalarExpr::Qualified(x, _)
             | ScalarExpr::Extract(x, _) => has_fma(x),
-            ScalarExpr::Pack(xs) => xs.iter().any(|x| has_fma(x)),
+            ScalarExpr::Pack(xs) => xs.iter().any(has_fma),
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
             | ScalarExpr::Mul(a, b)
