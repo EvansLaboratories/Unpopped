@@ -912,9 +912,12 @@ fn contraction_epilogue_admissible(e: &crate::ir::ScalarExpr, n_inputs: u8) -> b
         // targeted message; this arm keeps the predicate honest regardless).
         E::Param(_) | E::Reduced(_) | E::Coord(_) | E::CoordInt(..) | E::ConstInt(..) => false,
         E::Unary(_, x) => contraction_epilogue_admissible(x, n_inputs),
-        E::Cast(x, _) | E::Bitcast(x, _) | E::Qualified(x, _) => {
+        E::Cast(x, _) | E::Bitcast(x, _) | E::Qualified(x, _) | E::Extract(x, _) => {
             contraction_epilogue_admissible(x, n_inputs)
         }
+        E::Pack(xs) => xs
+            .iter()
+            .all(|x| contraction_epilogue_admissible(x, n_inputs)),
         E::Add(a, b) | E::Sub(a, b) | E::Mul(a, b) | E::Div(a, b) | E::Binary(_, a, b) => {
             contraction_epilogue_admissible(a, n_inputs)
                 && contraction_epilogue_admissible(b, n_inputs)
@@ -1244,8 +1247,14 @@ fn assert_valid_multi_output(op: &OpDef, key: &StructureKey) {
             ),
             ScalarExpr::ConstInt(..) => {}
             ScalarExpr::Unary(_, x) => check_body(x, n_inputs, name),
-            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
-                check_body(x, n_inputs, name)
+            ScalarExpr::Cast(x, _)
+            | ScalarExpr::Bitcast(x, _)
+            | ScalarExpr::Qualified(x, _)
+            | ScalarExpr::Extract(x, _) => check_body(x, n_inputs, name),
+            ScalarExpr::Pack(xs) => {
+                for x in xs {
+                    check_body(x, n_inputs, name);
+                }
             }
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
@@ -1939,9 +1948,11 @@ pub(crate) fn check_no_half_nextafter(op: &OpDef, dtype: ElementKind) -> Result<
             | ScalarExpr::Mul(a, b)
             | ScalarExpr::Div(a, b) => walk(a) || walk(b),
             ScalarExpr::Unary(_, a) => walk(a),
-            ScalarExpr::Cast(a, _) | ScalarExpr::Bitcast(a, _) | ScalarExpr::Qualified(a, _) => {
-                walk(a)
-            }
+            ScalarExpr::Cast(a, _)
+            | ScalarExpr::Bitcast(a, _)
+            | ScalarExpr::Qualified(a, _)
+            | ScalarExpr::Extract(a, _) => walk(a),
+            ScalarExpr::Pack(xs) => xs.iter().any(|x| walk(x)),
             ScalarExpr::Binary(bop, a, b) => {
                 matches!(bop, BinaryOp::Nextafter) || walk(a) || walk(b)
             }
@@ -2146,6 +2157,11 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
                     ));
                 }
                 walk(x, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+            }
+            ScalarExpr::Pack(_) | ScalarExpr::Extract(..) => {
+                return Err(format!(
+                    "op '{op_name}': Pack/Extract are not lowerable yet (packed values have no emitter seam)"
+                ));
             }
             ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => {
                 if int_dt {
@@ -2565,6 +2581,9 @@ pub(crate) fn check_complex_op_admissibility(
                 "Cast/Bitcast",
                 "typed expressions are f32/f32s/f64-compute only in v1",
             ),
+            ScalarExpr::Pack(_) | ScalarExpr::Extract(..) => {
+                reject("Pack/Extract", "packed values have no lowering yet")
+            }
             ScalarExpr::Qualified(..) => reject(
                 "Qualified",
                 "rounding/ftz/approx qualifiers are f32-compute only in v1",
@@ -2638,6 +2657,9 @@ pub(crate) fn check_bool_op_admissibility(op: &OpDef, dtype: ElementKind) -> Res
                 "Cast/Bitcast",
                 "typed expressions are f32/f32s/f64-compute only in v1",
             ),
+            ScalarExpr::Pack(_) | ScalarExpr::Extract(..) => {
+                reject("Pack/Extract", "packed values have no lowering yet")
+            }
             ScalarExpr::Qualified(..) => reject(
                 "Qualified",
                 "rounding/ftz/approx qualifiers are f32-compute only in v1",
@@ -2819,9 +2841,11 @@ pub(crate) fn expr_contains_coord(e: &ScalarExpr) -> bool {
         | ScalarExpr::Param(_)
         | ScalarExpr::Reduced(_) => false,
         ScalarExpr::Unary(_, x) => expr_contains_coord(x),
-        ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
-            expr_contains_coord(x)
-        }
+        ScalarExpr::Cast(x, _)
+        | ScalarExpr::Bitcast(x, _)
+        | ScalarExpr::Qualified(x, _)
+        | ScalarExpr::Extract(x, _) => expr_contains_coord(x),
+        ScalarExpr::Pack(xs) => xs.iter().any(|x| expr_contains_coord(x)),
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
@@ -2929,9 +2953,13 @@ pub(crate) fn check_coord_admissibility(op: &OpDef, key: &StructureKey) -> Resul
                 Ok(())
             }
             ScalarExpr::Unary(_, x) => walk(x, op_name, dtype, rank, elementwise),
-            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
-                walk(x, op_name, dtype, rank, elementwise)
-            }
+            ScalarExpr::Cast(x, _)
+            | ScalarExpr::Bitcast(x, _)
+            | ScalarExpr::Qualified(x, _)
+            | ScalarExpr::Extract(x, _) => walk(x, op_name, dtype, rank, elementwise),
+            ScalarExpr::Pack(xs) => xs
+                .iter()
+                .try_for_each(|x| walk(x, op_name, dtype, rank, elementwise)),
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
             | ScalarExpr::Mul(a, b)
@@ -3023,6 +3051,28 @@ pub(crate) fn check_typed_admissibility(op: &OpDef, dtype: ElementKind) -> Resul
         return Ok(());
     }
     let in_cell = |detail: String| Err(PlanError::InadmissibleOpInCell { detail });
+    // Packed values are typed (section 9) but no emitter has a seam for them yet, so the
+    // gate declines the op honestly rather than let a lowering decline mid-kernel.
+    let mut all_exprs: Vec<&ScalarExpr> = op.output_bodies();
+    match &op.access {
+        Access::RowReduce { stages, epilogue } => {
+            all_exprs.extend(stages.iter().map(|s| &s.pre));
+            all_exprs.push(epilogue);
+        }
+        Access::Contraction { epilogue, .. } => all_exprs.push(epilogue),
+        Access::Reduction { post, .. } => all_exprs.push(post),
+        Access::Scan { pre, post, .. } | Access::Window { pre, post, .. } => {
+            all_exprs.push(pre);
+            all_exprs.push(post);
+        }
+        _ => {}
+    }
+    if all_exprs.iter().any(|e| crate::types::has_packed(e)) {
+        return in_cell(format!(
+            "op '{}': Pack/Extract (packed values) have no lowering yet; miss honestly",
+            op.name
+        ));
+    }
     if !matches!(op.access, Access::Elementwise) {
         return in_cell(format!(
             "op '{}': Cast/Bitcast are Elementwise-only in v1 (a typed reduction,              contraction, scan or window epilogue needs its own semantics); miss honestly",
@@ -3067,9 +3117,11 @@ pub(crate) fn check_typed_admissibility(op: &OpDef, dtype: ElementKind) -> Resul
             ));
         }
         match e {
-            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
-                walk(x, compute, true)
-            }
+            ScalarExpr::Cast(x, _)
+            | ScalarExpr::Bitcast(x, _)
+            | ScalarExpr::Qualified(x, _)
+            | ScalarExpr::Extract(x, _) => walk(x, compute, true),
+            ScalarExpr::Pack(xs) => xs.iter().try_for_each(|x| walk(x, compute, true)),
             ScalarExpr::Unary(_, x) => walk(x, compute, false),
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
@@ -3210,9 +3262,11 @@ pub(crate) fn check_fma_admissibility(op: &OpDef, dtype: ElementKind) -> Result<
             | ScalarExpr::CoordInt(..)
             | ScalarExpr::ConstInt(..) => false,
             ScalarExpr::Unary(_, x) => has_fma(x),
-            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
-                has_fma(x)
-            }
+            ScalarExpr::Cast(x, _)
+            | ScalarExpr::Bitcast(x, _)
+            | ScalarExpr::Qualified(x, _)
+            | ScalarExpr::Extract(x, _) => has_fma(x),
+            ScalarExpr::Pack(xs) => xs.iter().any(|x| has_fma(x)),
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
             | ScalarExpr::Mul(a, b)
@@ -3440,8 +3494,14 @@ fn assert_valid_reduction_post(op: &OpDef) {
             ),
             ScalarExpr::ConstInt(..) => {}
             ScalarExpr::Unary(_, x) => walk(x, name),
-            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
-                walk(x, name)
+            ScalarExpr::Cast(x, _)
+            | ScalarExpr::Bitcast(x, _)
+            | ScalarExpr::Qualified(x, _)
+            | ScalarExpr::Extract(x, _) => walk(x, name),
+            ScalarExpr::Pack(xs) => {
+                for x in xs {
+                    walk(x, name);
+                }
             }
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
@@ -3657,9 +3717,13 @@ pub(crate) fn check_row_reduce(
                 Ok(())
             }
             ScalarExpr::Unary(_, x) => check(x, n_inputs, max_reduced, in_stage, is_col),
-            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
+            ScalarExpr::Cast(x, _)
+            | ScalarExpr::Bitcast(x, _)
+            | ScalarExpr::Qualified(x, _)
+            | ScalarExpr::Extract(x, _) => {
                 check(x, n_inputs, max_reduced, in_stage, is_col)
             }
+            ScalarExpr::Pack(xs) => xs.iter().try_for_each(|x| check(x, n_inputs, max_reduced, in_stage, is_col)),
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
             | ScalarExpr::Mul(a, b)
@@ -3837,8 +3901,14 @@ fn validate_scan(op: &OpDef, key: &StructureKey, axis: u8, reverse: bool, exclus
             | ScalarExpr::CoordInt(..)
             | ScalarExpr::ConstInt(..) => {}
             ScalarExpr::Unary(_, x) => check(x, n_inputs, allow_reduced, ctx, name),
-            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
-                check(x, n_inputs, allow_reduced, ctx, name)
+            ScalarExpr::Cast(x, _)
+            | ScalarExpr::Bitcast(x, _)
+            | ScalarExpr::Qualified(x, _)
+            | ScalarExpr::Extract(x, _) => check(x, n_inputs, allow_reduced, ctx, name),
+            ScalarExpr::Pack(xs) => {
+                for x in xs {
+                    check(x, n_inputs, allow_reduced, ctx, name);
+                }
             }
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
@@ -4070,8 +4140,14 @@ fn validate_window(
             | ScalarExpr::CoordInt(..)
             | ScalarExpr::ConstInt(..) => {}
             ScalarExpr::Unary(_, x) => check(x, n_inputs, allow_reduced, ctx, name),
-            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
-                check(x, n_inputs, allow_reduced, ctx, name)
+            ScalarExpr::Cast(x, _)
+            | ScalarExpr::Bitcast(x, _)
+            | ScalarExpr::Qualified(x, _)
+            | ScalarExpr::Extract(x, _) => check(x, n_inputs, allow_reduced, ctx, name),
+            ScalarExpr::Pack(xs) => {
+                for x in xs {
+                    check(x, n_inputs, allow_reduced, ctx, name);
+                }
             }
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)

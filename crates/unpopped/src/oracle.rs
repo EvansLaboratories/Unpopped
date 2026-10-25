@@ -1699,6 +1699,15 @@ fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
                 op, *n, &args,
             )))
         }
+        // A packed value is only ever consumed by `Extract` in this increment (the type
+        // rules admit nothing else), so a lane is evaluated by evaluating its child: the
+        // other lanes are pure and unobserved. A bare `Pack` or an `Extract` of anything but
+        // a `Pack` is ill-typed, which the plan gate rejects before any evaluation.
+        ScalarExpr::Extract(x, i) => match &**x {
+            ScalarExpr::Pack(xs) if usize::from(*i) < xs.len() => eval(&xs[usize::from(*i)], ev),
+            _ => panic!("oracle: Extract of a value that is not a Pack, or lane {i} out of range"),
+        },
+        ScalarExpr::Pack(_) => panic!("oracle: a packed value has no scalar result"),
         ScalarExpr::Bitcast(x, to) => {
             let from = crate::types::infer(x, ev.dtype)
                 .expect("oracle: ill-typed Bitcast operand (the plan gate rejects this)");
@@ -3411,7 +3420,11 @@ fn arith_steps(e: &ScalarExpr) -> u32 {
         ScalarExpr::Fma(a, b, c) => 1 + arith_steps(a) + arith_steps(b) + arith_steps(c),
         // A conversion is computed exactly by the oracle (the same single rounding the
         // device performs), so it adds no gap of its own.
-        ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => arith_steps(x),
+        ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Extract(x, _) => {
+            arith_steps(x)
+        }
+        // Every lane is computed on the device, whichever one is extracted.
+        ScalarExpr::Pack(xs) => xs.iter().map(arith_steps).sum(),
         // The qualified operation is computed exactly in its stated mode (the
         // oracle's directed rounding is built from the exact residual), so the
         // wrapper adds no gap beyond the wrapped operation's own.

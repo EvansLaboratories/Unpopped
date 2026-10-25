@@ -412,7 +412,8 @@ fn expr_to_recipe(e: &ScalarExpr, reduced: &[String]) -> Option<String> {
         E::Fma(..) => return None,
         // No confirmed KISS-Ops token for a conversion with explicit rounding and
         // saturation (never fabricate one).
-        E::Cast(..) | E::Bitcast(..) => return None,
+        // Nor for a packed value or a lane of one.
+        E::Cast(..) | E::Bitcast(..) | E::Pack(_) | E::Extract(..) => return None,
         // No KISS-Ops token carries a rounding mode, ftz or an approximate form.
         E::Qualified(..) => return None,
         E::Select(c, a, b) => format!(
