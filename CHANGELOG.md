@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.24.1` — numerics qualifiers: the spec (docs only)
+
+`docs/ir-numerics-qualifiers.md`: `ScalarExpr::Qualified(child, Numerics{round, ftz, approx})` over `Add`/`Sub`/`Mul`/`Div`/`Fma`/`Sqrt`/`Rsqrt`/`Recip`/`Exp2`/`Log2`; IEEE directed rounding including overflow and zero sign; PTX-style flush-to-zero (operands and result); `approx` as a stated 4-ulp bound on a stated domain, checkable against the oracle; backends that cannot honour a qualifier decline, never drop it. No code; the implementation is 0.25.0 (Part of #112).
+
 ## `0.24.0` — BREAKING: typed expressions, `Cast` and `Bitcast` (I1 of #112/#113)
 
 **Breaking, pre-1.0 (second number).** New variants: `ir::ScalarExpr::Cast`, `ir::ScalarExpr::Bitcast`, `ir::DagNode::Cast`/`Bitcast`, `pattern::PatternError::TypedExprUnsupported`; every exhaustive `match` on `ScalarExpr`, `DagNode` or `PatternError` in an adopter must add an arm. Additive: `ir::{RoundMode, Saturation, CastSpec}` (`#[non_exhaustive]` enums), `Expr::cast`/`bitcast`, the `types` module (`infer`, `check_cast`, `check_bitcast`, `TypeError`), `backend::DeclinedOp::{Cast, Bitcast}`, and the lowering seams `Lowering::{cast, bitcast, compute, type_name}` with `LoweringBuilder::{cast, bitcast, compute_dtype, type_name}`. The seams default to a typed decline, so an existing emitter compiles unchanged and declines a typed op.
