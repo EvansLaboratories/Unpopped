@@ -3767,6 +3767,31 @@ mod view_tests {
         assert!(op.read_index.is_empty());
     }
 
+    /// `is_integer_kind` documents itself as a mirror of `plan::is_int_dtype`; this checks the
+    /// mirror over EVERY dtype instead of the two the other tests happen to use. It was 4 of 11:
+    /// an integer `AtomicAdd` into u32/u64/i16/u16/i4/u4/b1 was classed as a floating-point atomic
+    /// add and routed to the non-deterministic variant.
+    #[test]
+    fn atomic_add_integer_classification_matches_plan_for_every_dtype() {
+        for dt in ElementKind::ALL {
+            assert_eq!(
+                WriteCombine::AtomicAdd.is_fp_atomic_add(dt),
+                !crate::plan::is_int_dtype(dt),
+                "{dt:?}: ir::is_integer_kind and plan::is_int_dtype disagree"
+            );
+        }
+        // Only AtomicAdd is order-dependent at all.
+        for c in [
+            WriteCombine::Assign,
+            WriteCombine::AtomicMax,
+            WriteCombine::AtomicMin,
+        ] {
+            for dt in ElementKind::ALL {
+                assert!(!c.is_fp_atomic_add(dt), "{c:?} {dt:?}");
+            }
+        }
+    }
+
     #[test]
     fn scatter_add_and_index_add_are_atomic_add() {
         let sa = OpDef::scatter_add("scatter_add", &[ElementKind::F32], 0, ElementKind::I32);
