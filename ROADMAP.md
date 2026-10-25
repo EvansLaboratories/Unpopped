@@ -178,3 +178,5 @@ CireSnave, 2026-10-24: *"I want the IR to cover the full union of the capabiliti
 | U11 | Typed `Extern`/inline-asm with declared effects and a declared per-target body | #122 | open, after U3 |
 | U12 | Peer/multicast scopes and multimem ops | #123 | open, last (D4) |
 
+
+**Flight of fancy (CireSnave, board 282 item 81):** direct-to-PTX emitter: a PTX-capable lowering in the union IR is its prerequisite; flight of fancy, no schedule.
