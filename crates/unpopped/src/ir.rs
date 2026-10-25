@@ -2231,7 +2231,17 @@ impl WriteCombine {
 fn is_integer_kind(dt: ElementKind) -> bool {
     matches!(
         dt,
-        ElementKind::I32 | ElementKind::I64 | ElementKind::U8 | ElementKind::I8
+        ElementKind::I32
+            | ElementKind::I64
+            | ElementKind::I8
+            | ElementKind::U8
+            | ElementKind::I16
+            | ElementKind::U16
+            | ElementKind::U32
+            | ElementKind::U64
+            | ElementKind::I4
+            | ElementKind::U4
+            | ElementKind::B1
     )
 }
 
@@ -3765,6 +3775,31 @@ mod view_tests {
         );
         // Scatter is a WRITE role — read_index stays empty (byte-identical reads).
         assert!(op.read_index.is_empty());
+    }
+
+    /// `is_integer_kind` documents itself as a mirror of `plan::is_int_dtype`; this checks the
+    /// mirror over EVERY dtype instead of the two the other tests happen to use. It was 4 of 11:
+    /// an integer `AtomicAdd` into u32/u64/i16/u16/i4/u4/b1 was classed as a floating-point atomic
+    /// add and routed to the non-deterministic variant.
+    #[test]
+    fn atomic_add_integer_classification_matches_plan_for_every_dtype() {
+        for dt in ElementKind::ALL {
+            assert_eq!(
+                WriteCombine::AtomicAdd.is_fp_atomic_add(dt),
+                !crate::plan::is_int_dtype(dt),
+                "{dt:?}: ir::is_integer_kind and plan::is_int_dtype disagree"
+            );
+        }
+        // Only AtomicAdd is order-dependent at all.
+        for c in [
+            WriteCombine::Assign,
+            WriteCombine::AtomicMax,
+            WriteCombine::AtomicMin,
+        ] {
+            for dt in ElementKind::ALL {
+                assert!(!c.is_fp_atomic_add(dt), "{c:?} {dt:?}");
+            }
+        }
     }
 
     #[test]
