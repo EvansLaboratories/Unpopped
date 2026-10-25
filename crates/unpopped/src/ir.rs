@@ -50,6 +50,52 @@ impl ArithOp {
     }
 }
 
+/// Rounding direction of a lossy [`ScalarExpr::Cast`] (IEEE 754 names).
+///
+/// Consulted only when the conversion cannot be exact (wider float to narrower
+/// float, float to integer, integer to float). Stochastic rounding needs a
+/// random-bits operand and is a separate follow-up, hence `non_exhaustive`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum RoundMode {
+    /// Round to nearest, ties to even (`.rn`).
+    NearestEven,
+    /// Round toward zero (`.rz`).
+    TowardZero,
+    /// Round toward negative infinity (`.rm`).
+    TowardNegInf,
+    /// Round toward positive infinity (`.rp`).
+    TowardPosInf,
+}
+
+/// Out-of-range behaviour of a [`ScalarExpr::Cast`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum Saturation {
+    /// Integer narrowing wraps (two's-complement truncation); float narrowing
+    /// overflows to infinity per the rounding mode.
+    Wrap,
+    /// Clamp into the destination's range. Required for float to integer (which
+    /// also maps NaN to 0, so no emitter reaches C's undefined behaviour).
+    Clamp,
+    /// Float narrowing clamps to the largest finite value instead of overflowing
+    /// to infinity (PTX `.satfinite`); NaN stays NaN.
+    ClampFinite,
+}
+
+/// The conversion a [`ScalarExpr::Cast`] performs: destination type plus how to round
+/// and saturate.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CastSpec {
+    /// Destination type of the conversion.
+    #[serde(with = "crate::text::ek")]
+    pub to: ElementKind,
+    /// Rounding direction when the value is not exactly representable.
+    pub round: RoundMode,
+    /// Out-of-range behaviour.
+    pub sat: Saturation,
+}
+
 /// A scalar compute expression — the per-output-coordinate math, as a typed DAG.
 ///
 /// Backend-agnostic: every emitter lowers it by walking the tree with per-backend
@@ -187,6 +233,19 @@ pub enum ScalarExpr {
     /// Added by increment I1 of the IR-as-full-union programme
     /// (`docs/ir-union-design.md` 3.12).
     Fma(Box<ScalarExpr>, Box<ScalarExpr>, Box<ScalarExpr>),
+    /// Convert the VALUE of the operand to another type, with explicit rounding and
+    /// saturation ([`CastSpec`]). The node's type is `spec.to`; see
+    /// `docs/ir-typed-expressions.md` for the typing rules and the legality table.
+    ///
+    /// Never folded or rewritten by the optimizer (zero rules): a conversion is
+    /// lossy, so `Cast(Cast(x))` is not `Cast(x)` in general.
+    Cast(Box<ScalarExpr>, CastSpec),
+    /// Reinterpret the operand's bits as another type of the same bit width. Moves
+    /// bits and computes nothing: NaN payloads and the sign of zero survive.
+    Bitcast(
+        Box<ScalarExpr>,
+        #[serde(with = "crate::text::ek")] ElementKind,
+    ),
 }
 
 /// A unary math / activation op. Variant names line up with the FKC §4.1
@@ -1033,6 +1092,10 @@ pub enum DagNode {
     /// Fused multiply-add over three nodes — `(a, b, c)` = `a*b + c`, one
     /// rounding ([`ScalarExpr::Fma`]). Positional like `Select`: never reordered.
     Fma(NodeId, NodeId, NodeId),
+    /// Value conversion of one node ([`ScalarExpr::Cast`]).
+    Cast(NodeId, CastSpec),
+    /// Bit reinterpretation of one node ([`ScalarExpr::Bitcast`]).
+    Bitcast(NodeId, ElementKind),
 }
 
 impl DagNode {
@@ -1188,6 +1251,12 @@ impl ExprDag {
         self.rebuild(self.root)
     }
 
+    /// The [`ScalarExpr`] subtree rooted at node `id` (the typed lowering walk uses
+    /// it to infer an operand's type).
+    pub(crate) fn node_expr(&self, id: NodeId) -> ScalarExpr {
+        self.rebuild(id)
+    }
+
     fn rebuild(&self, id: NodeId) -> ScalarExpr {
         match self.nodes[id as usize] {
             DagNode::Input(i) => ScalarExpr::Input(i),
@@ -1221,6 +1290,8 @@ impl ExprDag {
                 Box::new(self.rebuild(b)),
                 Box::new(self.rebuild(c)),
             ),
+            DagNode::Cast(x, spec) => ScalarExpr::Cast(Box::new(self.rebuild(x)), spec),
+            DagNode::Bitcast(x, to) => ScalarExpr::Bitcast(Box::new(self.rebuild(x)), to),
         }
     }
 }
@@ -1245,6 +1316,8 @@ enum DagKey {
     Select(NodeId, NodeId, NodeId),
     /// 3-child fused multiply-add key; strictly positional like `Select`.
     Fma(NodeId, NodeId, NodeId),
+    Cast(NodeId, CastSpec),
+    Bitcast(NodeId, ElementKind),
 }
 
 impl DagKey {
@@ -1263,6 +1336,8 @@ impl DagKey {
             DagNode::Binary(op, a, b) => DagKey::Binary(op, a, b),
             DagNode::Select(c, a, b) => DagKey::Select(c, a, b),
             DagNode::Fma(a, b, c) => DagKey::Fma(a, b, c),
+            DagNode::Cast(x, spec) => DagKey::Cast(x, spec),
+            DagNode::Bitcast(x, to) => DagKey::Bitcast(x, to),
         }
     }
 }
@@ -1313,6 +1388,14 @@ impl DagBuilder {
                 let (a, b, c) = (self.intern(a), self.intern(b), self.intern(c));
                 DagNode::Fma(a, b, c)
             }
+            ScalarExpr::Cast(x, spec) => {
+                let x = self.intern(x);
+                DagNode::Cast(x, *spec)
+            }
+            ScalarExpr::Bitcast(x, to) => {
+                let x = self.intern(x);
+                DagNode::Bitcast(x, *to)
+            }
         };
         self.hashcons(node)
     }
@@ -1346,7 +1429,7 @@ fn node_children(n: &DagNode) -> Vec<NodeId> {
         | DagNode::Param(_)
         | DagNode::Reduced(_)
         | DagNode::Coord(_) => Vec::new(),
-        DagNode::Unary(_, x) => vec![x],
+        DagNode::Unary(_, x) | DagNode::Cast(x, _) | DagNode::Bitcast(x, _) => vec![x],
         DagNode::Add(a, b)
         | DagNode::Sub(a, b)
         | DagNode::Mul(a, b)
@@ -1618,6 +1701,22 @@ impl Expr {
             Box::new(b.0),
             Box::new(c.0),
         ))
+    }
+
+    /// Convert this value to `to` ([`ScalarExpr::Cast`]) with the given rounding and
+    /// saturation.
+    #[must_use]
+    pub fn cast(self, to: ElementKind, round: RoundMode, sat: Saturation) -> Expr {
+        Expr(ScalarExpr::Cast(
+            Box::new(self.0),
+            CastSpec { to, round, sat },
+        ))
+    }
+
+    /// Reinterpret this value's bits as `to` ([`ScalarExpr::Bitcast`]).
+    #[must_use]
+    pub fn bitcast(self, to: ElementKind) -> Expr {
+        Expr(ScalarExpr::Bitcast(Box::new(self.0), to))
     }
 }
 

@@ -1241,6 +1241,7 @@ fn scan_params(e: &ScalarExpr, out: &mut Vec<u8>) {
         | ScalarExpr::Reduced(_)
         | ScalarExpr::Coord(_) => {}
         ScalarExpr::Unary(_, x) => scan_params(x, out),
+        ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => scan_params(x, out),
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
@@ -1536,6 +1537,13 @@ fn ulp_sum(e: &ScalarExpr) -> f64 {
         // Fma is correctly rounded (one rounding of the exact a*b+c), so it adds 0
         // ulp of its OWN; sub-expression tiers sum as usual.
         ScalarExpr::Fma(a, b, c) => ulp_sum(a) + ulp_sum(b) + ulp_sum(c),
+        // A conversion rounds once, and not into the compute dtype's ulp. Defensive:
+        // `derive_pattern` rejects a typed body (TypedExprUnsupported) before any
+        // contract is emitted, so no tolerance is ever advertised for one. One
+        // ulp is the conservative rating should that ever change.
+        ScalarExpr::Cast(x, _) => ulp_sum(x) + 1.0,
+        // A bitcast moves bits exactly.
+        ScalarExpr::Bitcast(x, _) => ulp_sum(x),
     }
 }
 
@@ -1663,6 +1671,7 @@ pub(crate) fn expr_contains_cmp(e: &ScalarExpr) -> bool {
         | ScalarExpr::Mul(a, b)
         | ScalarExpr::Div(a, b) => expr_contains_cmp(a) || expr_contains_cmp(b),
         ScalarExpr::Unary(_, a) => expr_contains_cmp(a),
+        ScalarExpr::Cast(a, _) | ScalarExpr::Bitcast(a, _) => expr_contains_cmp(a),
         ScalarExpr::Binary(bop, a, b) => {
             bop.is_cmp() || expr_contains_cmp(a) || expr_contains_cmp(b)
         }
@@ -1705,6 +1714,7 @@ fn expr_contains_select(e: &ScalarExpr) -> bool {
         | ScalarExpr::Div(a, b)
         | ScalarExpr::Binary(_, a, b) => expr_contains_select(a) || expr_contains_select(b),
         ScalarExpr::Unary(_, a) => expr_contains_select(a),
+        ScalarExpr::Cast(a, _) | ScalarExpr::Bitcast(a, _) => expr_contains_select(a),
     }
 }
 

@@ -1657,6 +1657,29 @@ fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
                 .f64()
                 .mul_add(eval(b, ev).f64(), eval(c, ev).f64()),
         ),
+        // Conversions are computed by `cast_ref`, from exact integers and IEEE bit
+        // patterns, never from an emitter's spelling. The operand's type is inferred
+        // (the plan gate has already rejected an ill-typed expression), and its value
+        // is first rounded to that type: a conversion is a DISCONTINUOUS decision
+        // (float to int, saturation), so deciding on the oracle's unrounded f64 would
+        // flip where the device, holding a rounded f32, does not.
+        ScalarExpr::Cast(x, spec) => {
+            let from = crate::types::infer(x, ev.dtype)
+                .expect("oracle: ill-typed Cast operand (the plan gate rejects this)");
+            let n = val_to_num(eval(x, ev), from);
+            Val::Raw(crate::cast_ref::cast_bits(n, from, *spec), spec.to)
+        }
+        ScalarExpr::Bitcast(x, to) => {
+            let from = crate::types::infer(x, ev.dtype)
+                .expect("oracle: ill-typed Bitcast operand (the plan gate rejects this)");
+            let bits = match eval(x, ev) {
+                // A value already carrying its own bits moves verbatim (NaN payloads,
+                // the sign of zero).
+                Val::Raw(b, dt) if dt == from => b,
+                other => crate::cast_ref::bits_of(val_to_num(other, from), from),
+            };
+            Val::Raw(bits, *to)
+        }
         ScalarExpr::Select(c, a, b) => {
             // cond tested in the compute dtype: -0.0 is false, NaN is true. Round
             // the condition to the compute dtype first — the emitter tests
@@ -1670,6 +1693,17 @@ fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
                 eval(b, ev)
             }
         }
+    }
+}
+
+/// A [`Val`] as the exact number a value of type `from` holds (floats rounded to
+/// `from` first, see the `Cast` arm of [`eval`]).
+fn val_to_num(v: Val, from: ElementKind) -> crate::cast_ref::Num {
+    use crate::cast_ref::Num;
+    if crate::types::is_cast_float(from) {
+        Num::F(round_to_compute(v.f64(), from))
+    } else {
+        Num::I(v.i128())
     }
 }
 
@@ -3283,6 +3317,9 @@ fn arith_steps(e: &ScalarExpr) -> u32 {
         ScalarExpr::Select(c, a, b) => arith_steps(c) + arith_steps(a) + arith_steps(b),
         // A fused multiply-add rounds exactly once on the device.
         ScalarExpr::Fma(a, b, c) => 1 + arith_steps(a) + arith_steps(b) + arith_steps(c),
+        // A conversion is computed exactly by the oracle (the same single rounding the
+        // device performs), so it adds no gap of its own.
+        ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => arith_steps(x),
     }
 }
 

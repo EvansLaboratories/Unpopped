@@ -149,6 +149,12 @@ pub fn out_ctype_of<'c>(plan: &KernelPlan<'_>, j: usize, ctype: &'c str) -> &'c 
 /// node would corrupt output 0's value (mutation M9).
 pub fn store_expr_of(plan: &KernelPlan<'_>, j: usize, root: String) -> String {
     let d = plan.out_dtype_of(j);
+    // A typed body's root already HAS the store type (the plan gate pinned
+    // `infer(body) == out_dtype`): converting it again from the compute dtype would
+    // apply a second, unstated conversion on top of the Cast the author wrote.
+    if j == 0 && crate::types::is_typed(plan.body) {
+        return root;
+    }
     if d == plan.dtype {
         // A UNIFORM cell still needs a store conversion when the dtype is a
         // NARROW FLOAT: its body was lowered at `float` (the leaf decoded), so
@@ -1085,6 +1091,7 @@ pub fn params_used(e: &ScalarExpr) -> Vec<u8> {
                 out.insert(*i);
             }
             ScalarExpr::Unary(_, x) => rec(x, out),
+            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => rec(x, out),
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
             | ScalarExpr::Mul(a, b)
@@ -1175,6 +1182,10 @@ pub fn assert_no_int_div_or_const(
         ScalarExpr::Fma(_, _, _) => panic!(
             "c-family lowering: Fma at an integer dtype ({dtype:?}) — a fused multiply-add \
              rounds once and has no integer meaning; the plan gate rejects this"
+        ),
+        ScalarExpr::Cast(_, _) | ScalarExpr::Bitcast(_, _) => panic!(
+            "c-family lowering: Cast/Bitcast at an integer compute dtype ({dtype:?}) — \
+             typed expressions are float-compute only in v1; the plan gate rejects this"
         ),
         ScalarExpr::Select(_, _, _) => panic!(
             "c-family lowering: Select at an integer dtype ({dtype:?}) — v1 select is \

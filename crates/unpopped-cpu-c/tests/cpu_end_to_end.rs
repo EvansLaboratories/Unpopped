@@ -2208,3 +2208,401 @@ int main(void) {{
         diffs.join("\n")
     );
 }
+
+// ===========================================================================
+// Cast / Bitcast through a real compiler
+// ===========================================================================
+
+use unpopped::ir::{Expr, RoundMode, Saturation};
+
+/// A C literal for the compute dtype's input value.
+fn typed_in_lit(v: f64, dt: ElementKind) -> String {
+    if dt == ElementKind::F32 {
+        return c_float_lit(v as f32);
+    }
+    if v.is_nan() {
+        "(double)NAN".to_string()
+    } else if v.is_infinite() {
+        if v < 0.0 {
+            "-(double)INFINITY"
+        } else {
+            "(double)INFINITY"
+        }
+        .to_string()
+    } else {
+        format!("{v:?}")
+    }
+}
+
+fn is_int_out(t: ElementKind) -> bool {
+    !matches!(
+        t,
+        ElementKind::F32 | ElementKind::F32Strict | ElementKind::F64
+    )
+}
+
+/// Decode the oracle's stored bits for an output of type `t` to an exact comparable value.
+fn oracle_value(bits: u128, t: ElementKind) -> Result<i128, f64> {
+    match t {
+        ElementKind::I8 => Ok(i128::from(bits as u8 as i8)),
+        ElementKind::I16 => Ok(i128::from(bits as u16 as i16)),
+        ElementKind::I32 => Ok(i128::from(bits as u32 as i32)),
+        ElementKind::I64 => Ok(i128::from(bits as u64 as i64)),
+        ElementKind::U8 => Ok(i128::from(bits as u8)),
+        ElementKind::U16 => Ok(i128::from(bits as u16)),
+        ElementKind::U32 => Ok(i128::from(bits as u32)),
+        ElementKind::F32 | ElementKind::F32Strict => Err(f64::from(f32::from_bits(bits as u32))),
+        ElementKind::F64 => Err(f64::from_bits(bits as u64)),
+        other => panic!("typed e2e: unsupported output {other:?}"),
+    }
+}
+
+/// Compile and run `body` over `xs` at compute dtype `dt`, storing `out`, and return
+/// the kernel's printed values together with the oracle's, as a mismatch report
+/// (empty when they agree).
+fn typed_case(
+    cc: &CCompiler,
+    dir: &Path,
+    tag: &str,
+    body: Expr,
+    dt: ElementKind,
+    out: ElementKind,
+    xs: &[f64],
+) -> Result<Vec<String>, String> {
+    // An odd lane count keeps the planner on the scalar schedule, the only one cpu_c
+    // serves (an even count over a same-dtype contiguous cell vectorizes).
+    let mut padded = xs.to_vec();
+    if padded.len() % 2 == 0 {
+        padded.push(7.0);
+    }
+    let xs = padded.as_slice();
+    let n = xs.len() as i64;
+    let mut op = OpDef::elementwise(tag, 1, &[dt], body);
+    if out != dt {
+        op.out_dtype = Some(out);
+    }
+    let a = OperandDesc::new(1, &[n], &[1], dt, 256);
+    let o = OperandDesc::new(1, &[n], &[1], out, 256);
+    let operands = vec![a, o];
+    let key = structure_key(OpCategory::UnaryElementwise, &operands, ArchSku::Sm89);
+    let kernel = unpopped::try_generate(&op, &key, &CpuC).map_err(|e| format!("{tag}: {e:?}"))?;
+
+    let in_c = unpopped::cfamily::scalar_ctype(dt).unwrap();
+    let out_c = unpopped::cfamily::scalar_ctype(out).unwrap();
+    let lits: Vec<String> = xs.iter().map(|v| typed_in_lit(*v, dt)).collect();
+    let fmt = if is_int_out(out) { "%lld" } else { "%.17g" };
+    let cast = if is_int_out(out) {
+        "long long"
+    } else {
+        "double"
+    };
+    let src = format!(
+        "{}\n#include <stdio.h>\nint main(void) {{\n    const {in_c} in0[{n}] = {{{}}};\n    \
+         {out_c} out[{n}];\n    for (int i = 0; i < {n}; ++i) out[i] = 0;\n    {}(in0, out, {n});\n    \
+         for (int i = 0; i < {n}; ++i) printf(\"{fmt}\\n\", ({cast})out[i]);\n    return 0;\n}}\n",
+        kernel.source,
+        lits.join(", "),
+        kernel.name,
+    );
+    let c_file = dir.join(format!("{tag}.c"));
+    let exe = dir.join(format!("{tag}.exe"));
+    std::fs::write(&c_file, &src).map_err(|e| format!("write: {e}"))?;
+    cc.compile(&c_file, &exe, true)?;
+    let run = Command::new(&exe)
+        .output()
+        .map_err(|e| format!("run: {e}"))?;
+    if !run.status.success() {
+        return Err(format!("{tag}: kernel exited {:?}", run.status.code()));
+    }
+    let printed: Vec<String> = String::from_utf8_lossy(&run.stdout)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.trim().to_string())
+        .collect();
+    if printed.len() != xs.len() {
+        return Err(format!(
+            "{tag}: printed {} of {} values",
+            printed.len(),
+            xs.len()
+        ));
+    }
+
+    let plan = build_plan(&op, &key);
+    let buf = if dt == ElementKind::F32 {
+        TypedBuffer::from_f32(&[n], &xs.iter().map(|v| *v as f32).collect::<Vec<_>>())
+    } else {
+        TypedBuffer::from_f64(&[n], xs)
+    };
+    let expected = evaluate(&plan, &operands, &[buf], &[]);
+    let want = expected.into_iter().next().unwrap();
+    let mut diffs = Vec::new();
+    for (i, p) in printed.iter().enumerate() {
+        let x = xs[i];
+        let ok = match oracle_value(want.bits_at(i), out) {
+            Ok(iv) => p.parse::<i128>().map(|g| g == iv).unwrap_or(false),
+            Err(fv) => {
+                let g = parse_out_elem(p);
+                (g.is_nan() && fv.is_nan()) || g.to_bits() == fv.to_bits()
+            }
+        };
+        if !ok {
+            diffs.push(format!(
+                "  {tag}: x = {x:?} -> compiled `{p}`, oracle {:?}",
+                oracle_value(want.bits_at(i), out)
+            ));
+        }
+    }
+    Ok(diffs)
+}
+
+/// Edge inputs for an f32 compute dtype (each is rounded to f32 on both sides).
+fn typed_edges() -> Vec<f64> {
+    let mut v = vec![
+        0.0,
+        -0.0,
+        0.5,
+        -0.5,
+        1.0,
+        -1.0,
+        1.5,
+        -1.5,
+        2.5,
+        -2.5,
+        3.99,
+        -3.99,
+        126.5,
+        127.0,
+        127.5,
+        128.0,
+        -128.0,
+        -128.5,
+        -129.0,
+        254.5,
+        255.0,
+        255.5,
+        256.0,
+        -1.0e-3,
+        32767.5,
+        32768.0,
+        -32768.0,
+        -32769.0,
+        65535.0,
+        65535.5,
+        65536.0,
+        16777216.0,
+        16777217.0,
+        2147483520.0,
+        2147483648.0,
+        -2147483648.0,
+        -2147483904.0,
+        4294967040.0,
+        4294967296.0,
+        9_223_372_036_854_775_808.0,
+        -9_223_372_036_854_775_808.0,
+        1.8446744073709552e19,
+        3.4028234663852886e38,
+        -3.4028234663852886e38,
+        1.0e-30,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+    ];
+    v.push(f64::from(f32::from_bits(0x3effffff))); // 0.49999997
+    v.push(f64::from(f32::from_bits(0x3f000001))); // 0.50000006
+    v
+}
+
+fn run_typed_cases(cases: Vec<(String, Expr, ElementKind, ElementKind, Vec<f64>)>) {
+    let Some(cc) = find_compiler() else {
+        eprintln!("SKIP typed e2e: no host C compiler");
+        return;
+    };
+    let dir: PathBuf = std::env::temp_dir().join("unpopped-e2e");
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let n_cases = cases.len();
+    let results: Vec<Result<Vec<String>, String>> = std::thread::scope(|sc| {
+        let handles: Vec<_> = cases
+            .into_iter()
+            .map(|(tag, body, dt, out, xs)| {
+                let (cc, dir) = (&cc, &dir);
+                sc.spawn(move || typed_case(cc, dir, &tag, body, dt, out, &xs))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("case thread"))
+            .collect()
+    });
+    let mut report = Vec::new();
+    for r in results {
+        match r {
+            Ok(d) => report.extend(d),
+            Err(e) => report.push(format!("  ERROR {e}")),
+        }
+    }
+    assert!(
+        report.is_empty(),
+        "compiled Cast/Bitcast disagrees with the oracle in {} place(s) over {n_cases} cases:\n{}",
+        report.len(),
+        report.join("\n")
+    );
+}
+
+#[test]
+fn float_to_integer_casts_agree_with_the_oracle_in_every_rounding_mode() {
+    use ElementKind::*;
+    let xs = typed_edges();
+    let mut cases = Vec::new();
+    for &t in &[I8, I16, I32, I64, U8, U16, U32] {
+        for (name, mode) in [
+            ("rz", RoundMode::TowardZero),
+            ("rn", RoundMode::NearestEven),
+            ("rm", RoundMode::TowardNegInf),
+            ("rp", RoundMode::TowardPosInf),
+        ] {
+            cases.push((
+                format!("f2i_{t:?}_{name}"),
+                input(0).cast(t, mode, Saturation::Clamp),
+                F32,
+                t,
+                xs.clone(),
+            ));
+        }
+    }
+    run_typed_cases(cases);
+}
+
+#[test]
+fn integer_to_integer_casts_wrap_and_clamp_like_the_oracle() {
+    use ElementKind::*;
+    let xs = typed_edges();
+    let mut cases = Vec::new();
+    for &t in &[I8, I16, U8, U16, U32, I64] {
+        for (name, sat) in [("wrap", Saturation::Wrap), ("clamp", Saturation::Clamp)] {
+            // float -> i32 (saturating) -> t: the second cast is the int-to-int under test.
+            let body = input(0)
+                .cast(I32, RoundMode::TowardZero, Saturation::Clamp)
+                .cast(t, RoundMode::NearestEven, sat);
+            cases.push((format!("i2i_{t:?}_{name}"), body, F32, t, xs.clone()));
+        }
+    }
+    run_typed_cases(cases);
+}
+
+#[test]
+fn integer_to_float_casts_round_like_the_oracle() {
+    use ElementKind::*;
+    let xs = typed_edges();
+    let mut cases = Vec::new();
+    for (via, vname) in [(I32, "i32"), (I64, "i64"), (U32, "u32")] {
+        for &t in &[F32, F64] {
+            let body = input(0)
+                .cast(via, RoundMode::TowardZero, Saturation::Clamp)
+                .cast(t, RoundMode::NearestEven, Saturation::Wrap);
+            cases.push((format!("i2f_{vname}_{t:?}"), body, F32, t, xs.clone()));
+        }
+    }
+    run_typed_cases(cases);
+}
+
+#[test]
+fn float_to_float_casts_round_and_clamp_like_the_oracle() {
+    use ElementKind::*;
+    let mut xs = typed_edges();
+    xs.extend([
+        1.0e300,
+        -1.0e300,
+        3.4028235677973366e38, // just above f32::MAX, rounds to f32::MAX under RNE
+        3.4028235677973367e38, // halfway to the next binade, rounds to inf
+        1.0 + 2.0f64.powi(-24), // a tie between two f32s
+        1.0 + 3.0 * 2.0f64.powi(-25),
+        1.0e-46, // below the smallest f32 subnormal
+    ]);
+    let mut cases = Vec::new();
+    for (name, sat) in [
+        ("wrap", Saturation::Wrap),
+        ("clampfinite", Saturation::ClampFinite),
+    ] {
+        cases.push((
+            format!("f2f_f64_f32_{name}"),
+            input(0).cast(F32, RoundMode::NearestEven, sat),
+            F64,
+            F32,
+            xs.clone(),
+        ));
+    }
+    // widening: f32 compute to f64 storage
+    cases.push((
+        "f2f_f32_f64".to_string(),
+        input(0).cast(F64, RoundMode::NearestEven, Saturation::Wrap),
+        F32,
+        F64,
+        typed_edges(),
+    ));
+    run_typed_cases(cases);
+}
+
+#[test]
+fn bitcast_moves_bits_exactly() {
+    use ElementKind::*;
+    let xs = typed_edges();
+    let cases = vec![
+        (
+            "bc_f32_i32".to_string(),
+            input(0).bitcast(I32),
+            F32,
+            I32,
+            xs.clone(),
+        ),
+        (
+            "bc_f32_u32".to_string(),
+            input(0).bitcast(U32),
+            F32,
+            U32,
+            xs.clone(),
+        ),
+        (
+            "bc_f64_i64".to_string(),
+            input(0).bitcast(I64),
+            F64,
+            I64,
+            xs.clone(),
+        ),
+        // and back: the round trip is the identity on every non-NaN bit pattern
+        (
+            "bc_roundtrip".to_string(),
+            input(0).bitcast(U32).bitcast(F32),
+            F32,
+            F32,
+            xs,
+        ),
+    ];
+    run_typed_cases(cases);
+}
+
+#[test]
+fn a_directed_inexact_conversion_is_declined_not_spelled_as_round_to_nearest() {
+    use ElementKind::*;
+    let Some(_cc) = find_compiler() else {
+        return;
+    };
+    let op = |round| {
+        let mut op = OpDef::elementwise(
+            "narrow",
+            1,
+            &[F64],
+            input(0).cast(F32, round, Saturation::Wrap),
+        );
+        op.out_dtype = Some(F32);
+        op
+    };
+    let a = OperandDesc::new(1, &[7], &[1], F64, 256);
+    let o = OperandDesc::new(1, &[7], &[1], F32, 256);
+    let key = structure_key(OpCategory::UnaryElementwise, &[a, o], ArchSku::Sm89);
+    // Control: round-to-nearest-even generates.
+    unpopped::try_generate(&op(RoundMode::NearestEven), &key, &CpuC)
+        .expect("RNE f64 -> f32 must generate");
+    let err = unpopped::try_generate(&op(RoundMode::TowardZero), &key, &CpuC)
+        .expect_err("a directed narrowing must decline");
+    assert!(format!("{err:?}").contains("NearestEven"), "{err:?}");
+}

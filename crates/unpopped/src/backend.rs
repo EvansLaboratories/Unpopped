@@ -9,7 +9,7 @@
 //! this generator eventually target backends beyond CUDA (and move out of
 //! Baracuda) without a rewrite.
 
-use crate::ir::{ArithOp, BinaryOp, DagNode, ExprDag, NodeId, ScalarExpr, UnaryOp};
+use crate::ir::{ArithOp, BinaryOp, CastSpec, DagNode, ExprDag, NodeId, ScalarExpr, UnaryOp};
 use unpopped_vocab::{ElementKind, TargetId};
 
 /// What a generated kernel was baked against — its validity key.
@@ -479,6 +479,10 @@ pub enum DeclinedOp {
     Select,
     /// The fused multiply-add ([`ScalarExpr::Fma`]).
     Fma,
+    /// A value conversion ([`ScalarExpr::Cast`]).
+    Cast,
+    /// A bit reinterpretation ([`ScalarExpr::Bitcast`]).
+    Bitcast,
     /// A constant literal.
     Constant,
     /// An input operand leaf the backend will not spell, by **operand index**.
@@ -771,6 +775,26 @@ pub struct Lowering<'a> {
     /// cannot spell a true fused operation at the plan's dtype must decline, never
     /// substitute the two-rounding form. The default declines.
     pub fma: &'a dyn Fn(String, String, String) -> Result<Spelling, LowerError>,
+    /// Value-conversion spelling ([`ScalarExpr::Cast`]) over the already-lowered
+    /// operand, its source type and the requested conversion. The source type is a
+    /// parameter because the spelling depends on both ends (float to int saturates,
+    /// int to float rounds, narrowing float overflows) and an operand's type is
+    /// not its text. An emitter that cannot spell the exact `(from, spec)` pair
+    /// declines; it never substitutes a plain C cast, which has none of the
+    /// requested rounding or saturation. The default declines.
+    pub cast: &'a dyn Fn(String, ElementKind, CastSpec) -> Result<Spelling, LowerError>,
+    /// Bit-reinterpretation spelling ([`ScalarExpr::Bitcast`]) over the operand
+    /// text, its source type and the destination type. Must move bits without
+    /// arithmetic (no pointer cast: strict aliasing). The default declines.
+    pub bitcast: &'a dyn Fn(String, ElementKind, ElementKind) -> Result<Spelling, LowerError>,
+    /// The op's compute dtype, which the typed nodes need to infer an operand's
+    /// type. `None` (the default) makes `Cast`/`Bitcast` decline: an emitter that
+    /// spells them says so with `LoweringBuilder::compute_dtype`.
+    pub compute: Option<ElementKind>,
+    /// C-family type name of a value of the given type, used to declare a hoisted
+    /// temporary whose type is not the compute type (the result of a `Cast` or
+    /// `Bitcast`). `None` makes the node decline rather than guess a declaration.
+    pub type_name: &'a dyn Fn(ElementKind) -> Option<String>,
     /// Constant-literal spelling ([`ScalarExpr::Const`]).
     ///
     /// A seam rather than a fixed call to [`const_lit`] because the correct
@@ -830,7 +854,7 @@ pub fn c_temp(ctype: &str, name: &str, rhs: &str) -> String {
 }
 
 mod default_seam {
-    use super::{ArithOp, Decline, DeclinedOp, LowerError, Spelling};
+    use super::{ArithOp, CastSpec, Decline, DeclinedOp, ElementKind, LowerError, Spelling};
 
     /// These three USED TO PANIC. They now return a typed decline, which is the
     /// KISS-EMIT §6.8-0004 fix: an emitter must not panic on any input, and a
@@ -867,6 +891,33 @@ mod default_seam {
                     .to_string(),
             }))
         };
+
+    pub(super) static CAST: fn(String, ElementKind, CastSpec) -> Result<Spelling, LowerError> =
+        |_x, from, spec| {
+            Ok(Spelling::Declined(Decline::UnsupportedOp {
+                op: DeclinedOp::Cast,
+                why: format!(
+                    "a Cast {from:?} -> {:?} reached an emitter with no `cast` seam. A plain \
+                     C cast has none of the requested rounding or saturation, so it cannot \
+                     stand in. Supply `.cast(..)`, or decline.",
+                    spec.to
+                ),
+            }))
+        };
+    pub(super) static BITCAST: fn(
+        String,
+        ElementKind,
+        ElementKind,
+    ) -> Result<Spelling, LowerError> = |_x, from, to| {
+        Ok(Spelling::Declined(Decline::UnsupportedOp {
+            op: DeclinedOp::Bitcast,
+            why: format!(
+                "a Bitcast {from:?} -> {to:?} reached an emitter with no `bitcast` seam. \
+                     Supply `.bitcast(..)`, or decline."
+            ),
+        }))
+    };
+    pub(super) static TYPE_NAME: fn(ElementKind) -> Option<String> = |_| None;
 
     pub(super) static FMA: fn(String, String, String) -> Result<Spelling, LowerError> =
         |_a, _b, _c| {
@@ -920,6 +971,10 @@ impl<'a> Lowering<'a> {
                 arith: &default_seam::ARITH,
                 select: &default_seam::SELECT,
                 fma: &default_seam::FMA,
+                cast: &default_seam::CAST,
+                bitcast: &default_seam::BITCAST,
+                compute: None,
+                type_name: &default_seam::TYPE_NAME,
                 constant: &default_seam::CONSTANT,
                 temp: &default_seam::TEMP,
             },
@@ -947,6 +1002,39 @@ impl<'a> LoweringBuilder<'a> {
         f: &'a dyn Fn(String, String, String) -> Result<Spelling, LowerError>,
     ) -> Self {
         self.inner.select = f;
+        self
+    }
+    /// Value-conversion spelling ([`ScalarExpr::Cast`]); see [`Lowering::cast`].
+    #[must_use]
+    pub fn cast(
+        mut self,
+        f: &'a dyn Fn(String, ElementKind, CastSpec) -> Result<Spelling, LowerError>,
+    ) -> Self {
+        self.inner.cast = f;
+        self
+    }
+    /// Bit-reinterpretation spelling ([`ScalarExpr::Bitcast`]); see
+    /// [`Lowering::bitcast`].
+    #[must_use]
+    pub fn bitcast(
+        mut self,
+        f: &'a dyn Fn(String, ElementKind, ElementKind) -> Result<Spelling, LowerError>,
+    ) -> Self {
+        self.inner.bitcast = f;
+        self
+    }
+    /// Declare the op's compute dtype so `Cast`/`Bitcast` operands can be typed; see
+    /// [`Lowering::compute`].
+    #[must_use]
+    pub fn compute_dtype(mut self, dtype: ElementKind) -> Self {
+        self.inner.compute = Some(dtype);
+        self
+    }
+    /// C-family type names for hoisted typed temporaries; see
+    /// [`Lowering::type_name`].
+    #[must_use]
+    pub fn type_name(mut self, f: &'a dyn Fn(ElementKind) -> Option<String>) -> Self {
+        self.inner.type_name = f;
         self
     }
     /// Fused multiply-add spelling ([`ScalarExpr::Fma`]).
@@ -1072,6 +1160,29 @@ macro_rules! spelled_or_return_decline {
     };
 }
 
+/// The type of a `Cast`/`Bitcast` operand, or the typed decline that says why it
+/// cannot be known (no declared compute dtype, or an ill-typed operand).
+fn typed_source(
+    x: &ScalarExpr,
+    lo: &Lowering<'_>,
+    op: DeclinedOp,
+) -> Result<ElementKind, Spelling> {
+    let Some(compute) = lo.compute else {
+        return Err(Spelling::Declined(Decline::UnsupportedOp {
+            op,
+            why: "Cast/Bitcast reached an emitter that declared no compute dtype \
+                  (`LoweringBuilder::compute_dtype`), so the operand's type is unknown"
+                .to_string(),
+        }));
+    };
+    crate::types::infer(x, compute).map_err(|e| {
+        Spelling::Declined(Decline::UnsupportedOp {
+            op,
+            why: format!("ill-typed Cast/Bitcast operand: {e:?}"),
+        })
+    })
+}
+
 /// Lower a [`ScalarExpr`] tree to a backend expression string via `lo`'s seams.
 ///
 /// Structural: a subtree reachable by two paths is re-rendered once per path. For
@@ -1111,6 +1222,22 @@ pub fn lower_expr(e: &ScalarExpr, lo: &Lowering<'_>) -> Result<Spelling, LowerEr
         ScalarExpr::Fma(a, b, c) => {
             let (a, b, c) = (sp!(a), sp!(b), sp!(c));
             return (lo.fma)(a, b, c);
+        }
+        ScalarExpr::Cast(x, spec) => {
+            let from = match typed_source(x, lo, DeclinedOp::Cast) {
+                Ok(t) => t,
+                Err(declined) => return Ok(declined),
+            };
+            let x = sp!(x);
+            return (lo.cast)(x, from, *spec);
+        }
+        ScalarExpr::Bitcast(x, to) => {
+            let from = match typed_source(x, lo, DeclinedOp::Bitcast) {
+                Ok(t) => t,
+                Err(declined) => return Ok(declined),
+            };
+            let x = sp!(x);
+            return (lo.bitcast)(x, from, *to);
         }
         ScalarExpr::Add(a, b) => {
             let (a, b) = (sp!(a), sp!(b));
@@ -1329,6 +1456,22 @@ fn lower_node(
             let (a, b, c) = (child!(a), child!(b), child!(c));
             spelled_or_return_decline!((lo.fma)(a, b, c))
         }
+        DagNode::Cast(x, spec) => {
+            let from = match typed_source(&dag.node_expr(x), lo, DeclinedOp::Cast) {
+                Ok(t) => t,
+                Err(declined) => return Ok(declined),
+            };
+            let x = child!(x);
+            spelled_or_return_decline!((lo.cast)(x, from, spec))
+        }
+        DagNode::Bitcast(x, to) => {
+            let from = match typed_source(&dag.node_expr(x), lo, DeclinedOp::Bitcast) {
+                Ok(t) => t,
+                Err(declined) => return Ok(declined),
+            };
+            let x = child!(x);
+            spelled_or_return_decline!((lo.bitcast)(x, from, to))
+        }
         DagNode::Add(a, b) => {
             let (a, b) = (child!(a), child!(b));
             spelled_or_return_decline!((lo.arith)(ArithOp::Add, a, b))
@@ -1364,7 +1507,22 @@ fn lower_node(
     };
     let r = if hoist {
         let name = format!("tmp{}", prelude.len());
-        prelude.push((lo.temp)(ctype, &name, &rhs));
+        // A Cast/Bitcast result is NOT the compute type, so its temporary needs its
+        // own declaration type; an emitter that cannot name it declines.
+        let temp_type = match node {
+            DagNode::Cast(_, spec) => (lo.type_name)(spec.to),
+            DagNode::Bitcast(_, to) => (lo.type_name)(to),
+            _ => Some(ctype.to_string()),
+        };
+        let Some(temp_type) = temp_type else {
+            return Ok(Spelling::Declined(Decline::UnsupportedOp {
+                op: DeclinedOp::Cast,
+                why: "a shared Cast/Bitcast needs a temporary of a non-compute type but the \
+                      emitter supplies no `type_name` seam for it"
+                    .to_string(),
+            }));
+        };
+        prelude.push((lo.temp)(&temp_type, &name, &rhs));
         name
     } else {
         rhs

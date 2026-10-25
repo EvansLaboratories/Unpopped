@@ -65,6 +65,7 @@
 
 pub mod backend;
 pub mod capability;
+mod cast_ref;
 pub mod cfamily;
 pub mod contract;
 #[cfg(feature = "convert")]
@@ -84,6 +85,7 @@ pub mod recipe;
 pub mod shape;
 pub mod telemetry;
 mod text;
+pub mod types;
 
 // The cross-backend IR fuzzer (`fuzz.rs`) moved to `baracuda-cuda-emit`'s
 // integration tests during the Unpopped carve — it drives `generate(&Cuda)`

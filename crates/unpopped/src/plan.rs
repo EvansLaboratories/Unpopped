@@ -559,6 +559,7 @@ pub fn try_build_plan<'a>(
     check_bool_op_admissibility(op, key.dtype)?;
     check_coord_admissibility(op, key)?;
     check_fma_admissibility(op, key.dtype)?;
+    check_typed_admissibility(op, key.dtype)?;
     if let Access::RowReduce {
         ref stages,
         ref epilogue,
@@ -909,6 +910,7 @@ fn contraction_epilogue_admissible(e: &crate::ir::ScalarExpr, n_inputs: u8) -> b
         // targeted message; this arm keeps the predicate honest regardless).
         E::Param(_) | E::Reduced(_) | E::Coord(_) => false,
         E::Unary(_, x) => contraction_epilogue_admissible(x, n_inputs),
+        E::Cast(x, _) | E::Bitcast(x, _) => contraction_epilogue_admissible(x, n_inputs),
         E::Add(a, b) | E::Sub(a, b) | E::Mul(a, b) | E::Div(a, b) | E::Binary(_, a, b) => {
             contraction_epilogue_admissible(a, n_inputs)
                 && contraction_epilogue_admissible(b, n_inputs)
@@ -1234,6 +1236,7 @@ fn assert_valid_multi_output(op: &OpDef, key: &StructureKey) {
                  elementwise-map only (a multi-output coordinate kernel is deferred)"
             ),
             ScalarExpr::Unary(_, x) => check_body(x, n_inputs, name),
+            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => check_body(x, n_inputs, name),
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
             | ScalarExpr::Mul(a, b)
@@ -1924,6 +1927,7 @@ pub(crate) fn check_no_half_nextafter(op: &OpDef, dtype: ElementKind) -> Result<
             | ScalarExpr::Mul(a, b)
             | ScalarExpr::Div(a, b) => walk(a) || walk(b),
             ScalarExpr::Unary(_, a) => walk(a),
+            ScalarExpr::Cast(a, _) | ScalarExpr::Bitcast(a, _) => walk(a),
             ScalarExpr::Binary(bop, a, b) => {
                 matches!(bop, BinaryOp::Nextafter) || walk(a) || walk(b)
             }
@@ -2114,6 +2118,14 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
             // moot for rule 3: an int-only op's operands are pinned to leaf
             // Inputs at 8-bit before Coord could ever appear there.
             ScalarExpr::Coord(_) => {}
+            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => {
+                if int_dt {
+                    return Err(format!(
+                        "op '{op_name}': Cast/Bitcast at int compute dtype {dtype:?} is                          rejected — typed expressions are f32/f32s/f64-compute only in v1"
+                    ));
+                }
+                walk(x, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+            }
             ScalarExpr::Const(_) => {
                 if !(!int_dt) {
                     return Err(format!(
@@ -2516,6 +2528,10 @@ pub(crate) fn check_complex_op_admissibility(
             ScalarExpr::Fma(_, _, _) => {
                 reject("Fma", "no complex fused multiply-add lowering exists")
             }
+            ScalarExpr::Cast(..) | ScalarExpr::Bitcast(..) => reject(
+                "Cast/Bitcast",
+                "typed expressions are f32/f32s/f64-compute only in v1",
+            ),
             ScalarExpr::Param(_) => reject("Param", "scalar params are f32-only"),
             ScalarExpr::Reduced(_) | ScalarExpr::Coord(_) => reject(
                 "Reduced/Coord",
@@ -2581,6 +2597,10 @@ pub(crate) fn check_bool_op_admissibility(op: &OpDef, dtype: ElementKind) -> Res
             }
             ScalarExpr::Select(_, _, _) => reject("Select", "no bool select lowering"),
             ScalarExpr::Fma(_, _, _) => reject("Fma", "no fused multiply-add on a truth value"),
+            ScalarExpr::Cast(..) | ScalarExpr::Bitcast(..) => reject(
+                "Cast/Bitcast",
+                "typed expressions are f32/f32s/f64-compute only in v1",
+            ),
             ScalarExpr::Param(_) => reject("Param", "scalar params are f32-only"),
             ScalarExpr::Reduced(_) | ScalarExpr::Coord(_) => {
                 reject("Reduced/Coord", "no bool reduction or coordinate path")
@@ -2753,6 +2773,7 @@ pub(crate) fn expr_contains_coord(e: &ScalarExpr) -> bool {
         | ScalarExpr::Param(_)
         | ScalarExpr::Reduced(_) => false,
         ScalarExpr::Unary(_, x) => expr_contains_coord(x),
+        ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => expr_contains_coord(x),
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
@@ -2842,6 +2863,9 @@ pub(crate) fn check_coord_admissibility(op: &OpDef, key: &StructureKey) -> Resul
                 Ok(())
             }
             ScalarExpr::Unary(_, x) => walk(x, op_name, dtype, rank, elementwise),
+            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => {
+                walk(x, op_name, dtype, rank, elementwise)
+            }
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
             | ScalarExpr::Mul(a, b)
@@ -2899,6 +2923,110 @@ pub(crate) fn check_coord_admissibility(op: &OpDef, key: &StructureKey) -> Resul
     Ok(())
 }
 
+/// Increment-I1 typed-expression admissibility gate: [`ScalarExpr::Cast`] and
+/// [`ScalarExpr::Bitcast`], the first nodes whose type is not the compute dtype
+/// (`docs/ir-typed-expressions.md`). Runs at the top of [`try_build_plan`].
+///
+/// An op with neither node returns at once, so every pre-existing op plans exactly
+/// as before. For one with either, v1 admits only:
+///
+/// 1. **an [`Access::Elementwise`] op with a single output** (a typed reduction,
+///    contraction, scan or window epilogue needs per-arm semantics, deferred);
+/// 2. **`f32`/`f32s`/`f64` compute** (the half, fp8, sub-byte and complex endpoints
+///    are not in the conversion table yet);
+/// 3. **a well-typed body** ([`crate::types::infer`]) whose type equals the store
+///    type, `out_dtype` or the compute dtype;
+/// 4. **typed values only at the root or directly under a `Cast`/`Bitcast`**:
+///    arithmetic, `Select` and the math ops stay compute-typed, because their
+///    lowering, hoisting and oracle semantics are per compute dtype today.
+pub(crate) fn check_typed_admissibility(op: &OpDef, dtype: ElementKind) -> Result<(), PlanError> {
+    let any_typed = op.output_bodies().iter().any(|e| crate::types::is_typed(e))
+        || match &op.access {
+            Access::RowReduce { stages, epilogue } => {
+                stages.iter().any(|s| crate::types::is_typed(&s.pre))
+                    || crate::types::is_typed(epilogue)
+            }
+            Access::Contraction { epilogue, .. } => crate::types::is_typed(epilogue),
+            Access::Reduction { post, .. } => crate::types::is_typed(post),
+            Access::Scan { pre, post, .. } | Access::Window { pre, post, .. } => {
+                crate::types::is_typed(pre) || crate::types::is_typed(post)
+            }
+            _ => false,
+        };
+    if !any_typed {
+        return Ok(());
+    }
+    let in_cell = |detail: String| Err(PlanError::InadmissibleOpInCell { detail });
+    if !matches!(op.access, Access::Elementwise) {
+        return in_cell(format!(
+            "op '{}': Cast/Bitcast are Elementwise-only in v1 (a typed reduction,              contraction, scan or window epilogue needs its own semantics); miss honestly",
+            op.name
+        ));
+    }
+    if op.output_bodies().len() != 1 {
+        return in_cell(format!(
+            "op '{}': Cast/Bitcast are single-output in v1; miss honestly",
+            op.name
+        ));
+    }
+    if !crate::types::is_cast_float(dtype) {
+        return Err(PlanError::InadmissibleOpAtDtype {
+            dtype,
+            detail: format!(
+                "op '{}': Cast/Bitcast need f32/f32s/f64 compute in v1 (the half, fp8,                  sub-byte and complex endpoints are not in the conversion table yet)",
+                op.name
+            ),
+        });
+    }
+    let ill = |detail: String| Err(PlanError::InadmissibleOpAtDtype { dtype, detail });
+    let root = match crate::types::infer(&op.body, dtype) {
+        Ok(t) => t,
+        Err(e) => return ill(format!("op '{}': ill-typed expression: {e:?}", op.name)),
+    };
+    let store = op.out_dtype.unwrap_or(dtype);
+    if root != store {
+        return ill(format!(
+            "op '{}': the body has type {root:?} but the store type is {store:?};              state the conversion with a Cast, and set out_dtype to the result type",
+            op.name
+        ));
+    }
+    // Typed (non-compute) values only at the root or directly under a Cast/Bitcast.
+    fn walk(e: &ScalarExpr, compute: ElementKind, typed_ok: bool) -> Result<(), String> {
+        let ty = crate::types::infer(e, compute).map_err(|x| format!("{x:?}"))?;
+        if ty != compute && !typed_ok {
+            return Err(format!(
+                "a value of type {ty:?} feeds an operator; v1 admits a non-compute-typed                  value only at the root or directly under a Cast/Bitcast"
+            ));
+        }
+        match e {
+            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => walk(x, compute, true),
+            ScalarExpr::Unary(_, x) => walk(x, compute, false),
+            ScalarExpr::Add(a, b)
+            | ScalarExpr::Sub(a, b)
+            | ScalarExpr::Mul(a, b)
+            | ScalarExpr::Div(a, b)
+            | ScalarExpr::Binary(_, a, b) => {
+                walk(a, compute, false)?;
+                walk(b, compute, false)
+            }
+            ScalarExpr::Select(c, a, b) | ScalarExpr::Fma(c, a, b) => {
+                walk(c, compute, false)?;
+                walk(a, compute, false)?;
+                walk(b, compute, false)
+            }
+            ScalarExpr::Input(_)
+            | ScalarExpr::Const(_)
+            | ScalarExpr::Param(_)
+            | ScalarExpr::Reduced(_)
+            | ScalarExpr::Coord(_) => Ok(()),
+        }
+    }
+    walk(&op.body, dtype, true).map_err(|why| PlanError::InadmissibleOpAtDtype {
+        dtype,
+        detail: format!("op '{}': {why}", op.name),
+    })
+}
+
 /// Increment-I1 [`ScalarExpr::Fma`] admissibility gate: runs at the top of
 /// [`try_build_plan`] and walks every expression of the op (output bodies and
 /// the `Access` arm's own expressions).
@@ -2918,6 +3046,7 @@ pub(crate) fn check_fma_admissibility(op: &OpDef, dtype: ElementKind) -> Result<
             | ScalarExpr::Reduced(_)
             | ScalarExpr::Coord(_) => false,
             ScalarExpr::Unary(_, x) => has_fma(x),
+            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => has_fma(x),
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
             | ScalarExpr::Mul(a, b)
@@ -2993,6 +3122,12 @@ pub(crate) fn check_fma_admissibility(op: &OpDef, dtype: ElementKind) -> Result<
 /// top-level cmp with `out_dtype = None` (a float mask) is likewise legal.
 fn assert_valid_out_dtype(op: &OpDef) {
     let Some(od) = op.out_dtype else { return };
+    // A typed body's store type is checked by `check_typed_admissibility` (the body's
+    // inferred type must equal this dtype), which `try_build_plan` ran first; the
+    // predicate-mask and bincount shapes below are about untyped bodies.
+    if matches!(&op.access, Access::Elementwise) && crate::types::is_typed(&op.body) {
+        return;
+    }
     match &op.access {
         // Increment 5 — a SCATTER may write an `I32` counts output (bincount:
         // `out[x[i]] += 1`), a hetero store distinct from the U8 mask. The body is
@@ -3135,6 +3270,7 @@ fn assert_valid_reduction_post(op: &OpDef) {
                  is Elementwise-only (a coordinate along a folded axis is ambiguous)"
             ),
             ScalarExpr::Unary(_, x) => walk(x, name),
+            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => walk(x, name),
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
             | ScalarExpr::Mul(a, b)
@@ -3343,6 +3479,9 @@ pub(crate) fn check_row_reduce(
                 Ok(())
             }
             ScalarExpr::Unary(_, x) => check(x, n_inputs, max_reduced, in_stage, is_col),
+            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => {
+                check(x, n_inputs, max_reduced, in_stage, is_col)
+            }
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
             | ScalarExpr::Mul(a, b)
@@ -3517,6 +3656,9 @@ fn validate_scan(op: &OpDef, key: &StructureKey, axis: u8, reverse: bool, exclus
             ),
             ScalarExpr::Param(_) | ScalarExpr::Coord(_) => {}
             ScalarExpr::Unary(_, x) => check(x, n_inputs, allow_reduced, ctx, name),
+            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => {
+                check(x, n_inputs, allow_reduced, ctx, name)
+            }
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
             | ScalarExpr::Mul(a, b)
@@ -3744,6 +3886,9 @@ fn validate_window(
             ),
             ScalarExpr::Param(_) | ScalarExpr::Coord(_) => {}
             ScalarExpr::Unary(_, x) => check(x, n_inputs, allow_reduced, ctx, name),
+            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => {
+                check(x, n_inputs, allow_reduced, ctx, name)
+            }
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
             | ScalarExpr::Mul(a, b)
