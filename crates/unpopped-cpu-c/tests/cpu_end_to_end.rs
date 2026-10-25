@@ -652,32 +652,14 @@ fn max_propagates_nan_through_a_real_compiler() {
 fn fma_is_fused_through_a_real_compiler() {
     let Some(cc) = find_compiler() else {
         eprintln!(
-            "SKIP fma_is_fused_through_a_real_compiler: no host C compiler (tried \
-             cc, gcc, clang, cl). This test compiles and RUNS a kernel; without a \
-             toolchain it cannot execute."
+            "SKIP fma_is_fused_through_a_real_compiler: no host C compiler (tried              cc, gcc, clang, cl). This test compiles and RUNS a kernel; without a              toolchain it cannot execute."
         );
         return;
     };
     let dir: PathBuf = std::env::temp_dir().join("unpopped-e2e");
     std::fs::create_dir_all(&dir).expect("scratch dir");
 
-    let a0 = 1.0f32 + 2.0f32.powi(-12);
-    let c0 = -(1.0f32 + 2.0f32.powi(-11));
-    // Precondition: the lane discriminates. Two roundings give exactly 0.
-    assert_eq!(
-        (a0 * a0) + c0,
-        0.0,
-        "harness precondition: the unfused f32 answer must be 0"
-    );
-    let fused_want = 2.0f64.powi(-24);
-
-    // Seven lanes keeps the planner on the scalar path (see the max-NaN test).
-    // Lane 0 is the discriminating lane; lanes 1-3 are ordinary positive controls
-    // (2*3+4 = 10, ...) so a kernel that wrote zeros everywhere cannot pass.
-    let a: Vec<f32> = vec![a0, 2.0, -1.5, 0.5, 3.0, 0.0, 1.0];
-    let b: Vec<f32> = vec![a0, 3.0, 2.0, 0.5, -4.0, 9.0, 1.0];
-    let c: Vec<f32> = vec![c0, 4.0, 0.25, 1.0, 2.0, -7.0, 0.0];
-
+    let inputs = fma_inputs();
     let op = OpDef::elementwise(
         "fmaop",
         3,
@@ -691,26 +673,50 @@ fn fma_is_fused_through_a_real_compiler() {
         &op,
         ElementKind::F32,
         OpCategory::BinaryElementwise,
-        &[a, b, c],
+        &inputs,
         // OPTIMIZED: the case where a contracting compiler would be most tempted.
         true,
     )
     .expect("fma_f32 end-to-end");
+    assert_fma_lanes(&actual, &expected.to_f64_vec());
+}
 
-    let want = expected.to_f64_vec();
+/// The fused answer at the discriminating lane: exactly `2^-24`.
+const FMA_FUSED_WANT: f64 = 1.0 / 16_777_216.0;
+
+/// Three seven-lane inputs (seven keeps the planner on the scalar path, see the
+/// max-NaN test). Lane 0 discriminates; lanes 1-6 are ordinary positive controls
+/// (2*3+4 = 10, ...) so a kernel that wrote zeros everywhere cannot pass.
+fn fma_inputs() -> [Vec<f32>; 3] {
+    let a0 = 1.0f32 + 2.0f32.powi(-12);
+    let c0 = -(1.0f32 + 2.0f32.powi(-11));
+    // Precondition: the lane discriminates. Two roundings give exactly 0.
+    assert_eq!(
+        (a0 * a0) + c0,
+        0.0,
+        "harness precondition: the unfused f32 answer must be 0"
+    );
+    [
+        vec![a0, 2.0, -1.5, 0.5, 3.0, 0.0, 1.0],
+        vec![a0, 3.0, 2.0, 0.5, -4.0, 9.0, 1.0],
+        vec![c0, 4.0, 0.25, 1.0, 2.0, -7.0, 0.0],
+    ]
+}
+
+/// The oracle must itself fuse, the compiled kernel must match it, and every
+/// control lane must be exact.
+fn assert_fma_lanes(actual: &[f64], want: &[f64]) {
     assert_eq!(actual.len(), 7, "expected 7 output lanes, got {actual:?}");
     assert_eq!(
-        want[0], fused_want,
+        want[0], FMA_FUSED_WANT,
         "the oracle must itself fuse (single rounding): got {} at the discriminating lane",
         want[0]
     );
     assert_eq!(
-        actual[0], fused_want,
-        "the compiled kernel did not fuse: lane 0 gave {} where one rounding gives 2^-24 \
-         ({fused_want}) and two roundings give 0. Full output: {actual:?}",
+        actual[0], FMA_FUSED_WANT,
+        "the compiled kernel did not fuse: lane 0 gave {} where one rounding gives 2^-24          ({FMA_FUSED_WANT}) and two roundings give 0. Full output: {actual:?}",
         actual[0]
     );
-    // Positive controls.
     for (lane, expect) in [
         (1usize, 10.0),
         (2, -2.75),
