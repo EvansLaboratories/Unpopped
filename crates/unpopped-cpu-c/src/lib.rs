@@ -343,10 +343,12 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> Result<GeneratedKernel
         ))
     };
     let sel = |c, a, b| cpu_select(c, a, b, plan.dtype);
+    let fm = |a, b, c| cpu_fma(a, b, c, plan.dtype);
     let cst = |v| Ok(Spelling::Spelled(const_lit(v)));
     let lowering = Lowering::builder(&acc, &un, &bin)
         .arith(&ar)
         .select(&sel)
+        .fma(&fm)
         .constant(&cst)
         .build();
     let (prelude, root) = if bit_move {
@@ -583,6 +585,27 @@ fn cpu_binary_bit_move(
     Ok(Spelling::Spelled(format!(
         "({pa} != {pa} ? {a} : ({pb} != {pb} ? {b} : ({pa} {cmp} {pb} ? {a} : {b})))"
     )))
+}
+
+/// Fused multiply-add: C99 `fmaf`/`fma` are specified as ONE rounding of the exact
+/// `a*b + c` (a software fallback is used where the hardware has no FMA), which is
+/// the contract [`unpopped::ir::ScalarExpr::Fma`] states. Spelling it `a * b + c`
+/// instead would let the compiler round the product, or contract it, depending on
+/// flags: a different function. Other dtypes decline (the plan gate already
+/// rejects them; this is the emitter's independent backstop).
+fn cpu_fma(a: String, b: String, c: String, dtype: ElementKind) -> Result<Spelling, LowerError> {
+    let spelled = match dtype {
+        ElementKind::F32 | ElementKind::F32Strict => format!("fmaf({a}, {b}, {c})"),
+        ElementKind::F64 => format!("fma({a}, {b}, {c})"),
+        _ => {
+            return Ok(Spelling::Declined(Decline::UnsupportedDtypeForOp {
+                op: DeclinedOp::Fma,
+                dtype,
+                why: "Fma is f32/f32s/f64 only in cpu_c v1".to_string(),
+            }));
+        }
+    };
+    Ok(Spelling::Spelled(spelled))
 }
 
 fn cpu_select(c: String, a: String, b: String, dtype: ElementKind) -> Result<Spelling, LowerError> {

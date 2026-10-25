@@ -197,6 +197,11 @@ pub enum PatternError {
     /// select-containing body via its own `expr_contains_select` guard — its
     /// own layer). The kernels still generate and lower normally.
     SelectUnsupported,
+    /// The body contains a [`crate::ir::ScalarExpr::Fma`]. FKC §4.1 names no
+    /// fused multiply-add op, and spelling it as `Add(Mul(..), ..)` would claim a
+    /// two-rounding function matches a one-rounding kernel, so there is no
+    /// pattern and no contract (the kernels still generate and lower normally).
+    FmaUnsupported,
     /// The op carries a runtime [`crate::ir::BaseOffset::Runtime`] base offset (a
     /// BASE_OFFSET SLICE — the runtime per-operand pointer bump). No honest v1
     /// contract, on two blockers verified against Fuel's actual sources:
@@ -373,6 +378,13 @@ fn canonicalize(e: &ScalarExpr) -> ScalarExpr {
             Box::new(canonicalize(a)),
             Box::new(canonicalize(b)),
         ),
+        // Fma(a, b, c) = a*b + c: a and b commute, but c does not, and nothing here
+        // ever rewrites it into Add/Mul. Keep it strictly positional (no reorder).
+        ScalarExpr::Fma(a, b, c) => ScalarExpr::Fma(
+            Box::new(canonicalize(a)),
+            Box::new(canonicalize(b)),
+            Box::new(canonicalize(c)),
+        ),
         ScalarExpr::Input(_)
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)
@@ -400,6 +412,7 @@ fn sig(e: &ScalarExpr) -> String {
         ScalarExpr::Binary(op, a, b) => format!("0B{op:?}({},{})", sig(a), sig(b)),
         ScalarExpr::Unary(op, x) => format!("0U{op:?}({})", sig(x)),
         ScalarExpr::Select(c, a, b) => format!("0Sel({},{},{})", sig(c), sig(a), sig(b)),
+        ScalarExpr::Fma(a, b, c) => format!("0Fma({},{},{})", sig(a), sig(b), sig(c)),
         ScalarExpr::Input(i) => format!("1I{i:03}"),
         ScalarExpr::Param(i) => format!("1P{i:03}"),
         ScalarExpr::Const(v) => format!("1C{v:?}"),
@@ -442,6 +455,7 @@ fn walk(
         // matcher validation first; see the variant docs. NO `op: Where` is
         // ever emitted in v1.
         ScalarExpr::Select(..) => Err(PatternError::SelectUnsupported),
+        ScalarExpr::Fma(..) => Err(PatternError::FmaUnsupported),
         ScalarExpr::Add(a, b) => scalar_binop("Add", "AddScalar", a, b, path, consumers, extracts),
         ScalarExpr::Mul(a, b) => scalar_binop("Mul", "MulScalar", a, b, path, consumers, extracts),
         ScalarExpr::Sub(a, b) => plain_binop("Sub", a, b, path, consumers, extracts),

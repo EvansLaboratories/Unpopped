@@ -73,6 +73,11 @@ enum ENode {
     /// NaN-cond fold (NaN cond is TRUE). Pinned by
     /// `select_is_never_folded_or_rewritten`.
     Select(Id, Id, Id),
+    /// Fused multiply-add `(a, b, c)` = `a*b + c`, one rounding
+    /// ([`ScalarExpr::Fma`]) — ZERO rewrite/fold rules, like `Select`. In
+    /// particular `Fma(a, b, c)` is never equated with `Add(Mul(a, b), c)`: the
+    /// latter rounds the product first, so the two differ in the last place.
+    Fma(Id, Id, Id),
 }
 
 /// An e-graph: union-find over e-classes + per-class e-node sets + a hashcons.
@@ -216,6 +221,14 @@ fn add_expr(eg: &mut EGraph, e: &ScalarExpr, compute: Compute) -> Id {
                 add_expr(eg, b, compute),
             );
             eg.add(ENode::Select(c, a, b))
+        }
+        ScalarExpr::Fma(a, b, c) => {
+            let (a, b, c) = (
+                add_expr(eg, a, compute),
+                add_expr(eg, b, compute),
+                add_expr(eg, c, compute),
+            );
+            eg.add(ENode::Fma(a, b, c))
         }
     }
 }
@@ -623,6 +636,8 @@ fn weight(n: &ENode) -> u64 {
         | ENode::Reduced(_)
         | ENode::Coord(_) => 1,
         ENode::Add(..) | ENode::Sub(..) | ENode::Mul(..) => 2,
+        // One fused instruction, the same tier as a single Mul/Add.
+        ENode::Fma(..) => 2,
         ENode::Div(..) => 8,
         ENode::Binary(op, ..) => match op {
             // Copysign/Nextafter are bit-manipulation ops; FmaxIeee/FminIeee are
@@ -766,6 +781,11 @@ fn build(eg: &EGraph, c: Id, best: &HashMap<Id, (u64, ENode)>) -> ScalarExpr {
             bx(build(eg, a, best)),
             bx(build(eg, b, best)),
         ),
+        ENode::Fma(a, b, c) => ScalarExpr::Fma(
+            bx(build(eg, a, best)),
+            bx(build(eg, b, best)),
+            bx(build(eg, c, best)),
+        ),
     }
 }
 
@@ -791,6 +811,7 @@ fn expr_cost(e: &ScalarExpr) -> u64 {
         ScalarExpr::Binary(op, a, b) => (ENode::Binary(*op, 0, 0), vec![a, b]),
         ScalarExpr::Unary(op, a) => (ENode::Unary(*op, 0), vec![a]),
         ScalarExpr::Select(c, a, b) => (ENode::Select(0, 0, 0), vec![c, a, b]),
+        ScalarExpr::Fma(a, b, c) => (ENode::Fma(0, 0, 0), vec![a, b, c]),
     };
     kids.into_iter()
         .fold(weight(&node), |acc, k| acc.saturating_add(expr_cost(k)))
@@ -855,6 +876,7 @@ fn expr_cmp(a: &ScalarExpr, b: &ScalarExpr) -> std::cmp::Ordering {
             ScalarExpr::Binary(..) => 9,
             ScalarExpr::Unary(..) => 10,
             ScalarExpr::Select(..) => 11,
+            ScalarExpr::Fma(..) => 12,
         }
     }
     match (a, b) {
@@ -876,7 +898,8 @@ fn expr_cmp(a: &ScalarExpr, b: &ScalarExpr) -> std::cmp::Ordering {
         (ScalarExpr::Unary(o1, x), ScalarExpr::Unary(o2, y)) => format!("{o1:?}")
             .cmp(&format!("{o2:?}"))
             .then_with(|| expr_cmp(x, y)),
-        (ScalarExpr::Select(c1, a1, b1), ScalarExpr::Select(c2, a2, b2)) => expr_cmp(c1, c2)
+        (ScalarExpr::Select(c1, a1, b1), ScalarExpr::Select(c2, a2, b2))
+        | (ScalarExpr::Fma(c1, a1, b1), ScalarExpr::Fma(c2, a2, b2)) => expr_cmp(c1, c2)
             .then_with(|| expr_cmp(a1, a2))
             .then_with(|| expr_cmp(b1, b2)),
         _ => rank(a).cmp(&rank(b)),
@@ -902,6 +925,7 @@ fn reconstruct(n: &ENode, ch: Vec<ScalarExpr>) -> ScalarExpr {
         ENode::Binary(op, ..) => ScalarExpr::Binary(op, bx(pop()), bx(pop())),
         ENode::Unary(op, ..) => ScalarExpr::Unary(op, bx(pop())),
         ENode::Select(..) => ScalarExpr::Select(bx(pop()), bx(pop()), bx(pop())),
+        ENode::Fma(..) => ScalarExpr::Fma(bx(pop()), bx(pop()), bx(pop())),
     }
 }
 
@@ -2094,6 +2118,54 @@ mod tests {
     }
 
     #[test]
+    fn fma_is_never_folded_or_rewritten() {
+        let fma = |a: ScalarExpr, b: ScalarExpr, c: ScalarExpr| {
+            ScalarExpr::Fma(Box::new(a), Box::new(b), Box::new(c))
+        };
+        // Zero rules, like Select. (1) A fused multiply-add is NOT `a*b + c`: the
+        // product is rounded in the second form and not in the first, so the two
+        // differ in the last place and neither may become the other. Even the
+        // "obvious" identities stay as authored.
+        for e in [
+            fma(
+                ScalarExpr::Input(0),
+                ScalarExpr::Input(1),
+                ScalarExpr::Input(2),
+            ),
+            fma(
+                ScalarExpr::Input(0),
+                ScalarExpr::Const(1.0),
+                ScalarExpr::Input(1),
+            ),
+            fma(
+                ScalarExpr::Input(0),
+                ScalarExpr::Input(1),
+                ScalarExpr::Const(0.0),
+            ),
+            fma(
+                ScalarExpr::Const(2.0),
+                ScalarExpr::Const(3.0),
+                ScalarExpr::Const(4.0),
+            ),
+        ] {
+            assert_eq!(optimize(&e, F32), e, "Fma must stay as authored");
+        }
+        // (2) The unfused form stays unfused: Add(Mul(a, b), c) never becomes Fma.
+        let unfused = ScalarExpr::Add(
+            Box::new(ScalarExpr::Mul(
+                Box::new(ScalarExpr::Input(0)),
+                Box::new(ScalarExpr::Input(1)),
+            )),
+            Box::new(ScalarExpr::Input(2)),
+        );
+        assert_eq!(
+            optimize(&unfused, F32),
+            unfused,
+            "a*b + c must NEVER become an Fma (it would change the rounding)"
+        );
+    }
+
+    #[test]
     fn select_is_never_folded_or_rewritten() {
         use crate::ir::{BinaryOp, coord, input, konst};
         let sel = |c: ScalarExpr, a: ScalarExpr, b: ScalarExpr| {
@@ -2252,6 +2324,7 @@ mod tests {
             ScalarExpr::Binary(op, a, b) => (ENode::Binary(*op, 0, 0), vec![a, b]),
             ScalarExpr::Unary(op, a) => (ENode::Unary(*op, 0), vec![a]),
             ScalarExpr::Select(c, a, b) => (ENode::Select(0, 0, 0), vec![c, a, b]),
+            ScalarExpr::Fma(a, b, c) => (ENode::Fma(0, 0, 0), vec![a, b, c]),
         };
         kids.into_iter()
             .fold(weight(&node), |acc, k| acc.saturating_add(cost_of(k)))

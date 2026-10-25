@@ -1249,7 +1249,7 @@ fn scan_params(e: &ScalarExpr, out: &mut Vec<u8>) {
             scan_params(a, out);
             scan_params(b, out);
         }
-        ScalarExpr::Select(c, a, b) => {
+        ScalarExpr::Select(c, a, b) | ScalarExpr::Fma(c, a, b) => {
             scan_params(c, out);
             scan_params(a, out);
             scan_params(b, out);
@@ -1533,6 +1533,9 @@ fn ulp_sum(e: &ScalarExpr) -> f64 {
         // purpose so the rating is decided here, not silently defaulted, when
         // the Where advert lands.)
         ScalarExpr::Select(c, a, b) => ulp_sum(c) + ulp_sum(a) + ulp_sum(b),
+        // Fma is correctly rounded (one rounding of the exact a*b+c), so it adds 0
+        // ulp of its OWN; sub-expression tiers sum as usual.
+        ScalarExpr::Fma(a, b, c) => ulp_sum(a) + ulp_sum(b) + ulp_sum(c),
     }
 }
 
@@ -1668,7 +1671,7 @@ pub(crate) fn expr_contains_cmp(e: &ScalarExpr) -> bool {
         // bodies are withheld wholesale by `expr_contains_select` anyway, and
         // the cmp honesty gate keeps its full reach independently — the arm
         // exists for exhaustiveness, not policy.
-        ScalarExpr::Select(c, a, b) => {
+        ScalarExpr::Select(c, a, b) | ScalarExpr::Fma(c, a, b) => {
             expr_contains_cmp(c) || expr_contains_cmp(a) || expr_contains_cmp(b)
         }
     }
@@ -1688,6 +1691,9 @@ pub(crate) fn expr_contains_cmp(e: &ScalarExpr) -> bool {
 fn expr_contains_select(e: &ScalarExpr) -> bool {
     match e {
         ScalarExpr::Select(..) => true,
+        ScalarExpr::Fma(a, b, c) => {
+            expr_contains_select(a) || expr_contains_select(b) || expr_contains_select(c)
+        }
         ScalarExpr::Input(_)
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)

@@ -536,6 +536,11 @@ fn expr_contains_cmp_outside_select_cond(e: &ScalarExpr) -> bool {
             expr_contains_cmp_outside_select_cond(a) || expr_contains_cmp_outside_select_cond(b)
         }
         ScalarExpr::Unary(_, a) => expr_contains_cmp_outside_select_cond(a),
+        ScalarExpr::Fma(a, b, c) => {
+            expr_contains_cmp_outside_select_cond(a)
+                || expr_contains_cmp_outside_select_cond(b)
+                || expr_contains_cmp_outside_select_cond(c)
+        }
         ScalarExpr::Binary(bop, a, b) => {
             bop.is_cmp()
                 || expr_contains_cmp_outside_select_cond(a)

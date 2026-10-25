@@ -1093,7 +1093,7 @@ pub fn params_used(e: &ScalarExpr) -> Vec<u8> {
                 rec(a, out);
                 rec(b, out);
             }
-            ScalarExpr::Select(c, a, b) => {
+            ScalarExpr::Select(c, a, b) | ScalarExpr::Fma(c, a, b) => {
                 rec(c, out);
                 rec(a, out);
                 rec(b, out);
@@ -1172,6 +1172,10 @@ pub fn assert_no_int_div_or_const(
         // per-speller panic in `cuda_select` (which only the elementwise
         // paths route through; the reduction-class accumulator closures
         // don't, so the walk is the layer that covers them).
+        ScalarExpr::Fma(_, _, _) => panic!(
+            "c-family lowering: Fma at an integer dtype ({dtype:?}) — a fused multiply-add \
+             rounds once and has no integer meaning; the plan gate rejects this"
+        ),
         ScalarExpr::Select(_, _, _) => panic!(
             "c-family lowering: Select at an integer dtype ({dtype:?}) — v1 select is \
              float-only (the 0c U8/I8 cond-observer question is unresolved); the \
