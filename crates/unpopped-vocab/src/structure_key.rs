@@ -883,7 +883,15 @@ pub struct CellFacts {
     /// declared contraction that leaves it `None`
     /// ([`DeriveDecline::ContractionRolesNotDeclared`]), as it does an undeclared weight.
     pub contraction_roles: Option<ContractionRoles>,
+    /// The **vector-access byte cap** the key's target declares (KISS-CLASSIFY-6.5-0009(c),
+    /// §6.8-0018), or `None` for a target whose namespace declares none: 16 bytes. It is a
+    /// property of the target's vocabulary, not of the cell, so a caller reads it from the
+    /// namespace document it keys against; `cuda` and `vulkan` declare 16, which moves no key.
+    pub vec_cap_bytes: Option<u32>,
 }
+
+/// The vector-access byte cap of a target that declares none (§6.8-0018).
+pub const DEFAULT_VEC_CAP_BYTES: u32 = 16;
 
 impl CellFacts {
     /// No declared facts: not a contraction, no index role, no reduced axes,
@@ -899,6 +907,7 @@ impl CellFacts {
             weight_operand: None,
             scale_operand: None,
             contraction_roles: None,
+            vec_cap_bytes: None,
         }
     }
 
@@ -1542,10 +1551,11 @@ fn derive_unchecked(operands: &[OperandDesc], facts: &CellFacts, target: TargetI
     // own innermost axis lands there (right alignment, §6.6-0013).
     let reduced_innermost = frame.rank > 0 && reduce_axes.is_set((frame.rank - 1) as u8);
 
+    let vec_cap = facts.vec_cap_bytes.unwrap_or(DEFAULT_VEC_CAP_BYTES);
     let mut keys = [OperandKey::default(); MAX_OPERANDS];
     let mut max_off: i64 = 0;
     for (slot, od) in keys.iter_mut().zip(operands.iter()).take(n) {
-        *slot = derive_operand_key(od, &frame, reduced_innermost);
+        *slot = derive_operand_key(od, &frame, reduced_innermost, vec_cap);
         max_off = max_off.max(max_touched_offset(od));
     }
 
@@ -2227,7 +2237,12 @@ fn inner_axis(od: &OperandDesc) -> Option<usize> {
 /// KISS's first draft of §6.5-0014 padded the *layout* too. That made a rank-3
 /// im2col output `br`, so a dense and a strided output shared a token. KISS
 /// amended the clause after Unpopped's im2col gate went red on it.
-fn derive_operand_key(od: &OperandDesc, frame: &Frame, reduced_innermost: bool) -> OperandKey {
+fn derive_operand_key(
+    od: &OperandDesc,
+    frame: &Frame,
+    reduced_innermost: bool,
+    vec_cap: u32,
+) -> OperandKey {
     let rank = od.rank as usize;
 
     // OWN-axis broadcast: the operand's own extent-> 1 axes with stride 0. This
@@ -2248,7 +2263,7 @@ fn derive_operand_key(od: &OperandDesc, frame: &Frame, reduced_innermost: bool) 
     let vec_width = if reduced_innermost {
         VecWidth::Scalar
     } else {
-        classify_vec_width(od, innermost, own_bcast)
+        classify_vec_width(od, innermost, own_bcast, vec_cap)
     };
     let inner_div = match innermost {
         Some(d) => div_bucket(od.shape[d]),
@@ -2295,7 +2310,12 @@ fn classify_contiguity(od: &OperandDesc, bcast: AxisMask, inner: Option<usize>) 
     }
 }
 
-fn classify_vec_width(od: &OperandDesc, inner: Option<usize>, bcast: AxisMask) -> VecWidth {
+fn classify_vec_width(
+    od: &OperandDesc,
+    inner: Option<usize>,
+    bcast: AxisMask,
+    vec_cap: u32,
+) -> VecWidth {
     let (Some(inner), Some(dsz)) = (inner, dtype_size_bytes(od.dtype)) else {
         return VecWidth::Scalar;
     };
@@ -2317,7 +2337,7 @@ fn classify_vec_width(od: &OperandDesc, inner: Option<usize>, bcast: AxisMask) -
     let dsz = u64::from(dsz);
     for &v in &[8u64, 4, 2] {
         let vbytes = v * dsz;
-        if vbytes <= 16 && align % vbytes == 0 && ext % v == 0 {
+        if vbytes <= u64::from(vec_cap) && align % vbytes == 0 && ext % v == 0 {
             return match v {
                 8 => VecWidth::V8,
                 4 => VecWidth::V4,

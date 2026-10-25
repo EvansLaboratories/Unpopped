@@ -25,7 +25,7 @@
 use serde_json::Value;
 use unpopped_vocab::{
     ArchSku, AxisRef, CellFacts, ContractionRoles, DequantForm, ElementKind, MpCode, OperandDesc,
-    OperandRole, STRUCTURE_KEY_VERSION, derive_structure_key_token, dtype_token,
+    OperandRole, STRUCTURE_KEY_VERSION, TargetId, derive_structure_key_token, dtype_token,
 };
 
 const VECTORS: &str = include_str!("../kiss/structure_key_derivation_vectors.json");
@@ -147,6 +147,10 @@ fn facts_of(name: &str, v: &Value) -> CellFacts {
             .set(u8::try_from(a.as_u64().unwrap()).unwrap());
     }
     facts.accumulator = v["accumulator"].as_str().map(dtype);
+    // §6.8-0018: the cap the vector's target declares, absent = undeclared (16).
+    facts.vec_cap_bytes = v
+        .get("target_vec_access_cap_bytes")
+        .map(|n| u32::try_from(n.as_u64().unwrap()).unwrap());
     // The vector's `contraction` object (KISS 0.4.3): every declared role, M/N/K and
     // batch included, so the role-driven derivation is what is measured.
     if let Some(c) = v["contraction"].as_object() {
@@ -170,13 +174,18 @@ fn facts_of(name: &str, v: &Value) -> CellFacts {
 
 fn run(v: &Value) -> Verdict {
     let name = v["name"].as_str().expect("name");
-    assert_eq!(
-        v["target"].as_str().expect("target"),
-        "cuda:sm89",
-        "{name}: every vector is on cuda:sm89, which ArchSku::Sm89 spells"
-    );
+    // Every vector is on cuda:sm89 except the §6.8-0018 cap vectors, which are on a
+    // target no `ArchSku` spells and say so.
+    let target = TargetId::parse(v["target"].as_str().expect("target")).expect("target parses");
+    if v.get("target_vec_access_cap_bytes").is_none() && name != "vec_cap_undeclared_is_16_bytes" {
+        assert_eq!(
+            target,
+            TargetId::from(ArchSku::Sm89),
+            "{name}: on cuda:sm89"
+        );
+    }
 
-    let got = derive_structure_key_token(&operands_of(name, v), &facts_of(name, v), ArchSku::Sm89);
+    let got = derive_structure_key_token(&operands_of(name, v), &facts_of(name, v), target);
     let want = v["value"].as_str().unwrap();
     match (v["expect"].as_str().unwrap(), got) {
         ("token", Ok(t)) if t == want => Verdict::Pass,
@@ -207,7 +216,7 @@ fn the_artifact_is_the_one_this_leg_claims() {
     );
     assert_eq!(
         v["vectors"].as_array().unwrap().len(),
-        63,
+        66,
         "vector count changed"
     );
 }
