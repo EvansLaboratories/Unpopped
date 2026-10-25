@@ -485,6 +485,10 @@ pub enum DeclinedOp {
     Cast,
     /// A bit reinterpretation ([`ScalarExpr::Bitcast`]).
     Bitcast,
+    /// An integer-typed leaf or operation ([`ScalarExpr::CoordInt`],
+    /// [`ScalarExpr::ConstInt`], or an `Add`/`Sub`/`Mul`/`Min`/`Max`/comparison/`Select`
+    /// over integer operands).
+    Integer,
     /// An operation under a rounding mode, flush-to-zero or approximate-form
     /// qualifier ([`ScalarExpr::Qualified`]).
     Qualified,
@@ -800,6 +804,20 @@ pub struct Lowering<'a> {
     /// `approx` it spells as the exact function is legitimate (the exact result is
     /// inside the bound), and its docs should say so. The default declines.
     pub qualified: &'a dyn Fn(QualOp, Vec<String>, Numerics) -> Result<Spelling, LowerError>,
+    /// Exact integer output coordinate ([`ScalarExpr::CoordInt`]) of the given integer
+    /// type. The default declines: an emitter that materializes per-axis coordinates
+    /// spells it without the float round-trip `coord` makes.
+    pub coord_int: &'a dyn Fn(u8, ElementKind) -> Result<Spelling, LowerError>,
+    /// Exact integer constant ([`ScalarExpr::ConstInt`]) of the given integer type.
+    /// The default declines.
+    pub const_int: &'a dyn Fn(i64, ElementKind) -> Result<Spelling, LowerError>,
+    /// Integer-typed operation spelling: `(op, operand type, already-lowered operands)`
+    /// (`Select` takes `(cond, a, b)`, the rest two). `Add`/`Sub`/`Mul` MUST wrap in
+    /// two's complement at the type's width (C's signed overflow is undefined, so an
+    /// emitter spells them through the unsigned type); `Select` tests the condition
+    /// `!= 0` and moves the arm unconverted; a comparison yields the **compute** type's
+    /// 1/0, as the float comparisons do. The default declines.
+    pub int_op: &'a dyn Fn(IntOp, ElementKind, Vec<String>) -> Result<Spelling, LowerError>,
     /// The op's compute dtype, which the typed nodes need to infer an operand's
     /// type. `None` (the default) makes `Cast`/`Bitcast` decline: an emitter that
     /// spells them says so with `LoweringBuilder::compute_dtype`.
@@ -932,6 +950,35 @@ mod default_seam {
     };
     pub(super) static TYPE_NAME: fn(ElementKind) -> Option<String> = |_| None;
 
+    pub(super) static COORD_INT: fn(u8, ElementKind) -> Result<Spelling, LowerError> = |d, t| {
+        Ok(Spelling::Declined(Decline::UnsupportedOp {
+            op: DeclinedOp::Integer,
+            why: format!(
+                "a CoordInt({d}, {t:?}) leaf reached an emitter with no `coord_int` seam.                  Supply `.coord_int(..)` on a strided emitter, or decline."
+            ),
+        }))
+    };
+    pub(super) static CONST_INT: fn(i64, ElementKind) -> Result<Spelling, LowerError> = |v, t| {
+        Ok(Spelling::Declined(Decline::UnsupportedOp {
+            op: DeclinedOp::Integer,
+            why: format!(
+                "a ConstInt({v}, {t:?}) leaf reached an emitter with no `const_int` seam.                  Supply `.const_int(..)`, or decline."
+            ),
+        }))
+    };
+    pub(super) static INT_OP: fn(
+        super::IntOp,
+        ElementKind,
+        Vec<String>,
+    ) -> Result<Spelling, LowerError> = |op, t, _operands| {
+        Ok(Spelling::Declined(Decline::UnsupportedOp {
+            op: DeclinedOp::Integer,
+            why: format!(
+                "an integer {op:?} at {t:?} reached an emitter with no `int_op` seam. C's                  signed overflow is undefined, so the plain operator cannot stand in. Supply                  `.int_op(..)`, or decline."
+            ),
+        }))
+    };
+
     pub(super) static QUALIFIED: fn(
         crate::ir::QualOp,
         Vec<String>,
@@ -1002,6 +1049,9 @@ impl<'a> Lowering<'a> {
                 cast: &default_seam::CAST,
                 bitcast: &default_seam::BITCAST,
                 qualified: &default_seam::QUALIFIED,
+                coord_int: &default_seam::COORD_INT,
+                const_int: &default_seam::CONST_INT,
+                int_op: &default_seam::INT_OP,
                 compute: None,
                 type_name: &default_seam::TYPE_NAME,
                 constant: &default_seam::CONSTANT,
@@ -1022,6 +1072,35 @@ impl<'a> LoweringBuilder<'a> {
     #[must_use]
     pub fn coord(mut self, f: &'a dyn Fn(u8) -> Result<Spelling, LowerError>) -> Self {
         self.inner.coord = f;
+        self
+    }
+    /// Exact integer coordinate spelling ([`ScalarExpr::CoordInt`]); see
+    /// [`Lowering::coord_int`].
+    #[must_use]
+    pub fn coord_int(
+        mut self,
+        f: &'a dyn Fn(u8, ElementKind) -> Result<Spelling, LowerError>,
+    ) -> Self {
+        self.inner.coord_int = f;
+        self
+    }
+    /// Exact integer constant spelling ([`ScalarExpr::ConstInt`]); see
+    /// [`Lowering::const_int`].
+    #[must_use]
+    pub fn const_int(
+        mut self,
+        f: &'a dyn Fn(i64, ElementKind) -> Result<Spelling, LowerError>,
+    ) -> Self {
+        self.inner.const_int = f;
+        self
+    }
+    /// Integer-typed operation spelling; see [`Lowering::int_op`].
+    #[must_use]
+    pub fn int_op(
+        mut self,
+        f: &'a dyn Fn(IntOp, ElementKind, Vec<String>) -> Result<Spelling, LowerError>,
+    ) -> Self {
+        self.inner.int_op = f;
         self
     }
     /// Ternary select spelling ([`ScalarExpr::Select`]).
@@ -1213,6 +1292,81 @@ fn qualified_child_decline(n: Numerics) -> Spelling {
     })
 }
 
+/// An integer-typed operation the `int_op` seam spells (`Add`, `Sub`, `Mul`, `Min`, `Max`,
+/// `Select` and the comparisons, over integer operands). See [`Lowering::int_op`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum IntOp {
+    /// Wrapping sum.
+    Add,
+    /// Wrapping difference.
+    Sub,
+    /// Wrapping product.
+    Mul,
+    /// Smaller of two.
+    Min,
+    /// Larger of two.
+    Max,
+    /// `(cond, a, b)`: `a` when `cond != 0`, else `b`; the arms are integers, the
+    /// condition any scalar.
+    Select,
+    /// A comparison (`CmpEq` .. `CmpGe`) of two integers, yielding the compute type's 1/0.
+    Cmp(BinaryOp),
+}
+
+/// The integer form of `op`, when it has one.
+fn int_op_of(op: BinaryOp) -> Option<IntOp> {
+    match op {
+        BinaryOp::Max => Some(IntOp::Max),
+        BinaryOp::Min => Some(IntOp::Min),
+        o if o.is_cmp() => Some(IntOp::Cmp(o)),
+        _ => None,
+    }
+}
+
+/// `Some((op, type, operands))` when `e` is an operation over INTEGER-typed operands
+/// (type != the declared compute dtype), which the `int_op` seam spells instead of
+/// `arith`/`binary`/`select`. `None` for everything else, including every expression
+/// of an emitter that declared no compute dtype, so untyped lowering is untouched.
+fn int_node<'e>(
+    e: &'e ScalarExpr,
+    lo: &Lowering<'_>,
+) -> Option<(IntOp, ElementKind, Vec<&'e ScalarExpr>)> {
+    let compute = lo.compute?;
+    let (op, kids): (IntOp, Vec<&ScalarExpr>) = match e {
+        ScalarExpr::Add(a, b) => (IntOp::Add, vec![a, b]),
+        ScalarExpr::Sub(a, b) => (IntOp::Sub, vec![a, b]),
+        ScalarExpr::Mul(a, b) => (IntOp::Mul, vec![a, b]),
+        ScalarExpr::Binary(op, a, b) => (int_op_of(*op)?, vec![a, b]),
+        ScalarExpr::Select(c, a, b) => (IntOp::Select, vec![c, a, b]),
+        _ => return None,
+    };
+    // The operand type decides: a Select's is its arms', everything else's the first.
+    let probe = if matches!(op, IntOp::Select) { kids[1] } else { kids[0] };
+    let t = crate::types::infer(probe, compute).ok()?;
+    (t != compute && crate::types::is_cast_int(t)).then_some((op, t, kids))
+}
+
+/// [`int_node`] for a DAG node: the operands are node ids.
+fn int_node_of_dag(
+    dag: &ExprDag,
+    n: &DagNode,
+    lo: &Lowering<'_>,
+) -> Option<(IntOp, ElementKind, Vec<NodeId>)> {
+    let compute = lo.compute?;
+    let (op, kids): (IntOp, Vec<NodeId>) = match *n {
+        DagNode::Add(a, b) => (IntOp::Add, vec![a, b]),
+        DagNode::Sub(a, b) => (IntOp::Sub, vec![a, b]),
+        DagNode::Mul(a, b) => (IntOp::Mul, vec![a, b]),
+        DagNode::Binary(op, a, b) => (int_op_of(op)?, vec![a, b]),
+        DagNode::Select(c, a, b) => (IntOp::Select, vec![c, a, b]),
+        _ => return None,
+    };
+    let probe = if matches!(op, IntOp::Select) { kids[1] } else { kids[0] };
+    let t = crate::types::infer(&dag.node_expr(probe), compute).ok()?;
+    (t != compute && crate::types::is_cast_int(t)).then_some((op, t, kids))
+}
+
 /// The type of a `Cast`/`Bitcast` operand, or the typed decline that says why it
 /// cannot be known (no declared compute dtype, or an ill-typed operand).
 fn typed_source(
@@ -1254,7 +1408,16 @@ pub fn lower_expr(e: &ScalarExpr, lo: &Lowering<'_>) -> Result<Spelling, LowerEr
             spelled_or_return_decline!(lower_expr($x, lo))
         };
     }
+    if let Some((op, t, kids)) = int_node(e, lo) {
+        let mut operands = Vec::with_capacity(kids.len());
+        for k in kids {
+            operands.push(sp!(k));
+        }
+        return (lo.int_op)(op, t, operands);
+    }
     Ok(match e {
+        ScalarExpr::CoordInt(d, t) => return (lo.coord_int)(*d, *t),
+        ScalarExpr::ConstInt(v, t) => return (lo.const_int)(*v, *t),
         ScalarExpr::Input(i) => return (lo.leaf)(*i),
         ScalarExpr::Reduced(i) => return (lo.reduced)(*i),
         ScalarExpr::Coord(d) => return (lo.coord)(*d),
@@ -1497,7 +1660,21 @@ fn lower_node(
             spelled_or_return_decline!(lower_node(dag, $n, ctype, lo, refs, prelude, policy))
         };
     }
+    let int_form = int_node_of_dag(dag, &node, lo);
+    let int_form_type = int_form
+        .as_ref()
+        .and_then(|(op, t, _)| (!matches!(op, IntOp::Cmp(_))).then_some(*t));
     let rhs = match node {
+        _ if int_form.is_some() => {
+            let (op, t, kids) = int_form.expect("checked by the guard");
+            let mut operands = Vec::with_capacity(kids.len());
+            for k in kids {
+                operands.push(child!(k));
+            }
+            spelled_or_return_decline!((lo.int_op)(op, t, operands))
+        }
+        DagNode::CoordInt(d, t) => spelled_or_return_decline!((lo.coord_int)(d, t)),
+        DagNode::ConstInt(v, t) => spelled_or_return_decline!((lo.const_int)(v, t)),
         DagNode::Input(i) => spelled_or_return_decline!((lo.leaf)(i)),
         DagNode::Reduced(i) => spelled_or_return_decline!((lo.reduced)(i)),
         DagNode::Coord(d) => spelled_or_return_decline!((lo.coord)(d)),
@@ -1587,7 +1764,12 @@ fn lower_node(
         let temp_type = match node {
             DagNode::Cast(_, spec) => (lo.type_name)(spec.to),
             DagNode::Bitcast(_, to) => (lo.type_name)(to),
-            _ => Some(ctype.to_string()),
+            // An integer-typed operation's temporary is of its integer type (a
+            // comparison's result is the compute type, so it falls through).
+            _ => match int_form_type {
+                Some(t) => (lo.type_name)(t),
+                None => Some(ctype.to_string()),
+            },
         };
         let Some(temp_type) = temp_type else {
             return Ok(Spelling::Declined(Decline::UnsupportedOp {

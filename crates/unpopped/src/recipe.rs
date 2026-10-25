@@ -425,6 +425,8 @@ fn expr_to_recipe(e: &ScalarExpr, reduced: &[String]) -> Option<String> {
         // 2026-07-15). The attr rides the parens, mirroring `const(v)`.
         E::Coord(axis) => format!("iota({axis})"),
         E::Param(i) => format!("runtime_scalar({i})"),
+        // Integer-typed leaves have no KISS-Ops spelling yet: an honest miss.
+        E::CoordInt(..) | E::ConstInt(..) => return None,
         // `Reduced(i)` resolves to stage `i`'s fold node (reduction/contraction/
         // scan/RowReduce epilogue); a bare elementwise body has no fold (`reduced`
         // empty) and an out-of-range stage index is an honest miss — never a

@@ -10,7 +10,7 @@
 //!
 //! The rules and the reasoning are in `docs/ir-typed-expressions.md`.
 
-use crate::ir::{CastSpec, Saturation, ScalarExpr};
+use crate::ir::{BinaryOp, CastSpec, Saturation, ScalarExpr};
 use unpopped_vocab::ElementKind;
 
 /// Why an expression does not type-check.
@@ -46,6 +46,58 @@ pub enum TypeError {
         /// Why it is rejected.
         why: &'static str,
     },
+    /// A `CoordInt` / `ConstInt` leaf of a type or value this version does not
+    /// define.
+    IllegalIntLeaf {
+        /// The leaf's declared type.
+        ty: ElementKind,
+        /// Why it is rejected.
+        why: &'static str,
+    },
+    /// An operator that has no integer form applied to an integer-typed value
+    /// (everything but `Add`/`Sub`/`Mul`, `Select`, `Min`/`Max` and the comparisons).
+    IntegerOperand {
+        /// The node kind, e.g. `"Div"`.
+        node: &'static str,
+        /// The integer type of the operand.
+        ty: ElementKind,
+    },
+}
+
+/// Integer types a `CoordInt` / `ConstInt` leaf may have.
+#[must_use]
+pub const fn is_index_int(t: ElementKind) -> bool {
+    matches!(t, ElementKind::I32 | ElementKind::I64 | ElementKind::U32)
+}
+
+/// Check a `CoordInt` / `ConstInt` leaf's type, and for a constant its value.
+///
+/// # Errors
+///
+/// [`TypeError::IllegalIntLeaf`] naming the reason.
+pub fn check_int_leaf(ty: ElementKind, value: Option<i64>) -> Result<(), TypeError> {
+    if !is_index_int(ty) {
+        return Err(TypeError::IllegalIntLeaf {
+            ty,
+            why: "an integer leaf is I32, I64 or U32",
+        });
+    }
+    if let (Some(v), Some((lo, hi))) = (value, int_range(ty)) {
+        if i128::from(v) < lo || i128::from(v) > hi {
+            return Err(TypeError::IllegalIntLeaf {
+                ty,
+                why: "the constant is outside the type's range",
+            });
+        }
+    }
+    Ok(())
+}
+
+/// `true` for the binary operations an integer-typed operand pair admits: ordering
+/// (`Min`, `Max`, whose NaN rules are moot) and the comparisons.
+#[must_use]
+pub fn int_binary_ok(op: BinaryOp) -> bool {
+    op.is_cmp() || matches!(op, BinaryOp::Max | BinaryOp::Min)
 }
 
 /// Floating-point scalar types a `Cast` accepts in this version.
@@ -188,20 +240,49 @@ pub fn infer(e: &ScalarExpr, compute: ElementKind) -> Result<ElementKind, TypeEr
             })
         }
     };
+    // The operators with no integer form refuse an integer-typed operand. Integer-typed
+    // values can only differ from the compute dtype here (the typed-expression gate
+    // admits them under float compute), so an integer COMPUTE dtype is untouched.
+    let no_int = |node: &'static str, t: ElementKind| {
+        if t != compute && is_cast_int(t) {
+            Err(TypeError::IntegerOperand { node, ty: t })
+        } else {
+            Ok(t)
+        }
+    };
     match e {
         ScalarExpr::Input(_)
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)
         | ScalarExpr::Reduced(_)
         | ScalarExpr::Coord(_) => Ok(compute),
+        ScalarExpr::CoordInt(_, t) => {
+            check_int_leaf(*t, None)?;
+            Ok(*t)
+        }
+        ScalarExpr::ConstInt(v, t) => {
+            check_int_leaf(*t, Some(*v))?;
+            Ok(*t)
+        }
         ScalarExpr::Add(a, b) => same("Add", a, b),
         ScalarExpr::Sub(a, b) => same("Sub", a, b),
         ScalarExpr::Mul(a, b) => same("Mul", a, b),
-        ScalarExpr::Div(a, b) => same("Div", a, b),
-        ScalarExpr::Binary(_, a, b) => same("Binary", a, b),
-        ScalarExpr::Unary(_, x) => infer(x, compute),
+        ScalarExpr::Div(a, b) => no_int("Div", same("Div", a, b)?),
+        ScalarExpr::Binary(op, a, b) => {
+            let t = same("Binary", a, b)?;
+            if t != compute && is_cast_int(t) {
+                if !int_binary_ok(*op) {
+                    return Err(TypeError::IntegerOperand { node: "Binary", ty: t });
+                }
+                // A comparison of integers is the compute type's 0/1, exactly as a
+                // comparison of floats is.
+                return Ok(if op.is_cmp() { compute } else { t });
+            }
+            Ok(t)
+        }
+        ScalarExpr::Unary(_, x) => no_int("Unary", infer(x, compute)?),
         ScalarExpr::Fma(a, b, c) => {
-            let ab = same("Fma", a, b)?;
+            let ab = no_int("Fma", same("Fma", a, b)?)?;
             let t = infer(c, compute)?;
             if ab == t {
                 Ok(t)
@@ -232,6 +313,30 @@ pub fn infer(e: &ScalarExpr, compute: ElementKind) -> Result<ElementKind, TypeEr
     }
 }
 
+/// The integer type of `e` when it is an integer-typed value, found by following the
+/// first operand down the expression (O(depth), no full inference): a `CoordInt` /
+/// `ConstInt` leaf, a `Cast` / `Bitcast` to an integer, or an `Add` / `Sub` / `Mul` /
+/// `Min` / `Max` / `Select` whose first value operand is one. `None` for anything else.
+///
+/// Meant for hot evaluation loops that must route the integer cases without paying
+/// [`infer`] per node per element. It is exact on a well-typed expression (the plan
+/// gate has checked that); on an ill-typed one the answer is unspecified, and
+/// [`infer`] is the authority.
+#[must_use]
+pub fn int_spine_type(e: &ScalarExpr) -> Option<ElementKind> {
+    match e {
+        ScalarExpr::CoordInt(_, t) | ScalarExpr::ConstInt(_, t) => Some(*t),
+        ScalarExpr::Cast(_, spec) => is_cast_int(spec.to).then_some(spec.to),
+        ScalarExpr::Bitcast(_, to) => is_cast_int(*to).then_some(*to),
+        ScalarExpr::Add(a, _) | ScalarExpr::Sub(a, _) | ScalarExpr::Mul(a, _) => int_spine_type(a),
+        ScalarExpr::Binary(op, a, _) if matches!(op, BinaryOp::Max | BinaryOp::Min) => {
+            int_spine_type(a)
+        }
+        ScalarExpr::Select(_, a, _) => int_spine_type(a),
+        _ => None,
+    }
+}
+
 /// `true` when `e` contains a [`ScalarExpr::Qualified`] node. The optimizer returns
 /// such an expression unchanged: a rewrite across the node would change which
 /// operations round, flush or approximate, and how.
@@ -243,7 +348,9 @@ pub fn has_qualified(e: &ScalarExpr) -> bool {
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)
         | ScalarExpr::Reduced(_)
-        | ScalarExpr::Coord(_) => false,
+        | ScalarExpr::Coord(_) 
+        | ScalarExpr::CoordInt(..)
+        | ScalarExpr::ConstInt(..) => false,
         ScalarExpr::Unary(_, x) | ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => {
             has_qualified(x)
         }
@@ -259,7 +366,7 @@ pub fn has_qualified(e: &ScalarExpr) -> bool {
 }
 
 /// `true` when `e` contains any node whose type can differ from the compute dtype
-/// (`Cast`, `Bitcast`). The back-compat fast path: an expression for which
+/// (`Cast`, `Bitcast`, `CoordInt`, `ConstInt`). The back-compat fast path: an expression for which
 /// this is `false` types to `compute` everywhere and needs no further type work.
 #[must_use]
 pub fn is_typed(e: &ScalarExpr) -> bool {
@@ -270,6 +377,9 @@ pub fn is_typed(e: &ScalarExpr) -> bool {
         | ScalarExpr::Param(_)
         | ScalarExpr::Reduced(_)
         | ScalarExpr::Coord(_) => false,
+        // Integer-typed leaves are the typed expressions' second kind: their type is not
+        // the compute dtype.
+        ScalarExpr::CoordInt(..) | ScalarExpr::ConstInt(..) => true,
         ScalarExpr::Unary(_, x) | ScalarExpr::Qualified(x, _) => is_typed(x),
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)

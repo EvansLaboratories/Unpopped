@@ -1559,7 +1559,18 @@ fn panic_coord(d: u8) -> Val {
 /// Evaluate a `ScalarExpr` TREE (hash-consing / `ExprDag` is an emission concern,
 /// ignored). Every node is computed from its DEFINITION.
 fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
+    // Integer-typed arithmetic (`docs/ir-typed-expressions.md` section 8): routed by the
+    // first operand's integer type, so a float body pays one `match` per node.
+    if !is_int(ev.dtype) && !is_complex(ev.dtype) {
+        if let Some(t) = int_op_ty(e) {
+            return eval_int_op(e, t, ev);
+        }
+    }
     match e {
+        ScalarExpr::CoordInt(d, t) => {
+            int_val((ev.coord)(*d).i128(), *t)
+        }
+        ScalarExpr::ConstInt(v, t) => int_val(i128::from(*v), *t),
         ScalarExpr::Input(i) => (ev.leaf)(*i),
         ScalarExpr::Const(v) => Val::Float(*v),
         ScalarExpr::Param(i) => Val::Float(ev.params[*i as usize]),
@@ -1714,6 +1725,64 @@ fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
                 eval(b, ev)
             }
         }
+    }
+}
+
+/// An integer value of type `t`: `v` wrapped to the type's width, carried as its bits.
+fn int_val(v: i128, t: ElementKind) -> Val {
+    Val::Raw(crate::cast_ref::bits_of(crate::cast_ref::Num::I(v), t), t)
+}
+
+/// The integer type `e` computes in, when `e` is an operation with an integer form
+/// (`Add`, `Sub`, `Mul`, `Min`, `Max`, a comparison, `Select`) over integer operands.
+fn int_op_ty(e: &ScalarExpr) -> Option<ElementKind> {
+    match e {
+        ScalarExpr::Add(a, _) | ScalarExpr::Sub(a, _) | ScalarExpr::Mul(a, _) => {
+            crate::types::int_spine_type(a)
+        }
+        ScalarExpr::Binary(op, a, _) if crate::types::int_binary_ok(*op) => {
+            crate::types::int_spine_type(a)
+        }
+        ScalarExpr::Select(_, a, _) => crate::types::int_spine_type(a),
+        _ => None,
+    }
+}
+
+/// Evaluate an integer-typed operation from its definition: exact `i128` arithmetic
+/// wrapped to the type's width (two's complement), so no overflow is undefined here
+/// and the emitted C is compared against this.
+fn eval_int_op(e: &ScalarExpr, t: ElementKind, ev: &Eval<'_>) -> Val {
+    let int = |x: &ScalarExpr| eval(x, ev).i128();
+    match e {
+        ScalarExpr::Add(a, b) => int_val(int(a).wrapping_add(int(b)), t),
+        ScalarExpr::Sub(a, b) => int_val(int(a).wrapping_sub(int(b)), t),
+        ScalarExpr::Mul(a, b) => int_val(int(a).wrapping_mul(int(b)), t),
+        ScalarExpr::Binary(op, a, b) => {
+            let (x, y) = (int(a), int(b));
+            match op {
+                BinaryOp::Max => int_val(x.max(y), t),
+                BinaryOp::Min => int_val(x.min(y), t),
+                // A comparison yields the compute type's 1/0, like a float comparison.
+                BinaryOp::CmpEq => Val::Float(f64::from(u8::from(x == y))),
+                BinaryOp::CmpNe => Val::Float(f64::from(u8::from(x != y))),
+                BinaryOp::CmpLt => Val::Float(f64::from(u8::from(x < y))),
+                BinaryOp::CmpLe => Val::Float(f64::from(u8::from(x <= y))),
+                BinaryOp::CmpGt => Val::Float(f64::from(u8::from(x > y))),
+                BinaryOp::CmpGe => Val::Float(f64::from(u8::from(x >= y))),
+                other => panic!("oracle: {other:?} has no integer form (the plan gate rejects this)"),
+            }
+        }
+        ScalarExpr::Select(c, a, b) => {
+            // The condition is any scalar, tested `!= 0`: an integer condition by value,
+            // a float one rounded to the compute dtype first, like the float `Select`.
+            let cv = eval(c, ev);
+            let taken = match cv {
+                Val::Raw(bits, dt) if is_int(dt) => raw_to_i128(bits, dt) != 0,
+                other => round_to_compute(other.f64(), ev.dtype) != 0.0,
+            };
+            if taken { eval(a, ev) } else { eval(b, ev) }
+        }
+        other => unreachable!("oracle: {other:?} is not an integer-typed operation"),
     }
 }
 
@@ -3327,7 +3396,9 @@ fn arith_steps(e: &ScalarExpr) -> u32 {
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)
         | ScalarExpr::Reduced(_)
-        | ScalarExpr::Coord(_) => 0,
+        | ScalarExpr::Coord(_)
+        | ScalarExpr::CoordInt(..)
+        | ScalarExpr::ConstInt(..) => 0,
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)

@@ -1239,7 +1239,9 @@ fn scan_params(e: &ScalarExpr, out: &mut Vec<u8>) {
         ScalarExpr::Input(_)
         | ScalarExpr::Const(_)
         | ScalarExpr::Reduced(_)
-        | ScalarExpr::Coord(_) => {}
+        | ScalarExpr::Coord(_)
+        | ScalarExpr::CoordInt(..)
+        | ScalarExpr::ConstInt(..) => {}
         ScalarExpr::Unary(_, x) => scan_params(x, out),
         ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
             scan_params(x, out)
@@ -1388,7 +1390,9 @@ fn is_exact_on_every_target(e: &ScalarExpr) -> bool {
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)
         | ScalarExpr::Reduced(_)
-        | ScalarExpr::Coord(_) => true,
+        | ScalarExpr::Coord(_)
+        | ScalarExpr::CoordInt(..)
+        | ScalarExpr::ConstInt(..) => true,
         ScalarExpr::Binary(op, a, b) => {
             op.is_int_only() && is_exact_on_every_target(a) && is_exact_on_every_target(b)
         }
@@ -1521,7 +1525,9 @@ fn ulp_sum(e: &ScalarExpr) -> f64 {
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)
         | ScalarExpr::Reduced(_)
-        | ScalarExpr::Coord(_) => 0.0,
+        | ScalarExpr::Coord(_)
+        | ScalarExpr::CoordInt(..)
+        | ScalarExpr::ConstInt(..) => 0.0,
         ScalarExpr::Unary(op, x) => ulp_sum(x) + unary_ulp(*op),
         ScalarExpr::Binary(op, a, b) => ulp_sum(a) + ulp_sum(b) + binary_ulp(*op),
         ScalarExpr::Add(a, b)
@@ -1683,7 +1689,9 @@ pub(crate) fn expr_contains_cmp(e: &ScalarExpr) -> bool {
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)
         | ScalarExpr::Reduced(_)
-        | ScalarExpr::Coord(_) => false,
+        | ScalarExpr::Coord(_)
+        | ScalarExpr::CoordInt(..)
+        | ScalarExpr::ConstInt(..) => false,
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
@@ -1727,7 +1735,9 @@ fn expr_contains_select(e: &ScalarExpr) -> bool {
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)
         | ScalarExpr::Reduced(_)
-        | ScalarExpr::Coord(_) => false,
+        | ScalarExpr::Coord(_)
+        | ScalarExpr::CoordInt(..)
+        | ScalarExpr::ConstInt(..) => false,
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
