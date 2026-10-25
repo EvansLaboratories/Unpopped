@@ -1117,6 +1117,38 @@ pub fn optimize_top_k(e: &ScalarExpr, k: usize, dtype: ElementKind) -> Vec<Scala
 
 #[cfg(test)]
 mod tests {
+    /// Exactly `2^k` for `-1074 <= k <= 1023`, built from the bit pattern. `powi(k)`
+    /// is `1 / 2^-k` on some libms and `2^1074` overflows f64, so below the normal
+    /// range it returns 0 there and the subnormal powers of two silently vanish.
+    fn pow2_f64(k: i32) -> f64 {
+        assert!((-1074..=1023).contains(&k), "2^{k} is not an f64");
+        if k >= -1022 {
+            f64::from_bits(((k + 1023) as u64) << 52)
+        } else {
+            f64::from_bits(1u64 << (k + 1074))
+        }
+    }
+
+    /// The edges where a libm `powi` can differ: the largest, the smallest normal,
+    /// the largest and smallest subnormal powers of two, checked against their bits.
+    #[test]
+    fn pow2_f64_is_exact_at_the_denormal_edge() {
+        assert_eq!(pow2_f64(1023).to_bits(), 0x7FE0_0000_0000_0000);
+        assert_eq!(pow2_f64(-1022).to_bits(), f64::MIN_POSITIVE.to_bits());
+        assert_eq!(pow2_f64(-1023).to_bits(), 1u64 << 51);
+        assert_eq!(pow2_f64(-1074).to_bits(), 1);
+        for k in -1074..=1023 {
+            let v = pow2_f64(k);
+            assert!(v > 0.0 && v.is_finite(), "2^{k} = {v}");
+            // Exactly one bit set in the mantissa/exponent pattern's significand.
+            let m = v.to_bits() & ((1u64 << 52) - 1);
+            assert!(m == 0 || (k < -1022 && m.is_power_of_two()), "2^{k}");
+        }
+        // Neighbouring powers are exact doublings, no libm in the loop.
+        for k in -1074..1023 {
+            assert_eq!(pow2_f64(k + 1), pow2_f64(k) * 2.0, "2^{}", k + 1);
+        }
+    }
     use unpopped_vocab::ElementKind;
     use unpopped_vocab::ElementKind::F32;
 
@@ -1694,7 +1726,7 @@ mod tests {
         let (mut admitted, mut divergent) = (0u32, 0u32);
         for k in -1074i32..=1023 {
             // Ingest rounding: the divisor is whatever the DEVICE would hold.
-            let c = compute.round((2.0f64).powi(k));
+            let c = compute.round(pow2_f64(k));
             let Some(r) = exact_pow2_recip(c) else {
                 continue;
             };
@@ -1752,7 +1784,7 @@ mod tests {
         let (mut accepted, mut wrong_in_f32, mut f32_guarded, mut wrong_when_guarded) =
             (0u32, 0u32, 0u32, 0u32);
         for k in -1074i32..=1023 {
-            let c = (2.0f64).powi(k);
+            let c = pow2_f64(k);
             let Some(r) = exact_pow2_recip(c) else {
                 continue;
             };
