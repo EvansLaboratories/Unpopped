@@ -173,6 +173,20 @@ pub enum ScalarExpr {
     /// Reduction pre-expr is the masked-sum shape). At f16/bf16 only the
     /// *cond* promotes to f32 (exact); arms are picked as raw half bits.
     Select(Box<ScalarExpr>, Box<ScalarExpr>, Box<ScalarExpr>),
+    /// Fused multiply-add: `out = a * b + c` with a **single** rounding (IEEE 754
+    /// `fusedMultiplyAdd`), operand order `(a, b, c)`. The product is never
+    /// rounded on its own, so `Fma(a, b, c)` is *not* `Add(Mul(a, b), c)` and the
+    /// two are never rewritten into each other (see `crate::optimize`).
+    ///
+    /// Legality (enforced at the top of `plan::build_plan`): `f32`/`f32s`/`f64`
+    /// compute dtypes only. `f16`/`bf16` decline, because the only way to spell a
+    /// half FMA here is to widen to `f32`, and rounding the `f32` sum to half is a
+    /// second rounding, so the result would not be fused. Integer and complex
+    /// dtypes decline (no single-rounding meaning).
+    ///
+    /// Added by increment I1 of the IR-as-full-union programme
+    /// (`docs/ir-union-design.md` 3.12).
+    Fma(Box<ScalarExpr>, Box<ScalarExpr>, Box<ScalarExpr>),
 }
 
 /// A unary math / activation op. Variant names line up with the FKC §4.1
@@ -1016,6 +1030,9 @@ pub enum DagNode {
     /// to a `tmp` like any interior (both arms then evaluate eagerly —
     /// value-identical for the pure IR expressions arms are, no GPU traps).
     Select(NodeId, NodeId, NodeId),
+    /// Fused multiply-add over three nodes — `(a, b, c)` = `a*b + c`, one
+    /// rounding ([`ScalarExpr::Fma`]). Positional like `Select`: never reordered.
+    Fma(NodeId, NodeId, NodeId),
 }
 
 impl DagNode {
@@ -1199,6 +1216,11 @@ impl ExprDag {
                 Box::new(self.rebuild(a)),
                 Box::new(self.rebuild(b)),
             ),
+            DagNode::Fma(a, b, c) => ScalarExpr::Fma(
+                Box::new(self.rebuild(a)),
+                Box::new(self.rebuild(b)),
+                Box::new(self.rebuild(c)),
+            ),
         }
     }
 }
@@ -1221,6 +1243,8 @@ enum DagKey {
     /// 3-child select key — hash-conses like any node (strictly positional:
     /// `(cond, a, b)` is never reordered, so no two orderings ever merge).
     Select(NodeId, NodeId, NodeId),
+    /// 3-child fused multiply-add key; strictly positional like `Select`.
+    Fma(NodeId, NodeId, NodeId),
 }
 
 impl DagKey {
@@ -1238,6 +1262,7 @@ impl DagKey {
             DagNode::Unary(op, x) => DagKey::Unary(op, x),
             DagNode::Binary(op, a, b) => DagKey::Binary(op, a, b),
             DagNode::Select(c, a, b) => DagKey::Select(c, a, b),
+            DagNode::Fma(a, b, c) => DagKey::Fma(a, b, c),
         }
     }
 }
@@ -1284,6 +1309,10 @@ impl DagBuilder {
                 let (c, a, b) = (self.intern(c), self.intern(a), self.intern(b));
                 DagNode::Select(c, a, b)
             }
+            ScalarExpr::Fma(a, b, c) => {
+                let (a, b, c) = (self.intern(a), self.intern(b), self.intern(c));
+                DagNode::Fma(a, b, c)
+            }
         };
         self.hashcons(node)
     }
@@ -1324,6 +1353,7 @@ fn node_children(n: &DagNode) -> Vec<NodeId> {
         | DagNode::Div(a, b)
         | DagNode::Binary(_, a, b) => vec![a, b],
         DagNode::Select(c, a, b) => vec![c, a, b],
+        DagNode::Fma(a, b, c) => vec![a, b, c],
     }
 }
 
@@ -1576,6 +1606,17 @@ impl Expr {
             Box::new(self.0),
             Box::new(a.0),
             Box::new(b.0),
+        ))
+    }
+
+    /// Fused multiply-add with `self` as the first factor:
+    /// `a.fma(b, c)` = `a * b + c` with a single rounding ([`ScalarExpr::Fma`]).
+    #[must_use]
+    pub fn fma(self, b: Expr, c: Expr) -> Expr {
+        Expr(ScalarExpr::Fma(
+            Box::new(self.0),
+            Box::new(b.0),
+            Box::new(c.0),
         ))
     }
 }

@@ -477,6 +477,8 @@ pub enum DeclinedOp {
     Arith(ArithOp),
     /// The ternary select.
     Select,
+    /// The fused multiply-add ([`ScalarExpr::Fma`]).
+    Fma,
     /// A constant literal.
     Constant,
     /// An input operand leaf the backend will not spell, by **operand index**.
@@ -762,6 +764,13 @@ pub struct Lowering<'a> {
     /// (the packed f16/bf16 pair path — `body_packs` excludes it) pass a
     /// panicking closure, the `coord` precedent.
     pub select: &'a dyn Fn(String, String, String) -> Result<Spelling, LowerError>,
+    /// Fused multiply-add spelling ([`ScalarExpr::Fma`]) over the three
+    /// already-lowered operand strings `(a, b, c)`, meaning `a * b + c` with ONE
+    /// rounding. Its own seam: `arith` rounds the product, so spelling an FMA as
+    /// `Mul` then `Add` is a different (two-rounding) function. An emitter that
+    /// cannot spell a true fused operation at the plan's dtype must decline, never
+    /// substitute the two-rounding form. The default declines.
+    pub fma: &'a dyn Fn(String, String, String) -> Result<Spelling, LowerError>,
     /// Constant-literal spelling ([`ScalarExpr::Const`]).
     ///
     /// A seam rather than a fixed call to [`const_lit`] because the correct
@@ -859,6 +868,15 @@ mod default_seam {
             }))
         };
 
+    pub(super) static FMA: fn(String, String, String) -> Result<Spelling, LowerError> =
+        |_a, _b, _c| {
+            Ok(Spelling::Declined(Decline::UnsupportedOp {
+                op: DeclinedOp::Fma,
+                why: "a Fma reached an emitter with no `fma` seam. A fused multiply-add rounds                       once; `Mul` then `Add` rounds twice and is a different function, so it                       cannot be spelled through the `arith` seam. Supply `.fma(..)`, or                       decline."
+                    .to_string(),
+            }))
+        };
+
     /// The C infix operator — right for every dtype whose compute type is a C
     /// scalar, which is all of them except the complex structs. Unlike the three
     /// above this is a working spelling rather than a refusal, because "spell it
@@ -901,6 +919,7 @@ impl<'a> Lowering<'a> {
                 binary,
                 arith: &default_seam::ARITH,
                 select: &default_seam::SELECT,
+                fma: &default_seam::FMA,
                 constant: &default_seam::CONSTANT,
                 temp: &default_seam::TEMP,
             },
@@ -928,6 +947,15 @@ impl<'a> LoweringBuilder<'a> {
         f: &'a dyn Fn(String, String, String) -> Result<Spelling, LowerError>,
     ) -> Self {
         self.inner.select = f;
+        self
+    }
+    /// Fused multiply-add spelling ([`ScalarExpr::Fma`]).
+    #[must_use]
+    pub fn fma(
+        mut self,
+        f: &'a dyn Fn(String, String, String) -> Result<Spelling, LowerError>,
+    ) -> Self {
+        self.inner.fma = f;
         self
     }
     /// Infix-arithmetic spelling ([`Lowering::arith`]). Defaults to the C
@@ -1079,6 +1107,10 @@ pub fn lower_expr(e: &ScalarExpr, lo: &Lowering<'_>) -> Result<Spelling, LowerEr
         ScalarExpr::Select(c, a, b) => {
             let (c, a, b) = (sp!(c), sp!(a), sp!(b));
             return (lo.select)(c, a, b);
+        }
+        ScalarExpr::Fma(a, b, c) => {
+            let (a, b, c) = (sp!(a), sp!(b), sp!(c));
+            return (lo.fma)(a, b, c);
         }
         ScalarExpr::Add(a, b) => {
             let (a, b) = (sp!(a), sp!(b));
@@ -1292,6 +1324,10 @@ fn lower_node(
         DagNode::Select(c, a, b) => {
             let (c, a, b) = (child!(c), child!(a), child!(b));
             spelled_or_return_decline!((lo.select)(c, a, b))
+        }
+        DagNode::Fma(a, b, c) => {
+            let (a, b, c) = (child!(a), child!(b), child!(c));
+            spelled_or_return_decline!((lo.fma)(a, b, c))
         }
         DagNode::Add(a, b) => {
             let (a, b) = (child!(a), child!(b));

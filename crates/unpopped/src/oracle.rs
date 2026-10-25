@@ -1646,6 +1646,17 @@ fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
             Val::Float(unary_op_f64(*op, xv))
         }
         ScalarExpr::Binary(op, a, b) => eval_binary(*op, a, b, ev),
+        // Fused multiply-add: ONE rounding of the exact `a*b + c`. `f64::mul_add`
+        // is the correctly-rounded fused operation, and the operands here are at
+        // most f32-wide (or f64, where it is the definition itself), so the f64
+        // result is the exact value rounded once at 53 bits, finer than the
+        // compute dtype's own single rounding the device performs. Narrower than a
+        // two-step `x * y + z`, which would round the product on its own.
+        ScalarExpr::Fma(a, b, c) => Val::Float(
+            eval(a, ev)
+                .f64()
+                .mul_add(eval(b, ev).f64(), eval(c, ev).f64()),
+        ),
         ScalarExpr::Select(c, a, b) => {
             // cond tested in the compute dtype: -0.0 is false, NaN is true. Round
             // the condition to the compute dtype first — the emitter tests
@@ -3270,6 +3281,8 @@ fn arith_steps(e: &ScalarExpr) -> u32 {
         ScalarExpr::Unary(_, x) => 1 + arith_steps(x),
         // A Select rounds nothing itself; its subexpressions still count.
         ScalarExpr::Select(c, a, b) => arith_steps(c) + arith_steps(a) + arith_steps(b),
+        // A fused multiply-add rounds exactly once on the device.
+        ScalarExpr::Fma(a, b, c) => 1 + arith_steps(a) + arith_steps(b) + arith_steps(c),
     }
 }
 

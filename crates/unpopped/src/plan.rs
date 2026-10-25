@@ -558,6 +558,7 @@ pub fn try_build_plan<'a>(
     check_complex_op_admissibility(op, key.dtype)?;
     check_bool_op_admissibility(op, key.dtype)?;
     check_coord_admissibility(op, key)?;
+    check_fma_admissibility(op, key.dtype)?;
     if let Access::RowReduce {
         ref stages,
         ref epilogue,
@@ -912,7 +913,7 @@ fn contraction_epilogue_admissible(e: &crate::ir::ScalarExpr, n_inputs: u8) -> b
             contraction_epilogue_admissible(a, n_inputs)
                 && contraction_epilogue_admissible(b, n_inputs)
         }
-        E::Select(c, a, b) => {
+        E::Select(c, a, b) | E::Fma(c, a, b) => {
             contraction_epilogue_admissible(c, n_inputs)
                 && contraction_epilogue_admissible(a, n_inputs)
                 && contraction_epilogue_admissible(b, n_inputs)
@@ -1241,7 +1242,7 @@ fn assert_valid_multi_output(op: &OpDef, key: &StructureKey) {
                 check_body(a, n_inputs, name);
                 check_body(b, n_inputs, name);
             }
-            ScalarExpr::Select(c, a, b) => {
+            ScalarExpr::Select(c, a, b) | ScalarExpr::Fma(c, a, b) => {
                 check_body(c, n_inputs, name);
                 check_body(a, n_inputs, name);
                 check_body(b, n_inputs, name);
@@ -1926,7 +1927,7 @@ pub(crate) fn check_no_half_nextafter(op: &OpDef, dtype: ElementKind) -> Result<
             ScalarExpr::Binary(bop, a, b) => {
                 matches!(bop, BinaryOp::Nextafter) || walk(a) || walk(b)
             }
-            ScalarExpr::Select(c, a, b) => walk(c) || walk(a) || walk(b),
+            ScalarExpr::Select(c, a, b) | ScalarExpr::Fma(c, a, b) => walk(c) || walk(a) || walk(b),
         }
     }
     let mut exprs: Vec<&ScalarExpr> = vec![&op.body];
@@ -2323,6 +2324,18 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
                 walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
                 walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
             }
+            ScalarExpr::Fma(a, b, c) => {
+                if int_dt {
+                    return Err(format!(
+                        "op '{op_name}': Fma has no integer meaning (a fused multiply-add \
+                         rounds once; integer multiply-add wraps), so int dtype {dtype:?} \
+                         must miss honestly"
+                    ));
+                }
+                walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+                walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+                walk(c, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+            }
             ScalarExpr::Select(c, a, b) => {
                 // G1 (WHERE/SELECT): select is rejected OUTRIGHT at every int
                 // dtype — v1 select is float-only (f32/f32s/f64/f16/bf16).
@@ -2500,6 +2513,9 @@ pub(crate) fn check_complex_op_admissibility(
                 "its predicate would have to be an ordered comparison, which complex \
                  does not have",
             ),
+            ScalarExpr::Fma(_, _, _) => {
+                reject("Fma", "no complex fused multiply-add lowering exists")
+            }
             ScalarExpr::Param(_) => reject("Param", "scalar params are f32-only"),
             ScalarExpr::Reduced(_) | ScalarExpr::Coord(_) => reject(
                 "Reduced/Coord",
@@ -2564,6 +2580,7 @@ pub(crate) fn check_bool_op_admissibility(op: &OpDef, dtype: ElementKind) -> Res
                 reject(&format!("{uop:?}"), "no unary math on a truth value")
             }
             ScalarExpr::Select(_, _, _) => reject("Select", "no bool select lowering"),
+            ScalarExpr::Fma(_, _, _) => reject("Fma", "no fused multiply-add on a truth value"),
             ScalarExpr::Param(_) => reject("Param", "scalar params are f32-only"),
             ScalarExpr::Reduced(_) | ScalarExpr::Coord(_) => {
                 reject("Reduced/Coord", "no bool reduction or coordinate path")
@@ -2741,7 +2758,7 @@ pub(crate) fn expr_contains_coord(e: &ScalarExpr) -> bool {
         | ScalarExpr::Mul(a, b)
         | ScalarExpr::Div(a, b)
         | ScalarExpr::Binary(_, a, b) => expr_contains_coord(a) || expr_contains_coord(b),
-        ScalarExpr::Select(c, a, b) => {
+        ScalarExpr::Select(c, a, b) | ScalarExpr::Fma(c, a, b) => {
             expr_contains_coord(c) || expr_contains_coord(a) || expr_contains_coord(b)
         }
     }
@@ -2833,7 +2850,7 @@ pub(crate) fn check_coord_admissibility(op: &OpDef, key: &StructureKey) -> Resul
                 walk(a, op_name, dtype, rank, elementwise)?;
                 walk(b, op_name, dtype, rank, elementwise)
             }
-            ScalarExpr::Select(c, a, b) => {
+            ScalarExpr::Select(c, a, b) | ScalarExpr::Fma(c, a, b) => {
                 walk(c, op_name, dtype, rank, elementwise)?;
                 walk(a, op_name, dtype, rank, elementwise)?;
                 walk(b, op_name, dtype, rank, elementwise)
@@ -2878,6 +2895,64 @@ pub(crate) fn check_coord_admissibility(op: &OpDef, key: &StructureKey) -> Resul
     }
     for e in exprs {
         walk(e, &op.name, key.dtype, key.rank, elementwise)?;
+    }
+    Ok(())
+}
+
+/// Increment-I1 [`ScalarExpr::Fma`] admissibility gate: runs at the top of
+/// [`try_build_plan`] and walks every expression of the op (output bodies and
+/// the `Access` arm's own expressions).
+///
+/// `Fma` is admissible at `F32`/`F32Strict`/`F64` ONLY. `F16`/`Bf16` miss
+/// honestly: the only way to spell a half FMA is to widen to `f32`, fuse there,
+/// and round the `f32` result to half, which is a second rounding, so the result
+/// is not the fused one. Integer, complex and bool dtypes are rejected by their
+/// own walks (an FMA has no meaning there).
+pub(crate) fn check_fma_admissibility(op: &OpDef, dtype: ElementKind) -> Result<(), PlanError> {
+    fn has_fma(e: &ScalarExpr) -> bool {
+        match e {
+            ScalarExpr::Fma(..) => true,
+            ScalarExpr::Input(_)
+            | ScalarExpr::Const(_)
+            | ScalarExpr::Param(_)
+            | ScalarExpr::Reduced(_)
+            | ScalarExpr::Coord(_) => false,
+            ScalarExpr::Unary(_, x) => has_fma(x),
+            ScalarExpr::Add(a, b)
+            | ScalarExpr::Sub(a, b)
+            | ScalarExpr::Mul(a, b)
+            | ScalarExpr::Div(a, b)
+            | ScalarExpr::Binary(_, a, b) => has_fma(a) || has_fma(b),
+            ScalarExpr::Select(c, a, b) => has_fma(c) || has_fma(a) || has_fma(b),
+        }
+    }
+    if !matches!(dtype, ElementKind::F16 | ElementKind::Bf16) {
+        return Ok(());
+    }
+    let mut exprs: Vec<&ScalarExpr> = op.output_bodies();
+    match &op.access {
+        Access::RowReduce { stages, epilogue } => {
+            exprs.extend(stages.iter().map(|s| &s.pre));
+            exprs.push(epilogue);
+        }
+        Access::Contraction { epilogue, .. } => exprs.push(epilogue),
+        Access::Reduction { post, .. } => exprs.push(post),
+        Access::Scan { pre, post, .. } | Access::Window { pre, post, .. } => {
+            exprs.push(pre);
+            exprs.push(post);
+        }
+        Access::RowSort { .. } | Access::Im2Col { .. } | Access::Elementwise => {}
+    }
+    if exprs.into_iter().any(has_fma) {
+        return Err(PlanError::InadmissibleOpAtDtype {
+            dtype,
+            detail: format!(
+                "op '{}': Fma at {dtype:?} is rejected: a half fused multiply-add can only \
+                 be spelled by widening to f32, fusing, and rounding to half, which rounds \
+                 twice and is not the fused result; miss honestly",
+                op.name
+            ),
+        });
     }
     Ok(())
 }
@@ -3068,7 +3143,7 @@ fn assert_valid_reduction_post(op: &OpDef) {
                 walk(a, name);
                 walk(b, name);
             }
-            ScalarExpr::Select(c, a, b) => {
+            ScalarExpr::Select(c, a, b) | ScalarExpr::Fma(c, a, b) => {
                 walk(c, name);
                 walk(a, name);
                 walk(b, name);
@@ -3276,7 +3351,7 @@ pub(crate) fn check_row_reduce(
                 check(a, n_inputs, max_reduced, in_stage, is_col)?;
                 check(b, n_inputs, max_reduced, in_stage, is_col)
             }
-            ScalarExpr::Select(c, a, b) => {
+            ScalarExpr::Select(c, a, b) | ScalarExpr::Fma(c, a, b) => {
                 check(c, n_inputs, max_reduced, in_stage, is_col)?;
                 check(a, n_inputs, max_reduced, in_stage, is_col)?;
                 check(b, n_inputs, max_reduced, in_stage, is_col)
@@ -3450,7 +3525,7 @@ fn validate_scan(op: &OpDef, key: &StructureKey, axis: u8, reverse: bool, exclus
                 check(a, n_inputs, allow_reduced, ctx, name);
                 check(b, n_inputs, allow_reduced, ctx, name);
             }
-            ScalarExpr::Select(c, a, b) => {
+            ScalarExpr::Select(c, a, b) | ScalarExpr::Fma(c, a, b) => {
                 check(c, n_inputs, allow_reduced, ctx, name);
                 check(a, n_inputs, allow_reduced, ctx, name);
                 check(b, n_inputs, allow_reduced, ctx, name);
@@ -3677,7 +3752,7 @@ fn validate_window(
                 check(a, n_inputs, allow_reduced, ctx, name);
                 check(b, n_inputs, allow_reduced, ctx, name);
             }
-            ScalarExpr::Select(c, a, b) => {
+            ScalarExpr::Select(c, a, b) | ScalarExpr::Fma(c, a, b) => {
                 check(c, n_inputs, allow_reduced, ctx, name);
                 check(a, n_inputs, allow_reduced, ctx, name);
                 check(b, n_inputs, allow_reduced, ctx, name);

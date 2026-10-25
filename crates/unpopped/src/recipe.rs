@@ -407,6 +407,9 @@ fn expr_to_recipe(e: &ScalarExpr, reduced: &[String]) -> Option<String> {
             expr_to_recipe(x, reduced)?,
             expr_to_recipe(y, reduced)?
         ),
+        // No confirmed KISS-Ops `fma` token: an honest miss, never a fabricated name
+        // and never `add(mul(..))` (that rounds twice and is a different function).
+        E::Fma(..) => return None,
         E::Select(c, a, b) => format!(
             "select({}, {}, {})",
             expr_to_recipe(c, reduced)?,
