@@ -432,3 +432,87 @@ fn a_cast_spec_round_trip_through_an_integer_body_keeps_the_value() {
     assert_eq!(f(2), (2_000_000_001_i64 as f32));
     assert_eq!(f(3), 1.0, "NaN saturates to 0, then + 1");
 }
+
+// ------------------------------------- 6. an emitter that skips the plan gate (Pip, #130)
+
+use unpopped::backend::{Decline, DeclinedOp, Lowering, Spelling, lower_expr};
+
+/// Run `f` against a `Lowering` with an `int_op` seam that records the call: the shape of an
+/// out-of-tree emitter that never ran `build_plan`.
+fn with_ungated_lowering(f: impl FnOnce(&Lowering<'_>)) {
+    let leaf = |i: u8| Ok(Spelling::Spelled(format!("x{i}")));
+    let un = |_o, x: String| Ok(Spelling::Spelled(x));
+    let bin = |_o, a: String, b: String| Ok(Spelling::Spelled(format!("bin({a},{b})")));
+    let ci = |d: u8, _t| Ok(Spelling::Spelled(format!("c{d}")));
+    let io = |op, t, v: Vec<String>| {
+        Ok(Spelling::Spelled(format!(
+            "int{op:?}{t:?}({})",
+            v.join(",")
+        )))
+    };
+    let lo = Lowering::builder(&leaf, &un, &bin)
+        .compute_dtype(F32)
+        .coord_int(&ci)
+        .int_op(&io)
+        .build();
+    f(&lo);
+}
+
+fn bin_expr(op: BinaryOp, x: Expr, y: Expr) -> Expr {
+    Expr(ScalarExpr::Binary(op, b(x), b(y)))
+}
+
+/// A mixed integer/float node is ill-typed, so it must decline BY NAME rather than reach
+/// `arith`/`select` (or `int_op` at the wrong type) and be spelled.
+#[test]
+fn a_mixed_integer_and_float_node_declines_even_when_the_plan_gate_was_skipped() {
+    let int = || coord_int(0, I32);
+    let mixed = [
+        ("int + float", int() + input(0)),
+        ("float + int", input(0) + int()),
+        ("int * float", int() * input(0)),
+        ("select(int, float)", input(1).select(int(), input(0))),
+        ("select(float, int)", input(1).select(input(0), int())),
+        ("max(float, int)", bin_expr(BinaryOp::Max, input(0), int())),
+        (
+            "cmp(int, float)",
+            bin_expr(BinaryOp::CmpLt, int(), input(0)),
+        ),
+    ];
+    with_ungated_lowering(|lo| {
+        for (name, e) in mixed {
+            match lower_expr(&e.0, lo).expect("a decline is a value, not an error") {
+                Spelling::Declined(Decline::UnsupportedOp { op, why }) => {
+                    assert_eq!(op, DeclinedOp::Integer, "{name}");
+                    assert!(why.contains("mixed"), "{name}: {why}");
+                }
+                other => panic!("{name}: expected a decline, got {other:?}"),
+            }
+        }
+    });
+}
+
+/// The controls for the test above: the same operators over matching integers are spelled
+/// through `int_op`, and an all-float node is still spelled by the default infix `arith`.
+#[test]
+fn matching_operands_still_lower_when_the_plan_gate_was_skipped() {
+    let int = || coord_int(0, I32);
+    with_ungated_lowering(|lo| {
+        for e in [
+            int() + int(),
+            input(1).select(int(), int()),
+            bin_expr(BinaryOp::CmpLt, int(), int()),
+        ] {
+            let got = lower_expr(&e.0, lo).unwrap();
+            assert!(
+                matches!(&got, Spelling::Spelled(s) if s.starts_with("int")),
+                "{got:?}"
+            );
+        }
+        let f = lower_expr(&(input(0) + input(1)).0, lo).unwrap();
+        assert!(
+            matches!(&f, Spelling::Spelled(s) if s == "(x0 + x1)"),
+            "{f:?}"
+        );
+    });
+}
