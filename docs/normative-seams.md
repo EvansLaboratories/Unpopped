@@ -287,7 +287,9 @@ silently.**
   theirs.
 - ~~**I did not audit `unpopped-slang` separately.**~~ **Audited 2026-09-05 after
   baracuda enumerated FOUR defective §6.16-0009 lowering surfaces in their own
-  emitter and sent the mechanism.** MEASURED through `supports_dtype`, with an
+  emitter and sent the mechanism.** (Since then `supports_dtype` returns
+  `DtypeSupport`, three states, not `bool`; the table below was taken when it
+  returned `bool`.) MEASURED through `supports_dtype`, with an
   `F32` control so the falses are real:
 
   | | F16 | Bf16 | fp8 | F32 (control) |

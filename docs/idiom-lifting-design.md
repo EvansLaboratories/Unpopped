@@ -1,5 +1,7 @@
 # Idiom lifting: parsers lift optimizations to intent, emitters re-lower
 
+> **Superseded in part (2026-10-24).** Section 1a (and the premise "parsers lift cooperation to non-cooperative intent") is replaced by the union ruling; see `docs/ir-union-design.md`. The rest stands.
+
 **Design doc only. No code changes.** It answers three PM tasks of 2026-09-30:
 - the `[TASK]` *"restart-then-idiom-lifting-design scope=design-doc-only"*
   (§§0-6);
@@ -66,23 +68,23 @@ cooperation can't be lifted back to the node, because `convert.rs`'s residue
 lists refuse `__shared__`, `__shfl` and `__syncthreads` outright
 (`crates/unpopped/src/convert.rs:61-88`).
 
-### 1a. This is the `groupshared` scope call, made explicitly
+### 1a. The `groupshared` scope call: the IR DOES model cooperation (ruling of 2026-10-24)
 
 `docs/groupshared-sizing.md` escalated a scope question: *does Unpopped's IR ever
-model workgroup-cooperative execution?* **Adopting this design answers it: no, the
-IR never models cooperation, and parsers lift cooperative source into the
-existing non-cooperative intent.** The residue refusal for
-`__shared__`/`__shfl`/`__syncthreads`/`groupshared` then changes meaning:
+model workgroup-cooperative execution?* **Answer, ruled by the PM on CireSnave's
+directive of 2026-10-24: yes.** The IR is built from the full union of the
+capabilities of the kernel languages in common use, so cooperation (execution
+scopes, shared memory, barriers, collectives, tensor-core tiles, async copy) is
+IR vocabulary, delivered by the increments in `docs/ir-union-design.md` section 5
+(tracking issues #111-#123). This section's earlier answer, that the IR never models cooperation and
+parsers lift cooperative source into non-cooperative intent, is **withdrawn and
+replaced**, not caveated. Idiom lifting still has a use (recognizing a naive
+loop a source wrote by hand and naming its intent), but it is no longer the only
+way to represent cooperative source.
 
-- **Today:** refuse, because the construct is hand-optimized.
-- **After this design:** refuse only if no idiom recognizer claims the construct.
-
-The change is deliberate and goes through the PM gate as that ruling. It is not a
-quiet reversal. `groupshared-sizing.md` said closing the bucket needs *"a new IR
-shape modeling a fixed-size cooperative scratch buffer ... and an explicit
-barrier/phase ordering"*. For the reductions, softmax and norms in that bucket,
-that is wrong, as §1 shows: the IR already holds their semantics. The claim is
-replaced in that doc by this PR, not caveated.
+The residue refusal for `__shared__`/`__shfl`/`__syncthreads`/`groupshared` keeps
+its present meaning until I3-I5 land: the IR cannot yet carry the construct.
+It then becomes "this emitter declines the `IrFeature`" (design doc D7).
 
 Of the 12 kernel families in that bucket, `reduce`, `reduce_last_dim`,
 `rms_norm_last_dim`, `softmax`, `arg_reduce_last_dim` and `layer_norm_last_dim`
@@ -711,7 +713,10 @@ never asserted. This is the same rule `capability.rs` applies to its own table.
 | 16-bit storage and arithmetic | `__half`, `half2` | `VK_KHR_16bit_storage`, `shaderFloat16` | packed fp16 | F16C (convert only), AVX512-FP16 |
 | wide vector access | `float4` loads | `vec4` loads, alignment decorations | `dwordx4` | SIMD loads |
 
-**Not transferable. Marked so the registry says so, never implies otherwise:**
+**Not transferable between vendors. Marked so the registry says so, never implies
+otherwise.** (Under the union ruling of 2026-10-24 these are still IR constructs,
+delivered by I4/I7/I8/I11; "not transferable" only means no other target may claim
+an analogue row, and an emitter without the `IrFeature` declines.)
 - `cp.async` pipelines (sm_80);
 - TMA and `wgmma` (sm_90/90a);
 - thread-block clusters and distributed shared memory (sm_90);

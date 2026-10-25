@@ -1,9 +1,10 @@
 # Sizing the `groupshared`/`__shared__` residue bucket
 
 > **Superseded in part (2026-09-29).** The claim that closing this bucket
-> needs the IR to model cooperation is withdrawn, and the scope question is
-> answered by `docs/idiom-lifting-design.md` §1a. See "What closing it
-> requires" below. The measurements in this note stand.
+> needs the IR to model cooperation was withdrawn on 2026-09-29, and that
+> withdrawal is itself **reversed on 2026-10-24**: the IR does model
+> cooperation (CireSnave's full-union directive; `docs/ir-union-design.md`).
+> The measurements in this note stand.
 
 Design note only — **no committed code changes.** Answers "what is the
 largest remaining error bucket in the Fuel corpus and what would it take to
@@ -120,12 +121,13 @@ doc §3.2 (e.g. RowReduce's single-input limit for the γ weight).
 ## Recommendation, as superseded
 
 The recommendation was *do not build; ask whether workgroup-cooperative
-kernels are in scope for the neutral IR*. That question is answered by the
-design in `docs/idiom-lifting-design.md` §1a, once it passes the PM gate:
-**the IR never models cooperation, and parsers lift cooperative source into
-the existing non-cooperative intent**. The `__shared__`/`__shfl`/barrier/
-`groupshared` residue refusal then means "no recognizer claims this", not
-"hand-optimized, therefore residue".
+kernels are in scope for the neutral IR*. **Answered 2026-10-24: yes, in
+scope.** The IR is the full union of the kernel languages' capabilities
+(`docs/ir-union-design.md`; increments I3-I5 add scopes, shared memory,
+barriers and collectives). The earlier 2026-09-29 answer (never; lift to
+non-cooperative intent) is withdrawn. Until those increments land the
+`__shared__`/`__shfl`/barrier/`groupshared` refusal means "the IR cannot yet
+carry this", and afterwards "this emitter declines the feature".
 
 The standalone item remains: the `arg_reduce_any_dim` naive twin's
 `identifier` blocker (≤4 files, PR-#22-sized).

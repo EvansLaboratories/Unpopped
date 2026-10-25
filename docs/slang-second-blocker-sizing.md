@@ -76,7 +76,9 @@ comparison ops that produce a 1.0/0.0 mask suitable as `cond`
 reference emitters already lower `Select` — `unpopped-slang` directly
 (`src/lib.rs:367`), `unpopped-cpu-c` for `F32`/`F32Strict`/`F64`
 (`src/lib.rs:580-591`, declining other dtypes as a named v1 limitation, not
-silently). **This means recognizing a simple branch and adding
+silently). **Correction 2026-10-24:** the Slang `Select` lowering is
+float-only (see `docs/ir-union-design.md` 3.22), so "directly" holds for float
+dtypes only. **This means recognizing a simple branch and adding
 comparison-operator support requires zero `Backend`/`Lowering` changes** —
 the constraint the task named — because the target vocabulary already
 exists and is already reachable by at least two of the three targets.

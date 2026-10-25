@@ -280,9 +280,11 @@ impl Element for bf16 {
     type Scalar = f32;
 }
 
-/// `f32` GEMM routes through TF32 tensor cores — see
+/// `f32` GEMM is *declared* to route through TF32 tensor cores — see
 /// [`crate::PrecisionGuarantee::math_precision`] (returns
-/// [`MathPrecision::Tf32`]). Inputs are full F32; the math instruction
+/// [`MathPrecision::Tf32`]). That is a vocabulary statement: Unpopped's IR
+/// does not carry it (`AccumSpec` has one variant, `WideFloat`), and the routing
+/// is the consuming runtime's. Inputs are full F32; the math instruction
 /// reduces to TF32 (10-bit mantissa) and accumulates into F32. Use
 /// [`F32Strict`] instead when bit-stable, full-precision IEEE 754
 /// binary32 math is required.
