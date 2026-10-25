@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.25.0` — BREAKING: numerics qualifiers, `ScalarExpr::Qualified` (I1 of #112)
+
+**Breaking, pre-1.0 (second number).** New variants: `ir::ScalarExpr::Qualified`, `ir::DagNode::Qualified`, `backend::DeclinedOp::Qualified`, `pattern::PatternError::QualifiedUnsupported`; new `Lowering::qualified` seam (default: decline); every exhaustive `match` over `ScalarExpr`/`DagNode` gains an arm. New public items: `ir::{Numerics, QualOp}`, `Expr::{qualified, rounded, ftz, approx}`, `numerics::{eval_qualified_f32, approx_within, ftz_f32, APPROX_ULP, LOG2_ABS_FLOOR}`, `types::has_qualified`.
+
+`Qualified(op, Numerics{round, ftz, approx})` evaluates one of `Add`/`Sub`/`Mul`/`Div`/`Fma`/`Sqrt`/`Rsqrt`/`Recip`/`Exp2`/`Log2` under an IEEE directed rounding mode, PTX-style flush-to-zero (operands and result, sign kept) and/or an approximate form with a stated bound (4 ulp of f32 on the finite-normal domain; `Log2` with a 2^-20 absolute floor). Spec: `docs/ir-numerics-qualifiers.md`. v1: f32/f32s, Elementwise, single output, not combined with `Cast`/`Bitcast`. The optimizer returns such a body unchanged; pattern derivation and recipes decline it. A backend that cannot honour a qualifier DECLINES (it never lowers the bare operation): cpu_c spells nearest-even, `ftz` and `approx` (as the exact function) and declines every directed mode naming it; Slang declines `Qualified`; the CUDA emitter declines until baracuda spells `__fadd_rd`-style forms.
+
+Proof: the directed-rounding reference is checked against exact `i128` integer rounding (add/sub/mul/fma, bracket checks for div/sqrt, an IEEE 7.4/6.3 overflow and zero-sign table); `ftz` is compiled and run through a real C compiler lane by lane with a no-`ftz` control; `approx` forms are compiled and checked within the bound over 199 lanes per operation with a failing control; seven reference mutations and six cpu_c mutations each turned a test red.
+
 ## `0.24.1` — numerics qualifiers: the spec (docs only)
 
 `docs/ir-numerics-qualifiers.md`: `ScalarExpr::Qualified(child, Numerics{round, ftz, approx})` over `Add`/`Sub`/`Mul`/`Div`/`Fma`/`Sqrt`/`Rsqrt`/`Recip`/`Exp2`/`Log2`; IEEE directed rounding including overflow and zero sign; PTX-style flush-to-zero (operands and result); `approx` as a stated 4-ulp bound on a stated domain, checkable against the oracle; backends that cannot honour a qualifier decline, never drop it. No code; the implementation is 0.25.0 (Part of #112).

@@ -56,6 +56,7 @@ use unpopped::ir::{BinaryOp, ExprDag, UnaryOp, is_bit_or_sign_move};
 use unpopped::plan::{KernelPlan, Schedule};
 use unpopped_vocab::{ElementKind, TargetId};
 
+mod qualified;
 mod typed;
 
 /// The portable-C CPU backend. Lowers a [`KernelPlan`] to `.c` source.
@@ -224,6 +225,11 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> Result<GeneratedKernel
         s.push_str(typed::TYPED_HELPERS);
         s.push('\n');
     }
+    // A flush-to-zero qualifier needs its helper in the kernel; only then.
+    if body_uses_ftz(plan.body) {
+        s.push_str(qualified::FTZ_HELPER);
+        s.push('\n');
+    }
     // A NARROW FLOAT cell stores an integer carrier and computes at f32, so its
     // codec has to travel with the kernel. EMITTED rather than intrinsic-named,
     // which is what keeps this backend portable C.
@@ -355,6 +361,7 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> Result<GeneratedKernel
     let cs = |x: String, from, spec| typed::cpu_cast(x, from, spec);
     let bc = |x: String, from, to| typed::cpu_bitcast(x, from, to);
     let tn = |t| typed::c_type(t).map(str::to_string);
+    let ql = |op, operands, n| qualified::cpu_qualified(op, operands, n, plan.dtype);
     let cst = |v| Ok(Spelling::Spelled(const_lit(v)));
     let lowering = Lowering::builder(&acc, &un, &bin)
         .arith(&ar)
@@ -362,6 +369,7 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> Result<GeneratedKernel
         .fma(&fm)
         .cast(&cs)
         .bitcast(&bc)
+        .qualified(&ql)
         .compute_dtype(plan.dtype)
         .type_name(&tn)
         .constant(&cst)
@@ -600,6 +608,18 @@ fn cpu_binary_bit_move(
     Ok(Spelling::Spelled(format!(
         "({pa} != {pa} ? {a} : ({pb} != {pb} ? {b} : ({pa} {cmp} {pb} ? {a} : {b})))"
     )))
+}
+
+/// Does any node of `body` carry an `ftz` qualifier? (Walks the interned DAG, so it
+/// sees every node without a hand-written traversal that could miss a variant.)
+fn body_uses_ftz(body: &unpopped::ir::ScalarExpr) -> bool {
+    let dag = unpopped::ir::ExprDag::from_expr(body);
+    (0..dag.len() as u32).any(|i| {
+        matches!(
+            dag.node(i),
+            unpopped::ir::DagNode::Qualified(_, n) if n.ftz
+        )
+    })
 }
 
 /// Fused multiply-add: C99 `fmaf`/`fma` are specified as ONE rounding of the exact

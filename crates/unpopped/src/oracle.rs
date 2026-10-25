@@ -1669,6 +1669,27 @@ fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
             let n = val_to_num(eval(x, ev), from);
             Val::Raw(crate::cast_ref::cast_bits(n, from, *spec), spec.to)
         }
+        // A qualified operation: operands rounded to the compute dtype (the device
+        // holds f32 values), then `numerics::eval_qualified_f32` applies the
+        // operand flush, the operation in its stated rounding mode, and the result
+        // flush. f32/f32s compute only; the plan gate rejects the rest.
+        ScalarExpr::Qualified(x, n) => {
+            assert!(
+                matches!(ev.dtype, ElementKind::F32 | ElementKind::F32Strict),
+                "oracle: Qualified at {:?} (the plan gate rejects this)",
+                ev.dtype
+            );
+            let (op, kids) = crate::ir::QualOp::of(x).expect(
+                "oracle: Qualified over a non-qualifiable node (the plan gate rejects this)",
+            );
+            let args: Vec<f32> = kids
+                .iter()
+                .map(|k| round_to_compute(eval(k, ev).f64(), ev.dtype) as f32)
+                .collect();
+            Val::Float(f64::from(crate::numerics::eval_qualified_f32(
+                op, *n, &args,
+            )))
+        }
         ScalarExpr::Bitcast(x, to) => {
             let from = crate::types::infer(x, ev.dtype)
                 .expect("oracle: ill-typed Bitcast operand (the plan gate rejects this)");
@@ -3320,6 +3341,10 @@ fn arith_steps(e: &ScalarExpr) -> u32 {
         // A conversion is computed exactly by the oracle (the same single rounding the
         // device performs), so it adds no gap of its own.
         ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => arith_steps(x),
+        // The qualified operation is computed exactly in its stated mode (the
+        // oracle's directed rounding is built from the exact residual), so the
+        // wrapper adds no gap beyond the wrapped operation's own.
+        ScalarExpr::Qualified(x, _) => arith_steps(x),
     }
 }
 

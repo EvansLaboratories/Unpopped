@@ -227,6 +227,34 @@ pub fn infer(e: &ScalarExpr, compute: ElementKind) -> Result<ElementKind, TypeEr
             check_bitcast(from, *to)?;
             Ok(*to)
         }
+        // A qualifier changes how the wrapped operation rounds, not what type it has.
+        ScalarExpr::Qualified(x, _) => infer(x, compute),
+    }
+}
+
+/// `true` when `e` contains a [`ScalarExpr::Qualified`] node. The optimizer returns
+/// such an expression unchanged: a rewrite across the node would change which
+/// operations round, flush or approximate, and how.
+#[must_use]
+pub fn has_qualified(e: &ScalarExpr) -> bool {
+    match e {
+        ScalarExpr::Qualified(..) => true,
+        ScalarExpr::Input(_)
+        | ScalarExpr::Const(_)
+        | ScalarExpr::Param(_)
+        | ScalarExpr::Reduced(_)
+        | ScalarExpr::Coord(_) => false,
+        ScalarExpr::Unary(_, x) | ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => {
+            has_qualified(x)
+        }
+        ScalarExpr::Add(a, b)
+        | ScalarExpr::Sub(a, b)
+        | ScalarExpr::Mul(a, b)
+        | ScalarExpr::Div(a, b)
+        | ScalarExpr::Binary(_, a, b) => has_qualified(a) || has_qualified(b),
+        ScalarExpr::Select(a, b, c) | ScalarExpr::Fma(a, b, c) => {
+            has_qualified(a) || has_qualified(b) || has_qualified(c)
+        }
     }
 }
 
@@ -242,7 +270,7 @@ pub fn is_typed(e: &ScalarExpr) -> bool {
         | ScalarExpr::Param(_)
         | ScalarExpr::Reduced(_)
         | ScalarExpr::Coord(_) => false,
-        ScalarExpr::Unary(_, x) => is_typed(x),
+        ScalarExpr::Unary(_, x) | ScalarExpr::Qualified(x, _) => is_typed(x),
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)

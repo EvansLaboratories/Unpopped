@@ -36,7 +36,8 @@ refused at the plan gate with a typed error naming the child. `Qualified` is not
 
 `approx` and a directed `round` never combine (an approximation has no rounding direction to honour);
 that pair is `PlanError::InadmissibleOpAtDtype` with both named. v1 is **f32 / f32-strict compute
-only** and **`OpKind::Elementwise` only**, the same envelope as `Cast`; f64 has no `ftz` form on the
+only**, **`Access::Elementwise` with a single output only**, and **not combined with `Cast`/`Bitcast`
+in one op** (the combination is unspecified, so it is a typed decline); f64 has no `ftz` form on the
 targets that have the flag (PTX denormal control for f64 does not exist), and directed f64 rounding
 needs a wider reference than this slice builds. Both are listed in section 8.
 

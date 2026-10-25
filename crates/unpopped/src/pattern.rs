@@ -208,6 +208,10 @@ pub enum PatternError {
     /// graph does carry do not state either, so no pattern and no contract (the
     /// kernels still generate and lower normally).
     TypedExprUnsupported,
+    /// The body contains a [`crate::ir::ScalarExpr::Qualified`] operation. FKC §4.1
+    /// names no rounding-mode, flush-to-zero or approximate-form variant of an op,
+    /// so no pattern and no contract (the kernels still generate and lower normally).
+    QualifiedUnsupported,
     /// The op carries a runtime [`crate::ir::BaseOffset::Runtime`] base offset (a
     /// BASE_OFFSET SLICE — the runtime per-operand pointer bump). No honest v1
     /// contract, on two blockers verified against Fuel's actual sources:
@@ -394,6 +398,7 @@ fn canonicalize(e: &ScalarExpr) -> ScalarExpr {
         // Conversions are positional and never reordered.
         ScalarExpr::Cast(x, spec) => ScalarExpr::Cast(Box::new(canonicalize(x)), *spec),
         ScalarExpr::Bitcast(x, to) => ScalarExpr::Bitcast(Box::new(canonicalize(x)), *to),
+        ScalarExpr::Qualified(x, n) => ScalarExpr::Qualified(Box::new(canonicalize(x)), *n),
         ScalarExpr::Input(_)
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)
@@ -424,6 +429,7 @@ fn sig(e: &ScalarExpr) -> String {
         ScalarExpr::Fma(a, b, c) => format!("0Fma({},{},{})", sig(a), sig(b), sig(c)),
         ScalarExpr::Cast(x, spec) => format!("0Cast{spec:?}({})", sig(x)),
         ScalarExpr::Bitcast(x, to) => format!("0Bitcast{to:?}({})", sig(x)),
+        ScalarExpr::Qualified(x, n) => format!("0Qual{n:?}({})", sig(x)),
         ScalarExpr::Input(i) => format!("1I{i:03}"),
         ScalarExpr::Param(i) => format!("1P{i:03}"),
         ScalarExpr::Const(v) => format!("1C{v:?}"),
@@ -468,6 +474,7 @@ fn walk(
         ScalarExpr::Select(..) => Err(PatternError::SelectUnsupported),
         ScalarExpr::Fma(..) => Err(PatternError::FmaUnsupported),
         ScalarExpr::Cast(..) | ScalarExpr::Bitcast(..) => Err(PatternError::TypedExprUnsupported),
+        ScalarExpr::Qualified(..) => Err(PatternError::QualifiedUnsupported),
         ScalarExpr::Add(a, b) => scalar_binop("Add", "AddScalar", a, b, path, consumers, extracts),
         ScalarExpr::Mul(a, b) => scalar_binop("Mul", "MulScalar", a, b, path, consumers, extracts),
         ScalarExpr::Sub(a, b) => plain_binop("Sub", a, b, path, consumers, extracts),
