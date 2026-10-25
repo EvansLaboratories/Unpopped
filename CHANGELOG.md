@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.25.1` — test fix: exact powers of two in the optimizer tests
+
+Two optimizer tests looped `k` over `-1074..=1023` with `f64::powi(k)`, which is `1 / 2^-k` on some libms; `2^1074` overflows, so the subnormal powers of two came out `0` there and the tested population differed by platform. They now build `2^k` from its bit pattern (`pow2_f64`), and a test pins it at `k = 1023, -1022, -1023, -1074`. Test-only; no public API change. Found by the 0.25.0 libm sweep (a `powi(-130)` fixture that was `0.0` on Linux).
+
 ## `0.25.0` — BREAKING: numerics qualifiers, `ScalarExpr::Qualified` (I1 of #112)
 
 **Breaking, pre-1.0 (second number).** New variants: `ir::ScalarExpr::Qualified`, `ir::DagNode::Qualified`, `backend::DeclinedOp::Qualified`, `pattern::PatternError::QualifiedUnsupported`; new `Lowering::qualified` seam (default: decline); every exhaustive `match` over `ScalarExpr`/`DagNode` gains an arm. New public items: `ir::{Numerics, QualOp}`, `Expr::{qualified, rounded, ftz, approx}`, `numerics::{eval_qualified_f32, approx_within, ftz_f32, APPROX_ULP, LOG2_ABS_FLOOR}`, `types::has_qualified`.
