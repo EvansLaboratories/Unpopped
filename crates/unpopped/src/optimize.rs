@@ -230,6 +230,12 @@ fn add_expr(eg: &mut EGraph, e: &ScalarExpr, compute: Compute) -> Id {
             );
             eg.add(ENode::Fma(a, b, c))
         }
+        // Unreachable: both entry points return a typed expression unchanged (see
+        // `optimize`). A rewrite could introduce a `Const` of the compute type where
+        // a converted value of another type stood, changing the node's type.
+        ScalarExpr::Cast(..) | ScalarExpr::Bitcast(..) => {
+            unreachable!("typed expressions bypass the e-graph (optimize returns them unchanged)")
+        }
     }
 }
 
@@ -812,6 +818,9 @@ fn expr_cost(e: &ScalarExpr) -> u64 {
         ScalarExpr::Unary(op, a) => (ENode::Unary(*op, 0), vec![a]),
         ScalarExpr::Select(c, a, b) => (ENode::Select(0, 0, 0), vec![c, a, b]),
         ScalarExpr::Fma(a, b, c) => (ENode::Fma(0, 0, 0), vec![a, b, c]),
+        ScalarExpr::Cast(..) | ScalarExpr::Bitcast(..) => {
+            unreachable!("typed expressions bypass the e-graph (optimize returns them unchanged)")
+        }
     };
     kids.into_iter()
         .fold(weight(&node), |acc, k| acc.saturating_add(expr_cost(k)))
@@ -830,6 +839,13 @@ fn expr_cost(e: &ScalarExpr) -> u64 {
 /// so the caller states the dtype.
 #[must_use]
 pub fn optimize(e: &ScalarExpr, dtype: ElementKind) -> ScalarExpr {
+    // ZERO rules for typed expressions: a conversion is lossy (`Cast(Cast(x))` is
+    // not `Cast(x)`), a bitcast is not arithmetic, and a rewrite that introduced a
+    // compute-typed `Const` where a converted value stood would change the node's
+    // type. The expression is returned exactly as authored.
+    if crate::types::is_typed(e) {
+        return e.clone();
+    }
     let compute = Compute::of(dtype);
     let mut eg = EGraph::default();
     let root = add_expr(&mut eg, e, compute);
@@ -877,6 +893,8 @@ fn expr_cmp(a: &ScalarExpr, b: &ScalarExpr) -> std::cmp::Ordering {
             ScalarExpr::Unary(..) => 10,
             ScalarExpr::Select(..) => 11,
             ScalarExpr::Fma(..) => 12,
+            ScalarExpr::Cast(..) => 13,
+            ScalarExpr::Bitcast(..) => 14,
         }
     }
     match (a, b) {
@@ -1061,7 +1079,7 @@ pub fn optimize_top_k(e: &ScalarExpr, k: usize, dtype: ElementKind) -> Vec<Scala
     }
     // form[0] IS optimize(e, dtype): the invariant is a construction, not a hope.
     let head = optimize(e, dtype);
-    if k == 1 {
+    if k == 1 || crate::types::is_typed(e) {
         return vec![head];
     }
     // The SAME compute precision as the head, necessarily: a k-best that
@@ -2325,6 +2343,9 @@ mod tests {
             ScalarExpr::Unary(op, a) => (ENode::Unary(*op, 0), vec![a]),
             ScalarExpr::Select(c, a, b) => (ENode::Select(0, 0, 0), vec![c, a, b]),
             ScalarExpr::Fma(a, b, c) => (ENode::Fma(0, 0, 0), vec![a, b, c]),
+            ScalarExpr::Cast(..) | ScalarExpr::Bitcast(..) => {
+                unreachable!("typed expressions bypass the e-graph")
+            }
         };
         kids.into_iter()
             .fold(weight(&node), |acc, k| acc.saturating_add(cost_of(k)))

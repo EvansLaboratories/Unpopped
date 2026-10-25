@@ -202,6 +202,12 @@ pub enum PatternError {
     /// two-rounding function matches a one-rounding kernel, so there is no
     /// pattern and no contract (the kernels still generate and lower normally).
     FmaUnsupported,
+    /// The body contains a [`crate::ir::ScalarExpr::Cast`] or
+    /// [`crate::ir::ScalarExpr::Bitcast`]. FKC §4.1 has no conversion op with
+    /// explicit rounding and saturation, and the implicit dtype conversions a
+    /// graph does carry do not state either, so no pattern and no contract (the
+    /// kernels still generate and lower normally).
+    TypedExprUnsupported,
     /// The op carries a runtime [`crate::ir::BaseOffset::Runtime`] base offset (a
     /// BASE_OFFSET SLICE — the runtime per-operand pointer bump). No honest v1
     /// contract, on two blockers verified against Fuel's actual sources:
@@ -385,6 +391,9 @@ fn canonicalize(e: &ScalarExpr) -> ScalarExpr {
             Box::new(canonicalize(b)),
             Box::new(canonicalize(c)),
         ),
+        // Conversions are positional and never reordered.
+        ScalarExpr::Cast(x, spec) => ScalarExpr::Cast(Box::new(canonicalize(x)), *spec),
+        ScalarExpr::Bitcast(x, to) => ScalarExpr::Bitcast(Box::new(canonicalize(x)), *to),
         ScalarExpr::Input(_)
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)
@@ -413,6 +422,8 @@ fn sig(e: &ScalarExpr) -> String {
         ScalarExpr::Unary(op, x) => format!("0U{op:?}({})", sig(x)),
         ScalarExpr::Select(c, a, b) => format!("0Sel({},{},{})", sig(c), sig(a), sig(b)),
         ScalarExpr::Fma(a, b, c) => format!("0Fma({},{},{})", sig(a), sig(b), sig(c)),
+        ScalarExpr::Cast(x, spec) => format!("0Cast{spec:?}({})", sig(x)),
+        ScalarExpr::Bitcast(x, to) => format!("0Bitcast{to:?}({})", sig(x)),
         ScalarExpr::Input(i) => format!("1I{i:03}"),
         ScalarExpr::Param(i) => format!("1P{i:03}"),
         ScalarExpr::Const(v) => format!("1C{v:?}"),
@@ -456,6 +467,7 @@ fn walk(
         // ever emitted in v1.
         ScalarExpr::Select(..) => Err(PatternError::SelectUnsupported),
         ScalarExpr::Fma(..) => Err(PatternError::FmaUnsupported),
+        ScalarExpr::Cast(..) | ScalarExpr::Bitcast(..) => Err(PatternError::TypedExprUnsupported),
         ScalarExpr::Add(a, b) => scalar_binop("Add", "AddScalar", a, b, path, consumers, extracts),
         ScalarExpr::Mul(a, b) => scalar_binop("Mul", "MulScalar", a, b, path, consumers, extracts),
         ScalarExpr::Sub(a, b) => plain_binop("Sub", a, b, path, consumers, extracts),

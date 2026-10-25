@@ -56,6 +56,8 @@ use unpopped::ir::{BinaryOp, ExprDag, UnaryOp, is_bit_or_sign_move};
 use unpopped::plan::{KernelPlan, Schedule};
 use unpopped_vocab::{ElementKind, TargetId};
 
+mod typed;
+
 /// The portable-C CPU backend. Lowers a [`KernelPlan`] to `.c` source.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct CpuC;
@@ -216,6 +218,12 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> Result<GeneratedKernel
     // Portable C99: `<math.h>` supplies the transcendental atoms (expf/sqrtf/…),
     // the `Cmp`/`Rem` helpers, and the `NAN`/`INFINITY` macros `const_lit` emits.
     s.push_str("#include <math.h>\n\n");
+    // Cast/Bitcast saturate through helpers that travel with the kernel. Emitted only
+    // for a typed body, so every untyped kernel is byte-identical to before.
+    if unpopped::types::is_typed(plan.body) {
+        s.push_str(typed::TYPED_HELPERS);
+        s.push('\n');
+    }
     // A NARROW FLOAT cell stores an integer carrier and computes at f32, so its
     // codec has to travel with the kernel. EMITTED rather than intrinsic-named,
     // which is what keeps this backend portable C.
@@ -344,11 +352,18 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> Result<GeneratedKernel
     };
     let sel = |c, a, b| cpu_select(c, a, b, plan.dtype);
     let fm = |a, b, c| cpu_fma(a, b, c, plan.dtype);
+    let cs = |x: String, from, spec| typed::cpu_cast(x, from, spec);
+    let bc = |x: String, from, to| typed::cpu_bitcast(x, from, to);
+    let tn = |t| typed::c_type(t).map(str::to_string);
     let cst = |v| Ok(Spelling::Spelled(const_lit(v)));
     let lowering = Lowering::builder(&acc, &un, &bin)
         .arith(&ar)
         .select(&sel)
         .fma(&fm)
+        .cast(&cs)
+        .bitcast(&bc)
+        .compute_dtype(plan.dtype)
+        .type_name(&tn)
         .constant(&cst)
         .build();
     let (prelude, root) = if bit_move {

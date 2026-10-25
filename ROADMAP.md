@@ -165,7 +165,7 @@ CireSnave, 2026-10-24: *"I want the IR to cover the full union of the capabiliti
 | ID | Work | Issue | Status |
 |---|---|---|---|
 | U0 | Replace idiom-lifting 1a, its "not transferable" table, and `groupshared-sizing`'s premise with the cooperation ruling; fix the stale claims in 3.22 docs; record the ownership split. Docs only | #111 | **done**, 0.22.19 |
-| U1 | `Cast`/`Bitcast` with rounding+saturation; `Fma`; rounding/ftz/approx qualifiers; new `ElementKind` rows for fp4/fp6/e3m4 and MX scales (reverses the 2026-08-08 ruling, **D5**); packed/vector values; integer `Coord`/`Select`; wider index dtypes | #112 | in progress: `Fma` landed in 0.23.0 (#112); rest open; the fp4/fp6/MX part waits on D5 |
+| U1 | `Cast`/`Bitcast` with rounding+saturation; `Fma`; rounding/ftz/approx qualifiers; new `ElementKind` rows for fp4/fp6/e3m4 and MX scales (reverses the 2026-08-08 ruling, **D5**); packed/vector values; integer `Coord`/`Select`; wider index dtypes | #112 | in progress: `Fma` landed in 0.23.0, typed expressions with `Cast`/`Bitcast` in 0.24.0 (#112); rest open (packed values, integer index arithmetic, qualifiers); the fp4/fp6/MX part waits on D5 |
 | U2 | Kernel layer v0: `Let`, assignment, `For`/`While`/`If`/`Break`/`Return`, calls, effects model; lifting of today's `OpDef` into it (so the layers agree on every existing op) | #113 | open, after U1 |
 | U3 | Execution scopes and ids; memory spaces and allocation; typed load/store; pointers; resources (textures/samplers/structs); `ProgramModel` | #114 | open, after U2 |
 | U4 | Barriers, fences, mbarrier, async groups; full atomics with order/scope/old-value, on shared memory too | #115 | open, after U3 |
