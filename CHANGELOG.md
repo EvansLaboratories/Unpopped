@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.26.3` — fix: Slang `lower()` decline text for i16/u16
+
+The `unpopped-slang` decline text said i16/u16 "wait on vocabulary v5"; v5 shipped (vulkane 0.14.0), so it now says they require `i16` in the target's `<arith>` field. **Error text only, no behaviour change** (`supports_dtype` is unchanged). Adopters that match the old substring `wait on vocabulary v5` must match `require `i16` in the same field` instead. ROADMAP X5.
+
 ## `0.26.2` — docs: patent sweep record
 
 `docs/PATENT-SWEEP.md`: a due-diligence patent sweep of the IR, lowering and backends at 0.25.1 (covers the 0.26.x line). Not legal advice. Independent claims of 13 patents read in full, none overlap on the crates (two Google kernel-caching patents charted, adopter runtimes flagged); four more listed unread. No code change.
