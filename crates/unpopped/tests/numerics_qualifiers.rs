@@ -403,7 +403,9 @@ fn ftz_flushes_operands_and_results_and_keeps_the_sign() {
         ftz: true,
         ..Numerics::default()
     };
-    let sub = 2f32.powi(-130); // subnormal
+    // 2^-130 by bits: `powi(-130)` is 1 / 2^130 on some libms, and 2^130 overflows f32.
+    let sub = f32::from_bits(1 << 19);
+    assert!(sub.is_subnormal() && sub > 0.0);
     let mul = |n, a: f32, b: f32| eval_qualified_f32(QualOp::Mul, n, &[a, b]);
     // Step 1, operand flush: the subnormal input reads as zero.
     assert_eq!(mul(ftz, sub, 2f32.powi(100)), 0.0);

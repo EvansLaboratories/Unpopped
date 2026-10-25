@@ -2643,15 +2643,15 @@ fn run_qualified(
 /// that the lanes discriminate.
 #[test]
 fn ftz_flushes_through_a_real_compiler() {
-    let sub = 2f32.powi(-130); // a subnormal
+    let sub = f32::from_bits(1 << 19); // 2^-130, a subnormal
     let a = vec![
-        sub,                // 0: subnormal operand -> operand flush
-        2f32.powi(-100),    // 1: normal x normal = subnormal -> result flush
-        -(2f32.powi(-100)), // 2: the same, negative -> sign kept (-0)
-        3.0,                // 3: ordinary control
-        f32::MIN_POSITIVE,  // 4: the smallest normal is NOT flushed
-        2f32.powi(-127),    // 5: a different subnormal operand
-        0.5,                // 6: ordinary control
+        sub,                     // 0: subnormal operand -> operand flush
+        2f32.powi(-100),         // 1: normal x normal = subnormal -> result flush
+        -(2f32.powi(-100)),      // 2: the same, negative -> sign kept (-0)
+        3.0,                     // 3: ordinary control
+        f32::MIN_POSITIVE,       // 4: the smallest normal is NOT flushed
+        f32::from_bits(1 << 22), // 5: a different subnormal operand (2^-127)
+        0.5,                     // 6: ordinary control
     ];
     let b = vec![
         2f32.powi(100),
@@ -2699,9 +2699,9 @@ fn ftz_flushes_through_a_real_compiler() {
     assert_eq!(flushed[6], 0.25, "control lane");
     // The control: WITHOUT ftz the same lanes are the nonzero values.
     assert_eq!(plain[0], f64::from(2f32.powi(-30)));
-    assert_eq!(plain[1], f64::from(2f32.powi(-130)));
+    assert_eq!(plain[1], f64::from(sub));
     assert!(plain[2] < 0.0);
-    assert_eq!(plain[5], f64::from(2f32.powi(-127)));
+    assert_eq!(plain[5], f64::from(f32::from_bits(1 << 22)));
 }
 
 /// A qualifier that changes nothing is the child operation, bit for bit, through the
@@ -2751,11 +2751,15 @@ fn a_default_qualifier_is_the_bare_operation_through_a_real_compiler() {
     assert_eq!(compared, 10);
     // The control that this comparison can fail: `ftz` on subnormal operands DOES
     // change a lane (sub + sub is the subnormal sum without it, zero with it).
-    let sub = vec![2f32.powi(-130); QUAL_LANES];
+    let sub = vec![f32::from_bits(1 << 19); QUAL_LANES]; // 2^-130
     let ins = [sub.clone(), sub];
     let (bare, _) = run_qualified("ctl_bare", input(0) + input(1), &ins).unwrap();
     let (flushed, _) = run_qualified("ctl_ftz", (input(0) + input(1)).ftz(), &ins).unwrap();
-    assert_eq!(bare[0], f64::from(2f32.powi(-129)), "the subnormal sum");
+    assert_eq!(
+        bare[0],
+        f64::from(f32::from_bits(1 << 20)),
+        "the subnormal sum (2^-129)"
+    );
     assert_eq!(flushed[0], 0.0, "flushed to zero");
 }
 
