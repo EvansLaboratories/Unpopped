@@ -1342,10 +1342,9 @@ fn int_route(
         return None;
     }
     let first = types[0];
-    if let Some(t) = first
-        && types.iter().all(|x| *x == first)
-    {
-        return Some(Ok(t));
+    match first {
+        Some(t) if types.iter().all(|x| *x == first) => return Some(Ok(t)),
+        _ => {}
     }
     Some(Err(format!(
         "an integer operation has mixed operand types {types:?}: there is no implicit          promotion, so the node is ill-typed (the plan gate refuses it; an emitter that          skips the gate gets this decline instead of a miscompile)"
