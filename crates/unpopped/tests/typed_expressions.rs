@@ -239,7 +239,7 @@ fn a_store_type_mismatch_is_a_typed_decline_naming_both_types() {
 }
 
 #[test]
-fn a_typed_value_may_not_feed_arithmetic_in_v1() {
+fn a_non_integer_typed_value_may_not_feed_arithmetic_in_v1() {
     let mut op = OpDef::elementwise(
         "i32_plus_one",
         1,
@@ -249,19 +249,22 @@ fn a_typed_value_may_not_feed_arithmetic_in_v1() {
     // Control: the round trip back to the compute type, then arithmetic, is fine.
     op.out_dtype = None;
     plan(&op, F32, F32).expect("Cast back to the compute type then arithmetic must plan");
-    // The refused shape: arithmetic directly on the I32-typed value.
+    // The refused shape: arithmetic directly on a value typed f64 under f32 compute. (An
+    // INTEGER-typed value is admitted by `integer_index_expressions.rs`: integer arithmetic
+    // is the one typed arithmetic with a spelling.)
+    let wide = || input(0).cast(ElementKind::F64, RoundMode::NearestEven, Saturation::Wrap);
     let bad = OpDef::elementwise(
-        "i32_arith",
+        "f64_arith",
         1,
         &[F32],
-        unpopped::ir::Expr(ScalarExpr::Add(Box::new(to_i32().0), Box::new(to_i32().0))),
+        unpopped::ir::Expr(ScalarExpr::Add(Box::new(wide().0), Box::new(wide().0))),
     );
     assert!(
         matches!(
             plan(&bad, F32, F32),
             Err(PlanError::InadmissibleOpAtDtype { .. })
         ),
-        "arithmetic on a non-compute-typed value must be a typed decline"
+        "arithmetic on a non-compute-typed float value must be a typed decline"
     );
 }
 

@@ -1110,7 +1110,9 @@ pub fn params_used(e: &ScalarExpr) -> Vec<u8> {
             ScalarExpr::Input(_)
             | ScalarExpr::Const(_)
             | ScalarExpr::Reduced(_)
-            | ScalarExpr::Coord(_) => {}
+            | ScalarExpr::Coord(_)
+            | ScalarExpr::CoordInt(..)
+            | ScalarExpr::ConstInt(..) => {}
         }
     }
     let mut set = std::collections::BTreeSet::new();
@@ -1164,6 +1166,9 @@ pub fn assert_no_int_div_or_const(
         // `Backend::lower` for every dtype (not just int) and carries the
         // targeted message; no second assert here (one message per layer).
         ScalarExpr::Coord(_) => {}
+        ScalarExpr::CoordInt(..) | ScalarExpr::ConstInt(..) => panic!(
+            "c-family lowering: CoordInt/ConstInt at an integer compute dtype ({dtype:?}) —              integer index expressions are float-compute only in v1; the plan gate rejects this"
+        ),
         ScalarExpr::Const(_) => panic!(
             "c-family lowering: Const at an integer dtype ({dtype:?}) — a Const is \
              spelled as an f64 C literal, which would silently run double math \

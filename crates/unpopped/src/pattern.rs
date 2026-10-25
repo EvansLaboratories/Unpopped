@@ -403,7 +403,9 @@ fn canonicalize(e: &ScalarExpr) -> ScalarExpr {
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)
         | ScalarExpr::Reduced(_)
-        | ScalarExpr::Coord(_) => e.clone(),
+        | ScalarExpr::Coord(_)
+        | ScalarExpr::CoordInt(..)
+        | ScalarExpr::ConstInt(..) => e.clone(),
     }
 }
 
@@ -435,6 +437,8 @@ fn sig(e: &ScalarExpr) -> String {
         ScalarExpr::Const(v) => format!("1C{v:?}"),
         ScalarExpr::Reduced(i) => format!("1R{i:03}"),
         ScalarExpr::Coord(d) => format!("1D{d:03}"),
+        ScalarExpr::CoordInt(d, t) => format!("1D{d:03}{t:?}"),
+        ScalarExpr::ConstInt(v, t) => format!("1K{v}{t:?}"),
     }
 }
 
@@ -449,7 +453,9 @@ fn walk(
         ScalarExpr::Input(i) => Ok(PatternNode::Bind(*i)),
         // A bare Const or a standalone Param (not the scalar of an Add/Mul) has
         // no graph-Op form.
-        ScalarExpr::Const(_) | ScalarExpr::Param(_) => Err(PatternError::ScalarParamUnsupported),
+        ScalarExpr::Const(_) | ScalarExpr::ConstInt(..) | ScalarExpr::Param(_) => {
+            Err(PatternError::ScalarParamUnsupported)
+        }
         // A `Reduced(i)` stage reference only exists inside a fold-carrying op
         // (RowReduce/Reduction/…), which `derive_pattern` rejects
         // (NotElementwise) before reaching `walk` — so on this path EVERY
@@ -465,7 +471,9 @@ fn walk(
         // grammar cannot carry the axis attribute and the Iota↔Coord
         // correspondence is unreconciled, so emitting `op: Iota` would
         // advertise a wrong-bind matcher. No pattern, no contract.
-        ScalarExpr::Coord(d) => Err(PatternError::CoordUnsupported { axis: *d }),
+        ScalarExpr::Coord(d) | ScalarExpr::CoordInt(d, _) => {
+            Err(PatternError::CoordUnsupported { axis: *d })
+        }
         // Select is a typed miss too — `OpTag::Where` exists and arity-3 is
         // expressible, but the single-op advert needs the Model-A per-operand
         // dtype tuple (cond is U8) and the fused-cmp form needs fuel-side

@@ -233,7 +233,11 @@ fn add_expr(eg: &mut EGraph, e: &ScalarExpr, compute: Compute) -> Id {
         // Unreachable: both entry points return a typed expression unchanged (see
         // `optimize`). A rewrite could introduce a `Const` of the compute type where
         // a converted value of another type stood, changing the node's type.
-        ScalarExpr::Cast(..) | ScalarExpr::Bitcast(..) | ScalarExpr::Qualified(..) => {
+        ScalarExpr::Cast(..)
+        | ScalarExpr::Bitcast(..)
+        | ScalarExpr::Qualified(..)
+        | ScalarExpr::CoordInt(..)
+        | ScalarExpr::ConstInt(..) => {
             unreachable!("typed expressions bypass the e-graph (optimize returns them unchanged)")
         }
     }
@@ -818,7 +822,11 @@ fn expr_cost(e: &ScalarExpr) -> u64 {
         ScalarExpr::Unary(op, a) => (ENode::Unary(*op, 0), vec![a]),
         ScalarExpr::Select(c, a, b) => (ENode::Select(0, 0, 0), vec![c, a, b]),
         ScalarExpr::Fma(a, b, c) => (ENode::Fma(0, 0, 0), vec![a, b, c]),
-        ScalarExpr::Cast(..) | ScalarExpr::Bitcast(..) | ScalarExpr::Qualified(..) => {
+        ScalarExpr::Cast(..)
+        | ScalarExpr::Bitcast(..)
+        | ScalarExpr::Qualified(..)
+        | ScalarExpr::CoordInt(..)
+        | ScalarExpr::ConstInt(..) => {
             unreachable!("typed expressions bypass the e-graph (optimize returns them unchanged)")
         }
     };
@@ -896,6 +904,8 @@ fn expr_cmp(a: &ScalarExpr, b: &ScalarExpr) -> std::cmp::Ordering {
             ScalarExpr::Cast(..) => 13,
             ScalarExpr::Bitcast(..) => 14,
             ScalarExpr::Qualified(..) => 15,
+            ScalarExpr::CoordInt(..) => 16,
+            ScalarExpr::ConstInt(..) => 17,
         }
     }
     match (a, b) {
@@ -904,6 +914,12 @@ fn expr_cmp(a: &ScalarExpr, b: &ScalarExpr) -> std::cmp::Ordering {
         | (ScalarExpr::Reduced(x), ScalarExpr::Reduced(y))
         | (ScalarExpr::Coord(x), ScalarExpr::Coord(y)) => x.cmp(y),
         (ScalarExpr::Const(x), ScalarExpr::Const(y)) => x.to_bits().cmp(&y.to_bits()),
+        (ScalarExpr::CoordInt(x, s), ScalarExpr::CoordInt(y, t)) => x
+            .cmp(y)
+            .then_with(|| format!("{s:?}").cmp(&format!("{t:?}"))),
+        (ScalarExpr::ConstInt(x, s), ScalarExpr::ConstInt(y, t)) => x
+            .cmp(y)
+            .then_with(|| format!("{s:?}").cmp(&format!("{t:?}"))),
         (ScalarExpr::Add(a1, a2), ScalarExpr::Add(b1, b2))
         | (ScalarExpr::Sub(a1, a2), ScalarExpr::Sub(b1, b2))
         | (ScalarExpr::Mul(a1, a2), ScalarExpr::Mul(b1, b2))
@@ -2376,7 +2392,11 @@ mod tests {
             ScalarExpr::Unary(op, a) => (ENode::Unary(*op, 0), vec![a]),
             ScalarExpr::Select(c, a, b) => (ENode::Select(0, 0, 0), vec![c, a, b]),
             ScalarExpr::Fma(a, b, c) => (ENode::Fma(0, 0, 0), vec![a, b, c]),
-            ScalarExpr::Cast(..) | ScalarExpr::Bitcast(..) | ScalarExpr::Qualified(..) => {
+            ScalarExpr::Cast(..)
+            | ScalarExpr::Bitcast(..)
+            | ScalarExpr::Qualified(..)
+            | ScalarExpr::CoordInt(..)
+            | ScalarExpr::ConstInt(..) => {
                 unreachable!("typed expressions bypass the e-graph")
             }
         };

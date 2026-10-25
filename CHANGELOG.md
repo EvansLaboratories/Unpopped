@@ -15,6 +15,16 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.26.0` — BREAKING: integer index expressions, `CoordInt`, `ConstInt` and integer arithmetic (I1 of #112)
+
+**Breaking, pre-1.0 (second number).** New variants: `ir::ScalarExpr::{CoordInt, ConstInt}`, `ir::DagNode::{CoordInt, ConstInt}`, `backend::DeclinedOp::Integer`, `types::TypeError::{IllegalIntLeaf, IntegerOperand}`; new `Lowering` seams `coord_int`, `const_int`, `int_op` (default: decline) and `backend::IntOp`; every exhaustive `match` over `ScalarExpr`/`DagNode`/`TypeError` gains arms. New public items: `ir::{coord_int, konst_int}`, `types::{check_int_leaf, int_binary_ok, int_spine_type, is_index_int}`.
+
+`CoordInt(axis, T)` is the exact output coordinate (no float round-trip, so no 2^24 bound) and `ConstInt(v, T)` an exact constant, `T` one of `I32`/`I64`/`U32`. Inside a float op, `Add`/`Sub`/`Mul` over integers wrap in two's complement at the type's width (never C's undefined signed overflow), `Min`/`Max` keep the type, the six comparisons yield the compute type's 1/0, and `Select` takes any condition and integer arms. `Div`, unary math, `Fma` and the other binary ops refuse an integer operand with `TypeError::IntegerOperand`; an integer COMPUTE dtype is unaffected. The plan gate admits an integer value anywhere `infer` accepts it (it was root-or-under-`Cast` only); the optimizer returns such a body unchanged. Spec: `docs/ir-typed-expressions.md` section 8.
+
+cpu_c spells the constants and every operation (widening to an unsigned type for the wrapping forms); it has no strided schedule, so it declines `CoordInt` through the default seam, as it does `Coord`. **Baracuda's CUDA emitter needs `coord_int`, `const_int` and `int_op` to lower these**; until then it declines naming the leaf.
+
+Proof: `tests/integer_index_expressions.rs` (type rules each with a control, gate, oracle at the extremes) and a real-compiler differential over 3 types x 6 edge constants x 11 forms (136 kernels) against the oracle's exact `i128` evaluation; a mutation of the `Sub` spelling turned it red.
+
 ## `0.25.1` — test fix: exact powers of two in the optimizer tests
 
 Two optimizer tests looped `k` over `-1074..=1023` with `f64::powi(k)`, which is `1 / 2^-k` on some libms; `2^1074` overflows, so the subnormal powers of two came out `0` there and the tested population differed by platform. They now build `2^k` from its bit pattern (`pow2_f64`), and a test pins it at `k = 1023, -1022, -1023, -1074`. Test-only; no public API change. Found by the 0.25.0 libm sweep (a `powi(-130)` fixture that was `0.0` on Linux).

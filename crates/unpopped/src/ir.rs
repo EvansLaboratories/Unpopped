@@ -296,6 +296,16 @@ pub enum ScalarExpr {
     ///   never `Vectorized`/`Scalar` (a linear-index kernel has no per-axis
     ///   coordinates to read).
     Coord(u8),
+    /// The output element's coordinate along `axis` as an **exact integer** of type
+    /// `.1` (`docs/ir-typed-expressions.md` section 8): no float round-trip, so no
+    /// 2^24 exactness bound. `.1` is one of `I32`, `I64`, `U32`. Legality is
+    /// [`ScalarExpr::Coord`]'s (Elementwise, `axis < rank`, `Schedule::Strided`).
+    /// A leaf, opaque to the optimizer.
+    CoordInt(u8, #[serde(with = "crate::text::ek")] ElementKind),
+    /// A compile-time **integer** constant of type `.1` (`I32`, `I64` or `U32`),
+    /// exact (never a float), which `Const` cannot be at an integer type without the
+    /// double-math hazard. The value must be in the type's range.
+    ConstInt(i64, #[serde(with = "crate::text::ek")] ElementKind),
     /// Sum of two sub-expressions.
     Add(Box<ScalarExpr>, Box<ScalarExpr>),
     /// Difference of two sub-expressions.
@@ -1200,6 +1210,10 @@ pub enum DagNode {
     Reduced(u8),
     /// Output coordinate along axis `axis` ([`ScalarExpr::Coord`]). (Leaf.)
     Coord(u8),
+    /// Exact integer output coordinate ([`ScalarExpr::CoordInt`]). (Leaf.)
+    CoordInt(u8, ElementKind),
+    /// Exact integer constant ([`ScalarExpr::ConstInt`]). (Leaf.)
+    ConstInt(i64, ElementKind),
     /// Sum of two nodes.
     Add(NodeId, NodeId),
     /// Difference of two nodes.
@@ -1242,6 +1256,8 @@ impl DagNode {
                 | DagNode::Param(_)
                 | DagNode::Reduced(_)
                 | DagNode::Coord(_)
+                | DagNode::CoordInt(..)
+                | DagNode::ConstInt(..)
         )
     }
 }
@@ -1395,6 +1411,8 @@ impl ExprDag {
             DagNode::Param(i) => ScalarExpr::Param(i),
             DagNode::Reduced(i) => ScalarExpr::Reduced(i),
             DagNode::Coord(d) => ScalarExpr::Coord(d),
+            DagNode::CoordInt(d, t) => ScalarExpr::CoordInt(d, t),
+            DagNode::ConstInt(v, t) => ScalarExpr::ConstInt(v, t),
             DagNode::Add(a, b) => {
                 ScalarExpr::Add(Box::new(self.rebuild(a)), Box::new(self.rebuild(b)))
             }
@@ -1437,6 +1455,8 @@ enum DagKey {
     Param(u8),
     Reduced(u8),
     Coord(u8),
+    CoordInt(u8, ElementKind),
+    ConstInt(i64, ElementKind),
     Add(NodeId, NodeId),
     Sub(NodeId, NodeId),
     Mul(NodeId, NodeId),
@@ -1461,6 +1481,8 @@ impl DagKey {
             DagNode::Param(i) => DagKey::Param(i),
             DagNode::Reduced(i) => DagKey::Reduced(i),
             DagNode::Coord(d) => DagKey::Coord(d),
+            DagNode::CoordInt(d, t) => DagKey::CoordInt(d, t),
+            DagNode::ConstInt(v, t) => DagKey::ConstInt(v, t),
             DagNode::Add(a, b) => DagKey::Add(a, b),
             DagNode::Sub(a, b) => DagKey::Sub(a, b),
             DagNode::Mul(a, b) => DagKey::Mul(a, b),
@@ -1490,6 +1512,8 @@ impl DagBuilder {
             ScalarExpr::Param(i) => DagNode::Param(*i),
             ScalarExpr::Reduced(i) => DagNode::Reduced(*i),
             ScalarExpr::Coord(d) => DagNode::Coord(*d),
+            ScalarExpr::CoordInt(d, t) => DagNode::CoordInt(*d, *t),
+            ScalarExpr::ConstInt(v, t) => DagNode::ConstInt(*v, *t),
             ScalarExpr::Add(a, b) => {
                 let (a, b) = (self.intern(a), self.intern(b));
                 DagNode::Add(a, b)
@@ -1566,7 +1590,9 @@ fn node_children(n: &DagNode) -> Vec<NodeId> {
         | DagNode::Const(_)
         | DagNode::Param(_)
         | DagNode::Reduced(_)
-        | DagNode::Coord(_) => Vec::new(),
+        | DagNode::Coord(_)
+        | DagNode::CoordInt(..)
+        | DagNode::ConstInt(..) => Vec::new(),
         DagNode::Unary(_, x)
         | DagNode::Cast(x, _)
         | DagNode::Bitcast(x, _)
@@ -1702,6 +1728,19 @@ pub fn reduced(i: u8) -> Expr {
 #[must_use]
 pub fn coord(axis: u8) -> Expr {
     Expr(ScalarExpr::Coord(axis))
+}
+
+/// The output element's coordinate along `axis` as an exact integer of type `t`
+/// ([`ScalarExpr::CoordInt`]; `t` is `I32`, `I64` or `U32`).
+#[must_use]
+pub fn coord_int(axis: u8, t: ElementKind) -> Expr {
+    Expr(ScalarExpr::CoordInt(axis, t))
+}
+
+/// A compile-time exact integer constant leaf of type `t` ([`ScalarExpr::ConstInt`]).
+#[must_use]
+pub fn konst_int(v: i64, t: ElementKind) -> Expr {
+    Expr(ScalarExpr::ConstInt(v, t))
 }
 
 /// A compile-time scalar constant leaf (e.g. `input(0) * konst(0.5)`).

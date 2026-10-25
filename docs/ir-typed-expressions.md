@@ -104,4 +104,49 @@ reviewable. fp4/fp6/MX element kinds are D5 (CireSnave, board 290) and stay out.
    seams. Breaking (new `ScalarExpr` variants): one pre-1.0 minor.
 3. Rounding / ftz / approx qualifiers on `Unary`/`Binary`.
 4. Packed values (section 6).
-5. `CoordInt`, `ConstInt` and integer arithmetic inside a float op (the full integer-index story), after slice 2.
+5. `CoordInt`, `ConstInt` and integer arithmetic inside a float op (the full integer-index story), after slice 2. **Landed**, section 8.
+
+## 8. Integer index expressions (slice 5, landed)
+
+`CoordInt(axis, T)`, `ConstInt(v, T)` and integer arithmetic inside a float op. `T` is `I32`, `I64` or
+`U32` for the leaves (`check_int_leaf`; a constant must be in range); the arithmetic also accepts the
+other integer types a `Cast` produces (`I8`, `I16`, `U8`, `U16`).
+
+**What exists at an integer type** (every other operator refuses an integer operand with
+`TypeError::IntegerOperand { node, ty }`, and an integer compute dtype is unaffected, because the
+refusal applies only to a type that differs from the compute dtype):
+
+| Node | Result | Semantics |
+|---|---|---|
+| `CoordInt(axis, T)` | `T` | The exact output coordinate: no float round-trip, so no 2^24 bound. Elementwise-only, `axis < rank`, lowers via `Schedule::Strided`, like `Coord`. |
+| `ConstInt(v, T)` | `T` | An exact constant. |
+| `Add`, `Sub`, `Mul` | `T` | **Two's-complement wrapping** at `T`'s width. Defined, never C's undefined signed overflow: an emitter widens to an unsigned type, operates, converts back. |
+| `Binary(Min \| Max)` | `T` | The smaller or larger value (NaN rules do not arise). |
+| `Binary(CmpEq .. CmpGe)` | `C` | The compute type's `1`/`0`, exactly as a float comparison: an integer mask feeds a float `Select` or a `Cast`. |
+| `Select(c, a, b)` | `T` of the arms | `c` is any scalar, tested `!= 0` in its own type (an integer by value, a float rounded to the compute dtype first); the arm moves unconverted. |
+
+Division is deliberately absent: integer division by zero and `MIN / -1` need a defined result per
+target, which is its own decision. Bitwise and shift operators, and `Cast`-free mixed-width
+arithmetic, are later slices.
+
+**Gate.** An integer value is admitted anywhere `infer` accepts it, not only at the root or under a
+`Cast`: that restriction (section 2, increment 2) existed because float arithmetic on a non-compute
+value had no spelling, and integer arithmetic now has one. A non-integer non-compute value (an `f64`
+under `f32` compute) keeps the old rule. The body's type must still equal the store type.
+
+**Seams.** `Lowering` gains `coord_int`, `const_int` and one `int_op(IntOp, T, operands)`; all default
+to a typed decline (`DeclinedOp::Integer`). A walker routes `Add`/`Sub`/`Mul`/`Min`/`Max`/comparisons/
+`Select` to `int_op` when the first value operand is integer-typed, and a hoisted integer temporary is
+declared with `type_name(T)`. cpu_c spells the constants and every operation; it has no strided
+schedule, so it declines `CoordInt` through the default and the leaf is exercised against the oracle
+and by seam-level tests. **Baracuda's CUDA emitter owns `CoordInt` there** (`coord_int`, `int_op`,
+`const_int`), as it owns `Coord`.
+
+**Optimizer.** `is_typed` is true of both leaves, so a body containing one is returned as authored
+(zero rules), the same bypass as `Cast`.
+
+**Evidence.** `tests/integer_index_expressions.rs` (type rules with controls, gate, oracle at the
+types' extremes) and `unpopped-cpu-c/tests/cpu_end_to_end.rs`
+`integer_index_arithmetic_wraps_like_the_oracle_in_a_real_compiler`, which compiles each operation at
+`I32`/`U32`/`I64` over operands that include both extremes and compares with the oracle's exact `i128`
+evaluation wrapped to the width.

@@ -363,6 +363,8 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> Result<GeneratedKernel
     let tn = |t| typed::c_type(t).map(str::to_string);
     let ql = |op, operands, n| qualified::cpu_qualified(op, operands, n, plan.dtype);
     let cst = |v| Ok(Spelling::Spelled(const_lit(v)));
+    let ci = |v, t| typed::cpu_const_int(v, t);
+    let io = |op, t, operands: Vec<String>| typed::cpu_int_op(op, t, &operands, plan.dtype);
     let lowering = Lowering::builder(&acc, &un, &bin)
         .arith(&ar)
         .select(&sel)
@@ -373,6 +375,8 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> Result<GeneratedKernel
         .compute_dtype(plan.dtype)
         .type_name(&tn)
         .constant(&cst)
+        .const_int(&ci)
+        .int_op(&io)
         .build();
     let (prelude, root) = if bit_move {
         lower_dag_all(&dag, body_ctype, &lowering)?

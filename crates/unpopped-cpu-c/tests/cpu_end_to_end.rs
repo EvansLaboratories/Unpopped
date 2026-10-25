@@ -2542,6 +2542,89 @@ fn float_to_float_casts_round_and_clamp_like_the_oracle() {
     run_typed_cases(cases);
 }
 
+/// Integer index arithmetic (`docs/ir-typed-expressions.md` section 8), compiled by a real
+/// C compiler and compared with the oracle's exact `i128` evaluation wrapped to the
+/// type's width. The inputs are the float edge set cast to the integer type with `Clamp`,
+/// so the integer operands include both extremes of every type: that is where C's signed
+/// overflow would be undefined if the emitter spelled the plain operator.
+#[test]
+fn integer_index_arithmetic_wraps_like_the_oracle_in_a_real_compiler() {
+    use ElementKind::*;
+    use unpopped::ir::{BinaryOp, konst_int};
+    let xs = typed_edges();
+    let rz = RoundMode::TowardZero;
+    let mut cases = Vec::new();
+    let consts: [(ElementKind, [i64; 6]); 3] = [
+        (
+            I32,
+            [
+                1,
+                -1,
+                i64::from(i32::MAX),
+                i64::from(i32::MIN),
+                65536,
+                46341,
+            ],
+        ),
+        (
+            U32,
+            [1, 3, i64::from(u32::MAX), 2_147_483_648, 65536, 46341],
+        ),
+        (
+            I64,
+            [1, -1, i64::MAX, i64::MIN, 4_294_967_296, 3_037_000_500],
+        ),
+    ];
+    for (t, ks) in consts {
+        let c = || input(0).cast(t, rz, Saturation::Clamp);
+        let mut push = |name: &str, body: Expr, out: ElementKind| {
+            cases.push((format!("idx_{t:?}_{name}"), body, F32, out, xs.clone()));
+        };
+        for (i, k) in ks.iter().enumerate() {
+            push(&format!("add{i}"), c() + konst_int(*k, t), t);
+            push(&format!("sub{i}"), c() - konst_int(*k, t), t);
+            push(&format!("rsub{i}"), konst_int(*k, t) - c(), t);
+            push(&format!("mul{i}"), c() * konst_int(*k, t), t);
+            push(&format!("min{i}"), c().min(konst_int(*k, t)), t);
+            push(&format!("max{i}"), c().max(konst_int(*k, t)), t);
+            // A comparison of integers is the compute type's 1/0.
+            push(
+                &format!("ge{i}"),
+                c().binary(BinaryOp::CmpGe, konst_int(*k, t)),
+                F32,
+            );
+            push(
+                &format!("ne{i}"),
+                c().binary(BinaryOp::CmpNe, konst_int(*k, t)),
+                F32,
+            );
+            // Select with an integer condition, and with a comparison condition.
+            push(
+                &format!("selint{i}"),
+                (c() - konst_int(*k, t)).select(konst_int(*k, t), c()),
+                t,
+            );
+            push(
+                &format!("selcmp{i}"),
+                c().binary(BinaryOp::CmpLt, konst_int(*k, t))
+                    .select(c(), konst_int(*k, t)),
+                t,
+            );
+            // Back to float: the integer result converts like any integer.
+            push(
+                &format!("tof{i}"),
+                (c() * konst_int(*k, t)).cast(F32, RoundMode::NearestEven, Saturation::Wrap),
+                F32,
+            );
+        }
+        // A shared integer subexpression is hoisted to a temporary of its OWN type.
+        let shared = || c() * c() + konst_int(ks[2], t);
+        push("shared", shared() * shared(), t);
+        push("square", c() * c(), t);
+    }
+    run_typed_cases(cases);
+}
+
 #[test]
 fn bitcast_moves_bits_exactly() {
     use ElementKind::*;

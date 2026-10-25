@@ -528,7 +528,9 @@ fn expr_contains_cmp_outside_select_cond(e: &ScalarExpr) -> bool {
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)
         | ScalarExpr::Reduced(_)
-        | ScalarExpr::Coord(_) => false,
+        | ScalarExpr::Coord(_)
+        | ScalarExpr::CoordInt(..)
+        | ScalarExpr::ConstInt(..) => false,
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)

@@ -910,7 +910,7 @@ fn contraction_epilogue_admissible(e: &crate::ir::ScalarExpr, n_inputs: u8) -> b
         // output space, not an elementwise cell's — Coord's v1 semantics are
         // Elementwise-only (`check_coord_admissibility` fires first with the
         // targeted message; this arm keeps the predicate honest regardless).
-        E::Param(_) | E::Reduced(_) | E::Coord(_) => false,
+        E::Param(_) | E::Reduced(_) | E::Coord(_) | E::CoordInt(..) | E::ConstInt(..) => false,
         E::Unary(_, x) => contraction_epilogue_admissible(x, n_inputs),
         E::Cast(x, _) | E::Bitcast(x, _) | E::Qualified(x, _) => {
             contraction_epilogue_admissible(x, n_inputs)
@@ -1239,6 +1239,10 @@ fn assert_valid_multi_output(op: &OpDef, key: &StructureKey) {
                 "OpDef '{name}': multi-output body must not read Coord({d}) — v1 is \
                  elementwise-map only (a multi-output coordinate kernel is deferred)"
             ),
+            ScalarExpr::CoordInt(d, _) => panic!(
+                "OpDef '{name}': multi-output body must not read CoordInt({d}) — v1 is                  elementwise-map only (a multi-output coordinate kernel is deferred)"
+            ),
+            ScalarExpr::ConstInt(..) => {}
             ScalarExpr::Unary(_, x) => check_body(x, n_inputs, name),
             ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
                 check_body(x, n_inputs, name)
@@ -1927,7 +1931,9 @@ pub(crate) fn check_no_half_nextafter(op: &OpDef, dtype: ElementKind) -> Result<
             | ScalarExpr::Const(_)
             | ScalarExpr::Param(_)
             | ScalarExpr::Reduced(_)
-            | ScalarExpr::Coord(_) => false,
+            | ScalarExpr::Coord(_)
+            | ScalarExpr::CoordInt(..)
+            | ScalarExpr::ConstInt(..) => false,
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
             | ScalarExpr::Mul(a, b)
@@ -2126,6 +2132,13 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
             // moot for rule 3: an int-only op's operands are pinned to leaf
             // Inputs at 8-bit before Coord could ever appear there.
             ScalarExpr::Coord(_) => {}
+            ScalarExpr::CoordInt(..) | ScalarExpr::ConstInt(..) => {
+                if int_dt {
+                    return Err(format!(
+                        "op '{op_name}': an integer-typed leaf (CoordInt/ConstInt) at int compute                          dtype {dtype:?} is rejected, integer index expressions are float-compute                          only in v1"
+                    ));
+                }
+            }
             ScalarExpr::Qualified(x, _) => {
                 if int_dt {
                     return Err(format!(
@@ -2501,6 +2514,10 @@ pub(crate) fn check_complex_op_admissibility(
         };
         match e {
             ScalarExpr::Input(_) | ScalarExpr::Const(_) => Ok(()),
+            ScalarExpr::CoordInt(..) | ScalarExpr::ConstInt(..) => reject(
+                "an integer-typed leaf",
+                "integer index expressions are float-compute only in v1",
+            ),
             // All four field operations. `Div` joined them once both sides
             // carried a rule: the oracle evaluates Smith's algorithm and
             // `cfamily::complex_helpers` emits the same recurrence. It was
@@ -2626,6 +2643,10 @@ pub(crate) fn check_bool_op_admissibility(op: &OpDef, dtype: ElementKind) -> Res
                 "rounding/ftz/approx qualifiers are f32-compute only in v1",
             ),
             ScalarExpr::Param(_) => reject("Param", "scalar params are f32-only"),
+            ScalarExpr::CoordInt(..) | ScalarExpr::ConstInt(..) => reject(
+                "CoordInt/ConstInt",
+                "integer index expressions are f32/f32s/f64-compute only in v1",
+            ),
             ScalarExpr::Reduced(_) | ScalarExpr::Coord(_) => {
                 reject("Reduced/Coord", "no bool reduction or coordinate path")
             }
@@ -2791,9 +2812,10 @@ mod int_reduction_predicate_gate_validate {
 /// `contract::expr_contains_cmp` in shape.
 pub(crate) fn expr_contains_coord(e: &ScalarExpr) -> bool {
     match e {
-        ScalarExpr::Coord(_) => true,
+        ScalarExpr::Coord(_) | ScalarExpr::CoordInt(..) => true,
         ScalarExpr::Input(_)
         | ScalarExpr::Const(_)
+        | ScalarExpr::ConstInt(..)
         | ScalarExpr::Param(_)
         | ScalarExpr::Reduced(_) => false,
         ScalarExpr::Unary(_, x) => expr_contains_coord(x),
@@ -2848,6 +2870,24 @@ pub(crate) fn check_coord_admissibility(op: &OpDef, key: &StructureKey) -> Resul
             | ScalarExpr::Const(_)
             | ScalarExpr::Param(_)
             | ScalarExpr::Reduced(_) => Ok(()),
+            ScalarExpr::ConstInt(..) => Ok(()),
+            ScalarExpr::CoordInt(d, _) => {
+                if !elementwise {
+                    return Err(PlanError::InadmissibleOpInCell {
+                        detail: format!(
+                            "op '{op_name}': CoordInt({d}) is Elementwise-only, like Coord (a                              coordinate along a reduced/folded axis is ambiguous); miss honestly"
+                        ),
+                    });
+                }
+                if *d >= rank {
+                    return Err(PlanError::InadmissibleOpInCell {
+                        detail: format!(
+                            "op '{op_name}': CoordInt({d}) axis out of range for rank {rank} —                              the iteration space has no such coordinate"
+                        ),
+                    });
+                }
+                Ok(())
+            }
             ScalarExpr::Coord(d) => {
                 // Message text is preserved BYTE-FOR-BYTE from the `assert!`s
                 // this replaced. `build_plan` panics with `Display`, which is
@@ -3016,10 +3056,12 @@ pub(crate) fn check_typed_admissibility(op: &OpDef, dtype: ElementKind) -> Resul
             op.name
         ));
     }
-    // Typed (non-compute) values only at the root or directly under a Cast/Bitcast.
+    // Typed (non-compute) values only at the root or directly under a Cast/Bitcast,
+    // except an INTEGER value, which `infer` already confines to the operators that
+    // have an integer form (`Add`/`Sub`/`Mul`, `Select`, `Min`/`Max`, comparisons).
     fn walk(e: &ScalarExpr, compute: ElementKind, typed_ok: bool) -> Result<(), String> {
         let ty = crate::types::infer(e, compute).map_err(|x| format!("{x:?}"))?;
-        if ty != compute && !typed_ok {
+        if ty != compute && !typed_ok && !crate::types::is_cast_int(ty) {
             return Err(format!(
                 "a value of type {ty:?} feeds an operator; v1 admits a non-compute-typed                  value only at the root or directly under a Cast/Bitcast"
             ));
@@ -3046,7 +3088,9 @@ pub(crate) fn check_typed_admissibility(op: &OpDef, dtype: ElementKind) -> Resul
             | ScalarExpr::Const(_)
             | ScalarExpr::Param(_)
             | ScalarExpr::Reduced(_)
-            | ScalarExpr::Coord(_) => Ok(()),
+            | ScalarExpr::Coord(_)
+            | ScalarExpr::CoordInt(..)
+            | ScalarExpr::ConstInt(..) => Ok(()),
         }
     }
     walk(&op.body, dtype, true).map_err(|why| PlanError::InadmissibleOpAtDtype {
@@ -3162,7 +3206,9 @@ pub(crate) fn check_fma_admissibility(op: &OpDef, dtype: ElementKind) -> Result<
             | ScalarExpr::Const(_)
             | ScalarExpr::Param(_)
             | ScalarExpr::Reduced(_)
-            | ScalarExpr::Coord(_) => false,
+            | ScalarExpr::Coord(_)
+            | ScalarExpr::CoordInt(..)
+            | ScalarExpr::ConstInt(..) => false,
             ScalarExpr::Unary(_, x) => has_fma(x),
             ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
                 has_fma(x)
@@ -3389,6 +3435,10 @@ fn assert_valid_reduction_post(op: &OpDef) {
                 "OpDef '{name}': reduction post-expr must not read Coord({d}) — Coord \
                  is Elementwise-only (a coordinate along a folded axis is ambiguous)"
             ),
+            ScalarExpr::CoordInt(d, _) => panic!(
+                "OpDef '{name}': reduction post-expr must not read CoordInt({d}) — Coord                  is Elementwise-only (a coordinate along a folded axis is ambiguous)"
+            ),
+            ScalarExpr::ConstInt(..) => {}
             ScalarExpr::Unary(_, x) => walk(x, name),
             ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
                 walk(x, name)
@@ -3596,6 +3646,12 @@ pub(crate) fn check_row_reduce(
                     "RowReduce forbids Coord({d}) — the RowReduce stages/epilogue iterate                      the (row, j) space, not an elementwise output coordinate space;                      Coord is Elementwise-only in 0d"
                 ),
             }),
+            ScalarExpr::CoordInt(..) | ScalarExpr::ConstInt(..) => {
+                Err(PlanError::InadmissibleOpInCell {
+                    detail: "RowReduce forbids integer-typed leaves (CoordInt/ConstInt) — they                              are Elementwise-only in v1"
+                        .to_string(),
+                })
+            }
             ScalarExpr::Const(v) => {
                 require!(v.is_finite(), "RowReduce Const must be finite, got {v}");
                 Ok(())
@@ -3776,7 +3832,10 @@ fn validate_scan(op: &OpDef, key: &StructureKey, axis: u8, reverse: bool, exclus
                 v.is_finite(),
                 "Scan '{name}' {ctx} Const must be finite, got {v}"
             ),
-            ScalarExpr::Param(_) | ScalarExpr::Coord(_) => {}
+            ScalarExpr::Param(_)
+            | ScalarExpr::Coord(_)
+            | ScalarExpr::CoordInt(..)
+            | ScalarExpr::ConstInt(..) => {}
             ScalarExpr::Unary(_, x) => check(x, n_inputs, allow_reduced, ctx, name),
             ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
                 check(x, n_inputs, allow_reduced, ctx, name)
@@ -4006,7 +4065,10 @@ fn validate_window(
                 v.is_finite(),
                 "Window '{name}' {ctx} Const must be finite, got {v}"
             ),
-            ScalarExpr::Param(_) | ScalarExpr::Coord(_) => {}
+            ScalarExpr::Param(_)
+            | ScalarExpr::Coord(_)
+            | ScalarExpr::CoordInt(..)
+            | ScalarExpr::ConstInt(..) => {}
             ScalarExpr::Unary(_, x) => check(x, n_inputs, allow_reduced, ctx, name),
             ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
                 check(x, n_inputs, allow_reduced, ctx, name)

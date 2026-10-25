@@ -170,3 +170,104 @@ pub(crate) fn cpu_bitcast(
         "((union {{ {from_c} a; {to_c} b; }}){{ ({x}) }}).b"
     )))
 }
+
+/// Spell `ConstInt(v, t)`: the exact value, converted from a `long long` literal so
+/// no literal is ever outside its C type's range or ambiguous about signedness.
+pub(crate) fn cpu_const_int(v: i64, t: ElementKind) -> Result<Spelling, LowerError> {
+    let Some(c) = c_type(t).filter(|_| unpopped::types::is_cast_int(t)) else {
+        return decline(
+            DeclinedOp::Integer,
+            format!("cpu_c has no C type for the integer constant of type {t:?}"),
+        );
+    };
+    Ok(Spelling::Spelled(format!("(({c})({}))", ll(i128::from(v)))))
+}
+
+/// Spell an integer-typed operation (`Add`/`Sub`/`Mul`/`Min`/`Max`/`Select`/comparison)
+/// over `operands` of type `t`; `compute` is the kernel's float type (a comparison's
+/// result).
+///
+/// `Add`/`Sub`/`Mul` wrap in two's complement at the type's width: signed overflow is
+/// undefined in C, so each operand is widened to an UNSIGNED type of at least `int`
+/// width (`unsigned long long` for 64-bit, `unsigned int` otherwise), the operation is
+/// done there, where overflow is defined, and the result is converted back, which
+/// every compiler targeted here defines as modular (C23 makes it the rule). Widening
+/// to `unsigned int`, never leaving a narrow type to promote to a signed `int`, is what
+/// keeps `u16 * u16` from overflowing `int`.
+pub(crate) fn cpu_int_op(
+    op: unpopped::backend::IntOp,
+    t: ElementKind,
+    operands: &[String],
+    compute: ElementKind,
+) -> Result<Spelling, LowerError> {
+    use unpopped::backend::IntOp;
+    let Some(c) = c_type(t).filter(|_| unpopped::types::is_cast_int(t)) else {
+        return decline(
+            DeclinedOp::Integer,
+            format!("cpu_c has no C type for integer arithmetic at {t:?}"),
+        );
+    };
+    let wide = if unpopped::types::typed_bits(t) == Some(64) {
+        "unsigned long long"
+    } else {
+        "unsigned int"
+    };
+    let (one, zero) = match compute {
+        ElementKind::F64 => ("1.0", "0.0"),
+        _ => ("1.0f", "0.0f"),
+    };
+    let arith = |sym: &str| {
+        format!(
+            "(({c})(({wide})({}) {sym} ({wide})({})))",
+            operands[0], operands[1]
+        )
+    };
+    let spelled = match op {
+        IntOp::Add => arith("+"),
+        IntOp::Sub => arith("-"),
+        IntOp::Mul => arith("*"),
+        IntOp::Min => format!(
+            "(({c})(({a}) < ({b}) ? ({a}) : ({b})))",
+            a = operands[0],
+            b = operands[1]
+        ),
+        IntOp::Max => format!(
+            "(({c})(({a}) > ({b}) ? ({a}) : ({b})))",
+            a = operands[0],
+            b = operands[1]
+        ),
+        // The condition is any scalar, tested against zero in its own type (a float
+        // condition's NaN is true and -0.0 false, as in the float `Select`).
+        IntOp::Select => format!(
+            "(({c})(({}) != 0 ? ({}) : ({})))",
+            operands[0], operands[1], operands[2]
+        ),
+        IntOp::Cmp(b) => {
+            let sym = match b {
+                unpopped::ir::BinaryOp::CmpEq => "==",
+                unpopped::ir::BinaryOp::CmpNe => "!=",
+                unpopped::ir::BinaryOp::CmpLt => "<",
+                unpopped::ir::BinaryOp::CmpLe => "<=",
+                unpopped::ir::BinaryOp::CmpGt => ">",
+                unpopped::ir::BinaryOp::CmpGe => ">=",
+                other => {
+                    return decline(
+                        DeclinedOp::Integer,
+                        format!("cpu_c has no integer form of {other:?}"),
+                    );
+                }
+            };
+            format!(
+                "(({}) {sym} ({}) ? {one} : {zero})",
+                operands[0], operands[1]
+            )
+        }
+        other => {
+            return decline(
+                DeclinedOp::Integer,
+                format!("cpu_c has no spelling for the integer operation {other:?}"),
+            );
+        }
+    };
+    Ok(Spelling::Spelled(spelled))
+}
