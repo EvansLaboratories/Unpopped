@@ -77,6 +77,7 @@ pub mod jit;
 pub mod kisc;
 pub mod lift;
 pub mod link;
+pub mod numerics;
 pub mod optimize;
 pub mod oracle;
 pub mod pattern;

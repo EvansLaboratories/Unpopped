@@ -536,7 +536,7 @@ fn expr_contains_cmp_outside_select_cond(e: &ScalarExpr) -> bool {
             expr_contains_cmp_outside_select_cond(a) || expr_contains_cmp_outside_select_cond(b)
         }
         ScalarExpr::Unary(_, a) => expr_contains_cmp_outside_select_cond(a),
-        ScalarExpr::Cast(a, _) | ScalarExpr::Bitcast(a, _) => {
+        ScalarExpr::Cast(a, _) | ScalarExpr::Bitcast(a, _) | ScalarExpr::Qualified(a, _) => {
             expr_contains_cmp_outside_select_cond(a)
         }
         ScalarExpr::Fma(a, b, c) => {

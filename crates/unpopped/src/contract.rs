@@ -1241,7 +1241,9 @@ fn scan_params(e: &ScalarExpr, out: &mut Vec<u8>) {
         | ScalarExpr::Reduced(_)
         | ScalarExpr::Coord(_) => {}
         ScalarExpr::Unary(_, x) => scan_params(x, out),
-        ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => scan_params(x, out),
+        ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
+            scan_params(x, out)
+        }
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
@@ -1544,6 +1546,22 @@ fn ulp_sum(e: &ScalarExpr) -> f64 {
         ScalarExpr::Cast(x, _) => ulp_sum(x) + 1.0,
         // A bitcast moves bits exactly.
         ScalarExpr::Bitcast(x, _) => ulp_sum(x),
+        // The wrapped operation's budget, plus one ulp when it rounds in a directed
+        // mode (error below one ulp, not half) and `APPROX_ULP` for an approximate
+        // form. `ftz` adds nothing: the contract's input domain excludes subnormals.
+        ScalarExpr::Qualified(x, n) => {
+            ulp_sum(x)
+                + if n.round == crate::ir::RoundMode::NearestEven {
+                    0.0
+                } else {
+                    1.0
+                }
+                + if n.approx {
+                    crate::numerics::APPROX_ULP
+                } else {
+                    0.0
+                }
+        }
     }
 }
 
@@ -1671,7 +1689,9 @@ pub(crate) fn expr_contains_cmp(e: &ScalarExpr) -> bool {
         | ScalarExpr::Mul(a, b)
         | ScalarExpr::Div(a, b) => expr_contains_cmp(a) || expr_contains_cmp(b),
         ScalarExpr::Unary(_, a) => expr_contains_cmp(a),
-        ScalarExpr::Cast(a, _) | ScalarExpr::Bitcast(a, _) => expr_contains_cmp(a),
+        ScalarExpr::Cast(a, _) | ScalarExpr::Bitcast(a, _) | ScalarExpr::Qualified(a, _) => {
+            expr_contains_cmp(a)
+        }
         ScalarExpr::Binary(bop, a, b) => {
             bop.is_cmp() || expr_contains_cmp(a) || expr_contains_cmp(b)
         }
@@ -1714,7 +1734,9 @@ fn expr_contains_select(e: &ScalarExpr) -> bool {
         | ScalarExpr::Div(a, b)
         | ScalarExpr::Binary(_, a, b) => expr_contains_select(a) || expr_contains_select(b),
         ScalarExpr::Unary(_, a) => expr_contains_select(a),
-        ScalarExpr::Cast(a, _) | ScalarExpr::Bitcast(a, _) => expr_contains_select(a),
+        ScalarExpr::Cast(a, _) | ScalarExpr::Bitcast(a, _) | ScalarExpr::Qualified(a, _) => {
+            expr_contains_select(a)
+        }
     }
 }
 

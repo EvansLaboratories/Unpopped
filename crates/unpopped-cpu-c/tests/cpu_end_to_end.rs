@@ -2606,3 +2606,309 @@ fn a_directed_inexact_conversion_is_declined_not_spelled_as_round_to_nearest() {
         .expect_err("a directed narrowing must decline");
     assert!(format!("{err:?}").contains("NearestEven"), "{err:?}");
 }
+
+// ---------------------------------------------------------------- numerics qualifiers
+//
+// `docs/ir-numerics-qualifiers.md`. Each test compiles and RUNS a kernel; the
+// semantics under test come from `unpopped::numerics`, which shares no code with
+// the C spelling.
+
+/// An odd lane count keeps the planner on the scalar schedule (see the max-NaN test).
+const QUAL_LANES: usize = 7;
+
+/// Compile and run `body` over `inputs`; `None` when there is no host C compiler.
+/// Returns the compiled kernel's output and the oracle's.
+fn run_qualified(
+    tag: &str,
+    body: unpopped::ir::Expr,
+    inputs: &[Vec<f32>],
+) -> Option<(Vec<f64>, Vec<f64>)> {
+    let cc = find_compiler()?;
+    let dir: PathBuf = std::env::temp_dir().join("unpopped-e2e");
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let n_in = inputs.len() as u8;
+    let op = OpDef::elementwise(tag, n_in, &[ElementKind::F32], body);
+    let cat = if n_in == 1 {
+        OpCategory::UnaryElementwise
+    } else {
+        OpCategory::BinaryElementwise
+    };
+    let (actual, expected) =
+        run_kernel(&cc, &dir, tag, &op, ElementKind::F32, cat, inputs, true).expect(tag);
+    Some((actual, expected.to_f64_vec()))
+}
+
+/// **`ftz` through the real compiler** (PM condition c): each step of the definition
+/// is exercised by its own lane, and the same kernel WITHOUT `ftz` is the control
+/// that the lanes discriminate.
+#[test]
+fn ftz_flushes_through_a_real_compiler() {
+    let sub = 2f32.powi(-130); // a subnormal
+    let a = vec![
+        sub,                // 0: subnormal operand -> operand flush
+        2f32.powi(-100),    // 1: normal x normal = subnormal -> result flush
+        -(2f32.powi(-100)), // 2: the same, negative -> sign kept (-0)
+        3.0,                // 3: ordinary control
+        f32::MIN_POSITIVE,  // 4: the smallest normal is NOT flushed
+        2f32.powi(-127),    // 5: a different subnormal operand
+        0.5,                // 6: ordinary control
+    ];
+    let b = vec![
+        2f32.powi(100),
+        2f32.powi(-30),
+        2f32.powi(-30),
+        4.0,
+        1.0,
+        1.0,
+        0.5,
+    ];
+    assert_eq!(a.len(), QUAL_LANES);
+    let ins = [a, b];
+    let Some((flushed, want)) = run_qualified("mul_ftz", (input(0) * input(1)).ftz(), &ins) else {
+        eprintln!("SKIP ftz_flushes_through_a_real_compiler: no host C compiler");
+        return;
+    };
+    let (plain, _) =
+        run_qualified("mul_noftz", input(0) * input(1), &ins).expect("compiler found above");
+
+    // The compiled kernel agrees with the independent reference, bit for bit.
+    for lane in 0..QUAL_LANES {
+        assert_eq!(
+            flushed[lane].to_bits(),
+            want[lane].to_bits(),
+            "lane {lane}: compiled {} vs reference {}",
+            flushed[lane],
+            want[lane]
+        );
+    }
+    // And the lanes say what the definition says.
+    assert_eq!(flushed[0], 0.0, "a subnormal operand reads as zero");
+    assert_eq!(flushed[1], 0.0, "a subnormal result is flushed");
+    assert!(
+        flushed[2] == 0.0 && flushed[2].is_sign_negative(),
+        "the sign of a flushed result is kept, got {}",
+        flushed[2]
+    );
+    assert_eq!(flushed[3], 12.0, "control lane");
+    assert_eq!(
+        flushed[4],
+        f64::from(f32::MIN_POSITIVE),
+        "the smallest normal survives"
+    );
+    assert_eq!(flushed[5], 0.0, "a different subnormal operand");
+    assert_eq!(flushed[6], 0.25, "control lane");
+    // The control: WITHOUT ftz the same lanes are the nonzero values.
+    assert_eq!(plain[0], f64::from(2f32.powi(-30)));
+    assert_eq!(plain[1], f64::from(2f32.powi(-130)));
+    assert!(plain[2] < 0.0);
+    assert_eq!(plain[5], f64::from(2f32.powi(-127)));
+}
+
+/// A qualifier that changes nothing is the child operation, bit for bit, through the
+/// compiler: `Numerics::default()` must not perturb any of the ten operations.
+#[test]
+fn a_default_qualifier_is_the_bare_operation_through_a_real_compiler() {
+    use unpopped::ir::{Expr, Numerics};
+    let a = vec![1.5f32, 0.1, 7.0, 2.5e-3, 100.0, 3.25, 0.75];
+    let b = vec![2.0f32, 3.0, 0.5, 8.0, 0.25, 1.5, 9.0];
+    let c = vec![0.5f32, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0];
+    let cases: Vec<(&str, usize, fn() -> Expr)> = vec![
+        ("d_add", 2, || input(0) + input(1)),
+        ("d_sub", 2, || input(0) - input(1)),
+        ("d_mul", 2, || input(0) * input(1)),
+        ("d_div", 2, || input(0) / input(1)),
+        ("d_fma", 3, || input(0).fma(input(1), input(2))),
+        ("d_sqrt", 1, || input(0).unary(UnaryOp::Sqrt)),
+        ("d_rsqrt", 1, || input(0).unary(UnaryOp::Rsqrt)),
+        ("d_recip", 1, || input(0).unary(UnaryOp::Recip)),
+        ("d_exp2", 1, || input(0).unary(UnaryOp::Exp2)),
+        ("d_log2", 1, || input(0).unary(UnaryOp::Log2)),
+    ];
+    let mut compared = 0;
+    for (tag, n_in, mk) in cases {
+        let ins: Vec<Vec<f32>> = [a.clone(), b.clone(), c.clone()][..n_in].to_vec();
+        let Some((bare, _)) = run_qualified(tag, mk(), &ins) else {
+            eprintln!("SKIP a_default_qualifier_is_the_bare_operation: no host C compiler");
+            return;
+        };
+        let (qual, _) = run_qualified(
+            &format!("{tag}_q"),
+            mk().qualified(Numerics::default()),
+            &ins,
+        )
+        .expect("compiler found above");
+        for lane in 0..QUAL_LANES {
+            assert_eq!(
+                qual[lane].to_bits(),
+                bare[lane].to_bits(),
+                "{tag} lane {lane}: qualified-by-default {} vs bare {}",
+                qual[lane],
+                bare[lane]
+            );
+        }
+        compared += 1;
+    }
+    assert_eq!(compared, 10);
+    // The control that this comparison can fail: `ftz` on subnormal operands DOES
+    // change a lane (sub + sub is the subnormal sum without it, zero with it).
+    let sub = vec![2f32.powi(-130); QUAL_LANES];
+    let ins = [sub.clone(), sub];
+    let (bare, _) = run_qualified("ctl_bare", input(0) + input(1), &ins).unwrap();
+    let (flushed, _) = run_qualified("ctl_ftz", (input(0) + input(1)).ftz(), &ins).unwrap();
+    assert_eq!(bare[0], f64::from(2f32.powi(-129)), "the subnormal sum");
+    assert_eq!(flushed[0], 0.0, "flushed to zero");
+}
+
+/// `approx` is within the stated bound of the exact result through the real compiler,
+/// over a grid per operation, and the checker is shown to reject a sloppy value on the
+/// same data (so "within the bound" is not vacuous).
+#[test]
+fn approx_forms_are_within_the_stated_bound_through_a_real_compiler() {
+    use unpopped::ir::{Expr, QualOp};
+    use unpopped::numerics::approx_within;
+    // Deterministic log-uniform magnitudes in [2^-12, 2^12).
+    let mut state = 0x2545_F491_4F6C_DD1Du64;
+    let mut magnitude = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let u = (state >> 11) as f64 / (1u64 << 53) as f64;
+        2f64.powf(u * 24.0 - 12.0) as f32
+    };
+    let n = 199; // odd: scalar schedule
+    let pos: Vec<f32> = (0..n).map(|_| magnitude()).collect();
+    let pos2: Vec<f32> = (0..n).map(|_| magnitude()).collect();
+    let small: Vec<f32> = pos
+        .iter()
+        .map(|x| (x.log2() * 2.0).clamp(-40.0, 40.0))
+        .collect();
+    type Exact = fn(&[f32]) -> f32;
+    let cases: Vec<(&str, QualOp, Expr, Vec<Vec<f32>>, Exact)> = vec![
+        (
+            "ap_div",
+            QualOp::Div,
+            (input(0) / input(1)).approx(),
+            vec![pos.clone(), pos2],
+            |v| (f64::from(v[0]) / f64::from(v[1])) as f32,
+        ),
+        (
+            "ap_sqrt",
+            QualOp::Sqrt,
+            input(0).unary(UnaryOp::Sqrt).approx(),
+            vec![pos.clone()],
+            |v| f64::from(v[0]).sqrt() as f32,
+        ),
+        (
+            "ap_rsqrt",
+            QualOp::Rsqrt,
+            input(0).unary(UnaryOp::Rsqrt).approx(),
+            vec![pos.clone()],
+            |v| (1.0 / f64::from(v[0]).sqrt()) as f32,
+        ),
+        (
+            "ap_recip",
+            QualOp::Recip,
+            input(0).unary(UnaryOp::Recip).approx(),
+            vec![pos.clone()],
+            |v| (1.0 / f64::from(v[0])) as f32,
+        ),
+        (
+            "ap_exp2",
+            QualOp::Exp2,
+            input(0).unary(UnaryOp::Exp2).approx(),
+            vec![small],
+            |v| f64::from(v[0]).exp2() as f32,
+        ),
+        (
+            "ap_log2",
+            QualOp::Log2,
+            input(0).unary(UnaryOp::Log2).approx(),
+            vec![pos],
+            |v| f64::from(v[0]).log2() as f32,
+        ),
+    ];
+    let mut verified = 0usize;
+    for (tag, qop, body, ins, exact) in cases {
+        let Some((actual, _)) = run_qualified(tag, body, &ins) else {
+            eprintln!("SKIP approx_forms_are_within_the_stated_bound: no host C compiler");
+            return;
+        };
+        assert_eq!(actual.len(), n);
+        for lane in 0..n {
+            let args: Vec<f32> = ins.iter().map(|v| v[lane]).collect();
+            let want = exact(&args);
+            let got = actual[lane] as f32;
+            assert!(
+                approx_within(qop, got, want),
+                "{tag} lane {lane} {args:?}: compiled {got:e}, exact {want:e}"
+            );
+            // The same data DOES fail the checker when the value is 2^-18 off, so a
+            // pass above is not the checker accepting everything. (Log2 has an
+            // absolute floor of 2^-20, so the control needs |log2| > 1 to exceed it.)
+            let floor = if qop == QualOp::Log2 { 1.0 } else { 1e-3 };
+            if want.is_normal() && want.abs() > floor {
+                assert!(
+                    !approx_within(qop, want * (1.0 + 2f32.powi(-18)), want),
+                    "{tag} lane {lane}: the checker accepted a 2^-18 relative error"
+                );
+                verified += 1;
+            }
+        }
+    }
+    assert!(
+        verified > 600,
+        "only {verified} lanes exercised the failing control"
+    );
+}
+
+/// A backend that cannot honour a qualifier DECLINES: cpu_c spells nearest-even,
+/// `ftz` and `approx`, and declines every directed mode with a decline that names the
+/// mode. It never lowers the bare operation (PM condition b).
+#[test]
+fn a_directed_rounding_mode_is_declined_never_dropped() {
+    use unpopped::ir::{Expr, Numerics, RoundMode};
+    let key = |n_in: usize| {
+        let d = OperandDesc::new(1, &[7], &[1], ElementKind::F32, 256);
+        let mut ops = vec![d; n_in];
+        ops.push(d);
+        let cat = if n_in == 1 {
+            OpCategory::UnaryElementwise
+        } else {
+            OpCategory::BinaryElementwise
+        };
+        structure_key(cat, &ops, ArchSku::Sm89)
+    };
+    let bodies: Vec<(&str, usize, fn() -> Expr)> = vec![
+        ("add", 2, || input(0) + input(1)),
+        ("mul", 2, || input(0) * input(1)),
+        ("div", 2, || input(0) / input(1)),
+        ("fma", 3, || input(0).fma(input(1), input(2))),
+        ("sqrt", 1, || input(0).unary(UnaryOp::Sqrt)),
+    ];
+    for (name, n_in, mk) in bodies {
+        let k = key(n_in);
+        let gen_ok = |body: Expr| {
+            let op = OpDef::elementwise(name, n_in as u8, &[ElementKind::F32], body);
+            unpopped::try_generate(&op, &k, &CpuC)
+        };
+        // Controls: the bare op, the default qualifier and `ftz` all generate, so each
+        // decline below is the directed mode and nothing else.
+        gen_ok(mk()).unwrap_or_else(|e| panic!("{name}: bare must generate: {e:?}"));
+        gen_ok(mk().qualified(Numerics::default()))
+            .unwrap_or_else(|e| panic!("{name}: default qualifier must generate: {e:?}"));
+        gen_ok(mk().ftz()).unwrap_or_else(|e| panic!("{name}: ftz must generate: {e:?}"));
+        for round in [
+            RoundMode::TowardZero,
+            RoundMode::TowardNegInf,
+            RoundMode::TowardPosInf,
+        ] {
+            let err = gen_ok(mk().rounded(round))
+                .expect_err(&format!("{name} {round:?}: a directed mode must decline"));
+            let text = format!("{err:?}");
+            assert!(
+                text.contains("Qualified") && text.contains(&format!("{round:?}")),
+                "{name}: the decline must name the qualifier and mode: {text}"
+            );
+        }
+    }
+}

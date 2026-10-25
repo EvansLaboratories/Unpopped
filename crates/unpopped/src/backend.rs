@@ -9,7 +9,9 @@
 //! this generator eventually target backends beyond CUDA (and move out of
 //! Baracuda) without a rewrite.
 
-use crate::ir::{ArithOp, BinaryOp, CastSpec, DagNode, ExprDag, NodeId, ScalarExpr, UnaryOp};
+use crate::ir::{
+    ArithOp, BinaryOp, CastSpec, DagNode, ExprDag, NodeId, Numerics, QualOp, ScalarExpr, UnaryOp,
+};
 use unpopped_vocab::{ElementKind, TargetId};
 
 /// What a generated kernel was baked against — its validity key.
@@ -483,6 +485,9 @@ pub enum DeclinedOp {
     Cast,
     /// A bit reinterpretation ([`ScalarExpr::Bitcast`]).
     Bitcast,
+    /// An operation under a rounding mode, flush-to-zero or approximate-form
+    /// qualifier ([`ScalarExpr::Qualified`]).
+    Qualified,
     /// A constant literal.
     Constant,
     /// An input operand leaf the backend will not spell, by **operand index**.
@@ -787,6 +792,14 @@ pub struct Lowering<'a> {
     /// text, its source type and the destination type. Must move bits without
     /// arithmetic (no pointer cast: strict aliasing). The default declines.
     pub bitcast: &'a dyn Fn(String, ElementKind, ElementKind) -> Result<Spelling, LowerError>,
+    /// Qualified-operation spelling ([`ScalarExpr::Qualified`]) over the wrapped
+    /// operation, its already-lowered operands (in operand order) and the
+    /// [`Numerics`]. An emitter that cannot honour EVERY qualifier it is handed
+    /// (the rounding mode, `ftz`, `approx`) must decline: lowering the bare
+    /// operation would silently drop the qualifier and make it mean nothing. An
+    /// `approx` it spells as the exact function is legitimate (the exact result is
+    /// inside the bound), and its docs should say so. The default declines.
+    pub qualified: &'a dyn Fn(QualOp, Vec<String>, Numerics) -> Result<Spelling, LowerError>,
     /// The op's compute dtype, which the typed nodes need to infer an operand's
     /// type. `None` (the default) makes `Cast`/`Bitcast` decline: an emitter that
     /// spells them says so with `LoweringBuilder::compute_dtype`.
@@ -919,6 +932,21 @@ mod default_seam {
     };
     pub(super) static TYPE_NAME: fn(ElementKind) -> Option<String> = |_| None;
 
+    pub(super) static QUALIFIED: fn(
+        crate::ir::QualOp,
+        Vec<String>,
+        crate::ir::Numerics,
+    ) -> Result<Spelling, LowerError> = |op, _operands, n| {
+        Ok(Spelling::Declined(Decline::UnsupportedOp {
+            op: DeclinedOp::Qualified,
+            why: format!(
+                "a Qualified {op:?} ({n:?}) reached an emitter with no `qualified` seam. \
+                     Lowering the bare operation would silently drop the rounding mode, \
+                     ftz or approx qualifier. Supply `.qualified(..)`, or decline."
+            ),
+        }))
+    };
+
     pub(super) static FMA: fn(String, String, String) -> Result<Spelling, LowerError> =
         |_a, _b, _c| {
             Ok(Spelling::Declined(Decline::UnsupportedOp {
@@ -973,6 +1001,7 @@ impl<'a> Lowering<'a> {
                 fma: &default_seam::FMA,
                 cast: &default_seam::CAST,
                 bitcast: &default_seam::BITCAST,
+                qualified: &default_seam::QUALIFIED,
                 compute: None,
                 type_name: &default_seam::TYPE_NAME,
                 constant: &default_seam::CONSTANT,
@@ -1021,6 +1050,16 @@ impl<'a> LoweringBuilder<'a> {
         f: &'a dyn Fn(String, ElementKind, ElementKind) -> Result<Spelling, LowerError>,
     ) -> Self {
         self.inner.bitcast = f;
+        self
+    }
+    /// Qualified-operation spelling ([`ScalarExpr::Qualified`]); see
+    /// [`Lowering::qualified`].
+    #[must_use]
+    pub fn qualified(
+        mut self,
+        f: &'a dyn Fn(QualOp, Vec<String>, Numerics) -> Result<Spelling, LowerError>,
+    ) -> Self {
+        self.inner.qualified = f;
         self
     }
     /// Declare the op's compute dtype so `Cast`/`Bitcast` operands can be typed; see
@@ -1160,6 +1199,20 @@ macro_rules! spelled_or_return_decline {
     };
 }
 
+/// The decline for a `Qualified` node wrapping something that is not a qualifiable
+/// operation (the plan gate rejects this before any lowering, so reaching it means a
+/// hand-built body skipped the gate).
+fn qualified_child_decline(n: Numerics) -> Spelling {
+    Spelling::Declined(Decline::UnsupportedOp {
+        op: DeclinedOp::Qualified,
+        why: format!(
+            "a Qualified node ({n:?}) wraps an expression that is not one of the \
+             qualifiable operations (Add, Sub, Mul, Div, Fma, Sqrt, Rsqrt, Recip, \
+             Exp2, Log2)"
+        ),
+    })
+}
+
 /// The type of a `Cast`/`Bitcast` operand, or the typed decline that says why it
 /// cannot be known (no declared compute dtype, or an ill-typed operand).
 fn typed_source(
@@ -1238,6 +1291,16 @@ pub fn lower_expr(e: &ScalarExpr, lo: &Lowering<'_>) -> Result<Spelling, LowerEr
             };
             let x = sp!(x);
             return (lo.bitcast)(x, from, *to);
+        }
+        ScalarExpr::Qualified(x, n) => {
+            let Some((op, kids)) = QualOp::of(x) else {
+                return Ok(qualified_child_decline(*n));
+            };
+            let mut operands = Vec::with_capacity(kids.len());
+            for k in kids {
+                operands.push(sp!(k));
+            }
+            return (lo.qualified)(op, operands, *n);
         }
         ScalarExpr::Add(a, b) => {
             let (a, b) = (sp!(a), sp!(b));
@@ -1471,6 +1534,18 @@ fn lower_node(
             };
             let x = child!(x);
             spelled_or_return_decline!((lo.bitcast)(x, from, to))
+        }
+        // The wrapped operation's node is never lowered itself: its OPERANDS are,
+        // and the qualified spelling replaces the whole operation.
+        DagNode::Qualified(x, n) => {
+            let Some((op, kids)) = QualOp::of_node(dag.node(x)) else {
+                return Ok(qualified_child_decline(n));
+            };
+            let mut operands = Vec::with_capacity(kids.len());
+            for k in kids {
+                operands.push(child!(k));
+            }
+            spelled_or_return_decline!((lo.qualified)(op, operands, n))
         }
         DagNode::Add(a, b) => {
             let (a, b) = (child!(a), child!(b));

@@ -96,6 +96,127 @@ pub struct CastSpec {
     pub sat: Saturation,
 }
 
+/// How one arithmetic operation rounds and flushes (`docs/ir-numerics-qualifiers.md`).
+///
+/// Carried by [`ScalarExpr::Qualified`]. `Default` is the unqualified behaviour
+/// (round to nearest even, denormals honoured, the exact function).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Numerics {
+    /// IEEE 754 rounding attribute of the single operation.
+    pub round: RoundMode,
+    /// Flush subnormal operands and a subnormal result to a same-signed zero (PTX `.ftz`).
+    pub ftz: bool,
+    /// Licence to use an approximate form within the bound of
+    /// [`crate::numerics::approx_within`]; a backend may still spell the exact function.
+    pub approx: bool,
+}
+
+impl Default for Numerics {
+    fn default() -> Self {
+        Numerics {
+            round: RoundMode::NearestEven,
+            ftz: false,
+            approx: false,
+        }
+    }
+}
+
+/// The operations a [`ScalarExpr::Qualified`] node may wrap.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum QualOp {
+    /// `a + b`.
+    Add,
+    /// `a - b`.
+    Sub,
+    /// `a * b`.
+    Mul,
+    /// `a / b`.
+    Div,
+    /// `a * b + c`, one rounding ([`ScalarExpr::Fma`]).
+    Fma,
+    /// Square root.
+    Sqrt,
+    /// Reciprocal square root.
+    Rsqrt,
+    /// Reciprocal.
+    Recip,
+    /// Base-2 exponential.
+    Exp2,
+    /// Base-2 logarithm.
+    Log2,
+}
+
+impl QualOp {
+    /// Number of operands.
+    #[must_use]
+    pub fn arity(self) -> usize {
+        match self {
+            QualOp::Add | QualOp::Sub | QualOp::Mul | QualOp::Div => 2,
+            QualOp::Fma => 3,
+            _ => 1,
+        }
+    }
+
+    /// May the operation take a rounding mode other than nearest-even?
+    #[must_use]
+    pub fn takes_directed_round(self) -> bool {
+        matches!(
+            self,
+            QualOp::Add | QualOp::Sub | QualOp::Mul | QualOp::Div | QualOp::Fma | QualOp::Sqrt
+        )
+    }
+
+    /// May the operation be marked `approx`?
+    #[must_use]
+    pub fn takes_approx(self) -> bool {
+        matches!(
+            self,
+            QualOp::Div
+                | QualOp::Sqrt
+                | QualOp::Rsqrt
+                | QualOp::Recip
+                | QualOp::Exp2
+                | QualOp::Log2
+        )
+    }
+
+    /// The operation and its operands if `e` is one a `Qualified` node may wrap.
+    #[must_use]
+    pub fn of(e: &ScalarExpr) -> Option<(QualOp, Vec<&ScalarExpr>)> {
+        Some(match e {
+            ScalarExpr::Add(a, b) => (QualOp::Add, vec![a, b]),
+            ScalarExpr::Sub(a, b) => (QualOp::Sub, vec![a, b]),
+            ScalarExpr::Mul(a, b) => (QualOp::Mul, vec![a, b]),
+            ScalarExpr::Div(a, b) => (QualOp::Div, vec![a, b]),
+            ScalarExpr::Fma(a, b, c) => (QualOp::Fma, vec![a, b, c]),
+            ScalarExpr::Unary(UnaryOp::Sqrt, x) => (QualOp::Sqrt, vec![x]),
+            ScalarExpr::Unary(UnaryOp::Rsqrt, x) => (QualOp::Rsqrt, vec![x]),
+            ScalarExpr::Unary(UnaryOp::Recip, x) => (QualOp::Recip, vec![x]),
+            ScalarExpr::Unary(UnaryOp::Exp2, x) => (QualOp::Exp2, vec![x]),
+            ScalarExpr::Unary(UnaryOp::Log2, x) => (QualOp::Log2, vec![x]),
+            _ => return None,
+        })
+    }
+
+    /// As [`QualOp::of`], over a DAG node (operands are node ids).
+    #[must_use]
+    pub fn of_node(n: &DagNode) -> Option<(QualOp, Vec<NodeId>)> {
+        Some(match *n {
+            DagNode::Add(a, b) => (QualOp::Add, vec![a, b]),
+            DagNode::Sub(a, b) => (QualOp::Sub, vec![a, b]),
+            DagNode::Mul(a, b) => (QualOp::Mul, vec![a, b]),
+            DagNode::Div(a, b) => (QualOp::Div, vec![a, b]),
+            DagNode::Fma(a, b, c) => (QualOp::Fma, vec![a, b, c]),
+            DagNode::Unary(UnaryOp::Sqrt, x) => (QualOp::Sqrt, vec![x]),
+            DagNode::Unary(UnaryOp::Rsqrt, x) => (QualOp::Rsqrt, vec![x]),
+            DagNode::Unary(UnaryOp::Recip, x) => (QualOp::Recip, vec![x]),
+            DagNode::Unary(UnaryOp::Exp2, x) => (QualOp::Exp2, vec![x]),
+            DagNode::Unary(UnaryOp::Log2, x) => (QualOp::Log2, vec![x]),
+            _ => return None,
+        })
+    }
+}
+
 /// A scalar compute expression — the per-output-coordinate math, as a typed DAG.
 ///
 /// Backend-agnostic: every emitter lowers it by walking the tree with per-backend
@@ -246,6 +367,13 @@ pub enum ScalarExpr {
         Box<ScalarExpr>,
         #[serde(with = "crate::text::ek")] ElementKind,
     ),
+    /// The wrapped operation evaluated under [`Numerics`]: a rounding mode, flush
+    /// to zero, and/or an approximate form. The wrapped node must be one
+    /// [`QualOp::of`] accepts (the plan gate enforces this and which qualifiers
+    /// each operation takes). The node's type is the child's. A backend that
+    /// cannot honour a qualifier DECLINES; it never lowers the bare operation.
+    /// Never rewritten by the optimizer. See `docs/ir-numerics-qualifiers.md`.
+    Qualified(Box<ScalarExpr>, Numerics),
 }
 
 /// A unary math / activation op. Variant names line up with the FKC §4.1
@@ -1096,6 +1224,9 @@ pub enum DagNode {
     Cast(NodeId, CastSpec),
     /// Bit reinterpretation of one node ([`ScalarExpr::Bitcast`]).
     Bitcast(NodeId, ElementKind),
+    /// A qualified operation ([`ScalarExpr::Qualified`]); the id is the wrapped
+    /// operation's node, whose operands the lowering reads directly.
+    Qualified(NodeId, Numerics),
 }
 
 impl DagNode {
@@ -1292,6 +1423,7 @@ impl ExprDag {
             ),
             DagNode::Cast(x, spec) => ScalarExpr::Cast(Box::new(self.rebuild(x)), spec),
             DagNode::Bitcast(x, to) => ScalarExpr::Bitcast(Box::new(self.rebuild(x)), to),
+            DagNode::Qualified(x, n) => ScalarExpr::Qualified(Box::new(self.rebuild(x)), n),
         }
     }
 }
@@ -1318,6 +1450,7 @@ enum DagKey {
     Fma(NodeId, NodeId, NodeId),
     Cast(NodeId, CastSpec),
     Bitcast(NodeId, ElementKind),
+    Qualified(NodeId, Numerics),
 }
 
 impl DagKey {
@@ -1338,6 +1471,7 @@ impl DagKey {
             DagNode::Fma(a, b, c) => DagKey::Fma(a, b, c),
             DagNode::Cast(x, spec) => DagKey::Cast(x, spec),
             DagNode::Bitcast(x, to) => DagKey::Bitcast(x, to),
+            DagNode::Qualified(x, n) => DagKey::Qualified(x, n),
         }
     }
 }
@@ -1396,6 +1530,10 @@ impl DagBuilder {
                 let x = self.intern(x);
                 DagNode::Bitcast(x, *to)
             }
+            ScalarExpr::Qualified(x, n) => {
+                let x = self.intern(x);
+                DagNode::Qualified(x, *n)
+            }
         };
         self.hashcons(node)
     }
@@ -1429,7 +1567,10 @@ fn node_children(n: &DagNode) -> Vec<NodeId> {
         | DagNode::Param(_)
         | DagNode::Reduced(_)
         | DagNode::Coord(_) => Vec::new(),
-        DagNode::Unary(_, x) | DagNode::Cast(x, _) | DagNode::Bitcast(x, _) => vec![x],
+        DagNode::Unary(_, x)
+        | DagNode::Cast(x, _)
+        | DagNode::Bitcast(x, _)
+        | DagNode::Qualified(x, _) => vec![x],
         DagNode::Add(a, b)
         | DagNode::Sub(a, b)
         | DagNode::Mul(a, b)
@@ -1717,6 +1858,40 @@ impl Expr {
     #[must_use]
     pub fn bitcast(self, to: ElementKind) -> Expr {
         Expr(ScalarExpr::Bitcast(Box::new(self.0), to))
+    }
+
+    /// Evaluate this operation under `n` ([`ScalarExpr::Qualified`]). `self` must be
+    /// an operation [`QualOp::of`] accepts; the plan gate refuses anything else.
+    #[must_use]
+    pub fn qualified(self, n: Numerics) -> Expr {
+        Expr(ScalarExpr::Qualified(Box::new(self.0), n))
+    }
+
+    /// [`Expr::qualified`] with only the rounding mode set.
+    #[must_use]
+    pub fn rounded(self, round: RoundMode) -> Expr {
+        self.qualified(Numerics {
+            round,
+            ..Numerics::default()
+        })
+    }
+
+    /// [`Expr::qualified`] with flush-to-zero set.
+    #[must_use]
+    pub fn ftz(self) -> Expr {
+        self.qualified(Numerics {
+            ftz: true,
+            ..Numerics::default()
+        })
+    }
+
+    /// [`Expr::qualified`] with the approximate-form licence set.
+    #[must_use]
+    pub fn approx(self) -> Expr {
+        self.qualified(Numerics {
+            approx: true,
+            ..Numerics::default()
+        })
     }
 }
 
