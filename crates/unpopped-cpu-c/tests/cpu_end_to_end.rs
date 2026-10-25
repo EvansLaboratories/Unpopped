@@ -2555,9 +2555,25 @@ fn integer_index_arithmetic_wraps_like_the_oracle_in_a_real_compiler() {
     let rz = RoundMode::TowardZero;
     let mut cases = Vec::new();
     let consts: [(ElementKind, [i64; 6]); 3] = [
-        (I32, [1, -1, i64::from(i32::MAX), i64::from(i32::MIN), 65536, 46341]),
-        (U32, [1, 3, i64::from(u32::MAX), 2_147_483_648, 65536, 46341]),
-        (I64, [1, -1, i64::MAX, i64::MIN, 4_294_967_296, 3_037_000_500]),
+        (
+            I32,
+            [
+                1,
+                -1,
+                i64::from(i32::MAX),
+                i64::from(i32::MIN),
+                65536,
+                46341,
+            ],
+        ),
+        (
+            U32,
+            [1, 3, i64::from(u32::MAX), 2_147_483_648, 65536, 46341],
+        ),
+        (
+            I64,
+            [1, -1, i64::MAX, i64::MIN, 4_294_967_296, 3_037_000_500],
+        ),
     ];
     for (t, ks) in consts {
         let c = || input(0).cast(t, rz, Saturation::Clamp);
@@ -2572,8 +2588,16 @@ fn integer_index_arithmetic_wraps_like_the_oracle_in_a_real_compiler() {
             push(&format!("min{i}"), c().min(konst_int(*k, t)), t);
             push(&format!("max{i}"), c().max(konst_int(*k, t)), t);
             // A comparison of integers is the compute type's 1/0.
-            push(&format!("ge{i}"), c().binary(BinaryOp::CmpGe, konst_int(*k, t)), F32);
-            push(&format!("ne{i}"), c().binary(BinaryOp::CmpNe, konst_int(*k, t)), F32);
+            push(
+                &format!("ge{i}"),
+                c().binary(BinaryOp::CmpGe, konst_int(*k, t)),
+                F32,
+            );
+            push(
+                &format!("ne{i}"),
+                c().binary(BinaryOp::CmpNe, konst_int(*k, t)),
+                F32,
+            );
             // Select with an integer condition, and with a comparison condition.
             push(
                 &format!("selint{i}"),

@@ -92,7 +92,11 @@ fn integer_add_sub_mul_keep_the_integer_type() {
         BinaryOp::CmpGt,
         BinaryOp::CmpGe,
     ] {
-        assert_eq!(infer(&c.clone().binary(cmp, k()).0, F32), Ok(F32), "{cmp:?}");
+        assert_eq!(
+            infer(&c.clone().binary(cmp, k()).0, F32),
+            Ok(F32),
+            "{cmp:?}"
+        );
     }
 }
 
@@ -217,7 +221,11 @@ fn an_integer_compute_dtype_still_infers_every_operator() {
 fn the_optimizer_returns_an_integer_body_exactly_as_authored() {
     // `x * 1` is rewritten for floats ...
     let plain = input(0) * konst(1.0);
-    assert_ne!(optimize(&plain.0, F32), plain.0, "control: x*1 is rewritten");
+    assert_ne!(
+        optimize(&plain.0, F32),
+        plain.0,
+        "control: x*1 is rewritten"
+    );
     // ... and the integer-typed twin is not (a rewrite could introduce a compute-typed
     // constant where an integer stood).
     let int = coord_int(0, I32) * konst_int(1, I32) + konst_int(0, I32);
@@ -318,7 +326,11 @@ fn coord_int_axis_must_be_inside_the_rank() {
         Err(PlanError::InadmissibleOpInCell { .. })
     ));
     // Control: axis 0 of a rank-1 cell is in range.
-    plan(&int_op("axis0", coord_int(0, I32) + konst_int(1, I32), I32), I32).expect("axis 0");
+    plan(
+        &int_op("axis0", coord_int(0, I32) + konst_int(1, I32), I32),
+        I32,
+    )
+    .expect("axis 0");
 }
 
 // ---------------------------------------------------------------- 5. the oracle
@@ -329,15 +341,10 @@ fn run(op: &OpDef, n: i64, out: ElementKind, xs: &[f32]) -> TypedBuffer {
     let operands = vec![a, o];
     let key = structure_key(OpCategory::UnaryElementwise, &operands, ArchSku::Sm89);
     let plan = build_plan(op, &key);
-    evaluate(
-        &plan,
-        &operands,
-        &[TypedBuffer::from_f32(&[n], xs)],
-        &[],
-    )
-    .into_iter()
-    .next()
-    .expect("one output")
+    evaluate(&plan, &operands, &[TypedBuffer::from_f32(&[n], xs)], &[])
+        .into_iter()
+        .next()
+        .expect("one output")
 }
 
 #[test]
@@ -350,7 +357,11 @@ fn coord_int_is_the_exact_coordinate_with_no_float_round_trip() {
     );
     let got = run(&op, n, I32, &vec![0.0; n as usize]);
     for i in 0..n as usize {
-        assert_eq!(got.bits_at(i) as u32 as i32, 3 * i as i32 + 1, "element {i}");
+        assert_eq!(
+            got.bits_at(i) as u32 as i32,
+            3 * i as i32 + 1,
+            "element {i}"
+        );
     }
 }
 
@@ -394,7 +405,11 @@ fn comparison_and_select_over_integers_follow_the_exact_values() {
     let body = (coord_int(0, I32) - konst_int(3, I32)).select(konst_int(1, I32), konst_int(0, I32));
     let got = run(&int_op("sel_int", body, I32), 8, I32, &[0.0; 8]);
     for i in 0..8usize {
-        assert_eq!(got.bits_at(i) as u32 as i32, i32::from(i != 3), "element {i}");
+        assert_eq!(
+            got.bits_at(i) as u32 as i32,
+            i32::from(i != 3),
+            "element {i}"
+        );
     }
 }
 

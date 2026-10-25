@@ -1342,7 +1342,11 @@ fn int_node<'e>(
         _ => return None,
     };
     // The operand type decides: a Select's is its arms', everything else's the first.
-    let probe = if matches!(op, IntOp::Select) { kids[1] } else { kids[0] };
+    let probe = if matches!(op, IntOp::Select) {
+        kids[1]
+    } else {
+        kids[0]
+    };
     let t = crate::types::infer(probe, compute).ok()?;
     (t != compute && crate::types::is_cast_int(t)).then_some((op, t, kids))
 }
@@ -1362,7 +1366,11 @@ fn int_node_of_dag(
         DagNode::Select(c, a, b) => (IntOp::Select, vec![c, a, b]),
         _ => return None,
     };
-    let probe = if matches!(op, IntOp::Select) { kids[1] } else { kids[0] };
+    let probe = if matches!(op, IntOp::Select) {
+        kids[1]
+    } else {
+        kids[0]
+    };
     let t = crate::types::infer(&dag.node_expr(probe), compute).ok()?;
     (t != compute && crate::types::is_cast_int(t)).then_some((op, t, kids))
 }

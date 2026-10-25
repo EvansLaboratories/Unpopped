@@ -272,7 +272,10 @@ pub fn infer(e: &ScalarExpr, compute: ElementKind) -> Result<ElementKind, TypeEr
             let t = same("Binary", a, b)?;
             if t != compute && is_cast_int(t) {
                 if !int_binary_ok(*op) {
-                    return Err(TypeError::IntegerOperand { node: "Binary", ty: t });
+                    return Err(TypeError::IntegerOperand {
+                        node: "Binary",
+                        ty: t,
+                    });
                 }
                 // A comparison of integers is the compute type's 0/1, exactly as a
                 // comparison of floats is.
@@ -329,9 +332,7 @@ pub fn int_spine_type(e: &ScalarExpr) -> Option<ElementKind> {
         ScalarExpr::Cast(_, spec) => is_cast_int(spec.to).then_some(spec.to),
         ScalarExpr::Bitcast(_, to) => is_cast_int(*to).then_some(*to),
         ScalarExpr::Add(a, _) | ScalarExpr::Sub(a, _) | ScalarExpr::Mul(a, _) => int_spine_type(a),
-        ScalarExpr::Binary(op, a, _) if matches!(op, BinaryOp::Max | BinaryOp::Min) => {
-            int_spine_type(a)
-        }
+        ScalarExpr::Binary(BinaryOp::Max | BinaryOp::Min, a, _) => int_spine_type(a),
         ScalarExpr::Select(_, a, _) => int_spine_type(a),
         _ => None,
     }
@@ -348,7 +349,7 @@ pub fn has_qualified(e: &ScalarExpr) -> bool {
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)
         | ScalarExpr::Reduced(_)
-        | ScalarExpr::Coord(_) 
+        | ScalarExpr::Coord(_)
         | ScalarExpr::CoordInt(..)
         | ScalarExpr::ConstInt(..) => false,
         ScalarExpr::Unary(_, x) | ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => {

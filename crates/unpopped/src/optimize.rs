@@ -2393,10 +2393,10 @@ mod tests {
             ScalarExpr::Select(c, a, b) => (ENode::Select(0, 0, 0), vec![c, a, b]),
             ScalarExpr::Fma(a, b, c) => (ENode::Fma(0, 0, 0), vec![a, b, c]),
             ScalarExpr::Cast(..)
-        | ScalarExpr::Bitcast(..)
-        | ScalarExpr::Qualified(..)
-        | ScalarExpr::CoordInt(..)
-        | ScalarExpr::ConstInt(..) => {
+            | ScalarExpr::Bitcast(..)
+            | ScalarExpr::Qualified(..)
+            | ScalarExpr::CoordInt(..)
+            | ScalarExpr::ConstInt(..) => {
                 unreachable!("typed expressions bypass the e-graph")
             }
         };

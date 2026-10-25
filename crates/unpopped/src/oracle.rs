@@ -1567,9 +1567,7 @@ fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
         }
     }
     match e {
-        ScalarExpr::CoordInt(d, t) => {
-            int_val((ev.coord)(*d).i128(), *t)
-        }
+        ScalarExpr::CoordInt(d, t) => int_val((ev.coord)(*d).i128(), *t),
         ScalarExpr::ConstInt(v, t) => int_val(i128::from(*v), *t),
         ScalarExpr::Input(i) => (ev.leaf)(*i),
         ScalarExpr::Const(v) => Val::Float(*v),
@@ -1769,7 +1767,9 @@ fn eval_int_op(e: &ScalarExpr, t: ElementKind, ev: &Eval<'_>) -> Val {
                 BinaryOp::CmpLe => Val::Float(f64::from(u8::from(x <= y))),
                 BinaryOp::CmpGt => Val::Float(f64::from(u8::from(x > y))),
                 BinaryOp::CmpGe => Val::Float(f64::from(u8::from(x >= y))),
-                other => panic!("oracle: {other:?} has no integer form (the plan gate rejects this)"),
+                other => {
+                    panic!("oracle: {other:?} has no integer form (the plan gate rejects this)")
+                }
             }
         }
         ScalarExpr::Select(c, a, b) => {
