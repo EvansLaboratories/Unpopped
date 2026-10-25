@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.26.4` — fix: integer routing in `lower_expr`/`lower_dag` types every operand (Pip review of #130)
+
+`int_node` routed on the first operand's type only (a `Select`'s first arm), so an emitter that skipped the plan gate and lowered a mixed integer/float node was spelled by `arith`/`select`, or by `int_op` at the first operand's type: a miscompile. Every value operand is now typed; a mix is `Decline::UnsupportedOp { op: DeclinedOp::Integer }` naming the types. Well-typed nodes and the plan gate are unchanged.
+
 ## `0.26.3` — fix: Slang `lower()` decline text for i16/u16
 
 The `unpopped-slang` decline text said i16/u16 "wait on vocabulary v5"; v5 shipped (vulkane 0.14.0), so it now says they require `i16` in the target's `<arith>` field. **Error text only, no behaviour change** (`supports_dtype` is unchanged). Adopters that match the old substring `wait on vocabulary v5` must match `require `i16` in the same field` instead. ROADMAP X5.

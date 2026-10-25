@@ -1324,14 +1324,44 @@ fn int_op_of(op: BinaryOp) -> Option<IntOp> {
     }
 }
 
-/// `Some((op, type, operands))` when `e` is an operation over INTEGER-typed operands
+/// How an integer-routed node is described: the op, its operand type, its operands.
+type IntForm<K> = (IntOp, ElementKind, Vec<K>);
+
+/// Decide whether an operation over `types` (the VALUE operands' inferred types, `None` for
+/// an operand that does not type) is integer. `None`: no operand is a non-compute integer,
+/// so the node is untyped lowering's. `Some(Err(why))`: some operand is, but the operands
+/// do not all share one type, so the node is ill-typed and must decline, not be spelled by
+/// `arith`/`select` or by `int_op` at the first operand's type. `Some(Ok(t))`: all `t`.
+fn int_route(
+    compute: ElementKind,
+    types: &[Option<ElementKind>],
+) -> Option<Result<ElementKind, String>> {
+    let is_int =
+        |t: &Option<ElementKind>| t.is_some_and(|t| t != compute && crate::types::is_cast_int(t));
+    if !types.iter().any(is_int) {
+        return None;
+    }
+    let first = types[0];
+    if let Some(t) = first
+        && types.iter().all(|x| *x == first)
+    {
+        return Some(Ok(t));
+    }
+    Some(Err(format!(
+        "an integer operation has mixed operand types {types:?}: there is no implicit          promotion, so the node is ill-typed (the plan gate refuses it; an emitter that          skips the gate gets this decline instead of a miscompile)"
+    )))
+}
+
+/// `Some(Ok((op, type, operands)))` when `e` is an operation over INTEGER-typed operands
 /// (type != the declared compute dtype), which the `int_op` seam spells instead of
-/// `arith`/`binary`/`select`. `None` for everything else, including every expression
-/// of an emitter that declared no compute dtype, so untyped lowering is untouched.
+/// `arith`/`binary`/`select`. `Some(Err(why))` when its operands mix integer and other
+/// types. `None` for everything else, including every expression of an emitter that
+/// declared no compute dtype, so untyped lowering is untouched. EVERY value operand is
+/// typed (a Select's condition may be any scalar and is not).
 fn int_node<'e>(
     e: &'e ScalarExpr,
     lo: &Lowering<'_>,
-) -> Option<(IntOp, ElementKind, Vec<&'e ScalarExpr>)> {
+) -> Option<Result<IntForm<&'e ScalarExpr>, String>> {
     let compute = lo.compute?;
     let (op, kids): (IntOp, Vec<&ScalarExpr>) = match e {
         ScalarExpr::Add(a, b) => (IntOp::Add, vec![a, b]),
@@ -1341,14 +1371,12 @@ fn int_node<'e>(
         ScalarExpr::Select(c, a, b) => (IntOp::Select, vec![c, a, b]),
         _ => return None,
     };
-    // The operand type decides: a Select's is its arms', everything else's the first.
-    let probe = if matches!(op, IntOp::Select) {
-        kids[1]
-    } else {
-        kids[0]
-    };
-    let t = crate::types::infer(probe, compute).ok()?;
-    (t != compute && crate::types::is_cast_int(t)).then_some((op, t, kids))
+    let value = if matches!(op, IntOp::Select) { 1 } else { 0 };
+    let types: Vec<Option<ElementKind>> = kids[value..]
+        .iter()
+        .map(|k| crate::types::infer(k, compute).ok())
+        .collect();
+    Some(int_route(compute, &types)?.map(|t| (op, t, kids)))
 }
 
 /// [`int_node`] for a DAG node: the operands are node ids.
@@ -1356,7 +1384,7 @@ fn int_node_of_dag(
     dag: &ExprDag,
     n: &DagNode,
     lo: &Lowering<'_>,
-) -> Option<(IntOp, ElementKind, Vec<NodeId>)> {
+) -> Option<Result<IntForm<NodeId>, String>> {
     let compute = lo.compute?;
     let (op, kids): (IntOp, Vec<NodeId>) = match *n {
         DagNode::Add(a, b) => (IntOp::Add, vec![a, b]),
@@ -1366,13 +1394,20 @@ fn int_node_of_dag(
         DagNode::Select(c, a, b) => (IntOp::Select, vec![c, a, b]),
         _ => return None,
     };
-    let probe = if matches!(op, IntOp::Select) {
-        kids[1]
-    } else {
-        kids[0]
-    };
-    let t = crate::types::infer(&dag.node_expr(probe), compute).ok()?;
-    (t != compute && crate::types::is_cast_int(t)).then_some((op, t, kids))
+    let value = if matches!(op, IntOp::Select) { 1 } else { 0 };
+    let types: Vec<Option<ElementKind>> = kids[value..]
+        .iter()
+        .map(|&k| crate::types::infer(&dag.node_expr(k), compute).ok())
+        .collect();
+    Some(int_route(compute, &types)?.map(|t| (op, t, kids)))
+}
+
+/// The decline an ill-typed integer node becomes.
+fn mixed_int_decline(why: String) -> Spelling {
+    Spelling::Declined(Decline::UnsupportedOp {
+        op: DeclinedOp::Integer,
+        why,
+    })
 }
 
 /// The type of a `Cast`/`Bitcast` operand, or the typed decline that says why it
@@ -1416,7 +1451,11 @@ pub fn lower_expr(e: &ScalarExpr, lo: &Lowering<'_>) -> Result<Spelling, LowerEr
             spelled_or_return_decline!(lower_expr($x, lo))
         };
     }
-    if let Some((op, t, kids)) = int_node(e, lo) {
+    if let Some(form) = int_node(e, lo) {
+        let (op, t, kids) = match form {
+            Ok(f) => f,
+            Err(why) => return Ok(mixed_int_decline(why)),
+        };
         let mut operands = Vec::with_capacity(kids.len());
         for k in kids {
             operands.push(sp!(k));
@@ -1668,7 +1707,11 @@ fn lower_node(
             spelled_or_return_decline!(lower_node(dag, $n, ctype, lo, refs, prelude, policy))
         };
     }
-    let int_form = int_node_of_dag(dag, &node, lo);
+    let int_form = match int_node_of_dag(dag, &node, lo) {
+        Some(Err(why)) => return Ok(mixed_int_decline(why)),
+        Some(Ok(f)) => Some(f),
+        None => None,
+    };
     let int_form_type = int_form
         .as_ref()
         .and_then(|(op, t, _)| (!matches!(op, IntOp::Cmp(_))).then_some(*t));
