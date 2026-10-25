@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.22.17` — integer `AtomicAdd` is deterministic for every integer dtype, not four
+
+`ir::is_integer_kind` is documented as a local mirror of `plan::is_int_dtype` but listed 4 of its 11 dtypes (i32, i64, u8, i8). `WriteCombine::is_fp_atomic_add` therefore classed an integer `AtomicAdd` into u32, u64, i16, u16, i4, u4 or b1 as a floating-point atomic add, and the CUDA emitter routed that scatter to the non-deterministic variant. The safe direction, but a wrong claim about an order-independent integer sum. The mirror now lists all 11. Found by the CUDA coverage survey (2026-10-25) and confirmed in source. Test: `atomic_add_integer_classification_matches_plan_for_every_dtype` compares the two over `ElementKind::ALL` (red before the fix on `I16`; green after) and checks that only `AtomicAdd` is ever order-dependent.
+
 ## `0.22.16` — ROADMAP records the Slang corpus baseline (E12)
 
 Docs only. `slang_corpus_report` over Fuel's 147 `.slang` kernels (`fuel` `ac29b53c9`, this crate at 0.22.14): 0 accepted, 94 unrecognized, 53 inexpressible (36 `groupshared`, 16 `InterlockedCompareExchange`, 1 `RWByteAddressBuffer`). The first measurement since #22/#25; Fuel uses its own binding layout, so it is the baseline for E13 and not a defect.

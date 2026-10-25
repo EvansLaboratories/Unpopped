@@ -2231,7 +2231,17 @@ impl WriteCombine {
 fn is_integer_kind(dt: ElementKind) -> bool {
     matches!(
         dt,
-        ElementKind::I32 | ElementKind::I64 | ElementKind::U8 | ElementKind::I8
+        ElementKind::I32
+            | ElementKind::I64
+            | ElementKind::I8
+            | ElementKind::U8
+            | ElementKind::I16
+            | ElementKind::U16
+            | ElementKind::U32
+            | ElementKind::U64
+            | ElementKind::I4
+            | ElementKind::U4
+            | ElementKind::B1
     )
 }
 
