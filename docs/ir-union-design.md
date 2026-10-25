@@ -192,24 +192,25 @@ The existing seams are the interface; this section says what changes.
 
 ## 7. Decisions for the PM (each also sent as an `[ASK]`)
 
-| ID | Decision | Recommendation |
-|---|---|---|
-| D1 | Two layers (intent + kernel) vs growing `ScalarExpr` into a statement language | Two layers (section 4) |
-| D2 | Is the typed escape hatch (inline asm / extern, 3.19) in the IR? "Nothing unexpressible" is not achievable without it | Yes, with declared effects and per-target bodies; it is opaque to the optimizer by construction |
-| D3 | Generics, specialization constants, comptime, autotune configs are front-end, not IR (3.20); autodiff is a transformation over I2; RNG/assert/print are effects | Confirm |
-| D4 | Multi-GPU (PGL, multimem) in scope (3.21) | In scope, last (I12) |
-| D5 | Reverse the 2026-08-08 maintainer ruling keeping MX element formats (fp4/fp6) out of `ElementKind` | Reverse: they are first-class types in CUTLASS, Mojo, Triton, ThunderKittens; keep the `structure_key` guard that a bare dtype position cannot name them without a scale |
-| D6 | `ThreadSpmd` and `BlockSpmd` as one IR with a lowering pass inside Unpopped | Yes |
-| D7 | Emitters declare an `IrFeature` set and decline the rest, rather than every emitter implementing every feature | Yes |
-| D8 | Versioning: each increment is breaking; batch I1-I2 into one pre-1.0 minor, others one each | PM allocates |
+| ID | Decision | Recommendation | Ruling (2026-10-24, PM) |
+|---|---|---|---|
+| D1 | Two layers (intent + kernel) vs growing `ScalarExpr` into a statement language | Two layers (section 4) | **Yes** |
+| D2 | Is the typed escape hatch (inline asm / extern, 3.19) in the IR? "Nothing unexpressible" is not achievable without it | Yes, with declared effects and per-target bodies; it is opaque to the optimizer by construction | **Yes** |
+| D3 | Generics, specialization constants, comptime, autotune configs are front-end, not IR (3.20); autodiff is a transformation over I2; RNG/assert/print are effects | Confirm | **Confirmed** |
+| D4 | Multi-GPU (PGL, multimem) in scope (3.21) | In scope, last (I12) | **Last** |
+| D5 | Reverse the 2026-08-08 maintainer ruling keeping MX element formats (fp4/fp6) out of `ElementKind` | Reverse: they are first-class types in CUTLASS, Mojo, Triton, ThunderKittens; keep the `structure_key` guard that a bare dtype position cannot name them without a scale | **PENDING: CireSnave's call (board 290). Nothing touching D5 proceeds until he rules** |
+| D6 | `ThreadSpmd` and `BlockSpmd` as one IR with a lowering pass inside Unpopped | Yes | **Yes** |
+| D7 | Emitters declare an `IrFeature` set and decline the rest, rather than every emitter implementing every feature | Yes | **Yes** |
+| D8 | Versioning: each increment is breaking; batch I1-I2 into one pre-1.0 minor, others one each | PM allocates | **Each breaking increment is one pre-1.0 minor; I1+I2 together** |
 
-## 8. Corrections to existing docs (done in I0, listed so none is lost)
+## 8. Corrections to existing docs (done in I0, 0.22.19, except the last item)
 
 `idiom-lifting-design.md` 1a and lines ~714-720; `groupshared-sizing.md` premise (and its header saying the
 question is "answered"); the `Contraction` doc ("rank-2"; `AxisRole::Batch` "unused"); `element.rs` TF32 claim
 for f32 GEMM; `joint-gpu-milestone-plan.md:28`; `normative-seams.md:292` (`supports_dtype` returns bool);
 `slang-second-blocker-sizing.md:77-79` (`Select` is float-only in Slang); the Slang `lower()` message about
-i16/u16 and "vocabulary v5".
+i16/u16 and "vocabulary v5" (**not done in I0**: it is panic/error text that adopters
+match, a cross-repo API; fix it in a code increment with a version note).
 
 ## 9. What this document does not establish
 

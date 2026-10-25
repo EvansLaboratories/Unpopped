@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.22.19` — I0 of the IR-as-full-union programme: the cooperation ruling replaces idiom-lifting 1a (docs and comments only)
+
+Replaces `idiom-lifting-design.md` 1a and the groupshared "answered" banners with the 2026-10-24 ruling (the IR models cooperation); records design-doc rulings D1-D8 (D5 pending CireSnave, board 290); adds `docs/ir-union-capability-grid.md` (Unpopped's IR beside the seven languages); ROADMAP 6.7 rows U0-U12 link tracking issues #111-#123; fixes the stale `Contraction`/`AxisRole::Batch` doc comments in `ir.rs`, the TF32 comment in `element.rs`, and three stale statements in `joint-gpu-milestone-plan.md`, `normative-seams.md`, `slang-second-blocker-sizing.md`. No behaviour change. The Slang `lower()` i16/u16 message is deliberately untouched (adopters match error text). Numbered 0.22.19; the PM allocates the final number.
+
 ## `0.22.18` — the IR as the full union of kernel languages: gap matrix and design (docs only)
 
 `docs/ir-union-design.md` plus seven raw surveys in `docs/ir-union-surveys/` (CUDA, CUTLASS, Slang, CuTe, Mojo, Triton, ThunderKittens). CireSnave's directive (2026-10-24, quoted verbatim in the doc) and the PM rulings: the IR models cooperation; the IR is built from the full union of the seven languages while parser/emitter modules exist only for CUDA, CUTLASS and Slang. The doc consolidates 22 gap rows, proposes an intent layer plus a kernel layer, orders 12 breaking increments (none started), states the module interface for the CUDA, CUTLASS and Slang owners, and lists decisions D1-D8 for the PM. No code.

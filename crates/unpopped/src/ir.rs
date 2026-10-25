@@ -1669,9 +1669,10 @@ pub enum Access {
     /// nor [`Access::RowReduce`] (row-broadcast, no second free axis) can
     /// express. The K-accumulator reaches the epilogue as the `Reduced(0)` leaf
     /// (the same bridge `RowReduce` uses — the item-02 "contraction producer"
-    /// hook in its v1 form). v1: rank-2 single-K dense row-major, epilogue over
-    /// `Reduced(0)` only; batch axes, transposes, and fused bias inputs are the
-    /// node's growth axes.
+    /// hook in its v1 form). Today: single-K dense, optional batch axes
+    /// (`ContractionAxes::batched_matmul`), epilogue over `Reduced(0)` only;
+    /// transposes and fused bias inputs are the node's growth axes (see
+    /// `docs/ir-union-design.md` I7/I9).
     Contraction {
         /// Per-operand axis roles (the AxisRole vocabulary, wired here per the
         /// item-10 spike / `baracuda:docs/design/axis-role-vocabulary.md`).
@@ -1867,7 +1868,8 @@ pub enum Access {
 /// reductions carry the `{Reduced}` projection as `StructureKey::reduce_axes`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AxisRole {
-    /// Shared, iterated, not summed (lhs & rhs & out). v1: unused (rank-2).
+    /// Shared, iterated, not summed (lhs & rhs & out). Used by
+    /// `ContractionAxes::batched_matmul`.
     Batch,
     /// Free on the lhs → a row of the output.
     FreeM,

@@ -153,7 +153,28 @@ RTX 4070 in 2026-07/08. The generators and emit examples live in baracuda.
 | X1 | `ulp_bound` "takes no target": conformance:272, normative-seams:145, deferred:425, and the `contract.rs` KNOWN LIMIT comment | **fixed in this PR** (claim replaced, not caveated) |
 | X2 | README published versions (`unpopped` 0.2.0, `unpopped-vocab` 0.3.0, emitters 0.14.4); "Eight public breaks" over nine rows | **fixed in this PR** (versions now point at crates.io) |
 | X3 | `ondevice/README.md`: snippets import `unpopped::Cuda` (it is in `baracuda-cuda-emit`); `cargo run -p unpopped --example emit_*` (those examples are in baracuda); test names such as `contract::tests::scan_is_an_honest_miss_no_contract` do not exist where cited; stale line cites; `reduction_int8_validate.cu` undocumented; rope "STILL DEFERRED" vs "3 of 3 blockers CLOSED" | open (with D1's home call) |
-| X4 | `groupshared-sizing:4-6` says the scope question is "answered"; §4 holds it | open: reconcile at the ruling |
-| X5 | `joint-gpu-plan:28` "plan.rs never reads the target" (false since #40); `slang-second-blocker:77-79` says Slang lowers `Select` for all dtypes (float-only); `normative-seams:292` `supports_dtype` returns bool (now `DtypeSupport`); Slang `lower()` error text says i16/u16 wait on vocabulary v5 | open |
+| X4 | `groupshared-sizing:4-6` says the scope question is "answered"; §4 holds it | **fixed in 0.22.19** (answered: yes, the IR models cooperation) |
+| X5 | `joint-gpu-plan:28` "plan.rs never reads the target" (false since #40); `slang-second-blocker:77-79` says Slang lowers `Select` for all dtypes (float-only); `normative-seams:292` `supports_dtype` returns bool (now `DtypeSupport`); Slang `lower()` error text says i16/u16 wait on vocabulary v5 | **fixed in 0.22.19 except the Slang `lower()` message**, which is error text adopters match (a cross-repo API): fix with a version note in a code increment |
 | X6 | `deferred.md:33-34` says moving `ArchSku` waits on baracuda's registry repoint; §4 said "PM says go" | §4 corrected in this PR |
 | X7 | Line cites drifted in slang-second-blocker, `ir.rs`, `structure_key.rs`, `convert.rs`, `contract.rs:245`, `pattern.rs:229` | open, cosmetic |
+
+### 6.7 The IR as the full union of kernel languages (`docs/ir-union-design.md`, `docs/ir-union-capability-grid.md`)
+
+CireSnave, 2026-10-24: *"I want the IR to cover the full union of the capabilities of every kernel language in common use today including, but not limited to, CUDA, CUTLASS, Slang, CuTe, Mojo, Triton, and ThunderKittens."* One tracking issue per increment; the lane that lands an increment closes its issue. Decisions D1-D4, D6-D8 are ruled (design doc section 7); **D5 (fp4/fp6 in `ElementKind`) is CireSnave's, board 290: nothing touching D5 starts.**
+
+| ID | Work | Issue | Status |
+|---|---|---|---|
+| U0 | Replace idiom-lifting 1a, its "not transferable" table, and `groupshared-sizing`'s premise with the cooperation ruling; fix the stale claims in 3.22 docs; record the ownership split. Docs only | #111 | **done**, 0.22.19 |
+| U1 | `Cast`/`Bitcast` with rounding+saturation; `Fma`; rounding/ftz/approx qualifiers; new `ElementKind` rows for fp4/fp6/e3m4 and MX scales (reverses the 2026-08-08 ruling, **D5**); packed/vector values; integer `Coord`/`Select`; wider index dtypes | #112 | open; the fp4/fp6/MX part waits on D5 |
+| U2 | Kernel layer v0: `Let`, assignment, `For`/`While`/`If`/`Break`/`Return`, calls, effects model; lifting of today's `OpDef` into it (so the layers agree on every existing op) | #113 | open, after U1 |
+| U3 | Execution scopes and ids; memory spaces and allocation; typed load/store; pointers; resources (textures/samplers/structs); `ProgramModel` | #114 | open, after U2 |
+| U4 | Barriers, fences, mbarrier, async groups; full atomics with order/scope/old-value, on shared memory too | #115 | open, after U3 |
+| U5 | Collectives as nodes; tuple-state reductions/scans with custom combine; arg-reductions; non-propagating NaN reduce | #116 | open, after U3, U4 |
+| U6 | Layout value + algebra (hierarchical shape:stride, composition/complement/divide/product/coalesce/swizzle) **as pure vocabulary with a property-test suite**; `View` re-expressed over it | #117 | open, after U1 |
+| U7 | MMA atoms (`mma.sync`, WGMMA, tcgen05/UMMA, sparse, block-scaled) and fragments; `AccumSpec` variants (TF32, 3xTF32, int32, f16, fp8 fast-accumulate); mixed-dtype contraction; accumulate-into-C | #118 | open, after U3, U6 |
+| U8 | Copy atoms (cp.async, TMA family, ldmatrix); pipelines, roles, persistent schedulers | #119 | open, after U4, U6, U7 |
+| U9 | EVT-style epilogue trees, grouped/ptr-array, split/stream-K, sparse, block-scaled GEMM; implicit-GEMM conv | #120 | open, after U7, U8 |
+| U10 | `Access::Attention` incl. online-softmax state, masks, paged KV (block-table addressing over `ReadIndex`), backward | #121 | open, after U5, U7, U9 |
+| U11 | Typed `Extern`/inline-asm with declared effects and a declared per-target body | #122 | open, after U3 |
+| U12 | Peer/multicast scopes and multimem ops | #123 | open, last (D4) |
+
