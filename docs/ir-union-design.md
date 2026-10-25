@@ -212,6 +212,25 @@ for f32 GEMM; `joint-gpu-milestone-plan.md:28`; `normative-seams.md:292` (`suppo
 i16/u16 and "vocabulary v5" (**not done in I0**: it is panic/error text that adopters
 match, a cross-repo API; fix it in a code increment with a version note).
 
+## 8b. The layout/shape frontier (baracuda SA-9), folded in and decided
+
+CireSnave, 2026-10-25, via the PM: *"SA-9: Fold them into the Unpopped union design and decide there with the evidence in hand."* Baracuda's list (its `ROADMAP.md` SA-9, with `docs/superpowers/specs/2026-08-01-ir-layout-shape-parent-design.md` section 5-8 and `...-subspec-a-roles-layout-design.md` A.6): output views, rank-changing `Reshape`, general strides, multi-K-group einsum, TF32/tensor-core `AccumSpec`, a faster transposed-RHS schedule. Evidence read: those specs and the cited `plan.rs` View checks (`assert_valid_views`); **not** run on a device, and baracuda's emitter code was not re-read here.
+
+All of it lands under increments already in section 5: layout is **U6** (the `Layout` value and algebra, with `View` re-expressed over it), contraction structure is **U7**/**U9**. None needs a new increment. Decisions:
+
+| Item | Decision | Why / where |
+|---|---|---|
+| **B. Output views** (`write_slice`) | A store-side `Layout`, the dual of the input view, using the **same** type as the input side. Mutually exclusive with a `WriteIndex` scatter in v1 (declined as a pair, typed). | Symmetry avoids a second mechanism; scatter is already a data-dependent output remap, and composing the two needs a rule nobody has asked for. **U6.** |
+| **C. Rank-change `Reshape`** | A layout operation, not a re-key of `StructureKey.rank`: a per-operand read-through (unravel at the producer rank, ravel at the consumer's). **Contiguous producers only**; a non-contiguous reshape is a typed decline (it needs materialization). | Keeps rank in the key meaning "the iteration space". It is the missing piece of im2col-GEMM-reshape Conv2D fusion, so it unblocks U9's implicit-GEMM conv. **U6.** |
+| **D. Arbitrary, negative, stride-2 strides** | Strides are part of the `Layout` value. A stride is **static** (folded into the address math) or **runtime** (a launch argument, keyed by a runtime-strided contiguity class); negative strides are a signed stride (baracuda folds them through `OperandKey.flipped` today). Agreement between a view and the runtime strides stays a caller precondition, stated, not checked. | One mechanism for all three cases; baracuda's own spec calls D the natural extension of A's binding. **U6.** |
+| **Multi-K-group einsum** | `ContractionAxes` generalizes from one contracted group to a list; nested K folds, one accumulator per group order stated in the node. v1 of U7 keeps a single group; the list form is the same increment's second step. | An accumulator-structure change, not a layout one, so it belongs with the MMA/contraction work. **U7.** |
+| **TF32 / tensor-core `AccumSpec`** | Already scheduled: U7 lists TF32, 3xTF32, int32, f16 and fp8 fast-accumulate variants. Confirmed as a compute-precision axis with its own contract flips (KISS-Contract 6.8), **not** a layout node. | Baracuda pulled it out of its layout charter for the same reason. **U7.** |
+| **Coalesced smem-staged transposed-RHS schedule** | **No IR change.** A schedule variant in the emitter, bench-gated, like `contraction_splitk_variant`. The IR's only duty is that the layout is visible enough (U6) for the emitter to recognize a transposed RHS. | Correct-first, optimize-as-variant is baracuda's ratified scoping; the IR must not encode a speed trick. Emitter side: baracuda. |
+
+**Order.** U6 first (B, C, D together, with a property-test suite as the U6 row requires), then U7 (multi-K, TF32). Nothing here blocks or is blocked by the integer-index work already landed.
+
+**What is open, not decided.** Whether the runtime-strided contiguity class is a `StructureKey` field or a plan-level attribute: it changes the cache key's meaning, so it is the U6 design's first question and goes to the PM as an `[ASK]` when U6 starts, with a recommendation then. Baracuda owns the emitter side of every row and follows once the IR nodes land.
+
 ## 9. What this document does not establish
 
 It does not prove the two-layer design is right; it argues for it from seven surveys that agree. The
