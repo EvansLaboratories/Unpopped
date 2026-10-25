@@ -94,6 +94,12 @@ and is not a moving target):**
   promises nothing; an author who needs those cases must not set `approx`, and the oracle returns the
   exact value there.
 
+**Stated assumption.** 4 ulp (and the `Log2` floor) is chosen, not measured: it is looser than the
+documented error of the PTX fast forms as the author recalls them, and no GPU measurement backs it
+yet. If a backend measures a fast form WORSE than the bound, that is a `[FINDING]` routed to the PM,
+never a quiet loosening here or a silent exemption in the backend's test; the bound changes only by
+a ruling that also bumps this document.
+
 A target whose fast instruction cannot meet this bound on this domain **declines `approx`** for that
 op; it does not weaken the promise. baracuda owns that measurement for its PTX forms. The helper
 `unpopped::numerics::approx_within(op, got, exact)` encodes the bound once, with a control proving it
