@@ -151,9 +151,9 @@ types' extremes) and `unpopped-cpu-c/tests/cpu_end_to_end.rs`
 `I32`/`U32`/`I64` over operands that include both extremes and compares with the oracle's exact `i128`
 evaluation wrapped to the width.
 
-## 9. Packed values (slice 4, design; not landed)
+## 9. Packed values (slice 4, step 1 landed)
 
-Status: **design only.** Nothing in this section exists in the code yet. It refines section 6.
+Status: **step 1 landed**: `Pack`, `Extract`, `Ty`, `infer_ty`, the DAG/text/oracle carriers and a plan-gate decline. Lane-wise arithmetic, `Cast`/`Bitcast` of packed values and every emitter seam are later steps; until they land the plan gate declines any body containing a packed node. `infer` refuses a packed result (`PackedResult`); `infer_ty` is the packed-aware form (the PM ruled option (b), 2026-10-25). This section refines section 6.
 
 **Type.** A packed value is `Packed(elem, lanes)` with `elem` a scalar float or integer `Cast` accepts
 (`is_cast_float` / `is_cast_int`, plus `F16` and `Bf16` once their `Cast` rows exist) and `lanes` in
