@@ -62,6 +62,46 @@ pub enum TypeError {
         /// The integer type of the operand.
         ty: ElementKind,
     },
+    /// A `Pack` with a lane count other than 2 or 4.
+    BadLanes {
+        /// The number of children given (saturated at 255).
+        lanes: u8,
+    },
+    /// An `Extract` index outside the packed value.
+    BadLane {
+        /// The index asked for.
+        index: u8,
+        /// The packed value's lane count.
+        lanes: u8,
+    },
+    /// An `Extract` of a value that is not packed.
+    NotPacked {
+        /// The node kind, `"Extract"`.
+        node: &'static str,
+    },
+    /// An operator with no packed form applied to a packed value (or a `Pack` lane
+    /// that is itself packed).
+    PackedOperand {
+        /// The node kind, e.g. `"Add"`.
+        node: &'static str,
+    },
+    /// [`infer`] was asked for the type of a packed value, which a bare
+    /// [`ElementKind`] cannot describe: use [`infer_ty`].
+    PackedResult {
+        /// The packed value's lane count.
+        lanes: u8,
+    },
+}
+
+/// The type of a [`ScalarExpr`] node: a scalar, or a packed value of 2 or 4 lanes
+/// (`docs/ir-typed-expressions.md` section 9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Ty {
+    /// One value of this element type.
+    Scalar(ElementKind),
+    /// `lanes` values of this element type, `lanes` in `{2, 4}`.
+    Packed(ElementKind, u8),
 }
 
 /// Integer types a `CoordInt` / `ConstInt` leaf may have.
@@ -228,8 +268,63 @@ pub fn check_bitcast(from: ElementKind, to: ElementKind) -> Result<(), TypeError
 ///
 /// The first [`TypeError`] found, walking children before parents.
 pub fn infer(e: &ScalarExpr, compute: ElementKind) -> Result<ElementKind, TypeError> {
+    match infer_ty(e, compute)? {
+        Ty::Scalar(t) => Ok(t),
+        Ty::Packed(_, lanes) => Err(TypeError::PackedResult { lanes }),
+    }
+}
+
+/// The [`Ty`] of `e`: [`infer`] extended to packed values. Where `e` has no packed
+/// node it is `Ty::Scalar(infer(e))`.
+///
+/// # Errors
+///
+/// The first [`TypeError`] found, walking children before parents.
+pub fn infer_ty(e: &ScalarExpr, compute: ElementKind) -> Result<Ty, TypeError> {
+    if let ScalarExpr::Pack(xs) = e {
+        let lanes = u8::try_from(xs.len()).unwrap_or(u8::MAX);
+        if !matches!(lanes, 2 | 4) {
+            return Err(TypeError::BadLanes { lanes });
+        }
+        let first = child("Pack", &xs[0], compute)?;
+        for x in &xs[1..] {
+            let t = child("Pack", x, compute)?;
+            if t != first {
+                return Err(TypeError::Mismatch {
+                    node: "Pack",
+                    left: first,
+                    right: t,
+                });
+            }
+        }
+        return Ok(Ty::Packed(first, lanes));
+    }
+    if let ScalarExpr::Extract(x, i) = e {
+        return match infer_ty(x, compute)? {
+            Ty::Packed(t, lanes) if *i < lanes => Ok(Ty::Scalar(t)),
+            Ty::Packed(_, lanes) => Err(TypeError::BadLane { index: *i, lanes }),
+            Ty::Scalar(_) => Err(TypeError::NotPacked { node: "Extract" }),
+        };
+    }
+    infer_scalar(e, compute).map(Ty::Scalar)
+}
+
+/// The scalar type of `x` as an operand of `node`; a packed operand is declined, since
+/// only `Pack` and `Extract` have a packed form in this increment.
+fn child(
+    node: &'static str,
+    x: &ScalarExpr,
+    compute: ElementKind,
+) -> Result<ElementKind, TypeError> {
+    match infer_ty(x, compute)? {
+        Ty::Scalar(t) => Ok(t),
+        Ty::Packed(..) => Err(TypeError::PackedOperand { node }),
+    }
+}
+
+fn infer_scalar(e: &ScalarExpr, compute: ElementKind) -> Result<ElementKind, TypeError> {
     let same = |node: &'static str, a: &ScalarExpr, b: &ScalarExpr| {
-        let (l, r) = (infer(a, compute)?, infer(b, compute)?);
+        let (l, r) = (child(node, a, compute)?, child(node, b, compute)?);
         if l == r {
             Ok(l)
         } else {
@@ -283,10 +378,10 @@ pub fn infer(e: &ScalarExpr, compute: ElementKind) -> Result<ElementKind, TypeEr
             }
             Ok(t)
         }
-        ScalarExpr::Unary(_, x) => no_int("Unary", infer(x, compute)?),
+        ScalarExpr::Unary(_, x) => no_int("Unary", child("Unary", x, compute)?),
         ScalarExpr::Fma(a, b, c) => {
             let ab = no_int("Fma", same("Fma", a, b)?)?;
-            let t = infer(c, compute)?;
+            let t = child("Fma", c, compute)?;
             if ab == t {
                 Ok(t)
             } else {
@@ -298,21 +393,27 @@ pub fn infer(e: &ScalarExpr, compute: ElementKind) -> Result<ElementKind, TypeEr
             }
         }
         ScalarExpr::Select(c, a, b) => {
-            infer(c, compute)?;
+            child("Select", c, compute)?;
             same("Select", a, b)
         }
         ScalarExpr::Cast(x, spec) => {
-            let from = infer(x, compute)?;
+            let from = child("Cast", x, compute)?;
             check_cast(from, *spec)?;
             Ok(spec.to)
         }
         ScalarExpr::Bitcast(x, to) => {
-            let from = infer(x, compute)?;
+            let from = child("Bitcast", x, compute)?;
             check_bitcast(from, *to)?;
             Ok(*to)
         }
         // A qualifier changes how the wrapped operation rounds, not what type it has.
-        ScalarExpr::Qualified(x, _) => infer(x, compute),
+        ScalarExpr::Qualified(x, _) => child("Qualified", x, compute),
+        // `infer_ty` answers these before it reaches here; delegating (not panicking) keeps
+        // the function total.
+        ScalarExpr::Pack(_) | ScalarExpr::Extract(..) => match infer_ty(e, compute)? {
+            Ty::Scalar(t) => Ok(t),
+            Ty::Packed(_, lanes) => Err(TypeError::PackedResult { lanes }),
+        },
     }
 }
 
@@ -352,9 +453,11 @@ pub fn has_qualified(e: &ScalarExpr) -> bool {
         | ScalarExpr::Coord(_)
         | ScalarExpr::CoordInt(..)
         | ScalarExpr::ConstInt(..) => false,
-        ScalarExpr::Unary(_, x) | ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => {
-            has_qualified(x)
-        }
+        ScalarExpr::Unary(_, x)
+        | ScalarExpr::Cast(x, _)
+        | ScalarExpr::Bitcast(x, _)
+        | ScalarExpr::Extract(x, _) => has_qualified(x),
+        ScalarExpr::Pack(xs) => xs.iter().any(has_qualified),
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
@@ -366,6 +469,33 @@ pub fn has_qualified(e: &ScalarExpr) -> bool {
     }
 }
 
+/// `true` when `e` contains a [`ScalarExpr::Pack`] or [`ScalarExpr::Extract`] node.
+#[must_use]
+pub fn has_packed(e: &ScalarExpr) -> bool {
+    match e {
+        ScalarExpr::Pack(_) | ScalarExpr::Extract(..) => true,
+        ScalarExpr::Input(_)
+        | ScalarExpr::Const(_)
+        | ScalarExpr::Param(_)
+        | ScalarExpr::Reduced(_)
+        | ScalarExpr::Coord(_)
+        | ScalarExpr::CoordInt(..)
+        | ScalarExpr::ConstInt(..) => false,
+        ScalarExpr::Unary(_, x) | ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => {
+            has_packed(x)
+        }
+        ScalarExpr::Qualified(x, _) => has_packed(x),
+        ScalarExpr::Add(a, b)
+        | ScalarExpr::Sub(a, b)
+        | ScalarExpr::Mul(a, b)
+        | ScalarExpr::Div(a, b)
+        | ScalarExpr::Binary(_, a, b) => has_packed(a) || has_packed(b),
+        ScalarExpr::Select(a, b, c) | ScalarExpr::Fma(a, b, c) => {
+            has_packed(a) || has_packed(b) || has_packed(c)
+        }
+    }
+}
+
 /// `true` when `e` contains any node whose type can differ from the compute dtype
 /// (`Cast`, `Bitcast`, `CoordInt`, `ConstInt`). The back-compat fast path: an expression for which
 /// this is `false` types to `compute` everywhere and needs no further type work.
@@ -373,6 +503,8 @@ pub fn has_qualified(e: &ScalarExpr) -> bool {
 pub fn is_typed(e: &ScalarExpr) -> bool {
     match e {
         ScalarExpr::Cast(..) | ScalarExpr::Bitcast(..) => true,
+        // A packed value is never the compute dtype; `Extract` is typed because its operand is.
+        ScalarExpr::Pack(_) | ScalarExpr::Extract(..) => true,
         ScalarExpr::Input(_)
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)

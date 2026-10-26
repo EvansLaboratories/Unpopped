@@ -237,7 +237,9 @@ fn add_expr(eg: &mut EGraph, e: &ScalarExpr, compute: Compute) -> Id {
         | ScalarExpr::Bitcast(..)
         | ScalarExpr::Qualified(..)
         | ScalarExpr::CoordInt(..)
-        | ScalarExpr::ConstInt(..) => {
+        | ScalarExpr::ConstInt(..)
+        | ScalarExpr::Pack(_)
+        | ScalarExpr::Extract(..) => {
             unreachable!("typed expressions bypass the e-graph (optimize returns them unchanged)")
         }
     }
@@ -826,7 +828,9 @@ fn expr_cost(e: &ScalarExpr) -> u64 {
         | ScalarExpr::Bitcast(..)
         | ScalarExpr::Qualified(..)
         | ScalarExpr::CoordInt(..)
-        | ScalarExpr::ConstInt(..) => {
+        | ScalarExpr::ConstInt(..)
+        | ScalarExpr::Pack(_)
+        | ScalarExpr::Extract(..) => {
             unreachable!("typed expressions bypass the e-graph (optimize returns them unchanged)")
         }
     };
@@ -906,6 +910,8 @@ fn expr_cmp(a: &ScalarExpr, b: &ScalarExpr) -> std::cmp::Ordering {
             ScalarExpr::Qualified(..) => 15,
             ScalarExpr::CoordInt(..) => 16,
             ScalarExpr::ConstInt(..) => 17,
+            ScalarExpr::Pack(_) => 18,
+            ScalarExpr::Extract(..) => 19,
         }
     }
     match (a, b) {
@@ -2396,7 +2402,9 @@ mod tests {
             | ScalarExpr::Bitcast(..)
             | ScalarExpr::Qualified(..)
             | ScalarExpr::CoordInt(..)
-            | ScalarExpr::ConstInt(..) => {
+            | ScalarExpr::ConstInt(..)
+            | ScalarExpr::Pack(_)
+            | ScalarExpr::Extract(..) => {
                 unreachable!("typed expressions bypass the e-graph")
             }
         };

@@ -492,6 +492,8 @@ pub enum DeclinedOp {
     /// An operation under a rounding mode, flush-to-zero or approximate-form
     /// qualifier ([`ScalarExpr::Qualified`]).
     Qualified,
+    /// A packed value or a lane of one ([`ScalarExpr::Pack`], [`ScalarExpr::Extract`]).
+    Packed,
     /// A constant literal.
     Constant,
     /// An input operand leaf the backend will not spell, by **operand index**.
@@ -1278,6 +1280,17 @@ macro_rules! spelled_or_return_decline {
     };
 }
 
+/// The decline for a packed value: no emitter spells one yet (the seams are the next
+/// increment, `docs/ir-typed-expressions.md` section 9), and the plan gate rejects a packed
+/// body before any lowering, so reaching it means a hand-built body skipped the gate.
+fn packed_decline() -> Spelling {
+    Spelling::Declined(Decline::UnsupportedOp {
+        op: DeclinedOp::Packed,
+        why: "a Pack/Extract reached an emitter; packed values have no lowering seam yet"
+            .to_string(),
+    })
+}
+
 /// The decline for a `Qualified` node wrapping something that is not a qualifiable
 /// operation (the plan gate rejects this before any lowering, so reaching it means a
 /// hand-built body skipped the gate).
@@ -1501,6 +1514,7 @@ pub fn lower_expr(e: &ScalarExpr, lo: &Lowering<'_>) -> Result<Spelling, LowerEr
             let x = sp!(x);
             return (lo.bitcast)(x, from, *to);
         }
+        ScalarExpr::Pack(_) | ScalarExpr::Extract(..) => return Ok(packed_decline()),
         ScalarExpr::Qualified(x, n) => {
             let Some((op, kids)) = QualOp::of(x) else {
                 return Ok(qualified_child_decline(*n));
@@ -1764,6 +1778,7 @@ fn lower_node(
         }
         // The wrapped operation's node is never lowered itself: its OPERANDS are,
         // and the qualified spelling replaces the whole operation.
+        DagNode::Pack(_) | DagNode::Extract(..) => return Ok(packed_decline()),
         DagNode::Qualified(x, n) => {
             let Some((op, kids)) = QualOp::of_node(dag.node(x)) else {
                 return Ok(qualified_child_decline(n));

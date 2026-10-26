@@ -399,6 +399,8 @@ fn canonicalize(e: &ScalarExpr) -> ScalarExpr {
         ScalarExpr::Cast(x, spec) => ScalarExpr::Cast(Box::new(canonicalize(x)), *spec),
         ScalarExpr::Bitcast(x, to) => ScalarExpr::Bitcast(Box::new(canonicalize(x)), *to),
         ScalarExpr::Qualified(x, n) => ScalarExpr::Qualified(Box::new(canonicalize(x)), *n),
+        ScalarExpr::Pack(xs) => ScalarExpr::Pack(xs.iter().map(canonicalize).collect()),
+        ScalarExpr::Extract(x, i) => ScalarExpr::Extract(Box::new(canonicalize(x)), *i),
         ScalarExpr::Input(_)
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)
@@ -432,6 +434,11 @@ fn sig(e: &ScalarExpr) -> String {
         ScalarExpr::Cast(x, spec) => format!("0Cast{spec:?}({})", sig(x)),
         ScalarExpr::Bitcast(x, to) => format!("0Bitcast{to:?}({})", sig(x)),
         ScalarExpr::Qualified(x, n) => format!("0Qual{n:?}({})", sig(x)),
+        ScalarExpr::Pack(xs) => format!(
+            "0Pack({})",
+            xs.iter().map(sig).collect::<Vec<_>>().join(",")
+        ),
+        ScalarExpr::Extract(x, i) => format!("0Extract{i}({})", sig(x)),
         ScalarExpr::Input(i) => format!("1I{i:03}"),
         ScalarExpr::Param(i) => format!("1P{i:03}"),
         ScalarExpr::Const(v) => format!("1C{v:?}"),
@@ -481,7 +488,10 @@ fn walk(
         // ever emitted in v1.
         ScalarExpr::Select(..) => Err(PatternError::SelectUnsupported),
         ScalarExpr::Fma(..) => Err(PatternError::FmaUnsupported),
-        ScalarExpr::Cast(..) | ScalarExpr::Bitcast(..) => Err(PatternError::TypedExprUnsupported),
+        ScalarExpr::Cast(..)
+        | ScalarExpr::Bitcast(..)
+        | ScalarExpr::Pack(_)
+        | ScalarExpr::Extract(..) => Err(PatternError::TypedExprUnsupported),
         ScalarExpr::Qualified(..) => Err(PatternError::QualifiedUnsupported),
         ScalarExpr::Add(a, b) => scalar_binop("Add", "AddScalar", a, b, path, consumers, extracts),
         ScalarExpr::Mul(a, b) => scalar_binop("Mul", "MulScalar", a, b, path, consumers, extracts),

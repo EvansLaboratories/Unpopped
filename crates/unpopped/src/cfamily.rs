@@ -1091,9 +1091,11 @@ pub fn params_used(e: &ScalarExpr) -> Vec<u8> {
                 out.insert(*i);
             }
             ScalarExpr::Unary(_, x) => rec(x, out),
-            ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
-                rec(x, out)
-            }
+            ScalarExpr::Cast(x, _)
+            | ScalarExpr::Bitcast(x, _)
+            | ScalarExpr::Qualified(x, _)
+            | ScalarExpr::Extract(x, _) => rec(x, out),
+            ScalarExpr::Pack(xs) => xs.iter().for_each(|x| rec(x, out)),
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
             | ScalarExpr::Mul(a, b)
@@ -1193,6 +1195,9 @@ pub fn assert_no_int_div_or_const(
         ScalarExpr::Cast(_, _) | ScalarExpr::Bitcast(_, _) => panic!(
             "c-family lowering: Cast/Bitcast at an integer compute dtype ({dtype:?}) — \
              typed expressions are float-compute only in v1; the plan gate rejects this"
+        ),
+        ScalarExpr::Pack(_) | ScalarExpr::Extract(..) => panic!(
+            "c-family lowering: Pack/Extract at an integer compute dtype ({dtype:?}) —              packed values have no c-family lowering yet; the plan gate rejects this"
         ),
         ScalarExpr::Qualified(_, _) => panic!(
             "c-family lowering: Qualified at an integer compute dtype ({dtype:?}) — \

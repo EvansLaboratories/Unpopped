@@ -306,6 +306,13 @@ pub enum ScalarExpr {
     /// exact (never a float), which `Const` cannot be at an integer type without the
     /// double-math hazard. The value must be in the type's range.
     ConstInt(i64, #[serde(with = "crate::text::ek")] ElementKind),
+    /// A **packed value** of 2 or 4 scalar lanes (`half2`/`float4`-style), lane `i` being
+    /// child `i` (`docs/ir-typed-expressions.md` section 9). Children share one scalar type;
+    /// a lane is never itself packed. Only [`ScalarExpr::Extract`] consumes it in this
+    /// increment, so a packed value is always reducible to scalars.
+    Pack(Vec<ScalarExpr>),
+    /// Lane `.1` of the packed value `.0`; its type is the lane type.
+    Extract(Box<ScalarExpr>, u8),
     /// Sum of two sub-expressions.
     Add(Box<ScalarExpr>, Box<ScalarExpr>),
     /// Difference of two sub-expressions.
@@ -1241,6 +1248,10 @@ pub enum DagNode {
     /// A qualified operation ([`ScalarExpr::Qualified`]); the id is the wrapped
     /// operation's node, whose operands the lowering reads directly.
     Qualified(NodeId, Numerics),
+    /// A packed value of the listed lane nodes ([`ScalarExpr::Pack`]).
+    Pack(Vec<NodeId>),
+    /// Lane `.1` of a packed node ([`ScalarExpr::Extract`]).
+    Extract(NodeId, u8),
 }
 
 impl DagNode {
@@ -1442,6 +1453,10 @@ impl ExprDag {
             DagNode::Cast(x, spec) => ScalarExpr::Cast(Box::new(self.rebuild(x)), spec),
             DagNode::Bitcast(x, to) => ScalarExpr::Bitcast(Box::new(self.rebuild(x)), to),
             DagNode::Qualified(x, n) => ScalarExpr::Qualified(Box::new(self.rebuild(x)), n),
+            DagNode::Pack(ref xs) => {
+                ScalarExpr::Pack(xs.iter().map(|&x| self.rebuild(x)).collect())
+            }
+            DagNode::Extract(x, i) => ScalarExpr::Extract(Box::new(self.rebuild(x)), i),
         }
     }
 }
@@ -1471,11 +1486,15 @@ enum DagKey {
     Cast(NodeId, CastSpec),
     Bitcast(NodeId, ElementKind),
     Qualified(NodeId, Numerics),
+    Pack(Vec<NodeId>),
+    Extract(NodeId, u8),
 }
 
 impl DagKey {
     fn of(n: &DagNode) -> DagKey {
         match *n {
+            DagNode::Pack(ref xs) => DagKey::Pack(xs.clone()),
+            DagNode::Extract(x, i) => DagKey::Extract(x, i),
             DagNode::Input(i) => DagKey::Input(i),
             DagNode::Const(v) => DagKey::ConstBits(v.to_bits()),
             DagNode::Param(i) => DagKey::Param(i),
@@ -1558,6 +1577,11 @@ impl DagBuilder {
                 let x = self.intern(x);
                 DagNode::Qualified(x, *n)
             }
+            ScalarExpr::Pack(xs) => DagNode::Pack(xs.iter().map(|x| self.intern(x)).collect()),
+            ScalarExpr::Extract(x, i) => {
+                let x = self.intern(x);
+                DagNode::Extract(x, *i)
+            }
         };
         self.hashcons(node)
     }
@@ -1596,7 +1620,9 @@ fn node_children(n: &DagNode) -> Vec<NodeId> {
         DagNode::Unary(_, x)
         | DagNode::Cast(x, _)
         | DagNode::Bitcast(x, _)
+        | DagNode::Extract(x, _)
         | DagNode::Qualified(x, _) => vec![x],
+        DagNode::Pack(ref xs) => xs.clone(),
         DagNode::Add(a, b)
         | DagNode::Sub(a, b)
         | DagNode::Mul(a, b)

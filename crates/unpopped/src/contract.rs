@@ -1243,9 +1243,11 @@ fn scan_params(e: &ScalarExpr, out: &mut Vec<u8>) {
         | ScalarExpr::CoordInt(..)
         | ScalarExpr::ConstInt(..) => {}
         ScalarExpr::Unary(_, x) => scan_params(x, out),
-        ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Qualified(x, _) => {
-            scan_params(x, out)
-        }
+        ScalarExpr::Cast(x, _)
+        | ScalarExpr::Bitcast(x, _)
+        | ScalarExpr::Qualified(x, _)
+        | ScalarExpr::Extract(x, _) => scan_params(x, out),
+        ScalarExpr::Pack(xs) => xs.iter().for_each(|x| scan_params(x, out)),
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
@@ -1552,6 +1554,11 @@ fn ulp_sum(e: &ScalarExpr) -> f64 {
         ScalarExpr::Cast(x, _) => ulp_sum(x) + 1.0,
         // A bitcast moves bits exactly.
         ScalarExpr::Bitcast(x, _) => ulp_sum(x),
+        // Defensive like `Cast`: a packed body is `TypedExprUnsupported`, so no contract is
+        // emitted. A lane moves unconverted; a pack's budget is the sum of its lanes'
+        // (an upper bound on any one of them).
+        ScalarExpr::Extract(x, _) => ulp_sum(x),
+        ScalarExpr::Pack(xs) => xs.iter().map(ulp_sum).sum(),
         // The wrapped operation's budget, plus one ulp when it rounds in a directed
         // mode (error below one ulp, not half) and `APPROX_ULP` for an approximate
         // form. `ftz` adds nothing: the contract's input domain excludes subnormals.
@@ -1697,9 +1704,11 @@ pub(crate) fn expr_contains_cmp(e: &ScalarExpr) -> bool {
         | ScalarExpr::Mul(a, b)
         | ScalarExpr::Div(a, b) => expr_contains_cmp(a) || expr_contains_cmp(b),
         ScalarExpr::Unary(_, a) => expr_contains_cmp(a),
-        ScalarExpr::Cast(a, _) | ScalarExpr::Bitcast(a, _) | ScalarExpr::Qualified(a, _) => {
-            expr_contains_cmp(a)
-        }
+        ScalarExpr::Cast(a, _)
+        | ScalarExpr::Bitcast(a, _)
+        | ScalarExpr::Qualified(a, _)
+        | ScalarExpr::Extract(a, _) => expr_contains_cmp(a),
+        ScalarExpr::Pack(xs) => xs.iter().any(expr_contains_cmp),
         ScalarExpr::Binary(bop, a, b) => {
             bop.is_cmp() || expr_contains_cmp(a) || expr_contains_cmp(b)
         }
@@ -1744,9 +1753,11 @@ fn expr_contains_select(e: &ScalarExpr) -> bool {
         | ScalarExpr::Div(a, b)
         | ScalarExpr::Binary(_, a, b) => expr_contains_select(a) || expr_contains_select(b),
         ScalarExpr::Unary(_, a) => expr_contains_select(a),
-        ScalarExpr::Cast(a, _) | ScalarExpr::Bitcast(a, _) | ScalarExpr::Qualified(a, _) => {
-            expr_contains_select(a)
-        }
+        ScalarExpr::Cast(a, _)
+        | ScalarExpr::Bitcast(a, _)
+        | ScalarExpr::Qualified(a, _)
+        | ScalarExpr::Extract(a, _) => expr_contains_select(a),
+        ScalarExpr::Pack(xs) => xs.iter().any(expr_contains_select),
     }
 }
 

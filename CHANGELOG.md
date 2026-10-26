@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.27.0` — feat (BREAKING): packed values, `Pack`/`Extract`, `Ty` and `infer_ty` (U1 slice 4 step 1, #112)
+
+**Breaking:** `ScalarExpr` gains the variants `Pack(Vec<ScalarExpr>)` and `Extract(Box<ScalarExpr>, u8)` (and `DagNode` gains `Pack` and `Extract`); every exhaustive match over them must handle or decline the new nodes. Additive: `types::Ty`, `types::infer_ty`, `types::has_packed`, the `TypeError` arms `BadLanes`, `BadLane`, `NotPacked`, `PackedOperand`, `PackedResult`, and `DeclinedOp::Packed`. `infer` is unchanged for every existing body and refuses a packed result with `PackedResult`. The plan gate declines any body containing a packed node (no emitter has a seam yet), so no existing op plans differently. Design: `docs/ir-typed-expressions.md` section 9.
+
 ## `0.26.5` — feat (additive, KISS-CLASSIFY-6.8-0018): per-target vector-access byte cap (KISS-CLASSIFY-6.8-0018, KISS#674)
 
 The `vec` width of `sk6` was capped at a literal 16 bytes. It is now the cap the key's target namespace declares: `CellFacts::vec_cap_bytes: Option<u32>` (`None` = `DEFAULT_VEC_CAP_BYTES` = 16). `cuda` and `vulkan` declare 16, so **no existing key moves**; the token set stays `{v1,v2,v4,v8}`. A caller keying a target that declares another cap sets the field; it is the namespace document's value, not a device query (`DeviceCapability::widest_vec_width` is legality on the running part and is unchanged). The vendored derivation corpus gains KISS's three `vec_cap_*` vectors (66 total); a cap that is ignored fails two of them.
