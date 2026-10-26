@@ -91,12 +91,12 @@ fn infer_refuses_a_packed_result() {
 }
 
 #[test]
-fn operators_other_than_pack_and_extract_refuse_a_packed_operand() {
+fn operators_with_no_packed_form_refuse_a_packed_operand() {
     let p = pack(vec![input(0).0, input(1).0]);
-    let e = ScalarExpr::Add(Box::new(p.clone()), Box::new(p));
+    let e = ScalarExpr::Div(Box::new(p.clone()), Box::new(p));
     assert!(matches!(
         infer_ty(&e, F32),
-        Err(TypeError::PackedOperand { node: "Add" })
+        Err(TypeError::PackedOperand { node: "Div" })
     ));
 }
 
@@ -167,4 +167,190 @@ fn the_plan_gate_declines_a_packed_body_with_a_typed_error() {
     // Control: the same op without the pack plans.
     let plain = OpDef::elementwise("plain", 1, &[F32], input(0) * unpopped::ir::konst(2.0));
     assert!(try_build_plan(&plain, &key).is_ok());
+}
+
+// ---------------------------------------------------------------- lane-wise operators (step 2)
+
+use unpopped::ir::{BinaryOp, CastSpec, RoundMode, Saturation};
+use unpopped::types::lane_of;
+
+fn p2(a: ScalarExpr, b: ScalarExpr) -> ScalarExpr {
+    pack(vec![a, b])
+}
+
+fn bx(e: ScalarExpr) -> Box<ScalarExpr> {
+    Box::new(e)
+}
+
+#[test]
+fn lane_wise_arithmetic_keeps_the_packed_type() {
+    let a = p2(input(0).0, input(1).0);
+    let b = p2(input(1).0, input(0).0);
+    for e in [
+        ScalarExpr::Add(bx(a.clone()), bx(b.clone())),
+        ScalarExpr::Sub(bx(a.clone()), bx(b.clone())),
+        ScalarExpr::Mul(bx(a.clone()), bx(b.clone())),
+        ScalarExpr::Binary(BinaryOp::Max, bx(a.clone()), bx(b.clone())),
+        ScalarExpr::Binary(BinaryOp::Min, bx(a.clone()), bx(b.clone())),
+        ScalarExpr::Fma(bx(a.clone()), bx(b.clone()), bx(a.clone())),
+    ] {
+        assert_eq!(infer_ty(&e, F32), Ok(Ty::Packed(F32, 2)), "{e:?}");
+    }
+}
+
+#[test]
+fn a_packed_operand_beside_a_scalar_or_a_different_width_is_refused() {
+    let a = p2(input(0).0, input(1).0);
+    let four = pack(vec![input(0).0, input(1).0, input(0).0, input(1).0]);
+    // No broadcast: a scalar beside a packed value is a typed error, never implicit.
+    assert!(matches!(
+        infer_ty(&ScalarExpr::Add(bx(a.clone()), bx(input(0).0)), F32),
+        Err(TypeError::PackedOperand { node: "Add" })
+    ));
+    assert!(matches!(
+        infer_ty(&ScalarExpr::Add(bx(a.clone()), bx(four)), F32),
+        Err(TypeError::PackedOperand { node: "Add" })
+    ));
+    // Different lane element types.
+    let ints = p2(
+        ScalarExpr::ConstInt(1, ElementKind::I32),
+        ScalarExpr::ConstInt(2, ElementKind::I32),
+    );
+    assert!(matches!(
+        infer_ty(&ScalarExpr::Add(bx(a), bx(ints)), F32),
+        Err(TypeError::Mismatch { node: "Add", .. })
+    ));
+}
+
+#[test]
+fn operators_with_no_packed_form_still_decline() {
+    let a = p2(input(0).0, input(1).0);
+    for (node, e) in [
+        ("Div", ScalarExpr::Div(bx(a.clone()), bx(a.clone()))),
+        (
+            "Unary",
+            ScalarExpr::Unary(unpopped::ir::UnaryOp::Neg, bx(a.clone())),
+        ),
+        (
+            "Binary",
+            ScalarExpr::Binary(BinaryOp::Pow, bx(a.clone()), bx(a.clone())),
+        ),
+        (
+            "Bitcast",
+            ScalarExpr::Bitcast(bx(a.clone()), ElementKind::U32),
+        ),
+    ] {
+        assert!(
+            matches!(infer_ty(&e, F32), Err(TypeError::PackedOperand { node: n }) if n == node),
+            "{node}"
+        );
+    }
+}
+
+#[test]
+fn integer_lane_arithmetic_follows_the_scalar_integer_rules() {
+    let i = |v| ScalarExpr::ConstInt(v, ElementKind::I32);
+    let ints = p2(i(1), i(2));
+    let sum = ScalarExpr::Add(bx(ints.clone()), bx(ints.clone()));
+    assert_eq!(infer_ty(&sum, F32), Ok(Ty::Packed(ElementKind::I32, 2)));
+    // Integer Div has no form, packed or not.
+    assert!(infer_ty(&ScalarExpr::Div(bx(ints.clone()), bx(ints)), F32).is_err());
+}
+
+#[test]
+fn a_whole_value_select_takes_a_scalar_condition_and_packed_arms() {
+    let a = p2(input(0).0, input(1).0);
+    let b = p2(input(1).0, input(0).0);
+    let sel = ScalarExpr::Select(bx(input(0).0), bx(a.clone()), bx(b.clone()));
+    assert_eq!(infer_ty(&sel, F32), Ok(Ty::Packed(F32, 2)));
+    // A packed condition is a later slice.
+    let bad = ScalarExpr::Select(bx(a.clone()), bx(a), bx(b));
+    assert!(matches!(
+        infer_ty(&bad, F32),
+        Err(TypeError::PackedOperand { node: "Select" })
+    ));
+}
+
+#[test]
+fn cast_converts_each_lane() {
+    let a = p2(input(0).0, input(1).0);
+    let spec = CastSpec {
+        to: ElementKind::F64,
+        round: RoundMode::NearestEven,
+        sat: Saturation::Wrap,
+    };
+    assert_eq!(
+        infer_ty(&ScalarExpr::Cast(bx(a), spec), F32),
+        Ok(Ty::Packed(ElementKind::F64, 2))
+    );
+}
+
+#[test]
+fn extract_through_an_operator_is_that_lane_of_the_operands() {
+    let a = p2(input(0).0, ScalarExpr::Const(2.0));
+    let b = p2(input(1).0, ScalarExpr::Const(3.0));
+    let sum = ScalarExpr::Add(bx(a.clone()), bx(b.clone()));
+    assert_eq!(
+        lane_of(&sum, 1),
+        Ok(ScalarExpr::Add(
+            bx(ScalarExpr::Const(2.0)),
+            bx(ScalarExpr::Const(3.0))
+        ))
+    );
+    assert_eq!(
+        lane_of(&sum, 0),
+        Ok(ScalarExpr::Add(bx(input(0).0), bx(input(1).0)))
+    );
+    // Typed: Extract(Add(a, b), i) infers to the lane type.
+    assert_eq!(infer_ty(&extract(sum, 1), F32), Ok(Ty::Scalar(F32)));
+    // Out-of-range and non-lane-wise are errors, not panics.
+    assert!(lane_of(&a, 2).is_err());
+    assert!(lane_of(&ScalarExpr::Div(bx(a.clone()), bx(a)), 0).is_err());
+}
+
+#[test]
+fn lane_of_distributes_every_lane_wise_operator() {
+    let a = p2(input(0).0, ScalarExpr::Const(2.0));
+    let b = p2(input(1).0, ScalarExpr::Const(3.0));
+    let c = p2(ScalarExpr::Const(5.0), input(0).0);
+    let (a0, b0, c0) = (input(0).0, input(1).0, ScalarExpr::Const(5.0));
+    let spec = CastSpec {
+        to: ElementKind::F64,
+        round: RoundMode::NearestEven,
+        sat: Saturation::Wrap,
+    };
+    let cases = [
+        (
+            ScalarExpr::Sub(bx(a.clone()), bx(b.clone())),
+            ScalarExpr::Sub(bx(a0.clone()), bx(b0.clone())),
+        ),
+        (
+            ScalarExpr::Mul(bx(a.clone()), bx(b.clone())),
+            ScalarExpr::Mul(bx(a0.clone()), bx(b0.clone())),
+        ),
+        (
+            ScalarExpr::Binary(BinaryOp::Max, bx(a.clone()), bx(b.clone())),
+            ScalarExpr::Binary(BinaryOp::Max, bx(a0.clone()), bx(b0.clone())),
+        ),
+        (
+            ScalarExpr::Binary(BinaryOp::Min, bx(a.clone()), bx(b.clone())),
+            ScalarExpr::Binary(BinaryOp::Min, bx(a0.clone()), bx(b0.clone())),
+        ),
+        (
+            ScalarExpr::Fma(bx(a.clone()), bx(b.clone()), bx(c.clone())),
+            ScalarExpr::Fma(bx(a0.clone()), bx(b0.clone()), bx(c0)),
+        ),
+        (
+            // The condition is a whole-value scalar and is not lane-selected.
+            ScalarExpr::Select(bx(input(1).0), bx(a.clone()), bx(b.clone())),
+            ScalarExpr::Select(bx(input(1).0), bx(a0.clone()), bx(b0)),
+        ),
+        (
+            ScalarExpr::Cast(bx(a), spec),
+            ScalarExpr::Cast(bx(a0), spec),
+        ),
+    ];
+    for (packed, lane0) in cases {
+        assert_eq!(lane_of(&packed, 0), Ok(lane0), "{packed:?}");
+    }
 }

@@ -1699,13 +1699,12 @@ fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
                 op, *n, &args,
             )))
         }
-        // A packed value is only ever consumed by `Extract` in this increment (the type
-        // rules admit nothing else), so a lane is evaluated by evaluating its child: the
-        // other lanes are pure and unobserved. A bare `Pack` or an `Extract` of anything but
-        // a `Pack` is ill-typed, which the plan gate rejects before any evaluation.
-        ScalarExpr::Extract(x, i) => match &**x {
-            ScalarExpr::Pack(xs) if usize::from(*i) < xs.len() => eval(&xs[usize::from(*i)], ev),
-            _ => panic!("oracle: Extract of a value that is not a Pack, or lane {i} out of range"),
+        // A lane of a packed value is its scalar meaning (`types::lane_of`): `Pack` picks a
+        // child and a lane-wise operator applies to the same lane of its operands. A bare
+        // `Pack` or an ill-typed `Extract` is rejected by the plan gate before any evaluation.
+        ScalarExpr::Extract(x, i) => match crate::types::lane_of(x, *i) {
+            Ok(lane) => eval(&lane, ev),
+            Err(err) => panic!("oracle: ill-typed Extract: {err:?}"),
         },
         ScalarExpr::Pack(_) => panic!("oracle: a packed value has no scalar result"),
         ScalarExpr::Bitcast(x, to) => {
