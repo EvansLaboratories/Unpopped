@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.27.2` — feat (additive): lane-wise operators on packed values (U1 slice 4 step 2, #112)
+
+`infer_ty` types `Add`, `Sub`, `Mul`, `Fma`, `Min`/`Max`, a whole-value `Select` (scalar condition, packed arms) and `Cast` over packed operands lane-wise (same lane count, no broadcast, scalar rules on the lane types; every other operator still refuses with `PackedOperand`). New `types::lane_of` is the reference meaning of `Extract`; the oracle evaluates through it. The type rules now live in one table (`node_ty`) used by scalar and packed expressions alike; scalar results are unchanged. The plan gate still declines every packed body (no emitter seam yet). Proposed number; the PM allocates.
+
 ## `0.27.1` — docs: ROADMAP rows with no owner or blocker now name one (weekly sweep 2026-10-26)
 
 E2-E11, I2, C3-C5, C7, C11, X3 and X7 said only "open"; each now names its owner and its trigger or blocker. No code change.
