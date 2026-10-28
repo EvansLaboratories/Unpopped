@@ -173,7 +173,7 @@ CireSnave, 2026-10-24: *"I want the IR to cover the full union of the capabiliti
 | U3 | Execution scopes and ids; memory spaces and allocation; typed load/store; pointers; resources (textures/samplers/structs); `ProgramModel` | #114 | open, after U2 |
 | U4 | Barriers, fences, mbarrier, async groups; full atomics with order/scope/old-value, on shared memory too | #115 | open, after U3 |
 | U5 | Collectives as nodes; tuple-state reductions/scans with custom combine; arg-reductions; non-propagating NaN reduce | #116 | open, after U3, U4 |
-| U6 | Layout value + algebra (hierarchical shape:stride, composition/complement/divide/product/coalesce/swizzle) **as pure vocabulary with a property-test suite**; `View` re-expressed over it | #117 | open, after U1 |
+| U6 | Layout value + algebra (hierarchical shape:stride, composition/complement/divide/product/coalesce/swizzle) **as pure vocabulary with a property-test suite**; `View` re-expressed over it | #117 | in progress: pure `layout_algebra` module + property tests in PR (View re-expression pending, needs lane 1) |
 | U7 | MMA atoms (`mma.sync`, WGMMA, tcgen05/UMMA, sparse, block-scaled) and fragments; `AccumSpec` variants (TF32, 3xTF32, int32, f16, fp8 fast-accumulate); mixed-dtype contraction; accumulate-into-C | #118 | open, after U3, U6 |
 | U8 | Copy atoms (cp.async, TMA family, ldmatrix); pipelines, roles, persistent schedulers | #119 | open, after U4, U6, U7 |
 | U9 | EVT-style epilogue trees, grouped/ptr-array, split/stream-K, sparse, block-scaled GEMM; implicit-GEMM conv | #120 | open, after U7, U8 |
