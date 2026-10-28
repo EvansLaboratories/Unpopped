@@ -114,7 +114,7 @@ jobs:
   # tree-sitter grammars through `cc` and is the slow job, and keeping it
   # separate means a failure names WHICH surface broke without reading logs.
   #
-  # `--all-features` turns on `convert` (the CUDA/Slang tree-sitter frontends),
+  # `--all-features` turns on `convert` (the Slang tree-sitter frontend),
   # which is not in `default`, so without this job it is not type-checked,
   # linted, or tested by anything that runs automatically. (It also turned on
   # `seam` until 0.12.0, which removed that feature and its

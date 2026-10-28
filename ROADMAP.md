@@ -126,7 +126,7 @@ was not found in `git log`, `CHANGELOG.md` or the tree, which is not proof of ab
 | ID | Work | Source | Status |
 |---|---|---|---|
 | P1 | `FrontendRegistry` parser registry; where the neutral half of `lift.rs` lives; no code written | parser-ownership:57-64,162-187 | open (design call at the PM gate) |
-| P2 | `baracuda-cuda-parse` donation: the CUDA slice of `convert.rs`, then evict the `cuda:` token and `KernelSku.arch` | deferred:33-34; `sku.rs:281` | held(baracuda, KISS registry repoint (b)); `KernelSku.arch` held(Fuel) |
+| P2 | `baracuda-cuda-parse` donation: the CUDA slice of `convert.rs`, then evict the `cuda:` token and `KernelSku.arch` | deferred:33-34; `sku.rs:281` | **CUDA slice done in 0.30.0** (`parse_cuda`, the CUDA residue list, the `CUDA` `Frontend` and `tree-sitter-cuda` removed; Slang and the shared walkers stay; Baracuda follows after Unpopped publishes). The old hold on "KISS registry repoint (b)" was **stale**: KISS#514 merged 2026-09-25 (`conformance/registry/namespaces.json` `cuda` `reference_implementation` = `baracuda-cuda-vocab`, read at KISS `bafbe07` 2026-10-28). The "evict the `cuda:` token" half was **already done 2026-09-25** (`target.rs:64`: the reserved id block is gone, `the_reserved_id_block_is_gone_not_just_renamed`); Baracuda read-only-grepped 2026-10-28: it depends on token TEXT only, so `ArchSku` and `From<ArchSku> for TargetId` stay. `KernelSku.arch` held(Fuel) |
 | P3 | Parse ownership for Slang with Fuel; whether GLSL/Metal are in scope; owners for OpenCL/HIP/ISPC | parser-ownership:106-115,195-205 | open. parked by the PM 2026-10-24 (was Call 8; the row stays recorded) |
 | P4 | Joint GPU plan beyond U1/U2: M2 lightbulb off the fuel git pin; B1 NVRTC sm_61 compile; M3; M4/M5 (P40); M6 (Qwen 27B-class); AMD/Intel via Vulkan (66/167 kernels have SPIR-V); no CUDA CI runner | joint-gpu-plan:18-19,95-145,203-223 | held(baracuda B1, fuel, lightbulb, P40 arrival and LAN). **Call 7**: exact model names, 27B quant, a CUDA runner |
 | P5 | qwen3_5 decode: planning test like `qwen3_dense_ops_plan_for_sm61.rs`; causal conv1d is 9 operands over `MAX_OPERANDS = 8`; triangular-solve intent; matrix-state recurrence | qwen3_5-assessment:112-141; `ir.rs:1740` | held(P40, M6) |
@@ -180,6 +180,8 @@ CireSnave, 2026-10-24: *"I want the IR to cover the full union of the capabiliti
 | U10 | `Access::Attention` incl. online-softmax state, masks, paged KV (block-table addressing over `ReadIndex`), backward | #121 | open, after U5, U7, U9 |
 | U11 | Typed `Extern`/inline-asm with declared effects and a declared per-target body | #122 | open, after U3 |
 | U12 | Peer/multicast scopes and multimem ops | #123 | open, last (D4) |
+
+**U-row build order by consumer demand** (CireSnave 2026-10-28: *"build every U row but start with the ones consumers ask for."*). Fuel, from its 147-kernel Slang corpus (regex counts, Fuel#514 section 5): U2, U3, U6, U4, U5, U10, U7, U11; U8, U9, U12 show no kernel. Baracuda has no recorded demand for U2-U12 and, under the 2026-10-28 seam hold, will not rank them. Ranked from the Slang corpus only; CUDA-side demand (Fuel rows 105/106: Q4_0/Q8_0 QMatMul, paged attention) would lift U7/U8/U10 and is unmeasured.
 
 
 **Flight of fancy (CireSnave, board 282 item 81):** direct-to-PTX emitter: a PTX-capable lowering in the union IR is its prerequisite; flight of fancy, no schedule.
