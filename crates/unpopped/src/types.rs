@@ -385,11 +385,14 @@ pub fn infer_ty(e: &ScalarExpr, compute: ElementKind) -> Result<Ty, TypeError> {
             if !lane_wise(e) {
                 return Err(TypeError::PackedOperand { node });
             }
-            // A whole-value `Select` takes a scalar condition; every other operand is packed.
-            let first_value = usize::from(matches!(e, ScalarExpr::Select(..)));
-            if first_value == 1 && !matches!(tys[0], Ty::Scalar(_)) {
+            // A `Select` takes a scalar condition (whole-value select) or a packed one with the
+            // arms' lane count (lane-wise mask); every other operand is packed.
+            let is_select = matches!(e, ScalarExpr::Select(..));
+            let lane_mask = is_select && matches!(tys[0], Ty::Packed(_, n) if n == lanes);
+            if is_select && !lane_mask && !matches!(tys[0], Ty::Scalar(_)) {
                 return Err(TypeError::PackedOperand { node });
             }
+            let first_value = usize::from(is_select && !lane_mask);
             if tys[first_value..]
                 .iter()
                 .any(|t| !matches!(t, Ty::Packed(_, n) if *n == lanes))
@@ -454,7 +457,18 @@ pub fn lane_of(e: &ScalarExpr, i: u8) -> Result<ScalarExpr, TypeError> {
             ScalarExpr::Binary(*op, one(a)?, one(b)?)
         }
         ScalarExpr::Fma(a, b, c) => ScalarExpr::Fma(one(a)?, one(b)?, one(c)?),
-        ScalarExpr::Select(c, a, b) => ScalarExpr::Select(c.clone(), one(a)?, one(b)?),
+        // A scalar condition selects the whole value, so it is the same in every lane; a packed
+        // one (lane-wise mask) contributes its own lane `i`.
+        ScalarExpr::Select(c, a, b) => {
+            let cond = match lane_of(c, i) {
+                Ok(lane) => lane,
+                // `PackedOperand`: a scalar condition built from a packed value (a `Bitcast` of one)
+                // has no lane form and is not one; `infer_ty` has already vetted the whole node.
+                Err(TypeError::NotPacked { .. } | TypeError::PackedOperand { .. }) => (**c).clone(),
+                Err(err) => return Err(err),
+            };
+            ScalarExpr::Select(Box::new(cond), one(a)?, one(b)?)
+        }
         ScalarExpr::Cast(x, spec) => ScalarExpr::Cast(one(x)?, *spec),
         ScalarExpr::Input(_)
         | ScalarExpr::Const(_)
