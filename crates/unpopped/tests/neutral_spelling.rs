@@ -104,7 +104,11 @@ fn expected(dt: ElementKind) -> Spelling {
         //     computed with at this schema version. Declining is REQUIRED here.
         //   * `F8E8M0`/`F8E6M2` are the MX shared block SCALES — active §6.1
         //     dtypes at sk4, but never an element compute dtype.
-        Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 => Spelling::Declined,
+        //   * `F4E2M1`/`F6E2M3`/`F6E3M2` are the OCP MX ELEMENT formats (§6.1-0014):
+        //     sub-byte storage and key identity only until a codec lands.
+        Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 | F4E2M1 | F6E2M3 | F6E3M2 => {
+            Spelling::Declined
+        }
     }
 }
 

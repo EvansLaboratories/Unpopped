@@ -63,7 +63,7 @@ fn every_dtype_with_a_c_spelling_has_a_real_symbol_tag() {
 /// The wildcard's current occupants, pinned so the set is a decision rather than
 /// an accident.
 ///
-/// These four are **unreachable through the documented path** (none has a
+/// These seven are **unreachable through the documented path** (none has a
 /// `scalar_ctype` spelling). Pinned because if one later gains a C spelling, the
 /// test above fires — and this one tells the next reader which dtypes were
 /// deliberately left in the wildcard and why.
@@ -84,9 +84,13 @@ fn the_wildcard_holds_exactly_the_dtypes_with_no_c_spelling() {
             ElementKind::F8E8M0,
             ElementKind::F8E6M2,
             ElementKind::Fp8E5M2FNUZ,
+            // The OCP MX element formats (0.29.0): storage and key identity only.
+            ElementKind::F4E2M1,
+            ElementKind::F6E2M3,
+            ElementKind::F6E3M2,
         ],
         "the wildcard set moved. The MX scales (F8E8M0/F8E6M2) are sibling operands \
-         rather than element compute dtypes, and the fnuz pair is reserved — none \
+         rather than element compute dtypes, and the fnuz pair is reserved, the MX element formats (F4E2M1/F6E2M3/F6E3M2) are storage only — none \
          lowers, so none has a C spelling. Anything else here is a dtype that lost \
          its tag."
     );

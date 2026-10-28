@@ -1892,7 +1892,7 @@ fn assert_valid_offsets(op: &OpDef, _key: &StructureKey) {
 
 /// A `structure_key` dtype position must name a dtype a kernel can COMPUTE IN.
 ///
-/// Four §6.1 rows are not that, and the vocabulary says so in its own doc:
+/// Seven §6.1 rows are not that, and the vocabulary says so in its own doc:
 ///
 /// - **`Fp8E4M3FNUZ` / `Fp8E5M2FNUZ`** — RESERVED. *"Every use in a
 ///   `structure_key` dtype position is a **typed decline**."* They are recognized
@@ -1902,6 +1902,10 @@ fn assert_valid_offsets(op: &OpDef, _key: &StructureKey) {
 /// - **`F8E8M0` / `F8E6M2`** — MX shared block **scales** (KISS-CLASSIFY
 ///   §6.1-0013): a sibling operand that scales a block, **never an element value
 ///   dtype a kernel computes in**. A kernel does not compute *in* a scale.
+/// - **`F4E2M1` / `F6E2M3` / `F6E3M2`** — OCP MX **element** formats
+///   (§6.1-0014): storage and key identity only until a codec lands (no
+///   `oracle::elem_size`, no emitter carrier). Added with the rows themselves, so
+///   the oracle never meets a dtype it cannot size.
 ///
 /// # Why this is a gate rather than a comment
 ///
@@ -1924,6 +1928,9 @@ fn check_dtype_is_a_compute_dtype(dtype: ElementKind) -> Result<(), PlanError> {
         }
         ElementKind::F8E8M0 | ElementKind::F8E6M2 => {
             "an MX shared block SCALE (KISS-CLASSIFY 6.1-0013) — a sibling              operand that scales a block, never an element value dtype a kernel              computes in"
+        }
+        ElementKind::F4E2M1 | ElementKind::F6E2M3 | ElementKind::F6E3M2 => {
+            "an OCP MX ELEMENT format (KISS-CLASSIFY 6.1-0014) — sub-byte storage              and key identity only; no oracle sizing or emitter codec exists yet"
         }
         _ => return Ok(()),
     };

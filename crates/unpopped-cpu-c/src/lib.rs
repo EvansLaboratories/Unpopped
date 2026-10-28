@@ -140,6 +140,12 @@ impl Backend for CpuC {
             | ElementKind::F8E6M2
             | ElementKind::Fp8E4M3FNUZ
             | ElementKind::Fp8E5M2FNUZ => DtypeSupport::Unsupported,
+            // Declined until a codec lands: the OCP MX element formats (§6.1-0014)
+            // are storage and key identity only. Sub-byte storage with no emitted
+            // carrier or decode, so "not computed" is the honest answer.
+            ElementKind::F4E2M1 | ElementKind::F6E2M3 | ElementKind::F6E3M2 => {
+                DtypeSupport::Unsupported
+            }
         }
     }
 

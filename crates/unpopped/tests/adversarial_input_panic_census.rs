@@ -92,7 +92,10 @@ use unpopped_vocab::{
 const KNOWN_PANICKING: usize = 0;
 
 /// See [`KNOWN_PANICKING`]. Every one of these was a panic before 0.6.0.
-const KNOWN_DECLINED: usize = 1428;
+/// 1428 -> 1716 in 0.29.0: +288 inputs, all declined, from the three OCP MX element
+/// dtypes (`F4E2M1`/`F6E2M3`/`F6E3M2`) the corpus now iterates; panics stayed 0 and
+/// the lowered count stayed 972, so the new dtypes reach the gate and are refused.
+const KNOWN_DECLINED: usize = 1716;
 
 /// Spells every dtype and every plan, so a panic is never a backend decline in
 /// disguise. A backend that declined would mask the very thing being counted.

@@ -32,7 +32,7 @@ const VECTORS: &str = include_str!("../kiss/structure_key_derivation_vectors.jso
 
 /// Every §6.1 dtype, so a vector's spelling resolves through `dtype_token`
 /// rather than through a second hand-written table that could drift from it.
-const ALL_DTYPES: [ElementKind; 24] = [
+const ALL_DTYPES: [ElementKind; 27] = [
     ElementKind::F16,
     ElementKind::Bf16,
     ElementKind::F32,
@@ -57,6 +57,9 @@ const ALL_DTYPES: [ElementKind; 24] = [
     ElementKind::B1,
     ElementKind::Complex64,
     ElementKind::Complex128,
+    ElementKind::F4E2M1,
+    ElementKind::F6E2M3,
+    ElementKind::F6E3M2,
 ];
 
 fn dtype(name: &str) -> ElementKind {
@@ -216,7 +219,7 @@ fn the_artifact_is_the_one_this_leg_claims() {
     );
     assert_eq!(
         v["vectors"].as_array().unwrap().len(),
-        66,
+        71,
         "vector count changed"
     );
 }

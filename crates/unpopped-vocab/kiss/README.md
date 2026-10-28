@@ -7,12 +7,34 @@ vendoring better than retyping.
 
 | File | Source path in KISS | Vendored from commit |
 |---|---|---|
-| `dtype_manifest.json` | `conformance/corpus/dtype_manifest.json` | `86196f7` (blob `ab50a92692ce92447913cd14d910c466cdf7e315`) |
-| `structure_key_vectors.json` | `conformance/corpus/structure_key_vectors.json` | `86196f7` (blob `019f646f607d068db4dfe23396fc817093b6f455`) |
-| `structure_key_derivation_vectors.json` | `conformance/corpus/structure_key_derivation_vectors.json` | `026feba` (blob `ddf46e0897c23017c2fc45df9c65e8889925ff8b`) |
+| `dtype_manifest.json` | `conformance/corpus/dtype_manifest.json` | `bafbe07` (blob `7aa676d9324b800241ddcb31d294ddce8e70af0a`) |
+| `structure_key_vectors.json` | `conformance/corpus/structure_key_vectors.json` | `bafbe07` (blob `05c7a99bff4451dad318393c3360ac254d598da1`) |
+| `structure_key_derivation_vectors.json` | `conformance/corpus/structure_key_derivation_vectors.json` | `bafbe07` (blob `313a03f0e0805f382e63801b943f34a0b2bf2529`) |
 
-`86196f7` is KISS `main` as read on 2026-10-16 (conformance 0.4.0). It is a single
-commit for all three files, so the table cannot name two different spec states.
+`bafbe07` is KISS `main` as read on 2026-10-28 (KISS#713). It is a single commit
+for all three files, so the table cannot name two different spec states.
+
+### Re-vendored 2026-10-28 from KISS `bafbe07` (MX element dtypes, unpopped-vocab 0.29.0)
+
+Spans every KISS corpus commit since the previous copies (`86196f7` for the manifest and
+key vectors, `026feba` for the derivation vectors): `9336a5b` (3 pair vectors, #662),
+`07ccc96` (per-target vector-access byte cap, 6.8-0018, already adopted in #135),
+`68dc233` (MX element rows `f4e2m1`/`f6e2m3`/`f6e3m2`, 6.1-0014..-0016) and `bafbe07`
+(#713: `generated_from` names the emitting program; the never-moving `source_commit`
+member is dropped). Verified after writing: each `git hash-object` equals the KISS blob
+at `bafbe07`, 0 CR bytes.
+
+| File | KISS blob | sha256 | bytes |
+|---|---|---|---|
+| `dtype_manifest.json` | `7aa676d9324b800241ddcb31d294ddce8e70af0a` | `c1d6dc57cf588be8b951f8742ed0fdfc349f3945042803d85de10c0e0256ded1` | 3554 |
+| `structure_key_vectors.json` | `05c7a99bff4451dad318393c3360ac254d598da1` | `dfc0f5c895213d3c99d4bb863ab5620f117b286e9b48ee2fdb39c16e7619b69e` | 36129 |
+| `structure_key_derivation_vectors.json` | `313a03f0e0805f382e63801b943f34a0b2bf2529` | `800d0586d04058b715bdb0001a1b7d6a489d041e8de413f0ef36f5232193a16d` | 58638 |
+
+What it required here: three `ElementKind` rows (`F4E2M1`, `F6E2M3`, `F6E3M2`; usable, not
+reserved), the 24 → 27 token vocabulary, a typed decline `ElementDtypeAsAccumulator` for an
+MX element in an accumulator position (token and derive sides, 6.1-0016), and 5 new
+derivation vectors. The pins in `tests/kiss_byte_match.rs` moved with the artifact
+(positive 28 → 34, decline 25 → 27, the `source_commit` assertion removed).
 
 ### Derivation vectors re-vendored 2026-10-16 from KISS `026feba` (conformance 0.4.4 proposed, #592)
 
@@ -104,15 +126,16 @@ output path. That was fixed upstream and the hold was lifted on 2026-10-14 (see 
 
 ### Two commits, two meanings
 
-`structure_key_vectors.json` carries its own `source_commit: 19c3ad7`, which is
-**not** the commit above and is **not** staleness. The table records where the
+**Historical (the member was dropped from the artifact in KISS#713, 2026-10-28).**
+`structure_key_vectors.json` carried its own `source_commit: 19c3ad7`, which was
+**not** the commit above and was **not** staleness. The table records where the
 *artifact* was copied from (KISS `main`); `source_commit` records the *spec*
 provenance the artifact was generated against. They differ because the artifact
 landed after the spec anchor and `spec/` has not moved since.
 
-`tests/kiss_byte_match.rs` asserts the `source_commit` value, so citing one
-without the other is caught rather than merely discouraged — a report naming
-only one of the two is not falsifiable.
+`tests/kiss_byte_match.rs` used to assert the `source_commit` value; with the member
+gone the content hash in `the_vendored_artifacts_are_the_revisions_this_leg_was_written_against`
+is the only revision identity.
 
 ## Why these are here
 

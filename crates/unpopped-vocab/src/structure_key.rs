@@ -1505,6 +1505,12 @@ fn contraction_from_axes(
     }
 
     let primary = operands.first().map_or(ElementKind::F32, |o| o.dtype);
+    // §6.1-0016, after the §6.1-0001 reserved checks above so a reserved dtype keeps
+    // its own verdict: an MX element is never the accumulator, declared or defaulted.
+    let acc_dtype = facts.accumulator.unwrap_or(primary);
+    if acc_dtype.is_mx_element() {
+        return Err(DeriveDecline::ElementDtypeAsAccumulator { dtype: acc_dtype });
+    }
     Ok(ContractionKey {
         m: SizeClass::of(m_ext),
         n: SizeClass::of(n_ext),
@@ -1995,6 +2001,14 @@ pub enum DeriveDecline {
         /// The reserved dtype found.
         dtype: ElementKind,
     },
+    /// KISS-CLASSIFY §6.1-0016: an OCP MX **element** dtype would be the cell's
+    /// accumulator, either declared or by default (an undeclared contraction
+    /// accumulates at operand 0's dtype). Declare an accumulator that is not an MX
+    /// element.
+    ElementDtypeAsAccumulator {
+        /// The MX element dtype that would have been the accumulator.
+        dtype: ElementKind,
+    },
 }
 
 impl DeriveDecline {
@@ -2016,6 +2030,7 @@ impl DeriveDecline {
             Self::ReservedScaleDtype { .. } | Self::ReservedContractionDtype { .. } => {
                 "ReservedDtype"
             }
+            Self::ElementDtypeAsAccumulator { .. } => "ElementDtypeAsAccumulator",
             Self::ContractionRolesNotDeclared => "ContractionRolesNotDeclared",
             Self::ContractionAxisInvalid => "ContractionAxisInvalid",
             Self::ContractionNoOutput => "ContractionNoOutput",
@@ -2082,6 +2097,10 @@ impl core::fmt::Display for DeriveDecline {
                 f,
                 "a declared contraction has no output operand (KISS-CLASSIFY §6.7-0006)"
             ),
+            Self::ElementDtypeAsAccumulator { dtype } => write!(
+                f,
+                "the accumulator would be the MX element dtype {dtype:?}, which is never an accumulator (KISS-CLASSIFY §6.1-0016); declare a different one"
+            ),
             Self::Batch(b) => write!(
                 f,
                 "malformed batch-axis role {} (KISS-CLASSIFY §6.6-0023)",
@@ -2129,6 +2148,9 @@ fn check_declines(operands: &[OperandDesc], facts: &CellFacts) -> Result<(), Der
     }
     if facts.contraction_declared {
         contraction_key(operands, facts, true)?;
+    } else if let Some(dtype) = facts.accumulator.filter(|d| d.is_mx_element()) {
+        // §6.1-0016 for the non-contraction `(acc + mp)` field.
+        return Err(DeriveDecline::ElementDtypeAsAccumulator { dtype });
     }
     Ok(())
 }
@@ -2478,12 +2500,15 @@ impl Frame {
 #[must_use]
 pub const fn dtype_storage_bits(dt: ElementKind) -> u32 {
     use ElementKind::{
-        B1, Bf16, Bool, Complex64, Complex128, F8E6M2, F8E8M0, F16, F32, F32Strict, F64, Fp8E4M3FN,
-        Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4, U8, U16, U32, U64,
+        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E6M2, F8E8M0, F16, F32,
+        F32Strict, F64, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4,
+        U8, U16, U32, U64,
     };
     match dt {
         B1 => 1,
-        I4 | U4 => 4,
+        // MX elements (KISS-CLASSIFY §6.1-0014): 4 and 6 stored bits, sub-byte.
+        I4 | U4 | F4E2M1 => 4,
+        F6E2M3 | F6E3M2 => 6,
         // The `fnuz` FP8 variants are RESERVED (no computation semantics at this
         // schema version) but their *storage* width is pinned by §6.1 all the
         // same — a reserved dtype is still a known dtype, and answering "how wide
@@ -2514,12 +2539,13 @@ fn dtype_size_bytes(dt: ElementKind) -> Option<u32> {
 #[must_use]
 pub const fn dtype_numeric_kind(dt: ElementKind) -> &'static str {
     use ElementKind::{
-        B1, Bf16, Bool, Complex64, Complex128, F8E6M2, F8E8M0, F16, F32, F32Strict, F64, Fp8E4M3FN,
-        Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4, U8, U16, U32, U64,
+        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E6M2, F8E8M0, F16, F32,
+        F32Strict, F64, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4,
+        U8, U16, U32, U64,
     };
     match dt {
         F16 | Bf16 | F32 | F32Strict | F64 | Fp8E4M3FN | Fp8E4M3FNUZ | Fp8E5M2 | Fp8E5M2FNUZ
-        | F8E8M0 | F8E6M2 => "float",
+        | F8E8M0 | F8E6M2 | F4E2M1 | F6E2M3 | F6E3M2 => "float",
         I8 | I16 | I32 | I64 | I4 => "int",
         U8 | U16 | U32 | U64 | U4 | B1 => "uint",
         Bool => "bool",
@@ -2583,6 +2609,12 @@ pub enum TokenDecline {
     /// [`BadAccMpField`](Self::BadAccMpField): this field is *well-formed*, it
     /// just says nothing, and a producer emitting it has a real bug.
     RedundantAccMpField,
+    /// An OCP MX **element** dtype (`f4e2m1`, `f6e2m3`, `f6e3m2`) was spelled in
+    /// an accumulator position, in the contraction group's `<acc>` or the
+    /// non-contraction `(acc + mp)` field (KISS-CLASSIFY §6.1-0016). The spelling is
+    /// recognized and usable elsewhere, so this is neither
+    /// [`ReservedDtype`](Self::ReservedDtype) nor [`UnknownDtype`](Self::UnknownDtype).
+    ElementDtypeAsAccumulator,
     /// Field 8 spelled a reduced-axis set with the **wrong one** of the four
     /// distinct encodings — an `x<hh>` bitmask naming a set that has a sentinel
     /// (`rall` / `rlast`), or `x00` naming the empty set that is `-`.
@@ -2706,6 +2738,7 @@ impl TokenDecline {
             Self::NonCanonicalReduceField => "NonCanonicalReduceField",
             Self::BadReduceField => "BadReduceField",
             Self::UnknownDtype => "UnknownDtype",
+            Self::ElementDtypeAsAccumulator => "ElementDtypeAsAccumulator",
             Self::UnknownCellClass => "UnknownCellClass",
             Self::BadOperandSubKey => "BadOperandSubKey",
             Self::BadDequantForm => "BadDequantForm",
@@ -3149,7 +3182,7 @@ impl StructureKey {
                     // top-level dtype: a reserved spelling is recognized by
                     // `dtype_from_code` and refused here.
                     wdt: reject_reserved(dtype_from_code(prec[0])?)?,
-                    acc: reject_reserved(dtype_from_code(prec[1])?)?,
+                    acc: reject_mx_element(reject_reserved(dtype_from_code(prec[1])?)?)?,
                     out: reject_reserved(dtype_from_code(prec[2])?)?,
                     mp: mp_from_code(prec[3])?,
                     scale,
@@ -4116,8 +4149,9 @@ pub const fn dtype_token(v: ElementKind) -> &'static str {
 
 const fn dtype_code(v: ElementKind) -> &'static str {
     use ElementKind::{
-        B1, Bf16, Bool, Complex64, Complex128, F8E6M2, F8E8M0, F16, F32, F32Strict, F64, Fp8E4M3FN,
-        Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4, U8, U16, U32, U64,
+        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E6M2, F8E8M0, F16, F32,
+        F32Strict, F64, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4,
+        U8, U16, U32, U64,
     };
     match v {
         F16 => "f16",
@@ -4156,6 +4190,10 @@ const fn dtype_code(v: ElementKind) -> &'static str {
         I16 => "i16",
         U16 => "u16",
         U64 => "u64",
+        // OCP MX elements (KISS-CLASSIFY §6.1-0014), usable, not reserved.
+        F4E2M1 => "f4e2m1",
+        F6E2M3 => "f6e2m3",
+        F6E3M2 => "f6e3m2",
         I4 => "i4",
         U4 => "u4",
         B1 => "b1",
@@ -4194,6 +4232,12 @@ fn parse_canonical_version(field: &str) -> Result<u16, ()> {
 /// while forbidding the second.
 fn reject_reserved(dt: ElementKind) -> Option<ElementKind> {
     if dt.is_reserved() { None } else { Some(dt) }
+}
+
+/// The gate for an MX element in an accumulator position (KISS-Classify §6.1-0016):
+/// the strict decode's counterpart of [`TokenDecline::ElementDtypeAsAccumulator`].
+fn reject_mx_element(dt: ElementKind) -> Option<ElementKind> {
+    if dt.is_mx_element() { None } else { Some(dt) }
 }
 
 /// The all-axes mask for a `rank`-dimensional iteration frame.
@@ -4389,6 +4433,10 @@ fn attribute_bad_contraction(field: &str) -> Result<(), TokenDecline> {
     if mp_from_code(prec[3]).is_none() {
         return Err(TokenDecline::BadContractionField);
     }
+    // §6.1-0016: an MX element is never an accumulator (`prec[1]` is `<acc>`).
+    if dtype_from_code(prec[1]).is_some_and(ElementKind::is_mx_element) {
+        return Err(TokenDecline::ElementDtypeAsAccumulator);
+    }
     Ok(())
 }
 
@@ -4426,6 +4474,9 @@ fn parse_acc_mp(field: &str, compute: ElementKind) -> Result<AccMp, TokenDecline
             spelling: acc_code.to_string(),
         });
     }
+    if acc.is_mx_element() {
+        return Err(TokenDecline::ElementDtypeAsAccumulator);
+    }
     let mp = mp_from_code(mp_str).ok_or(TokenDecline::BadAccMpField)?;
     // Rule (d). `AccMp::new` is the rule; asking it is how the encoder's notion
     // of "worth emitting" and the decoder's notion of "legal to have emitted"
@@ -4435,8 +4486,9 @@ fn parse_acc_mp(field: &str, compute: ElementKind) -> Result<AccMp, TokenDecline
 
 fn dtype_from_code(s: &str) -> Option<ElementKind> {
     use ElementKind::{
-        B1, Bf16, Bool, Complex64, Complex128, F8E6M2, F8E8M0, F16, F32, F64, Fp8E4M3FN,
-        Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4, U8, U16, U32, U64,
+        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E6M2, F8E8M0, F16, F32,
+        F64, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4, U8, U16, U32,
+        U64,
     };
     Some(match s {
         "f16" => F16,
@@ -4461,6 +4513,9 @@ fn dtype_from_code(s: &str) -> Option<ElementKind> {
         "f8e8m0" => F8E8M0,
         "f8e6m2" => F8E6M2,
         "f8e5m2fnuz" => Fp8E5M2FNUZ,
+        "f4e2m1" => F4E2M1,
+        "f6e2m3" => F6E2M3,
+        "f6e3m2" => F6E3M2,
         "i32" => I32,
         "i64" => I64,
         "u32" => U32,

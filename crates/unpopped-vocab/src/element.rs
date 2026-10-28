@@ -1148,11 +1148,12 @@ pub enum ElementKind {
     /// `exp + mantissa = 8 + 0`, not the signed-float `1 + e + m`.
     ///
     /// A scale is an ordinary §6.1 dtype because it is an ordinary 8-bit value.
-    /// The MX *element* formats it scales (`f6e2m3`, `f6e3m2`, `f4`) are **not**
-    /// §6.1 rows — they are block-scoped element formats living in the
-    /// MX-encoding vocabulary, so they are deliberately absent from this enum
-    /// (maintainer ruling, 2026-08-08). Putting them here would let a bare
-    /// `structure_key` dtype position name `f4`, which is not a thing.
+    /// The MX *element* formats it scales ([`F4E2M1`](Self::F4E2M1),
+    /// [`F6E2M3`](Self::F6E2M3), [`F6E3M2`](Self::F6E3M2)) ARE §6.1 rows since
+    /// 0.29.0 (KISS-CLASSIFY §6.1-0014..0016, KISS#675 merged as-is per decision
+    /// 301 A; the CireSnave/maintainer ruling of 2026-08-08 that kept them out of
+    /// this enum is reversed, ROADMAP D5/U1b). They are usable as an operand,
+    /// weight or output dtype, never as an accumulator (`ElementDtypeAsAccumulator`).
     F8E8M0,
     /// MX shared block **scale**, E6M2 — a finer-granularity sibling of
     /// [`F8E8M0`](Self::F8E8M0): +2 mantissa, −2 exponent, so less dynamic range.
@@ -1221,6 +1222,17 @@ pub enum ElementKind {
     /// same terms as [`I16`](Self::I16) — named so it can be declined as a
     /// known dtype rather than as an unknown token.
     U64,
+    /// OCP MX v1.0 FP4 element, E2M1 (1 sign + 2 exponent + 1 mantissa, bias 1, no
+    /// inf/NaN), token `f4e2m1` (KISS-CLASSIFY §6.1-0014). 4-bit storage: sub-byte,
+    /// never vectorizes. Storage and key identity only here: the plan gate and
+    /// every emitter decline it with a typed error until a codec lands.
+    F4E2M1,
+    /// OCP MX v1.0 FP6 element, E2M3 (1 + 2 + 3, bias 1, no inf/NaN), token
+    /// `f6e2m3`. 6-bit storage, sub-byte. Same terms as [`F4E2M1`](Self::F4E2M1).
+    F6E2M3,
+    /// OCP MX v1.0 FP6 element, E3M2 (1 + 3 + 2, bias 3, no inf/NaN), token
+    /// `f6e3m2`. 6-bit storage, sub-byte. Same terms as [`F4E2M1`](Self::F4E2M1).
+    F6E3M2,
 }
 
 impl ElementKind {
@@ -1234,13 +1246,13 @@ impl ElementKind {
     /// checks half the property (a *missing* token and an *extra* one are
     /// different bugs).
     ///
-    /// # This is 25 entries against a 24-token vocabulary
+    /// # This is 28 entries against a 27-token vocabulary
     ///
     /// Not a discrepancy. [`F32Strict`](Self::F32Strict) is a derivation input
     /// on the operand channel, not a key dtype: it folds to
     /// [`F32`](Self::F32) and spells the same `f32` token (sk3 D4 retired
-    /// `f32s`; §6.1-0005 forbids a strict-precision dtype token). So 25 variants
-    /// produce 24 distinct tokens, and **the token image is the thing to compare
+    /// `f32s`; §6.1-0005 forbids a strict-precision dtype token). So 28 variants
+    /// produce 27 distinct tokens, and **the token image is the thing to compare
     /// across implementations** — comparing variant counts manufactures
     /// divergence that isn't on the wire.
     ///
@@ -1251,7 +1263,7 @@ impl ElementKind {
     /// every match site including the token codec. If a new variant carries a
     /// §6.1 token but is missed here, `tests/kiss_dtype_manifest.rs` fails — the
     /// vendored manifest would list a token this list cannot produce.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 28] = [
         Self::F16,
         Self::Bf16,
         Self::F32,
@@ -1277,6 +1289,9 @@ impl ElementKind {
         Self::Complex128,
         Self::U32,
         Self::U64,
+        Self::F4E2M1,
+        Self::F6E2M3,
+        Self::F6E3M2,
     ];
 
     /// Whether this dtype is **reserved** by KISS-Classify §6.1-0001: part of
@@ -1296,6 +1311,15 @@ impl ElementKind {
     #[must_use]
     pub const fn is_reserved(self) -> bool {
         matches!(self, Self::Fp8E4M3FNUZ | Self::Fp8E5M2FNUZ | Self::F8E6M2)
+    }
+
+    /// Whether this is an OCP MX **element** format (`f4e2m1`, `f6e2m3`,
+    /// `f6e3m2`; KISS-CLASSIFY §6.1-0014). Usable as an operand, weight or output
+    /// dtype, but never as an accumulator (§6.1-0016): a position that names one
+    /// as `<acc>` typed-declines with `ElementDtypeAsAccumulator`.
+    #[must_use]
+    pub const fn is_mx_element(self) -> bool {
+        matches!(self, Self::F4E2M1 | Self::F6E2M3 | Self::F6E3M2)
     }
 }
 
