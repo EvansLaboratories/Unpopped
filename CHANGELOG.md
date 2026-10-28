@@ -15,9 +15,16 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## `0.29.1` — feat (additive): `Cast` rows for `F16` and `Bf16` (U1, #112)
+## `0.30.0` — refactor (BREAKING): the CUDA front end leaves the neutral core (ROADMAP P2, #112)
+
+Removed from `unpopped::convert` (feature `convert`): `parse_cuda`, the `CUDA` `Frontend` const, the private CUDA residue list, and the optional `tree-sitter-cuda` dependency (the feature is now `dep:tree-sitter`, `dep:tree-sitter-slang`). Baracuda owns CUDA in this ecosystem and already ships the same three items as `baracuda-cuda-parse` (0.24.0): migrate with `use baracuda_cuda_parse::{CUDA, parse_cuda}`. `Frontend`, `SLANG`, `parse_slang`, `lift_elementwise`/`lift_reduction`/`lift_scan`/`lift` and the eleven shared walkers are unchanged: **no trait or struct shape changes in this release** (the `Frontend`/`Backend` seam is held until the Slang requirements are in). The old P2 hold on "KISS registry repoint (b)" was stale: KISS#514 merged 2026-09-25.
+
+Tests: the CUDA-source tests left with the code (11 are in `baracuda-cuda-parse/tests/convert.rs` with the same bodies; `slang_and_cuda_lift_to_the_same_ir` needs both grammars and moves there). Five walker tests that happened to use CUDA source (`elementwise_and_reduction_lifters_dont_cross`, `scan_reduction_elementwise_are_disjoint`, the single-assignment / reassigned-local pair and the ternary-to-`Select` test) are re-expressed on Slang so the shared walkers keep their coverage here; `a_caller_defined_frontend_lifts_through_the_shared_walkers` now borrows the Slang grammar. New `tests/neutral_core_names_no_cuda_grammar.rs` guards the absence (with controls that find what stays). Proposed number; the PM allocates. Not published.
+
+## `0.30.1` — feat (additive): `Cast` rows for `F16` and `Bf16` (U1, #112)
 
 `F16` and `Bf16` are now `Cast` endpoints, both directions, against `{f32, f32s, f64, i8..i64, u8..u32}` and each other (`types::is_cast_float_endpoint`, `float_format`; `is_cast_float` is unchanged and still means a compute float, so an `F16` compute dtype is still declined by the plan gate). `check_cast` accepts them with the float rules (float to float: `Wrap`/`ClampFinite`; float to int: `Clamp`; int to float: `Wrap`), `Bitcast` accepts `F16`/`Bf16` against 16-bit integers, and `rounding_matters` compares exponent range AND significand (f16 to bf16 and bf16 to f16 are both inexact despite equal width). The oracle reference rounds once from the exact value (`cast_ref::encode_ieee`, all four `RoundMode`s, overflow follows the direction, `ClampFinite` clamps infinities, integers above 2^53 go through round-to-odd so there is no double rounding); it is cross-checked against the hardware `f32` conversion and exhaustively over all 65536 patterns of each format. No emitter spells them yet: CpuC has no C type and declines, Slang is unchanged (baracuda/Fuel own those spellings). Packed elements `F16`/`Bf16` now type, still declined by the plan gate until a packed seam lands. Behaviour change for callers: `check_cast(F16, ..)` and `check_bitcast(F16, U16)` used to be `Err`.
+
 
 ## `0.29.0` — feat (BREAKING): OCP MX element dtypes `F4E2M1`, `F6E2M3`, `F6E3M2`; KISS corpus re-vendored to `bafbe07` (U1b, #112)
 

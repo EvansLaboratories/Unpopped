@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! CUDA / Slang → IR converters (IR-hub Phase 4, `convert` feature) — the
+//! Source-language → IR converters (IR-hub Phase 4, `convert` feature) — the
 //! source-language side of the translation hub, built on **tree-sitter**.
 //!
 //! Instead of a hand-written parser (the pilot in `lift.rs`), these frontends
-//! reuse the mature `tree-sitter-cuda` / `tree-sitter-slang` grammars: parse
+//! reuse mature tree-sitter grammars (here `tree-sitter-slang`; CUDA's lives in
+//! Baracuda's `baracuda-cuda-parse`, see below): parse
 //! source into an error-tolerant CST, recognize the expressible idioms
 //! (grid-stride / dispatch elementwise, …) into the neutral IR (`OpDef`), and
 //! keep whatever doesn't map as a typed [`LiftError`] residue
@@ -13,8 +14,9 @@
 //!
 //! Because `tree-sitter-slang` is built on `tree-sitter-cpp`, a Slang elementwise
 //! store parses into the SAME `assignment_expression` / `subscript_expression` /
-//! `binary_expression` node shapes as CUDA — so ONE CST walk serves both, differing
-//! only in naming conventions (`out`/`in` are HLSL keywords, so Slang uses
+//! `binary_expression` node shapes as CUDA (`tree-sitter-cuda` is built on it
+//! too) — so ONE CST walk serves every C-family language, differing only in
+//! naming conventions (`out`/`in` are HLSL keywords, so Slang uses
 //! `output`/`input{k}`) and the kernel/residue markers.
 //!
 //! # The shape: one walk, many [`Frontend`]s
@@ -26,29 +28,26 @@
 //! naming, and a `parse` function pointer), and [`lift_elementwise`],
 //! [`lift_reduction`], [`lift_scan`] and [`lift`] take one.
 //!
-//! [`CUDA`] and [`SLANG`] are the two supplied here. A caller can define
-//! another, and `a_caller_defined_frontend_lifts_through_the_shared_walkers`
-//! proves the walkers read the descriptor rather than hardcoding this crate's
-//! two — the test every existing test here would pass without.
+//! [`SLANG`] is the one supplied here. A caller defines any other, and
+//! `a_caller_defined_frontend_lifts_through_the_shared_walkers` proves the walkers
+//! read the descriptor rather than hardcoding this crate's.
 //!
-//! The grammar crates are named in exactly one place each ([`parse_cuda`],
-//! [`parse_slang`]), which is what makes moving them into per-target crates a
-//! move rather than a rewrite.
+//! # CUDA is not here (0.30.0)
+//!
+//! `parse_cuda`, the CUDA residue list, the `CUDA` descriptor and the
+//! `tree-sitter-cuda` dependency moved out: Baracuda owns CUDA in this ecosystem
+//! and supplies the parser as `baracuda-cuda-parse` (and the emitter as
+//! `baracuda-cuda-emit`). That crate depends on this one for [`Frontend`] and the
+//! shared walkers, so this crate cannot depend back (a cycle) and carries no CUDA
+//! tests; the CUDA golden vectors live in `baracuda-cuda-parse/tests/convert.rs`.
+//! `tests/neutral_core_names_no_cuda_grammar.rs` guards the absence.
+//!
+//! The grammar crate is named in exactly one place ([`parse_slang`]).
 
 use crate::ir::{BinaryOp, Expr, OpDef, ReduceOp, ScalarExpr, UnaryOp};
 use crate::lift::{LiftError, Lifted, binary_fn, unary_fn};
 use tree_sitter::{Node, Parser, Tree};
 use unpopped_vocab::ElementKind;
-
-/// Parse CUDA source into a tree-sitter CST (error-tolerant; unrecognized
-/// constructs become `ERROR`/unhandled subtrees rather than failing).
-pub fn parse_cuda(src: &str) -> Option<Tree> {
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_cuda::LANGUAGE.into())
-        .ok()?;
-    parser.parse(src, None)
-}
 
 /// Parse Slang source into a tree-sitter CST.
 pub fn parse_slang(src: &str) -> Option<Tree> {
@@ -59,25 +58,7 @@ pub fn parse_slang(src: &str) -> Option<Tree> {
     parser.parse(src, None)
 }
 
-/// CUDA constructs that aren't IR-expressible — their presence means the kernel
-/// is hand-optimized (shared mem, atomics, barriers, library calls) and belongs
-/// in the source language. Shared across the elementwise and reduction lifters:
-/// a *naive* reduction (plain accumulator loop) has none of these; the generator
-/// supplies the cooperative/block machinery.
-const CUDA_RESIDUE: &[&str] = &[
-    "__shared__",
-    "atomicAdd",
-    "atomicCAS",
-    "__syncthreads",
-    "cublas",
-    "cudnn",
-    "printf",
-    "asm",
-    "cp.async",
-    "__shfl",
-];
-
-/// Slang analogue of [`CUDA_RESIDUE`] — group-shared memory, barriers, atomics.
+/// Slang constructs that aren't IR-expressible — group-shared memory, barriers, atomics.
 const SLANG_RESIDUE: &[&str] = &[
     "groupshared",
     "GroupMemoryBarrier",
@@ -102,13 +83,13 @@ const SLANG_RESIDUE: &[&str] = &[
 /// store parses into the same `assignment_expression` / `subscript_expression`
 /// node shapes as CUDA.
 ///
-/// So "the CUDA parser in the neutral crate" is really a **C-family CST walker**
-/// that CUDA happens to feed, and the CUDA-specific part is a grammar binding,
-/// not parsing logic. Naming the seam has two payoffs: the duplicated preamble
+/// So the parser in the neutral crate is really a **C-family CST walker** that a
+/// language feeds, and the language-specific part is a grammar binding, not
+/// parsing logic. Naming the seam has two payoffs: the duplicated preamble
 /// collapses to one function, and the grammar dependency is isolated behind a
-/// `fn` pointer — which is what makes moving it into a per-target crate
-/// mechanical rather than a rewrite. An `unpopped-cuda` crate supplies its own
-/// [`Frontend`] and this crate stops naming `tree_sitter_cuda` at all.
+/// `fn` pointer — which is what made moving CUDA's into a per-target crate
+/// (`baracuda-cuda-parse`, which supplies its own [`Frontend`]) mechanical
+/// rather than a rewrite.
 ///
 /// # Ingest is not the same coupling as emit
 ///
@@ -116,7 +97,7 @@ const SLANG_RESIDUE: &[&str] = &[
 /// **emits** is its vendor coupling: a kernel spelling `__half2float` only runs
 /// on CUDA. What it **reads** is not — a C compiler that parses C is not thereby
 /// a C program. Reading CUDA source into neutral IR is a frontend, and the
-/// reason it still moves out is narrower than neutrality: it is the grammar
+/// reason it moved out is narrower than neutrality: it is the grammar
 /// *dependency*, not the act of parsing.
 #[derive(Clone, Copy, Debug)]
 pub struct Frontend {
@@ -141,16 +122,6 @@ pub struct Frontend {
     /// depending on any grammar at all.
     pub parse: fn(&str) -> Option<Tree>,
 }
-
-/// CUDA: `__global__` kernels, `out`/`in{K}` buffers.
-pub const CUDA: Frontend = Frontend {
-    name: "cuda",
-    kernel_marker: "__global__",
-    residue: CUDA_RESIDUE,
-    out_name: "out",
-    in_prefix: "in",
-    parse: parse_cuda,
-};
 
 /// Slang: `numthreads` compute kernels, `output`/`input{K}` buffers.
 ///
@@ -838,7 +809,7 @@ mod tests {
     /// A [`Frontend`] this module does not know about lifts through the same
     /// walkers — which is the whole claim.
     ///
-    /// Every other test here uses [`CUDA`] or [`SLANG`], so all of them would
+    /// Every other test here uses [`SLANG`], so all of them would
     /// still pass if the walkers secretly hardcoded `"out"`/`"in"` and ignored
     /// the descriptor. This one supplies different values for **every** field
     /// and checks the lift still works, so the descriptor is proven to be read
@@ -854,9 +825,9 @@ mod tests {
             residue: &["forbidden_thing"],
             out_name: "dst",
             in_prefix: "src",
-            // Reuses the CUDA grammar because the CST shapes are C-family; the
+            // Reuses the Slang grammar because the CST shapes are C-family; the
             // point under test is the descriptor, not the grammar.
-            parse: parse_cuda,
+            parse: parse_slang,
         };
         let src = "TOY_KERNEL void k(float* dst, const float* src0, const float* src1) {\
                    int i = 0; dst[i] = src0[i] + src1[i]; }";
@@ -875,22 +846,18 @@ mod tests {
             lift_elementwise(&MINE, &src.replace("TOY_KERNEL ", ""), "toy", F32),
             Err(LiftError::NotAKernel)
         ));
-        // And the caller's residue list is the one enforced — `__shared__` is
-        // CUDA's residue, not this frontend's, so it must NOT be refused here.
-        let with_cuda_residue = src.replace("int i = 0;", "__shared__ float s; int i = 0;");
+        // And the caller's residue list is the one enforced — `groupshared` is
+        // Slang's residue, not this frontend's, so it must NOT be refused here.
+        let with_slang_residue = src.replace("int i = 0;", "groupshared float s; int i = 0;");
         assert!(
-            lift_elementwise(&MINE, &with_cuda_residue, "toy", F32).is_ok(),
-            "CUDA's residue list must not leak into a frontend that did not declare it"
+            lift_elementwise(&MINE, &with_slang_residue, "toy", F32).is_ok(),
+            "Slang's residue list must not leak into a frontend that did not declare it"
         );
         let with_own_residue = src.replace("int i = 0;", "forbidden_thing(); int i = 0;");
         assert!(matches!(
             lift_elementwise(&MINE, &with_own_residue, "toy", F32),
             Err(LiftError::Inexpressible(_))
         ));
-    }
-
-    fn cuda_body(src: &str) -> ScalarExpr {
-        lift_elementwise(&CUDA, src, "x", F32).unwrap().op.body
     }
 
     const SLANG_MUL: &str = "StructuredBuffer<float> input0;\n\
@@ -927,105 +894,7 @@ mod tests {
 
     #[test]
     fn grammars_load_and_parse() {
-        assert!(parse_cuda("__global__ void k(float* out){ out[i]=0.0f; }").is_some());
         assert!(parse_slang("float4 f(float x) { return x; }").is_some());
-    }
-
-    #[test]
-    fn cuda_lifts_fused_multiply_add() {
-        let src = "__global__ void mul(const float* in0, const float* in1, const float* in2, float* out, long long n) {\n\
-            long long i = blockIdx.x*blockDim.x + threadIdx.x;\n\
-            for (; i < n; i += gridDim.x*blockDim.x) { out[i] = in0[i] * in1[i] + in2[i]; }\n}";
-        let lifted = lift_elementwise(&CUDA, src, "fma", F32).unwrap();
-        assert_eq!(lifted.n_inputs, 3);
-        assert_eq!(
-            lifted.op.body,
-            ScalarExpr::Add(
-                Box::new(ScalarExpr::Mul(
-                    Box::new(ScalarExpr::Input(0)),
-                    Box::new(ScalarExpr::Input(1)),
-                )),
-                Box::new(ScalarExpr::Input(2)),
-            )
-        );
-    }
-
-    #[test]
-    fn cuda_lifts_unary_intrinsic() {
-        let src = "__global__ void k(const float* in0, float* out, long long n){ out[i] = expf(in0[i]); }";
-        assert_eq!(
-            cuda_body(src),
-            ScalarExpr::Unary(UnaryOp::Exp, Box::new(ScalarExpr::Input(0)))
-        );
-    }
-
-    #[test]
-    fn cuda_fast_math_intrinsics_refuse() {
-        for f in ["__expf", "__logf"] {
-            let src = format!(
-                "__global__ void k(const float* in0, float* out, long long n){{ out[i] = {f}(in0[i]); }}"
-            );
-            let err = lift_elementwise(&CUDA, &src, "x", F32).err();
-            assert!(
-                matches!(err, Some(LiftError::Unrecognized(_))),
-                "{f} must be Unrecognized, got {err:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn cuda_fmaxf_is_ieee_not_torch_max() {
-        let src = "__global__ void k(const float* in0, float* out, long long n){ out[i] = fmaxf(in0[i], 0.0f); }";
-        assert_eq!(
-            cuda_body(src),
-            ScalarExpr::Binary(
-                crate::ir::BinaryOp::FmaxIeee,
-                Box::new(ScalarExpr::Input(0)),
-                Box::new(ScalarExpr::Const(0.0)),
-            )
-        );
-    }
-
-    #[test]
-    fn cuda_precedence_from_the_grammar() {
-        let src = "__global__ void k(const float* in0, const float* in1, const float* in2, float* out){ out[i] = in0[i] + in1[i]*in2[i]; }";
-        assert_eq!(
-            cuda_body(src),
-            ScalarExpr::Add(
-                Box::new(ScalarExpr::Input(0)),
-                Box::new(ScalarExpr::Mul(
-                    Box::new(ScalarExpr::Input(1)),
-                    Box::new(ScalarExpr::Input(2)),
-                )),
-            )
-        );
-    }
-
-    /// Both of these must be refused, but they are refused for *different*
-    /// reasons, and the difference is the whole point of the two variants:
-    /// `Unrecognized` tells a consumer "ask for this op to be added", while
-    /// `Inexpressible` tells it "leave this fragment in the source language".
-    /// Collapsing them to "some error" would let a genuine recognizer gap be
-    /// mistaken for a hard IR limit and silently stop anyone from filing it.
-    #[test]
-    fn cuda_refuses_residue() {
-        // A non-`[i]` read is a recognizer gap: KISS-Ops *can* express a stencil.
-        let neigh = "__global__ void k(const float* in0, float* out){ out[i] = in0[i+1]; }";
-        assert!(matches!(
-            lift_elementwise(&CUDA, neigh, "x", F32),
-            Err(LiftError::Unrecognized(_))
-        ));
-        // Shared memory has no neutral-IR representation at all, and the payload
-        // must name the construct so the caller can say which fragment stays.
-        let smem = "__global__ void k(float* out){ __shared__ float s[32]; out[i] = s[0]; }";
-        assert!(
-            matches!(
-                lift_elementwise(&CUDA, smem, "x", F32),
-                Err(LiftError::Inexpressible(ref w)) if w == "__shared__"
-            ),
-            "got {:?}",
-            lift_elementwise(&CUDA, smem, "x", F32)
-        );
     }
 
     #[test]
@@ -1042,7 +911,7 @@ mod tests {
     }
 
     /// Slang's `groupshared` is the same inexpressible-residue class as CUDA's
-    /// `__shared__` (see [`cuda_refuses_residue`]), and must be reported as such
+    /// `__shared__` (`baracuda-cuda-parse` tests that side), and must be reported as such
     /// — the two source languages spell it differently but the neutral answer
     /// is identical, which is what makes the refusal category portable.
     #[test]
@@ -1061,72 +930,6 @@ mod tests {
     }
 
     #[test]
-    fn slang_and_cuda_lift_to_the_same_ir() {
-        // A CUDA and a Slang kernel for the same math lift to the SAME OpDef body.
-        let cuda = "__global__ void mul(const float* in0, const float* in1, float* out, long long n){ out[i] = in0[i] * in1[i]; }";
-        let c = lift_elementwise(&CUDA, cuda, "m", F32).unwrap();
-        let s = lift_elementwise(&SLANG, SLANG_MUL, "m", F32).unwrap();
-        assert_eq!(c.op.body, s.op.body);
-    }
-
-    #[test]
-    fn cuda_lifts_sum_reduction() {
-        let src = "__global__ void sum(const float* in0, float* out, long long n){ float acc = 0.0f; for (long long i=0;i<n;i++) acc += in0[i]; out[0] = acc; }";
-        let lifted = lift_reduction(&CUDA, src, "sum", F32).unwrap();
-        assert_eq!(lifted.n_inputs, 1);
-        assert_eq!(lifted.op.body, ScalarExpr::Input(0));
-        assert_eq!(reduce_op(&lifted), Some(ReduceOp::Sum));
-    }
-
-    #[test]
-    fn cuda_lifts_sum_of_squares() {
-        let src = "__global__ void ss(const float* in0, float* out, long long n){ float acc = 0.0f; for (long long i=0;i<n;i++) acc += in0[i]*in0[i]; out[0] = acc; }";
-        let lifted = lift_reduction(&CUDA, src, "ss", F32).unwrap();
-        assert_eq!(
-            lifted.op.body,
-            ScalarExpr::Mul(
-                Box::new(ScalarExpr::Input(0)),
-                Box::new(ScalarExpr::Input(0))
-            )
-        );
-        assert_eq!(reduce_op(&lifted), Some(ReduceOp::Sum));
-    }
-
-    #[test]
-    fn cuda_lifts_prod_and_acc_plus_forms() {
-        let prod = "__global__ void pr(const float* in0, float* out, long long n){ float acc = 1.0f; for (long long i=0;i<n;i++) acc *= in0[i]; out[0] = acc; }";
-        assert_eq!(
-            reduce_op(&lift_reduction(&CUDA, prod, "pr", F32).unwrap()),
-            Some(ReduceOp::Prod)
-        );
-        let sum2 = "__global__ void s2(const float* in0, float* out, long long n){ float acc = 0.0f; for (long long i=0;i<n;i++) acc = acc + in0[i]; out[0] = acc; }";
-        assert_eq!(
-            reduce_op(&lift_reduction(&CUDA, sum2, "s2", F32).unwrap()),
-            Some(ReduceOp::Sum)
-        );
-    }
-
-    #[test]
-    fn cuda_lifts_max_via_fmaxf() {
-        let src = "__global__ void mx(const float* in0, float* out, long long n){ float acc = in0[0]; for (long long i=1;i<n;i++) acc = fmaxf(acc, in0[i]); out[0] = acc; }";
-        let lifted = lift_reduction(&CUDA, src, "mx", F32).unwrap();
-        assert_eq!(lifted.op.body, ScalarExpr::Input(0));
-        assert_eq!(reduce_op(&lifted), Some(ReduceOp::Max));
-    }
-
-    #[test]
-    fn elementwise_and_reduction_lifters_dont_cross() {
-        // The elementwise lifter refuses a reduction (scalar store), and vice versa.
-        let reduction = "__global__ void sum(const float* in0, float* out, long long n){ float acc = 0.0f; for (long long i=0;i<n;i++) acc += in0[i]; out[0] = acc; }";
-        assert!(lift_elementwise(&CUDA, reduction, "x", F32).is_err());
-        let elementwise = "__global__ void k(const float* in0, float* out){ out[i] = in0[i]; }";
-        assert!(lift_reduction(&CUDA, elementwise, "x", F32).is_err());
-        // The unified entry point handles either class.
-        assert!(lift(&CUDA, reduction, "x", F32).is_ok());
-        assert!(lift(&CUDA, elementwise, "x", F32).is_ok());
-    }
-
-    #[test]
     fn slang_lifts_sum_reduction() {
         let src = "StructuredBuffer<float> input0;\n\
             RWStructuredBuffer<float> output;\n\
@@ -1138,43 +941,51 @@ mod tests {
     }
 
     #[test]
-    fn cuda_lifts_cumsum() {
-        let src = "__global__ void cs(const float* in0, float* out, long long n){ float acc = 0.0f; for (long long i=0;i<n;i++){ acc += in0[i]; out[i] = acc; } }";
-        let lifted = lift_scan(&CUDA, src, "cs", F32).unwrap();
-        assert_eq!(lifted.n_inputs, 1);
-        let (op, pre, rev, exc) = scan_info(&lifted).unwrap();
-        assert_eq!(op, ReduceOp::Sum);
-        assert_eq!(pre, &ScalarExpr::Input(0));
-        assert!(!rev && !exc);
+    fn slang_lifts_cumsum() {
+        let src = "StructuredBuffer<float> input0;\n\
+            RWStructuredBuffer<float> output;\n\
+            [numthreads(256,1,1)]\n\
+            void csum(uint3 tid : SV_DispatchThreadID){ float acc = 0.0f; for (uint i=0;i<256;i++){ acc += input0[i]; output[i] = acc; } }";
+        let lifted = lift_scan(&SLANG, src, "csum", F32).unwrap();
+        assert_eq!(scan_info(&lifted).unwrap().0, ReduceOp::Sum);
     }
 
+    const SLANG_COPY: &str = "StructuredBuffer<float> input0;\n\
+        RWStructuredBuffer<float> output;\n\
+        [numthreads(256, 1, 1)]\n\
+        void k(uint3 tid : SV_DispatchThreadID) { uint i = tid.x; output[i] = input0[i]; }";
+    const SLANG_SUM: &str = "StructuredBuffer<float> input0;\n\
+        RWStructuredBuffer<float> output;\n\
+        [numthreads(256,1,1)]\n\
+        void rsum(uint3 tid : SV_DispatchThreadID){ float acc = 0.0f; for (uint i=0;i<256;i++) acc += input0[i]; output[0] = acc; }";
+    const SLANG_CSUM: &str = "StructuredBuffer<float> input0;\n\
+        RWStructuredBuffer<float> output;\n\
+        [numthreads(256,1,1)]\n\
+        void csum(uint3 tid : SV_DispatchThreadID){ float acc = 0.0f; for (uint i=0;i<256;i++){ acc += input0[i]; output[i] = acc; } }";
+
+    // The walker-behaviour tests below were CUDA-source tests until the CUDA front
+    // end moved to `baracuda-cuda-parse`. The walkers are shared (both grammars give
+    // the same C-family node shapes), so they are re-expressed on Slang here and keep
+    // their coverage in the neutral core.
+
     #[test]
-    fn cuda_lifts_cumprod_and_cummax() {
-        let cp = "__global__ void cp(const float* in0, float* out, long long n){ float acc = 1.0f; for (long long i=0;i<n;i++){ acc *= in0[i]; out[i] = acc; } }";
-        assert_eq!(
-            scan_info(&lift_scan(&CUDA, cp, "cp", F32).unwrap())
-                .unwrap()
-                .0,
-            ReduceOp::Prod
-        );
-        let cm = "__global__ void cm(const float* in0, float* out, long long n){ float acc = in0[0]; for (long long i=0;i<n;i++){ acc = fmaxf(acc, in0[i]); out[i] = acc; } }";
-        assert_eq!(
-            scan_info(&lift_scan(&CUDA, cm, "cm", F32).unwrap())
-                .unwrap()
-                .0,
-            ReduceOp::Max
-        );
+    fn elementwise_and_reduction_lifters_dont_cross() {
+        // The elementwise lifter refuses a reduction (scalar store), and vice versa.
+        assert!(lift_elementwise(&SLANG, SLANG_SUM, "x", F32).is_err());
+        assert!(lift_reduction(&SLANG, SLANG_COPY, "x", F32).is_err());
+        // The unified entry point handles either class.
+        assert!(lift(&SLANG, SLANG_SUM, "x", F32).is_ok());
+        assert!(lift(&SLANG, SLANG_COPY, "x", F32).is_ok());
     }
 
     #[test]
     fn scan_reduction_elementwise_are_disjoint() {
-        // out[i]=acc (running) → scan; out[0]=acc → reduction; out[i]=expr → elementwise.
-        let scan = "__global__ void cs(const float* in0, float* out, long long n){ float acc = 0.0f; for (long long i=0;i<n;i++){ acc += in0[i]; out[i] = acc; } }";
-        assert!(lift_scan(&CUDA, scan, "x", F32).is_ok());
-        assert!(lift_reduction(&CUDA, scan, "x", F32).is_err());
-        assert!(lift_elementwise(&CUDA, scan, "x", F32).is_err());
+        // out[i]=acc (running) -> scan; out[0]=acc -> reduction; out[i]=expr -> elementwise.
+        assert!(lift_scan(&SLANG, SLANG_CSUM, "x", F32).is_ok());
+        assert!(lift_reduction(&SLANG, SLANG_CSUM, "x", F32).is_err());
+        assert!(lift_elementwise(&SLANG, SLANG_CSUM, "x", F32).is_err());
         assert!(matches!(
-            lift(&CUDA, scan, "x", F32).unwrap().op.access,
+            lift(&SLANG, SLANG_CSUM, "x", F32).unwrap().op.access,
             crate::ir::Access::Scan { .. }
         ));
     }
@@ -1184,13 +995,15 @@ mod tests {
         // The shape a real Fuel kernel uses (cast_f32_to_f16.slang): declare,
         // assign once, read once at the store. Before local-variable
         // resolution this refused as `Unrecognized("identifier 'x'")`.
-        let src = "__global__ void cast(const float* in0, float* out, long long n) {\n\
-            long long i = blockIdx.x*blockDim.x + threadIdx.x;\n\
-            for (; i < n; i += gridDim.x*blockDim.x) {\n\
-                float x = in0[i];\n\
-                out[i] = x + 1.0f;\n\
-            }\n}";
-        let lifted = lift_elementwise(&CUDA, src, "cast", F32)
+        let src = "StructuredBuffer<float> input0;\n\
+            RWStructuredBuffer<float> output;\n\
+            [numthreads(256,1,1)]\n\
+            void cast(uint3 tid : SV_DispatchThreadID){\n\
+                uint i = tid.x;\n\
+                float x = input0[i];\n\
+                output[i] = x + 1.0f;\n\
+            }";
+        let lifted = lift_elementwise(&SLANG, src, "cast", F32)
             .expect("a single-assignment local must resolve, not refuse as an unknown identifier");
         assert_eq!(
             lifted.op.body,
@@ -1203,34 +1016,36 @@ mod tests {
 
     #[test]
     fn a_reassigned_local_is_not_resolved() {
-        // `x` is assigned twice (declaration, then a plain `=` reassignment)
-        // with no branch involved at all — the simplest possible case a
-        // single-assignment resolver must still decline, because picking
-        // either value would be a guess. Distinct from
-        // `scan_reduction_elementwise_are_disjoint`, which covers the
+        // `x` is assigned twice (declaration, then a plain `=` reassignment) with no
+        // branch involved at all — the simplest case a single-assignment resolver
+        // must still decline, because picking either value would be a guess.
+        // Distinct from `scan_reduction_elementwise_are_disjoint`, which covers the
         // COMPOUND-assignment (`+=`) shape of the same hazard.
-        let src = "__global__ void two(const float* in0, float* out, long long n) {\n\
-            long long i = blockIdx.x*blockDim.x + threadIdx.x;\n\
-            for (; i < n; i += gridDim.x*blockDim.x) {\n\
-                float x = in0[i];\n\
+        let src = "StructuredBuffer<float> input0;\n\
+            RWStructuredBuffer<float> output;\n\
+            [numthreads(256,1,1)]\n\
+            void two(uint3 tid : SV_DispatchThreadID){\n\
+                uint i = tid.x;\n\
+                float x = input0[i];\n\
                 x = x + 1.0f;\n\
-                out[i] = x;\n\
-            }\n}";
+                output[i] = x;\n\
+            }";
         assert!(
-            lift_elementwise(&CUDA, src, "two", F32).is_err(),
+            lift_elementwise(&SLANG, src, "two", F32).is_err(),
             "a name assigned twice must not be silently resolved to either value"
         );
     }
 
     #[test]
     fn a_ternary_lifts_to_select() {
-        // relu via `?:`: out[i] = in0[i] > 0.0f ? in0[i] : 0.0f.
-        let src = "__global__ void relu(const float* in0, float* out, long long n) {\n\
-            long long i = blockIdx.x*blockDim.x + threadIdx.x;\n\
-            for (; i < n; i += gridDim.x*blockDim.x) {\n\
-                out[i] = in0[i] > 0.0f ? in0[i] : 0.0f;\n\
-            }\n}";
-        let lifted = lift_elementwise(&CUDA, src, "relu", F32)
+        let src = "StructuredBuffer<float> input0;\n\
+            RWStructuredBuffer<float> output;\n\
+            [numthreads(256,1,1)]\n\
+            void relu(uint3 tid : SV_DispatchThreadID){\n\
+                uint i = tid.x;\n\
+                output[i] = input0[i] > 0.0f ? input0[i] : 0.0f;\n\
+            }";
+        let lifted = lift_elementwise(&SLANG, src, "relu", F32)
             .expect("a ternary must lift to Select, not refuse as an unknown node");
         assert_eq!(
             lifted.op.body,
@@ -1244,30 +1059,5 @@ mod tests {
                 Box::new(ScalarExpr::Const(0.0)),
             )
         );
-    }
-
-    #[test]
-    fn slang_lifts_a_ternary_too() {
-        let src = "StructuredBuffer<float> input0;\n\
-            RWStructuredBuffer<float> output;\n\
-            [numthreads(256,1,1)]\n\
-            void clampz(uint3 tid : SV_DispatchThreadID){\n\
-                uint i = tid.x;\n\
-                output[i] = input0[i] < 0.0f ? 0.0f : input0[i];\n\
-            }";
-        assert!(
-            lift_elementwise(&SLANG, src, "clampz", F32).is_ok(),
-            "the conditional_expression arm must not be CUDA-specific"
-        );
-    }
-
-    #[test]
-    fn slang_lifts_cumsum() {
-        let src = "StructuredBuffer<float> input0;\n\
-            RWStructuredBuffer<float> output;\n\
-            [numthreads(256,1,1)]\n\
-            void csum(uint3 tid : SV_DispatchThreadID){ float acc = 0.0f; for (uint i=0;i<256;i++){ acc += input0[i]; output[i] = acc; } }";
-        let lifted = lift_scan(&SLANG, src, "csum", F32).unwrap();
-        assert_eq!(scan_info(&lifted).unwrap().0, ReduceOp::Sum);
     }
 }
