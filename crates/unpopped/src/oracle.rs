@@ -1702,11 +1702,10 @@ fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
         // A lane of a packed value is its scalar meaning (`types::lane_of`): `Pack` picks a
         // child and a lane-wise operator applies to the same lane of its operands. A bare
         // `Pack` or an ill-typed `Extract` is rejected by the plan gate before any evaluation.
-        ScalarExpr::Extract(x, i) => match crate::types::lane_of(x, *i) {
-            Ok(lane) => eval(&lane, ev),
-            Err(err) => panic!("oracle: ill-typed Extract: {err:?}"),
-        },
-        ScalarExpr::Pack(_) => panic!("oracle: a packed value has no scalar result"),
+        ScalarExpr::Extract(x, i) => packed_lane(x, *i, ev),
+        ScalarExpr::Pack(_) | ScalarExpr::BitcastPacked(..) => {
+            panic!("oracle: a packed value has no scalar result")
+        }
         // A packed operand is its lanes' bits, lane 0 least significant.
         ScalarExpr::Bitcast(x, to)
             if matches!(
@@ -1722,10 +1721,7 @@ fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
                 .expect("oracle: untyped packed lane (the plan gate rejects this)");
             let mut bits = 0u128;
             for i in 0..lanes {
-                let lane = crate::types::lane_of(x, i).expect(
-                    "oracle: ill-typed packed Bitcast operand (the plan gate rejects this)",
-                );
-                let b = match eval(&lane, ev) {
+                let b = match packed_lane(x, i, ev) {
                     Val::Raw(b, dt) if dt == elem => b,
                     other => crate::cast_ref::bits_of(val_to_num(other, elem), elem),
                 };
@@ -1757,6 +1753,34 @@ fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
                 eval(b, ev)
             }
         }
+    }
+}
+
+/// Lane `i` of the packed expression `x`. A `BitcastPacked` is sliced out of its operand's
+/// bits (lane 0 least significant); every other packed form is its scalar meaning
+/// ([`crate::types::lane_of`]).
+fn packed_lane(x: &ScalarExpr, i: u8, ev: &Eval<'_>) -> Val {
+    if let ScalarExpr::BitcastPacked(y, elem, lanes) = x {
+        assert!(
+            i < *lanes,
+            "oracle: Extract lane out of range (the plan gate rejects this)"
+        );
+        let from = crate::types::infer(y, ev.dtype)
+            .expect("oracle: ill-typed BitcastPacked operand (the plan gate rejects this)");
+        let bits = match eval(y, ev) {
+            Val::Raw(b, dt) if dt == from => b,
+            other => crate::cast_ref::bits_of(val_to_num(other, from), from),
+        };
+        let width = crate::types::typed_bits(*elem)
+            .expect("oracle: untyped packed lane (the plan gate rejects this)");
+        return Val::Raw(
+            (bits >> (u32::from(i) * width)) & ((1u128 << width) - 1),
+            *elem,
+        );
+    }
+    match crate::types::lane_of(x, i) {
+        Ok(lane) => eval(&lane, ev),
+        Err(err) => panic!("oracle: ill-typed Extract: {err:?}"),
     }
 }
 
@@ -3445,9 +3469,10 @@ fn arith_steps(e: &ScalarExpr) -> u32 {
         ScalarExpr::Fma(a, b, c) => 1 + arith_steps(a) + arith_steps(b) + arith_steps(c),
         // A conversion is computed exactly by the oracle (the same single rounding the
         // device performs), so it adds no gap of its own.
-        ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) | ScalarExpr::Extract(x, _) => {
-            arith_steps(x)
-        }
+        ScalarExpr::Cast(x, _)
+        | ScalarExpr::Bitcast(x, _)
+        | ScalarExpr::Extract(x, _)
+        | ScalarExpr::BitcastPacked(x, ..) => arith_steps(x),
         // Every lane is computed on the device, whichever one is extracted.
         ScalarExpr::Pack(xs) => xs.iter().map(arith_steps).sum(),
         // The qualified operation is computed exactly in its stated mode (the
@@ -3751,6 +3776,36 @@ mod complex_arithmetic_tests {
 
 #[cfg(test)]
 mod tests {
+
+    /// `Extract(BitcastPacked(x, elem, n), i)` is lane `i` of `x`'s bits, lane 0 least
+    /// significant, and `Bitcast(BitcastPacked(..))` reassembles the same bits. The plan gate
+    /// declines packed bodies, so the public API cannot reach this arm; evaluate directly.
+    #[test]
+    fn bitcast_packed_slices_lane_zero_from_the_low_bits_and_reassembles() {
+        let leaf = |_: u8| Val::Float(0.0);
+        let none = |_: u8| -> Val { unreachable!() };
+        let ev = Eval {
+            dtype: ElementKind::F32,
+            params: &[],
+            leaf: &leaf,
+            reduced: &none,
+            coord: &none,
+        };
+        let word = ScalarExpr::ConstInt(0x0403_0201, ElementKind::U32);
+        let packed = ScalarExpr::BitcastPacked(Box::new(word.clone()), ElementKind::I8, 4);
+        for (i, want) in [(0u8, 1u128), (1, 2), (2, 3), (3, 4)] {
+            let lane = ScalarExpr::Extract(Box::new(packed.clone()), i);
+            match eval(&lane, &ev) {
+                Val::Raw(b, ElementKind::I8) => assert_eq!(b, want, "lane {i}"),
+                _ => panic!("lane {i}: not a raw I8"),
+            }
+        }
+        let back = ScalarExpr::Bitcast(Box::new(packed), ElementKind::U32);
+        match eval(&back, &ev) {
+            Val::Raw(b, ElementKind::U32) => assert_eq!(b, 0x0403_0201),
+            _ => panic!("not a raw U32"),
+        }
+    }
 
     /// The shared sign/magnitude masks, checked against an **independently
     /// authored** width table rather than against themselves.

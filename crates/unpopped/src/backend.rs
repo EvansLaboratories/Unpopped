@@ -1514,7 +1514,9 @@ pub fn lower_expr(e: &ScalarExpr, lo: &Lowering<'_>) -> Result<Spelling, LowerEr
             let x = sp!(x);
             return (lo.bitcast)(x, from, *to);
         }
-        ScalarExpr::Pack(_) | ScalarExpr::Extract(..) => return Ok(packed_decline()),
+        ScalarExpr::Pack(_) | ScalarExpr::Extract(..) | ScalarExpr::BitcastPacked(..) => {
+            return Ok(packed_decline());
+        }
         ScalarExpr::Qualified(x, n) => {
             let Some((op, kids)) = QualOp::of(x) else {
                 return Ok(qualified_child_decline(*n));
@@ -1778,7 +1780,9 @@ fn lower_node(
         }
         // The wrapped operation's node is never lowered itself: its OPERANDS are,
         // and the qualified spelling replaces the whole operation.
-        DagNode::Pack(_) | DagNode::Extract(..) => return Ok(packed_decline()),
+        DagNode::Pack(_) | DagNode::Extract(..) | DagNode::BitcastPacked(..) => {
+            return Ok(packed_decline());
+        }
         DagNode::Qualified(x, n) => {
             let Some((op, kids)) = QualOp::of_node(dag.node(x)) else {
                 return Ok(qualified_child_decline(n));
