@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.30.3` — docs: the kernel layer v0 spec (U2, #113)
+
+New `docs/ir-kernel-layer.md`: a separate `kernel.rs` artifact (`KernelFn`, `Stmt`, `Place::Logical`) plus one new `ScalarExpr::Local(u32)` leaf, with the scope and type rules `check_kernel` will enforce (and the known-bad mutations it must catch), the reference interpreter's semantics, the effects model with its six unknowns marked, the `lift_opdef` plan (Elementwise by nested `For`, since the intent layer has no integer division), and the U2 choices that would constrain U3's `ProgramModel` and resource manifest. No code, no trait change. Proposed number; the PM allocates.
+
 ## `0.30.0` — refactor (BREAKING): the CUDA front end leaves the neutral core (ROADMAP P2, #112)
 
 Removed from `unpopped::convert` (feature `convert`): `parse_cuda`, the `CUDA` `Frontend` const, the private CUDA residue list, and the optional `tree-sitter-cuda` dependency (the feature is now `dep:tree-sitter`, `dep:tree-sitter-slang`). Baracuda owns CUDA in this ecosystem and already ships the same three items as `baracuda-cuda-parse` (0.24.0): migrate with `use baracuda_cuda_parse::{CUDA, parse_cuda}`. `Frontend`, `SLANG`, `parse_slang`, `lift_elementwise`/`lift_reduction`/`lift_scan`/`lift` and the eleven shared walkers are unchanged: **no trait or struct shape changes in this release** (the `Frontend`/`Backend` seam is held until the Slang requirements are in). The old P2 hold on "KISS registry repoint (b)" was stale: KISS#514 merged 2026-09-25.
