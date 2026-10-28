@@ -35,14 +35,15 @@ New module `crates/unpopped/src/kernel.rs`. All types derive `Clone, Debug, Part
 are exhaustive **on purpose**, as `ScalarExpr` is: a new statement must break every consumer at compile time.
 
 ```
-KernelFn { name, params: Vec<Param>, locals: Vec<LocalDecl>, body: Block }
+KernelFn { name, compute: ElementKind, params: Vec<Param>, locals: Vec<LocalDecl>, body: Block }
 Param    { name, kind: ParamKind }          // #[non_exhaustive]
 ParamKind::Buffer { elem: ElementKind, role: BufferRole }   // Read | Write | ReadWrite
-ParamKind::Scalar { ty: ElementKind }
+ParamKind::Scalar { ty: ElementKind, local: u32 }   // readable as that local, in scope everywhere, never assigned
 LocalDecl{ ty: Ty }                          // Ty = Scalar(ElementKind) | Packed(ElementKind, u8)
 Block(Vec<Stmt>)
 
 Stmt::Let    { local: u32, init: ScalarExpr }          // declare + initialize; scope = rest of the block
+Stmt::Load   { local: u32, place: Place }              // declare local = the element at place
 Stmt::Assign { local: u32, value: ScalarExpr }         // mutation of a declared local
 Stmt::Store  { place: Place, value: ScalarExpr }       // write one element
 Stmt::If     { cond: ScalarExpr, then: Block, els: Block }
@@ -57,10 +58,13 @@ Place::Logical { buffer: u32, coords: Vec<ScalarExpr> }   // the element at LOGI
 Plus the single `ScalarExpr` addition: **`Local(u32)`**, a leaf reading a declared local. It is the only change
 to the intent layer's expression type (breaking, because `ScalarExpr` is exhaustive; every match site decides,
 and intent-layer consumers that never see a kernel reject it with the same typed decline they use for `Pack`).
-`Place::Logical` also appears as an *expression*, `ScalarExpr::Load`, **only** if the checker design in section 4
-needs it; v0 avoids that by loading through `Stmt::Let { init: Load(...) }`. **Unknown U-1:** whether `Load` has to
-be a `ScalarExpr` leaf (a second breaking addition) or can stay a statement. Decided when `lift_opdef` for
-Elementwise is written, because that is the first consumer; the PM is asked before a second leaf is added.
+A load is a **statement** (`Stmt::Load`), not an expression, so no second leaf is needed in v0. **Unknown U-1:**
+whether U3's typed loads need to be expressions (for example a load inside an index expression) is open; if so
+that is a second breaking leaf and the PM is asked first. Expressions inside a kernel may use only `Const`,
+`ConstInt`, `Local` and operators: the intent-layer leaves `Input`, `Param`, `Reduced`, `Coord`, `CoordInt` have
+no meaning in a statement program (`KernelError::IntentLeaf`); inputs arrive through `Load`, scalar arguments
+through `ParamKind::Scalar { local }`. `compute` is the dtype of the untyped leaves (`Const`), exactly the
+plan dtype's role for an `OpDef`.
 
 Why `Place::Logical` and not a pointer: the intent layer's operands already carry views (strides, broadcast,
 reversal) that the oracle applies, so a v0 kernel can say "element at these coordinates" and inherit exactly
@@ -76,7 +80,7 @@ those semantics. Pointer arithmetic is U3's `typed load/store; pointers`. See se
 2. **One declaration per local id.** A `Let` or `For` re-declaring an id that is in scope, or an id outside
    `locals`, is `Redeclared` / `UnknownLocal`.
 3. **Types.** Every expression is typed by `infer_ty` (packed values included) with `Local(i)` typed from its
-   `LocalDecl`. `Let` and `Assign` require `Ty` equality (no implicit conversion; use `Cast`). `If` / `While`
+   `LocalDecl` (`types::infer_ty_in`, which takes the local types). `Let`, `Load` and `Assign` require `Ty` equality (a `Load`'s local type equals the buffer's `elem`) (no implicit conversion; use `Cast`). `If` / `While`
    conditions are scalars of any type (tested `!= 0`, as `Select`'s condition is). `For` bounds are one integer type
    shared with the counter. `Store` value type equals the buffer's `elem`. `KernelError::TypeMismatch`.
 4. **Control flow.** `Break` / `Continue` only inside `For` / `While`. `Return` anywhere. No statement after
@@ -85,11 +89,12 @@ those semantics. Pointer arithmetic is U3's `typed load/store; pointers`. See se
 5. **Buffers.** `Store` only to a `Write` or `ReadWrite` buffer; `Place::Logical` arity equals the declared rank
    when the rank is known. `KernelError::WriteToReadOnly`, `BadPlace`.
 6. **Mutation discipline.** An `Assign` to a loop counter inside its own loop body is rejected (`CounterAssigned`),
-   removing the one mutation whose meaning differs between C and the interpreter's half-open loop.
+   removing the one mutation whose meaning differs between C and the interpreter's half-open loop; an `Assign`
+   to a scalar-parameter local is rejected (`ParamAssigned`).
 
 **Known-bad mutations the test suite must exercise** (each is a program that is *valid* except for one change, so
 the test fails if the check it targets is deleted, not merely if checking is off): delete the `Let` of a used
-local; move a use after its block closes; declare an id twice; `Assign` an `f32` local an `i32`; branch on a packed
+local; move a use after its block closes; declare an id twice; `Assign` an `f32` local an `i32`; `Load` into a local of the wrong type; read an intent-layer `Input` leaf; branch on a packed
 value; `Break` outside a loop; a statement after `Return`; `Store` into a `Read` buffer; assign the loop counter.
 Plus the positive control for each: the unmutated program passes.
 
