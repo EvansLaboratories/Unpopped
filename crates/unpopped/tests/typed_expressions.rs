@@ -485,3 +485,156 @@ fn the_oracle_widens_a_16_bit_float_back_exactly_and_casts_it_to_an_integer() {
         assert_eq!(out.to_f64_vec(), vec![3.0, -3.0, 127.0, 0.0], "{half:?}");
     }
 }
+
+// ---------------------------------------------------------------- 7. MX elements
+
+const MX_ELEMENTS: [ElementKind; 3] = [
+    ElementKind::F4E2M1,
+    ElementKind::F6E2M3,
+    ElementKind::F6E3M2,
+];
+
+#[test]
+fn a_cast_into_an_mx_element_must_say_clamp_finite() {
+    use ElementKind::{F16, F64, I8, I32};
+    for mx in MX_ELEMENTS {
+        for from in [F32, F64, F16, ElementKind::Bf16, I8, I32, mx] {
+            for sat in [Saturation::Wrap, Saturation::Clamp] {
+                match check_cast(from, CastSpec { sat, ..cast(mx) }) {
+                    Err(TypeError::IllegalCast { why, .. }) => {
+                        assert!(
+                            why.contains("ClampFinite"),
+                            "the reason names the fix: {why}"
+                        );
+                    }
+                    other => {
+                        panic!("{from:?} -> {mx:?} with {sat:?} must be rejected, got {other:?}")
+                    }
+                }
+            }
+            let spec = CastSpec {
+                sat: Saturation::ClampFinite,
+                ..cast(mx)
+            };
+            assert!(check_cast(from, spec).is_ok(), "{from:?} -> {mx:?}");
+        }
+        // out of an MX element: the ordinary float and integer rules
+        assert!(check_cast(mx, cast(F32)).is_ok());
+        let to_i8 = CastSpec {
+            sat: Saturation::Clamp,
+            ..cast(I8)
+        };
+        assert!(check_cast(mx, to_i8).is_ok());
+        assert!(
+            check_cast(mx, cast(I8)).is_err(),
+            "float to int still demands Clamp"
+        );
+        assert!(
+            check_bitcast(mx, ElementKind::U8).is_err(),
+            "no Bitcast row for sub-byte floats"
+        );
+    }
+}
+
+#[test]
+fn rounding_matters_for_mx_elements_by_range_and_significand() {
+    use ElementKind::{F4E2M1, F6E2M3, F6E3M2, F16, I8};
+    assert!(!rounding_matters(F4E2M1, F32) && !rounding_matters(F6E3M2, F16));
+    assert!(rounding_matters(F32, F4E2M1) && rounding_matters(F16, F6E2M3));
+    assert!(rounding_matters(F6E2M3, F6E3M2), "e3m2 has more range");
+    assert!(rounding_matters(F6E3M2, F6E2M3), "e2m3 has more mantissa");
+    assert!(!rounding_matters(F4E2M1, F6E2M3));
+    assert!(!rounding_matters(F4E2M1, F6E3M2));
+    assert!(
+        rounding_matters(I8, F4E2M1),
+        "an i8 does not fit 2 significand bits"
+    );
+}
+
+fn quantize(mx: ElementKind, round: RoundMode, xs: &[f32]) -> Vec<f64> {
+    use unpopped::oracle::{TypedBuffer, evaluate};
+    // f32 -> MX -> f32: the fake-quantise round trip. The MX value is an intermediate
+    // (a typed non-compute value directly under a Cast), which the oracle carries as a code.
+    let body = input(0).cast(mx, round, Saturation::ClampFinite).cast(
+        F32,
+        RoundMode::NearestEven,
+        Saturation::Wrap,
+    );
+    let op = OpDef::elementwise("fake_quant", 1, &[F32], body);
+    let n = xs.len() as i64;
+    let operands = vec![
+        OperandDesc::new(1, &[n], &[1], F32, 256),
+        OperandDesc::new(1, &[n], &[1], F32, 256),
+    ];
+    let key = structure_key(OpCategory::UnaryElementwise, &operands, ArchSku::Sm89);
+    let plan = try_build_plan(&op, &key).expect("an MX intermediate under a Cast must plan");
+    evaluate(&plan, &operands, &[TypedBuffer::from_f32(&[n], xs)], &[])
+        .into_iter()
+        .next()
+        .expect("one output")
+        .to_f64_vec()
+}
+
+#[test]
+fn the_oracle_fake_quantises_through_each_mx_element() {
+    let xs = [
+        0.0f32,
+        0.3,
+        0.75,
+        1.2,
+        5.0,
+        6.0,
+        7.0,
+        1.0e9,
+        -1.0e9,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NAN,
+        -0.2,
+    ];
+    // e2m1 grid {0, .5, 1, 1.5, 2, 3, 4, 6}
+    let q = quantize(ElementKind::F4E2M1, RoundMode::NearestEven, &xs);
+    assert_eq!(&q[..6], &[0.0, 0.5, 1.0, 1.0, 4.0, 6.0]);
+    assert_eq!(q[6], 6.0, "7 saturates to the largest finite value");
+    assert_eq!(
+        &q[7..11],
+        &[6.0, -6.0, 6.0, -6.0],
+        "overflow and infinities saturate"
+    );
+    assert_eq!(q[11], 0.0, "NaN becomes +0 (the IR's rule)");
+    assert!(q[11].is_sign_positive());
+    assert_eq!(q[12], -0.0, "-0.2 rounds to zero and keeps its sign");
+    assert!(q[12].is_sign_negative());
+    let q = quantize(
+        ElementKind::F6E3M2,
+        RoundMode::NearestEven,
+        &[28.0, 29.0, 1.0e30, 0.1],
+    );
+    assert_eq!(&q[..3], &[28.0, 28.0, 28.0]);
+    assert_eq!(q[3], 0.125, "0.1 is closer to 0.125 than to 0.0625");
+    let q = quantize(
+        ElementKind::F6E2M3,
+        RoundMode::TowardZero,
+        &[7.4, -7.4, 0.99],
+    );
+    assert_eq!(&q[..2], &[7.0, -7.0]);
+    assert_eq!(q[2], 0.875);
+}
+
+#[test]
+fn an_mx_element_is_still_not_a_compute_or_store_dtype() {
+    for mx in MX_ELEMENTS {
+        let mut op = OpDef::elementwise(
+            "store_mx",
+            1,
+            &[F32],
+            input(0).cast(mx, RoundMode::NearestEven, Saturation::ClampFinite),
+        );
+        op.out_dtype = Some(mx);
+        assert!(
+            plan(&op, F32, mx).is_err(),
+            "{mx:?} has no buffer layout yet: storing it must decline, not panic"
+        );
+        assert!(plan(&op, mx, mx).is_err(), "{mx:?} is not a compute dtype");
+    }
+}

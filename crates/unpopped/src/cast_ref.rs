@@ -73,7 +73,11 @@ fn round_scaled(ax: f64, eff: i32, mbits: u32, mode: RoundMode, neg: bool) -> u1
 
 /// Decode an MX element code (`1 + ebits + mbits` bits) to its exact value.
 pub(crate) fn decode_mx(bits: u128, ebits: u32, mbits: u32) -> f64 {
-    let sign = if (bits >> (ebits + mbits)) & 1 == 1 { -1.0 } else { 1.0 };
+    let sign = if (bits >> (ebits + mbits)) & 1 == 1 {
+        -1.0
+    } else {
+        1.0
+    };
     let exp = ((bits >> mbits) & ((1u128 << ebits) - 1)) as i32;
     let mant = (bits & ((1u128 << mbits) - 1)) as f64;
     let bias = (1i32 << (ebits - 1)) - 1;
@@ -548,6 +552,155 @@ mod tests {
         }
         v.extend(v.clone().into_iter().map(|x| -x));
         v
+    }
+
+    const MX: [(ElementKind, u32, u32, f64); 3] = [
+        (ElementKind::F4E2M1, 2, 1, 6.0),
+        (ElementKind::F6E2M3, 2, 3, 7.5),
+        (ElementKind::F6E3M2, 3, 2, 28.0),
+    ];
+
+    /// Every non-negative code of an MX format with its value, ascending (the grid).
+    fn mx_grid(e: u32, m: u32) -> Vec<(u128, f64)> {
+        (0..(1u128 << (e + m)))
+            .map(|c| (c, decode_mx(c, e, m)))
+            .collect()
+    }
+
+    /// The independent reference: pick from the explicit grid, by definition.
+    fn mx_reference(x: f64, e: u32, m: u32, mode: RoundMode) -> f64 {
+        if x.is_nan() {
+            return 0.0;
+        }
+        let grid = mx_grid(e, m);
+        let max = grid.last().expect("non-empty").1;
+        let a = x.abs().min(max);
+        let neg = x < 0.0;
+        let lo = grid
+            .iter()
+            .filter(|(_, v)| *v <= a)
+            .next_back()
+            .expect("0 is on the grid");
+        let hi = grid
+            .iter()
+            .find(|(_, v)| *v >= a)
+            .expect("clamped into the grid");
+        let mag = if lo.1 == hi.1 {
+            lo.1
+        } else {
+            match mode {
+                RoundMode::TowardZero => lo.1,
+                RoundMode::TowardPosInf => {
+                    if neg {
+                        lo.1
+                    } else {
+                        hi.1
+                    }
+                }
+                RoundMode::TowardNegInf => {
+                    if neg {
+                        hi.1
+                    } else {
+                        lo.1
+                    }
+                }
+                RoundMode::NearestEven => {
+                    let (dl, dh) = (a - lo.1, hi.1 - a);
+                    if dl < dh {
+                        lo.1
+                    } else if dh < dl {
+                        hi.1
+                    } else if lo.0 % 2 == 0 {
+                        lo.1
+                    } else {
+                        hi.1
+                    }
+                }
+            }
+        };
+        if neg { -mag } else { mag }
+    }
+
+    #[test]
+    fn mx_grids_match_the_ocp_tables() {
+        // OCP MX v1.0 element value sets (spot values read from the spec's tables).
+        let e2m1: Vec<f64> = mx_grid(2, 1).iter().take(8).map(|g| g.1).collect();
+        assert_eq!(e2m1, [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]);
+        for (_, e, m, max) in MX {
+            assert_eq!(mx_grid(e, m).last().expect("non-empty").1, max, "e{e}m{m}");
+        }
+        assert_eq!(
+            decode_mx(0b1_111_11, 3, 2),
+            -28.0,
+            "e3m2 has no NaN or Inf: all-ones is -28"
+        );
+        assert_eq!(decode_mx(0b0_11_111, 2, 3), 7.5);
+    }
+
+    #[test]
+    fn mx_encoder_equals_the_brute_force_grid_search_for_every_mode() {
+        let extra = [0.25, 0.75, 2.5, 5.0, 0.25 + 1e-12, 6.0 + 1e-9, 7.75, 29.0];
+        for (_, e, m, _) in MX {
+            for x in probes().into_iter().chain(extra) {
+                for mode in MODES {
+                    let got = decode_mx(encode_mx(x, e, m, mode), e, m);
+                    let want = mx_reference(x, e, m, mode);
+                    assert_eq!(got, want, "e{e}m{m} {x:e} under {mode:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mx_saturates_nan_goes_to_plus_zero_and_zero_keeps_its_sign() {
+        for (_, e, m, max) in MX {
+            let enc = |x: f64| encode_mx(x, e, m, RoundMode::NearestEven);
+            let sign = 1u128 << (e + m);
+            let max_code = sign - 1;
+            assert_eq!(
+                enc(f64::NAN),
+                0,
+                "NaN -> +0 (the IR's rule; hardware unverified)"
+            );
+            assert_eq!(enc(-f64::NAN), 0, "even a negative NaN");
+            assert_eq!(enc(f64::INFINITY), max_code);
+            assert_eq!(enc(f64::NEG_INFINITY), sign | max_code);
+            // the clamp edge: max, just past max
+            assert_eq!(decode_mx(enc(max), e, m), max);
+            assert_eq!(enc(max + 1e-9), max_code, "max + eps");
+            assert_eq!(enc(-max - 1e-9), sign | max_code, "-max - eps");
+            assert_eq!(enc(1.0e300), max_code);
+            for mode in MODES {
+                assert_eq!(
+                    encode_mx(1.0e300, e, m, mode),
+                    max_code,
+                    "no mode escapes to a non-finite code"
+                );
+                assert_eq!(encode_mx(-1.0e300, e, m, mode), sign | max_code);
+            }
+            assert_eq!(enc(0.0), 0);
+            assert_eq!(enc(-0.0), sign, "-0 keeps its sign bit");
+            assert_eq!(
+                enc(-1e-30),
+                sign,
+                "a negative value that rounds to zero is -0"
+            );
+        }
+    }
+
+    #[test]
+    fn integers_into_an_mx_element_round_once_and_saturate() {
+        let to = |i: i128| {
+            decode_mx(
+                encode_mx(int_to_f64_sticky(i), 2, 1, RoundMode::NearestEven),
+                2,
+                1,
+            )
+        };
+        assert_eq!(to(5), 4.0, "5 is a tie between 4 and 6: even code (4) wins");
+        assert_eq!(to(7), 6.0);
+        assert_eq!(to(-1_000_000), -6.0);
+        assert_eq!(to(i128::from(i64::MAX)), 6.0);
     }
 
     #[test]

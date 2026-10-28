@@ -3113,6 +3113,12 @@ pub(crate) fn check_typed_admissibility(op: &OpDef, dtype: ElementKind) -> Resul
         Err(e) => return ill(format!("op '{}': ill-typed expression: {e:?}", op.name)),
     };
     let store = op.out_dtype.unwrap_or(dtype);
+    if crate::types::is_mx_element(store) || crate::types::is_mx_element(root) {
+        return ill(format!(
+            "op '{}': an MX element ({root:?}) has no buffer layout yet (sub-byte float packing is a later slice), so it may be an intermediate under a Cast but not the stored result; miss honestly",
+            op.name
+        ));
+    }
     if root != store {
         return ill(format!(
             "op '{}': the body has type {root:?} but the store type is {store:?};              state the conversion with a Cast, and set out_dtype to the result type",
