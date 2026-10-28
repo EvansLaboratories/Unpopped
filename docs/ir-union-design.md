@@ -171,8 +171,7 @@ Each increment closes its rows in `ROADMAP.md` section 6 and updates the survey 
 
 The existing seams are the interface; this section says what changes.
 
-- **Parser = `Frontend` descriptor** (`convert.rs`; for CUDA it moves to `baracuda-cuda-parse` once baracuda's
-  condition (b) holds). It gains a *kernel-layer path*: where lifting to intent fails today it returns
+- **Parser = `Frontend` descriptor** (`convert.rs`; CUDA's moved to `baracuda-cuda-parse` in 0.30.0). It gains a *kernel-layer path*: where lifting to intent fails today it returns
   `Residue`; after I2 it returns a kernel-layer body. The `Frontend` type becomes `#[non_exhaustive]`
   (breaking, in I2). A CUTLASS front end is the CUDA/C++ front end plus a **recognizer set** for CUTLASS
   template idioms (collective mainloop, epilogue visitor tree, tile scheduler); CuTe and ThunderKittens
