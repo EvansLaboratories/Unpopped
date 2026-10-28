@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.28.0` — feat (BREAKING): `ScalarExpr::BitcastPacked`, scalar to packed reinterpretation (U1 slice 4 step 3b, #112)
+
+New `ScalarExpr::BitcastPacked(x, elem, lanes)` (and `DagNode::BitcastPacked`) reinterprets the bits of a scalar as `Packed(elem, lanes)`, lane 0 least significant; `U32` to `Packed(I8, 4)` is the example. Total lane bits must equal the operand's width (`IllegalBitcast`), lanes are 2 or 4 (`BadLanes`), the operand must be scalar (`PackedOperand`). It is the inverse of step 3a's `Bitcast` of a packed value. `ScalarExpr` is deliberately exhaustive, so every downstream `match` over it must choose to handle or decline the new node (PM ruling (a), 2026-10-28). The oracle slices `Extract(BitcastPacked(..), i)` from the operand's bits (`types::lane_of` declines it, since there is no scalar shift node). The optimizer and pattern matcher treat it as opaque and the plan gate still declines every packed body. Proposed number; the PM allocates.
+
 ## `0.27.3` — feat (additive): `Bitcast` of a packed value to a scalar (U1 slice 4 step 3a, #112)
 
 `infer_ty` accepts `Bitcast(packed, scalar)` when lane bits times lane count equal the target width (`Packed(I8, 4)` to `U32`; lane 0 least significant); new `types::check_packed_bitcast` names the refusal, and the oracle assembles the bits. A `Bitcast` of a packed value to a mismatched width is now `IllegalBitcast` (it was `PackedOperand`). The plan gate still declines every packed body. Scalar to packed is the later `BitcastPacked` node. Proposed number; the PM allocates.
