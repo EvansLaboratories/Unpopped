@@ -578,8 +578,7 @@ mod tests {
         let neg = x < 0.0;
         let lo = grid
             .iter()
-            .filter(|(_, v)| *v <= a)
-            .next_back()
+            .rfind(|(_, v)| *v <= a)
             .expect("0 is on the grid");
         let hi = grid
             .iter()
@@ -630,11 +629,11 @@ mod tests {
             assert_eq!(mx_grid(e, m).last().expect("non-empty").1, max, "e{e}m{m}");
         }
         assert_eq!(
-            decode_mx(0b1_111_11, 3, 2),
+            decode_mx(0b111_111, 3, 2),
             -28.0,
             "e3m2 has no NaN or Inf: all-ones is -28"
         );
-        assert_eq!(decode_mx(0b0_11_111, 2, 3), 7.5);
+        assert_eq!(decode_mx(0b011_111, 2, 3), 7.5);
     }
 
     #[test]
