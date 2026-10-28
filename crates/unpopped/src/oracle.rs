@@ -1171,6 +1171,11 @@ fn raw_to_f64(bits: u128, dt: ElementKind) -> f64 {
         ElementKind::Fp8E5M2 => fp8_e5m2_to_f64(bits as u8),
         ElementKind::F16 => f16_to_f64(bits as u16),
         ElementKind::Bf16 => bf16_to_f64(bits as u16),
+        // An MX element only ever exists as an intermediate `Cast` result (it has no buffer
+        // layout yet), carried as its raw code.
+        ElementKind::F4E2M1 => crate::cast_ref::decode_mx(bits, 2, 1),
+        ElementKind::F6E2M3 => crate::cast_ref::decode_mx(bits, 2, 3),
+        ElementKind::F6E3M2 => crate::cast_ref::decode_mx(bits, 3, 2),
         ElementKind::F32 | ElementKind::F32Strict => f64::from(f32::from_bits(bits as u32)),
         ElementKind::F64 => f64::from_bits(bits as u64),
         ElementKind::I32

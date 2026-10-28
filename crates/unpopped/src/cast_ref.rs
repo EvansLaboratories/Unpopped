@@ -15,11 +15,11 @@
 //! - **integer to integer**: `Wrap` truncates two's-complement, `Clamp` saturates.
 //!
 //! Only `{f16, bf16, f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32}` are defined
-//! (`types::check_cast`). The 16-bit floats go through [`encode_ieee`], one rounding from
+//! (`types::check_cast`), plus the MX elements `f4e2m1`/`f6e2m3`/`f6e3m2` ([`encode_mx`]). The 16-bit floats go through [`encode_ieee`], one rounding from
 //! the exact value; f32 and f64 keep their hardware-checked paths.
 
 use crate::ir::{CastSpec, RoundMode, Saturation};
-use crate::types::{float_format, int_range, is_cast_float_endpoint, typed_bits};
+use crate::types::{float_format, int_range, is_cast_float_endpoint, is_mx_element, typed_bits};
 use unpopped_vocab::ElementKind;
 
 /// Whether `t` is one of the 16-bit floats, which the generic IEEE helpers below encode.
@@ -51,6 +51,74 @@ pub(crate) fn decode_ieee(bits: u128, ebits: u32, mbits: u32) -> f64 {
         (1.0 + mant * scale(-(mbits as i32))) * scale(exp - bias)
     };
     sign * mag
+}
+
+/// `ax` (a positive finite value) in units of the last place of a format with `mbits`
+/// mantissa bits whose exponent is `eff`, rounded to an integer under `mode`.
+///
+/// The scaling by a power of two is exact in `f64`, so the only rounding is the one asked for.
+fn round_scaled(ax: f64, eff: i32, mbits: u32, mode: RoundMode, neg: bool) -> u128 {
+    let q = ax * 2f64.powi(mbits as i32 - eff);
+    let fl = q.floor();
+    let frac = q - fl;
+    let n = fl as u128;
+    let up = match mode {
+        RoundMode::NearestEven => frac > 0.5 || (frac == 0.5 && n % 2 == 1),
+        RoundMode::TowardZero => false,
+        RoundMode::TowardNegInf => frac > 0.0 && neg,
+        RoundMode::TowardPosInf => frac > 0.0 && !neg,
+    };
+    n + u128::from(up)
+}
+
+/// Decode an MX element code (`1 + ebits + mbits` bits) to its exact value.
+pub(crate) fn decode_mx(bits: u128, ebits: u32, mbits: u32) -> f64 {
+    let sign = if (bits >> (ebits + mbits)) & 1 == 1 { -1.0 } else { 1.0 };
+    let exp = ((bits >> mbits) & ((1u128 << ebits) - 1)) as i32;
+    let mant = (bits & ((1u128 << mbits) - 1)) as f64;
+    let bias = (1i32 << (ebits - 1)) - 1;
+    let mag = if exp == 0 {
+        mant * 2f64.powi(1 - bias - mbits as i32)
+    } else {
+        (1.0 + mant * 2f64.powi(-(mbits as i32))) * 2f64.powi(exp - bias)
+    };
+    sign * mag
+}
+
+/// `x` converted to an MX element under `mode`, SATURATING: every overflow (an infinity
+/// included) lands on the largest finite value of its sign, and a NaN becomes `+0`. This is
+/// the IR's rule (mirroring float to integer), NOT a hardware fact: the NaN behaviour of
+/// the vendors' conversion instructions is unverified here, so an emitter that cannot match
+/// it must decline rather than approximate. The sign of a zero (and of a value that rounds to
+/// zero) is kept.
+pub(crate) fn encode_mx(x: f64, ebits: u32, mbits: u32, mode: RoundMode) -> u128 {
+    if x.is_nan() {
+        return 0;
+    }
+    let neg = x.is_sign_negative();
+    let sign_bit = u128::from(neg) << (ebits + mbits);
+    let max_code = (1u128 << (ebits + mbits)) - 1;
+    let ax = x.abs();
+    if ax == 0.0 {
+        return sign_bit;
+    }
+    if ax.is_infinite() {
+        return sign_bit | max_code;
+    }
+    let bias = (1i32 << (ebits - 1)) - 1;
+    let emin = 1 - bias;
+    let emax = ((1i32 << ebits) - 1) - bias;
+    let e = (((ax.to_bits() >> 52) & 0x7ff) as i32 - 1023).max(-1022);
+    if e > emax {
+        return sign_bit | max_code;
+    }
+    let n = round_scaled(ax, e.max(emin), mbits, mode, neg);
+    let bits = if e < emin {
+        n
+    } else {
+        (((e + bias) as u128) << mbits) + (n - (1u128 << mbits))
+    };
+    sign_bit | bits.min(max_code)
 }
 
 /// `x` rounded to the `(ebits, mbits)` IEEE-shaped float under `mode`, as that format's bits.
@@ -106,19 +174,7 @@ pub(crate) fn encode_ieee(
     if e > bias {
         return overflow();
     }
-    let eff = e.max(emin);
-    // `q` = ax / ulp, an exact power-of-two scaling of an f64.
-    let q = ax * 2f64.powi(mbits as i32 - eff);
-    let fl = q.floor();
-    let frac = q - fl;
-    let n = fl as u128;
-    let up = match mode {
-        RoundMode::NearestEven => frac > 0.5 || (frac == 0.5 && n % 2 == 1),
-        RoundMode::TowardZero => false,
-        RoundMode::TowardNegInf => frac > 0.0 && neg,
-        RoundMode::TowardPosInf => frac > 0.0 && !neg,
-    };
-    let n = n + u128::from(up);
+    let n = round_scaled(ax, e.max(emin), mbits, mode, neg);
     let bits = if e < emin {
         // Subnormal range: `n` is the mantissa field, and `n == 2^mbits` carries into the
         // exponent field as the smallest normal.
@@ -168,6 +224,10 @@ pub(crate) fn bits_of(x: Num, t: ElementKind) -> u128 {
     match (x, t) {
         (Num::F(f), ElementKind::F64) => u128::from(f.to_bits()),
         (Num::F(f), ElementKind::F32 | ElementKind::F32Strict) => u128::from((f as f32).to_bits()),
+        (Num::F(f), t) if is_mx_element(t) => {
+            let (e, m) = float_format(t).expect("an MX element has a format");
+            encode_mx(f, e, m, RoundMode::NearestEven)
+        }
         // A value HELD as a 16-bit float is already on its grid, so any mode agrees.
         (Num::F(f), t) if is_half(t) => {
             let (e, m) = float_format(t).expect("a half has a format");
@@ -190,6 +250,10 @@ pub(crate) fn num_of(bits: u128, t: ElementKind) -> Num {
         t if is_half(t) => {
             let (e, m) = float_format(t).expect("a half has a format");
             Num::F(decode_ieee(bits, e, m))
+        }
+        t if is_mx_element(t) => {
+            let (e, m) = float_format(t).expect("an MX element has a format");
+            Num::F(decode_mx(bits, e, m))
         }
         ElementKind::I8 => Num::I(i128::from(bits as u8 as i8)),
         ElementKind::I16 => Num::I(i128::from(bits as u16 as i16)),
@@ -371,6 +435,10 @@ pub(crate) fn cast_bits(x: Num, from: ElementKind, spec: CastSpec) -> u128 {
                     let (e, m) = float_format(t).expect("a half has a format");
                     encode_ieee(f, e, m, spec.round, spec.sat == Saturation::ClampFinite)
                 }
+                t if is_mx_element(t) => {
+                    let (e, m) = float_format(t).expect("an MX element has a format");
+                    encode_mx(f, e, m, spec.round)
+                }
                 _ => {
                     let max = f64::from(f32::MAX);
                     let r = if spec.sat == Saturation::ClampFinite && !f.is_nan() {
@@ -408,6 +476,10 @@ pub(crate) fn cast_bits(x: Num, from: ElementKind, spec: CastSpec) -> u128 {
                 t if is_half(t) => {
                     let (e, m) = float_format(t).expect("a half has a format");
                     encode_ieee(int_to_f64_sticky(i), e, m, spec.round, false)
+                }
+                t if is_mx_element(t) => {
+                    let (e, m) = float_format(t).expect("an MX element has a format");
+                    encode_mx(int_to_f64_sticky(i), e, m, spec.round)
                 }
                 _ => u128::from(int_to_f32(i, spec.round).to_bits()),
             }
