@@ -50,7 +50,7 @@ Stmt::If     { cond: ScalarExpr, then: Block, els: Block }
 Stmt::For    { local: u32, start, end, step: ScalarExpr, body: Block }   // integer counter, half-open
 Stmt::While  { cond: ScalarExpr, body: Block }
 Stmt::Break | Stmt::Continue | Stmt::Return
-Stmt::Call   { func: FuncRef, args: Vec<ScalarExpr>, result: Option<u32> }  // see 6, unknown U-2
+// Stmt::Call { func, args, result }  -- DEFERRED to the PR that introduces a module type (unknown U-2)
 
 Place::Logical { buffer: u32, coords: Vec<ScalarExpr> }   // the element at LOGICAL coordinates
 ```
