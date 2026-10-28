@@ -91,6 +91,9 @@ pub enum TypeError {
         /// The packed value's lane count.
         lanes: u8,
     },
+    /// A [`ScalarExpr::Local`] was typed with no kernel to say what the local is: a local has
+    /// meaning only inside a `kernel::KernelFn` (use [`infer_ty_in`]).
+    LocalOutsideKernel,
 }
 
 /// The type of a [`ScalarExpr`] node: a scalar, or a packed value of 2 or 4 lanes
@@ -287,15 +290,31 @@ pub fn infer(e: &ScalarExpr, compute: ElementKind) -> Result<ElementKind, TypeEr
 ///
 /// The first [`TypeError`] found, walking children before parents.
 pub fn infer_ty(e: &ScalarExpr, compute: ElementKind) -> Result<Ty, TypeError> {
+    infer_ty_in(e, compute, &[])
+}
+
+/// [`infer_ty`] inside a kernel: `locals[i]` is the declared type of `Local(i)`. A `Local`
+/// whose id is outside `locals` (so every `Local` under [`infer_ty`]) is
+/// [`TypeError::LocalOutsideKernel`]. Scope (declared before use) is the kernel checker's
+/// business, not this function's.
+///
+/// # Errors
+///
+/// The first [`TypeError`] found, walking children before parents.
+pub fn infer_ty_in(e: &ScalarExpr, compute: ElementKind, locals: &[Ty]) -> Result<Ty, TypeError> {
     match e {
+        ScalarExpr::Local(i) => locals
+            .get(*i as usize)
+            .copied()
+            .ok_or(TypeError::LocalOutsideKernel),
         ScalarExpr::Pack(xs) => {
             let lanes = u8::try_from(xs.len()).unwrap_or(u8::MAX);
             if !matches!(lanes, 2 | 4) {
                 return Err(TypeError::BadLanes { lanes });
             }
-            let first = child("Pack", &xs[0], compute)?;
+            let first = child("Pack", &xs[0], compute, locals)?;
             for x in &xs[1..] {
-                let t = child("Pack", x, compute)?;
+                let t = child("Pack", x, compute, locals)?;
                 if t != first {
                     return Err(TypeError::Mismatch {
                         node: "Pack",
@@ -310,11 +329,11 @@ pub fn infer_ty(e: &ScalarExpr, compute: ElementKind) -> Result<Ty, TypeError> {
             if !matches!(*lanes, 2 | 4) {
                 return Err(TypeError::BadLanes { lanes: *lanes });
             }
-            let from = child("BitcastPacked", x, compute)?;
+            let from = child("BitcastPacked", x, compute, locals)?;
             check_packed_bitcast(*elem, *lanes, from)?;
             Ok(Ty::Packed(*elem, *lanes))
         }
-        ScalarExpr::Extract(x, i) => match infer_ty(x, compute)? {
+        ScalarExpr::Extract(x, i) => match infer_ty_in(x, compute, locals)? {
             Ty::Packed(t, lanes) if *i < lanes => Ok(Ty::Scalar(t)),
             Ty::Packed(_, lanes) => Err(TypeError::BadLane { index: *i, lanes }),
             Ty::Scalar(_) => Err(TypeError::NotPacked { node: "Extract" }),
@@ -322,7 +341,7 @@ pub fn infer_ty(e: &ScalarExpr, compute: ElementKind) -> Result<Ty, TypeError> {
         _ => {
             let tys = operands(e)
                 .into_iter()
-                .map(|x| infer_ty(x, compute))
+                .map(|x| infer_ty_in(x, compute, locals))
                 .collect::<Result<Vec<_>, _>>()?;
             let elems: Vec<ElementKind> = tys.iter().map(|t| elem_of(*t)).collect();
             let lanes = tys.iter().find_map(|t| match t {
@@ -419,6 +438,7 @@ pub fn lane_of(e: &ScalarExpr, i: u8) -> Result<ScalarExpr, TypeError> {
         | ScalarExpr::Coord(_)
         | ScalarExpr::CoordInt(..)
         | ScalarExpr::ConstInt(..)
+        | ScalarExpr::Local(_)
         | ScalarExpr::Extract(..)
         | ScalarExpr::BitcastPacked(..) => return Err(TypeError::NotPacked { node: node_name(e) }),
         _ => return Err(TypeError::PackedOperand { node: node_name(e) }),
@@ -431,8 +451,9 @@ fn child(
     node: &'static str,
     x: &ScalarExpr,
     compute: ElementKind,
+    locals: &[Ty],
 ) -> Result<ElementKind, TypeError> {
-    match infer_ty(x, compute)? {
+    match infer_ty_in(x, compute, locals)? {
         Ty::Scalar(t) => Ok(t),
         Ty::Packed(..) => Err(TypeError::PackedOperand { node }),
     }
@@ -459,7 +480,7 @@ const fn lane_wise(e: &ScalarExpr) -> bool {
 }
 
 /// The child expressions of `e`, in the order [`node_ty`] reads their types.
-fn operands(e: &ScalarExpr) -> Vec<&ScalarExpr> {
+pub(crate) fn operands(e: &ScalarExpr) -> Vec<&ScalarExpr> {
     match e {
         ScalarExpr::Input(_)
         | ScalarExpr::Const(_)
@@ -467,7 +488,8 @@ fn operands(e: &ScalarExpr) -> Vec<&ScalarExpr> {
         | ScalarExpr::Reduced(_)
         | ScalarExpr::Coord(_)
         | ScalarExpr::CoordInt(..)
-        | ScalarExpr::ConstInt(..) => vec![],
+        | ScalarExpr::ConstInt(..)
+        | ScalarExpr::Local(_) => vec![],
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
@@ -485,7 +507,7 @@ fn operands(e: &ScalarExpr) -> Vec<&ScalarExpr> {
 }
 
 /// The node kind's name, as `TypeError`s report it.
-const fn node_name(e: &ScalarExpr) -> &'static str {
+pub(crate) const fn node_name(e: &ScalarExpr) -> &'static str {
     match e {
         ScalarExpr::Input(_) => "Input",
         ScalarExpr::Const(_) => "Const",
@@ -494,6 +516,7 @@ const fn node_name(e: &ScalarExpr) -> &'static str {
         ScalarExpr::Coord(_) => "Coord",
         ScalarExpr::CoordInt(..) => "CoordInt",
         ScalarExpr::ConstInt(..) => "ConstInt",
+        ScalarExpr::Local(_) => "Local",
         ScalarExpr::Add(..) => "Add",
         ScalarExpr::Sub(..) => "Sub",
         ScalarExpr::Mul(..) => "Mul",
@@ -592,9 +615,10 @@ fn node_ty(
         ScalarExpr::Qualified(..) => Ok(k[0]),
         // `infer_ty` answers these itself; reaching here is an internal misuse, reported
         // rather than panicked on.
-        ScalarExpr::Pack(_) | ScalarExpr::Extract(..) | ScalarExpr::BitcastPacked(..) => {
-            Err(TypeError::NotPacked { node: node_name(e) })
-        }
+        ScalarExpr::Pack(_)
+        | ScalarExpr::Extract(..)
+        | ScalarExpr::BitcastPacked(..)
+        | ScalarExpr::Local(_) => Err(TypeError::NotPacked { node: node_name(e) }),
     }
 }
 
@@ -633,7 +657,8 @@ pub fn has_qualified(e: &ScalarExpr) -> bool {
         | ScalarExpr::Reduced(_)
         | ScalarExpr::Coord(_)
         | ScalarExpr::CoordInt(..)
-        | ScalarExpr::ConstInt(..) => false,
+        | ScalarExpr::ConstInt(..)
+        | ScalarExpr::Local(_) => false,
         ScalarExpr::Unary(_, x)
         | ScalarExpr::Cast(x, _)
         | ScalarExpr::Bitcast(x, _)
@@ -651,6 +676,12 @@ pub fn has_qualified(e: &ScalarExpr) -> bool {
     }
 }
 
+/// `true` when `e` contains a [`ScalarExpr::Local`] leaf (meaningful only inside a kernel).
+#[must_use]
+pub fn has_local(e: &ScalarExpr) -> bool {
+    matches!(e, ScalarExpr::Local(_)) || operands(e).into_iter().any(has_local)
+}
+
 /// `true` when `e` contains a [`ScalarExpr::Pack`] or [`ScalarExpr::Extract`] node.
 #[must_use]
 pub fn has_packed(e: &ScalarExpr) -> bool {
@@ -662,7 +693,8 @@ pub fn has_packed(e: &ScalarExpr) -> bool {
         | ScalarExpr::Reduced(_)
         | ScalarExpr::Coord(_)
         | ScalarExpr::CoordInt(..)
-        | ScalarExpr::ConstInt(..) => false,
+        | ScalarExpr::ConstInt(..)
+        | ScalarExpr::Local(_) => false,
         ScalarExpr::Unary(_, x) | ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => {
             has_packed(x)
         }
@@ -695,6 +727,8 @@ pub fn is_typed(e: &ScalarExpr) -> bool {
         // Integer-typed leaves are the typed expressions' second kind: their type is not
         // the compute dtype.
         ScalarExpr::CoordInt(..) | ScalarExpr::ConstInt(..) => true,
+        // A local's type comes from its kernel's declaration, never the compute dtype.
+        ScalarExpr::Local(_) => true,
         ScalarExpr::Unary(_, x) | ScalarExpr::Qualified(x, _) => is_typed(x),
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
