@@ -313,6 +313,15 @@ pub enum ScalarExpr {
     Pack(Vec<ScalarExpr>),
     /// Lane `.1` of the packed value `.0`; its type is the lane type.
     Extract(Box<ScalarExpr>, u8),
+    /// Reinterpret the bits of the scalar `.0` as a **packed value** of `.2` lanes of type
+    /// `.1` (`docs/ir-typed-expressions.md` section 9): lane 0 is the least significant.
+    /// The inverse of [`ScalarExpr::Bitcast`] over a packed operand; total lane bits must
+    /// equal the operand's width.
+    BitcastPacked(
+        Box<ScalarExpr>,
+        #[serde(with = "crate::text::ek")] ElementKind,
+        u8,
+    ),
     /// Sum of two sub-expressions.
     Add(Box<ScalarExpr>, Box<ScalarExpr>),
     /// Difference of two sub-expressions.
@@ -1252,6 +1261,8 @@ pub enum DagNode {
     Pack(Vec<NodeId>),
     /// Lane `.1` of a packed node ([`ScalarExpr::Extract`]).
     Extract(NodeId, u8),
+    /// Packed reinterpretation of a scalar node ([`ScalarExpr::BitcastPacked`]).
+    BitcastPacked(NodeId, ElementKind, u8),
 }
 
 impl DagNode {
@@ -1457,6 +1468,9 @@ impl ExprDag {
                 ScalarExpr::Pack(xs.iter().map(|&x| self.rebuild(x)).collect())
             }
             DagNode::Extract(x, i) => ScalarExpr::Extract(Box::new(self.rebuild(x)), i),
+            DagNode::BitcastPacked(x, e, n) => {
+                ScalarExpr::BitcastPacked(Box::new(self.rebuild(x)), e, n)
+            }
         }
     }
 }
@@ -1488,6 +1502,7 @@ enum DagKey {
     Qualified(NodeId, Numerics),
     Pack(Vec<NodeId>),
     Extract(NodeId, u8),
+    BitcastPacked(NodeId, ElementKind, u8),
 }
 
 impl DagKey {
@@ -1495,6 +1510,7 @@ impl DagKey {
         match *n {
             DagNode::Pack(ref xs) => DagKey::Pack(xs.clone()),
             DagNode::Extract(x, i) => DagKey::Extract(x, i),
+            DagNode::BitcastPacked(x, e, n) => DagKey::BitcastPacked(x, e, n),
             DagNode::Input(i) => DagKey::Input(i),
             DagNode::Const(v) => DagKey::ConstBits(v.to_bits()),
             DagNode::Param(i) => DagKey::Param(i),
@@ -1582,6 +1598,10 @@ impl DagBuilder {
                 let x = self.intern(x);
                 DagNode::Extract(x, *i)
             }
+            ScalarExpr::BitcastPacked(x, e, n) => {
+                let x = self.intern(x);
+                DagNode::BitcastPacked(x, *e, *n)
+            }
         };
         self.hashcons(node)
     }
@@ -1621,6 +1641,7 @@ fn node_children(n: &DagNode) -> Vec<NodeId> {
         | DagNode::Cast(x, _)
         | DagNode::Bitcast(x, _)
         | DagNode::Extract(x, _)
+        | DagNode::BitcastPacked(x, ..)
         | DagNode::Qualified(x, _) => vec![x],
         DagNode::Pack(ref xs) => xs.clone(),
         DagNode::Add(a, b)

@@ -541,7 +541,8 @@ fn expr_contains_cmp_outside_select_cond(e: &ScalarExpr) -> bool {
         ScalarExpr::Cast(a, _)
         | ScalarExpr::Bitcast(a, _)
         | ScalarExpr::Qualified(a, _)
-        | ScalarExpr::Extract(a, _) => expr_contains_cmp_outside_select_cond(a),
+        | ScalarExpr::Extract(a, _)
+        | ScalarExpr::BitcastPacked(a, ..) => expr_contains_cmp_outside_select_cond(a),
         ScalarExpr::Pack(xs) => xs.iter().any(expr_contains_cmp_outside_select_cond),
         ScalarExpr::Fma(a, b, c) => {
             expr_contains_cmp_outside_select_cond(a)

@@ -398,3 +398,81 @@ fn bitcast_of_a_packed_value_refuses_a_width_mismatch() {
         );
     }
 }
+
+fn bitcast_packed(x: ScalarExpr, elem: ElementKind, lanes: u8) -> ScalarExpr {
+    ScalarExpr::BitcastPacked(bx(x), elem, lanes)
+}
+
+#[test]
+fn bitcast_packed_makes_a_packed_value_from_a_scalar_of_equal_total_bits() {
+    let u = ScalarExpr::ConstInt(0x0403_0201, ElementKind::U32);
+    assert_eq!(
+        infer_ty(&bitcast_packed(u.clone(), ElementKind::I8, 4), F32),
+        Ok(Ty::Packed(ElementKind::I8, 4))
+    );
+    assert_eq!(
+        infer_ty(&bitcast_packed(u, ElementKind::I16, 2), F32),
+        Ok(Ty::Packed(ElementKind::I16, 2))
+    );
+    let w = ScalarExpr::ConstInt(1, ElementKind::I64);
+    assert_eq!(
+        infer_ty(&bitcast_packed(w, F32, 2), F32),
+        Ok(Ty::Packed(F32, 2))
+    );
+}
+
+#[test]
+fn bitcast_packed_refuses_a_width_mismatch_a_packed_operand_and_bad_lanes() {
+    let u = ScalarExpr::ConstInt(1, ElementKind::U32);
+    // Control: the matching shape above is accepted; each of these is one thing off.
+    assert!(matches!(
+        infer_ty(&bitcast_packed(u.clone(), ElementKind::I8, 2), F32),
+        Err(TypeError::IllegalBitcast { .. })
+    ));
+    assert!(matches!(
+        infer_ty(&bitcast_packed(u.clone(), ElementKind::I8, 3), F32),
+        Err(TypeError::BadLanes { lanes: 3 })
+    ));
+    let packed = pack(vec![input(0).0, input(1).0]);
+    assert!(matches!(
+        infer_ty(&bitcast_packed(packed, ElementKind::I8, 4), F32),
+        Err(TypeError::PackedOperand { .. })
+    ));
+}
+
+#[test]
+fn bitcast_packed_round_trips_through_bitcast_to_the_same_scalar_type() {
+    let u = ScalarExpr::ConstInt(7, ElementKind::U32);
+    let there = bitcast_packed(u, ElementKind::I8, 4);
+    assert_eq!(
+        infer_ty(&bitcast(there, ElementKind::U32), F32),
+        Ok(Ty::Scalar(ElementKind::U32))
+    );
+}
+
+fn bitcast_packed_body() -> ScalarExpr {
+    // Lane 1 of the f32 bits of input 0 read as two 16-bit halves is not typable (F32 is 32
+    // bits); a 32-bit integer read as 2 x I16 is.
+    let u = ScalarExpr::ConstInt(0x0002_0001, ElementKind::U32);
+    extract(bitcast_packed(u, ElementKind::I16, 2), 1)
+}
+
+#[test]
+fn bitcast_packed_is_typed_found_by_has_packed_and_round_trips_dag_and_text() {
+    let b = bitcast_packed_body();
+    assert!(is_typed(&b) && has_packed(&b));
+    assert_eq!(ExprDag::from_expr(&b).to_expr(), b);
+    let op = OpDef::elementwise("bcp", 1, &[F32], unpopped::ir::Expr(b));
+    assert_eq!(op_from_text(&op_to_text(&op)).expect("parses"), op);
+}
+
+#[test]
+fn bitcast_packed_is_opaque_to_the_optimizer_and_declined_by_the_plan_gate() {
+    let b = bitcast_packed_body();
+    assert_eq!(optimize(&b, F32), b);
+    let op = OpDef::elementwise("bcp", 1, &[F32], unpopped::ir::Expr(b));
+    let a = OperandDesc::new(1, &[7], &[1], F32, 256);
+    let o = OperandDesc::new(1, &[7], &[1], F32, 256);
+    let key = structure_key(OpCategory::UnaryElementwise, &[a, o], ArchSku::Sm89);
+    assert!(try_build_plan(&op, &key).is_err());
+}

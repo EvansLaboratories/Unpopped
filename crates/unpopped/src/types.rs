@@ -306,6 +306,14 @@ pub fn infer_ty(e: &ScalarExpr, compute: ElementKind) -> Result<Ty, TypeError> {
             }
             Ok(Ty::Packed(first, lanes))
         }
+        ScalarExpr::BitcastPacked(x, elem, lanes) => {
+            if !matches!(*lanes, 2 | 4) {
+                return Err(TypeError::BadLanes { lanes: *lanes });
+            }
+            let from = child("BitcastPacked", x, compute)?;
+            check_packed_bitcast(*elem, *lanes, from)?;
+            Ok(Ty::Packed(*elem, *lanes))
+        }
         ScalarExpr::Extract(x, i) => match infer_ty(x, compute)? {
             Ty::Packed(t, lanes) if *i < lanes => Ok(Ty::Scalar(t)),
             Ty::Packed(_, lanes) => Err(TypeError::BadLane { index: *i, lanes }),
@@ -411,7 +419,8 @@ pub fn lane_of(e: &ScalarExpr, i: u8) -> Result<ScalarExpr, TypeError> {
         | ScalarExpr::Coord(_)
         | ScalarExpr::CoordInt(..)
         | ScalarExpr::ConstInt(..)
-        | ScalarExpr::Extract(..) => return Err(TypeError::NotPacked { node: node_name(e) }),
+        | ScalarExpr::Extract(..)
+        | ScalarExpr::BitcastPacked(..) => return Err(TypeError::NotPacked { node: node_name(e) }),
         _ => return Err(TypeError::PackedOperand { node: node_name(e) }),
     })
 }
@@ -468,7 +477,8 @@ fn operands(e: &ScalarExpr) -> Vec<&ScalarExpr> {
         | ScalarExpr::Cast(x, _)
         | ScalarExpr::Bitcast(x, _)
         | ScalarExpr::Qualified(x, _)
-        | ScalarExpr::Extract(x, _) => vec![x],
+        | ScalarExpr::Extract(x, _)
+        | ScalarExpr::BitcastPacked(x, ..) => vec![x],
         ScalarExpr::Fma(a, b, c) | ScalarExpr::Select(a, b, c) => vec![a, b, c],
         ScalarExpr::Pack(xs) => xs.iter().collect(),
     }
@@ -497,6 +507,7 @@ const fn node_name(e: &ScalarExpr) -> &'static str {
         ScalarExpr::Qualified(..) => "Qualified",
         ScalarExpr::Pack(_) => "Pack",
         ScalarExpr::Extract(..) => "Extract",
+        ScalarExpr::BitcastPacked(..) => "BitcastPacked",
     }
 }
 
@@ -581,7 +592,7 @@ fn node_ty(
         ScalarExpr::Qualified(..) => Ok(k[0]),
         // `infer_ty` answers these itself; reaching here is an internal misuse, reported
         // rather than panicked on.
-        ScalarExpr::Pack(_) | ScalarExpr::Extract(..) => {
+        ScalarExpr::Pack(_) | ScalarExpr::Extract(..) | ScalarExpr::BitcastPacked(..) => {
             Err(TypeError::NotPacked { node: node_name(e) })
         }
     }
@@ -626,7 +637,8 @@ pub fn has_qualified(e: &ScalarExpr) -> bool {
         ScalarExpr::Unary(_, x)
         | ScalarExpr::Cast(x, _)
         | ScalarExpr::Bitcast(x, _)
-        | ScalarExpr::Extract(x, _) => has_qualified(x),
+        | ScalarExpr::Extract(x, _)
+        | ScalarExpr::BitcastPacked(x, ..) => has_qualified(x),
         ScalarExpr::Pack(xs) => xs.iter().any(has_qualified),
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
@@ -643,7 +655,7 @@ pub fn has_qualified(e: &ScalarExpr) -> bool {
 #[must_use]
 pub fn has_packed(e: &ScalarExpr) -> bool {
     match e {
-        ScalarExpr::Pack(_) | ScalarExpr::Extract(..) => true,
+        ScalarExpr::Pack(_) | ScalarExpr::Extract(..) | ScalarExpr::BitcastPacked(..) => true,
         ScalarExpr::Input(_)
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)
@@ -674,7 +686,7 @@ pub fn is_typed(e: &ScalarExpr) -> bool {
     match e {
         ScalarExpr::Cast(..) | ScalarExpr::Bitcast(..) => true,
         // A packed value is never the compute dtype; `Extract` is typed because its operand is.
-        ScalarExpr::Pack(_) | ScalarExpr::Extract(..) => true,
+        ScalarExpr::Pack(_) | ScalarExpr::Extract(..) | ScalarExpr::BitcastPacked(..) => true,
         ScalarExpr::Input(_)
         | ScalarExpr::Const(_)
         | ScalarExpr::Param(_)
