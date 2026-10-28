@@ -1707,6 +1707,32 @@ fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
             Err(err) => panic!("oracle: ill-typed Extract: {err:?}"),
         },
         ScalarExpr::Pack(_) => panic!("oracle: a packed value has no scalar result"),
+        // A packed operand is its lanes' bits, lane 0 least significant.
+        ScalarExpr::Bitcast(x, to)
+            if matches!(
+                crate::types::infer_ty(x, ev.dtype),
+                Ok(crate::types::Ty::Packed(..))
+            ) =>
+        {
+            let Ok(crate::types::Ty::Packed(elem, lanes)) = crate::types::infer_ty(x, ev.dtype)
+            else {
+                unreachable!("matched as packed above")
+            };
+            let width = crate::types::typed_bits(elem)
+                .expect("oracle: untyped packed lane (the plan gate rejects this)");
+            let mut bits = 0u128;
+            for i in 0..lanes {
+                let lane = crate::types::lane_of(x, i).expect(
+                    "oracle: ill-typed packed Bitcast operand (the plan gate rejects this)",
+                );
+                let b = match eval(&lane, ev) {
+                    Val::Raw(b, dt) if dt == elem => b,
+                    other => crate::cast_ref::bits_of(val_to_num(other, elem), elem),
+                };
+                bits |= b << (u32::from(i) * width);
+            }
+            Val::Raw(bits, *to)
+        }
         ScalarExpr::Bitcast(x, to) => {
             let from = crate::types::infer(x, ev.dtype)
                 .expect("oracle: ill-typed Bitcast operand (the plan gate rejects this)");

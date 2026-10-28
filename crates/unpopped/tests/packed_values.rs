@@ -235,10 +235,6 @@ fn operators_with_no_packed_form_still_decline() {
             "Binary",
             ScalarExpr::Binary(BinaryOp::Pow, bx(a.clone()), bx(a.clone())),
         ),
-        (
-            "Bitcast",
-            ScalarExpr::Bitcast(bx(a.clone()), ElementKind::U32),
-        ),
     ] {
         assert!(
             matches!(infer_ty(&e, F32), Err(TypeError::PackedOperand { node: n }) if n == node),
@@ -352,5 +348,53 @@ fn lane_of_distributes_every_lane_wise_operator() {
     ];
     for (packed, lane0) in cases {
         assert_eq!(lane_of(&packed, 0), Ok(lane0), "{packed:?}");
+    }
+}
+
+/// A lane of integer type `t` (integer leaves are I32/I64/U32, so narrower lanes are cast).
+fn ci(v: i64, t: ElementKind) -> ScalarExpr {
+    let spec = CastSpec {
+        to: t,
+        round: RoundMode::NearestEven,
+        sat: Saturation::Wrap,
+    };
+    ScalarExpr::Cast(bx(ScalarExpr::ConstInt(v, ElementKind::I32)), spec)
+}
+
+fn bitcast(x: ScalarExpr, to: ElementKind) -> ScalarExpr {
+    ScalarExpr::Bitcast(Box::new(x), to)
+}
+
+#[test]
+fn bitcast_of_a_packed_value_to_a_scalar_of_equal_total_bits_is_that_scalar() {
+    let i8x4 = pack((0..4).map(|v| ci(v, ElementKind::I8)).collect());
+    assert_eq!(
+        infer_ty(&bitcast(i8x4, ElementKind::U32), F32),
+        Ok(Ty::Scalar(ElementKind::U32))
+    );
+    let i16x2 = pack(vec![ci(1, ElementKind::I16), ci(2, ElementKind::I16)]);
+    assert_eq!(
+        infer_ty(&bitcast(i16x2, ElementKind::I32), F32),
+        Ok(Ty::Scalar(ElementKind::I32))
+    );
+    let f32x2 = pack(vec![input(0).0, input(1).0]);
+    assert_eq!(
+        infer_ty(&bitcast(f32x2, ElementKind::I64), F32),
+        Ok(Ty::Scalar(ElementKind::I64))
+    );
+}
+
+#[test]
+fn bitcast_of_a_packed_value_refuses_a_width_mismatch() {
+    // Control for the test above: the same shapes, one width off.
+    let i8x4 = pack((0..4).map(|v| ci(v, ElementKind::I8)).collect());
+    for to in [ElementKind::U16, ElementKind::I64] {
+        assert!(
+            matches!(
+                infer_ty(&bitcast(i8x4.clone(), to), F32),
+                Err(TypeError::IllegalBitcast { .. })
+            ),
+            "{to:?}"
+        );
     }
 }
