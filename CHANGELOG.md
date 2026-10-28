@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.29.0` — feat (BREAKING): OCP MX element dtypes `F4E2M1`, `F6E2M3`, `F6E3M2`; KISS corpus re-vendored to `bafbe07` (U1b, #112)
+
+Three new `ElementKind` rows, appended after `U64` (`ALL` 25 -> 28; `ElementKind` is deliberately exhaustive, so every downstream `match` over it must choose: breaking pre-1.0). Tokens `f4e2m1` / `f6e2m3` / `f6e3m2` (KISS-CLASSIFY 6.1-0014..-0016), storage 4 / 6 / 6 bits, kind `float`, usable (not reserved), so the closed vocabulary is 27 tokens. `ElementKind::is_mx_element` is new. An MX element in an accumulator position typed-declines: new `TokenDecline::ElementDtypeAsAccumulator` (token `<acc>` and the `(acc + mp)` field, both the lenient and strict decode) and new `DeriveDecline::ElementDtypeAsAccumulator` (declared, or defaulted to operand 0's dtype for a contraction). Both are additive on `#[non_exhaustive]`/new-variant enums but the `DeriveDecline` addition is breaking for an exhaustive matcher.
+
+Nothing computes with them: `plan::check_dtype_is_a_compute_dtype` declines them (typed `InadmissibleOpInCell`), CpuC and Slang report them unsupported, FKC has no spelling, and no `Cast`/codec row exists (a later slice; the OCP packing convention is unverified, ROADMAP U1b).
+
+Vendored KISS artifacts re-taken from `bafbe07` (spans corpus commits `9336a5b`, `07ccc96`, `68dc233`, `bafbe07`; see `kiss/README.md`): `structure_key_vectors.json` 28 -> 34 positive and 25 -> 27 decline vectors, 66 -> 71 derivation vectors, `dtype_manifest.json` 24 -> 27 rows, and the `source_commit` member is gone upstream, so its assertion and shape pin were removed. Proposed number; the PM allocates.
+
 ## `0.28.0` — feat (BREAKING): `ScalarExpr::BitcastPacked`, scalar to packed reinterpretation (U1 slice 4 step 3b, #112)
 
 New `ScalarExpr::BitcastPacked(x, elem, lanes)` (and `DagNode::BitcastPacked`) reinterprets the bits of a scalar as `Packed(elem, lanes)`, lane 0 least significant; `U32` to `Packed(I8, 4)` is the example. Total lane bits must equal the operand's width (`IllegalBitcast`), lanes are 2 or 4 (`BadLanes`), the operand must be scalar (`PackedOperand`). It is the inverse of step 3a's `Bitcast` of a packed value. `ScalarExpr` is deliberately exhaustive, so every downstream `match` over it must choose to handle or decline the new node (PM ruling (a), 2026-10-28). The oracle slices `Extract(BitcastPacked(..), i)` from the operand's bits (`types::lane_of` declines it, since there is no scalar shift node). The optimizer and pattern matcher treat it as opaque and the plan gate still declines every packed body. Proposed number; the PM allocates.

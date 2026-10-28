@@ -93,7 +93,7 @@ reinterpret in C, `asuint`/`asfloat` in Slang), not a pointer cast (strict alias
 vectors; lane-wise operators, `Extract(x, i)` / `Pack(a, b, ..)`, and `Cast` between packed forms
 (`cvt.rn.f16x2.f32`). Typed this way, a `float4` is not a special case of the scalar rules but a
 consequence of them. Deferred to the slice after scalar `Cast` so the first breaking PR stays
-reviewable. fp4/fp6/MX element kinds are D5 (CireSnave, board 290) and stay out.
+reviewable. fp4/fp6/MX element kinds (`F4E2M1`, `F6E2M3`, `F6E3M2`) became `ElementKind` rows in 0.29.0 as storage and key identity only (D5; PM go 2026-10-28); no `Cast` row or codec exists for them yet.
 
 ## 7. Increments
 

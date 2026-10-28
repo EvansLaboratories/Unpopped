@@ -45,21 +45,18 @@ const SUBSTITUTE_TARGET: &str = "cuda:sm89";
 
 /// The vendored artifact is the one this leg claims to have run against.
 ///
-/// Two commits with two meanings: the file was copied from a KISS `main` commit
-/// (recorded in `kiss/README.md`), while its own `source_commit` is the *spec*
-/// provenance it was generated against.
+/// The file was copied from a KISS `main` commit (recorded in `kiss/README.md`).
+/// Its former `source_commit` member (a literal `19c3ad7` that never moved, so it
+/// could not fail on a re-vendor) was dropped upstream in KISS#713, and its
+/// `generated_from` now names the emitting program.
 ///
-/// **This is not a currency check and must not be read as one.** `source_commit`
-/// has never moved — `19c3ad7` across every revision of the artifact — because
-/// it names the spec commit and the changes have all been generator changes. It
-/// therefore cannot fail when the artifact is regenerated. What identifies the
-/// revision is the content hash in
+/// **This is not a currency check and must not be read as one.** What identifies
+/// the revision is the content hash in
 /// `the_vendored_artifacts_are_the_revisions_this_leg_was_written_against`.
 #[test]
 fn the_artifact_is_the_one_this_leg_claims() {
     for (key, want) in [
         ("\"schema\"", "kiss-structure-key-vectors-v1"),
-        ("\"source_commit\"", "19c3ad7"),
         ("\"token_prefix\"", "sk6"),
         ("\"clause\"", "KISS-CLASSIFY-6.7"),
     ] {
@@ -122,14 +119,14 @@ fn the_vendored_artifacts_are_the_revisions_this_leg_was_written_against() {
         (
             "structure_key_vectors.json",
             VECTORS,
-            32_807_usize,
-            0x0d63_c3e8_02a1_51e8_u64,
+            36_129_usize,
+            0x14cd_3d65_b5d0_2e78_u64,
         ),
         (
             "dtype_manifest.json",
             MANIFEST,
-            3_182_usize,
-            0x2492_bb47_2880_56e5_u64,
+            3_554_usize,
+            0xbfa2_ea46_d958_466f_u64,
         ),
     ] {
         assert_eq!(
@@ -207,7 +204,6 @@ fn the_artifact_shape_is_pinned_so_any_new_field_is_loud() {
     const EXPECTED: &[&str] = &[
         "schema",
         "generated_from",
-        "source_commit",
         "clause",
         "namespace_vocabulary_note",
         "namespace_vocabulary_versions",
@@ -283,7 +279,7 @@ fn the_artifact_shape_is_pinned_so_any_new_field_is_loud() {
 #[test]
 fn positive_vectors_round_trip_byte_exact() {
     let vectors = positives();
-    assert_eq!(vectors.len(), 28, "artifact positive-vector count changed");
+    assert_eq!(vectors.len(), 34, "artifact positive-vector count changed");
 
     let mut matched = Vec::new();
     let mut skipped = Vec::new();
@@ -368,7 +364,7 @@ fn skips_fall_only_on_unimplemented_targets() {
 #[test]
 fn decline_vectors_produce_the_same_verdict() {
     let vectors = declines();
-    assert_eq!(vectors.len(), 25, "artifact decline-vector count changed");
+    assert_eq!(vectors.len(), 27, "artifact decline-vector count changed");
 
     let mut exact = 0;
     let mut failed = Vec::new();
@@ -743,13 +739,13 @@ fn target_match_vectors_are_byte_exact() {
 fn the_artifact_scanner_actually_reads_the_vectors() {
     let pos = positives();
     let dec = declines();
-    assert_eq!(pos.len(), 28);
-    assert_eq!(dec.len(), 25);
+    assert_eq!(pos.len(), 34);
+    assert_eq!(dec.len(), 27);
 
     // Namespaces are tagged and split the way the artifact says.
     let vulkan = pos.iter().filter(|p| p.namespace == "vulkan").count();
     let cuda = pos.iter().filter(|p| p.namespace == "cuda").count();
-    assert_eq!((cuda, vulkan), (27, 1), "namespace split changed");
+    assert_eq!((cuda, vulkan), (33, 1), "namespace split changed");
 
     // Tokens and targets are non-empty and internally consistent: the tag must
     // agree with the token's own field 3, or the skip axis is being read from a
