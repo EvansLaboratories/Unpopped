@@ -91,6 +91,13 @@ Queries (all 2026-10-28):
 - "patent tensor layout algebra composition complement hierarchical shape stride mapping coordinates to memory offsets compiler GPU": no patent on the algebra itself; unrelated tensor patents only (US20210064987A1, US20170200094A1, US20230004365A1, KR20210021258A, US20240176663).
 - "patent XOR swizzle shared memory address bank conflict avoidance bit permutation tensor layout": NVIDIA tensor-memory-accelerator family, US20230289304 / US12141082B2 / US20240176663 (hardware unit that swizzles on load into shared memory; patterns held as lookup tables).
 
+| patent | what the search summary says | why flagged | claims |
+|---|---|---|---|
+| US20230289304A1 | NVIDIA: hardware unit swizzles data as it loads a tensor into shared memory, fixed patterns per layout, to avoid bank conflicts | swizzle for bank-conflict avoidance (`Swizzle`) | unread |
+| US12141082B2 | continuation of the above; swizzle encoded as 8x8 lookup tables | same | unread |
+| US20240176663A1 | NVIDIA: tensor map cache storage, repeats the bank-swizzling description | same | unread |
+| US20210064987A1 | NVIDIA: reinterprets a tensor with overlapping strides so logical elements share memory (stride-0 / overlapping-stride layouts) | `Layout` allows stride 0 and overlapping strides | unread |
+
 Not read: **no claim of any hit above was read.** Verdict: **not cleared, not assessed.** The TMA family describes a hardware unit; `Swizzle` here is an arithmetic function in a vocabulary crate, which is a difference of kind, but that is a reading of titles and summaries, not of claims. Needs the PM's claim-reading pass (`tools/patent-claims.py`) before any "clear".
 
 ## Limitations

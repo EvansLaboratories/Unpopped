@@ -31,6 +31,10 @@
 
 use std::fmt;
 
+mod swizzle;
+
+pub use swizzle::{ComposedLayout, Swizzle};
+
 /// Deepest nesting an [`IntTuple`] may have inside a [`Layout`]. A bare integer
 /// has depth 0, `(a,b)` depth 1. Bounds recursion on untrusted input; real CuTe
 /// layouts are far shallower.
@@ -250,6 +254,19 @@ fn node(mut modes: Vec<(IntTuple, IntTuple)>) -> (IntTuple, IntTuple) {
     (IntTuple::Tuple(s), IntTuple::Tuple(d))
 }
 
+/// The `(shape, stride)` trees of a flat mode list; `1:0` when empty.
+fn flat_node(modes: &[(i64, i64)]) -> (IntTuple, IntTuple) {
+    if modes.is_empty() {
+        return (IntTuple::Int(1), IntTuple::Int(0));
+    }
+    node(
+        modes
+            .iter()
+            .map(|&(s, d)| (IntTuple::Int(s), IntTuple::Int(d)))
+            .collect(),
+    )
+}
+
 impl Layout {
     /// Validate and build a layout: congruent profiles, no empty tuples, depth
     /// at most [`MAX_DEPTH`], shape leaves `>= 1`, stride leaves `>= 0`, and
@@ -379,15 +396,7 @@ impl Layout {
 
     fn from_flat(modes: &[(i64, i64)]) -> Layout {
         // Callers pass modes already known valid.
-        let nodes = modes
-            .iter()
-            .map(|&(s, d)| (IntTuple::Int(s), IntTuple::Int(d)))
-            .collect();
-        let (shape, stride) = if modes.is_empty() {
-            (IntTuple::Int(1), IntTuple::Int(0))
-        } else {
-            node(nodes)
-        };
+        let (shape, stride) = flat_node(modes);
         Layout { shape, stride }
     }
 
@@ -615,93 +624,5 @@ fn compose_leaf(a: &[(i64, i64)], s: i64, d: i64) -> Result<(IntTuple, IntTuple)
         rest_shape /= take;
         rest_stride = 1;
     }
-    let (shape, stride) = node(
-        out.into_iter()
-            .map(|(s, d)| (IntTuple::Int(s), IntTuple::Int(d)))
-            .collect(),
-    );
-    Ok((shape, stride))
-}
-
-/// The XOR address permutation `Swizzle<B,M,S>`: `bits` (B) address bits starting
-/// at `base`+max(`shift`,0) are XORed into the `bits` bits `|shift|` positions
-/// away, leaving the low `base` bits alone. It is a bijection on non-negative
-/// integers and its own inverse. Used to spread shared-memory rows across banks.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub struct Swizzle {
-    bits: u32,
-    base: u32,
-    shift: i32,
-}
-
-impl Swizzle {
-    /// Build a swizzle. Requires `|shift| >= bits` (so the source and target bit
-    /// groups cannot overlap, which is what makes it an involution) and
-    /// `bits + base + |shift| <= 62` (so every intermediate stays in `i64`).
-    pub fn new(bits: u32, base: u32, shift: i32) -> Result<Self, LayoutError> {
-        let a = shift.unsigned_abs();
-        if a < bits || u64::from(bits) + u64::from(base) + u64::from(a) > 62 {
-            return Err(LayoutError::BadSwizzle);
-        }
-        Ok(Self { bits, base, shift })
-    }
-
-    /// Number of bits XORed (B).
-    pub fn bits(&self) -> u32 {
-        self.bits
-    }
-
-    /// Number of untouched low bits (M).
-    pub fn base(&self) -> u32 {
-        self.base
-    }
-
-    /// Signed distance between source and target bit groups (S).
-    pub fn shift(&self) -> i32 {
-        self.shift
-    }
-
-    /// Apply the swizzle to a non-negative offset.
-    pub fn apply(&self, x: i64) -> Result<i64, LayoutError> {
-        if x < 0 {
-            return Err(LayoutError::OutOfRange);
-        }
-        let msk = (1i64 << self.bits) - 1;
-        let src = msk << (self.base + self.shift.max(0).unsigned_abs());
-        let moved = if self.shift >= 0 {
-            (x & src) >> self.shift
-        } else {
-            (x & src) << self.shift.unsigned_abs()
-        };
-        Ok(x ^ moved)
-    }
-}
-
-/// A [`Swizzle`] applied after a [`Layout`]: `i -> swizzle(layout(i))`.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct ComposedLayout {
-    swizzle: Swizzle,
-    layout: Layout,
-}
-
-impl ComposedLayout {
-    /// Apply `swizzle` to the offsets of `layout`.
-    pub fn new(swizzle: Swizzle, layout: Layout) -> Self {
-        Self { swizzle, layout }
-    }
-
-    /// The swizzle stage.
-    pub fn swizzle(&self) -> Swizzle {
-        self.swizzle
-    }
-
-    /// The underlying layout.
-    pub fn layout(&self) -> &Layout {
-        &self.layout
-    }
-
-    /// The swizzled offset for linear index `idx`.
-    pub fn call(&self, idx: i64) -> Result<i64, LayoutError> {
-        self.swizzle.apply(self.layout.call(idx)?)
-    }
+    Ok(flat_node(&out))
 }
