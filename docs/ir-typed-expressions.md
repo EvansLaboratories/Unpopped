@@ -151,9 +151,9 @@ types' extremes) and `unpopped-cpu-c/tests/cpu_end_to_end.rs`
 `I32`/`U32`/`I64` over operands that include both extremes and compares with the oracle's exact `i128`
 evaluation wrapped to the width.
 
-## 9. Packed values (slice 4, steps 1 and 2 landed)
+## 9. Packed values (slice 4, steps 1, 2 and 3a landed)
 
-Status: **steps 1 and 2 landed**: `Pack`, `Extract`, `Ty`, `infer_ty`, the DAG/text carriers, and lane-wise `Add`/`Sub`/`Mul`/`Fma`/`Min`/`Max`, whole-value `Select` (scalar condition) and per-lane `Cast`, with `types::lane_of` as the reference meaning of `Extract` (the oracle evaluates it). `Bitcast` of a packed value, a packed `Select` condition and every emitter seam are later steps; until they land the plan gate declines any body containing a packed node. `infer` refuses a packed result (`PackedResult`); `infer_ty` is the packed-aware form (the PM ruled option (b), 2026-10-25). This section refines section 6.
+Status: **steps 1 and 2 landed**: `Pack`, `Extract`, `Ty`, `infer_ty`, the DAG/text carriers, and lane-wise `Add`/`Sub`/`Mul`/`Fma`/`Min`/`Max`, whole-value `Select` (scalar condition) and per-lane `Cast`, with `types::lane_of` as the reference meaning of `Extract` (the oracle evaluates it). step 3a adds `Bitcast` of a packed value to a scalar of equal total bits (`Packed(I8, 4)` -> `U32`; lane 0 is the least significant; `types::check_packed_bitcast`, evaluated by the oracle). The inverse (scalar to packed) needs a target `Bitcast` cannot name, so it is a new node `BitcastPacked(x, elem, lanes)` (PM ruling (a), 2026-10-28; breaking, 0.28.0). `Packed(F16, 2)` <-> `U32` waits on `F16` having `Cast` rows. A packed `Select` condition and every emitter seam are later steps; until they land the plan gate declines any body containing a packed node. `infer` refuses a packed result (`PackedResult`); `infer_ty` is the packed-aware form (the PM ruled option (b), 2026-10-25). This section refines section 6.
 
 **Type.** A packed value is `Packed(elem, lanes)` with `elem` a scalar float or integer `Cast` accepts
 (`is_cast_float` / `is_cast_int`, plus `F16` and `Bf16` once their `Cast` rows exist) and `lanes` in

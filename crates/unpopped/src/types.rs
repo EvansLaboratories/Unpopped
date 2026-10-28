@@ -325,6 +325,11 @@ pub fn infer_ty(e: &ScalarExpr, compute: ElementKind) -> Result<Ty, TypeError> {
                 return node_ty(e, compute, &elems).map(Ty::Scalar);
             };
             let node = node_name(e);
+            // A `Bitcast` of a packed value to a scalar of the same total bits; the inverse
+            // (scalar to packed) needs a packed target, which `Bitcast` cannot name yet.
+            if let ScalarExpr::Bitcast(_, to) = e {
+                return check_packed_bitcast(elems[0], lanes, *to).map(|()| Ty::Scalar(*to));
+            }
             if !lane_wise(e) {
                 return Err(TypeError::PackedOperand { node });
             }
@@ -341,6 +346,32 @@ pub fn infer_ty(e: &ScalarExpr, compute: ElementKind) -> Result<Ty, TypeError> {
             }
             Ok(Ty::Packed(node_ty(e, compute, &elems)?, lanes))
         }
+    }
+}
+
+/// Check that a `Bitcast` of `Packed(elem, lanes)` to the scalar `to` is defined: lane bits
+/// times lane count equal `to`'s width. Lane 0 is the least significant lane.
+///
+/// # Errors
+///
+/// [`TypeError::IllegalBitcast`] naming the reason.
+pub fn check_packed_bitcast(
+    elem: ElementKind,
+    lanes: u8,
+    to: ElementKind,
+) -> Result<(), TypeError> {
+    match (typed_bits(elem), typed_bits(to)) {
+        (Some(a), Some(b)) if a * u32::from(lanes) == b => Ok(()),
+        (Some(_), Some(_)) => Err(TypeError::IllegalBitcast {
+            from: elem,
+            to,
+            why: "a packed Bitcast needs lane bits times lane count equal to the target width",
+        }),
+        _ => Err(TypeError::IllegalBitcast {
+            from: elem,
+            to,
+            why: "a Bitcast endpoint outside {f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32} is not defined yet",
+        }),
     }
 }
 
