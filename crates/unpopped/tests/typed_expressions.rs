@@ -122,12 +122,7 @@ fn the_conversion_table_accepts_what_it_claims() {
 
 #[test]
 fn endpoints_outside_the_table_are_refused_by_name() {
-    for bad in [
-        ElementKind::F16,
-        ElementKind::Bf16,
-        ElementKind::Fp8E4M3FN,
-        ElementKind::Bool,
-    ] {
+    for bad in [ElementKind::Fp8E4M3FN, ElementKind::Bool] {
         match check_cast(F32, cast(bad)) {
             Err(TypeError::IllegalCast { why, .. }) => {
                 assert!(why.contains("outside"), "the reason must say why: {why}");
@@ -136,6 +131,91 @@ fn endpoints_outside_the_table_are_refused_by_name() {
         }
         assert!(check_cast(bad, cast(F32)).is_err());
         assert!(check_bitcast(bad, F32).is_err());
+    }
+}
+
+#[test]
+fn the_16_bit_floats_are_cast_endpoints_with_the_float_rules() {
+    use ElementKind::{Bf16, F16, F64, I8, I32, U16};
+    for half in [F16, Bf16] {
+        for other in [F32, F64, I8, I32, U16, F16, Bf16] {
+            let wrap = cast(half);
+            // Wrap is the legal saturation into a float from a float or an integer.
+            assert!(check_cast(other, wrap).is_ok(), "{other:?} -> {half:?}");
+            if matches!(other, F32 | F64 | F16 | Bf16) {
+                assert!(
+                    check_cast(
+                        other,
+                        CastSpec {
+                            sat: Saturation::ClampFinite,
+                            ..wrap
+                        }
+                    )
+                    .is_ok()
+                );
+                assert!(
+                    check_cast(
+                        other,
+                        CastSpec {
+                            sat: Saturation::Clamp,
+                            ..wrap
+                        }
+                    )
+                    .is_err()
+                );
+            }
+        }
+        // float to int saturates: Clamp only
+        let to_int = |sat| CastSpec {
+            to: I8,
+            round: RoundMode::TowardZero,
+            sat,
+        };
+        assert!(check_cast(half, to_int(Saturation::Clamp)).is_ok());
+        assert!(check_cast(half, to_int(Saturation::Wrap)).is_err());
+    }
+    // A narrow float is an endpoint, never a compute dtype.
+    let mut op = OpDef::elementwise(
+        "f16_compute",
+        1,
+        &[F16],
+        input(0).cast(F32, RoundMode::NearestEven, Saturation::Wrap),
+    );
+    op.out_dtype = Some(F32);
+    assert!(
+        plan(&op, F16, F32).is_err(),
+        "F16 compute must still be refused by the typed gate"
+    );
+}
+
+#[test]
+fn rounding_matters_between_16_bit_floats_by_range_and_significand_not_width() {
+    use ElementKind::{Bf16, F16, F64, I8, I16};
+    assert!(!rounding_matters(F16, F32), "f16 widens to f32 exactly");
+    assert!(!rounding_matters(Bf16, F32), "bf16 widens to f32 exactly");
+    assert!(rounding_matters(F32, F16));
+    assert!(rounding_matters(F64, Bf16));
+    // Equal width, yet neither direction is exact: f16 has more precision, bf16 more range.
+    assert!(
+        rounding_matters(F16, Bf16),
+        "f16 -> bf16 drops mantissa bits"
+    );
+    assert!(rounding_matters(Bf16, F16), "bf16 -> f16 drops range");
+    assert!(!rounding_matters(F16, F16));
+    assert!(
+        !rounding_matters(I8, F16) && !rounding_matters(I8, Bf16),
+        "i8 fits both"
+    );
+    assert!(rounding_matters(I16, F16), "i16 does not fit f16's 11 bits");
+    assert!(rounding_matters(I16, Bf16));
+}
+
+#[test]
+fn a_16_bit_float_bitcasts_to_the_integer_of_its_width_only() {
+    use ElementKind::{Bf16, F16, I16, U16};
+    for half in [F16, Bf16] {
+        assert!(check_bitcast(half, U16).is_ok() && check_bitcast(I16, half).is_ok());
+        assert!(check_bitcast(half, F32).is_err());
     }
 }
 
@@ -292,4 +372,116 @@ fn typed_nodes_are_elementwise_only_in_v1() {
         ),
         "a Cast inside a reduction must be a typed decline"
     );
+}
+
+// ---------------------------------------------------------------- 6. the oracle at 16 bits
+
+fn run_cast(to: ElementKind, spec: CastSpec, xs: &[f32]) -> unpopped::oracle::TypedBuffer {
+    use unpopped::oracle::{TypedBuffer, evaluate};
+    let n = xs.len() as i64;
+    let mut op = OpDef::elementwise(
+        "to_half",
+        1,
+        &[F32],
+        input(0).cast(to, spec.round, spec.sat),
+    );
+    op.out_dtype = Some(to);
+    let a = OperandDesc::new(1, &[n], &[1], F32, 256);
+    let o = OperandDesc::new(1, &[n], &[1], to, 256);
+    let operands = vec![a, o];
+    let key = structure_key(OpCategory::UnaryElementwise, &operands, ArchSku::Sm89);
+    let plan = try_build_plan(&op, &key).expect("f32 to a 16-bit float must plan");
+    evaluate(&plan, &operands, &[TypedBuffer::from_f32(&[n], xs)], &[])
+        .into_iter()
+        .next()
+        .expect("one output")
+}
+
+#[test]
+fn the_oracle_narrows_f32_to_f16_and_bf16_with_the_stated_rounding() {
+    let xs = [
+        1.0f32,
+        65519.0,
+        65520.0,
+        1.0e10,
+        -1.0e10,
+        f32::INFINITY,
+        f32::NAN,
+        1.000_488_3,
+    ];
+    let nearest = run_cast(ElementKind::F16, cast(ElementKind::F16), &xs).to_f64_vec();
+    assert_eq!(nearest[0], 1.0);
+    assert_eq!(nearest[1], 65504.0, "just under the overflow midpoint");
+    assert_eq!(
+        nearest[2],
+        f64::INFINITY,
+        "the midpoint ties to even, which is infinity"
+    );
+    assert_eq!(nearest[3], f64::INFINITY);
+    assert_eq!(
+        nearest[5],
+        f64::INFINITY,
+        "an infinite input stays infinite"
+    );
+    assert!(nearest[6].is_nan());
+    let clamped = CastSpec {
+        sat: Saturation::ClampFinite,
+        ..cast(ElementKind::F16)
+    };
+    let c = run_cast(ElementKind::F16, clamped, &xs).to_f64_vec();
+    assert_eq!(&c[1..6], &[65504.0, 65504.0, 65504.0, -65504.0, 65504.0]);
+    assert!(c[6].is_nan(), "ClampFinite leaves NaN");
+    let down = CastSpec {
+        round: RoundMode::TowardZero,
+        ..cast(ElementKind::Bf16)
+    };
+    let up = CastSpec {
+        round: RoundMode::TowardPosInf,
+        ..cast(ElementKind::Bf16)
+    };
+    let (lo, hi) = (
+        run_cast(ElementKind::Bf16, down, &[1.000_488_3]).to_f64_vec()[0],
+        run_cast(ElementKind::Bf16, up, &[1.000_488_3]).to_f64_vec()[0],
+    );
+    assert_eq!(lo, 1.0);
+    assert_eq!(
+        hi,
+        1.0 + 2f64.powi(-7),
+        "directed rounding sees the dropped bits"
+    );
+}
+
+#[test]
+fn the_oracle_widens_a_16_bit_float_back_exactly_and_casts_it_to_an_integer() {
+    use unpopped::oracle::{TypedBuffer, evaluate};
+    for half in [ElementKind::F16, ElementKind::Bf16] {
+        let mut op = OpDef::elementwise(
+            "half_to_i8",
+            1,
+            &[F32],
+            input(0)
+                .cast(half, RoundMode::NearestEven, Saturation::Wrap)
+                .cast(ElementKind::I8, RoundMode::TowardZero, Saturation::Clamp),
+        );
+        op.out_dtype = Some(ElementKind::I8);
+        let n = 4;
+        let a = OperandDesc::new(1, &[n], &[1], F32, 256);
+        let o = OperandDesc::new(1, &[n], &[1], ElementKind::I8, 256);
+        let operands = vec![a, o];
+        let key = structure_key(OpCategory::UnaryElementwise, &operands, ArchSku::Sm89);
+        // The root is I8; the inner F16 value is a typed non-compute value under a Cast.
+        let Ok(plan) = try_build_plan(&op, &key) else {
+            panic!("{half:?} under an integer Cast must plan");
+        };
+        let out = evaluate(
+            &plan,
+            &operands,
+            &[TypedBuffer::from_f32(&[n], &[3.9, -3.9, 1000.0, f32::NAN])],
+            &[],
+        )
+        .into_iter()
+        .next()
+        .expect("one output");
+        assert_eq!(out.to_f64_vec(), vec![3.0, -3.0, 127.0, 0.0], "{half:?}");
+    }
 }

@@ -149,6 +149,26 @@ pub const fn is_cast_float(t: ElementKind) -> bool {
     )
 }
 
+/// Floating-point types a `Cast` converts from or to: the compute floats of
+/// [`is_cast_float`] plus the 16-bit `F16` and `Bf16`. A narrow float is a conversion
+/// ENDPOINT only: it is never a compute dtype (the plan gate keys on [`is_cast_float`]).
+#[must_use]
+pub const fn is_cast_float_endpoint(t: ElementKind) -> bool {
+    is_cast_float(t) || matches!(t, ElementKind::F16 | ElementKind::Bf16)
+}
+
+/// `(exponent bits, mantissa bits)` of an IEEE-shaped float a `Cast` accepts, or `None`.
+#[must_use]
+pub const fn float_format(t: ElementKind) -> Option<(u32, u32)> {
+    match t {
+        ElementKind::F16 => Some((5, 10)),
+        ElementKind::Bf16 => Some((8, 7)),
+        ElementKind::F32 | ElementKind::F32Strict => Some((8, 23)),
+        ElementKind::F64 => Some((11, 52)),
+        _ => None,
+    }
+}
+
 /// Integer scalar types a `Cast` accepts in this version.
 #[must_use]
 pub const fn is_cast_int(t: ElementKind) -> bool {
@@ -169,7 +189,7 @@ pub const fn is_cast_int(t: ElementKind) -> bool {
 pub const fn typed_bits(t: ElementKind) -> Option<u32> {
     match t {
         ElementKind::I8 | ElementKind::U8 => Some(8),
-        ElementKind::I16 | ElementKind::U16 => Some(16),
+        ElementKind::I16 | ElementKind::U16 | ElementKind::F16 | ElementKind::Bf16 => Some(16),
         ElementKind::I32 | ElementKind::U32 | ElementKind::F32 | ElementKind::F32Strict => Some(32),
         ElementKind::I64 | ElementKind::F64 => Some(64),
         _ => None,
@@ -194,8 +214,8 @@ pub const fn int_range(t: ElementKind) -> Option<(i128, i128)> {
 /// Check that `from -> spec.to` with `spec.round` / `spec.sat` is a conversion this
 /// version defines.
 ///
-/// The v1 table covers `{f32, f32s, f64}` and `{i8, i16, i32, i64, u8, u16, u32, u64}`.
-/// Half, fp8 and sub-byte endpoints are not in it yet (their codecs exist in
+/// The table covers `{f16, bf16, f32, f32s, f64}` and `{i8, i16, i32, i64, u8, u16, u32}`.
+/// Fp8 and sub-byte endpoints are not in it yet (their codecs exist in
 /// `unpopped-vocab`; wiring them is the next slice) and are rejected here by name,
 /// never lowered by guesswork.
 ///
@@ -205,13 +225,13 @@ pub const fn int_range(t: ElementKind) -> Option<(i128, i128)> {
 pub fn check_cast(from: ElementKind, spec: CastSpec) -> Result<(), TypeError> {
     let bad = |why: &'static str| Err(TypeError::IllegalCast { from, spec, why });
     let to = spec.to;
-    let known = |t| is_cast_float(t) || is_cast_int(t);
+    let known = |t| is_cast_float_endpoint(t) || is_cast_int(t);
     if !known(from) || !known(to) {
         return bad(
-            "a Cast endpoint outside {f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32} is not defined yet",
+            "a Cast endpoint outside {f16, bf16, f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32} is not defined yet",
         );
     }
-    match (is_cast_float(from), is_cast_float(to)) {
+    match (is_cast_float_endpoint(from), is_cast_float_endpoint(to)) {
         // float -> float
         (true, true) => match spec.sat {
             Saturation::Wrap | Saturation::ClampFinite => Ok(()),
@@ -713,12 +733,15 @@ pub fn is_typed(e: &ScalarExpr) -> bool {
 /// know when they must decline a directed mode.
 #[must_use]
 pub fn rounding_matters(from: ElementKind, to: ElementKind) -> bool {
-    let significand = |t: ElementKind| match t {
-        ElementKind::F64 => 53,
-        _ => 24,
-    };
-    match (is_cast_float(from), is_cast_float(to)) {
-        (true, true) => typed_bits(from) > typed_bits(to),
+    let significand = |t: ElementKind| float_format(t).map_or(0, |(_, m)| m + 1);
+    match (is_cast_float_endpoint(from), is_cast_float_endpoint(to)) {
+        // Exact only when the destination has at least the source's exponent range AND
+        // significand: equal widths do not say so (f16 -> bf16 loses precision, bf16 ->
+        // f16 loses range).
+        (true, true) => match (float_format(from), float_format(to)) {
+            (Some((fe, fm)), Some((te, tm))) => !(te >= fe && tm >= fm),
+            _ => true,
+        },
         (true, false) => true,
         (false, true) => typed_bits(from).is_some_and(|b| b > significand(to)),
         (false, false) => false,
