@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.31.8` — docs: the U3 spec, execution scopes, memory spaces, resources, `ProgramModel` and the Frontend/Backend seam against Slang's needs (#114)
+
+New `docs/u3-program-model-and-seam.md`. Section 1 lists what the seam assumes today and which of it is CUDA-shaped (source-text artifact, no argument ABI, a dtype-only capability query, name-convention buffers, substring kernel marker and residue list), each with its evidence. Section 2 proposes the U3 data model on top of the kernel layer (scopes and ids, memory spaces, resources, `ProgramModel`, a capability *set* with a subgroup range and reported/measured provenance). Section 3 records the five seam positions with Fuel's review of each (Fuel#514): per-entry manifest with the `Params` layout rule and the toolchain record, a declared resource map with `inferred` provenance, capability set, a measured conformance record per (device, driver, kernel) besides the flags, and Fuel owning the layout dialect as data. Section 4 sketches the types; section 5 lists what changes in the traits when this lands and what each costs; section 6 marks the unknowns UNVERIFIED (Fuel: the `Params` layout rule for 4 kernels; Vulkane: whether the `vulkan:` token set can carry a subgroup range). Docs only; no trait edit before this merges (CireSnave's hold). Proposed number; the PM allocates.
+
 ## `0.31.6` — feat (additive): `Layout::right_inverse` and `Layout::left_inverse` (U6 part 2, #117)
 
 `right_inverse` returns `R` with `self(R(i)) == i` for every `i < size(R)`, chaining the modes whose stride equals the extent covered so far (the two-sided inverse for a bijection onto `[0, size)`); `left_inverse` of an injective layout is `right_inverse((self, complement(self, cosize(self))))` and declines what `complement` declines. Property tests in `tests/layout_algebra_inverse.rs`, each against a deliberately broken variant. Not yet: slicing, `select`/`take`, `tile_to_shape`. Proposed number; the PM allocates.
