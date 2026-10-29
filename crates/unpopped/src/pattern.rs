@@ -410,7 +410,8 @@ fn canonicalize(e: &ScalarExpr) -> ScalarExpr {
         | ScalarExpr::Reduced(_)
         | ScalarExpr::Coord(_)
         | ScalarExpr::CoordInt(..)
-        | ScalarExpr::ConstInt(..) => e.clone(),
+        | ScalarExpr::ConstInt(..)
+        | ScalarExpr::Local(_) => e.clone(),
     }
 }
 
@@ -442,6 +443,7 @@ fn sig(e: &ScalarExpr) -> String {
             xs.iter().map(sig).collect::<Vec<_>>().join(",")
         ),
         ScalarExpr::Extract(x, i) => format!("0Extract{i}({})", sig(x)),
+        ScalarExpr::Local(i) => format!("0Local{i}"),
         ScalarExpr::BitcastPacked(x, e, n) => format!("0BitcastPacked{e:?}x{n}({})", sig(x)),
         ScalarExpr::Input(i) => format!("1I{i:03}"),
         ScalarExpr::Param(i) => format!("1P{i:03}"),
@@ -496,7 +498,8 @@ fn walk(
         | ScalarExpr::Bitcast(..)
         | ScalarExpr::Pack(_)
         | ScalarExpr::Extract(..)
-        | ScalarExpr::BitcastPacked(..) => Err(PatternError::TypedExprUnsupported),
+        | ScalarExpr::BitcastPacked(..)
+        | ScalarExpr::Local(_) => Err(PatternError::TypedExprUnsupported),
         ScalarExpr::Qualified(..) => Err(PatternError::QualifiedUnsupported),
         ScalarExpr::Add(a, b) => scalar_binop("Add", "AddScalar", a, b, path, consumers, extracts),
         ScalarExpr::Mul(a, b) => scalar_binop("Mul", "MulScalar", a, b, path, consumers, extracts),
