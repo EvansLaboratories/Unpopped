@@ -405,25 +405,9 @@ fn check_stmt(
             let ty = check_expr(k, init, sc)?;
             declare(k, *local, ty, sc, declared_here)?;
         }
-        Stmt::Load { local, place } => {
-            let (elem, role) = check_place(k, place, sc)?;
-            if !role.reads() {
-                let Place::Logical { buffer, .. } = place;
-                return Err(KernelError::ReadFromWriteOnly { buffer: *buffer });
-            }
-            declare(k, *local, Ty::Scalar(elem), sc, declared_here)?;
-        }
+        Stmt::Load { local, place } => check_load(k, *local, place, sc, declared_here)?,
         Stmt::Assign { local, value } => check_assign(k, *local, value, sc)?,
-        Stmt::Store { place, value } => {
-            let (elem, role) = check_place(k, place, sc)?;
-            if !role.writes() {
-                let Place::Logical { buffer, .. } = place;
-                return Err(KernelError::WriteToReadOnly { buffer: *buffer });
-            }
-            if check_expr(k, value, sc)? != Ty::Scalar(elem) {
-                return Err(KernelError::TypeMismatch { what: "Store" });
-            }
-        }
+        Stmt::Store { place, value } => check_store(k, place, value, sc)?,
         Stmt::If { cond, then, els } => {
             scalar_cond(k, cond, sc)?;
             check_block(k, then, sc)?;
@@ -449,6 +433,38 @@ fn check_stmt(
         Stmt::Return => return Ok(true),
     }
     Ok(false)
+}
+
+fn check_load(
+    k: &KernelFn,
+    local: u32,
+    place: &Place,
+    sc: &mut Scope,
+    declared_here: &mut Vec<usize>,
+) -> Result<(), KernelError> {
+    let (elem, role) = check_place(k, place, sc)?;
+    if !role.reads() {
+        let Place::Logical { buffer, .. } = place;
+        return Err(KernelError::ReadFromWriteOnly { buffer: *buffer });
+    }
+    declare(k, local, Ty::Scalar(elem), sc, declared_here)
+}
+
+fn check_store(
+    k: &KernelFn,
+    place: &Place,
+    value: &ScalarExpr,
+    sc: &Scope,
+) -> Result<(), KernelError> {
+    let (elem, role) = check_place(k, place, sc)?;
+    if !role.writes() {
+        let Place::Logical { buffer, .. } = place;
+        return Err(KernelError::WriteToReadOnly { buffer: *buffer });
+    }
+    if check_expr(k, value, sc)? != Ty::Scalar(elem) {
+        return Err(KernelError::TypeMismatch { what: "Store" });
+    }
+    Ok(())
 }
 
 fn check_assign(
