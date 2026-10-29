@@ -1115,7 +1115,8 @@ pub fn params_used(e: &ScalarExpr) -> Vec<u8> {
             | ScalarExpr::Reduced(_)
             | ScalarExpr::Coord(_)
             | ScalarExpr::CoordInt(..)
-            | ScalarExpr::ConstInt(..) => {}
+            | ScalarExpr::ConstInt(..)
+            | ScalarExpr::Local(_) => {}
         }
     }
     let mut set = std::collections::BTreeSet::new();
@@ -1197,7 +1198,10 @@ pub fn assert_no_int_div_or_const(
             "c-family lowering: Cast/Bitcast at an integer compute dtype ({dtype:?}) — \
              typed expressions are float-compute only in v1; the plan gate rejects this"
         ),
-        ScalarExpr::Pack(_) | ScalarExpr::Extract(..) | ScalarExpr::BitcastPacked(..) => panic!(
+        ScalarExpr::Pack(_)
+        | ScalarExpr::Extract(..)
+        | ScalarExpr::BitcastPacked(..)
+        | ScalarExpr::Local(_) => panic!(
             "c-family lowering: Pack/Extract at an integer compute dtype ({dtype:?}) —              packed values have no c-family lowering yet; the plan gate rejects this"
         ),
         ScalarExpr::Qualified(_, _) => panic!(

@@ -494,6 +494,8 @@ pub enum DeclinedOp {
     Qualified,
     /// A packed value or a lane of one ([`ScalarExpr::Pack`], [`ScalarExpr::Extract`]).
     Packed,
+    /// A kernel-layer construct (`ScalarExpr::Local`); no emitter receives a kernel yet.
+    Kernel,
     /// A constant literal.
     Constant,
     /// An input operand leaf the backend will not spell, by **operand index**.
@@ -1291,6 +1293,17 @@ fn packed_decline() -> Spelling {
     })
 }
 
+/// The decline for a kernel-layer `Local` leaf: it has meaning only inside a
+/// `kernel::KernelFn`, which no emitter receives yet, and the plan gate rejects an `OpDef`
+/// body containing one, so reaching it means a hand-built body skipped the gate.
+fn local_decline() -> Spelling {
+    Spelling::Declined(Decline::UnsupportedOp {
+        op: DeclinedOp::Kernel,
+        why: "a kernel-layer Local reached an emitter; the kernel layer has no lowering seam yet"
+            .to_string(),
+    })
+}
+
 /// The decline for a `Qualified` node wrapping something that is not a qualifiable
 /// operation (the plan gate rejects this before any lowering, so reaching it means a
 /// hand-built body skipped the gate).
@@ -1517,6 +1530,7 @@ pub fn lower_expr(e: &ScalarExpr, lo: &Lowering<'_>) -> Result<Spelling, LowerEr
         ScalarExpr::Pack(_) | ScalarExpr::Extract(..) | ScalarExpr::BitcastPacked(..) => {
             return Ok(packed_decline());
         }
+        ScalarExpr::Local(_) => return Ok(local_decline()),
         ScalarExpr::Qualified(x, n) => {
             let Some((op, kids)) = QualOp::of(x) else {
                 return Ok(qualified_child_decline(*n));
@@ -1783,6 +1797,7 @@ fn lower_node(
         DagNode::Pack(_) | DagNode::Extract(..) | DagNode::BitcastPacked(..) => {
             return Ok(packed_decline());
         }
+        DagNode::Local(_) => return Ok(local_decline()),
         DagNode::Qualified(x, n) => {
             let Some((op, kids)) = QualOp::of_node(dag.node(x)) else {
                 return Ok(qualified_child_decline(n));
