@@ -26,11 +26,13 @@ mod im2col;
 mod post;
 mod row_reduce;
 mod row_sort;
+mod scatter;
 mod window;
 pub use gather::lift_gather_opdef;
 pub use im2col::lift_im2col_opdef;
 pub use row_reduce::lift_row_reduce_opdef;
 pub use row_sort::lift_row_sort_opdef;
+pub use scatter::lift_scatter_opdef;
 pub use window::lift_window_opdef;
 
 /// Why an `OpDef` was not lifted.
@@ -56,9 +58,11 @@ pub enum LiftDecline {
     NotRowSort,
     /// No input has a `ReadIndex::Indexed` read (for [`lift_gather_opdef`]).
     NotGather,
+    /// The output has no `WriteIndex::ScatterIndexed` write (for [`lift_scatter_opdef`]).
+    NotScatter,
     /// More than one output, a per-output dtype, a gather/scatter (outside their own lifts), a
-    /// runtime base offset outside Elementwise or a non-identity view: forms this increment does
-    /// not lift.
+    /// runtime base offset outside Elementwise or a non-identity view: forms this increment does not
+    /// lift.
     UnsupportedForm(&'static str),
     /// The body reads an intent-layer leaf that has no kernel-layer meaning yet.
     UnsupportedLeaf(&'static str),
@@ -146,7 +150,7 @@ fn check_liftable(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<(), LiftDe
     if !matches!(op.access, Access::Elementwise) {
         return Err(LiftDecline::NotElementwise);
     }
-    check_plain_with(op, dtype, rank, false, true)?;
+    check_plain_with(op, dtype, rank, Indexing::None, true)?;
     leaves_ok(&op.body)
 }
 
@@ -160,17 +164,26 @@ fn check_common(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<(), LiftDecl
 /// [`check_common`] without the body-leaf check (a `Scan` keeps its `Reduced(0)` post in
 /// `body`, and its value expression in `pre`).
 fn check_plain(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<(), LiftDecline> {
-    check_plain_with(op, dtype, rank, false, false)
+    check_plain_with(op, dtype, rank, Indexing::None, false)
 }
 
-/// [`check_plain`], optionally admitting a gathered read (only the gather lift builds the
-/// address math for one) and per-input views (only the Elementwise lift builds the read-through
-/// for them; every other lift would silently ignore one).
+/// Which data-dependent addressing [`check_plain_with`] admits: only the gather and scatter lifts
+/// build the address math for theirs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Indexing {
+    None,
+    Gather,
+    Scatter,
+}
+
+/// [`check_plain`], optionally admitting a gathered read or a scattered write, and per-input views
+/// (only the Elementwise lift builds the read-through for them; every other lift would silently
+/// ignore one).
 fn check_plain_with(
     op: &OpDef,
     dtype: ElementKind,
     rank: u8,
-    allow_gather: bool,
+    indexing: Indexing,
     views: bool,
 ) -> Result<(), LiftDecline> {
     if rank == 0 || rank > 8 {
@@ -181,7 +194,8 @@ fn check_plain_with(
             "multi-output or a per-output dtype",
         ));
     }
-    if (!allow_gather && !op.read_index.is_empty()) || !matches!(op.write_index, WriteIndex::Direct)
+    if (indexing != Indexing::Gather && !op.read_index.is_empty())
+        || (indexing != Indexing::Scatter && !matches!(op.write_index, WriteIndex::Direct))
     {
         return Err(LiftDecline::UnsupportedForm("gather or scatter"));
     }
@@ -955,7 +969,7 @@ fn check_contraction(
     if op.n_inputs < 2 || (batched && op.n_inputs != 2) {
         return Err(LiftDecline::UnsupportedForm("a batched fused bias input"));
     }
-    check_plain_with(op, dtype, if batched { 3 } else { 2 }, false, true)?;
+    check_plain_with(op, dtype, if batched { 3 } else { 2 }, Indexing::None, true)?;
     // A view on the two factors is recognition metadata: the oracle reads them through the bound
     // operand's own strides (a transposed operand is a transposed binding), so the kernel is the
     // view-free one. A fused bias is read through its view, which this lift does not build.

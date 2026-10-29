@@ -14,7 +14,7 @@
 use unpopped_vocab::ElementKind;
 
 use super::im2col::{int, local};
-use super::{LiftDecline, check_plain_with, leaves_ok, substitute_inputs};
+use super::{Indexing, LiftDecline, check_plain_with, leaves_ok, substitute_inputs};
 use crate::ir::{Access, BinaryOp, OobPolicy, OpDef, ReadIndex, ScalarExpr, WriteIndex};
 use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 
@@ -78,7 +78,7 @@ fn check_gather(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Gather, Lift
     ) {
         return Err(LiftDecline::UnsupportedForm("a non-integer gather index"));
     }
-    check_plain_with(op, dtype, rank, true, false)?;
+    check_plain_with(op, dtype, rank, Indexing::Gather, false)?;
     leaves_ok(&op.body)?;
     if usize::from(axis) >= usize::from(rank)
         || usize::from(index) >= usize::from(op.n_inputs)
@@ -97,6 +97,18 @@ fn check_gather(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Gather, Lift
         oob,
         index_dtype,
     })
+}
+
+/// `buffer` at the loop counters of a rank-`r` kernel (counters are locals `r..2r`), with the
+/// coordinate on `axis` replaced by local `via` when `axis` is `Some((axis, via))`.
+pub(super) fn place_at(buffer: u32, r: u32, axis: Option<(u32, u32)>) -> Place {
+    let coords = (0..r)
+        .map(|d| match axis {
+            Some((a, via)) if a == d => local(via),
+            _ => local(r + d),
+        })
+        .collect();
+    Place::Logical { buffer, coords }
 }
 
 /// Local ids of a gather kernel.
@@ -142,13 +154,7 @@ impl Shape {
     }
 
     fn at_counters(&self, buffer: u32, axis: Option<(u32, u32)>) -> Place {
-        let coords = (0..self.r)
-            .map(|d| match axis {
-                Some((a, via)) if a == d => local(via),
-                _ => local(self.counter(d)),
-            })
-            .collect();
-        Place::Logical { buffer, coords }
+        place_at(buffer, self.r, axis)
     }
 
     fn load(&self, k: u32, via: Option<(u32, u32)>) -> Stmt {
