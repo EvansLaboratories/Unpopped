@@ -307,73 +307,91 @@ pub fn infer_ty_in(e: &ScalarExpr, compute: ElementKind, locals: &[Ty]) -> Resul
             .get(*i as usize)
             .copied()
             .ok_or(TypeError::LocalOutsideKernel),
-        ScalarExpr::Pack(xs) => {
-            let lanes = u8::try_from(xs.len()).unwrap_or(u8::MAX);
-            if !matches!(lanes, 2 | 4) {
-                return Err(TypeError::BadLanes { lanes });
-            }
-            let first = child("Pack", &xs[0], compute, locals)?;
-            for x in &xs[1..] {
-                let t = child("Pack", x, compute, locals)?;
-                if t != first {
-                    return Err(TypeError::Mismatch {
-                        node: "Pack",
-                        left: first,
-                        right: t,
-                    });
-                }
-            }
-            Ok(Ty::Packed(first, lanes))
-        }
+        ScalarExpr::Pack(xs) => pack_ty(xs, compute, locals),
         ScalarExpr::BitcastPacked(x, elem, lanes) => {
-            if !matches!(*lanes, 2 | 4) {
-                return Err(TypeError::BadLanes { lanes: *lanes });
-            }
-            let from = child("BitcastPacked", x, compute, locals)?;
-            check_packed_bitcast(*elem, *lanes, from)?;
-            Ok(Ty::Packed(*elem, *lanes))
+            bitcast_packed_ty(x, *elem, *lanes, compute, locals)
         }
         ScalarExpr::Extract(x, i) => match infer_ty_in(x, compute, locals)? {
             Ty::Packed(t, lanes) if *i < lanes => Ok(Ty::Scalar(t)),
             Ty::Packed(_, lanes) => Err(TypeError::BadLane { index: *i, lanes }),
             Ty::Scalar(_) => Err(TypeError::NotPacked { node: "Extract" }),
         },
-        _ => {
-            let tys = operands(e)
-                .into_iter()
-                .map(|x| infer_ty_in(x, compute, locals))
-                .collect::<Result<Vec<_>, _>>()?;
-            let elems: Vec<ElementKind> = tys.iter().map(|t| elem_of(*t)).collect();
-            let lanes = tys.iter().find_map(|t| match t {
-                Ty::Packed(_, n) => Some(*n),
-                Ty::Scalar(_) => None,
+        _ => operator_ty(e, compute, locals),
+    }
+}
+
+/// The type of a `Pack`: 2 or 4 scalar children of one type.
+fn pack_ty(xs: &[ScalarExpr], compute: ElementKind, locals: &[Ty]) -> Result<Ty, TypeError> {
+    let lanes = u8::try_from(xs.len()).unwrap_or(u8::MAX);
+    if !matches!(lanes, 2 | 4) {
+        return Err(TypeError::BadLanes { lanes });
+    }
+    let first = child("Pack", &xs[0], compute, locals)?;
+    for x in &xs[1..] {
+        let t = child("Pack", x, compute, locals)?;
+        if t != first {
+            return Err(TypeError::Mismatch {
+                node: "Pack",
+                left: first,
+                right: t,
             });
-            let Some(lanes) = lanes else {
-                return node_ty(e, compute, &elems).map(Ty::Scalar);
-            };
-            let node = node_name(e);
-            // A `Bitcast` of a packed value to a scalar of the same total bits; the inverse
-            // (scalar to packed) needs a packed target, which `Bitcast` cannot name yet.
-            if let ScalarExpr::Bitcast(_, to) = e {
-                return check_packed_bitcast(elems[0], lanes, *to).map(|()| Ty::Scalar(*to));
-            }
-            if !lane_wise(e) {
-                return Err(TypeError::PackedOperand { node });
-            }
-            // A whole-value `Select` takes a scalar condition; every other operand is packed.
-            let first_value = usize::from(matches!(e, ScalarExpr::Select(..)));
-            if first_value == 1 && !matches!(tys[0], Ty::Scalar(_)) {
-                return Err(TypeError::PackedOperand { node });
-            }
-            if tys[first_value..]
-                .iter()
-                .any(|t| !matches!(t, Ty::Packed(_, n) if *n == lanes))
-            {
-                return Err(TypeError::PackedOperand { node });
-            }
-            Ok(Ty::Packed(node_ty(e, compute, &elems)?, lanes))
         }
     }
+    Ok(Ty::Packed(first, lanes))
+}
+
+/// The type of a `BitcastPacked`: a scalar operand reinterpreted as `lanes` lanes of `elem`.
+fn bitcast_packed_ty(
+    x: &ScalarExpr,
+    elem: ElementKind,
+    lanes: u8,
+    compute: ElementKind,
+    locals: &[Ty],
+) -> Result<Ty, TypeError> {
+    if !matches!(lanes, 2 | 4) {
+        return Err(TypeError::BadLanes { lanes });
+    }
+    let from = child("BitcastPacked", x, compute, locals)?;
+    check_packed_bitcast(elem, lanes, from)?;
+    Ok(Ty::Packed(elem, lanes))
+}
+
+/// The type of every other node: scalar rules when no operand is packed, the lane-wise rules
+/// otherwise.
+fn operator_ty(e: &ScalarExpr, compute: ElementKind, locals: &[Ty]) -> Result<Ty, TypeError> {
+    let tys = operands(e)
+        .into_iter()
+        .map(|x| infer_ty_in(x, compute, locals))
+        .collect::<Result<Vec<_>, _>>()?;
+    let elems: Vec<ElementKind> = tys.iter().map(|t| elem_of(*t)).collect();
+    let lanes = tys.iter().find_map(|t| match t {
+        Ty::Packed(_, n) => Some(*n),
+        Ty::Scalar(_) => None,
+    });
+    let Some(lanes) = lanes else {
+        return node_ty(e, compute, &elems).map(Ty::Scalar);
+    };
+    let node = node_name(e);
+    // A `Bitcast` of a packed value to a scalar of the same total bits; the inverse
+    // (scalar to packed) is `BitcastPacked`.
+    if let ScalarExpr::Bitcast(_, to) = e {
+        return check_packed_bitcast(elems[0], lanes, *to).map(|()| Ty::Scalar(*to));
+    }
+    if !lane_wise(e) {
+        return Err(TypeError::PackedOperand { node });
+    }
+    // A whole-value `Select` takes a scalar condition; every other operand is packed.
+    let first_value = usize::from(matches!(e, ScalarExpr::Select(..)));
+    if first_value == 1 && !matches!(tys[0], Ty::Scalar(_)) {
+        return Err(TypeError::PackedOperand { node });
+    }
+    if tys[first_value..]
+        .iter()
+        .any(|t| !matches!(t, Ty::Packed(_, n) if *n == lanes))
+    {
+        return Err(TypeError::PackedOperand { node });
+    }
+    Ok(Ty::Packed(node_ty(e, compute, &elems)?, lanes))
 }
 
 /// Check that a `Bitcast` of `Packed(elem, lanes)` to the scalar `to` is defined: lane bits

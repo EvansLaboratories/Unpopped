@@ -384,93 +384,125 @@ fn check_block(k: &KernelFn, b: &Block, sc: &mut Scope) -> Result<(), KernelErro
         if terminated {
             return Err(KernelError::Unreachable);
         }
-        match st {
-            Stmt::Let { local, init } => {
-                let ty = check_expr(k, init, sc)?;
-                declare(k, *local, ty, sc, &mut declared_here)?;
-            }
-            Stmt::Load { local, place } => {
-                let (elem, role) = check_place(k, place, sc)?;
-                if !role.reads() {
-                    let Place::Logical { buffer, .. } = place;
-                    return Err(KernelError::ReadFromWriteOnly { buffer: *buffer });
-                }
-                declare(k, *local, Ty::Scalar(elem), sc, &mut declared_here)?;
-            }
-            Stmt::Assign { local, value } => {
-                let ty = check_expr(k, value, sc)?;
-                use_local(k, *local, sc)?;
-                let i = *local as usize;
-                if sc.param_local[i] {
-                    return Err(KernelError::ParamAssigned { local: *local });
-                }
-                if sc.counter_local[i] {
-                    return Err(KernelError::CounterAssigned { local: *local });
-                }
-                if sc.tys[i] != ty {
-                    return Err(KernelError::TypeMismatch { what: "Assign" });
-                }
-            }
-            Stmt::Store { place, value } => {
-                let (elem, role) = check_place(k, place, sc)?;
-                if !role.writes() {
-                    let Place::Logical { buffer, .. } = place;
-                    return Err(KernelError::WriteToReadOnly { buffer: *buffer });
-                }
-                let ty = check_expr(k, value, sc)?;
-                if ty != Ty::Scalar(elem) {
-                    return Err(KernelError::TypeMismatch { what: "Store" });
-                }
-            }
-            Stmt::If { cond, then, els } => {
-                scalar_cond(k, cond, sc)?;
-                check_block(k, then, sc)?;
-                check_block(k, els, sc)?;
-            }
-            Stmt::For {
-                local,
-                start,
-                end,
-                step,
-                body,
-            } => {
-                let t0 = check_expr(k, start, sc)?;
-                let t1 = check_expr(k, end, sc)?;
-                let t2 = check_expr(k, step, sc)?;
-                let int = matches!(t0, Ty::Scalar(e) if types::int_range(e).is_some());
-                if t0 != t1 || t1 != t2 || !int {
-                    return Err(KernelError::TypeMismatch { what: "For bounds" });
-                }
-                let mut counter = Vec::new();
-                declare(k, *local, t0, sc, &mut counter)?;
-                sc.counter_local[*local as usize] = true;
-                sc.loop_depth += 1;
-                let r = check_block(k, body, sc);
-                sc.loop_depth -= 1;
-                sc.counter_local[*local as usize] = false;
-                sc.in_scope[*local as usize] = false;
-                r?;
-            }
-            Stmt::While { cond, body } => {
-                scalar_cond(k, cond, sc)?;
-                sc.loop_depth += 1;
-                let r = check_block(k, body, sc);
-                sc.loop_depth -= 1;
-                r?;
-            }
-            Stmt::Break | Stmt::Continue => {
-                if sc.loop_depth == 0 {
-                    return Err(KernelError::BreakOutsideLoop);
-                }
-                terminated = true;
-            }
-            Stmt::Return => terminated = true,
-        }
+        terminated = check_stmt(k, st, sc, &mut declared_here)?;
     }
     for i in declared_here {
         sc.in_scope[i] = false;
     }
     Ok(())
+}
+
+/// Check one statement; `Ok(true)` when it unconditionally leaves the block (`Break`,
+/// `Continue`, `Return`).
+fn check_stmt(
+    k: &KernelFn,
+    st: &Stmt,
+    sc: &mut Scope,
+    declared_here: &mut Vec<usize>,
+) -> Result<bool, KernelError> {
+    match st {
+        Stmt::Let { local, init } => {
+            let ty = check_expr(k, init, sc)?;
+            declare(k, *local, ty, sc, declared_here)?;
+        }
+        Stmt::Load { local, place } => {
+            let (elem, role) = check_place(k, place, sc)?;
+            if !role.reads() {
+                let Place::Logical { buffer, .. } = place;
+                return Err(KernelError::ReadFromWriteOnly { buffer: *buffer });
+            }
+            declare(k, *local, Ty::Scalar(elem), sc, declared_here)?;
+        }
+        Stmt::Assign { local, value } => check_assign(k, *local, value, sc)?,
+        Stmt::Store { place, value } => {
+            let (elem, role) = check_place(k, place, sc)?;
+            if !role.writes() {
+                let Place::Logical { buffer, .. } = place;
+                return Err(KernelError::WriteToReadOnly { buffer: *buffer });
+            }
+            if check_expr(k, value, sc)? != Ty::Scalar(elem) {
+                return Err(KernelError::TypeMismatch { what: "Store" });
+            }
+        }
+        Stmt::If { cond, then, els } => {
+            scalar_cond(k, cond, sc)?;
+            check_block(k, then, sc)?;
+            check_block(k, els, sc)?;
+        }
+        Stmt::For {
+            local,
+            start,
+            end,
+            step,
+            body,
+        } => check_for(k, *local, [start, end, step], body, sc)?,
+        Stmt::While { cond, body } => {
+            scalar_cond(k, cond, sc)?;
+            in_loop(k, body, sc)?;
+        }
+        Stmt::Break | Stmt::Continue => {
+            if sc.loop_depth == 0 {
+                return Err(KernelError::BreakOutsideLoop);
+            }
+            return Ok(true);
+        }
+        Stmt::Return => return Ok(true),
+    }
+    Ok(false)
+}
+
+fn check_assign(
+    k: &KernelFn,
+    local: u32,
+    value: &ScalarExpr,
+    sc: &Scope,
+) -> Result<(), KernelError> {
+    let ty = check_expr(k, value, sc)?;
+    use_local(k, local, sc)?;
+    let i = local as usize;
+    if sc.param_local[i] {
+        return Err(KernelError::ParamAssigned { local });
+    }
+    if sc.counter_local[i] {
+        return Err(KernelError::CounterAssigned { local });
+    }
+    if sc.tys[i] != ty {
+        return Err(KernelError::TypeMismatch { what: "Assign" });
+    }
+    Ok(())
+}
+
+/// A `For`: three integer bounds of one type, a counter declared by the loop itself, and a body
+/// that may `Break` and `Continue`.
+fn check_for(
+    k: &KernelFn,
+    local: u32,
+    bounds: [&ScalarExpr; 3],
+    body: &Block,
+    sc: &mut Scope,
+) -> Result<(), KernelError> {
+    let t0 = check_expr(k, bounds[0], sc)?;
+    let t1 = check_expr(k, bounds[1], sc)?;
+    let t2 = check_expr(k, bounds[2], sc)?;
+    let int = matches!(t0, Ty::Scalar(e) if types::int_range(e).is_some());
+    if t0 != t1 || t1 != t2 || !int {
+        return Err(KernelError::TypeMismatch { what: "For bounds" });
+    }
+    let mut counter = Vec::new();
+    declare(k, local, t0, sc, &mut counter)?;
+    sc.counter_local[local as usize] = true;
+    let r = in_loop(k, body, sc);
+    sc.counter_local[local as usize] = false;
+    sc.in_scope[local as usize] = false;
+    r
+}
+
+/// Check `body` one loop deeper.
+fn in_loop(k: &KernelFn, body: &Block, sc: &mut Scope) -> Result<(), KernelError> {
+    sc.loop_depth += 1;
+    let r = check_block(k, body, sc);
+    sc.loop_depth -= 1;
+    r
 }
 
 fn declare(
