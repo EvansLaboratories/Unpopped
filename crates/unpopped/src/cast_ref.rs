@@ -53,6 +53,36 @@ pub(crate) fn decode_ieee(bits: u128, ebits: u32, mbits: u32) -> f64 {
     sign * mag
 }
 
+/// `ax` (a positive finite value) in units of the last place of a format with `mbits`
+/// mantissa bits whose exponent is `eff`, rounded to an integer under `mode`.
+///
+/// The scaling by a power of two is exact in `f64`, so the only rounding is the one asked for.
+fn round_scaled(ax: f64, eff: i32, mbits: u32, mode: RoundMode, neg: bool) -> u128 {
+    let q = ax * 2f64.powi(mbits as i32 - eff);
+    let fl = q.floor();
+    let frac = q - fl;
+    let n = fl as u128;
+    let up = match mode {
+        RoundMode::NearestEven => frac > 0.5 || (frac == 0.5 && n % 2 == 1),
+        RoundMode::TowardZero => false,
+        RoundMode::TowardNegInf => frac > 0.0 && neg,
+        RoundMode::TowardPosInf => frac > 0.0 && !neg,
+    };
+    n + u128::from(up)
+}
+
+/// Whether a FINITE value too large for the format rounds to infinity (rather than stopping at
+/// the largest finite value) under `mode`: nearest does, and a directed mode does only when it
+/// points toward the overflowing side.
+fn overflows_to_infinity(mode: RoundMode, neg: bool) -> bool {
+    match mode {
+        RoundMode::NearestEven => true,
+        RoundMode::TowardZero => false,
+        RoundMode::TowardNegInf => neg,
+        RoundMode::TowardPosInf => !neg,
+    }
+}
+
 /// `x` rounded to the `(ebits, mbits)` IEEE-shaped float under `mode`, as that format's bits.
 ///
 /// Single rounding from the exact value, so no double-rounding through `f32`. `clamp_finite`
@@ -74,15 +104,8 @@ pub(crate) fn encode_ieee(
     if x.is_nan() {
         return sign_bit | (exp_all << mbits) | (1u128 << (mbits - 1));
     }
-    // Which way a result that overflows goes: `true` = infinity.
     let overflow = || {
-        let to_inf = !clamp_finite
-            && match mode {
-                RoundMode::NearestEven => true,
-                RoundMode::TowardZero => false,
-                RoundMode::TowardNegInf => neg,
-                RoundMode::TowardPosInf => !neg,
-            };
+        let to_inf = !clamp_finite && overflows_to_infinity(mode, neg);
         sign_bit | if to_inf { exp_all << mbits } else { max_finite }
     };
     let ax = x.abs();
@@ -106,19 +129,7 @@ pub(crate) fn encode_ieee(
     if e > bias {
         return overflow();
     }
-    let eff = e.max(emin);
-    // `q` = ax / ulp, an exact power-of-two scaling of an f64.
-    let q = ax * 2f64.powi(mbits as i32 - eff);
-    let fl = q.floor();
-    let frac = q - fl;
-    let n = fl as u128;
-    let up = match mode {
-        RoundMode::NearestEven => frac > 0.5 || (frac == 0.5 && n % 2 == 1),
-        RoundMode::TowardZero => false,
-        RoundMode::TowardNegInf => frac > 0.0 && neg,
-        RoundMode::TowardPosInf => frac > 0.0 && !neg,
-    };
-    let n = n + u128::from(up);
+    let n = round_scaled(ax, e.max(emin), mbits, mode, neg);
     let bits = if e < emin {
         // Subnormal range: `n` is the mantissa field, and `n == 2^mbits` carries into the
         // exponent field as the smallest normal.
