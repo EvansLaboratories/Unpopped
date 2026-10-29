@@ -776,3 +776,36 @@ pub fn rounding_matters(from: ElementKind, to: ElementKind) -> bool {
         (false, false) => false,
     }
 }
+
+/// Rebuild `e` with `f` applied to each child.
+pub(crate) fn map_children<E>(
+    e: &ScalarExpr,
+    f: &mut dyn FnMut(&ScalarExpr) -> Result<ScalarExpr, E>,
+) -> Result<ScalarExpr, E> {
+    use ScalarExpr as S;
+    let bx = |r: Result<ScalarExpr, E>| r.map(Box::new);
+    Ok(match e {
+        S::Input(_)
+        | S::Const(_)
+        | S::Param(_)
+        | S::Reduced(_)
+        | S::Coord(_)
+        | S::CoordInt(..)
+        | S::ConstInt(..)
+        | S::Local(_) => e.clone(),
+        S::Add(a, b) => S::Add(bx(f(a))?, bx(f(b))?),
+        S::Sub(a, b) => S::Sub(bx(f(a))?, bx(f(b))?),
+        S::Mul(a, b) => S::Mul(bx(f(a))?, bx(f(b))?),
+        S::Div(a, b) => S::Div(bx(f(a))?, bx(f(b))?),
+        S::Binary(op, a, b) => S::Binary(*op, bx(f(a))?, bx(f(b))?),
+        S::Unary(op, x) => S::Unary(*op, bx(f(x))?),
+        S::Select(c, a, b) => S::Select(bx(f(c))?, bx(f(a))?, bx(f(b))?),
+        S::Fma(a, b, c) => S::Fma(bx(f(a))?, bx(f(b))?, bx(f(c))?),
+        S::Cast(x, s) => S::Cast(bx(f(x))?, *s),
+        S::Bitcast(x, t) => S::Bitcast(bx(f(x))?, *t),
+        S::Qualified(x, n) => S::Qualified(bx(f(x))?, *n),
+        S::Pack(xs) => S::Pack(xs.iter().map(&mut *f).collect::<Result<_, E>>()?),
+        S::Extract(x, i) => S::Extract(bx(f(x))?, *i),
+        S::BitcastPacked(x, t, n) => S::BitcastPacked(bx(f(x))?, *t, *n),
+    })
+}
