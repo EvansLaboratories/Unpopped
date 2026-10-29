@@ -54,6 +54,7 @@ pub(crate) fn c_type(t: ElementKind) -> Option<&'static str> {
         ElementKind::U8 => "unsigned char",
         ElementKind::U16 => "unsigned short",
         ElementKind::U32 => "unsigned int",
+        ElementKind::U64 => "unsigned long long",
         _ => return None,
     })
 }
@@ -78,6 +79,14 @@ pub(crate) fn cpu_cast(
     spec: CastSpec,
 ) -> Result<Spelling, LowerError> {
     let to = spec.to;
+    // The conversion helpers (`unp_clamp_ll`, `unp_sat_f2ll`) are `long long` based, which
+    // cannot hold a `u64` above `i64::MAX` or its range: decline rather than approximate.
+    if from == ElementKind::U64 || to == ElementKind::U64 {
+        return decline(
+            DeclinedOp::Cast,
+            format!("cpu_c has no exact conversion helper for the u64 Cast {from:?} -> {to:?}"),
+        );
+    }
     let (Some(_), Some(to_c)) = (c_type(from), c_type(to)) else {
         return decline(
             DeclinedOp::Cast,

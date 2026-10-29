@@ -266,6 +266,7 @@ pub(crate) fn num_of(bits: u128, t: ElementKind) -> Num {
         ElementKind::U8 => Num::I(i128::from(bits as u8)),
         ElementKind::U16 => Num::I(i128::from(bits as u16)),
         ElementKind::U32 => Num::I(i128::from(bits as u32)),
+        ElementKind::U64 => Num::I(i128::from(bits as u64)),
         other => panic!("cast_ref: {other:?} is outside the typed table"),
     }
 }
