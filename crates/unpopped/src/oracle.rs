@@ -102,6 +102,8 @@
 //! BEFORE all per-element address math), since the plan carries only the PRESENCE
 //! mask, not the runtime value.
 
+pub mod kernel_eval;
+
 use crate::ir::{Access, BinaryOp, ReduceOp, ScalarExpr, SortOrder, SortOut, UnaryOp, View};
 use crate::plan::{KernelPlan, RrRole, Schedule, rr_role};
 use unpopped_vocab::{ElementKind, OperandDesc};
