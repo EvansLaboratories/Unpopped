@@ -29,6 +29,8 @@ pub enum LiftDecline {
     NotElementwise,
     /// The op is not `Access::Reduction` (for [`lift_reduction_opdef`]).
     NotReduction,
+    /// The op is not `Access::Scan` (for [`lift_scan_opdef`]).
+    NotScan,
     /// More than one output, a per-output dtype, a gather/scatter, a runtime base offset or a
     /// non-identity view: forms this increment does not lift.
     UnsupportedForm(&'static str),
@@ -111,6 +113,13 @@ fn check_liftable(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<(), LiftDe
 /// The conditions every lifted access shares: rank, one output, plain addressing, one dtype,
 /// and a body that reads only inputs and constants.
 fn check_common(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<(), LiftDecline> {
+    check_plain(op, dtype, rank)?;
+    leaves_ok(&op.body)
+}
+
+/// [`check_common`] without the body-leaf check (a `Scan` keeps its `Reduced(0)` post in
+/// `body`, and its value expression in `pre`).
+fn check_plain(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<(), LiftDecline> {
     if rank == 0 || rank > 8 {
         return Err(LiftDecline::BadRank);
     }
@@ -135,7 +144,7 @@ fn check_common(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<(), LiftDecl
     if op.dtypes.iter().any(|d| *d != dtype) {
         return Err(LiftDecline::MixedDtypes);
     }
-    leaves_ok(&op.body)
+    Ok(())
 }
 
 fn leaves_ok(e: &ScalarExpr) -> Result<(), LiftDecline> {
@@ -223,6 +232,161 @@ pub fn lift_reduction_opdef(
 
     let (params, locals) = sh.signature(out_rank);
     Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body))
+}
+
+/// Lift a float `Access::Scan` over `rank` axes (the scanned axis is the innermost), computed at
+/// `dtype` (`F32` or `F64`), reading dense row-major inputs as the oracle's flat addressing does.
+///
+/// Per row, the oracle keeps an `f64` prefix that starts at the monoid identity (`0`, `1`, `-inf`,
+/// `+inf`), folds each pre-mapped element into it (the `Max`/`Min` NaN rule as in a reduction) and
+/// writes the prefix after the fold (inclusive) or before it (exclusive), walking the axis
+/// descending for a reverse scan. The kernel does the same with an `F64` prefix local and one
+/// `Cast` down at each `Store`. Only the identity post-expression (`Reduced(0)`) lifts, for the
+/// reason a reduction's fused post does not.
+///
+/// Parameters and locals are laid out as for [`lift_reduction_opdef`], with the output the same
+/// rank as the input.
+///
+/// # Errors
+///
+/// A [`LiftDecline`].
+pub fn lift_scan_opdef(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<KernelFn, LiftDecline> {
+    let (sop, reverse, exclusive, pre) = check_scan(op, dtype, rank)?;
+    let sh = ReductionShape::new(op.n_inputs, dtype, rank, AxisMask::EMPTY);
+    let scanned = sh.reduced[0];
+    let all_counters = || {
+        (0..sh.r)
+            .map(|d| ScalarExpr::Local(sh.counter(d)))
+            .collect::<Vec<_>>()
+    };
+    let mut pass: Vec<Stmt> = (0..sh.n)
+        .map(|k| Stmt::Load {
+            local: sh.loaded(k),
+            place: Place::Logical {
+                buffer: k,
+                coords: all_counters(),
+            },
+        })
+        .collect();
+    pass.push(Stmt::Let {
+        local: sh.val,
+        init: sh.up(substitute_inputs(pre, &|k| sh.loaded(k))),
+    });
+    let write = Stmt::Store {
+        place: Place::Logical {
+            buffer: sh.n,
+            coords: all_counters(),
+        },
+        value: sh.stored(sop),
+    };
+    let fold = fold_step(sop, sh.acc, sh.have, sh.val);
+    if exclusive {
+        pass.push(write);
+        pass.extend(fold);
+    } else {
+        pass.extend(fold);
+        pass.push(write);
+    }
+
+    let int = |v: i64| ScalarExpr::ConstInt(v, ElementKind::I32);
+    let extent = ScalarExpr::Local(scanned);
+    let (start, end, step) = if reverse {
+        (
+            ScalarExpr::Sub(Box::new(extent), Box::new(int(1))),
+            int(-1),
+            int(-1),
+        )
+    } else {
+        (int(0), extent, int(1))
+    };
+    let mut row = Block(vec![
+        Stmt::Let {
+            local: sh.acc,
+            init: sh.up(scan_identity(sop, dtype)),
+        },
+        Stmt::Let {
+            local: sh.have,
+            init: int(0),
+        },
+        Stmt::For {
+            local: sh.counter(scanned),
+            start,
+            end,
+            step,
+            body: Block(pass),
+        },
+    ]);
+    for &d in sh.kept.iter().rev() {
+        row = for_axis(d, sh.r, row);
+    }
+    let (params, locals) = sh.signature(u8::try_from(sh.r).expect("rank is at most 8"));
+    Ok(KernelFn::new(op.name.clone(), dtype, params, locals, row))
+}
+
+/// The scan's op, direction, exclusivity and pre-map once the op is known to be liftable.
+fn check_scan(
+    op: &OpDef,
+    dtype: ElementKind,
+    rank: u8,
+) -> Result<(ReduceOp, bool, bool, &ScalarExpr), LiftDecline> {
+    let Access::Scan {
+        op: sop,
+        axis,
+        reverse,
+        exclusive,
+        pre,
+        post,
+    } = &op.access
+    else {
+        return Err(LiftDecline::NotScan);
+    };
+    if !matches!(dtype, ElementKind::F32 | ElementKind::F64) {
+        return Err(LiftDecline::UnsupportedForm("a non-float scan"));
+    }
+    if matches!(sop, ReduceOp::Mean) {
+        return Err(LiftDecline::UnsupportedForm("a Mean scan (not a monoid)"));
+    }
+    if !matches!(post, ScalarExpr::Reduced(0)) {
+        return Err(LiftDecline::UnsupportedForm("a fused post-expression"));
+    }
+    if u32::from(*axis) + 1 != u32::from(rank) {
+        return Err(LiftDecline::UnsupportedForm(
+            "a scan over a non-innermost axis",
+        ));
+    }
+    check_plain(op, dtype, rank)?;
+    leaves_ok(pre)?;
+    Ok((*sop, *reverse, *exclusive, pre))
+}
+
+/// The scan monoid identity (the oracle's `scan_identity`, float domain) as an expression of the
+/// compute dtype. The infinities are built from their bit patterns (`Bitcast` of an integer
+/// constant) because a JSON number cannot be infinite and a kernel is authored as JSON.
+fn scan_identity(rop: ReduceOp, dtype: ElementKind) -> ScalarExpr {
+    let infinity = |neg: bool| {
+        let (bits, int_ty) = if dtype == ElementKind::F64 {
+            let v = if neg {
+                f64::NEG_INFINITY
+            } else {
+                f64::INFINITY
+            };
+            (v.to_bits() as i64, ElementKind::I64)
+        } else {
+            let v = if neg {
+                f32::NEG_INFINITY
+            } else {
+                f32::INFINITY
+            };
+            (i64::from(v.to_bits() as i32), ElementKind::I32)
+        };
+        ScalarExpr::Bitcast(Box::new(ScalarExpr::ConstInt(bits, int_ty)), dtype)
+    };
+    match rop {
+        ReduceOp::Prod => ScalarExpr::Const(1.0),
+        ReduceOp::Max => infinity(true),
+        ReduceOp::Min => infinity(false),
+        ReduceOp::Sum | ReduceOp::Mean => ScalarExpr::Const(0.0),
+    }
 }
 
 /// The reduction's op, axis set and `keepdim` once the op is known to be liftable: a float
