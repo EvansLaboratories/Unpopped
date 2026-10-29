@@ -69,7 +69,7 @@ fn check_row_sort(
         ElementKind::F32 | ElementKind::F64 | ElementKind::I32
     ) {
         return Err(LiftDecline::UnsupportedForm(
-            "a row sort outside F32, F64 and I32",
+            "a row sort outside F32, F64 and I32 (the oracle sorts I64 through f64, which collapses large keys)",
         ));
     }
     if !stable {
