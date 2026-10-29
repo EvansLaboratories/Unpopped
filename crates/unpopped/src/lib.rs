@@ -89,6 +89,7 @@ pub mod shape;
 pub mod telemetry;
 mod text;
 pub mod types;
+pub mod view_layout;
 
 // The cross-backend IR fuzzer (`fuzz.rs`) moved to `baracuda-cuda-emit`'s
 // integration tests during the Unpopped carve — it drives `generate(&Cuda)`
