@@ -17,7 +17,7 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ## `0.32.26` — docs: U3 row 4 design note, execution scopes and memory spaces
 
-`docs/u3-row4-scopes-and-memory-spaces.md`: one `ScalarExpr::Exec` leaf, `LaunchShape`, `Place::Alloc` arrays (no pointer values), `Stmt::Barrier` with a conservative uniformity rule, and the per-thread driver, as one breaking increment (0.33.0). Design only; no code.
+`docs/u3-row4-scopes-and-memory-spaces.md`: one `ScalarExpr::Exec` leaf, `LaunchShape`, `Place::Alloc` arrays (no pointer values), `Stmt::Barrier` with a conservative uniformity rule, and the per-thread driver, as one breaking increment (0.33.0). Design only; no code. The barrier-uniformity check (D-R4-5) is conservative and will reject some correct programs; the cases are listed in the note for a later relaxation row.
 
 ## `0.32.24` — feat (additive): `bincount` lifts (U2, #113)
 

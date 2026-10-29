@@ -138,6 +138,17 @@ rejects some correct programs (a data-dependent but in-fact-uniform trip count) 
 divergent barrier. The alternative (no rule, document "undefined if divergent") would let the interpreter
 deadlock or silently run a program no GPU defines.
 
+**Correct-but-rejected programs (the test list for a later relaxation row).** The 0.33.0 PR commits each of
+these as a test asserting `BarrierDivergent`, so the over-rejection is pinned and a relaxation shows up as a
+deliberate flip, not a silent change:
+
+1. A `Barrier` under `If (ThreadIdx(0) < BlockDim(0))`: always true, yet reads an `Exec` leaf.
+2. A `Barrier` in a `For` whose bound is loaded from a global buffer all threads read identically (a
+   data-dependent but uniform trip count).
+3. A `Barrier` under `If (lane_count_param > 0)` where the local was assigned from `SubgroupSize` (uniform
+   within the subgroup).
+4. A `Barrier` after a loop with a `Break` guarded by a uniform loaded flag.
+
 ## 5. The per-thread driver (interpreter)
 
 `run_kernel` stays as is for `launch == None`. A new public `run_launch(kernel, args)` runs every thread:
