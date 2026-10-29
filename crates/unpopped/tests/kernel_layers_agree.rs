@@ -537,3 +537,66 @@ fn traps_are_typed_not_panics() {
         Err(KernelTrap::ArgMismatch(_))
     ));
 }
+
+#[test]
+fn integer_bounds_wrap_to_the_type_before_the_loop_runs() {
+    // end = i32::MAX + 1 wraps to i32::MIN, so `0 .. MIN` runs nothing. Unwrapped it would be a
+    // 2^31-pass loop and hit the step limit. (Stores mask to the width, so a wrap error is
+    // invisible in an output element; it is observable only through control flow.)
+    let wrapped_end = ScalarExpr::Add(Box::new(ci(i64::from(i32::MAX))), Box::new(ci(1)));
+    let kernel = k(vec![Stmt::For {
+        local: 0,
+        start: ci(0),
+        end: wrapped_end,
+        step: ci(1),
+        body: Block(vec![store_at(ci(0), ci(5))]),
+    }]);
+    let mut args = vec![out_buf(2)];
+    assert_eq!(run_kernel(&kernel, &mut args), Ok(()));
+    assert_eq!(read_i32(&args[0]), [0, 0], "the loop must not have run");
+    // Control: the same loop with an end of 1 runs once.
+    let once = k(vec![for_loop(0, 1, 1, vec![store_at(ci(0), ci(5))])]);
+    let mut args = vec![out_buf(2)];
+    run_kernel(&once, &mut args).expect("runs");
+    assert_eq!(read_i32(&args[0]), [5, 0]);
+}
+
+#[test]
+fn break_and_continue_work_inside_a_while_loop() {
+    // A While that stores and breaks on its first pass terminates; without the Break it would hit
+    // the step limit (the condition is constant true).
+    let kernel = k(vec![Stmt::While {
+        cond: ci(1),
+        body: Block(vec![store_at(ci(0), ci(1)), Stmt::Break]),
+    }]);
+    let mut args = vec![out_buf(2)];
+    assert_eq!(run_kernel(&kernel, &mut args), Ok(()));
+    assert_eq!(read_i32(&args[0]), [1, 0]);
+
+    // Continue skips the rest of the pass: count 0..3 in local 1, store only when it is not 1.
+    let counted = k(vec![
+        Stmt::Let {
+            local: 1,
+            init: ci(0),
+        },
+        Stmt::While {
+            cond: ScalarExpr::Sub(Box::new(ci(3)), Box::new(local(1))),
+            body: Block(vec![
+                Stmt::Assign {
+                    local: 1,
+                    value: ScalarExpr::Add(Box::new(local(1)), Box::new(ci(1))),
+                },
+                Stmt::If {
+                    cond: ScalarExpr::Sub(Box::new(local(1)), Box::new(ci(2))),
+                    then: Block(vec![]),
+                    els: Block(vec![Stmt::Continue]),
+                },
+                store_at(ci(0), local(1)),
+            ]),
+        },
+    ]);
+    let mut args = vec![out_buf(2)];
+    assert_eq!(run_kernel(&counted, &mut args), Ok(()));
+    // Passes see local 1 = 1, 2 (skipped by Continue), 3: the last store wins with 3 (never 2).
+    assert_eq!(read_i32(&args[0]), [3, 0]);
+}
