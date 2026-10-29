@@ -15,6 +15,9 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.31.5` — feat (additive): `unpopped_vocab::layout_algebra`, hierarchical layouts and their algebra (U6, #117)
+
+New pure module: `IntTuple`, `Layout` (`shape:stride`, hierarchical, validated), `LayoutError`, `Swizzle`, `ComposedLayout`. On `Layout`: `size`/`cosize`/`rank`/`depth`/`call`/`crd2idx`/`flatten`/`coalesce`/`composition`/`complement`/`logical_divide`/`logical_product`. No dependency on the IR, `OpDef`, or the Frontend/Backend traits; no `unsafe`, no I/O, checked arithmetic. Strides are `>= 0` (negative declined); `composition` uses CuTe's sufficient divisibility condition and declines some expressible cases. `View` is NOT re-expressed over it yet (later PR, needs the first lane's agreement). Tests: `tests/layout_algebra_properties.rs`, each property run against the real operation and against a seeded-bad variant that must fail. Proposed number; the PM allocates.
 ## `0.31.4` — docs: the kernel layer v0 spec (U2, #113)
 
 New `docs/ir-kernel-layer.md`: a separate `kernel.rs` artifact (`KernelFn`, `Stmt`, `Place::Logical`) plus one `ScalarExpr::Local(u32)` leaf, the scope and type rules `check_kernel` enforces and the known-bad mutations that pin them, the reference interpreter's semantics, the effects model with its six unknowns marked, the `lift_opdef` plan (Elementwise by nested `For`, since the intent layer has no integer division), and the U2 choices that constrain U3's `ProgramModel` and resource manifest. Written before the code it describes; the code landed in 0.31.0 (types, `check_kernel`) and 0.31.3 (interpreter, Elementwise lift). Docs only. Proposed number; the PM allocates.

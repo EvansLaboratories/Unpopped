@@ -64,6 +64,7 @@ pub mod device_repr;
 pub mod dispatch;
 pub mod element;
 pub mod layout;
+pub mod layout_algebra;
 pub mod ops;
 pub mod plan;
 pub mod shape_expr;
