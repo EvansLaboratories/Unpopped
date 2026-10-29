@@ -15,13 +15,15 @@ use unpopped_vocab::ElementKind;
 use super::im2col::{add, int, local, mul, outside, sub};
 use super::post;
 use super::{
-    LiftDecline, check_plain, fold_step, leaves_ok, scan_identity, substitute_inputs, widen,
+    LiftDecline, check_accumulated_dtype, check_plain, fold_step, is_int_kernel_dtype, leaves_ok,
+    scan_identity, substitute_inputs, widen,
 };
 use crate::ir::{Access, OpDef, ReduceOp, ScalarExpr};
 use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 
-/// Lift a float 1-D `Access::Window` over `rank` axes (the pooled axis is the innermost),
-/// computed at `dtype` (`F32` or `F64`).
+/// Lift a 1-D `Access::Window` over `rank` axes (the pooled axis is the innermost), computed at
+/// `dtype` (`F32` or `F64`; `I32` or `I64` for `Sum`/`Max`/`Min` with the identity post, where the
+/// accumulator is the dtype itself and the oracle's exact wrapping fold is matched).
 ///
 /// Parameters: the inputs (`Read`, rank `rank`), the output (`Write`, rank `rank`), then one `I32`
 /// extent per input axis and finally the output extent `k_out` of the pooled axis. The window
@@ -40,7 +42,7 @@ pub fn lift_window_opdef(
     let mut body = Block(vec![
         Stmt::Let {
             local: w.acc,
-            init: w.up(ScalarExpr::Const(0.0)),
+            init: w.zero(),
         },
         Stmt::Let {
             local: w.have,
@@ -100,9 +102,7 @@ fn check_window(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Geometry, Li
     else {
         return Err(LiftDecline::NotWindow);
     };
-    if !matches!(dtype, ElementKind::F32 | ElementKind::F64) {
-        return Err(LiftDecline::UnsupportedForm("a non-float window"));
-    }
+    check_accumulated_dtype(dtype, *wop, post, "a window")?;
     let post = if matches!(post, ScalarExpr::Reduced(0)) {
         None
     } else {
@@ -181,8 +181,30 @@ impl Win {
         self.pos + 1 + k
     }
 
+    fn is_int(&self) -> bool {
+        is_int_kernel_dtype(self.dtype)
+    }
+
+    /// The accumulator's, current value's and result's type.
+    fn acc_ty(&self) -> ElementKind {
+        if self.is_int() {
+            self.dtype
+        } else {
+            ElementKind::F64
+        }
+    }
+
+    /// The accumulator's starting value (a `Max`/`Min` is guarded by `have`).
+    fn zero(&self) -> ScalarExpr {
+        if self.is_int() {
+            ScalarExpr::ConstInt(0, self.dtype)
+        } else {
+            self.up(ScalarExpr::Const(0.0))
+        }
+    }
+
     fn up(&self, e: ScalarExpr) -> ScalarExpr {
-        if self.dtype == ElementKind::F64 {
+        if self.dtype == ElementKind::F64 || self.is_int() {
             e
         } else {
             ScalarExpr::Cast(Box::new(e), widen(ElementKind::F64))
@@ -228,7 +250,13 @@ impl Win {
             local: self.val,
             init: self.up(substitute_inputs(&g.pre, &|k| self.loaded(k))),
         });
-        valid.extend(fold_step(g.op, self.acc, self.have, self.val, false));
+        valid.extend(fold_step(
+            g.op,
+            self.acc,
+            self.have,
+            self.val,
+            self.is_int(),
+        ));
         valid.push(Stmt::Assign {
             local: self.cnt,
             value: add(local(self.cnt), int(1)),
@@ -298,7 +326,7 @@ impl Win {
 
     fn stored(&self) -> ScalarExpr {
         let res = local(self.res);
-        if self.dtype == ElementKind::F64 {
+        if self.dtype == ElementKind::F64 || self.is_int() {
             res
         } else {
             ScalarExpr::Cast(Box::new(res), widen(self.dtype))
@@ -336,11 +364,11 @@ impl Win {
         // Extents (r + 1), cell counters (r), tap counter and source position: all `I32`.
         let mut locals = vec![LocalDecl::scalar(ElementKind::I32); self.pos as usize + 1];
         locals.extend((0..self.n).map(|_| LocalDecl::scalar(self.dtype)));
-        locals.push(LocalDecl::scalar(ElementKind::F64)); // acc
+        locals.push(LocalDecl::scalar(self.acc_ty())); // acc
         locals.push(LocalDecl::scalar(ElementKind::I32)); // have
         locals.push(LocalDecl::scalar(ElementKind::I32)); // cnt
-        locals.push(LocalDecl::scalar(ElementKind::F64)); // val
-        locals.push(LocalDecl::scalar(ElementKind::F64)); // res
+        locals.push(LocalDecl::scalar(self.acc_ty())); // val
+        locals.push(LocalDecl::scalar(self.acc_ty())); // res
         (params, locals)
     }
 }

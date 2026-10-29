@@ -492,6 +492,7 @@ fn check_accumulated_dtype(
     if !is_int_kernel_dtype(dtype) {
         return Err(LiftDecline::UnsupportedForm(match what {
             "a scan" => "a scan outside F32, F64, I32 and I64",
+            "a window" => "a window outside F32, F64, I32 and I64",
             _ => "a reduction outside F32, F64, I32 and I64",
         }));
     }
