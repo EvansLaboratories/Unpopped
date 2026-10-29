@@ -2351,8 +2351,17 @@ fn eval_elementwise(
     // destination can be smaller than its source (bincount is the extreme —
     // thousands of elements into a handful of bins), and walking the output
     // would visit the bins and silently drop every source element past the
-    // first few. The value operand is the input that is not the index.
-    let src_slot = scatter.map(|(idx_op, ..)| usize::from(idx_op == 0));
+    // first few. The value operand is the input that is not the index; a scatter with
+    // ONE input (bincount) indexes itself, so that input is the source. (Without this,
+    // `usize::from(idx_op == 0)` named operand 1, the OUTPUT, and bincount counted only
+    // the first `bins` elements of its data.)
+    let src_slot = scatter.map(|(idx_op, ..)| {
+        if n_in == 1 {
+            0
+        } else {
+            usize::from(idx_op == 0)
+        }
+    });
     let ext: Vec<i64> = match src_slot {
         Some(v) => operands[v].shape[..rank].to_vec(),
         None => out0.shape[..rank].to_vec(),
@@ -4347,6 +4356,31 @@ mod tests {
             i32s(&out[0]),
             vec![7, 9],
             "the 5 and -1 targets are dropped"
+        );
+    }
+
+    /// ⚠️ `bincount` has ONE input, and it is its own index, so the source of the walk
+    /// is that input and not "the input that is not the index". Naming operand
+    /// `usize::from(index_operand == 0)` named the OUTPUT instead, and 14 values into
+    /// 6 bins counted only the first 6 of them. Every other scatter test here has a
+    /// separate value operand, which is why nothing caught it; the data is longer than
+    /// the bin count on purpose.
+    #[test]
+    fn bincount_counts_its_whole_input_not_the_first_bins_elements() {
+        let x = desc(&[14], &[1], ElementKind::I32);
+        let bins = desc(&[6], &[1], ElementKind::I32);
+        let op = OpDef::bincount("bc", ElementKind::I32);
+        let k = key(OpCategory::UnaryElementwise, &[x, bins]);
+        let out = evaluate(
+            &build_plan(&op, &k),
+            &[x, bins],
+            &[i32b(&[14], &[0, 2, 2, 0, 5, 1, 0, -1, 6, 9, 2, 1, -7, 0])],
+            &[],
+        );
+        assert_eq!(
+            i32s(&out[0]),
+            vec![4, 2, 3, 0, 0, 1],
+            "10 in-range values counted; -1, -7, 6 and 9 dropped; bin 4 never hit"
         );
     }
 
