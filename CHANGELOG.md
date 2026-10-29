@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.31.10` — feat (additive): `unpopped::view_layout`, `View` as a `Layout` (U6, #117)
+
+New module, no change to `View`, the key or the text codec. `view_to_layout(view, iter_shape, producer_strides)` builds the `Layout` a view reads (modes in REVERSE axis order, since the oracle iterates last-axis-fastest and a `Layout` first-mode-fastest); `layout_to_view(layout, producer_strides)` returns the one of `Identity`/`Permute`/`Broadcast` that reads identically, and `None` otherwise (nested layout, foreign stride, permute-and-broadcast mix, ambiguous permutation), never a nearest view. Negative (flipped) strides and rank-changing `Reshape` are declined. `tests/view_layout_oracle.rs` checks every rank-2/3 permute, every rank-3 broadcast mask, identity and same-rank reshape against `oracle::evaluate`; six seeded mutations of the recognition rules (axis order, permutation direction, broadcast stride-0 check, reshape strides, ambiguity, broadcast recognition) each turned a test red. Proposed number; the PM allocates.
+
 ## `0.31.9` — feat (additive): `Layout::select`, `take`, `slice` (with `SliceCrd`) and `tile_to_shape` (U6 part 3, #117)
 
 `select`/`take` pick top-level modes; `slice(&SliceCrd)` fixes some coordinates and keeps others, returning the kept layout and the offset (`kept(j) + offset == self(full coordinate)`); `tile_to_shape(target)` replicates a block to cover `target` as `(block_i, tiles_i)` per dimension, tiles after the whole block (declines non-multiples with `NotDivisible`). New file `layout_algebra/slice.rs`; tests in `tests/layout_algebra_slice.rs`, each against a deliberately broken variant. Proposed number; the PM allocates.
