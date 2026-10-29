@@ -102,6 +102,65 @@ Reads (PM agent, 2026-10-28, Google Patents text only, not USPTO PDFs, specifica
 
 Not read, from the search: the claims of any paper hit and of other result-list patents (US20170200094A1, US20230004365A1, KR20210021258A). Verdict: the four listed patents are **outside as read** (PM, independent claims, see Reads); everything else the search returned is not assessed.
 
+## Re-sweep addendum: kernel layer (U2), packed values, MX dtypes, layout inverses/views, the U3 seam; 2026-10-29
+
+Date: 2026-10-29; Run by: unpopped lane 1, Claude Sonnet 5.5; Method: AI-assisted web search restricted to `patents.google.com` and `patents.justia.com` (the search tool also returned `image-ppubs.uspto.gov` and arXiv pages, listed where they appeared); **NOT legal advice; NOT a freedom-to-operate opinion; no claim text was read by this lane in this addendum.** Scope: `origin/main` `11b1575` (0.31.11), i.e. what landed since the 2026-10-25 sweep at `6a2a17d`: the kernel layer (0.31.0 `ScalarExpr::Local`, `kernel`, `check_kernel`), the kernel interpreter and the Elementwise, Reduction and Scan lifts (0.31.3-0.31.12), packed values (0.27.0-0.28.0), `Cast`/MX element dtypes (0.29.0, 0.31.1, 0.31.7), the CUDA front end leaving the core (0.30.0, a removal), and `unpopped-vocab::layout_algebra` inverses/slice and `unpopped::view_layout` (0.31.5-0.31.11). The U3 spec (`u3-program-model-and-seam.md`) is **docs only**, so its three ideas are swept as design intent, not as shipped code. The 2026-10-25 sweep said "re-sweep at the next new family (the kernel layer, U2)"; this is that re-sweep.
+
+### Ideas swept (numbering continues from the sections above; 15 is the layout algebra addendum)
+16. A statement-level kernel IR (locals, assignment, `if`/`for`/`while`/`break`/`return`, loads and stores through logical coordinates) with a scope-and-type checker, held beside the expression IR and **lifted from it** (one op in, one kernel out, per access pattern).
+17. A reference interpreter for that statement IR on the CPU that reuses the exact-reference expression evaluator, with a differential test that the lifted kernel and the original op agree byte for byte.
+18. Reductions, scans and contractions lowered with a wider accumulator than the element type (an `f64` accumulator inside an `f32` kernel), a `Max`/`Min` fold that keeps a NaN once seen, and one rounding at the store.
+19. Packed lane values in the IR: `Pack`/`Extract`, lane-wise operators, and a bit-reinterpretation between a packed value and an equal-width scalar, in both directions.
+20. OCP microscaling element formats (`f4e2m1`, `f6e2m3`, `f6e3m2`) as storage and key-identity dtypes, with a typed decline when one is named as an accumulator.
+21. Layout algebra extensions: left and right inverses, `select`/`take`/`slice`/`tile_to_shape`, and recognising a hierarchical layout as one of four named view kinds (and the reverse).
+22. (Design only, U3 spec.) A generated-kernel artifact that is source text **or** a SPIR-V word stream with a per-entry binding/parameter-layout manifest; a declared resource map as a front-end input; a per-target capability set with reported-versus-measured provenance.
+
+### Queries (all 2026-10-29; source `patents.google.com` + `patents.justia.com` unless stated)
+Counts are the number of patent documents the result list named, not a claim of coverage. A null from this tool is not evidence that no patent exists (see Limitations).
+- "patent GPU kernel intermediate representation statements loops memory spaces thread blocks barriers lowering to multiple GPU programming languages" (US9740464B2, US20150347107A1, US11288108B2, US9275426B2, US20150347108A1, US20250004730A1; plus two papers).
+- "patent interpreter executes compute kernel intermediate representation on CPU to verify GPU kernel semantics reference implementation differential testing" (US11288108B2, US10949182B2, EP3053038A1, CN104137070B, US7673304B2, US20070294666A1; one paper). Nothing on a CPU interpreter used as a differential reference.
+- "patent lowering tensor operation to structured loop nest statements intermediate representation affine loops load store index expressions code generation GPU" (US8671401B2, US10949182B2, US20180197068A1, US9836691B1, US20240020239A1, US8046202).
+- "patent packed vector data type two half precision values in a 32-bit register compiler intermediate representation lane-wise operation extract pack" (US11409536B2, US20050021926A1, GB2560400A, US20160378716A1, US20140095842, US20050125631A1, USPTO 11880683, 10684854, 11500630): hardware instruction and register-format patents; none on an IR-level packed type.
+- "patent microscaling block floating point shared exponent 4-bit 6-bit element format tensor core conversion software emulation" (US20250285207A1, US11886833B2, US8301803B2, US8874794B2, US20180157465A1, EP3791260A1, CN120634832A).
+- "patent reduction accumulate in higher precision accumulator wider than element type compiler generates kernel prefix scan inclusive exclusive code generation" (US7225212B2, US7181484B2, US20100175056A1, US5583804A, EP0109137A2): hardware multiply-accumulate; none on a compiler choosing a wider accumulator.
+- "patent translating GPU kernel source abstract syntax tree to intermediate representation with loops conditionals then generating source for different GPU programming language" (US9740464B2, US10372431B2, US20150347107A1, US20150347108A1, US10949182B2, US11288108B2, US20080066046A1).
+- "patent shader compiled binary metadata descriptor set binding layout reflection uniform buffer layout std140 offsets manifest generated with SPIR-V" (US7839410B1, US20160071230A1, WO2017058541A1, US20230360321A1/US12112428, US8134566B1, US8134570B1, US7533237B1, US7958498B1): API-level descriptor and uniform-buffer patents; none on a reflection manifest or a layout-rule record.
+- "patent device capability set subgroup size supported features selects compilation variant of compute shader per target hardware capability query" (US9529575B2, JP2016524242A, US20040003370A1, USPTO 12412230, 10726606, 10957006, 12254554, US20040207622A1, US20140362081A1).
+- "patent tensor layout inverse right inverse left inverse hierarchical layout slice select tile mapping index to offset": **no patent**; arXiv 2603.02298, 2511.10374, 2601.05972 (CuTe layout papers: published prior art).
+- "patent reinterpret bit pattern bitcast between vector of lanes and scalar integer of equal width type system compiler intermediate representation" (US9513917B2, WO2012134532A1, US20140317377A1, WO2016071668A1, US20160224345A1, US9792117B2, US8260598B2): vector instruction formats; none on an IR bitcast.
+- "patent 4-bit floating point format E2M1 conversion lookup table quantization neural network storage unpacking two values per byte" (WO2024152124A1, US9483265, US20240160406A1, US7685214B2, US20060106909A1, US5528741A; papers).
+- "patent GPU intermediate representation address spaces global shared local private typed pointers load store address space qualifier compiler" (US9588826B2, US20120254497A1, EP2386087B1, US20100122264A1, WO2013070636A1, US20080109795, USPTO 12299766, US20150113255A1, US8531471B2).
+- "patent compiler side effect analysis effect set memory reads writes function pure reorder statements intermediate representation parallel kernel" (USPTO 8121828, 8065504, 5903749, 5625835, 10884720, 11379195, 7069421, US6877088B2): binary translation and processor reordering; none on an effect-set analysis for a kernel IR.
+- "patent maximum minimum reduction NaN propagation semantics floating point reduction kernel generated exact IEEE handling compiler" (USPTO 12393530, 12301450, 11929919, 12244489, 7228324, 7219117, US5892697A, US5487022A, US4777613A): in-network reduction engines and a max/min circuit; none on compiler-generated reduction kernels.
+
+### Hits (this addendum reads **no claims**; "needs read" says which independent claims the PM should read)
+
+| # | patent | title (as the search summary gave it) | assignee | idea | why flagged | claims read | needs read |
+|---|---|---|---|---|---|---|---|
+| 10 | US10949182B2 | Systems and methods for generating code for parallel processing units | not stated by the tool | 16, 17 | summary: claims describe compiler transformations that lower a function in an in-memory IR into a nested loop structure of for-loops with loop bounds; an IR generator may translate source programs of several languages to one or more IRs | none | **all independent claims** (closest to idea 16) |
+| 11 | US8671401B2 | Tiling across loop nests with possible recomputation | not stated | 16 | summary: a high-level IR is translated to a lower-level IR holding a tiled loop nest, with min/max bounds expressions | none | independent claims |
+| 12 | US11288108B2 | Automatic out-of-bound access prevention in GPU kernels executed in a managed environment | not stated | 16 | GPU kernel source (CUDA) to LLVM IR with Clang, then bounds protection | none | independent claims (our difference, not checked against the claims: `check_kernel` and the interpreter reject out-of-bounds accesses but do not transform an IR to add checks) |
+| 13 | US9275426B2; US20150347108A1 | Method and apparatus for unifying GPU computation languages; Language, function library and compiler for graphical and non-graphical computation on a GPU | not stated; US20150347108A1 appeared beside the Apple unified-IR family of hit 1 (its own assignee is not stated by the tool) | 16 | one IR for several source languages; macros hold the differences between CUDA and OpenCL | none | independent claims of each |
+| 14 | US9740464B2, US10372431B2, US20150347107A1 | Unified intermediate representation | Apple Inc. | 16 | re-surfaced; **already read in full on 2026-10-25 (hit 1)** | earlier read only | **re-check against the new statement layer**: do any independent claims recite control-flow statements, loops or memory in the IR? The 2026-10-25 read predates the kernel layer |
+| 15 | US20250285207A1 (CN120634832A is its CN counterpart) | Tensor core hardware for mixed-type microscaling floating point (MXFP) data format calculations | Intel (per the summary) | 20 | MXFP4/6/8 tensor-core hardware; we do not implement hardware, MX is storage and key identity | none | independent claims |
+| 16 | US11886833B2 | Hierarchical and shared exponent floating point data types | not stated | 20 | shared-exponent data types with a tile size | none | independent claims |
+| 17 | US20180157465A1; EP3791260A1 | Block floating point for neural network implementations; Block floating point computations using shared exponents | not stated | 20 | predate the MX standard; shared-exponent compute | none | independent claims if idea 20 is extended to compute |
+| 18 | WO2024152124A1; US9483265 | Lookup tables for ultra low-bit operations; Vectorized lookup of floating point values | not stated | 20 | table-lookup decode of 4-bit values | none | independent claims if a 4-bit decode codec is ever added (today only a type row exists; no codec) |
+| 19 | US10726606; USPTO 12412230 | Shader program selection in graphics processing systems; Optimizing compilation of shaders | not stated | 22 | the compiler generates several variants of a shader and one is selected (here by runtime conditions or search); our capability-driven selection is spec only | none | independent claims, **before** the U3 capability set is built |
+| 20 | WO2013070636A1; US20100122264A1; US20120254497A1; US20080109795; USPTO 12299766 | inter-procedural address-space optimization in a GPU compiler; language-level shared virtual memory; GenX JIT IL; C/C++ extensions for GPGPU; native generic pointers | NVIDIA / Intel (per the summaries) | 22 | memory spaces as pointer types in a GPU compiler and IL | none | independent claims, **before** U3 memory spaces are built (`US20080109795` was published May 2008; whether its term has ended is not verified) |
+| 21 | US12393530, US12301450, US11929919, US12244489; US7228324 | reduction engines (in-network); max/min circuit | not stated | 18 | NaN rules for min/max reductions | none | low priority and the PM's call: these are in-network reduction and circuit patents that state NaN rules for min/max reductions, and the lift's `Max`/`Min` rule is the oracle's existing one |
+
+Weak or null areas (the tool returned only hardware or API-level patents, none read): idea 17 (a CPU interpreter as a differential reference), idea 18 (a compiler choosing a wider accumulator; the extended-precision accumulator patents US7225212B2 and US7181484B2 are hardware), idea 19 (packed lane types: hardware ISA patents such as USPTO 11880683 and US9513917B2 only), idea 21 (layout inverses and views: **no patent**, only published CuTe papers), idea 22 (the SPIR-V manifest: API-level descriptor patents US20160071230A1 and US7839410B1 only).
+
+### Needs review (to the PM), by priority
+1. **US10949182B2**, all independent claims. It is the only hit that pairs "IR" with "lowered to nested for-loops" for parallel processing units, which is what `lift_*_opdef` does to an op.
+2. **US8671401B2** and **US11288108B2**, independent claims.
+3. **US9275426B2** and **US20150347108A1**, independent claims; and the **Apple unified-IR family (hit 14) re-checked against statements**.
+4. Before building U3 (not now): **US10726606**, **US12412230** (variant selection) and **WO2013070636A1**, **US20100122264A1** (address spaces).
+5. MX hits 15-18 only if the MX work grows past a type row.
+
+No verdict is written for any of these. The earlier "clear" verdicts in the sections above are unchanged and apply to the earlier scope only.
+
 ## Limitations
 - AI-assisted search by one model in one session; the search tool returns general web results, mostly papers, and found no patent for several ideas (2, 4, 9, 13, 14). **A null from this tool is not evidence that no patent exists**: the same tool did find patents on other queries, but it is not a patent database and cannot be queried by claim language, class or assignee.
 - No query used CPC classes (G06F 8/41, G06F 8/51, G06F 9/45516), USPTO full text, Espacenet or WIPO PATENTSCOPE. These are the next step for anyone with access.
@@ -109,3 +168,45 @@ Not read, from the search: the claims of any paper hit and of other result-list 
 - No CPC-class pass: no USPTO or Espacenet access in this session, and the claims tool reads one named patent at a time.
 - Ideas 8, 9 and 13 are mostly engineering practice; they were searched with one query each.
 - Not legal advice. A freedom-to-operate review by a patent attorney is a separate, later purchase.
+- The 2026-10-29 addendum read **no claims**: it lists what the search surfaced and which independent claims the PM should read. Assignee and status were not verified for most of its rows; patent numbers are as the search result lists gave them. Searches ran through a web search tool restricted to Google Patents and Justia, not USPTO full text or CPC classes.
+
+### Claim reads and verdicts for the hits above (added 2026-10-29)
+
+Source: a read run for the PM on 2026-10-28 (record: `C:/Projects/.lane-state/patent-reads/unpopped-kernel-layer.md`), from Google Patents claim text (machine-converted, not USPTO PDFs), **independent claims only**. Dependent claims, specifications, prosecution history, claim construction, continuations and non-US family members were **not** read; statuses and expiries are Google Patents' own and were not verified at the USPTO. **NOT legal advice; NOT a freedom-to-operate opinion.** "Outside as read" means each independent claim has at least one limitation the `unpopped*` crates, as described, lack.
+
+| hit | patent | verdict | limitation(s) Unpopped lacks | status per Google |
+|---|---|---|---|---|
+| 10 | US10949182B2 | outside as read | claims 1/30/44: a parallel-loop analysis, block/thread counts computed from loop bounds, a launch directive (the Slang emitter hard-codes `[numthreads(256, 1, 1)]`); 15/58/64: a serial-segment single-thread kernel; 26/70/74: a library-call substitution table | Active, no expiry shown |
+| 11 | US8671401B2 | outside as read | break-mark sub-graph splitting, instantiating only the elements a tile needs, tiling a series of loop nests | "Expired - Fee Related" and an estimated expiry of 2031-05-23 on the same page (inconsistent; status unverified) |
+| 12 | US11288108B2 | outside as read | a rewrite that adds array-size parameters and bounds guards, loading the rewritten module in a virtual machine, modifying host source | Active, est. 2040-09-22 |
+| 13 | US9275426B2 | outside as read | runtime detection of the GPU's computation language, dual-language macros | Active, est. 2033-06-21 |
+| 13 | US20150347108A1 (an **Apple** application, not Adobe; granted as US10430169B2) | outside as read | graphics functions and shader/kernel qualifiers in the IR; linking a shader-and-compute library; compiling when graphics pipeline objects are created | Granted, Active |
+| 14 | Apple unified-IR family (US9740464B2, US10372431B2, US20150347107A1) | outside as read | graphics operations in the IR, shaders in the binary, a pre-compiled library, retrieval on request | Active |
+
+Answer to hit 14's question: none of the nine independent claims re-read (US9740464B2 1/7/13, US10372431B2 1/8/14, US20150347107A1 1/7/15) recites control-flow statements, loops, locals or memory in the IR, so the statement layer neither adds nor removes a limitation.
+
+Open items from that read:
+1. **US10949182B2 claim 1** is the closest of the five to the lifts. An adopter that analyses loop nests for parallelism, derives grid/block sizes from loop bounds and emits a launch directive (the Baracuda and Fuel CUDA emitters) was not read and should be charted separately. Re-read it if U3 or any emitter starts deriving launch geometry. The code check behind "the Slang emitter hard-codes the geometry" was one `git grep` on `origin/main` (2026-10-28), not a full read.
+2. **US8671401B2**: Google's status and expiry disagree; check the USPTO record if it ever matters.
+3. **The Apple family is protected by the absence of graphics.** Re-read it if Unpopped gains graphics or shader operations (a Slang fragment or vertex path, texture sampling) or address-space qualifiers (U3 memory spaces).
+4. Hits 19 and 20 (shader variant selection; address spaces) are **not covered: U3 is not built**, so they are out of scope for the current publish and must be read before U3 builds those features.
+5. **The MX codec is NOT in this publish scope.** On `origin/main` the three MX element kinds (`F4E2M1`, `F6E2M3`, `F6E3M2`) are type rows and structure-key identity only; `unpopped-cpu-c` still declines them (no codec) and the scale kinds `F8E8M0`/`F8E6M2` are declined as compute dtypes, so nothing computes or stores a scale. The verdicts below were made against that state; if a codec or block-scale lowering lands, re-read per the triggers in the table.
+
+#### Part 2: MX, block floating point, lookup decode, reduction hits (added 2026-10-29)
+
+Source: the PM's second claim read (record: `C:/Projects/.lane-state/patent-reads/unpopped-kernel-layer-part2.md`), Google Patents claim text (machine-converted), **independent claims only**, 2026-10-28; specifications, prosecution history, claim construction and national phases were not read. **NOT legal advice; NOT a freedom-to-operate opinion.**
+
+| hit | patent | verdict | limitation(s) Unpopped lacks | status per Google |
+|---|---|---|---|---|
+| 15 | US20250285207A1 | outside as read | a hardware decoder and opcode, an execution resource chosen by a variant selector that is part of the block data type, a shared-scale block data type | pending application; **re-read when it grants** |
+| 16 | US11886833B2 | outside as read | a two-level hierarchy of shared exponents (subset exponents, a derived third exponent, difference values) and the recited multiplier/shifter/adder hardware chain; "tile size" is not in the independent claims | Active |
+| 17 | US20180157465A1 | outside as read | block floating-point representation with a common exponent, an output-driven exponent update, a configured circuit | Active |
+| 17 | EP3791260A1 | outside as read | multi-tiered shared-exponent BFP, mantissa dot products with shifting | Active (national validity not checked) |
+| 18 | WO2024152124A1 | outside as read | a lookup table implementing a convolution from packed weights and activations | Ceased (national phases not checked) |
+| 18 | US9483265B2 | outside as read | every independent claim is limited to automatic speech recognition (vector permute decode of quantized features) | "Expired - Fee Related" beside an expiry estimate of 2035-04-23 (inconsistent; unverified) |
+| 21 | US12393530B2, US12301450B2, US11929919B2, US12244489B2 | outside as read each | network switch and reduction-engine claims (multicast frames, arming, timers, topology) | Active |
+| 21 | US7228324B2 | outside as read | a floating-point max/min circuit | "Expired - Lifetime" |
+
+The NaN-propagation rule of `Max`/`Min` is not recited in any independent claim of the hit-21 patents.
+
+Re-read triggers: US20250285207A1 on grant; US11886833B2, US20180157465A1 and EP3791260A1 if MX block-scale computation, multi-level scales or mantissa dot products are added. The part-2 read also noted that this doc's earlier wording for hit 16 ("with a tile size") is not in the claims as read.
