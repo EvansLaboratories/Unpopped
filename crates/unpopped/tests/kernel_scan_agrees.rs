@@ -194,7 +194,7 @@ fn forms_the_lift_does_not_cover_decline_with_a_reason() {
             "a scan over a non-innermost axis"
         ))
     );
-    // A fused post-expression.
+    // A fused post-expression lifts in tolerance mode (`kernel_scan_post_agrees.rs`).
     let post = OpDef::scan(
         "q",
         1,
@@ -209,10 +209,7 @@ fn forms_the_lift_does_not_cover_decline_with_a_reason() {
             Box::new(ScalarExpr::Reduced(0)),
         )),
     );
-    assert_eq!(
-        lift_scan_opdef(&post, ElementKind::F32, 2),
-        Err(LiftDecline::UnsupportedForm("a fused post-expression"))
-    );
+    assert!(lift_scan_opdef(&post, ElementKind::F32, 2).is_ok());
     // An integer scan.
     let int = OpDef::scan_simple("i", &[ElementKind::I32], ReduceOp::Sum, 1, false, false);
     assert_eq!(

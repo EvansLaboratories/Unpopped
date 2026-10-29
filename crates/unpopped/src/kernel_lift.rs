@@ -263,8 +263,10 @@ pub fn lift_reduction_opdef(
 /// `+inf`), folds each pre-mapped element into it (the `Max`/`Min` NaN rule as in a reduction) and
 /// writes the prefix after the fold (inclusive) or before it (exclusive), walking the axis
 /// descending for a reverse scan. The kernel does the same with an `F64` prefix local and one
-/// `Cast` down at each `Store`. Only the identity post-expression (`Reduced(0)`) lifts, for the
-/// reason a reduction's fused post does not.
+/// `Cast` down at each `Store`. The identity post-expression (`Reduced(0)`) is byte-exact; a fused
+/// post lifts in tolerance mode, with `Reduced(0)` bound to the prefix rounded once to the compute
+/// dtype and its `Input(k)` leaves to the elements loaded at the position (`docs/ir-kernel-layer.md`
+/// 7.1), as a reduction's does.
 ///
 /// Parameters and locals are laid out as for [`lift_reduction_opdef`], with the output the same
 /// rank as the input.
@@ -273,20 +275,29 @@ pub fn lift_reduction_opdef(
 ///
 /// A [`LiftDecline`].
 pub fn lift_scan_opdef(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<KernelFn, LiftDecline> {
-    let (sop, reverse, exclusive, pre) = check_scan(op, dtype, rank)?;
+    let (sop, reverse, exclusive, pre, post) = check_scan(op, dtype, rank)?;
     let sh = ReductionShape::new(op.n_inputs, dtype, rank, AxisMask::EMPTY);
-    let pass = scan_pass(&sh, sop, exclusive, pre);
+    let pass = scan_pass(&sh, sop, exclusive, pre, post);
     let mut row = scan_row(&sh, sop, reverse, pass);
     for &d in sh.kept.iter().rev() {
         row = for_axis(d, sh.r, row);
     }
-    let (params, locals) = sh.signature(u8::try_from(sh.r).expect("rank is at most 8"));
+    let (params, mut locals) = sh.signature(u8::try_from(sh.r).expect("rank is at most 8"));
+    if post.is_some() {
+        locals.push(LocalDecl::scalar(dtype)); // red: the prefix rounded to the compute dtype
+    }
     Ok(KernelFn::new(op.name.clone(), dtype, params, locals, row))
 }
 
 /// One position of the scan: load the inputs, pre-map, fold into the prefix, and write the prefix
 /// after the fold (inclusive) or before it (exclusive).
-fn scan_pass(sh: &ReductionShape, sop: ReduceOp, exclusive: bool, pre: &ScalarExpr) -> Vec<Stmt> {
+fn scan_pass(
+    sh: &ReductionShape,
+    sop: ReduceOp,
+    exclusive: bool,
+    pre: &ScalarExpr,
+    post: Option<&ScalarExpr>,
+) -> Vec<Stmt> {
     let all_counters = || {
         (0..sh.r)
             .map(|d| ScalarExpr::Local(sh.counter(d)))
@@ -305,22 +316,49 @@ fn scan_pass(sh: &ReductionShape, sop: ReduceOp, exclusive: bool, pre: &ScalarEx
         local: sh.val,
         init: sh.up(substitute_inputs(pre, &|k| sh.loaded(k))),
     });
-    let write = Stmt::Store {
-        place: Place::Logical {
-            buffer: sh.n,
-            coords: all_counters(),
-        },
-        value: sh.stored(sop),
-    };
+    let write = scan_write(sh, sop, post, all_counters());
     let fold = fold_step(sop, sh.acc, sh.have, sh.val);
     if exclusive {
-        pass.push(write);
+        pass.extend(write);
         pass.extend(fold);
     } else {
         pass.extend(fold);
-        pass.push(write);
+        pass.extend(write);
     }
     pass
+}
+
+/// Write the prefix at the current position. With a fused post, the prefix is first rounded once
+/// to the compute dtype (`red`) and the post reads it as `Reduced(0)`, its `Input(k)` leaves being
+/// the elements loaded for this position (`docs/ir-kernel-layer.md` 7.1).
+fn scan_write(
+    sh: &ReductionShape,
+    sop: ReduceOp,
+    post: Option<&ScalarExpr>,
+    coords: Vec<ScalarExpr>,
+) -> Vec<Stmt> {
+    let place = Place::Logical {
+        buffer: sh.n,
+        coords,
+    };
+    let Some(post) = post else {
+        return vec![Stmt::Store {
+            place,
+            value: sh.stored(sop),
+        }];
+    };
+    let value = post::bind(post, &|leaf| match leaf {
+        ScalarExpr::Reduced(_) => Some(ScalarExpr::Local(sh.red)),
+        ScalarExpr::Input(k) => Some(ScalarExpr::Local(sh.loaded(u32::from(*k)))),
+        _ => None,
+    });
+    vec![
+        Stmt::Let {
+            local: sh.red,
+            init: sh.stored(sop),
+        },
+        Stmt::Store { place, value },
+    ]
 }
 
 /// The scan of one row: the prefix starts at the monoid identity and the scanned axis is walked
@@ -362,7 +400,7 @@ fn check_scan(
     op: &OpDef,
     dtype: ElementKind,
     rank: u8,
-) -> Result<(ReduceOp, bool, bool, &ScalarExpr), LiftDecline> {
+) -> Result<(ReduceOp, bool, bool, &ScalarExpr, Option<&ScalarExpr>), LiftDecline> {
     let Access::Scan {
         op: sop,
         axis,
@@ -380,9 +418,12 @@ fn check_scan(
     if matches!(sop, ReduceOp::Mean) {
         return Err(LiftDecline::UnsupportedForm("a Mean scan (not a monoid)"));
     }
-    if !matches!(post, ScalarExpr::Reduced(0)) {
-        return Err(LiftDecline::UnsupportedForm("a fused post-expression"));
-    }
+    let post = if matches!(post, ScalarExpr::Reduced(0)) {
+        None
+    } else {
+        post::check_post(post, 1)?;
+        Some(post)
+    };
     if u32::from(*axis) + 1 != u32::from(rank) {
         return Err(LiftDecline::UnsupportedForm(
             "a scan over a non-innermost axis",
@@ -390,7 +431,7 @@ fn check_scan(
     }
     check_plain(op, dtype, rank)?;
     leaves_ok(pre)?;
-    Ok((*sop, *reverse, *exclusive, pre))
+    Ok((*sop, *reverse, *exclusive, pre, post))
 }
 
 /// The scan monoid identity (the oracle's `scan_identity`, float domain) as an expression of the
