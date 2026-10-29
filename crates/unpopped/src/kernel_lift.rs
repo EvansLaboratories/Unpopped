@@ -22,6 +22,7 @@ use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 use crate::types::map_children;
 
 mod im2col;
+mod post;
 mod row_reduce;
 mod window;
 pub use im2col::lift_im2col_opdef;
@@ -216,7 +217,7 @@ pub fn lift_reduction_opdef(
     dtype: ElementKind,
     rank: u8,
 ) -> Result<KernelFn, LiftDecline> {
-    let (rop, axes, keepdim) = check_reduction(op, dtype, rank)?;
+    let (rop, axes, keepdim, post) = check_reduction(op, dtype, rank)?;
     let sh = ReductionShape::new(op.n_inputs, dtype, rank, axes);
     let mut body = Block(vec![
         Stmt::Let {
@@ -235,18 +236,33 @@ pub fn lift_reduction_opdef(
     body.0.extend(sh.reduce_loop(op, rop).0);
     let out_coords = sh.out_coords(keepdim);
     let out_rank = u8::try_from(out_coords.len()).expect("rank is at most 8");
+    let value = match post {
+        None => sh.stored(rop),
+        Some(post) => {
+            body.0.push(Stmt::Let {
+                local: sh.red,
+                init: sh.stored(rop),
+            });
+            post::bind(post, &|leaf| {
+                matches!(leaf, ScalarExpr::Reduced(_)).then(|| ScalarExpr::Local(sh.red))
+            })
+        }
+    };
     body.0.push(Stmt::Store {
         place: Place::Logical {
             buffer: sh.n,
             coords: out_coords,
         },
-        value: sh.stored(rop),
+        value,
     });
     for &d in sh.kept.iter().rev() {
         body = for_axis(d, sh.r, body);
     }
 
-    let (params, locals) = sh.signature(out_rank);
+    let (params, mut locals) = sh.signature(out_rank);
+    if post.is_some() {
+        locals.push(LocalDecl::scalar(dtype)); // red: the stage value rounded to the compute dtype
+    }
     Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body))
 }
 
@@ -423,7 +439,7 @@ fn check_reduction(
     op: &OpDef,
     dtype: ElementKind,
     rank: u8,
-) -> Result<(ReduceOp, AxisMask, bool), LiftDecline> {
+) -> Result<(ReduceOp, AxisMask, bool, Option<&ScalarExpr>), LiftDecline> {
     let Access::Reduction {
         op: rop,
         axes,
@@ -437,11 +453,17 @@ fn check_reduction(
     if !matches!(dtype, ElementKind::F32 | ElementKind::F64) {
         return Err(LiftDecline::UnsupportedForm("a non-float reduction"));
     }
-    if !matches!(post, ScalarExpr::Reduced(0)) {
-        return Err(LiftDecline::UnsupportedForm("a fused post-expression"));
-    }
+    let post = if matches!(post, ScalarExpr::Reduced(0)) {
+        None
+    } else {
+        post::check_post(post, 1)?;
+        if post::reads_input(post) {
+            return Err(LiftDecline::UnsupportedLeaf("an Input in a reduction post"));
+        }
+        Some(post)
+    };
     check_common(op, dtype, rank)?;
-    Ok((*rop, *axes, *keepdim))
+    Ok((*rop, *axes, *keepdim, post))
 }
 
 /// The axis bookkeeping of a lifted reduction: which axes are kept and which are folded, and the
@@ -457,6 +479,8 @@ struct ReductionShape {
     acc: u32,
     have: u32,
     val: u32,
+    /// The stage value rounded to the compute dtype (declared only when a post is lifted).
+    red: u32,
 }
 
 impl ReductionShape {
@@ -477,6 +501,7 @@ impl ReductionShape {
             acc: 2 * r + n,
             have: 2 * r + n + 1,
             val: 2 * r + n + 2,
+            red: 2 * r + n + 3,
         }
     }
 
