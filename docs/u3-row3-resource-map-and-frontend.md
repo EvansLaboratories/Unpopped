@@ -101,15 +101,13 @@ return itself stays I2's. If the PM means the code to land in one PR, say so at 
   This is the row 1 rule ("a manifest that does not say is not a manifest") applied to the input.
 - It is per map, not per `Frontend`, because it is a property of a pipeline-layout family
   (`2s1u`, `3s1u`), which is Fuel's dialect, not of the language (spec section 3, item 5).
-- Fuel measured every `Params` field in the corpus as scalar (`SLANG-SEAM-REQUIREMENTS.md:74` region), and
-  for scalar-only members the three rules give the same offsets. They differ only for **array members**,
-  which the corpus has in 4 kernels. Which rule Fuel's host struct assumes for those 4 stays
-  **UNVERIFIED and Fuel's to measure** (spec section 6); this row makes it a stated input instead of an
-  implicit one. **As built, `ParamField` is a scalar member** (a type and an offset), so a map cannot yet
-  describe an array member at all, and `ResourceMap::check` applies the manifest's scalar alignment and
-  overlap rules, which are the same under all three rules. The 4 array kernels are therefore outside what
-  a map can describe until Fuel's answer says what an array field needs; this note does not claim they
-  are covered.
+- Fuel measured all 147 Slang kernels at its `origin/main` (146 `Params` structs, 635 fields): zero
+  array, vector or nested fields, so std140 and scalar layout give the same offsets today
+  (`SLANG-SEAM-REQUIREMENTS.md:74`; an earlier claim of "4 fixed-array kernels" was wrong and is
+  retracted). No array members exist in Fuel's measured corpus. `ParamField` is a scalar member (a type
+  and an offset) and cannot represent one: a limit stated for future corpora, not a gap in the current
+  one. `ResourceMap::check` applies the manifest's scalar alignment and overlap rules, which are the same
+  under all three rules. What this row adds is that the rule is a stated input instead of an implicit one.
 - The cost of getting it wrong is bounded: the lift does not use the offsets (it resolves names);
   only the manifest built from the map carries them.
 
@@ -150,4 +148,4 @@ orders the row 3 and row 4 numbers at the gate (one minor bump, 0.33.0).
 2. "With I2's kernel-layer path" means the same **release**, not the same PR: separate PRs, merged
    back-to-back, published together. This lane's code PR is 0.33.0 (first breaking; Baracuda needs the
    `Frontend` constructor); lane 1's row 4 is 0.33.1; one 0.33.x release.
-3. Still open and Fuel's: std140 or scalar for the 4 array-member kernels (section 3).
+3. Closed by Fuel's measurement: no array members in the corpus, so std140 == scalar today (section 3).
