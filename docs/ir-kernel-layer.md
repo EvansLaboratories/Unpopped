@@ -179,6 +179,8 @@ emitter, which is why they can land under the seam hold.
   lift at `I32` and `I64`: an accumulator of the dtype itself (the oracle folds integers exactly and wraps, and wrapping at the width
   commutes with the store's truncation), the identities `0`, `1` and the type's extremes, no NaN arm. An integer `Mean` and a fused post
   at an integer dtype decline.
+  Integer **windows** (`Sum`/`Max`/`Min`, `tests/kernel_int_window_agrees.rs`) lift the same way; `RowReduce` is float-only in the plan, so
+  it has no integer form.
 
 - **Gather** (`lift_gather_opdef`, `tests/kernel_gather_agrees.rs`): byte-exact, an Elementwise op with one `ReadIndex::Indexed` input
   (torch `gather`, `index_select`, embedding), index dtype `I32`/`I64`/`U32`, every `OobPolicy`. The kernel loads the index once per cell,
