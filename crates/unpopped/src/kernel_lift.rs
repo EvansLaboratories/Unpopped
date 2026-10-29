@@ -741,7 +741,9 @@ fn extremum_step(rop: ReduceOp, acc: u32, have: u32, val: u32) -> Vec<Stmt> {
 // Contraction
 
 /// Lift a float `Access::Contraction`, plain `[M,K]x[K,N]` or batched `[B,M,K]x[B,K,N]`, computed
-/// at `dtype` (`F32` or `F64`), with the identity epilogue (`Reduced(0)`) and no fused bias.
+/// at `dtype` (`F32` or `F64`), with no fused bias. The identity epilogue (`Reduced(0)`) is
+/// byte-exact; a fused epilogue lifts in tolerance mode, with `Reduced(0)` bound to the K-sum
+/// rounded once to the compute dtype (`docs/ir-kernel-layer.md` 7.1); it must not read an `Input`.
 ///
 /// The oracle reads each operand by its physical strides at the logical `(m, k)` / `(k, n)`
 /// coordinate (so transposed and broadcast operands need nothing extra: that is what
@@ -755,7 +757,7 @@ fn extremum_step(rop: ReduceOp, acc: u32, have: u32, val: u32) -> Vec<Stmt> {
 ///
 /// A [`LiftDecline`].
 pub fn lift_contraction_opdef(op: &OpDef, dtype: ElementKind) -> Result<KernelFn, LiftDecline> {
-    let batched = check_contraction(op, dtype)?;
+    let (batched, epilogue) = check_contraction(op, dtype)?;
     let sh = ContractionShape::new(dtype, batched);
     let k_loop = for_axis(
         sh.k,
@@ -780,32 +782,47 @@ pub fn lift_contraction_opdef(op: &OpDef, dtype: ElementKind) -> Result<KernelFn
         init: sh.up(ScalarExpr::Const(0.0)),
     }]);
     body.0.extend(k_loop.0);
+    let value = sh.stored_value(epilogue, &mut body);
     body.0.push(Stmt::Store {
         place: Place::Logical {
             buffer: 2,
             coords: sh.out_coords(),
         },
-        value: sh.stored(),
+        value,
     });
     for d in sh.outer_axes().into_iter().rev() {
         body = for_axis(d, sh.axes, body);
     }
-    let (params, locals) = sh.signature();
+    let (params, mut locals) = sh.signature();
+    if epilogue.is_some() {
+        locals.push(LocalDecl::scalar(dtype)); // red: the K-sum rounded to the compute dtype
+    }
     Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body))
 }
 
 /// `true` when batched. The op must be exactly a plain or a batched matmul with the identity
 /// epilogue, two inputs (no fused bias) and float compute.
-fn check_contraction(op: &OpDef, dtype: ElementKind) -> Result<bool, LiftDecline> {
+fn check_contraction(
+    op: &OpDef,
+    dtype: ElementKind,
+) -> Result<(bool, Option<&ScalarExpr>), LiftDecline> {
     let Access::Contraction { axes, epilogue, .. } = &op.access else {
         return Err(LiftDecline::NotContraction);
     };
     if !matches!(dtype, ElementKind::F32 | ElementKind::F64) {
         return Err(LiftDecline::UnsupportedForm("a non-float contraction"));
     }
-    if !matches!(epilogue, ScalarExpr::Reduced(0)) {
-        return Err(LiftDecline::UnsupportedForm("a fused epilogue or bias"));
-    }
+    let epilogue = if matches!(epilogue, ScalarExpr::Reduced(0)) {
+        None
+    } else {
+        post::check_post(epilogue, 1)?;
+        if post::reads_input(epilogue) {
+            return Err(LiftDecline::UnsupportedLeaf(
+                "an Input in a contraction epilogue",
+            ));
+        }
+        Some(epilogue)
+    };
     let batched = *axes == ContractionAxes::batched_matmul();
     if !batched && *axes != ContractionAxes::matmul() {
         return Err(LiftDecline::UnsupportedForm(
@@ -816,7 +833,7 @@ fn check_contraction(op: &OpDef, dtype: ElementKind) -> Result<bool, LiftDecline
         return Err(LiftDecline::UnsupportedForm("a fused bias input"));
     }
     check_plain(op, dtype, if batched { 3 } else { 2 })?;
-    Ok(batched)
+    Ok((batched, epilogue))
 }
 
 /// Local ids of a lifted contraction: extents `0..axes` in the order `[B,] M, N, K`, counters
@@ -832,6 +849,8 @@ struct ContractionShape {
     a: u32,
     b: u32,
     acc: u32,
+    /// The K-sum rounded to the compute dtype (declared only when an epilogue is lifted).
+    red: u32,
 }
 
 impl ContractionShape {
@@ -848,6 +867,7 @@ impl ContractionShape {
             a: 2 * axes,
             b: 2 * axes + 1,
             acc: 2 * axes + 2,
+            red: 2 * axes + 3,
         }
     }
 
@@ -919,6 +939,21 @@ impl ContractionShape {
         } else {
             ScalarExpr::Cast(Box::new(acc), widen(self.dtype))
         }
+    }
+
+    /// The value to store. With a fused epilogue, `red` (the K-sum rounded once to the compute
+    /// dtype) is declared at the end of `body` and the epilogue reads it as `Reduced(0)`.
+    fn stored_value(&self, epilogue: Option<&ScalarExpr>, body: &mut Block) -> ScalarExpr {
+        let Some(epilogue) = epilogue else {
+            return self.stored();
+        };
+        body.0.push(Stmt::Let {
+            local: self.red,
+            init: self.stored(),
+        });
+        post::bind(epilogue, &|leaf| {
+            matches!(leaf, ScalarExpr::Reduced(_)).then(|| ScalarExpr::Local(self.red))
+        })
     }
 
     fn signature(&self) -> (Vec<Param>, Vec<LocalDecl>) {

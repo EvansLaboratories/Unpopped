@@ -9,7 +9,7 @@
 //! zeros, and the operands are also run transposed (column-major strides), because a lift that
 //! assumed dense row-major would agree on every dense case and still be wrong.
 
-use unpopped::ir::{ContractionAxes, Expr, OpDef, ScalarExpr, input, reduced};
+use unpopped::ir::{ContractionAxes, Expr, OpDef, ScalarExpr, input, konst, reduced};
 use unpopped::kernel::check_kernel;
 use unpopped::kernel_lift::{LiftDecline, lift_contraction_opdef};
 use unpopped::oracle::kernel_eval::{KernelArg, run_kernel};
@@ -228,9 +228,20 @@ fn forms_the_lift_does_not_cover_decline_with_a_reason() {
             Box::new(ScalarExpr::Const(2.0)),
         )),
     );
+    // A fused epilogue lifts in tolerance mode (the tests below).
+    assert!(lift_contraction_opdef(&scaled, ElementKind::F32).is_ok());
+    // An epilogue that reads an input is not a function of the K-sum.
+    let reads_input = OpDef::contraction(
+        "ri",
+        &[ElementKind::F32],
+        ContractionAxes::matmul(),
+        reduced(0) + input(0),
+    );
     assert_eq!(
-        lift_contraction_opdef(&scaled, ElementKind::F32),
-        Err(LiftDecline::UnsupportedForm("a fused epilogue or bias"))
+        lift_contraction_opdef(&reads_input, ElementKind::F32),
+        Err(LiftDecline::UnsupportedLeaf(
+            "an Input in a contraction epilogue"
+        ))
     );
     // An integer contraction.
     let int = OpDef::contraction(
@@ -275,4 +286,249 @@ fn the_k_order_is_ascending_and_the_accumulator_f64_when_compute_is_f64() {
         f64::from_le_bytes(got[..8].try_into().unwrap()).to_bits(),
         asc.to_bits()
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fused epilogues, in tolerance mode (`docs/ir-kernel-layer.md` 7.1). The oracle hands the K-sum to
+// the epilogue as an unrounded `f64`; the lift sets `Reduced(0) := Cast(f64 sum -> compute)`. So
+// `F64` compute is byte-exact and `F32` compute is compared to within `MAX_ULPS` ulps (NaN equal,
+// infinities exact), the oracle being a tolerance referee, as for `eval_contraction`. The bound is
+// for well-conditioned epilogues (condition number `|s f'(s) / f(s)|` of about 1 or less). Measured
+// on this corpus: `0.37 * s + 1` cancels near `s = -2.7` and moved by 71 ulps; `silu` at `s = -5`
+// has condition number about 5 and moved by 3. Neither is a lift defect (rounding `s` once is the
+// whole difference), so those shapes are not in the list below. `tanh` is evaluated at the compute
+// dtype by the oracle as well, so it agrees exactly and is no probe of the tolerance; the shifted
+// scale is (`the_tolerance_is_not_vacuous`).
+
+/// The PM-approved bound for tolerance mode (2026-10-29).
+const MAX_ULPS: u64 = 2;
+
+fn ulps_f32(a: f32, b: f32) -> u64 {
+    if a.is_nan() || b.is_nan() {
+        return if a.is_nan() && b.is_nan() {
+            0
+        } else {
+            u64::MAX
+        };
+    }
+    let key = |x: f32| {
+        let bits = i64::from(x.to_bits() as i32);
+        if bits < 0 {
+            i64::from(i32::MIN) - bits
+        } else {
+            bits
+        }
+    };
+    key(a).abs_diff(key(b))
+}
+
+fn max_ulps_f32(want: &[u8], got: &[u8]) -> u64 {
+    let f = |b: &[u8]| -> Vec<f32> {
+        b.chunks(4)
+            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .collect()
+    };
+    f(want)
+        .into_iter()
+        .zip(f(got))
+        .map(|(a, b)| ulps_f32(a, b))
+        .max()
+        .unwrap_or(0)
+}
+
+fn buffer_f64(shape: &[i64], value: impl Fn(usize) -> f64) -> TypedBuffer {
+    let n: i64 = shape.iter().product();
+    let bytes = (0..n as usize)
+        .flat_map(|i| value(i).to_le_bytes())
+        .collect();
+    let strides = (0..shape.len())
+        .map(|i| shape[i + 1..].iter().product())
+        .collect();
+    TypedBuffer::new(ElementKind::F64, shape.to_vec(), strides, bytes)
+}
+
+/// Benign values: the epilogues below are not defined (or not interesting) on NaN and infinity.
+fn benign(i: usize) -> f64 {
+    [0.3, -1.7, 2.9, 0.11, -0.45, 1.3, 0.77, -2.2][i % 8] * (1.0 + (i / 8) as f64 * 0.07)
+}
+
+fn epilogues(dtype: ElementKind) -> Vec<(&'static str, OpDef)> {
+    let mk = |name: &'static str, e: Expr| {
+        OpDef::contraction(name, &[dtype], ContractionAxes::matmul(), e)
+    };
+    vec![
+        (
+            "scale and shift",
+            mk("scale", reduced(0) * konst(0.37) + konst(10.0)),
+        ),
+        ("tanh", mk("tanh", reduced(0).tanh())),
+        ("sigmoid", mk("sigmoid", reduced(0).sigmoid())),
+    ]
+}
+
+#[test]
+fn f64_compute_is_byte_exact_for_every_epilogue() {
+    let lhs = buffer_f64(&[3, 5], benign);
+    let rhs = buffer_f64(&[5, 4], |i| benign(i + 3));
+    for (name, op) in epilogues(ElementKind::F64) {
+        let (want, got) = both(&op, &lhs, &rhs, &[3, 4]);
+        assert_eq!(got, want, "{name}");
+    }
+}
+
+#[test]
+fn f32_epilogues_are_within_the_tolerance() {
+    let lhs = buffer(&[3, 5], &[5, 1], |i| benign(i) as f32);
+    let rhs = buffer(&[5, 4], &[4, 1], |i| benign(i + 3) as f32);
+    for (name, op) in epilogues(ElementKind::F32) {
+        let (want, got) = both(&op, &lhs, &rhs, &[3, 4]);
+        let worst = max_ulps_f32(&want, &got);
+        assert!(
+            worst <= MAX_ULPS,
+            "{name}: {worst} ulps apart (bound {MAX_ULPS})"
+        );
+    }
+}
+
+#[test]
+fn the_tolerance_is_not_vacuous() {
+    // Control: rounding the K-sum to f32 before the epilogue really moves some cell, so the
+    // tolerance cases are not secretly byte-exact.
+    let mut moved = false;
+    for m in 1..30i64 {
+        let lhs = buffer(&[m, 5], &[5, 1], |i| benign(i % 16) as f32);
+        let rhs = buffer(&[5, 4], &[4, 1], |i| benign(i + 3) as f32);
+        let op = OpDef::contraction(
+            "t",
+            &[ElementKind::F32],
+            ContractionAxes::matmul(),
+            reduced(0) * konst(0.37) + konst(10.0),
+        );
+        let (want, got) = both(&op, &lhs, &rhs, &[m, 4]);
+        assert!(max_ulps_f32(&want, &got) <= MAX_ULPS);
+        moved |= want != got;
+    }
+    assert!(
+        moved,
+        "some cell differs between the unrounded and rounded K-sum"
+    );
+}
+
+#[test]
+fn a_wide_accumulator_is_required_under_an_epilogue() {
+    // 1e8 + 1 - 1e8 + 0.5 + 2 = 3.5 in f64; an f32 accumulator loses the 1 and gets 2.5.
+    let op = OpDef::contraction(
+        "dbl",
+        &[ElementKind::F32],
+        ContractionAxes::matmul(),
+        reduced(0) * konst(2.0),
+    );
+    let lhs = buffer(&[1, 5], &[5, 1], lhs_value);
+    let rhs = buffer(&[5, 1], &[1, 1], |_| 1.0);
+    let (want, got) = both(&op, &lhs, &rhs, &[1, 1]);
+    assert!(max_ulps_f32(&want, &got) <= MAX_ULPS);
+    assert_eq!(f32::from_le_bytes(got[..4].try_into().unwrap()), 7.0);
+}
+
+#[test]
+fn a_batched_epilogue_agrees() {
+    let lhs = buffer_f64(&[2, 3, 5], benign);
+    let rhs = buffer_f64(&[2, 5, 4], |i| benign(i + 1));
+    let op = OpDef::contraction(
+        "bt",
+        &[ElementKind::F64],
+        ContractionAxes::batched_matmul(),
+        reduced(0).tanh(),
+    );
+    let (want, got) = both(&op, &lhs, &rhs, &[2, 3, 4]);
+    assert_eq!(got, want);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Ill-conditioned epilogues state their own bound (spec 7.1). Rounding the K-sum `s` once moves it
+// by at most half an ulp, so a post `f` can move by `k / 2` ulp of its result, `k = |s f'(s) / f(s)|`;
+// the bound for a cell is `ceil(k / 2) + 1` (the `+ 1` covers the post's own rounding). Each case
+// shows both sides: every cell is inside its stated bound, and the stated bound is not vacuous
+// because the default bound is broken somewhere (so loosening it is what the case needs).
+
+/// The `f64` K-sums of an `[m, 5] x [5, 4]` product, row-major.
+fn k_sums(lhs: &[f32], rhs: &[f32], m: usize) -> Vec<f64> {
+    (0..m)
+        .flat_map(|i| (0..4).map(move |j| (i, j)))
+        .map(|(i, j)| {
+            (0..5)
+                .map(|k| f64::from(lhs[i * 5 + k]) * f64::from(rhs[k * 4 + j]))
+                .sum()
+        })
+        .collect()
+}
+
+/// Run `epilogue` over `m` rows of the benign corpus; return `(ulps, bound)` per cell, with the
+/// bound from `condition(s)`.
+fn ulps_against_bound(epilogue: Expr, condition: impl Fn(f64) -> f64, m: usize) -> Vec<(u64, u64)> {
+    let l: Vec<f32> = (0..m * 5).map(|i| benign(i % 16) as f32).collect();
+    let r: Vec<f32> = (0..20).map(|i| benign(i + 3) as f32).collect();
+    let lhs = buffer(&[m as i64, 5], &[5, 1], |i| l[i]);
+    let rhs = buffer(&[5, 4], &[4, 1], |i| r[i]);
+    let op = OpDef::contraction(
+        "ill",
+        &[ElementKind::F32],
+        ContractionAxes::matmul(),
+        epilogue,
+    );
+    let (want, got) = both(&op, &lhs, &rhs, &[m as i64, 4]);
+    let f = |b: &[u8]| -> Vec<f32> {
+        b.chunks(4)
+            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .collect()
+    };
+    k_sums(&l, &r, m)
+        .into_iter()
+        .zip(f(&want).into_iter().zip(f(&got)))
+        .map(|(s, (w, g))| (ulps_f32(w, g), (condition(s) / 2.0).ceil() as u64 + 1))
+        .collect()
+}
+
+fn assert_states_its_own_bound(cells: &[(u64, u64)]) {
+    let over_default = cells.iter().filter(|(u, _)| *u > MAX_ULPS).count();
+    assert!(
+        over_default > 0,
+        "the default bound is never broken, so the case needs no bound of its own"
+    );
+    for (ulps, bound) in cells {
+        assert!(ulps <= bound, "{ulps} ulps exceed the stated bound {bound}");
+    }
+    // Tight: the stated bound is within a factor of three of what happens on the worst cell.
+    let (worst, bound) = cells
+        .iter()
+        .copied()
+        .max_by_key(|(u, _)| *u)
+        .expect("cells");
+    assert!(
+        bound <= 3 * worst,
+        "bound {bound} is more than three times the worst case {worst}"
+    );
+}
+
+#[test]
+fn a_cancelling_shift_states_its_own_bound() {
+    // 0.37 s + 1, condition number |0.37 s / (0.37 s + 1)|.
+    let cells = ulps_against_bound(
+        reduced(0) * konst(0.37) + konst(1.0),
+        |s| (0.37 * s / (0.37 * s + 1.0)).abs(),
+        12,
+    );
+    assert_states_its_own_bound(&cells);
+}
+
+#[test]
+fn silu_states_its_own_bound() {
+    // x * sigmoid(x): d/dx = sigmoid(x) (1 + x (1 - sigmoid(x))); condition number |x f' / f|.
+    let sig = |x: f64| 1.0 / (1.0 + (-x).exp());
+    let cells = ulps_against_bound(
+        reduced(0).silu(),
+        move |s| (1.0 + s * (1.0 - sig(s))).abs(),
+        12,
+    );
+    assert_states_its_own_bound(&cells);
 }
