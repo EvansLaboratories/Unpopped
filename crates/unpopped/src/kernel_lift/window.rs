@@ -228,7 +228,7 @@ impl Win {
             local: self.val,
             init: self.up(substitute_inputs(&g.pre, &|k| self.loaded(k))),
         });
-        valid.extend(fold_step(g.op, self.acc, self.have, self.val));
+        valid.extend(fold_step(g.op, self.acc, self.have, self.val, false));
         valid.push(Stmt::Assign {
             local: self.cnt,
             value: add(local(self.cnt), int(1)),
