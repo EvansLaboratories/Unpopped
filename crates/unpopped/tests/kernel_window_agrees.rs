@@ -258,10 +258,12 @@ fn forms_the_lift_does_not_cover_decline_with_a_reason() {
     );
     assert_eq!(
         lift_window_opdef(
-            &BASE.op(ReduceOp::Sum, ElementKind::I32),
-            ElementKind::I32,
+            &BASE.op(ReduceOp::Sum, ElementKind::I16),
+            ElementKind::I16,
             2
         ),
-        Err(LiftDecline::UnsupportedForm("a non-float window"))
+        Err(LiftDecline::UnsupportedForm(
+            "a window outside F32, F64, I32 and I64"
+        ))
     );
 }
