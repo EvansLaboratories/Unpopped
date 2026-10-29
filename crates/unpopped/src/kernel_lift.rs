@@ -22,8 +22,10 @@ use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 use crate::types::map_children;
 
 mod im2col;
+mod row_reduce;
 mod window;
 pub use im2col::lift_im2col_opdef;
+pub use row_reduce::lift_row_reduce_opdef;
 pub use window::lift_window_opdef;
 
 /// Why an `OpDef` was not lifted.
@@ -43,6 +45,8 @@ pub enum LiftDecline {
     NotIm2Col,
     /// The op is not `Access::Window` (for [`lift_window_opdef`]).
     NotWindow,
+    /// The op is not `Access::RowReduce` (for [`lift_row_reduce_opdef`]).
+    NotRowReduce,
     /// More than one output, a per-output dtype, a gather/scatter, a runtime base offset or a
     /// non-identity view: forms this increment does not lift.
     UnsupportedForm(&'static str),
