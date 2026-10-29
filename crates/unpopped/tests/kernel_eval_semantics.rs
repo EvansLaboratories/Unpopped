@@ -270,3 +270,90 @@ fn break_and_continue_work_inside_a_while_loop() {
     // Passes see local 1 = 1, 2 (skipped by Continue), 3: the last store wins with 3 (never 2).
     assert_eq!(read_i32(&args[0]), [3, 0]);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Mixed-type expressions: why the interpreter evaluates them node by node.
+//
+// The oracle's expression evaluator rounds every float operation to ONE dtype (the plan's
+// compute dtype). A reduction accumulates in `f64` inside an `f32` kernel, so a kernel-layer
+// expression can mix widths, and evaluating `f64 + f64` under an `f32` evaluator would round the
+// sum to `f32`. The interpreter therefore evaluates a mixed-type expression one node at a time,
+// each node at the type of its operands; a pure compute-dtype expression keeps the oracle path
+// (which is what makes the layers-agree tests byte-exact). These two tests pin the difference.
+
+const F64: ElementKind = ElementKind::F64;
+
+fn f64_out() -> KernelArg {
+    KernelArg::Buffer(TypedBuffer::new(F64, vec![1], vec![1], vec![0u8; 8]))
+}
+
+fn read_f64(a: &KernelArg) -> f64 {
+    let KernelArg::Buffer(b) = a else { panic!() };
+    f64::from_le_bytes(b.bytes[..8].try_into().unwrap())
+}
+
+fn widen_spec() -> unpopped::ir::CastSpec {
+    unpopped::ir::CastSpec {
+        to: F64,
+        round: unpopped::ir::RoundMode::NearestEven,
+        sat: unpopped::ir::Saturation::Wrap,
+    }
+}
+
+#[test]
+fn an_f64_sum_inside_an_f32_kernel_is_rounded_at_f64() {
+    // 1e8 + 1 is exact in f64 (100000001) and rounds to 1e8 in f32.
+    let wide = |v: f64| ScalarExpr::Cast(Box::new(ScalarExpr::Const(v)), widen_spec());
+    let kernel = KernelFn::new(
+        "wide",
+        ElementKind::F32,
+        vec![Param::buffer("out", F64, BufferRole::Write, Some(1))],
+        vec![LocalDecl::scalar(F64)],
+        Block(vec![
+            Stmt::Let {
+                local: 0,
+                init: ScalarExpr::Add(Box::new(wide(1.0e8)), Box::new(wide(1.0))),
+            },
+            Stmt::Store {
+                place: Place::Logical {
+                    buffer: 0,
+                    coords: vec![ci(0)],
+                },
+                value: local(0),
+            },
+        ]),
+    );
+    let mut args = vec![f64_out()];
+    run_kernel(&kernel, &mut args).expect("runs");
+    assert_eq!(read_f64(&args[0]), 100_000_001.0);
+}
+
+#[test]
+fn an_integer_local_widens_to_f64_exactly() {
+    let kernel = KernelFn::new(
+        "int_to_f64",
+        ElementKind::F32,
+        vec![Param::buffer("out", F64, BufferRole::Write, Some(1))],
+        vec![LocalDecl::scalar(I32), LocalDecl::scalar(F64)],
+        Block(vec![
+            Stmt::Let {
+                local: 0,
+                init: ci(16_777_217), // 2^24 + 1: not representable in f32
+            },
+            Stmt::Let {
+                local: 1,
+                init: ScalarExpr::Cast(Box::new(local(0)), widen_spec()),
+            },
+            Stmt::Store {
+                place: Place::Logical {
+                    buffer: 0,
+                    coords: vec![ci(0)],
+                },
+                value: local(1),
+            },
+        ]),
+    );
+    let mut args = vec![f64_out()];
+    run_kernel(&kernel, &mut args).expect("runs");
+    assert_eq!(read_f64(&args[0]), 16_777_217.0);
+}
