@@ -229,12 +229,15 @@ impl Row {
         let mut params: Vec<Param> = (0..self.n)
             .map(|k| Param::buffer(format!("in{k}"), self.dtype, BufferRole::Read, Some(rank)))
             .collect();
-        params.push(Param::buffer("out", self.dtype, BufferRole::Write, Some(rank)));
+        params.push(Param::buffer(
+            "out",
+            self.dtype,
+            BufferRole::Write,
+            Some(rank),
+        ));
         params.extend((0..self.r).map(|d| Param::scalar(format!("n{d}"), ElementKind::I32, d)));
         let mut locals = vec![LocalDecl::scalar(ElementKind::I32); 2 * self.r as usize];
-        locals.extend(
-            (0..(self.stages + 1) * self.n).map(|_| LocalDecl::scalar(self.dtype)),
-        );
+        locals.extend((0..(self.stages + 1) * self.n).map(|_| LocalDecl::scalar(self.dtype)));
         for _ in 0..self.stages {
             locals.push(LocalDecl::scalar(ElementKind::F64)); // acc
             locals.push(LocalDecl::scalar(ElementKind::I32)); // have

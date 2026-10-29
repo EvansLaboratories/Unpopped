@@ -25,19 +25,7 @@ use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, try_structur
 const MAX_ULPS: u64 = 2;
 
 const VALUES: [f64; 13] = [
-    1.0e8,
-    1.0,
-    -1.0e8,
-    0.5,
-    3.25,
-    -2.0,
-    7.0,
-    0.1,
-    -0.75,
-    12.0,
-    -5.5,
-    0.3,
-    2.0,
+    1.0e8, 1.0, -1.0e8, 0.5, 3.25, -2.0, 7.0, 0.1, -0.75, 12.0, -5.5, 0.3, 2.0,
 ];
 
 fn buffer(dtype: ElementKind, rows: i64, k: i64, f: impl Fn(usize) -> f64) -> TypedBuffer {
@@ -62,7 +50,11 @@ fn both(op: &OpDef, dtype: ElementKind, src: &TypedBuffer) -> (Vec<u8>, Vec<u8>)
         .bytes;
 
     let kernel = lift_row_reduce_opdef(op, dtype, 2).expect("the row reduction lifts");
-    assert_eq!(check_kernel(&kernel), Ok(()), "a lifted kernel is well formed");
+    assert_eq!(
+        check_kernel(&kernel),
+        Ok(()),
+        "a lifted kernel is well formed"
+    );
     let mut args = vec![
         KernelArg::Buffer(src.clone()),
         KernelArg::Buffer(TypedBuffer::new(
@@ -84,11 +76,19 @@ fn both(op: &OpDef, dtype: ElementKind, src: &TypedBuffer) -> (Vec<u8>, Vec<u8>)
 /// Distance in representable `f32` values; NaN equals NaN, infinities must match exactly.
 fn ulps_f32(a: f32, b: f32) -> u64 {
     if a.is_nan() || b.is_nan() {
-        return if a.is_nan() && b.is_nan() { 0 } else { u64::MAX };
+        return if a.is_nan() && b.is_nan() {
+            0
+        } else {
+            u64::MAX
+        };
     }
     let key = |x: f32| {
         let bits = i64::from(x.to_bits() as i32);
-        if bits < 0 { i64::from(i32::MIN) - bits } else { bits }
+        if bits < 0 {
+            i64::from(i32::MIN) - bits
+        } else {
+            bits
+        }
     };
     key(a).abs_diff(key(b))
 }
@@ -146,7 +146,9 @@ fn rms_norm(dtype: ElementKind) -> OpDef {
 }
 
 fn data(rows: i64, k: i64, dtype: ElementKind) -> TypedBuffer {
-    buffer(dtype, rows, k, |i| VALUES[i % VALUES.len()] * (1.0 + (i / 13) as f64 * 0.37))
+    buffer(dtype, rows, k, |i| {
+        VALUES[i % VALUES.len()] * (1.0 + (i / 13) as f64 * 0.37)
+    })
 }
 
 #[test]
@@ -164,7 +166,11 @@ fn identity_epilogues_are_byte_exact() {
 
 #[test]
 fn f64_compute_is_byte_exact_for_every_epilogue() {
-    for op in [softmax(ElementKind::F64), centred_quotient(ElementKind::F64), rms_norm(ElementKind::F64)] {
+    for op in [
+        softmax(ElementKind::F64),
+        centred_quotient(ElementKind::F64),
+        rms_norm(ElementKind::F64),
+    ] {
         let (want, got) = both(&op, ElementKind::F64, &data(3, 13, ElementKind::F64));
         assert_eq!(got, want);
     }
@@ -179,7 +185,10 @@ fn f32_epilogues_are_within_the_tolerance() {
     ] {
         let (want, got) = both(&op, ElementKind::F32, &data(5, 13, ElementKind::F32));
         let worst = max_ulps_f32(&want, &got);
-        assert!(worst <= MAX_ULPS, "{name}: {worst} ulps apart (bound {MAX_ULPS})");
+        assert!(
+            worst <= MAX_ULPS,
+            "{name}: {worst} ulps apart (bound {MAX_ULPS})"
+        );
     }
 }
 
@@ -190,12 +199,17 @@ fn the_tolerance_is_not_vacuous() {
     // oracle divides by the unrounded f64 sum, the kernel by its f32 rounding.
     let mut moved = false;
     for rows in 1..40 {
-        let src = buffer(ElementKind::F32, rows, 11, |i| ((i * 7 + 3) % 19) as f64 * 0.37 - 2.0);
+        let src = buffer(ElementKind::F32, rows, 11, |i| {
+            ((i * 7 + 3) % 19) as f64 * 0.37 - 2.0
+        });
         let (want, got) = both(&softmax(ElementKind::F32), ElementKind::F32, &src);
         assert!(max_ulps_f32(&want, &got) <= MAX_ULPS);
         moved |= want != got;
     }
-    assert!(moved, "some softmax row differs between the unrounded and rounded stage value");
+    assert!(
+        moved,
+        "some softmax row differs between the unrounded and rounded stage value"
+    );
 }
 
 #[test]
@@ -206,7 +220,9 @@ fn a_wide_accumulator_is_required() {
         vec![stage(input(0), ReduceOp::Sum)],
         reduced(0),
     );
-    let src = buffer(ElementKind::F32, 1, 5, |i| [1.0e8, 1.0, -1.0e8, 0.5, 2.0][i]);
+    let src = buffer(ElementKind::F32, 1, 5, |i| {
+        [1.0e8, 1.0, -1.0e8, 0.5, 2.0][i]
+    });
     let (want, got) = both(&op, ElementKind::F32, &src);
     assert_eq!(got, want);
     let v = f32::from_le_bytes(got[..4].try_into().unwrap());
@@ -231,7 +247,10 @@ fn nan_and_infinity_rows_agree() {
             2.0,
         ][i]
     });
-    for op in [softmax(ElementKind::F32), centred_quotient(ElementKind::F32)] {
+    for op in [
+        softmax(ElementKind::F32),
+        centred_quotient(ElementKind::F32),
+    ] {
         let (want, got) = both(&op, ElementKind::F32, &src);
         assert!(max_ulps_f32(&want, &got) <= MAX_ULPS);
         let f = |b: &[u8]| -> Vec<bool> {
@@ -281,6 +300,9 @@ fn extremum_rows_that_never_cross_zero_agree() {
         let (want, got) = both(&op, ElementKind::F32, src);
         assert_eq!(got, want, "{stage_op:?}");
         let first = f32::from_le_bytes(got[..4].try_into().unwrap());
-        assert_ne!(first, 0.0, "{stage_op:?}: the extremum is not the zero identity");
+        assert_ne!(
+            first, 0.0,
+            "{stage_op:?}: the extremum is not the zero identity"
+        );
     }
 }
