@@ -200,9 +200,10 @@ fn substitute_inputs(body: &ScalarExpr, loaded: &dyn Fn(u32) -> u32) -> ScalarEx
 /// oracle's order (kept axes outermost ascending, reduced axes ascending, last fastest), and one
 /// `Cast` down at the `Store`. `Max` and `Min` carry a `have` flag and keep a NaN once seen (the
 /// oracle's rule: `!have || v.is_nan() || better`); `Mean` divides the `F64` accumulator by the
-/// reduced extents' product. Only the identity post-expression (`Reduced(0)`) lifts: a fused post
-/// would have to run at the compute dtype over an unrounded `F64` value, which the typed kernel
-/// language cannot state.
+/// reduced extents' product. The identity post-expression (`Reduced(0)`) is byte-exact. A fused
+/// post lifts in tolerance mode: the oracle runs it over an unrounded `F64` value, which the typed
+/// kernel language cannot state, so the lift binds `Reduced(0)` to the finalised fold rounded once
+/// to the compute dtype (`docs/ir-kernel-layer.md` 7.1); it must not read an `Input`.
 ///
 /// Parameters, in order: the inputs (`Read`, rank `rank`), the output (`Write`; rank `rank` with
 /// `keepdim`, else the kept-axis count), then one `I32` extent per input axis. Locals:
@@ -236,18 +237,7 @@ pub fn lift_reduction_opdef(
     body.0.extend(sh.reduce_loop(op, rop).0);
     let out_coords = sh.out_coords(keepdim);
     let out_rank = u8::try_from(out_coords.len()).expect("rank is at most 8");
-    let value = match post {
-        None => sh.stored(rop),
-        Some(post) => {
-            body.0.push(Stmt::Let {
-                local: sh.red,
-                init: sh.stored(rop),
-            });
-            post::bind(post, &|leaf| {
-                matches!(leaf, ScalarExpr::Reduced(_)).then(|| ScalarExpr::Local(sh.red))
-            })
-        }
-    };
+    let value = sh.stored_value(rop, post, &mut body);
     body.0.push(Stmt::Store {
         place: Place::Logical {
             buffer: sh.n,
@@ -587,6 +577,26 @@ impl ReductionShape {
         } else {
             ScalarExpr::Cast(Box::new(finalized), widen(self.dtype))
         }
+    }
+
+    /// The value to store. With a fused post, `red` (the finalised fold rounded once to the
+    /// compute dtype) is declared at the end of `body` and the post reads it as `Reduced(0)`.
+    fn stored_value(
+        &self,
+        rop: ReduceOp,
+        post: Option<&ScalarExpr>,
+        body: &mut Block,
+    ) -> ScalarExpr {
+        let Some(post) = post else {
+            return self.stored(rop);
+        };
+        body.0.push(Stmt::Let {
+            local: self.red,
+            init: self.stored(rop),
+        });
+        post::bind(post, &|leaf| {
+            matches!(leaf, ScalarExpr::Reduced(_)).then(|| ScalarExpr::Local(self.red))
+        })
     }
 
     /// Parameters (inputs, output, one `I32` extent per input axis) and local declarations.

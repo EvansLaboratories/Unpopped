@@ -208,3 +208,22 @@ fn a_post_that_reads_an_input_declines() {
         Err(LiftDecline::UnsupportedLeaf("an Input in a reduction post"))
     );
 }
+
+#[test]
+fn a_wide_accumulator_is_required_under_a_post() {
+    // 1e8 + 1 - 1e8 + 0.5 + 2 = 3.5 in f64; an f32 accumulator loses the 1 and gets 2.5.
+    let op = OpDef::reduction_post(
+        "dbl",
+        1,
+        &[ElementKind::F32],
+        Expr(input(0).0),
+        ReduceOp::Sum,
+        reduced(0) * konst(2.0),
+    );
+    let src = buffer(ElementKind::F32, 1, |i| {
+        [1.0e8, 1.0, -1.0e8, 0.5, 2.0, 0.0, 0.0][i]
+    });
+    let (want, got) = both(&op, ElementKind::F32, &src);
+    assert!(max_ulps_f32(&want, &got) <= MAX_ULPS);
+    assert_eq!(f32::from_le_bytes(got[..4].try_into().unwrap()), 7.0);
+}
