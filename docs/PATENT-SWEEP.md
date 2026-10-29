@@ -83,6 +83,25 @@ Present: "generating one or more intermediate representation entries for the one
 
 Verdict for the `unpopped*` crates: **clear**, four required elements are absent. **Design hazard to record:** adding a runtime kernel cache keyed by an IR-derived identifier, together with a run-time choice of processor type and execution scheduling, would supply every remaining element of claim 1. The `jit.rs` note about a pre-built-variant cache should not be built in this crate without a fresh read of this patent (expiry estimated 2030-07-05).
 
+## Addendum: layout algebra (U6), 2026-10-28, `unpopped-vocab::layout_algebra`
+
+Idea 15: a hierarchical `shape:stride` layout value with composition, complement, divide, product, coalesce and an XOR swizzle, as pure data. The idea is published prior art in the CuTe documentation and papers (e.g. arXiv 2603.02298, "CuTe Layout Representation and Algebra"), so novelty is not claimed; this addendum asks only whether a patent reads on it. Same tool and limits as above (web search restricted to `patents.google.com` and `patents.justia.com`; result lists, no claims fetched).
+
+Queries (all 2026-10-28):
+- "patent tensor layout algebra composition complement hierarchical shape stride mapping coordinates to memory offsets compiler GPU": no patent on the algebra itself; unrelated tensor patents only (US20210064987A1, US20170200094A1, US20230004365A1, KR20210021258A, US20240176663).
+- "patent XOR swizzle shared memory address bank conflict avoidance bit permutation tensor layout": NVIDIA tensor-memory-accelerator family, US20230289304 / US12141082B2 / US20240176663 (hardware unit that swizzles on load into shared memory; patterns held as lookup tables).
+
+| patent | what the search summary says | why flagged | claims |
+|---|---|---|---|
+| US20230289304A1 | NVIDIA: hardware unit swizzles data as it loads a tensor into shared memory, fixed patterns per layout, to avoid bank conflicts | swizzle for bank-conflict avoidance (`Swizzle`) | published application, same family as the grant below; **outside as read**, superseded by the grant |
+| US12141082B2 | continuation of the above; swizzle encoded as 8x8 lookup tables | same | granted; all 5 independent claims read by the PM: **outside as read** (needs memory-access hardware circuits asynchronously transferring data; this module has none) |
+| US20240176663A1 | NVIDIA: tensor map cache storage, repeats the bank-swizzling description | same | pending; published claims read by the PM: **outside as read** (needs tensor acceleration circuits and tensor maps in cache); low-medium confidence, current claims unread |
+| US20210064987A1 | NVIDIA: reinterprets a tensor with overlapping strides so logical elements share memory (stride-0 / overlapping-stride layouts) | `Layout` allows stride 0 and overlapping strides | pending, allowed 2026-06-17; published claims read by the PM: **outside as read** (convolution on image data / re-dimensioned tensor); low-medium confidence, allowed claims unread |
+
+Reads (PM agent, 2026-10-28, Google Patents text only, not USPTO PDFs, specifications not read; record C:/Projects/.lane-state/patent-reads/u6-layout.md): the four rows above say what was read. Wording is **outside as read**, not "clear"; nothing reads on `layout_algebra`. **Triggers:** re-read US20240176663A1 and US20210064987A1 when either grants; the continuation US12499052B2 is unread.
+
+Not read, from the search: the claims of any paper hit and of other result-list patents (US20170200094A1, US20230004365A1, KR20210021258A). Verdict: the four listed patents are **outside as read** (PM, independent claims, see Reads); everything else the search returned is not assessed.
+
 ## Limitations
 - AI-assisted search by one model in one session; the search tool returns general web results, mostly papers, and found no patent for several ideas (2, 4, 9, 13, 14). **A null from this tool is not evidence that no patent exists**: the same tool did find patents on other queries, but it is not a patent database and cannot be queried by claim language, class or assignee.
 - No query used CPC classes (G06F 8/41, G06F 8/51, G06F 9/45516), USPTO full text, Espacenet or WIPO PATENTSCOPE. These are the next step for anyone with access.
