@@ -56,6 +56,10 @@ pub fn lift_scatter_opdef(
 /// Local ids and the scatter's fields.
 struct Scatter {
     dtype: ElementKind,
+    /// The destination's element type: the compute dtype, or an integer count type (`bincount`).
+    out_dtype: ElementKind,
+    /// The constant a `bincount` adds per element (its body is `Const(c)`, not a read).
+    count: Option<i64>,
     index_dtype: ElementKind,
     r: u32,
     n: u32,
@@ -87,13 +91,20 @@ fn check_scatter(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Scatter, Li
     if matches!(combine, WriteCombine::AtomicMax | WriteCombine::AtomicMin) && !is_int {
         return Err(LiftDecline::UnsupportedForm("a float atomic max or min"));
     }
-    check_plain_with(op, dtype, rank, Indexing::Scatter, false)?;
+    // A per-output dtype is admitted for `bincount` only: an integer count destination that takes
+    // `+= Const(c)` per source element.
+    let (out_dtype, count) = count_output(op, dtype, combine)?;
+    let mut plain = op.clone();
+    plain.out_dtype = None;
+    check_plain_with(&plain, dtype, rank, Indexing::Scatter, false)?;
     leaves_ok(&op.body)?;
     if usize::from(axis) >= usize::from(rank) || index >= op.n_inputs {
         return Err(LiftDecline::UnsupportedForm("an ill-formed scatter"));
     }
     Ok(Scatter {
         dtype,
+        out_dtype,
+        count,
         index_dtype,
         r: u32::from(rank),
         n: u32::from(op.n_inputs),
@@ -101,6 +112,32 @@ fn check_scatter(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Scatter, Li
         axis: u32::from(axis),
         combine,
     })
+}
+
+/// The destination dtype and, for a counting scatter, its per-element increment.
+fn count_output(
+    op: &OpDef,
+    dtype: ElementKind,
+    combine: WriteCombine,
+) -> Result<(ElementKind, Option<i64>), LiftDecline> {
+    let Some(out) = op.out_dtype else {
+        return Ok((dtype, None));
+    };
+    let ScalarExpr::Const(c) = op.body else {
+        return Err(LiftDecline::UnsupportedForm(
+            "a per-output dtype that is not a count",
+        ));
+    };
+    let counts = crate::types::int_range(out).is_some()
+        && matches!(combine, WriteCombine::AtomicAdd)
+        && c.fract() == 0.0
+        && c.abs() <= 1.0e9;
+    if !counts {
+        return Err(LiftDecline::UnsupportedForm(
+            "a per-output dtype that is not a count",
+        ));
+    }
+    Ok((out, Some(c as i64)))
 }
 
 impl Scatter {
@@ -133,7 +170,10 @@ impl Scatter {
 
     /// The store of one source cell into its destination.
     fn write(&self, op: &OpDef) -> Vec<Stmt> {
-        let value = substitute_inputs(&op.body, &|k| self.loaded(k));
+        let value = match self.count {
+            Some(c) => ScalarExpr::ConstInt(c, self.out_dtype),
+            None => substitute_inputs(&op.body, &|k| self.loaded(k)),
+        };
         let combined = |f: &dyn Fn(Box<ScalarExpr>, Box<ScalarExpr>) -> ScalarExpr| {
             vec![
                 Stmt::Load {
@@ -197,13 +237,13 @@ impl Scatter {
         } else {
             BufferRole::ReadWrite
         };
-        params.push(Param::buffer("out", self.dtype, role, Some(rank)));
+        params.push(Param::buffer("out", self.out_dtype, role, Some(rank)));
         params.extend((0..self.r).map(|d| Param::scalar(format!("n{d}"), ElementKind::I32, d)));
         params.push(Param::scalar("dst_extent", self.index_dtype, self.extent()));
         let mut locals = vec![LocalDecl::scalar(ElementKind::I32); 2 * self.r as usize];
         locals.extend((0..self.n).map(|k| LocalDecl::scalar(elem(k))));
         locals.push(LocalDecl::scalar(self.index_dtype)); // dst_extent
-        locals.push(LocalDecl::scalar(self.dtype)); // prev
+        locals.push(LocalDecl::scalar(self.out_dtype)); // prev
         (params, locals)
     }
 }
