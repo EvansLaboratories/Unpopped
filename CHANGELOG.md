@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.31.1` — feat (additive): the kernel interpreter and `lift_elementwise_opdef`, with the layers-agree differential (U2, #113)
+
+New `oracle::kernel_eval` (`run_kernel`, `KernelArg`, `KernelTrap`): runs a `KernelFn` on one logical thread in plain Rust, reusing the oracle's own evaluator for compute-dtype expressions (so a lifted body is evaluated by the same code as the original) and a small wrapped-integer evaluator for bounds, coordinates and conditions. New `kernel_lift::lift_elementwise_opdef` lowers an Elementwise `OpDef` (single output, identity views, no gather/scatter, body of `Input`/`Const`/`ConstInt` and operators) into a nested-`For` kernel, or returns a typed `LiftDecline`. `tests/kernel_layers_agree.rs`: byte-for-byte agreement with `oracle::evaluate` over every unary and binary op on f32 special values (signed zero, NaN, infinities, subnormals) with a broadcast input, f64, wrapped i32 add/sub/mul, plus the interpreter's own semantics (loop bounds read once, `Break`/`Continue`/`Return`, step limit, typed traps). Mutation-checked: stride handling, integer wrap, `Break` and `Continue` in `While` each turned a test red when deleted (the first corpus missed the last three; tests were added). No trait or struct shape change. Proposed number; the PM allocates.
+
 ## `0.31.0` — feat (BREAKING): `ScalarExpr::Local` and the kernel layer's types and scope checker (U2, #113)
 
 New leaf `ScalarExpr::Local(u32)` (and `DagNode::Local`): a read of a kernel-layer local. It has meaning only inside a `KernelFn`, so `types::infer`/`infer_ty` refuse it (`TypeError::LocalOutsideKernel`, new variant), the plan gate declines an `OpDef` body containing one (`types::has_local`), and every emitter-facing site declines it (`DeclinedOp::Kernel`, new variant); `ScalarExpr` is exhaustive, so every downstream `match` must choose. `types::infer_ty_in(e, compute, local_types)` types an expression inside a kernel.
