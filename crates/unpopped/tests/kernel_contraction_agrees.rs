@@ -107,6 +107,21 @@ fn both(op: &OpDef, lhs: &TypedBuffer, rhs: &TypedBuffer, out_shape: &[i64]) -> 
         .remove(0)
         .bytes;
 
+    let got = run_lifted(op, lhs, rhs, out_shape, out_strides, want.len());
+    (want, got)
+}
+
+/// Lift `op`, run the kernel on `lhs`, `rhs`, and return the first `len` bytes of its output.
+fn run_lifted(
+    op: &OpDef,
+    lhs: &TypedBuffer,
+    rhs: &TypedBuffer,
+    out_shape: &[i64],
+    out_strides: Vec<i64>,
+    len: usize,
+) -> Vec<u8> {
+    let dtype = lhs.dtype;
+    let rank = lhs.shape.len();
     let kernel = lift_contraction_opdef(op, dtype).expect("the contraction lifts");
     assert_eq!(
         check_kernel(&kernel),
@@ -137,7 +152,7 @@ fn both(op: &OpDef, lhs: &TypedBuffer, rhs: &TypedBuffer, out_shape: &[i64]) -> 
     let KernelArg::Buffer(got) = &args[2] else {
         unreachable!()
     };
-    (want.clone(), got.bytes[..want.len()].to_vec())
+    got.bytes[..len].to_vec()
 }
 
 fn lhs_value(i: usize) -> f32 {
