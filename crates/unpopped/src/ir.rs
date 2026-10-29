@@ -2380,7 +2380,7 @@ pub enum ReductionAccum {
 /// the other variants let a fused op read an input *through* a layout change in
 /// one pass, skipping a materialized `contiguize`/transpose copy (the §1 win).
 ///
-/// v1 emits `Transpose` (= rank-2 `Permute`) / `Permute` / `Broadcast`;
+/// v1 emits `Transpose` (= rank-2 `Permute`) / `Permute` / `Broadcast` / `Layout`;
 /// `Reshape` is carried for recognition + keying only (a reshape of a contiguous
 /// producer is the identity linear-index map — genuine rank-change emit belongs
 /// to items 03/10).
@@ -2412,6 +2412,23 @@ pub enum View {
         /// Logical rank of the pre-reshape producer.
         producer_rank: u8,
     },
+    /// An explicit strided read: iteration coordinate `c` reads element
+    /// `base_offset + sum_d c[d] * stride[d]`. Unlike the four variants above this
+    /// one **carries extents**: `shape` must equal the op's iteration extents (a
+    /// caller precondition, checked by the oracle, because the structure key still
+    /// abstracts numeric extents away), and `stride` is the truth for this input:
+    /// the operand's own runtime strides are not consulted, so the operand must
+    /// not carry a broadcast mask. It says what the four variants cannot (a
+    /// strided slice, a reshape of a dense producer to another rank, any
+    /// `unpopped_vocab::layout_algebra::Layout` of one mode per axis). Counts as
+    /// address-affecting like `Permute`. Axis order is the iteration order
+    /// (last axis fastest); [`crate::view_layout`] converts to and from a `Layout`.
+    Layout {
+        /// Extents, one per iteration axis; each `>= 1`.
+        shape: Vec<i64>,
+        /// Element strides, one per iteration axis; each `>= 0`.
+        stride: Vec<i64>,
+    },
 }
 
 impl View {
@@ -2427,6 +2444,12 @@ impl View {
         match self {
             View::Identity | View::Broadcast { .. } | View::Reshape { .. } => true,
             View::Permute { perm } => is_permutation(perm, rank),
+            View::Layout { shape, stride } => {
+                shape.len() == rank as usize
+                    && stride.len() == rank as usize
+                    && shape.iter().all(|&s| s >= 1)
+                    && stride.iter().all(|&d| d >= 0)
+            }
         }
     }
 
