@@ -136,7 +136,14 @@ impl Binding {
         elem: ElementKind,
         packing: Packing,
     ) -> Self {
-        Self { set, index, kind, role, elem, packing }
+        Self {
+            set,
+            index,
+            kind,
+            role,
+            elem,
+            packing,
+        }
     }
 }
 
@@ -156,7 +163,11 @@ impl ParamField {
     /// A param field.
     #[must_use]
     pub fn new(name: impl Into<String>, offset: u32, ty: ElementKind) -> Self {
-        Self { name: name.into(), offset, ty }
+        Self {
+            name: name.into(),
+            offset,
+            ty,
+        }
     }
 }
 
@@ -343,8 +354,15 @@ fn check_entry(e: &EntryManifest) -> Result<(), ManifestError> {
         return Err(ManifestError::ZeroWorkgroup(name()));
     }
     for (i, b) in e.bindings.iter().enumerate() {
-        if e.bindings[..i].iter().any(|p| (p.set, p.index) == (b.set, b.index)) {
-            return Err(ManifestError::DuplicateBinding { entry: name(), set: b.set, index: b.index });
+        if e.bindings[..i]
+            .iter()
+            .any(|p| (p.set, p.index) == (b.set, b.index))
+        {
+            return Err(ManifestError::DuplicateBinding {
+                entry: name(),
+                set: b.set,
+                index: b.index,
+            });
         }
         if matches!(b.packing, Packing::Packed { elems_per_word } if elems_per_word < 2) {
             return Err(ManifestError::DegeneratePacking { entry: name() });
@@ -353,10 +371,16 @@ fn check_entry(e: &EntryManifest) -> Result<(), ManifestError> {
     if let Some(p) = &e.params {
         for (i, f) in p.fields.iter().enumerate() {
             let Some(size) = scalar_bytes(f.ty) else {
-                return Err(ManifestError::UnsizedParamType { entry: name(), field: f.name.clone() });
+                return Err(ManifestError::UnsizedParamType {
+                    entry: name(),
+                    field: f.name.clone(),
+                });
             };
             if f.offset % size != 0 {
-                return Err(ManifestError::MisalignedParam { entry: name(), field: f.name.clone() });
+                return Err(ManifestError::MisalignedParam {
+                    entry: name(),
+                    field: f.name.clone(),
+                });
             }
             for g in &p.fields[..i] {
                 // `g` was sized when it was visited as `f`.

@@ -210,3 +210,7 @@ Source: the PM's second claim read (record: `C:/Projects/.lane-state/patent-read
 The NaN-propagation rule of `Max`/`Min` is not recited in any independent claim of the hit-21 patents.
 
 Re-read triggers: US20250285207A1 on grant; US11886833B2, US20180157465A1 and EP3791260A1 if MX block-scale computation, multi-level scales or mantissa dot products are added. The part-2 read also noted that this doc's earlier wording for hit 16 ("with a tile size") is not in the claims as read.
+
+#### Note, 0.32.16: U3 artifact/manifest and capability-set types (2026-10-29)
+
+New surface is passive data (a binding/params manifest, a keyed capability set) with a validity check; no variant selection, address-space qualifiers or graphics operation, so hits 19 and 20 stay as item 4 above says: **not covered, to be read before U3 builds scopes and memory spaces (build row 4)**. Not a new claim-shaped surface; no new read taken.
