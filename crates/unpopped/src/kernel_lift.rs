@@ -408,10 +408,6 @@ fn for_axis(d: u32, r: u32, inner: Block) -> Block {
 fn fold_step(rop: ReduceOp, acc: u32, have: u32, val: u32) -> Vec<Stmt> {
     let l = ScalarExpr::Local;
     let bx = Box::new;
-    let set = |v: u32| Stmt::Assign {
-        local: acc,
-        value: l(v),
-    };
     match rop {
         ReduceOp::Sum | ReduceOp::Mean => vec![Stmt::Assign {
             local: acc,
@@ -421,34 +417,44 @@ fn fold_step(rop: ReduceOp, acc: u32, have: u32, val: u32) -> Vec<Stmt> {
             local: acc,
             value: ScalarExpr::Mul(bx(l(acc)), bx(l(val))),
         }],
-        ReduceOp::Max | ReduceOp::Min => {
-            let better = if matches!(rop, ReduceOp::Max) {
-                BinaryOp::CmpGt
-            } else {
-                BinaryOp::CmpLt
-            };
-            // if !have { acc = v } else if v != v { acc = v } else if better(v, acc) { acc = v }
-            let keep_going = Stmt::If {
-                cond: ScalarExpr::Binary(better, bx(l(val)), bx(l(acc))),
-                then: Block(vec![set(val)]),
-                els: Block(vec![]),
-            };
-            let nan_check = Stmt::If {
-                cond: ScalarExpr::Binary(BinaryOp::CmpNe, bx(l(val)), bx(l(val))),
-                then: Block(vec![set(val)]),
-                els: Block(vec![keep_going]),
-            };
-            vec![
-                Stmt::If {
-                    cond: l(have),
-                    then: Block(vec![nan_check]),
-                    els: Block(vec![set(val)]),
-                },
-                Stmt::Assign {
-                    local: have,
-                    value: ScalarExpr::ConstInt(1, ElementKind::I32),
-                },
-            ]
-        }
+        ReduceOp::Max | ReduceOp::Min => extremum_step(rop, acc, have, val),
     }
+}
+
+/// `Max` / `Min` step: `if !have { acc = v } else if v != v { acc = v } else if better(v, acc)
+/// { acc = v }`, then `have = 1` (the oracle's `!have || v.is_nan() || better`).
+fn extremum_step(rop: ReduceOp, acc: u32, have: u32, val: u32) -> Vec<Stmt> {
+    let l = ScalarExpr::Local;
+    let bx = Box::new;
+    let set = |v: u32| Stmt::Assign {
+        local: acc,
+        value: l(v),
+    };
+    let better = if matches!(rop, ReduceOp::Max) {
+        BinaryOp::CmpGt
+    } else {
+        BinaryOp::CmpLt
+    };
+    // if !have { acc = v } else if v != v { acc = v } else if better(v, acc) { acc = v }
+    let keep_going = Stmt::If {
+        cond: ScalarExpr::Binary(better, bx(l(val)), bx(l(acc))),
+        then: Block(vec![set(val)]),
+        els: Block(vec![]),
+    };
+    let nan_check = Stmt::If {
+        cond: ScalarExpr::Binary(BinaryOp::CmpNe, bx(l(val)), bx(l(val))),
+        then: Block(vec![set(val)]),
+        els: Block(vec![keep_going]),
+    };
+    vec![
+        Stmt::If {
+            cond: l(have),
+            then: Block(vec![nan_check]),
+            els: Block(vec![set(val)]),
+        },
+        Stmt::Assign {
+            local: have,
+            value: ScalarExpr::ConstInt(1, ElementKind::I32),
+        },
+    ]
 }
