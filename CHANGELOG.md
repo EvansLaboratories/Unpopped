@@ -15,6 +15,9 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.31.10` — feat (additive): packed `Select` mask, lane-wise (U1 slice 4, #112)
+
+`Select(c, a, b)` accepts a PACKED condition whose lane count equals the arms': lane `i` of the result is `a`'s lane `i` when `c`'s lane `i` is non-zero, else `b`'s. Each mask lane is tested `!= 0` in its own type exactly as a scalar `Select` condition is (an integer lane by value, a float lane rounded to the compute dtype first: `-0.0` is false, NaN true), and the mask's lane type may differ from the arms'. `types::infer_ty` types it; `types::lane_of` selects the mask's lane (a scalar condition is still the same in every lane); the oracle evaluates it through `lane_of`. A packed `c` over scalar arms or with a different lane count stays `PackedOperand`. No new variants, so additive; the plan gate still declines every packed body and no emitter spells it. Behaviour change for callers: `infer_ty` of a `Select` with a packed condition used to be `Err(PackedOperand)`.
 ## `0.31.9` — feat (additive): `Layout::select`, `take`, `slice` (with `SliceCrd`) and `tile_to_shape` (U6 part 3, #117)
 
 `select`/`take` pick top-level modes; `slice(&SliceCrd)` fixes some coordinates and keeps others, returning the kept layout and the offset (`kept(j) + offset == self(full coordinate)`); `tile_to_shape(target)` replicates a block to cover `target` as `(block_i, tiles_i)` per dimension, tiles after the whole block (declines non-multiples with `NotDivisible`). New file `layout_algebra/slice.rs`; tests in `tests/layout_algebra_slice.rs`, each against a deliberately broken variant. Proposed number; the PM allocates.
