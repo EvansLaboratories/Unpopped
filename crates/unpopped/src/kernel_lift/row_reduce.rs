@@ -13,10 +13,10 @@
 use unpopped_vocab::ElementKind;
 
 use super::im2col::{int, local};
-use super::{LiftDecline, check_plain, fold_step, leaves_ok, widen};
+use super::post::{bind, check_post};
+use super::{LiftDecline, check_plain, fold_step, widen};
 use crate::ir::{Access, OpDef, ReduceOp, ReduceStage, ScalarExpr};
 use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
-use crate::types::map_children;
 
 /// Lift a float `Access::RowReduce` over `rank` axes (the reduced axis is the innermost; the output
 /// has the input's shape), computed at `dtype` (`F32` or `F64`). See the module docs for the
@@ -64,27 +64,10 @@ fn check_row_reduce(
     }
     check_plain(op, dtype, rank)?;
     for (s, stage) in stages.iter().enumerate() {
-        leaves_ok_but_reduced(&stage.pre, s)?;
+        check_post(&stage.pre, s)?;
     }
-    leaves_ok_but_reduced(epilogue, stages.len())?;
+    check_post(epilogue, stages.len())?;
     Ok((stages, epilogue))
-}
-
-/// [`leaves_ok`] for an expression that may read `Reduced(t)` for `t < available`.
-fn leaves_ok_but_reduced(e: &ScalarExpr, available: usize) -> Result<(), LiftDecline> {
-    leaves_ok(&strip_reduced(e, available)?)
-}
-
-/// `e` with every in-range `Reduced(t)` replaced by a constant, so [`leaves_ok`] can judge the rest.
-fn strip_reduced(e: &ScalarExpr, available: usize) -> Result<ScalarExpr, LiftDecline> {
-    if let ScalarExpr::Reduced(t) = e {
-        return if usize::from(*t) < available {
-            Ok(ScalarExpr::Const(0.0))
-        } else {
-            Err(LiftDecline::UnsupportedLeaf("a Reduced of a later stage"))
-        };
-    }
-    map_children(e, &mut |c| strip_reduced(c, available))
 }
 
 /// Local ids. Extents `0..r`; counters `r..2r` (the last is the position along the row); then, per
@@ -150,18 +133,11 @@ impl Row {
     /// The expression with `Input(k)` read from phase `phase`'s loaded locals and `Reduced(t)` from
     /// stage `t`'s rounded result.
     fn bind(&self, e: &ScalarExpr, phase: u32) -> ScalarExpr {
-        match e {
-            ScalarExpr::Input(k) => local(self.loaded(phase, u32::from(*k))),
-            ScalarExpr::Reduced(t) => local(self.stage_base(u32::from(*t)) + 3),
-            _ => {
-                let r: Result<ScalarExpr, std::convert::Infallible> =
-                    map_children(e, &mut |c| Ok(self.bind(c, phase)));
-                match r {
-                    Ok(e) => e,
-                    Err(never) => match never {},
-                }
-            }
-        }
+        bind(e, &|leaf| match leaf {
+            ScalarExpr::Input(k) => Some(local(self.loaded(phase, u32::from(*k)))),
+            ScalarExpr::Reduced(t) => Some(local(self.stage_base(u32::from(*t)) + 3)),
+            _ => None,
+        })
     }
 
     fn loads(&self, phase: u32) -> Vec<Stmt> {

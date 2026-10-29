@@ -260,8 +260,7 @@ fn forms_the_lift_does_not_cover_decline_with_a_reason() {
         lift_reduction_opdef(&ew, ElementKind::F32, 2),
         Err(LiftDecline::NotReduction)
     );
-    // A fused post-expression does not lift (it would run at the compute dtype over an unrounded
-    // f64 value).
+    // A fused post-expression lifts in tolerance mode (`kernel_reduction_post_agrees.rs`).
     let post = OpDef::reduction_post(
         "q",
         1,
@@ -273,10 +272,7 @@ fn forms_the_lift_does_not_cover_decline_with_a_reason() {
             Box::new(ScalarExpr::Reduced(0)),
         )),
     );
-    assert_eq!(
-        lift_reduction_opdef(&post, ElementKind::F32, 2),
-        Err(LiftDecline::UnsupportedForm("a fused post-expression"))
-    );
+    assert!(lift_reduction_opdef(&post, ElementKind::F32, 2).is_ok());
     // An integer reduction.
     let int = OpDef::reduction("i", 1, &[ElementKind::I32], Expr(input(0).0), ReduceOp::Sum);
     assert_eq!(
