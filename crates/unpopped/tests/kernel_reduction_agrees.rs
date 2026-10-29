@@ -3,6 +3,11 @@
 //! `Access::Reduction` lifted into the kernel layer and run by the kernel interpreter produces,
 //! byte for byte, what `oracle::evaluate` produces.
 //!
+//! **Why the interpreter has a mixed-type fallback** (see `kernel_eval_semantics.rs`): the oracle
+//! rounds every float operation to the plan's compute dtype, but a reduction accumulates in `f64`
+//! inside an `f32` kernel, so the kernel mixes widths and each node must be evaluated at its
+//! operands' type or the sum would be rounded to `f32` after every addition.
+//!
 //! The oracle accumulates in `f64` and rounds once at the store; `Max` / `Min` keep a NaN once
 //! seen; `Mean` divides by the reduced extents. Every corpus here has NaN, signed zeros,
 //! infinities and cancelling magnitudes in it, because an agreement over friendly numbers would
