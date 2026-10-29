@@ -1371,7 +1371,10 @@ fn access_tag(a: &Access) -> &'static str {
 /// coordinate exactly like a view-free operand, so an all-identity op stays
 /// byte-identical to a view-free one.
 pub fn view_is_addressing(v: &View) -> bool {
-    matches!(v, View::Permute { .. } | View::Broadcast { .. })
+    matches!(
+        v,
+        View::Permute { .. } | View::Broadcast { .. } | View::Layout { .. }
+    )
 }
 
 /// `true` if any of `op`'s per-input views is address-affecting
@@ -1480,6 +1483,23 @@ fn assert_valid_views(op: &OpDef, key: &StructureKey) {
                      view-only broadcast the emitter ignores would be a silent lie)",
                     bcast.0,
                     o.bcast.0
+                );
+            }
+            View::Layout { shape, .. } => {
+                assert!(
+                    matches!(op.access, Access::Elementwise),
+                    "OpDef '{name}': input {i} Layout view is admitted only on Access::Elementwise in v1 (its extents are the iteration extents, which a {}-class op does not have)",
+                    access_tag(&op.access)
+                );
+                assert!(
+                    o.bcast.is_empty(),
+                    "OpDef '{name}': input {i} has a Layout view AND a broadcast mask ({:#04x}): the view's strides are the truth for this input, so the operand must carry no key broadcast (write a broadcast as a stride 0 in the view instead)",
+                    o.bcast.0
+                );
+                assert!(
+                    shape.len() == usize::from(rank),
+                    "OpDef '{name}': input {i} Layout view has {} extents for iteration rank {rank}",
+                    shape.len()
                 );
             }
             View::Reshape { producer_rank } => {
@@ -3131,6 +3151,12 @@ pub(crate) fn check_typed_admissibility(op: &OpDef, dtype: ElementKind) -> Resul
         Err(e) => return ill(format!("op '{}': ill-typed expression: {e:?}", op.name)),
     };
     let store = op.out_dtype.unwrap_or(dtype);
+    if crate::types::is_mx_element(store) || crate::types::is_mx_element(root) {
+        return ill(format!(
+            "op '{}': an MX element ({root:?}) has no buffer layout yet (sub-byte float packing is a later slice), so it may be an intermediate under a Cast but not the stored result; miss honestly",
+            op.name
+        ));
+    }
     if root != store {
         return ill(format!(
             "op '{}': the body has type {root:?} but the store type is {store:?};              state the conversion with a Cast, and set out_dtype to the result type",

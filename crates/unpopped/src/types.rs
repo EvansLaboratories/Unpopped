@@ -108,9 +108,17 @@ pub enum Ty {
 }
 
 /// Integer types a `CoordInt` / `ConstInt` leaf may have.
+///
+/// `U64` is a leaf type, but a `ConstInt` literal's payload is an `i64`, so a `U64` literal
+/// is limited to `0..=i64::MAX` (checked by [`check_int_leaf`]). Larger `U64` values are
+/// reached with `Cast`, arithmetic or `CoordInt`; widening the payload is a separate change
+/// together with the `Lowering::const_int` seam.
 #[must_use]
 pub const fn is_index_int(t: ElementKind) -> bool {
-    matches!(t, ElementKind::I32 | ElementKind::I64 | ElementKind::U32)
+    matches!(
+        t,
+        ElementKind::I32 | ElementKind::I64 | ElementKind::U32 | ElementKind::U64
+    )
 }
 
 /// Check a `CoordInt` / `ConstInt` leaf's type, and for a constant its value.
@@ -122,7 +130,7 @@ pub fn check_int_leaf(ty: ElementKind, value: Option<i64>) -> Result<(), TypeErr
     if !is_index_int(ty) {
         return Err(TypeError::IllegalIntLeaf {
             ty,
-            why: "an integer leaf is I32, I64 or U32",
+            why: "an integer leaf is I32, I64, U32 or U64",
         });
     }
     if let (Some(v), Some((lo, hi))) = (value, int_range(ty)) {
@@ -157,7 +165,19 @@ pub const fn is_cast_float(t: ElementKind) -> bool {
 /// ENDPOINT only: it is never a compute dtype (the plan gate keys on [`is_cast_float`]).
 #[must_use]
 pub const fn is_cast_float_endpoint(t: ElementKind) -> bool {
-    is_cast_float(t) || matches!(t, ElementKind::F16 | ElementKind::Bf16)
+    is_cast_float(t) || matches!(t, ElementKind::F16 | ElementKind::Bf16) || is_mx_element(t)
+}
+
+/// An OCP MX element format (`F4E2M1`, `F6E2M3`, `F6E3M2`): IEEE-shaped fields with NO
+/// infinity and NO NaN, so the all-ones exponent is an ordinary exponent and the largest
+/// code is the largest finite value. A `Cast` into one saturates (`docs/ir-typed-expressions.md`
+/// section 10). Like the 16-bit floats it is an ENDPOINT only, never a compute dtype.
+#[must_use]
+pub const fn is_mx_element(t: ElementKind) -> bool {
+    matches!(
+        t,
+        ElementKind::F4E2M1 | ElementKind::F6E2M3 | ElementKind::F6E3M2
+    )
 }
 
 /// `(exponent bits, mantissa bits)` of an IEEE-shaped float a `Cast` accepts, or `None`.
@@ -166,6 +186,9 @@ pub const fn float_format(t: ElementKind) -> Option<(u32, u32)> {
     match t {
         ElementKind::F16 => Some((5, 10)),
         ElementKind::Bf16 => Some((8, 7)),
+        ElementKind::F4E2M1 => Some((2, 1)),
+        ElementKind::F6E2M3 => Some((2, 3)),
+        ElementKind::F6E3M2 => Some((3, 2)),
         ElementKind::F32 | ElementKind::F32Strict => Some((8, 23)),
         ElementKind::F64 => Some((11, 52)),
         _ => None,
@@ -184,6 +207,7 @@ pub const fn is_cast_int(t: ElementKind) -> bool {
             | ElementKind::U8
             | ElementKind::U16
             | ElementKind::U32
+            | ElementKind::U64
     )
 }
 
@@ -194,7 +218,7 @@ pub const fn typed_bits(t: ElementKind) -> Option<u32> {
         ElementKind::I8 | ElementKind::U8 => Some(8),
         ElementKind::I16 | ElementKind::U16 | ElementKind::F16 | ElementKind::Bf16 => Some(16),
         ElementKind::I32 | ElementKind::U32 | ElementKind::F32 | ElementKind::F32Strict => Some(32),
-        ElementKind::I64 | ElementKind::F64 => Some(64),
+        ElementKind::I64 | ElementKind::U64 | ElementKind::F64 => Some(64),
         _ => None,
     }
 }
@@ -210,6 +234,7 @@ pub const fn int_range(t: ElementKind) -> Option<(i128, i128)> {
         ElementKind::U8 => (0, u8::MAX as i128),
         ElementKind::U16 => (0, u16::MAX as i128),
         ElementKind::U32 => (0, u32::MAX as i128),
+        ElementKind::U64 => (0, u64::MAX as i128),
         _ => return None,
     })
 }
@@ -217,7 +242,7 @@ pub const fn int_range(t: ElementKind) -> Option<(i128, i128)> {
 /// Check that `from -> spec.to` with `spec.round` / `spec.sat` is a conversion this
 /// version defines.
 ///
-/// The table covers `{f16, bf16, f32, f32s, f64}` and `{i8, i16, i32, i64, u8, u16, u32}`.
+/// The table covers `{f4e2m1, f6e2m3, f6e3m2, f16, bf16, f32, f32s, f64}` and `{i8, i16, i32, i64, u8, u16, u32}`.
 /// Fp8 and sub-byte endpoints are not in it yet (their codecs exist in
 /// `unpopped-vocab`; wiring them is the next slice) and are rejected here by name,
 /// never lowered by guesswork.
@@ -231,8 +256,17 @@ pub fn check_cast(from: ElementKind, spec: CastSpec) -> Result<(), TypeError> {
     let known = |t| is_cast_float_endpoint(t) || is_cast_int(t);
     if !known(from) || !known(to) {
         return bad(
-            "a Cast endpoint outside {f16, bf16, f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32} is not defined yet",
+            "a Cast endpoint outside {f4e2m1, f6e2m3, f6e3m2, f16, bf16, f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32, u64} is not defined yet",
         );
+    }
+    // An MX element has no infinity or NaN to overflow into: a conversion into one
+    // saturates (largest finite value; NaN to +0), from a float or an integer alike, so
+    // the only legal saturation is the explicit ClampFinite.
+    if is_mx_element(to) {
+        return match spec.sat {
+            Saturation::ClampFinite => Ok(()),
+            _ => bad("a Cast into an MX element type saturates: use Saturation::ClampFinite"),
+        };
     }
     match (is_cast_float_endpoint(from), is_cast_float_endpoint(to)) {
         // float -> float
@@ -275,7 +309,7 @@ pub fn check_bitcast(from: ElementKind, to: ElementKind) -> Result<(), TypeError
         _ => Err(TypeError::IllegalBitcast {
             from,
             to,
-            why: "a Bitcast endpoint outside {f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32} is not defined yet",
+            why: "a Bitcast endpoint outside {f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32, u64} is not defined yet",
         }),
     }
 }
@@ -400,11 +434,14 @@ fn operator_ty(e: &ScalarExpr, compute: ElementKind, locals: &[Ty]) -> Result<Ty
     if !lane_wise(e) {
         return Err(TypeError::PackedOperand { node });
     }
-    // A whole-value `Select` takes a scalar condition; every other operand is packed.
-    let first_value = usize::from(matches!(e, ScalarExpr::Select(..)));
-    if first_value == 1 && !matches!(tys[0], Ty::Scalar(_)) {
+    // A `Select` takes a scalar condition (whole-value select) or a packed one with the
+    // arms' lane count (lane-wise mask); every other operand is packed.
+    let is_select = matches!(e, ScalarExpr::Select(..));
+    let lane_mask = is_select && matches!(tys[0], Ty::Packed(_, n) if n == lanes);
+    if is_select && !lane_mask && !matches!(tys[0], Ty::Scalar(_)) {
         return Err(TypeError::PackedOperand { node });
     }
+    let first_value = usize::from(is_select && !lane_mask);
     if tys[first_value..]
         .iter()
         .any(|t| !matches!(t, Ty::Packed(_, n) if *n == lanes))
@@ -435,7 +472,7 @@ pub fn check_packed_bitcast(
         _ => Err(TypeError::IllegalBitcast {
             from: elem,
             to,
-            why: "a Bitcast endpoint outside {f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32} is not defined yet",
+            why: "a Bitcast endpoint outside {f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32, u64} is not defined yet",
         }),
     }
 }
@@ -467,7 +504,18 @@ pub fn lane_of(e: &ScalarExpr, i: u8) -> Result<ScalarExpr, TypeError> {
             ScalarExpr::Binary(*op, one(a)?, one(b)?)
         }
         ScalarExpr::Fma(a, b, c) => ScalarExpr::Fma(one(a)?, one(b)?, one(c)?),
-        ScalarExpr::Select(c, a, b) => ScalarExpr::Select(c.clone(), one(a)?, one(b)?),
+        // A scalar condition selects the whole value, so it is the same in every lane; a packed
+        // one (lane-wise mask) contributes its own lane `i`.
+        ScalarExpr::Select(c, a, b) => {
+            let cond = match lane_of(c, i) {
+                Ok(lane) => lane,
+                // `PackedOperand`: a scalar condition built from a packed value (a `Bitcast` of one)
+                // has no lane form and is not one; `infer_ty` has already vetted the whole node.
+                Err(TypeError::NotPacked { .. } | TypeError::PackedOperand { .. }) => (**c).clone(),
+                Err(err) => return Err(err),
+            };
+            ScalarExpr::Select(Box::new(cond), one(a)?, one(b)?)
+        }
         ScalarExpr::Cast(x, spec) => ScalarExpr::Cast(one(x)?, *spec),
         ScalarExpr::Input(_)
         | ScalarExpr::Const(_)

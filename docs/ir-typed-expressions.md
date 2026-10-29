@@ -108,9 +108,15 @@ reviewable. fp4/fp6/MX element kinds (`F4E2M1`, `F6E2M3`, `F6E3M2`) became `Elem
 
 ## 8. Integer index expressions (slice 5, landed)
 
-`CoordInt(axis, T)`, `ConstInt(v, T)` and integer arithmetic inside a float op. `T` is `I32`, `I64` or
-`U32` for the leaves (`check_int_leaf`; a constant must be in range); the arithmetic also accepts the
+`CoordInt(axis, T)`, `ConstInt(v, T)` and integer arithmetic inside a float op. `T` is `I32`, `I64`,
+`U32` or `U64` for the leaves (`check_int_leaf`; a constant must be in range); the arithmetic also accepts the
 other integer types a `Cast` produces (`I8`, `I16`, `U8`, `U16`).
+
+**`U64` (0.30.5, PM ruling B 2026-10-28).** `U64` is a leaf type, a `Cast` endpoint and an arithmetic type (wrapping at 64 bits, zero-extended, `Cast`
+float to `U64` saturates at `u64::MAX` with NaN to 0). A `ConstInt` literal's payload is still an `i64`, so a `U64` literal is limited to
+`0..=i64::MAX` and a negative one is `IllegalIntLeaf`, never a wrap; larger values are reached with `Cast`, arithmetic or `CoordInt`. Widening the payload
+would change the `Lowering::const_int` seam and waits for it (ROADMAP row, owner lane 1). cpu_c spells `U64` constants, arithmetic and `Bitcast`
+but DECLINES a `Cast` to or from `U64` (its conversion helpers are `long long` based and cannot hold the range); Slang has no typed `Cast` seam.
 
 **What exists at an integer type** (every other operator refuses an integer operand with
 `TypeError::IntegerOperand { node, ty }`, and an integer compute dtype is unaffected, because the
@@ -169,7 +175,7 @@ caller changes meaning). Which of the two the PM rules is `[ASK] packed-values-T
 | `Extract(x, i)` | `t` | `x` is `Packed(t, n)`, `i < n`, else `TypeError::BadLane`. |
 | `Add/Sub/Mul/Fma/Min/Max` | operand type | Lane-wise. Operands must have identical `Ty`; integer lanes wrap exactly as section 8. |
 | `Cast` / `Bitcast` | per lane / by width | `Cast` converts each lane (`cvt.rn.f16x2.f32` is `Cast` of `Pack(a, b)`); `Bitcast` needs equal total bits (`Packed(F16, 2)` <-> `U32`). |
-| `Select(c, a, b)` | type of `a` | `c` scalar: whole-value select. A packed `c` is out of scope (lane-wise mask is a later slice). |
+| `Select(c, a, b)` | type of `a` | `c` scalar: whole-value select. `c` packed with the arms' lane count: lane-wise mask, lane `i` of the result is `a`'s lane `i` when `c`'s lane `i` is non-zero, else `b`'s (each mask lane tested `!= 0` in its own type, like a scalar condition; `c`'s lanes may be any scalar type). A packed `c` over scalar arms, or with a different lane count, is `PackedOperand`. |
 
 Everything else (Div, Unary, comparisons, `Bitcast`, `Qualified` over a packed operand) declines with
 `TypeError::PackedOperand` until a backend needs it; declining is the safe direction.
@@ -181,3 +187,31 @@ expression always has a correct fallback and the differential harness compares n
 **Order of work (red-first).** (1) `Ty`, `infer_ty` and the `TypeError` arms with tests that fail on
 the empty enum; (2) `Pack`/`Extract` in `ScalarExpr`, text format, optimizer (opaque, like `Qualified`),
 oracle; (3) cpu-c and Slang lowering or typed decline; (4) lane-wise arithmetic. Each step is its own PR.
+
+## 10. Casts into and out of the OCP MX element formats (`F4E2M1`, `F6E2M3`, `F6E3M2`)
+
+Status: **PM ruling A, 2026-10-28** ("saturate-always"). These formats have IEEE-shaped fields but **no
+infinity and no NaN**: the all-ones exponent is an ordinary exponent and the largest code is the largest
+finite value (e2m1 6, e2m3 7.5, e3m2 28; values checked against the OCP MX v1.0 tables, KISS R1.30). So an
+overflow or a NaN has nowhere to go, and the IR defines where, exactly as it does for float to integer.
+
+| Conversion | Rule |
+|---|---|
+| any float or integer **into** an MX element | `Saturation::ClampFinite` is the only legal `sat`; `Wrap` and `Clamp` are `TypeError::IllegalCast` naming the fix. One rounding from the exact value under the stated `RoundMode` (all four). Every overflow, an infinity included, lands on the largest finite value of its sign. **NaN becomes `+0`.** The sign of a zero, and of a value that rounds to zero, is kept (`-0` stays `-0`). |
+| an MX element **out of** to a float or integer | The ordinary rules (exact widening; float to integer takes `Clamp`). `rounding_matters` compares exponent range AND significand. |
+| `Bitcast` of an MX element | No row: the typed bit widths are byte-multiples only. |
+
+**NaN to `+0` is the IR's rule, not a hardware fact.** What the vendors' conversion instructions do with a
+NaN here is UNVERIFIED (no PTX or Vulkan check has been made; that waits for a consumer). An emitter that
+cannot reproduce the rule exactly MUST DECLINE, never approximate. No emitter spells these casts today (CpuC has no
+C type for them and declines; Slang is unchanged).
+
+**Where an MX value may live.** Only as an intermediate directly under a `Cast` (the fake-quantise round trip
+`Cast(Cast(x, F4E2M1, ClampFinite), F32)` is the use). It may not be the stored result or a compute dtype: there
+is no buffer layout for sub-byte floats (the 6-bit packing is its own slice), and the plan gate declines a root or `out_dtype` of an MX
+type with a typed reason rather than letting the oracle's buffer sizing panic.
+
+**Evidence.** `cast_ref` tests compare the encoder with a brute-force search of the explicit value grid for
+every mode over a few thousand probes, plus the saturation, NaN, `-0` and clamp-edge cases; `typed_expressions` tests the
+legality table and the oracle end to end. Seeded mutations (accept `Wrap`, NaN to max, no clamp on carry,
+drop the sign) each turn a test red.

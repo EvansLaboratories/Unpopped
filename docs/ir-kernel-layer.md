@@ -15,7 +15,7 @@ body is a later decision that waits for the Slang requirements (Fuel#514) and fo
 Delivers: (1) the data types of section 3; (2) `check_kernel`, a scope and type checker (section 4);
 (3) a reference **interpreter** on the oracle side (section 5), so that "the layers agree" is a test that runs in
 plain Rust with no emitter and no device; (4) `lift_elementwise_opdef` (module `kernel_lift`), which lowers an existing intent-layer `OpDef` into a
-`KernelFn` (section 7), in the order Elementwise (landed), Reduction, Scan, RowReduce (open).
+`KernelFn` (section 7), in the order Elementwise, Reduction, Scan, Contraction, Im2Col, Window, RowReduce (all landed or in the gate).
 
 Does not deliver: memory spaces, pointers, execution scopes or thread ids (U3); barriers, atomics with order or
 scope (U4); collectives (U5); a path from a `KernelFn` to any emitter; any `Frontend` change (ROADMAP I1 waits
@@ -163,9 +163,45 @@ emitter, which is why they can land under the seam hold.
   reversed input is already handled by the view behind `Place::Logical`.
 - **Reduction**, **Scan**, **RowReduce**: one accumulator local per `ReduceStage` / scan state, `For` over the
   reduced axis in the order the oracle folds (this order is part of the agreement; a reordering is U5).
-- Anything the lifting cannot express is a typed `LiftDecline`, never a partial kernel. `Contraction`, `Window`,
-  `RowSort`, `Im2Col` and the multi-output and write-index forms are **out of v0**; each gets its own PR with its
-  own differential once the first four agree.
+- Anything the lifting cannot express is a typed `LiftDecline`, never a partial kernel. `RowSort` and the
+  multi-output and write-index forms are **out of v0**; each gets its own PR with its own differential. Landed
+  after the first four: `Contraction` (identity epilogue), `Im2Col`, `Window` (identity post), `RowReduce`
+  (tolerance mode, below).
+
+### 7.1 Two agreement modes, and the oracle as a tolerance referee
+
+**Byte-exact is the default**, and the only mode for a post-expression or epilogue that is the identity
+(`Reduced(0)`): the oracle accumulates in `f64` and rounds once at the store, and so does the lifted kernel.
+
+A non-identity post or epilogue cannot agree byte for byte. The oracle hands the finalised stage value to it as an
+**unrounded `f64`** (`Reduced(s)`), and the kernel language has no way to put an `f64` leaf inside a compute-dtype
+expression. The lift therefore sets `Reduced(s) := Cast(f64 accumulator -> compute dtype)` and runs the later stages
+and the epilogue on that. Consequences, stated so nobody has to rediscover them:
+
+- At `F64` compute the cast is the identity, so the kernel is byte-exact for every epilogue.
+- At `F32` compute the kernel differs from the oracle by the rounding of the stage values. A case in this mode is
+  **opt-in per case**, compares with a bound of **at most 2 ulp** (NaN equal to NaN, infinities exact), and writes
+  that bound in the test. Today that is `tests/kernel_row_reduce_agrees.rs` (`MAX_ULPS = 2`; PM ruling 2026-10-29).
+- In this mode the oracle is a **tolerance referee**, as it already is for the fused epilogue of
+  `eval_contraction`: it says which answers are acceptable, not which bit pattern is the only correct one.
+- The tolerance must be non-vacuous: each tolerance case needs a control showing that the rounded and unrounded
+  stage values really differ on its corpus (`the_tolerance_is_not_vacuous`), and a mutation that moves the rounding
+  point (an `F32` accumulator, a wrong stage register, a mis-divided `Mean`) must turn a test red.
+- The stage folds themselves (accumulator width, ascending order, NaN-keeping `Max`/`Min`) stay exactly the oracle's;
+  only the hand-off between stages and into the epilogue is rounded.
+
+`Reduction` and `Scan` posts and the `Contraction` epilogue are lifted the same way
+(`tests/kernel_reduction_post_agrees.rs`, `tests/kernel_scan_post_agrees.rs`, `tests/kernel_contraction_agrees.rs`;
+same bound; a scan post may also read the element at its position).
+
+**The bound is for well-conditioned posts.** Rounding the stage value once moves it by half an ulp, and a post with
+condition number `k = |s f'(s) / f(s)|` turns that into about `k / 2` ulp of its result. Measured when the
+contraction epilogues were added: `0.37 s + 1` cancels near `s = -2.7` and moved by 71 ulp; `silu` at `s = -5`
+(`k` about 5) moved by 3. Neither is a lift defect, and neither fits a 2 ulp bound. A case whose post is that
+ill-conditioned must keep clear of the ill-conditioned region in its corpus, or state its own larger bound with this
+calculation beside it; it must not loosen the default. (`tanh`, `sin`, `exp` and the like are evaluated at the
+compute dtype by the oracle too, so they agree exactly and prove nothing about the tolerance; a tolerance case needs
+a post with an arithmetic step, and its non-vacuous control.)
 
 ## 8. Which U2 choices constrain U3's `ProgramModel` and resource manifest
 
@@ -193,5 +229,5 @@ nothing here answers its five questions.)
 2. (landed, 0.31.0) `ScalarExpr::Local` (breaking) with the match sites, text and DAG carriers, and its own refusals; `kernel.rs`
    types; `check_kernel` with the nine known-bad mutations and their positive controls.
 3. (landed, 0.31.3) The interpreter and its direct tests (loops, `Break`, `Continue`, `Return`, `ZeroStep`, wrap of the counter).
-4. `lift_elementwise_opdef` + the differential against `oracle::evaluate` (landed, 0.31.3); then Reduction, Scan, RowReduce (open).
+4. `lift_elementwise_opdef` + the differential against `oracle::evaluate` (landed, 0.31.3); then Reduction, Scan, Contraction, Im2Col, Window and RowReduce (landed or in the gate; fused posts of the first three are open).
 5. Effects (`effects(&KernelFn)`), once a consumer asks; it is stated here so the shape is agreed, not built.
