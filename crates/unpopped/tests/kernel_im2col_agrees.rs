@@ -38,7 +38,14 @@ impl Case {
     }
 
     fn op(&self, dtype: ElementKind) -> OpDef {
-        OpDef::im2col_2d("im2col", dtype, self.kernel, self.stride, self.pad, self.dilation)
+        OpDef::im2col_2d(
+            "im2col",
+            dtype,
+            self.kernel,
+            self.stride,
+            self.pad,
+            self.dilation,
+        )
     }
 }
 
@@ -84,10 +91,16 @@ fn both(case: Case, dtype: ElementKind) -> (Vec<u8>, Vec<u8>) {
     ];
     let key = try_structure_key(OpCategory::Convolution, &ops, ArchSku::Sm89).expect("a key");
     let plan = try_build_plan(&op, &key).expect("the im2col plans");
-    let want = evaluate(&plan, &ops, &[src.clone()], &[]).remove(0).bytes;
+    let want = evaluate(&plan, &ops, std::slice::from_ref(&src), &[])
+        .remove(0)
+        .bytes;
 
     let kernel = lift_im2col_opdef(&op, dtype).expect("the im2col lifts");
-    assert_eq!(check_kernel(&kernel), Ok(()), "a lifted kernel is well formed");
+    assert_eq!(
+        check_kernel(&kernel),
+        Ok(()),
+        "a lifted kernel is well formed"
+    );
     let elem = want.len() / out_shape.iter().product::<i64>() as usize;
     let mut args = vec![
         KernelArg::Buffer(src),

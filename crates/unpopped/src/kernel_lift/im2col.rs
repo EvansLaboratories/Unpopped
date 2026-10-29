@@ -100,7 +100,11 @@ fn bin(op: BinaryOp, a: ScalarExpr, b: ScalarExpr) -> ScalarExpr {
 /// Non-zero exactly when `index` is outside `[0, local(extent))`.
 fn outside(index: u32, extent: u32) -> ScalarExpr {
     let last = sub(local(extent), int(1));
-    let clamped = bin(BinaryOp::Max, int(0), bin(BinaryOp::Min, local(index), last));
+    let clamped = bin(
+        BinaryOp::Max,
+        int(0),
+        bin(BinaryOp::Min, local(index), last),
+    );
     sub(clamped, local(index))
 }
 
