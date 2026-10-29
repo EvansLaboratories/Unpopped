@@ -15,9 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## `0.31.6` — feat (additive): `lift_reduction_opdef`, and the interpreter's mixed-type fallback (U2, #113)
+## `0.31.7` — feat (additive): `lift_reduction_opdef`, and the interpreter's mixed-type fallback (U2, #113)
 
 New `kernel_lift::lift_reduction_opdef` lowers a float `Access::Reduction` (`Sum`, `Prod`, `Max`, `Min`, `Mean`; last axis or an axis set; `keepdim` or not; `F32` or `F64` compute; identity post-expression only) into a kernel that does what the oracle does: an `F64` accumulator, one `Cast` up per body value, the fold in the oracle's order, the `Max`/`Min` NaN rule (`!have || v.is_nan() || better`), `Mean` as an `F64` division by the reduced extents, one `Cast` down at the `Store`. A fused post-expression, an integer reduction or a non-last-axis form the oracle also lacks decline with a typed `LiftDecline` (new variant `NotReduction`). The interpreter gains a node-by-node fallback for mixed-type float expressions: the oracle rounds every float operation to one dtype, but a reduction accumulates in `f64` inside an `f32` kernel, so each node runs at its operands' type; a pure compute-dtype expression keeps the oracle path. `tests/kernel_reduction_agrees.rs`: byte-for-byte agreement with `oracle::evaluate` over all five reduce ops, outer-axis and keepdim, f64 compute, a body over the input, on a corpus with f32-cancelling magnitudes, an all-negative row, NaN first and NaN mid-row, infinities and signed zeros. Mutation-checked: the NaN rule, the `have` flag, the Mean divisor, keepdim, the Prod identity and the mixed-type fallback each turned tests red when deleted. No trait or struct shape change. Proposed number; the PM allocates.
+## `0.31.6` — feat (additive): `Layout::right_inverse` and `Layout::left_inverse` (U6 part 2, #117)
+
+`right_inverse` returns `R` with `self(R(i)) == i` for every `i < size(R)`, chaining the modes whose stride equals the extent covered so far (the two-sided inverse for a bijection onto `[0, size)`); `left_inverse` of an injective layout is `right_inverse((self, complement(self, cosize(self))))` and declines what `complement` declines. Property tests in `tests/layout_algebra_inverse.rs`, each against a deliberately broken variant. Not yet: slicing, `select`/`take`, `tile_to_shape`. Proposed number; the PM allocates.
 
 ## `0.31.5` — feat (additive): `unpopped_vocab::layout_algebra`, hierarchical layouts and their algebra (U6, #117)
 
