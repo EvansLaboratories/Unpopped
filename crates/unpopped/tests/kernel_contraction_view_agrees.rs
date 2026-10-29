@@ -82,13 +82,13 @@ fn matmul(batched: bool, views: Vec<View>) -> OpDef {
 /// The oracle's output and the lifted kernel's for `op` on `lhs`, `rhs`.
 fn both(op: &OpDef, lhs: &TypedBuffer, rhs: &TypedBuffer) -> (Vec<u8>, Vec<u8>) {
     let rank = lhs.shape.len();
-    let (m, k) = (lhs.shape[rank - 2], lhs.shape[rank - 1]);
-    let n = rhs.shape[rank - 1];
-    let mut out_shape: Vec<i64> = lhs.shape[..rank - 2].to_vec();
-    out_shape.extend([m, n]);
-    let out_strides: Vec<i64> = (0..rank)
-        .map(|d| out_shape[d + 1..].iter().product())
+    let (m, n) = (lhs.shape[rank - 2], rhs.shape[rank - 1]);
+    let out_shape: Vec<i64> = lhs.shape[..rank - 2]
+        .iter()
+        .copied()
+        .chain([m, n])
         .collect();
+    let out_strides = dense_strides(&out_shape);
     let desc = |t: &TypedBuffer| OperandDesc::new(rank, &t.shape, &t.strides, t.dtype, 256);
     let ops = [
         desc(lhs),
@@ -105,6 +105,20 @@ fn both(op: &OpDef, lhs: &TypedBuffer, rhs: &TypedBuffer) -> (Vec<u8>, Vec<u8>) 
         .remove(0)
         .bytes;
 
+    let got = kernel_out(op, lhs, rhs, &out_shape, out_strides, want.len());
+    (want, got)
+}
+
+/// What the lifted kernel writes for `op` on `lhs`, `rhs`: the first `len` bytes of its output.
+fn kernel_out(
+    op: &OpDef,
+    lhs: &TypedBuffer,
+    rhs: &TypedBuffer,
+    out_shape: &[i64],
+    out_strides: Vec<i64>,
+    len: usize,
+) -> Vec<u8> {
+    let rank = lhs.shape.len();
     let kernel = lift_contraction_opdef(op, ElementKind::F32).expect("the contraction lifts");
     assert_eq!(
         check_kernel(&kernel),
@@ -113,22 +127,32 @@ fn both(op: &OpDef, lhs: &TypedBuffer, rhs: &TypedBuffer) -> (Vec<u8>, Vec<u8>) 
     );
     let out = TypedBuffer::new(
         ElementKind::F32,
-        out_shape,
+        out_shape.to_vec(),
         out_strides,
-        vec![0; want.len()],
+        vec![0; len],
     );
     let mut args = vec![
         KernelArg::Buffer(lhs.clone()),
         KernelArg::Buffer(rhs.clone()),
         KernelArg::Buffer(out),
     ];
-    let extents = lhs.shape[..rank - 2].iter().copied().chain([m, n, k]);
+    let (m, k) = (lhs.shape[rank - 2], lhs.shape[rank - 1]);
+    let extents = lhs.shape[..rank - 2]
+        .iter()
+        .copied()
+        .chain([m, rhs.shape[rank - 1], k]);
     args.extend(extents.map(|e| KernelArg::Int(i128::from(e))));
     run_kernel(&kernel, &mut args).expect("the kernel runs");
     let KernelArg::Buffer(got) = &args[2] else {
         unreachable!()
     };
-    (want.clone(), got.bytes[..want.len()].to_vec())
+    got.bytes[..len].to_vec()
+}
+
+fn dense_strides(shape: &[i64]) -> Vec<i64> {
+    (0..shape.len())
+        .map(|d| shape[d + 1..].iter().product())
+        .collect()
 }
 
 fn permute(batched: bool, transposed: bool) -> View {
