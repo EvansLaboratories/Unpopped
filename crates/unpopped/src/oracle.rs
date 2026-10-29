@@ -1853,7 +1853,7 @@ fn eval_int_op(e: &ScalarExpr, t: ElementKind, ev: &Eval<'_>) -> Val {
 /// `from` first, see the `Cast` arm of [`eval`]).
 fn val_to_num(v: Val, from: ElementKind) -> crate::cast_ref::Num {
     use crate::cast_ref::Num;
-    if crate::types::is_cast_float(from) {
+    if crate::types::is_cast_float_endpoint(from) {
         Num::F(round_to_compute(v.f64(), from))
     } else {
         Num::I(v.i128())
