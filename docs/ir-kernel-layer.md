@@ -190,10 +190,18 @@ and the epilogue on that. Consequences, stated so nobody has to rediscover them:
 - The stage folds themselves (accumulator width, ascending order, NaN-keeping `Max`/`Min`) stay exactly the oracle's;
   only the hand-off between stages and into the epilogue is rounded.
 
-`Reduction` and `Scan` posts are lifted the same way (`tests/kernel_reduction_post_agrees.rs`,
-`tests/kernel_scan_post_agrees.rs`, same bound; a scan post may also read the element at its position). A
-`Contraction` epilogue can be lifted the same way and would be held to the same bound; it declines today
-(`LiftDecline::UnsupportedForm`), and is its own PR.
+`Reduction` and `Scan` posts and the `Contraction` epilogue are lifted the same way
+(`tests/kernel_reduction_post_agrees.rs`, `tests/kernel_scan_post_agrees.rs`, `tests/kernel_contraction_agrees.rs`;
+same bound; a scan post may also read the element at its position).
+
+**The bound is for well-conditioned posts.** Rounding the stage value once moves it by half an ulp, and a post with
+condition number `k = |s f'(s) / f(s)|` turns that into about `k / 2` ulp of its result. Measured when the
+contraction epilogues were added: `0.37 s + 1` cancels near `s = -2.7` and moved by 71 ulp; `silu` at `s = -5`
+(`k` about 5) moved by 3. Neither is a lift defect, and neither fits a 2 ulp bound. A case whose post is that
+ill-conditioned must keep clear of the ill-conditioned region in its corpus, or state its own larger bound with this
+calculation beside it; it must not loosen the default. (`tanh`, `sin`, `exp` and the like are evaluated at the
+compute dtype by the oracle too, so they agree exactly and prove nothing about the tolerance; a tolerance case needs
+a post with an arithmetic step, and its non-vacuous control.)
 
 ## 8. Which U2 choices constrain U3's `ProgramModel` and resource manifest
 

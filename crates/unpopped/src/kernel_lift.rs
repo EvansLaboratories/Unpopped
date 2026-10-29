@@ -741,7 +741,9 @@ fn extremum_step(rop: ReduceOp, acc: u32, have: u32, val: u32) -> Vec<Stmt> {
 // Contraction
 
 /// Lift a float `Access::Contraction`, plain `[M,K]x[K,N]` or batched `[B,M,K]x[B,K,N]`, computed
-/// at `dtype` (`F32` or `F64`), with the identity epilogue (`Reduced(0)`) and no fused bias.
+/// at `dtype` (`F32` or `F64`), with no fused bias. The identity epilogue (`Reduced(0)`) is
+/// byte-exact; a fused epilogue lifts in tolerance mode, with `Reduced(0)` bound to the K-sum
+/// rounded once to the compute dtype (`docs/ir-kernel-layer.md` 7.1); it must not read an `Input`.
 ///
 /// The oracle reads each operand by its physical strides at the logical `(m, k)` / `(k, n)`
 /// coordinate (so transposed and broadcast operands need nothing extra: that is what
