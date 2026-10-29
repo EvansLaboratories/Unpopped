@@ -169,3 +169,24 @@ No verdict is written for any of these. The earlier "clear" verdicts in the sect
 - Ideas 8, 9 and 13 are mostly engineering practice; they were searched with one query each.
 - Not legal advice. A freedom-to-operate review by a patent attorney is a separate, later purchase.
 - The 2026-10-29 addendum read **no claims**: it lists what the search surfaced and which independent claims the PM should read. Assignee and status were not verified for most of its rows; patent numbers are as the search result lists gave them. Searches ran through a web search tool restricted to Google Patents and Justia, not USPTO full text or CPC classes.
+
+### Claim reads and verdicts for the hits above (added 2026-10-29)
+
+Source: a read run for the PM on 2026-10-28 (record: `C:/Projects/.lane-state/patent-reads/unpopped-kernel-layer.md`), from Google Patents claim text (machine-converted, not USPTO PDFs), **independent claims only**. Dependent claims, specifications, prosecution history, claim construction, continuations and non-US family members were **not** read; statuses and expiries are Google Patents' own and were not verified at the USPTO. **NOT legal advice; NOT a freedom-to-operate opinion.** "Outside as read" means each independent claim has at least one limitation the `unpopped*` crates, as described, lack.
+
+| hit | patent | verdict | limitation(s) Unpopped lacks | status per Google |
+|---|---|---|---|---|
+| 10 | US10949182B2 | outside as read | claims 1/30/44: a parallel-loop analysis, block/thread counts computed from loop bounds, a launch directive (the Slang emitter hard-codes `[numthreads(256, 1, 1)]`); 15/58/64: a serial-segment single-thread kernel; 26/70/74: a library-call substitution table | Active, no expiry shown |
+| 11 | US8671401B2 | outside as read | break-mark sub-graph splitting, instantiating only the elements a tile needs, tiling a series of loop nests | "Expired - Fee Related" and an estimated expiry of 2031-05-23 on the same page (inconsistent; status unverified) |
+| 12 | US11288108B2 | outside as read | a rewrite that adds array-size parameters and bounds guards, loading the rewritten module in a virtual machine, modifying host source | Active, est. 2040-09-22 |
+| 13 | US9275426B2 | outside as read | runtime detection of the GPU's computation language, dual-language macros | Active, est. 2033-06-21 |
+| 13 | US20150347108A1 (an **Apple** application, not Adobe; granted as US10430169B2) | outside as read | graphics functions and shader/kernel qualifiers in the IR; linking a shader-and-compute library; compiling when graphics pipeline objects are created | Granted, Active |
+| 14 | Apple unified-IR family (US9740464B2, US10372431B2, US20150347107A1) | outside as read | graphics operations in the IR, shaders in the binary, a pre-compiled library, retrieval on request | Active |
+
+Answer to hit 14's question: none of the nine independent claims re-read (US9740464B2 1/7/13, US10372431B2 1/8/14, US20150347107A1 1/7/15) recites control-flow statements, loops, locals or memory in the IR, so the statement layer neither adds nor removes a limitation.
+
+Open items from that read:
+1. **US10949182B2 claim 1** is the closest of the five to the lifts. An adopter that analyses loop nests for parallelism, derives grid/block sizes from loop bounds and emits a launch directive (the Baracuda and Fuel CUDA emitters) was not read and should be charted separately. Re-read it if U3 or any emitter starts deriving launch geometry. The code check behind "the Slang emitter hard-codes the geometry" was one `git grep` on `origin/main` (2026-10-28), not a full read.
+2. **US8671401B2**: Google's status and expiry disagree; check the USPTO record if it ever matters.
+3. **The Apple family is protected by the absence of graphics.** Re-read it if Unpopped gains graphics or shader operations (a Slang fragment or vertex path, texture sampling) or address-space qualifiers (U3 memory spaces).
+4. Hits 15-21 (MX, variant selection, address spaces, NaN reductions) were **not** read; the priorities in "Needs review" for them stand.
