@@ -157,7 +157,19 @@ pub const fn is_cast_float(t: ElementKind) -> bool {
 /// ENDPOINT only: it is never a compute dtype (the plan gate keys on [`is_cast_float`]).
 #[must_use]
 pub const fn is_cast_float_endpoint(t: ElementKind) -> bool {
-    is_cast_float(t) || matches!(t, ElementKind::F16 | ElementKind::Bf16)
+    is_cast_float(t) || matches!(t, ElementKind::F16 | ElementKind::Bf16) || is_mx_element(t)
+}
+
+/// An OCP MX element format (`F4E2M1`, `F6E2M3`, `F6E3M2`): IEEE-shaped fields with NO
+/// infinity and NO NaN, so the all-ones exponent is an ordinary exponent and the largest
+/// code is the largest finite value. A `Cast` into one saturates (`docs/ir-typed-expressions.md`
+/// section 10). Like the 16-bit floats it is an ENDPOINT only, never a compute dtype.
+#[must_use]
+pub const fn is_mx_element(t: ElementKind) -> bool {
+    matches!(
+        t,
+        ElementKind::F4E2M1 | ElementKind::F6E2M3 | ElementKind::F6E3M2
+    )
 }
 
 /// `(exponent bits, mantissa bits)` of an IEEE-shaped float a `Cast` accepts, or `None`.
@@ -166,6 +178,9 @@ pub const fn float_format(t: ElementKind) -> Option<(u32, u32)> {
     match t {
         ElementKind::F16 => Some((5, 10)),
         ElementKind::Bf16 => Some((8, 7)),
+        ElementKind::F4E2M1 => Some((2, 1)),
+        ElementKind::F6E2M3 => Some((2, 3)),
+        ElementKind::F6E3M2 => Some((3, 2)),
         ElementKind::F32 | ElementKind::F32Strict => Some((8, 23)),
         ElementKind::F64 => Some((11, 52)),
         _ => None,
@@ -217,7 +232,7 @@ pub const fn int_range(t: ElementKind) -> Option<(i128, i128)> {
 /// Check that `from -> spec.to` with `spec.round` / `spec.sat` is a conversion this
 /// version defines.
 ///
-/// The table covers `{f16, bf16, f32, f32s, f64}` and `{i8, i16, i32, i64, u8, u16, u32}`.
+/// The table covers `{f4e2m1, f6e2m3, f6e3m2, f16, bf16, f32, f32s, f64}` and `{i8, i16, i32, i64, u8, u16, u32}`.
 /// Fp8 and sub-byte endpoints are not in it yet (their codecs exist in
 /// `unpopped-vocab`; wiring them is the next slice) and are rejected here by name,
 /// never lowered by guesswork.
@@ -231,8 +246,17 @@ pub fn check_cast(from: ElementKind, spec: CastSpec) -> Result<(), TypeError> {
     let known = |t| is_cast_float_endpoint(t) || is_cast_int(t);
     if !known(from) || !known(to) {
         return bad(
-            "a Cast endpoint outside {f16, bf16, f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32} is not defined yet",
+            "a Cast endpoint outside {f4e2m1, f6e2m3, f6e3m2, f16, bf16, f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32} is not defined yet",
         );
+    }
+    // An MX element has no infinity or NaN to overflow into: a conversion into one
+    // saturates (largest finite value; NaN to +0), from a float or an integer alike, so
+    // the only legal saturation is the explicit ClampFinite.
+    if is_mx_element(to) {
+        return match spec.sat {
+            Saturation::ClampFinite => Ok(()),
+            _ => bad("a Cast into an MX element type saturates: use Saturation::ClampFinite"),
+        };
     }
     match (is_cast_float_endpoint(from), is_cast_float_endpoint(to)) {
         // float -> float

@@ -15,6 +15,9 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.31.7` — feat (additive): `Cast` rows for the OCP MX elements `F4E2M1`, `F6E2M3`, `F6E3M2` (U1, #112)
+
+`F4E2M1`/`F6E2M3`/`F6E3M2` are `Cast` endpoints (`types::is_mx_element`; `float_format` gains their `(ebits, mbits)`). PM ruling A (2026-10-28): a Cast INTO one requires `Saturation::ClampFinite` (`Wrap`/`Clamp` are `IllegalCast` naming the fix), rounds once from the exact value under any of the four `RoundMode`s, saturates every overflow and infinity to the largest finite value (e2m1 6, e2m3 7.5, e3m2 28), turns NaN into `+0` and keeps the sign of zero. **NaN to `+0` is the IR's rule; the NaN behaviour of the vendors' conversion instructions is UNVERIFIED, so an emitter that cannot match it must decline.** The oracle reference (`cast_ref::encode_mx`/`decode_mx`) is cross-checked against a brute-force search of the explicit value grid. An MX value may only be an intermediate directly under a `Cast`: a root or `out_dtype` of an MX type is a typed plan decline (no buffer layout yet), not an oracle panic. No emitter spells them. Behaviour change for callers: `check_cast(F4E2M1, ..)` used to be `Err`.
 ## `0.31.6` — feat (additive): `Layout::right_inverse` and `Layout::left_inverse` (U6 part 2, #117)
 
 `right_inverse` returns `R` with `self(R(i)) == i` for every `i < size(R)`, chaining the modes whose stride equals the extent covered so far (the two-sided inverse for a bijection onto `[0, size)`); `left_inverse` of an injective layout is `right_inverse((self, complement(self, cosize(self))))` and declines what `complement` declines. Property tests in `tests/layout_algebra_inverse.rs`, each against a deliberately broken variant. Not yet: slicing, `select`/`take`, `tile_to_shape`. Proposed number; the PM allocates.
