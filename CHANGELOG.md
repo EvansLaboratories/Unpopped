@@ -15,9 +15,13 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## `0.32.12` — feat (additive): `I32` row sorts lift, and the kernel interpreter compares integers (U2, #113)
+## `0.32.13` — feat (additive): `I32` row sorts lift, and the kernel interpreter compares integers (U2, #113)
 
 `lift_row_sort_opdef` now lifts an `I32` `RowSort` (every `SortOut`, both orders, full and `TopK`), byte-identical to the oracle (`tests/kernel_row_sort_agrees.rs`: `integer_sorts_agree_in_every_form`, plus a control that the corpus holds both extremes and a tie). Other dtypes decline: `I64` plans but the oracle orders keys through `f64`, which collapses large 64-bit keys, so an exact kernel would disagree; the plan gate does not admit the other integers. The kernel interpreter's `eval_int` gains the six comparisons (1 or 0 at the compute type, operands at their own integer type), which an integer-compute kernel needs for any `If`/`Select` condition. Mutation-checked: `<` to `<=`, `<=` to `<` and `!=` to `==` in the new arm each turn `integer_sorts_agree_in_every_form` red. No trait or struct shape change. Proposed number; the PM allocates.
+
+## `0.32.12` — feat (additive): the fused per-column bias in `lift_contraction_opdef` (tolerance mode, U2, #113)
+
+`lift_contraction_opdef` now lifts `OpDef::contraction_bias` (a plain matmul whose epilogue reads `Input(2..n_inputs)`, a `[N]` bias read at the output column and broadcast over the rows, the oracle's rule) instead of declining `a fused bias input`. The kernel takes each bias as a rank-1 `Read` buffer after `out` (`Input(2)` is buffer 3), so a bias-free contraction keeps its parameters. Same tolerance mode as the other fused epilogues: byte-exact at `F64` compute, at most 2 ulp at `F32`; an ill-conditioned bias states its own bound (`tests/kernel_contraction_agrees.rs`: `a_cancelling_bias_states_its_own_bound`, `s + b` with `b = -0.9 s`, `k = |s / (s + b)|`, bound `ceil(k / 2) + 1`, and the default bound is shown broken so the stated one is needed). An epilogue reading `Input(0)`/`Input(1)` or past `n_inputs`, or a batched contraction with a bias, still declines (`UnsupportedLeaf` / `UnsupportedForm("a batched fused bias input")`). Mutation-checked, all red: the bias read at the row coordinate (3 red), the bias bound to `0` (3 red), the K-sum accumulator rounded to `F32` each step (10 red, 3 of them bias tests). Declines that stay, with the reason: `Mean` scan, `Prod` row-reduce stage and `Prod` window are rejected by the plan builder and the oracle (`plan.rs` Scan combine, `oracle.rs` "RowReduce Prod stage is unsupported", "Window rejects Prod"), so there is nothing to agree with. Proposed number; the PM allocates.
 
 ## `0.32.11` — feat (additive): fused post-expressions for `lift_window_opdef` (tolerance mode, U2, #113)
 

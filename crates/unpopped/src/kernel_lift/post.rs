@@ -40,6 +40,19 @@ pub(super) fn reads_input(e: &ScalarExpr) -> bool {
     found
 }
 
+/// Whether `e` reads an `Input(i)` outside `lo..hi`.
+pub(super) fn reads_input_outside(e: &ScalarExpr, lo: u8, hi: u8) -> bool {
+    if let ScalarExpr::Input(i) = e {
+        return !(lo..hi).contains(i);
+    }
+    let mut found = false;
+    let _: Result<ScalarExpr, Infallible> = map_children(e, &mut |c| {
+        found |= reads_input_outside(c, lo, hi);
+        Ok(c.clone())
+    });
+    found
+}
+
 /// `e` with `Reduced(t)` replaced by `Local(local_of(t))`; every other leaf is left to `leaf`.
 pub(super) fn bind(e: &ScalarExpr, leaf: &dyn Fn(&ScalarExpr) -> Option<ScalarExpr>) -> ScalarExpr {
     if let Some(bound) = leaf(e) {

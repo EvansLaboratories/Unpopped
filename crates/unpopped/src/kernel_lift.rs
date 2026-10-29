@@ -745,9 +745,11 @@ fn extremum_step(rop: ReduceOp, acc: u32, have: u32, val: u32) -> Vec<Stmt> {
 // Contraction
 
 /// Lift a float `Access::Contraction`, plain `[M,K]x[K,N]` or batched `[B,M,K]x[B,K,N]`, computed
-/// at `dtype` (`F32` or `F64`), with no fused bias. The identity epilogue (`Reduced(0)`) is
-/// byte-exact; a fused epilogue lifts in tolerance mode, with `Reduced(0)` bound to the K-sum
-/// rounded once to the compute dtype (`docs/ir-kernel-layer.md` 7.1); it must not read an `Input`.
+/// at `dtype` (`F32` or `F64`). The identity epilogue (`Reduced(0)`) is byte-exact; a fused
+/// epilogue lifts in tolerance mode, with `Reduced(0)` bound to the K-sum rounded once to the
+/// compute dtype (`docs/ir-kernel-layer.md` 7.1). The epilogue may read only the fused per-column
+/// bias inputs `Input(2..n_inputs)` of a plain matmul (a `[N]` buffer broadcast over the rows,
+/// the oracle's rule; a batched contraction carries no bias).
 ///
 /// The oracle reads each operand by its physical strides at the logical `(m, k)` / `(k, n)`
 /// coordinate (so transposed and broadcast operands need nothing extra: that is what
@@ -755,14 +757,15 @@ fn extremum_step(rop: ReduceOp, acc: u32, have: u32, val: u32) -> Vec<Stmt> {
 /// `k` ascending, and rounds once at the store. The kernel does the same: nested `For` over
 /// `b`, `m`, `n`, an inner `For` over `k`, an `F64` accumulator, `Cast` up on each factor.
 ///
-/// Parameters: `lhs`, `rhs` (`Read`), `out` (`Write`), then `I32` extents `[B,] M, N, K`.
+/// Parameters: `lhs`, `rhs` (`Read`), `out` (`Write`), one rank-1 `Read` buffer per fused bias
+/// (`Input(2)` is buffer 3, and so on), then `I32` extents `[B,] M, N, K`.
 ///
 /// # Errors
 ///
 /// A [`LiftDecline`].
 pub fn lift_contraction_opdef(op: &OpDef, dtype: ElementKind) -> Result<KernelFn, LiftDecline> {
     let (batched, epilogue) = check_contraction(op, dtype)?;
-    let sh = ContractionShape::new(dtype, batched);
+    let sh = ContractionShape::new(dtype, batched, op.n_inputs.saturating_sub(2));
     let k_loop = for_axis(
         sh.k,
         sh.axes,
@@ -800,12 +803,13 @@ pub fn lift_contraction_opdef(op: &OpDef, dtype: ElementKind) -> Result<KernelFn
     let (params, mut locals) = sh.signature();
     if epilogue.is_some() {
         locals.push(LocalDecl::scalar(dtype)); // red: the K-sum rounded to the compute dtype
+        locals.extend((0..sh.biases).map(|_| LocalDecl::scalar(dtype))); // one loaded bias each
     }
     Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body))
 }
 
-/// `true` when batched. The op must be exactly a plain or a batched matmul with the identity
-/// epilogue, two inputs (no fused bias) and float compute.
+/// `true` when batched. The op must be exactly a plain or a batched matmul (a bias only on the
+/// plain one) with float compute; the epilogue reads `Reduced(0)` and the bias inputs only.
 fn check_contraction(
     op: &OpDef,
     dtype: ElementKind,
@@ -820,7 +824,7 @@ fn check_contraction(
         None
     } else {
         post::check_post(epilogue, 1)?;
-        if post::reads_input(epilogue) {
+        if post::reads_input_outside(epilogue, 2, op.n_inputs) {
             return Err(LiftDecline::UnsupportedLeaf(
                 "an Input in a contraction epilogue",
             ));
@@ -833,8 +837,8 @@ fn check_contraction(
             "a contraction other than matmul",
         ));
     }
-    if op.n_inputs != 2 {
-        return Err(LiftDecline::UnsupportedForm("a fused bias input"));
+    if op.n_inputs < 2 || (batched && op.n_inputs != 2) {
+        return Err(LiftDecline::UnsupportedForm("a batched fused bias input"));
     }
     check_plain(op, dtype, if batched { 3 } else { 2 })?;
     Ok((batched, epilogue))
@@ -855,10 +859,12 @@ struct ContractionShape {
     acc: u32,
     /// The K-sum rounded to the compute dtype (declared only when an epilogue is lifted).
     red: u32,
+    /// Fused bias inputs: bias `j` is buffer `3 + j` and, with an epilogue, local `red + 1 + j`.
+    biases: u32,
 }
 
 impl ContractionShape {
-    fn new(dtype: ElementKind, batched: bool) -> Self {
+    fn new(dtype: ElementKind, batched: bool, biases: u8) -> Self {
         let axes = if batched { 4 } else { 3 };
         let off = u32::from(batched);
         Self {
@@ -872,6 +878,7 @@ impl ContractionShape {
             b: 2 * axes + 1,
             acc: 2 * axes + 2,
             red: 2 * axes + 3,
+            biases: u32::from(biases),
         }
     }
 
@@ -955,8 +962,14 @@ impl ContractionShape {
             local: self.red,
             init: self.stored(),
         });
-        post::bind(epilogue, &|leaf| {
-            matches!(leaf, ScalarExpr::Reduced(_)).then(|| ScalarExpr::Local(self.red))
+        for j in 0..self.biases {
+            body.0
+                .push(self.load(3 + j, &[self.counter(self.n)], self.red + 1 + j));
+        }
+        post::bind(epilogue, &|leaf| match leaf {
+            ScalarExpr::Reduced(_) => Some(ScalarExpr::Local(self.red)),
+            ScalarExpr::Input(i) => Some(ScalarExpr::Local(self.red + u32::from(*i) - 1)),
+            _ => None,
         })
     }
 
@@ -968,6 +981,10 @@ impl ContractionShape {
             buf("rhs", BufferRole::Read),
             buf("out", BufferRole::Write),
         ];
+        params.extend(
+            (0..self.biases)
+                .map(|j| Param::buffer(format!("bias{j}"), self.dtype, BufferRole::Read, Some(1))),
+        );
         let names = if self.batched {
             vec!["b", "m", "n", "k"]
         } else {
