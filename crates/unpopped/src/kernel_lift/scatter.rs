@@ -87,7 +87,7 @@ fn check_scatter(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Scatter, Li
     if matches!(combine, WriteCombine::AtomicMax | WriteCombine::AtomicMin) && !is_int {
         return Err(LiftDecline::UnsupportedForm("a float atomic max or min"));
     }
-    check_plain_with(op, dtype, rank, Indexing::Scatter)?;
+    check_plain_with(op, dtype, rank, Indexing::Scatter, false)?;
     leaves_ok(&op.body)?;
     if usize::from(axis) >= usize::from(rank) || index >= op.n_inputs {
         return Err(LiftDecline::UnsupportedForm("an ill-formed scatter"));
