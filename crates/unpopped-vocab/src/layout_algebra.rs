@@ -27,12 +27,14 @@
 //! [`Layout::complement`] orders modes by stride. Nesting depth is capped at
 //! [`MAX_DEPTH`].
 //!
-//! Not here yet: slicing, by-mode `select`/`take`, TMA basis strides.
+//! Not here yet: TMA basis strides.
 
 use std::fmt;
 
+mod slice;
 mod swizzle;
 
+pub use slice::SliceCrd;
 pub use swizzle::{ComposedLayout, Swizzle};
 
 /// Deepest nesting an [`IntTuple`] may have inside a [`Layout`]. A bare integer
