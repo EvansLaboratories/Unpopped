@@ -214,7 +214,9 @@ emitter, which is why they can land under the seam hold.
   out-of-range target (`< 0` or `>= extent`) is skipped. The atomics are a serial read-modify-write, exact because the kernel walks
   the cells in the oracle's order (a duplicate target under `Assign` is last-writer-wins in that order). The kernel never zeroes the
   destination: the caller owns its start value, and the oracle's zero start is what makes `AtomicAdd` a count (one test adds into a
-  destination holding 100). `bincount` (a per-output dtype) still declines. Open: a base offset on a scatter has no test of its own yet; views decline.
+  destination holding 100). `bincount` (`tests/kernel_bincount_agrees.rs`) lifts too: its one input is also its own index, its body is
+  the constant `1` and its destination is an `I32` count, so the increment is a `ConstInt` at the count dtype and the destination is not
+  the compute dtype; any other per-output dtype declines. Writing this test found the oracle bug fixed in 0.32.20 (`bincount` counted only the first `bins` elements of its data). Open: a base offset on a scatter has no test of its own yet; views decline.
 
 ### 7.1 Two agreement modes, and the oracle as a tolerance referee
 
