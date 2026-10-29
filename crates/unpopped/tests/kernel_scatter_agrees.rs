@@ -133,56 +133,45 @@ fn make_op(
     }
 }
 
-/// The oracle's destination and the kernel's, the kernel's destination starting as `fill` repeated
-/// per element (the oracle's starts zeroed).
-fn run(
-    case: Case,
-    combine: WriteCombine,
-    dtype: ElementKind,
-    index_dtype: ElementKind,
-    fill: Option<&[u8]>,
-) -> (Vec<u8>, Vec<u8>) {
-    let n_src = (case.src[0] * case.src[1]) as usize;
-    let n_dst = (case.dst[0] * case.dst[1]) as usize;
-    let updates = TypedBuffer::new(
-        dtype,
-        case.src.to_vec(),
-        vec![case.src[1], 1],
-        data_bytes(dtype, n_src),
-    );
-    let idx = index_buffer(case, index_dtype);
-    let dst_strides = vec![case.dst[1], 1];
+/// What the oracle writes for `op` over `updates` and `idx`.
+fn oracle_out(case: Case, op: &OpDef, dtype: ElementKind, inputs: &[TypedBuffer; 2]) -> Vec<u8> {
     let ops = [
         OperandDesc::new(2, &case.src, &[case.src[1], 1], dtype, 256),
-        OperandDesc::new(2, &case.src, &idx.strides, index_dtype, 256),
-        OperandDesc::new(2, &case.dst, &dst_strides, dtype, 256),
+        OperandDesc::new(2, &case.src, &inputs[1].strides, inputs[1].dtype, 256),
+        OperandDesc::new(2, &case.dst, &[case.dst[1], 1], dtype, 256),
     ];
-    let op = make_op(case, combine, dtype, index_dtype);
     let key = try_structure_key(OpCategory::BinaryElementwise, &ops, ArchSku::Sm89).expect("a key");
-    let plan = try_build_plan(&op, &key).expect("the scatter plans");
-    let len = n_dst * width(dtype);
-    let want = evaluate(&plan, &ops, &[updates.clone(), idx.clone()], &[])
-        .remove(0)
-        .bytes[..len]
-        .to_vec();
+    let plan = try_build_plan(op, &key).expect("the scatter plans");
+    let len = (case.dst[0] * case.dst[1]) as usize * width(dtype);
+    evaluate(&plan, &ops, inputs, &[]).remove(0).bytes[..len].to_vec()
+}
 
-    let kernel = lift_scatter_opdef(&op, dtype, 2).expect("the scatter lifts");
+/// What the lifted kernel writes, its destination starting as `fill` repeated per element.
+fn kernel_out(
+    case: Case,
+    op: &OpDef,
+    dtype: ElementKind,
+    inputs: &[TypedBuffer; 2],
+    fill: Option<&[u8]>,
+) -> Vec<u8> {
+    let kernel = lift_scatter_opdef(op, dtype, 2).expect("the scatter lifts");
     assert_eq!(
         check_kernel(&kernel),
         Ok(()),
         "a lifted kernel is well formed"
     );
+    let len = (case.dst[0] * case.dst[1]) as usize * width(dtype);
     let init: Vec<u8> = match fill {
         Some(f) => f.iter().copied().cycle().take(len).collect(),
         None => vec![0; len],
     };
     let mut args = vec![
-        KernelArg::Buffer(updates),
-        KernelArg::Buffer(idx),
+        KernelArg::Buffer(inputs[0].clone()),
+        KernelArg::Buffer(inputs[1].clone()),
         KernelArg::Buffer(TypedBuffer::new(
             dtype,
             case.dst.to_vec(),
-            dst_strides,
+            vec![case.dst[1], 1],
             init,
         )),
         KernelArg::Int(i128::from(case.src[0])),
@@ -193,7 +182,31 @@ fn run(
     let KernelArg::Buffer(out) = &args[2] else {
         unreachable!()
     };
-    (want, out.bytes[..len].to_vec())
+    out.bytes[..len].to_vec()
+}
+
+/// The oracle's destination and the kernel's, the kernel's destination starting as `fill` repeated
+/// per element (the oracle's starts zeroed).
+fn run(
+    case: Case,
+    combine: WriteCombine,
+    dtype: ElementKind,
+    index_dtype: ElementKind,
+    fill: Option<&[u8]>,
+) -> (Vec<u8>, Vec<u8>) {
+    let n_src = (case.src[0] * case.src[1]) as usize;
+    let updates = TypedBuffer::new(
+        dtype,
+        case.src.to_vec(),
+        vec![case.src[1], 1],
+        data_bytes(dtype, n_src),
+    );
+    let inputs = [updates, index_buffer(case, index_dtype)];
+    let op = make_op(case, combine, dtype, index_dtype);
+    (
+        oracle_out(case, &op, dtype, &inputs),
+        kernel_out(case, &op, dtype, &inputs, fill),
+    )
 }
 
 #[test]
