@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.32.25` — docs: the U3 row 3 design note, the resource map and the `Frontend` change (#113)
+
+`docs/u3-row3-resource-map-and-frontend.md`, docs only, no code: `Frontend` goes `#[non_exhaustive]` with a `const fn new`; a per-call `ResourceMap` (buffers plus a `Params` layout whose `LayoutRule` has no default) enters through `*_with` siblings of the four `lift_*` entry points, which keep their signatures; `Lifted` records `Declared` or `Inferred`; the layout rule is data in the map, not a `Frontend` field. Names no change to `ElementKind`, `OperandDesc`, `ArchSku` or `ScalarExpr`. Open questions for the PM are in its section 6. Proposed number; the PM allocates.
+
 ## `0.32.24` — feat (additive): `bincount` lifts (U2, #113)
 
 `lift_scatter_opdef` now lifts `OpDef::bincount`, the one scatter whose output dtype is not its compute dtype: one integer input that is also its own index, a constant body, and an `I32` count destination, lifted as `out[x[i]] += ConstInt(c)` at the count dtype (`tests/kernel_bincount_agrees.rs`, 3: `I32` and `I64` data against the oracle, the in-range total and the unhit bin as controls, and the declines). Any other per-output dtype declines (`"a per-output dtype that is not a count"`: a non-integer constant, a non-add combine, a float count). Writing the test found the oracle bug fixed in 0.32.20 (`bincount` counted only the first `bins` elements of its input). Mutation-checked, each killed by a named test: the increment off by one, the add-only guard removed, the destination local typed as the compute dtype, and the count path bypassed. No trait or struct shape change.
