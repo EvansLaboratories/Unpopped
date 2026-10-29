@@ -2043,13 +2043,23 @@ fn encode_int(i: i128, out: ElementKind) -> u128 {
 // Layout / coordinate math.
 // ===========================================================================
 
-/// The permutation input operand `k` is read through, or `None` for an identity
-/// read. Mirrors the emitter's `input_perm` from `plan.views` (an upstream
-/// layout fact), independently.
-fn input_perm<'a>(plan: &'a KernelPlan<'_>, k: usize) -> Option<&'a [u8]> {
+/// How input operand `k` is addressed: at the iteration coordinate through the
+/// operand's own strides, through a permutation of them, or through the view's
+/// own explicit strides ([`View::Layout`]).
+#[derive(Clone, Copy)]
+enum ViewRead<'a> {
+    Direct,
+    Perm(&'a [u8]),
+    Strides(&'a [i64]),
+}
+
+/// The read mode of input operand `k`. Mirrors the emitter's `input_perm` from
+/// `plan.views` (an upstream layout fact), independently.
+fn input_read<'a>(plan: &'a KernelPlan<'_>, k: usize) -> ViewRead<'a> {
     match plan.views.get(k) {
-        Some(View::Permute { perm }) => Some(perm.as_slice()),
-        _ => None,
+        Some(View::Permute { perm }) => ViewRead::Perm(perm.as_slice()),
+        Some(View::Layout { stride, .. }) => ViewRead::Strides(stride.as_slice()),
+        _ => ViewRead::Direct,
     }
 }
 
@@ -2077,15 +2087,18 @@ fn read_strided(
     operands: &[OperandDesc],
     i: usize,
     coords: &[i64],
-    perm: Option<&[u8]>,
+    read: ViewRead<'_>,
 ) -> Val {
     let od = &operands[i];
     let tb = &inputs[i];
     let rank = od.rank as usize;
     let mut off = tb.base_offset;
     for (d, &c) in coords.iter().enumerate().take(rank) {
-        let si = perm.map_or(d, |p| p[d] as usize);
-        off += c * od.strides[si];
+        off += c * match read {
+            ViewRead::Direct => od.strides[d],
+            ViewRead::Perm(p) => od.strides[p[d] as usize],
+            ViewRead::Strides(s) => s[d],
+        };
     }
     assert!(
         off >= 0,
@@ -2138,6 +2151,22 @@ fn alloc_output(
 // The public entry point.
 // ===========================================================================
 
+/// A [`View::Layout`] carries its own extents; they must be the iteration extents
+/// (the output operand's shape, for the elementwise access it is admitted on). The
+/// structure key abstracts extents away, so this is where a mismatch is caught.
+fn assert_layout_view_extents(plan: &KernelPlan<'_>, operands: &[OperandDesc]) {
+    for (k, v) in plan.views.iter().enumerate() {
+        if let View::Layout { shape, .. } = v {
+            let out = &operands[plan.views.len()];
+            assert_eq!(
+                shape.as_slice(),
+                &out.shape[..out.rank as usize],
+                "oracle: input {k} Layout view extents differ from the iteration extents"
+            );
+        }
+    }
+}
+
 /// Interpret `plan` over `operands` (inputs THEN outputs, `len ==
 /// key.n_operands`), `inputs` (the input storage images), and `params` (runtime
 /// scalar `Param` values), returning the computed output storage images.
@@ -2155,6 +2184,7 @@ pub fn evaluate(
     inputs: &[TypedBuffer],
     params: &[f64],
 ) -> Vec<TypedBuffer> {
+    assert_layout_view_extents(plan, operands);
     match plan.access {
         Access::Elementwise => eval_elementwise(plan, operands, inputs, params),
         Access::Reduction { .. } => vec![eval_reduction(plan, operands, inputs, params)],
@@ -2353,7 +2383,7 @@ fn eval_elementwise(
                     operands,
                     idx_op as usize,
                     &coords,
-                    input_perm(plan, idx_op as usize),
+                    input_read(plan, idx_op as usize),
                 )
                 .i128(),
             )
@@ -2379,7 +2409,7 @@ fn eval_elementwise(
                 operands,
                 i as usize,
                 c,
-                input_perm(plan, i as usize),
+                input_read(plan, i as usize),
             )
         };
         let coord = |d: u8| Val::Float(coords[d as usize] as f64);
@@ -2417,7 +2447,7 @@ fn eval_elementwise(
                     operands,
                     idx_op as usize,
                     &coords,
-                    input_perm(plan, idx_op as usize),
+                    input_read(plan, idx_op as usize),
                 )
                 .i128(),
             )
@@ -2554,7 +2584,7 @@ fn eval_reduction(
                     operands,
                     i as usize,
                     &coords,
-                    input_perm(plan, i as usize),
+                    input_read(plan, i as usize),
                 )
             };
             let ev = Eval {
@@ -2667,8 +2697,8 @@ fn eval_contraction(
                     } else {
                         (vec![mi, kk], vec![kk, ni])
                     };
-                    let a = read_strided(inputs, operands, 0, &lc, None).f64();
-                    let b = read_strided(inputs, operands, 1, &rc, None).f64();
+                    let a = read_strided(inputs, operands, 0, &lc, ViewRead::Direct).f64();
+                    let b = read_strided(inputs, operands, 1, &rc, ViewRead::Direct).f64();
                     acc += a * b;
                 }
                 // Epilogue over Reduced(0) = the accumulator, plus the optional
@@ -2689,7 +2719,7 @@ fn eval_contraction(
                         operands,
                         i as usize,
                         &[ni],
-                        input_perm(plan, i as usize),
+                        input_read(plan, i as usize),
                     )
                 };
                 let ev = Eval {
