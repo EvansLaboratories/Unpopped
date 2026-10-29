@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.32.11` — feat (additive): fused post-expressions for `lift_window_opdef` (tolerance mode, U2, #113)
+
+`lift_window_opdef` now lifts a 1-D `Window` pool with a fused post (e.g. a scaled and shifted `Mean`, a `sqrt` of a `Sum`) instead of declining. `Reduced(0)` is bound to the finalised pool value (the `F64` fold, `Mean` divisor and `Max`/`Min` identity as before) rounded once to the compute dtype (`docs/ir-kernel-layer.md` 7.1): byte-exact at `F64` compute, at most 2 ulp at `F32` (NaN equal, infinities exact). A post that reads an `Input` declines (`UnsupportedLeaf`). `tests/kernel_window_post_agrees.rs` (6): `F64` byte-exact and `F32` within 2 ulp for five posts over all four pools and both `Mean` divisors; a control that the tolerance is not vacuous; a wide-accumulator case (`1e8 + 1 - 1e8 ...`, exact value asserted); NaN/infinity cells; the `Input`-in-post decline. Mutation-checked: the post ignored (4+ red), the post bound to the wrong local (4+ red), an `F32`-rounded accumulator inside the tap fold (1 red, `a_wide_accumulator_is_required_under_a_post`; my first corpus for that test (`1, -1e8, 0.5`) let this mutant survive because both roundings land on the same `F32`, so the case is now `1e8, 1, -1e8` inside one window). No trait or struct shape change. Proposed number (assumes #166 takes 0.32.10); the PM allocates.
+
 ## `0.32.10` — feat (additive): `lift_row_sort_opdef`, the RowSort lift (U2, #113)
 
 `lift_row_sort_opdef` lifts `Access::RowSort` (`row_sort`, `row_argsort`, `row_sort_indices`, `row_topk`, `row_bottomk`; `F32`/`F64`; ascending and descending; full and `TopK`) to a rank-sort kernel that is byte-identical to the oracle on a corpus of ties, NaNs with distinct payloads, signed zeros and infinities (`tests/kernel_row_sort_agrees.rs`). Integer keys and unstable sorts decline (`LiftDecline::UnsupportedForm`); a non-sort op declines with the new `LiftDecline::NotRowSort`. Additive: one new function and one new variant of a `#[non_exhaustive]` enum.

@@ -5,12 +5,15 @@
 //! inside `[0, k_in)`) in `f64`, in ascending `kk`, then finalises: `Sum` as is, `Mean` divided by
 //! `size` (`count_include_pad`) or by the valid-tap count (zero when none were valid), `Max`/`Min`
 //! with the NaN-keeping rule and the monoid identity when no tap was valid. One rounding happens at
-//! the store. The kernel does exactly that. Only the identity post-expression lifts, for the
-//! reason a reduction's fused post does not (see [`super::lift_reduction_opdef`]).
+//! the store. The kernel does exactly that. The identity post-expression is byte-exact; a fused
+//! post lifts in tolerance mode, `Reduced(0)` bound to the finalised value rounded once to the
+//! compute dtype (`docs/ir-kernel-layer.md` 7.1), as a reduction's does (see
+//! [`super::lift_reduction_opdef`]).
 
 use unpopped_vocab::ElementKind;
 
 use super::im2col::{add, int, local, mul, outside, sub};
+use super::post;
 use super::{
     LiftDecline, check_plain, fold_step, leaves_ok, scan_identity, substitute_inputs, widen,
 };
@@ -50,17 +53,21 @@ pub fn lift_window_opdef(
     ]);
     body.0.push(w.taps(&g));
     body.0.extend(w.finish(&g));
+    let value = w.stored_value(&g, &mut body);
     body.0.push(Stmt::Store {
         place: Place::Logical {
             buffer: w.n,
             coords: w.out_coords(),
         },
-        value: w.stored(),
+        value,
     });
     for d in (0..w.r).rev() {
         body = w.for_cell(d, body);
     }
-    let (params, locals) = w.signature();
+    let (params, mut locals) = w.signature();
+    if g.post.is_some() {
+        locals.push(LocalDecl::scalar(dtype)); // red
+    }
     Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body))
 }
 
@@ -73,6 +80,8 @@ struct Geometry {
     pad_lo: u8,
     count_include_pad: bool,
     pre: ScalarExpr,
+    /// The fused post-expression, or `None` for the identity (`Reduced(0)`).
+    post: Option<ScalarExpr>,
 }
 
 fn check_window(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Geometry, LiftDecline> {
@@ -94,9 +103,15 @@ fn check_window(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Geometry, Li
     if !matches!(dtype, ElementKind::F32 | ElementKind::F64) {
         return Err(LiftDecline::UnsupportedForm("a non-float window"));
     }
-    if !matches!(post, ScalarExpr::Reduced(0)) {
-        return Err(LiftDecline::UnsupportedForm("a fused post-expression"));
-    }
+    let post = if matches!(post, ScalarExpr::Reduced(0)) {
+        None
+    } else {
+        post::check_post(post, 1)?;
+        if post::reads_input(post) {
+            return Err(LiftDecline::UnsupportedLeaf("an Input in a window post"));
+        }
+        Some(post.clone())
+    };
     if matches!(wop, ReduceOp::Prod) || usize::from(*axis) + 1 != usize::from(rank) {
         return Err(LiftDecline::UnsupportedForm(
             "a window that is not a pool over the last axis",
@@ -112,6 +127,7 @@ fn check_window(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Geometry, Li
         pad_lo: *pad_lo,
         count_include_pad: *count_include_pad,
         pre: pre.clone(),
+        post,
     })
 }
 
@@ -130,6 +146,8 @@ struct Win {
     cnt: u32,
     val: u32,
     res: u32,
+    /// The result rounded to the compute dtype (declared only when a post is lifted).
+    red: u32,
 }
 
 impl Win {
@@ -150,6 +168,7 @@ impl Win {
             cnt: acc + 2,
             val: acc + 3,
             res: acc + 4,
+            red: acc + 5,
         }
     }
 
@@ -284,6 +303,21 @@ impl Win {
         } else {
             ScalarExpr::Cast(Box::new(res), widen(self.dtype))
         }
+    }
+
+    /// The value to store. With a fused post, `red` (the result rounded once to the compute dtype)
+    /// is declared at the end of `body` and the post reads it as `Reduced(0)`.
+    fn stored_value(&self, g: &Geometry, body: &mut Block) -> ScalarExpr {
+        let Some(post) = &g.post else {
+            return self.stored();
+        };
+        body.0.push(Stmt::Let {
+            local: self.red,
+            init: self.stored(),
+        });
+        post::bind(post, &|leaf| {
+            matches!(leaf, ScalarExpr::Reduced(_)).then(|| ScalarExpr::Local(self.red))
+        })
     }
 
     fn signature(&self) -> (Vec<Param>, Vec<LocalDecl>) {
