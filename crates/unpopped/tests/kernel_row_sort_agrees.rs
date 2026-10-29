@@ -13,6 +13,7 @@ use unpopped::kernel_lift::{LiftDecline, lift_row_sort_opdef};
 use unpopped::oracle::kernel_eval::{KernelArg, run_kernel};
 use unpopped::oracle::{TypedBuffer, evaluate};
 use unpopped::plan::try_build_plan;
+use unpopped::types::int_range;
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, try_structure_key};
 
 /// Raw `f32` bit patterns: ties, both zeros, infinities, and NaNs with distinct payloads and signs
@@ -34,10 +35,11 @@ const POOL: [u32; 11] = [
 /// The `i`th corpus element as raw bits of `dtype`. An `F64` element is the `F32` value widened,
 /// except that a NaN keeps a payload of its own so the bits being moved are distinguishable.
 fn element(dtype: ElementKind, i: usize) -> Vec<u8> {
-    let bits = POOL[(i * 7 + (i / 5) * 3 + i * i) % POOL.len()];
+    let slot = (i * 7 + (i / 5) * 3 + i * i) % POOL.len();
+    let bits = POOL[slot];
     match dtype {
         ElementKind::F32 => bits.to_le_bytes().to_vec(),
-        _ => {
+        ElementKind::F64 => {
             let f = f32::from_bits(bits);
             let wide = if f.is_nan() {
                 0x7ff0_0000_0000_0000_u64
@@ -48,6 +50,35 @@ fn element(dtype: ElementKind, i: usize) -> Vec<u8> {
             };
             wide.to_le_bytes().to_vec()
         }
+        _ => {
+            let (lo, hi) = int_range(dtype).expect("an integer dtype");
+            // Ties, both extremes, zero, and (signed) minus one: the values where a signed read of
+            // an unsigned key, or the reverse, changes the order.
+            let pool = [
+                hi,
+                lo,
+                0,
+                7,
+                hi - 1,
+                lo + 1,
+                7,
+                if lo < 0 { -1 } else { hi / 2 },
+                0,
+                lo,
+                1,
+            ];
+            let v = pool[slot];
+            v.to_le_bytes()[..width(dtype)].to_vec()
+        }
+    }
+}
+
+fn width(dtype: ElementKind) -> usize {
+    match dtype {
+        ElementKind::I8 | ElementKind::U8 => 1,
+        ElementKind::I16 | ElementKind::U16 => 2,
+        ElementKind::F64 => 8,
+        _ => 4,
     }
 }
 
@@ -69,7 +100,7 @@ fn desc(dtype: ElementKind, shape: &[i64]) -> OperandDesc {
 
 fn contiguous(dtype: ElementKind, shape: &[i64], fill: u8) -> TypedBuffer {
     let n: i64 = shape.iter().product();
-    let size = if dtype == ElementKind::F64 { 8 } else { 4 };
+    let size = width(dtype);
     let strides: Vec<i64> = (0..shape.len())
         .map(|d| shape[d + 1..].iter().product())
         .collect();
@@ -168,10 +199,7 @@ fn both(
     let args = run_lifted(&op, input, out_bufs, shape, k_out);
     // The oracle sizes every output at the plan dtype's width; only the real elements count.
     let n_out: usize = out_shape.iter().product::<i64>() as usize;
-    let widths: Vec<usize> = ops[1..]
-        .iter()
-        .map(|o| if o.dtype == ElementKind::F64 { 8 } else { 4 })
-        .collect();
+    let widths: Vec<usize> = ops[1..].iter().map(|o| width(o.dtype)).collect();
     want.into_iter()
         .enumerate()
         .map(|(j, w)| {
@@ -222,6 +250,44 @@ fn capped_sorts_agree() {
             assert_agree(dtype, order, SortOut::Indices, Some(4), &[3, 9]);
         }
     }
+}
+
+#[test]
+fn integer_sorts_agree_in_every_form() {
+    for dtype in [ElementKind::I32] {
+        for order in [SortOrder::Asc, SortOrder::Desc] {
+            for out in [SortOut::Values, SortOut::Indices, SortOut::Both] {
+                assert_agree(dtype, order, out, None, &[4, 11]);
+                assert_agree(dtype, order, out, None, &[2, 3, 7]);
+            }
+            for k_out in [1, 3, 11] {
+                assert_agree(dtype, order, SortOut::Both, Some(k_out), &[4, 11]);
+            }
+        }
+    }
+}
+
+#[test]
+fn the_integer_corpus_has_both_extremes_and_ties() {
+    // Control: the oracle's own answer shows both extremes, each at its end of a row, and a tie.
+    let io = both(
+        ElementKind::I32,
+        SortOrder::Asc,
+        SortOut::Values,
+        None,
+        &[4, 11],
+    );
+    let v = i32s(&io[0].0);
+    let rows: Vec<&[i32]> = v.chunks(11).collect();
+    assert!(
+        rows.iter().any(|r| r[0] == i32::MIN),
+        "a minimum sorts first"
+    );
+    assert!(
+        rows.iter().any(|r| r[10] == i32::MAX),
+        "a maximum sorts last"
+    );
+    assert!(v.windows(2).any(|w| w[0] == w[1]), "a tie is sorted");
 }
 
 #[test]
@@ -303,7 +369,7 @@ fn declines_what_it_does_not_lift() {
         Some(LiftDecline::NotRowSort)
     );
     assert!(matches!(
-        f(&sort, ElementKind::I32),
+        f(&sort, ElementKind::I64),
         Some(LiftDecline::UnsupportedForm(_))
     ));
     let mut unstable = sort;
