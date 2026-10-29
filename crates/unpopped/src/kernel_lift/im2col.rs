@@ -153,8 +153,9 @@ impl Geometry {
         )
     }
 
-    /// One output cell: compute the source coordinate, load it when inside, store the result.
-    fn cell(&self) -> Block {
+    /// The source element when both coordinates are inside the input, else nothing (the zero
+    /// default in `VAL` stays).
+    fn guarded_load() -> Stmt {
         let load = Stmt::Load {
             local: LOADED,
             place: Place::Logical {
@@ -173,11 +174,15 @@ impl Geometry {
                 },
             ]),
         };
-        let guarded = Stmt::If {
+        Stmt::If {
             cond: outside(IH, H),
             then: Block(vec![]),
             els: Block(vec![inner]),
-        };
+        }
+    }
+
+    /// One output cell: compute the source coordinate, load it when inside, store the result.
+    fn cell(&self) -> Block {
         let (kh, kw) = (i64::from(self.kernel.0), i64::from(self.kernel.1));
         let row = add(
             mul(Self::ctr(1), int(kh * kw)),
@@ -197,7 +202,7 @@ impl Geometry {
                 local: VAL,
                 init: ScalarExpr::Const(0.0),
             },
-            guarded,
+            Self::guarded_load(),
             Stmt::Store {
                 place: Place::Logical {
                     buffer: 1,
