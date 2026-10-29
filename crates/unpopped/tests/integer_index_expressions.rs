@@ -516,3 +516,84 @@ fn matching_operands_still_lower_when_the_plan_gate_was_skipped() {
         );
     });
 }
+
+// ---------------------------------------------------------------- 6. U64
+
+const U64: ElementKind = ElementKind::U64;
+
+#[test]
+fn u64_is_an_integer_leaf_type_with_a_literal_limited_to_the_i64_range() {
+    assert_eq!(infer(&coord_int(0, U64).0, F32), Ok(U64));
+    assert_eq!(infer(&konst_int(0, U64).0, F32), Ok(U64));
+    assert_eq!(infer(&konst_int(i64::MAX, U64).0, F32), Ok(U64));
+    // A negative literal is a typed reject, never a wrap to a huge value.
+    assert!(matches!(
+        infer(&konst_int(-1, U64).0, F32),
+        Err(TypeError::IllegalIntLeaf { ty: U64, .. })
+    ));
+    // The payload is an i64 (widening it is a separate change with the Lowering::const_int
+    // seam), so the largest literal is i64::MAX.
+    assert_eq!(i64::MAX as u128, (u64::MAX >> 1) as u128);
+}
+
+#[test]
+fn u64_values_above_the_literal_limit_stay_reachable_by_cast_and_arithmetic() {
+    let xs = [0.0_f32; 4];
+    let one = |body: Expr| run(&int_op("u64", body, U64), 4, U64, &xs).bits_at(0) as u64;
+    // 0 - 1 wraps to u64::MAX (zero-extended).
+    assert_eq!(one(konst_int(0, U64) - konst_int(1, U64)), u64::MAX);
+    // A Cast from -1 (i64) with Wrap keeps the bits: u64::MAX.
+    let cast = |sat| CastSpec {
+        to: U64,
+        round: RoundMode::NearestEven,
+        sat,
+    };
+    assert_eq!(
+        one(Expr(ScalarExpr::Cast(
+            b(konst_int(-1, I64)),
+            cast(Saturation::Wrap)
+        ))),
+        u64::MAX
+    );
+    // ... and with Clamp saturates at 0.
+    assert_eq!(
+        one(Expr(ScalarExpr::Cast(
+            b(konst_int(-1, I64)),
+            cast(Saturation::Clamp)
+        ))),
+        0
+    );
+    // i64::MAX * 2 + 1 = u64::MAX, computed (not written) in u64.
+    assert_eq!(
+        one(konst_int(i64::MAX, U64) * konst_int(2, U64) + konst_int(1, U64)),
+        u64::MAX
+    );
+    // u64::MAX * u64::MAX = 1 (wrapping at 64 bits, not 128).
+    let big = konst_int(0, U64) - konst_int(1, U64);
+    assert_eq!(one(big.clone() * big), 1);
+    // A float saturates at u64::MAX, and NaN is 0.
+    let sat = Expr(ScalarExpr::Cast(
+        b(input(0)),
+        CastSpec {
+            to: U64,
+            round: RoundMode::TowardZero,
+            sat: Saturation::Clamp,
+        },
+    ));
+    let got = run(&int_op("f2u64", sat, U64), 3, U64, &[1.0e30, f32::NAN, 3.9]);
+    let g = |i| got.bits_at(i) as u64;
+    assert_eq!((g(0), g(1), g(2)), (u64::MAX, 0, 3));
+}
+
+#[test]
+fn coord_int_u64_is_the_exact_coordinate() {
+    let got = run(
+        &int_op("coord64", coord_int(0, U64) * konst_int(3, U64), U64),
+        5,
+        U64,
+        &[0.0; 5],
+    );
+    for i in 0..5usize {
+        assert_eq!(got.bits_at(i) as u64, 3 * i as u64, "element {i}");
+    }
+}
