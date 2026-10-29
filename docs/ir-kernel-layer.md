@@ -1,6 +1,6 @@
 # The kernel layer, v0 (U2): spec
 
-Status: **spec, written before any code** (PM ruling 2026-10-28: spec doc first, effects model stated, unknowns
+Status: **spec, written before the code; steps 1-4 of section 9 (Elementwise part) have landed** (0.31.0 types and `check_kernel`; 0.31.3 interpreter and `lift_elementwise_opdef`) (PM ruling 2026-10-28: spec doc first, effects model stated, unknowns
 marked, scope checker with known-bad mutations). Closes ROADMAP U2 / gap 3.1 of `ir-union-design.md` once built.
 This document refines `ir-union-design.md` section 4 (two layers) and decision D1; it does not reopen it.
 
@@ -14,8 +14,8 @@ body is a later decision that waits for the Slang requirements (Fuel#514) and fo
 
 Delivers: (1) the data types of section 3; (2) `check_kernel`, a scope and type checker (section 4);
 (3) a reference **interpreter** on the oracle side (section 5), so that "the layers agree" is a test that runs in
-plain Rust with no emitter and no device; (4) `lift_opdef`, which lowers an existing intent-layer `OpDef` into a
-`KernelFn` (section 7), in the order Elementwise, Reduction, Scan, RowReduce.
+plain Rust with no emitter and no device; (4) `lift_elementwise_opdef` (module `kernel_lift`), which lowers an existing intent-layer `OpDef` into a
+`KernelFn` (section 7), in the order Elementwise (landed), Reduction, Scan, RowReduce (open).
 
 Does not deliver: memory spaces, pointers, execution scopes or thread ids (U3); barriers, atomics with order or
 scope (U4); collectives (U5); a path from a `KernelFn` to any emitter; any `Frontend` change (ROADMAP I1 waits
@@ -100,7 +100,7 @@ Plus the positive control for each: the unmutated program passes.
 
 ## 5. Semantics and the interpreter
 
-The interpreter (`oracle::kernel_eval`, test-visible, no emitter) runs a `KernelFn` with scalar arguments and
+The interpreter (`oracle::kernel_eval::run_kernel`, public, no emitter) runs a `KernelFn` with scalar arguments and
 buffers and returns the written buffers. Rules:
 
 - Locals are mutable cells initialized by `Let` before first read; there is no uninitialized read (the checker
@@ -190,8 +190,8 @@ nothing here answers its five questions.)
 ## 9. Order of work (each its own PR, red-first)
 
 1. This spec (docs only).
-2. `ScalarExpr::Local` (breaking) with the match sites, text and DAG carriers, and its own refusals; `kernel.rs`
+2. (landed, 0.31.0) `ScalarExpr::Local` (breaking) with the match sites, text and DAG carriers, and its own refusals; `kernel.rs`
    types; `check_kernel` with the nine known-bad mutations and their positive controls.
-3. The interpreter and its direct tests (loops, `Break`, `Continue`, `Return`, `ZeroStep`, wrap of the counter).
-4. `lift_opdef` Elementwise + the differential against `oracle::evaluate`; then Reduction, Scan, RowReduce.
+3. (landed, 0.31.3) The interpreter and its direct tests (loops, `Break`, `Continue`, `Return`, `ZeroStep`, wrap of the counter).
+4. `lift_elementwise_opdef` + the differential against `oracle::evaluate` (landed, 0.31.3); then Reduction, Scan, RowReduce (open).
 5. Effects (`effects(&KernelFn)`), once a consumer asks; it is stated here so the shape is agreed, not built.
