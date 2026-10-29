@@ -169,7 +169,7 @@ caller changes meaning). Which of the two the PM rules is `[ASK] packed-values-T
 | `Extract(x, i)` | `t` | `x` is `Packed(t, n)`, `i < n`, else `TypeError::BadLane`. |
 | `Add/Sub/Mul/Fma/Min/Max` | operand type | Lane-wise. Operands must have identical `Ty`; integer lanes wrap exactly as section 8. |
 | `Cast` / `Bitcast` | per lane / by width | `Cast` converts each lane (`cvt.rn.f16x2.f32` is `Cast` of `Pack(a, b)`); `Bitcast` needs equal total bits (`Packed(F16, 2)` <-> `U32`). |
-| `Select(c, a, b)` | type of `a` | `c` scalar: whole-value select. A packed `c` is out of scope (lane-wise mask is a later slice). |
+| `Select(c, a, b)` | type of `a` | `c` scalar: whole-value select. `c` packed with the arms' lane count: lane-wise mask, lane `i` of the result is `a`'s lane `i` when `c`'s lane `i` is non-zero, else `b`'s (each mask lane tested `!= 0` in its own type, like a scalar condition; `c`'s lanes may be any scalar type). A packed `c` over scalar arms, or with a different lane count, is `PackedOperand`. |
 
 Everything else (Div, Unary, comparisons, `Bitcast`, `Qualified` over a packed operand) declines with
 `TypeError::PackedOperand` until a backend needs it; declining is the safe direction.
