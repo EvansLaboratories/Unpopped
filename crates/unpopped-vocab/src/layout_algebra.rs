@@ -27,7 +27,7 @@
 //! [`Layout::complement`] orders modes by stride. Nesting depth is capped at
 //! [`MAX_DEPTH`].
 //!
-//! Not here yet: inverses, slicing, by-mode `select`/`take`, TMA basis strides.
+//! Not here yet: slicing, by-mode `select`/`take`, TMA basis strides.
 
 use std::fmt;
 
@@ -542,6 +542,45 @@ impl Layout {
     pub fn logical_divide(&self, tiler: &Layout) -> Result<Layout, LayoutError> {
         let rest = tiler.complement(self.size())?;
         self.composition(&Layout::from_modes(&[tiler.clone(), rest])?)
+    }
+
+    /// A layout `R` with `self(R(i)) == i` for every `i < size(R)`, where `size(R)`
+    /// is as large as `self`'s modes allow: starting from offset 1, it chains the
+    /// modes whose stride is exactly the extent covered so far. Offsets beyond
+    /// `size(R)` are not claimed. For a layout that is a bijection onto
+    /// `[0, size(self))` this is the two-sided inverse. `1:0` when no mode has
+    /// stride 1.
+    pub fn right_inverse(&self) -> Layout {
+        let modes = self.flat_modes();
+        let mut index_stride = Vec::with_capacity(modes.len());
+        let mut run: i64 = 1;
+        for &(s, _) in &modes {
+            index_stride.push(run);
+            run = run.saturating_mul(s);
+        }
+        let mut used = vec![false; modes.len()];
+        let mut covered: i64 = 1;
+        let mut out: Vec<(i64, i64)> = Vec::new();
+        while let Some(k) =
+            (0..modes.len()).find(|&k| !used[k] && modes[k].0 > 1 && modes[k].1 == covered)
+        {
+            used[k] = true;
+            out.push((modes[k].0, index_stride[k]));
+            match covered.checked_mul(modes[k].0) {
+                Some(c) => covered = c,
+                None => break,
+            }
+        }
+        Self::from_flat(&out).coalesce()
+    }
+
+    /// For an injective `self`, a layout `L` with `L(self(i)) == i` for every
+    /// `i < size(self)` and `size(L) >= cosize(self)`:
+    /// `right_inverse((self, complement(self, cosize(self))))`. Declines what
+    /// [`Layout::complement`] declines (stride-0 or overlapping modes).
+    pub fn left_inverse(&self) -> Result<Layout, LayoutError> {
+        let rest = self.complement(self.cosize())?;
+        Ok(Layout::from_modes(&[self.clone(), rest])?.right_inverse())
     }
 
     /// `self x rhs`: `(self, composition(complement(self, size(self)*cosize(rhs)), rhs))`.
