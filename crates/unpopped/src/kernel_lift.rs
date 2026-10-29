@@ -955,7 +955,13 @@ fn check_contraction(
     if op.n_inputs < 2 || (batched && op.n_inputs != 2) {
         return Err(LiftDecline::UnsupportedForm("a batched fused bias input"));
     }
-    check_plain(op, dtype, if batched { 3 } else { 2 })?;
+    check_plain_with_views(op, dtype, if batched { 3 } else { 2 }, true)?;
+    // A view on the two factors is recognition metadata: the oracle reads them through the bound
+    // operand's own strides (a transposed operand is a transposed binding), so the kernel is the
+    // view-free one. A fused bias is read through its view, which this lift does not build.
+    if op.views.iter().skip(2).any(|v| !v.is_identity()) {
+        return Err(LiftDecline::UnsupportedForm("a view on a fused bias"));
+    }
     Ok((batched, epilogue))
 }
 
