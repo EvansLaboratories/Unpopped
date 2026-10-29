@@ -253,7 +253,18 @@ pub fn lift_reduction_opdef(
 pub fn lift_scan_opdef(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<KernelFn, LiftDecline> {
     let (sop, reverse, exclusive, pre) = check_scan(op, dtype, rank)?;
     let sh = ReductionShape::new(op.n_inputs, dtype, rank, AxisMask::EMPTY);
-    let scanned = sh.reduced[0];
+    let pass = scan_pass(&sh, sop, exclusive, pre);
+    let mut row = scan_row(&sh, sop, reverse, pass);
+    for &d in sh.kept.iter().rev() {
+        row = for_axis(d, sh.r, row);
+    }
+    let (params, locals) = sh.signature(u8::try_from(sh.r).expect("rank is at most 8"));
+    Ok(KernelFn::new(op.name.clone(), dtype, params, locals, row))
+}
+
+/// One position of the scan: load the inputs, pre-map, fold into the prefix, and write the prefix
+/// after the fold (inclusive) or before it (exclusive).
+fn scan_pass(sh: &ReductionShape, sop: ReduceOp, exclusive: bool, pre: &ScalarExpr) -> Vec<Stmt> {
     let all_counters = || {
         (0..sh.r)
             .map(|d| ScalarExpr::Local(sh.counter(d)))
@@ -287,8 +298,14 @@ pub fn lift_scan_opdef(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Kerne
         pass.extend(fold);
         pass.push(write);
     }
+    pass
+}
 
+/// The scan of one row: the prefix starts at the monoid identity and the scanned axis is walked
+/// ascending, or descending for a reverse scan.
+fn scan_row(sh: &ReductionShape, sop: ReduceOp, reverse: bool, pass: Vec<Stmt>) -> Block {
     let int = |v: i64| ScalarExpr::ConstInt(v, ElementKind::I32);
+    let scanned = sh.reduced[0];
     let extent = ScalarExpr::Local(scanned);
     let (start, end, step) = if reverse {
         (
@@ -299,10 +316,10 @@ pub fn lift_scan_opdef(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Kerne
     } else {
         (int(0), extent, int(1))
     };
-    let mut row = Block(vec![
+    Block(vec![
         Stmt::Let {
             local: sh.acc,
-            init: sh.up(scan_identity(sop, dtype)),
+            init: sh.up(scan_identity(sop, sh.dtype)),
         },
         Stmt::Let {
             local: sh.have,
@@ -315,12 +332,7 @@ pub fn lift_scan_opdef(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Kerne
             step,
             body: Block(pass),
         },
-    ]);
-    for &d in sh.kept.iter().rev() {
-        row = for_axis(d, sh.r, row);
-    }
-    let (params, locals) = sh.signature(u8::try_from(sh.r).expect("rank is at most 8"));
-    Ok(KernelFn::new(op.name.clone(), dtype, params, locals, row))
+    ])
 }
 
 /// The scan's op, direction, exclusivity and pre-map once the op is known to be liftable.
