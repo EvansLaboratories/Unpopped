@@ -198,6 +198,15 @@ emitter, which is why they can land under the seam hold.
   input's offset dropped to show the agreement depends on it. Open (U3): a backend that emits source from a `KernelFn` has no
   parameter that carries the offset (the spec's "no argument ABI" finding), so how it reaches a launch is the seam's question.
 
+- **Input views** (`tests/kernel_view_agrees.rs`): an Elementwise op whose inputs carry `View::Permute`/`Layout`/`Broadcast`/`Reshape` (the plan
+  admits views on Elementwise and Contraction; only Elementwise lifts them). A `Place` goes through the bound buffer's own shape
+  and strides, so `Permute` is lift code (iteration axis `d` indexes producer axis `perm[d]`, so the producer coordinate on axis
+  `perm[d]` is the counter of axis `d`; the producer buffer is bound as it is), while `Layout`, `Broadcast` (stride 0), `Reshape` and a
+  flipped operand are **binding contracts** like a base offset: the caller binds the view's extents and strides on the same storage and
+  the lifted kernel is the identity one. The tests use a rank-3 permutation that is not its own inverse (a transposed rank-2 is, and
+  would not tell the two directions apart), and a control that the view-free op on the same buffers traps or differs. Open: a view on a
+  Contraction (a transposed matmul operand); every other access still declines a view, since it would ignore it.
+
 ### 7.1 Two agreement modes, and the oracle as a tolerance referee
 
 **Byte-exact is the default**, and the only mode for a post-expression or epilogue that is the identity
