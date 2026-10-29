@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.31.11` — feat (additive): `lift_scan_opdef` (U2, #113)
+
+New `kernel_lift::lift_scan_opdef` lowers a float `Access::Scan` (`Sum`, `Prod`, `Max`, `Min`; inclusive or exclusive; forward or reverse; innermost axis; `F32` or `F64` compute; identity post-expression only; `pre` may be any body over the inputs) into a kernel that does what the oracle does: an `F64` prefix local that starts at the monoid identity, one `Cast` up per pre-mapped element, the fold in the oracle's order (`Max`/`Min` keep a NaN), the prefix written before the fold (exclusive) or after it (inclusive), one `Cast` down per `Store`. The infinite identities are built from their bit patterns (`Bitcast` of an integer constant) so a scan kernel serializes to JSON. Typed `LiftDecline` for `Mean`, an integer scan, an outer-axis scan and a fused post (new `NotScan`). `tests/kernel_scan_agrees.rs`: byte-for-byte agreement with `oracle::evaluate` for 4 monoids x 2 directions x 2 exclusivities, a pre-map, on a corpus with f32-cancelling magnitudes, an all-negative row, NaN first and mid-row, infinities and signed zeros; JSON round trip. Mutation-checked: exclusive ordering, reverse, and the Max, Min and Prod identities each turned tests red when altered. No trait or struct shape change. Proposed number; the PM allocates.
+
 ## `0.31.9` — feat (additive): `Layout::select`, `take`, `slice` (with `SliceCrd`) and `tile_to_shape` (U6 part 3, #117)
 
 `select`/`take` pick top-level modes; `slice(&SliceCrd)` fixes some coordinates and keeps others, returning the kept layout and the offset (`kept(j) + offset == self(full coordinate)`); `tile_to_shape(target)` replicates a block to cover `target` as `(block_i, tiles_i)` per dimension, tiles after the whole block (declines non-multiples with `NotDivisible`). New file `layout_algebra/slice.rs`; tests in `tests/layout_algebra_slice.rs`, each against a deliberately broken variant. Proposed number; the PM allocates.
