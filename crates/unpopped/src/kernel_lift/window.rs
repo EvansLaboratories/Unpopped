@@ -11,7 +11,9 @@
 use unpopped_vocab::ElementKind;
 
 use super::im2col::{add, int, local, mul, outside, sub};
-use super::{LiftDecline, check_plain, fold_step, leaves_ok, scan_identity, substitute_inputs, widen};
+use super::{
+    LiftDecline, check_plain, fold_step, leaves_ok, scan_identity, substitute_inputs, widen,
+};
 use crate::ir::{Access, OpDef, ReduceOp, ScalarExpr};
 use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 
@@ -25,7 +27,11 @@ use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 /// # Errors
 ///
 /// A [`LiftDecline`].
-pub fn lift_window_opdef(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<KernelFn, LiftDecline> {
+pub fn lift_window_opdef(
+    op: &OpDef,
+    dtype: ElementKind,
+    rank: u8,
+) -> Result<KernelFn, LiftDecline> {
     let g = check_window(op, dtype, rank)?;
     let w = Win::new(op.n_inputs, dtype, rank);
     let mut body = Block(vec![
@@ -92,7 +98,9 @@ fn check_window(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Geometry, Li
         return Err(LiftDecline::UnsupportedForm("a fused post-expression"));
     }
     if matches!(wop, ReduceOp::Prod) || usize::from(*axis) + 1 != usize::from(rank) {
-        return Err(LiftDecline::UnsupportedForm("a window that is not a pool over the last axis"));
+        return Err(LiftDecline::UnsupportedForm(
+            "a window that is not a pool over the last axis",
+        ));
     }
     check_plain(op, dtype, rank)?;
     leaves_ok(pre)?;
@@ -283,7 +291,12 @@ impl Win {
         let mut params: Vec<Param> = (0..self.n)
             .map(|k| Param::buffer(format!("in{k}"), self.dtype, BufferRole::Read, Some(rank)))
             .collect();
-        params.push(Param::buffer("out", self.dtype, BufferRole::Write, Some(rank)));
+        params.push(Param::buffer(
+            "out",
+            self.dtype,
+            BufferRole::Write,
+            Some(rank),
+        ));
         params.extend((0..self.r).map(|d| Param::scalar(format!("n{d}"), ElementKind::I32, d)));
         params.push(Param::scalar("k_out", ElementKind::I32, self.k_out));
         // Extents (r + 1), cell counters (r), tap counter and source position: all `I32`.

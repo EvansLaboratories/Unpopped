@@ -89,12 +89,7 @@ fn buffer(dtype: ElementKind, shape: [i64; 2], values: &[f64]) -> TypedBuffer {
 }
 
 /// Run the case through the oracle and through the lifted kernel on `values`.
-fn both(
-    case: Case,
-    wop: ReduceOp,
-    dtype: ElementKind,
-    values: &[f64],
-) -> (Vec<u8>, Vec<u8>) {
+fn both(case: Case, wop: ReduceOp, dtype: ElementKind, values: &[f64]) -> (Vec<u8>, Vec<u8>) {
     let (rows, k_in, k_out) = (case.rows, case.k_in, case.k_out());
     let src = buffer(dtype, [rows, k_in], values);
     let op = case.op(wop, dtype);
@@ -109,7 +104,11 @@ fn both(
         .bytes;
 
     let kernel = lift_window_opdef(&op, dtype, 2).expect("the window lifts");
-    assert_eq!(check_kernel(&kernel), Ok(()), "a lifted kernel is well formed");
+    assert_eq!(
+        check_kernel(&kernel),
+        Ok(()),
+        "a lifted kernel is well formed"
+    );
     let mut args = vec![
         KernelArg::Buffer(src),
         KernelArg::Buffer(TypedBuffer::new(
@@ -199,7 +198,10 @@ fn a_nan_is_kept_by_max_and_min() {
         let (want, got) = both(case, wop, ElementKind::F32, &values);
         assert_eq!(got, want, "{wop:?}");
         let first = f32::from_le_bytes(got[..4].try_into().unwrap());
-        assert!(first.is_nan(), "{wop:?}: the window holding a NaN stays NaN");
+        assert!(
+            first.is_nan(),
+            "{wop:?}: the window holding a NaN stays NaN"
+        );
     }
 }
 
@@ -220,8 +222,15 @@ fn the_accumulator_is_f64_and_ascending() {
     assert_eq!(got, want);
     let asc: f64 = values.iter().sum();
     let desc: f64 = values.iter().rev().sum();
-    assert_ne!(asc.to_bits(), desc.to_bits(), "the case discriminates the order");
-    assert_eq!(f64::from_le_bytes(got[..8].try_into().unwrap()).to_bits(), asc.to_bits());
+    assert_ne!(
+        asc.to_bits(),
+        desc.to_bits(),
+        "the case discriminates the order"
+    );
+    assert_eq!(
+        f64::from_le_bytes(got[..8].try_into().unwrap()).to_bits(),
+        asc.to_bits()
+    );
     // f32 compute with f32-cancelling data agrees too.
     let (want32, got32) = both(case, ReduceOp::Sum, ElementKind::F32, &values);
     assert_eq!(got32, want32);
@@ -229,7 +238,14 @@ fn the_accumulator_is_f64_and_ascending() {
 
 #[test]
 fn forms_the_lift_does_not_cover_decline_with_a_reason() {
-    assert!(lift_window_opdef(&BASE.op(ReduceOp::Sum, ElementKind::F32), ElementKind::F32, 2).is_ok());
+    assert!(
+        lift_window_opdef(
+            &BASE.op(ReduceOp::Sum, ElementKind::F32),
+            ElementKind::F32,
+            2
+        )
+        .is_ok()
+    );
     let ew = OpDef::elementwise(
         "e",
         1,
@@ -241,7 +257,11 @@ fn forms_the_lift_does_not_cover_decline_with_a_reason() {
         Err(LiftDecline::NotWindow)
     );
     assert_eq!(
-        lift_window_opdef(&BASE.op(ReduceOp::Sum, ElementKind::I32), ElementKind::I32, 2),
+        lift_window_opdef(
+            &BASE.op(ReduceOp::Sum, ElementKind::I32),
+            ElementKind::I32,
+            2
+        ),
         Err(LiftDecline::UnsupportedForm("a non-float window"))
     );
 }
