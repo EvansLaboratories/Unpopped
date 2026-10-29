@@ -14,7 +14,9 @@
 
 use unpopped_vocab::ElementKind;
 
-use crate::ir::{Access, OpDef, ScalarExpr, WriteIndex};
+use crate::ir::{
+    Access, BinaryOp, CastSpec, OpDef, ReduceOp, RoundMode, Saturation, ScalarExpr, WriteIndex,
+};
 use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 use crate::types::map_children;
 
@@ -22,8 +24,11 @@ use crate::types::map_children;
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LiftDecline {
-    /// The op is not `Access::Elementwise`; Reduction, Scan and RowReduce follow.
+    /// The op is not `Access::Elementwise` (for [`lift_elementwise_opdef`]); Scan and RowReduce
+    /// follow.
     NotElementwise,
+    /// The op is not `Access::Reduction` (for [`lift_reduction_opdef`]).
+    NotReduction,
     /// More than one output, a per-output dtype, a gather/scatter, a runtime base offset or a
     /// non-identity view: forms this increment does not lift.
     UnsupportedForm(&'static str),
@@ -100,6 +105,12 @@ fn check_liftable(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<(), LiftDe
     if !matches!(op.access, Access::Elementwise) {
         return Err(LiftDecline::NotElementwise);
     }
+    check_common(op, dtype, rank)
+}
+
+/// The conditions every lifted access shares: rank, one output, plain addressing, one dtype,
+/// and a body that reads only inputs and constants.
+fn check_common(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<(), LiftDecline> {
     if rank == 0 || rank > 8 {
         return Err(LiftDecline::BadRank);
     }
@@ -150,5 +161,238 @@ fn substitute_inputs(body: &ScalarExpr, loaded: &dyn Fn(u32) -> u32) -> ScalarEx
     match r {
         Ok(e) => e,
         Err(never) => match never {},
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reduction
+
+/// Lift a float `Access::Reduction` over `rank` input axes, computed at `dtype` (`F32` or `F64`).
+///
+/// The oracle accumulates a float reduction in `f64` and rounds once at the store, so the kernel
+/// does too: an `F64` accumulator local, a `Cast` of each body value up to `F64`, the fold in the
+/// oracle's order (kept axes outermost ascending, reduced axes ascending, last fastest), and one
+/// `Cast` down at the `Store`. `Max` and `Min` carry a `have` flag and keep a NaN once seen (the
+/// oracle's rule: `!have || v.is_nan() || better`); `Mean` divides the `F64` accumulator by the
+/// reduced extents' product. Only the identity post-expression (`Reduced(0)`) lifts: a fused post
+/// would have to run at the compute dtype over an unrounded `F64` value, which the typed kernel
+/// language cannot state.
+///
+/// Parameters, in order: the inputs (`Read`, rank `rank`), the output (`Write`; rank `rank` with
+/// `keepdim`, else the kept-axis count), then one `I32` extent per input axis. Locals:
+/// extents `0..rank`, counters `rank..2*rank`, loaded inputs `2*rank..2*rank+n`, then the
+/// accumulator, the `have` flag and the current value.
+///
+/// # Errors
+///
+/// A [`LiftDecline`].
+pub fn lift_reduction_opdef(
+    op: &OpDef,
+    dtype: ElementKind,
+    rank: u8,
+) -> Result<KernelFn, LiftDecline> {
+    let Access::Reduction {
+        op: rop,
+        axes,
+        keepdim,
+        post,
+        ..
+    } = &op.access
+    else {
+        return Err(LiftDecline::NotReduction);
+    };
+    if !matches!(dtype, ElementKind::F32 | ElementKind::F64) {
+        return Err(LiftDecline::UnsupportedForm("a non-float reduction"));
+    }
+    if !matches!(post, ScalarExpr::Reduced(0)) {
+        return Err(LiftDecline::UnsupportedForm("a fused post-expression"));
+    }
+    check_common(op, dtype, rank)?;
+
+    let r = u32::from(rank);
+    let n = u32::from(op.n_inputs);
+    let reduced: Vec<u32> = if axes.is_empty() {
+        vec![r - 1]
+    } else {
+        (0..r).filter(|&d| axes.is_set(d as u8)).collect()
+    };
+    let kept: Vec<u32> = (0..r).filter(|d| !reduced.contains(d)).collect();
+    let counter = |d: u32| r + d;
+    let loaded = |k: u32| 2 * r + k;
+    let (acc, have, val) = (2 * r + n, 2 * r + n + 1, 2 * r + n + 2);
+    let f64k = ElementKind::F64;
+    let up = |e: ScalarExpr| {
+        if dtype == f64k {
+            e
+        } else {
+            ScalarExpr::Cast(Box::new(e), widen(f64k))
+        }
+    };
+    let local = ScalarExpr::Local;
+    let bx = Box::new;
+    let coords_of = |axes: &[u32]| axes.iter().map(|&d| local(counter(d))).collect::<Vec<_>>();
+
+    // One pass of the fold.
+    let mut inner: Vec<Stmt> = (0..n)
+        .map(|k| Stmt::Load {
+            local: loaded(k),
+            place: Place::Logical {
+                buffer: k,
+                coords: (0..r).map(|d| local(counter(d))).collect(),
+            },
+        })
+        .collect();
+    inner.push(Stmt::Let {
+        local: val,
+        init: up(substitute_inputs(&op.body, &loaded)),
+    });
+    inner.extend(fold_step(*rop, acc, have, val));
+
+    let mut reduce_loop = Block(inner);
+    for &d in reduced.iter().rev() {
+        reduce_loop = for_axis(d, r, reduce_loop);
+    }
+
+    let init = if matches!(rop, ReduceOp::Prod) {
+        1.0
+    } else {
+        0.0
+    };
+    let finalized = if matches!(rop, ReduceOp::Mean) {
+        let divisor = reduced
+            .iter()
+            .map(|&d| ScalarExpr::Cast(bx(local(d)), widen(f64k)))
+            .reduce(|a, b| ScalarExpr::Mul(bx(a), bx(b)))
+            .expect("a reduction has at least one reduced axis");
+        ScalarExpr::Div(bx(local(acc)), bx(divisor))
+    } else {
+        local(acc)
+    };
+    let stored = if dtype == f64k {
+        finalized
+    } else {
+        ScalarExpr::Cast(bx(finalized), widen(dtype))
+    };
+    let out_coords: Vec<ScalarExpr> = if *keepdim {
+        (0..r)
+            .map(|d| {
+                if kept.contains(&d) {
+                    local(counter(d))
+                } else {
+                    ScalarExpr::ConstInt(0, ElementKind::I32)
+                }
+            })
+            .collect()
+    } else {
+        coords_of(&kept)
+    };
+    let out_rank = u8::try_from(out_coords.len()).expect("rank is at most 8");
+
+    let mut body = Block(vec![
+        Stmt::Let {
+            local: acc,
+            init: up(ScalarExpr::Const(init)),
+        },
+        Stmt::Let {
+            local: have,
+            init: ScalarExpr::ConstInt(0, ElementKind::I32),
+        },
+    ]);
+    body.0.extend(reduce_loop.0);
+    body.0.push(Stmt::Store {
+        place: Place::Logical {
+            buffer: n,
+            coords: out_coords,
+        },
+        value: stored,
+    });
+    for &d in kept.iter().rev() {
+        body = for_axis(d, r, body);
+    }
+
+    let mut params: Vec<Param> = (0..n)
+        .map(|k| Param::buffer(format!("in{k}"), dtype, BufferRole::Read, Some(rank)))
+        .collect();
+    params.push(Param::buffer(
+        "out",
+        dtype,
+        BufferRole::Write,
+        Some(out_rank),
+    ));
+    params.extend((0..r).map(|d| Param::scalar(format!("n{d}"), ElementKind::I32, d)));
+    let mut locals = vec![LocalDecl::scalar(ElementKind::I32); 2 * usize::from(rank)];
+    locals.extend((0..n).map(|_| LocalDecl::scalar(dtype)));
+    locals.push(LocalDecl::scalar(f64k)); // acc
+    locals.push(LocalDecl::scalar(ElementKind::I32)); // have
+    locals.push(LocalDecl::scalar(f64k)); // val
+    Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body))
+}
+
+/// A float-to-float (or int-to-float) conversion that rounds to nearest even and never traps.
+fn widen(to: ElementKind) -> CastSpec {
+    CastSpec {
+        to,
+        round: RoundMode::NearestEven,
+        sat: Saturation::Wrap,
+    }
+}
+
+/// `for counter(d) in 0..extent(d) { inner }` for input axis `d` of a rank-`r` kernel.
+fn for_axis(d: u32, r: u32, inner: Block) -> Block {
+    Block(vec![Stmt::For {
+        local: r + d,
+        start: ScalarExpr::ConstInt(0, ElementKind::I32),
+        end: ScalarExpr::Local(d),
+        step: ScalarExpr::ConstInt(1, ElementKind::I32),
+        body: inner,
+    }])
+}
+
+/// The oracle's `fold_step` for a float accumulator `acc` (an `F64` local) and value `val`.
+fn fold_step(rop: ReduceOp, acc: u32, have: u32, val: u32) -> Vec<Stmt> {
+    let l = ScalarExpr::Local;
+    let bx = Box::new;
+    let set = |v: u32| Stmt::Assign {
+        local: acc,
+        value: l(v),
+    };
+    match rop {
+        ReduceOp::Sum | ReduceOp::Mean => vec![Stmt::Assign {
+            local: acc,
+            value: ScalarExpr::Add(bx(l(acc)), bx(l(val))),
+        }],
+        ReduceOp::Prod => vec![Stmt::Assign {
+            local: acc,
+            value: ScalarExpr::Mul(bx(l(acc)), bx(l(val))),
+        }],
+        ReduceOp::Max | ReduceOp::Min => {
+            let better = if matches!(rop, ReduceOp::Max) {
+                BinaryOp::CmpGt
+            } else {
+                BinaryOp::CmpLt
+            };
+            // if !have { acc = v } else if v != v { acc = v } else if better(v, acc) { acc = v }
+            let keep_going = Stmt::If {
+                cond: ScalarExpr::Binary(better, bx(l(val)), bx(l(acc))),
+                then: Block(vec![set(val)]),
+                els: Block(vec![]),
+            };
+            let nan_check = Stmt::If {
+                cond: ScalarExpr::Binary(BinaryOp::CmpNe, bx(l(val)), bx(l(val))),
+                then: Block(vec![set(val)]),
+                els: Block(vec![keep_going]),
+            };
+            vec![
+                Stmt::If {
+                    cond: l(have),
+                    then: Block(vec![nan_check]),
+                    els: Block(vec![set(val)]),
+                },
+                Stmt::Assign {
+                    local: have,
+                    value: ScalarExpr::ConstInt(1, ElementKind::I32),
+                },
+            ]
+        }
     }
 }

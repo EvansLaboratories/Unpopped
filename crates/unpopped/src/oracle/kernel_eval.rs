@@ -288,13 +288,13 @@ impl Machine<'_> {
         self.locals[i as usize].expect("check_kernel guarantees a local is set before it is read")
     }
 
-    fn eval_expr(&mut self, e: &ScalarExpr) -> Result<Val, KernelTrap> {
+    fn eval_expr(&self, e: &ScalarExpr) -> Result<Val, KernelTrap> {
         match types::infer_ty_in(e, self.k.compute, &self.local_tys)
             .map_err(|_| KernelTrap::Unsupported("ill-typed expression"))?
         {
             Ty::Packed(..) => Err(KernelTrap::Unsupported("packed value")),
             Ty::Scalar(t) if types::int_range(t).is_some() => Ok(int_val(self.eval_int(e, t)?, t)),
-            Ty::Scalar(_) => self.eval_float(e),
+            Ty::Scalar(t) => self.eval_float(e, t),
         }
     }
 
@@ -340,21 +340,91 @@ impl Machine<'_> {
         })
     }
 
-    /// Rewrite `Local(i)` to `Input(slot)` and let the oracle evaluate it. Valid exactly when
-    /// every local read is a compute-dtype scalar, which is what `Input` means to the oracle.
-    fn eval_float(&self, e: &ScalarExpr) -> Result<Val, KernelTrap> {
-        let mut slots: Vec<u32> = Vec::new();
-        let rewritten = self.rewrite(e, &mut slots)?;
-        let leaf = |s: u8| self.local_val(slots[usize::from(s)]);
+    /// A floating-point expression of type `t`.
+    ///
+    /// When `t` and every local it reads are the compute dtype, this is exactly what the oracle
+    /// does to an `OpDef` body: rewrite `Local(i)` to `Input(slot)` and evaluate. Otherwise (an
+    /// `f64` accumulator inside an `f32` kernel, a cast of an integer local) the oracle's
+    /// compute-dtype machinery would round at the wrong width, so the expression is evaluated
+    /// node by node, each node at the type of its operands ([`Self::eval_mixed`]).
+    fn eval_float(&self, e: &ScalarExpr, t: ElementKind) -> Result<Val, KernelTrap> {
+        if t == self.k.compute && self.reads_only_compute_locals(e) {
+            let mut slots: Vec<u32> = Vec::new();
+            let rewritten = self.rewrite(e, &mut slots)?;
+            let leaf = |s: u8| self.local_val(slots[usize::from(s)]);
+            return Ok(self.run_oracle(&rewritten, self.k.compute, &leaf));
+        }
+        self.eval_mixed(e)
+    }
+
+    fn reads_only_compute_locals(&self, e: &ScalarExpr) -> bool {
+        match e {
+            ScalarExpr::Local(i) => self.local_tys[*i as usize] == Ty::Scalar(self.k.compute),
+            _ => types::operands(e)
+                .into_iter()
+                .all(|c| self.reads_only_compute_locals(c)),
+        }
+    }
+
+    fn run_oracle(&self, e: &ScalarExpr, dtype: ElementKind, leaf: &dyn Fn(u8) -> Val) -> Val {
         let coord = |_d: u8| -> Val { unreachable!("check_kernel rejects Coord inside a kernel") };
         let ev = Eval {
-            dtype: self.k.compute,
+            dtype,
             params: &[],
-            leaf: &leaf,
+            leaf,
             reduced: &panic_reduced,
             coord: &coord,
         };
-        Ok(eval(&rewritten, &ev))
+        eval(e, &ev)
+    }
+
+    /// Evaluate `e` one node at a time: children first (each by [`Self::eval_expr`], so a pure
+    /// compute-dtype subtree still takes the fast path), then the node itself under the oracle,
+    /// with the children's values as its leaves and the node's operand type as the evaluation
+    /// dtype. So `Add` of two `f64` locals is rounded at `f64`, and a `Cast` of an `i32` local
+    /// reads its operand as `i32`.
+    fn eval_mixed(&self, e: &ScalarExpr) -> Result<Val, KernelTrap> {
+        match e {
+            ScalarExpr::Local(i) => return Ok(self.local_val(*i)),
+            ScalarExpr::Const(v) => return Ok(Val::Float(*v)),
+            ScalarExpr::Qualified(..) => {
+                return Err(KernelTrap::Unsupported(
+                    "a Qualified node over a mixed-type operand",
+                ));
+            }
+            _ => {}
+        }
+        let kids = types::operands(e);
+        if kids.is_empty() {
+            return Err(KernelTrap::Unsupported(
+                "a leaf with no mixed-type evaluation",
+            ));
+        }
+        let mut vals = Vec::with_capacity(kids.len());
+        let mut tys = Vec::with_capacity(kids.len());
+        for k in &kids {
+            let ty = types::infer_ty_in(k, self.k.compute, &self.local_tys)
+                .map_err(|_| KernelTrap::Unsupported("ill-typed operand"))?;
+            let Ty::Scalar(t) = ty else {
+                return Err(KernelTrap::Unsupported("packed operand"));
+            };
+            tys.push(t);
+            vals.push(self.eval_expr(k)?);
+        }
+        // The dtype the node runs at: its operands' (a `Select`'s arms are operands 1 and 2).
+        let dtype = if matches!(e, ScalarExpr::Select(..)) {
+            tys[1]
+        } else {
+            tys[0]
+        };
+        let mut next = 0u8;
+        let node = map_children(e, &mut |_| {
+            let slot = next;
+            next += 1;
+            Ok::<_, KernelTrap>(ScalarExpr::Input(slot))
+        })?;
+        let leaf = |s: u8| vals[usize::from(s)];
+        Ok(self.run_oracle(&node, dtype, &leaf))
     }
 
     fn rewrite(&self, e: &ScalarExpr, slots: &mut Vec<u32>) -> Result<ScalarExpr, KernelTrap> {
