@@ -21,11 +21,13 @@ use crate::ir::{
 use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 use crate::types::{int_range, map_children};
 
+mod gather;
 mod im2col;
 mod post;
 mod row_reduce;
 mod row_sort;
 mod window;
+pub use gather::lift_gather_opdef;
 pub use im2col::lift_im2col_opdef;
 pub use row_reduce::lift_row_reduce_opdef;
 pub use row_sort::lift_row_sort_opdef;
@@ -52,6 +54,8 @@ pub enum LiftDecline {
     NotRowReduce,
     /// The op is not `Access::RowSort` (for [`lift_row_sort_opdef`]).
     NotRowSort,
+    /// No input has a `ReadIndex::Indexed` read (for [`lift_gather_opdef`]).
+    NotGather,
     /// More than one output, a per-output dtype, a gather/scatter (outside their own lifts), a
     /// runtime base offset outside Elementwise or a non-identity view: forms this increment does
     /// not lift.
@@ -142,6 +146,17 @@ fn check_common(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<(), LiftDecl
 /// [`check_common`] without the body-leaf check (a `Scan` keeps its `Reduced(0)` post in
 /// `body`, and its value expression in `pre`).
 fn check_plain(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<(), LiftDecline> {
+    check_plain_with(op, dtype, rank, false)
+}
+
+/// [`check_plain`], optionally admitting a gathered read (only the gather lift builds the
+/// address math for one).
+fn check_plain_with(
+    op: &OpDef,
+    dtype: ElementKind,
+    rank: u8,
+    allow_gather: bool,
+) -> Result<(), LiftDecline> {
     if rank == 0 || rank > 8 {
         return Err(LiftDecline::BadRank);
     }
@@ -150,7 +165,8 @@ fn check_plain(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<(), LiftDecli
             "multi-output or a per-output dtype",
         ));
     }
-    if !op.read_index.is_empty() || !matches!(op.write_index, WriteIndex::Direct) {
+    if (!allow_gather && !op.read_index.is_empty()) || !matches!(op.write_index, WriteIndex::Direct)
+    {
         return Err(LiftDecline::UnsupportedForm("gather or scatter"));
     }
     // A runtime base offset is a launch argument added to the operand's base before any address
