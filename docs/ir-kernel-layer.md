@@ -204,8 +204,11 @@ emitter, which is why they can land under the seam hold.
   `perm[d]` is the counter of axis `d`; the producer buffer is bound as it is), while `Layout`, `Broadcast` (stride 0), `Reshape` and a
   flipped operand are **binding contracts** like a base offset: the caller binds the view's extents and strides on the same storage and
   the lifted kernel is the identity one. The tests use a rank-3 permutation that is not its own inverse (a transposed rank-2 is, and
-  would not tell the two directions apart), and a control that the view-free op on the same buffers traps or differs. Open: a view on a
-  Contraction (a transposed matmul operand); every other access still declines a view, since it would ignore it.
+  would not tell the two directions apart), and a control that the view-free op on the same buffers traps or differs. Every other
+  access still declines a view, since it would ignore it, with one exception that is the opposite case: a **Contraction** accepts
+  `Permute` on its two factors as *recognition metadata* (`tests/kernel_contraction_view_agrees.rs`). The oracle reads the factors through
+  the bound operand's own strides and never reads the view, so a transposed factor is a transposed binding and the kernel must stay the
+  view-free one (reordering coordinates there would transpose twice); a view on a fused bias, which the oracle does read, declines.
 
 ### 7.1 Two agreement modes, and the oracle as a tolerance referee
 
