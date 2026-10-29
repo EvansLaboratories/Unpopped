@@ -15,11 +15,11 @@
 //! - **integer to integer**: `Wrap` truncates two's-complement, `Clamp` saturates.
 //!
 //! Only `{f16, bf16, f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32}` are defined
-//! (`types::check_cast`). The 16-bit floats go through [`encode_ieee`], one rounding from
+//! (`types::check_cast`), plus the MX elements `f4e2m1`/`f6e2m3`/`f6e3m2` ([`encode_mx`]). The 16-bit floats go through [`encode_ieee`], one rounding from
 //! the exact value; f32 and f64 keep their hardware-checked paths.
 
 use crate::ir::{CastSpec, RoundMode, Saturation};
-use crate::types::{float_format, int_range, is_cast_float_endpoint, typed_bits};
+use crate::types::{float_format, int_range, is_cast_float_endpoint, is_mx_element, typed_bits};
 use unpopped_vocab::ElementKind;
 
 /// Whether `t` is one of the 16-bit floats, which the generic IEEE helpers below encode.
@@ -69,6 +69,60 @@ fn round_scaled(ax: f64, eff: i32, mbits: u32, mode: RoundMode, neg: bool) -> u1
         RoundMode::TowardPosInf => frac > 0.0 && !neg,
     };
     n + u128::from(up)
+}
+
+/// Decode an MX element code (`1 + ebits + mbits` bits) to its exact value.
+pub(crate) fn decode_mx(bits: u128, ebits: u32, mbits: u32) -> f64 {
+    let sign = if (bits >> (ebits + mbits)) & 1 == 1 {
+        -1.0
+    } else {
+        1.0
+    };
+    let exp = ((bits >> mbits) & ((1u128 << ebits) - 1)) as i32;
+    let mant = (bits & ((1u128 << mbits) - 1)) as f64;
+    let bias = (1i32 << (ebits - 1)) - 1;
+    let mag = if exp == 0 {
+        mant * 2f64.powi(1 - bias - mbits as i32)
+    } else {
+        (1.0 + mant * 2f64.powi(-(mbits as i32))) * 2f64.powi(exp - bias)
+    };
+    sign * mag
+}
+
+/// `x` converted to an MX element under `mode`, SATURATING: every overflow (an infinity
+/// included) lands on the largest finite value of its sign, and a NaN becomes `+0`. This is
+/// the IR's rule (mirroring float to integer), NOT a hardware fact: the NaN behaviour of
+/// the vendors' conversion instructions is unverified here, so an emitter that cannot match
+/// it must decline rather than approximate. The sign of a zero (and of a value that rounds to
+/// zero) is kept.
+pub(crate) fn encode_mx(x: f64, ebits: u32, mbits: u32, mode: RoundMode) -> u128 {
+    if x.is_nan() {
+        return 0;
+    }
+    let neg = x.is_sign_negative();
+    let sign_bit = u128::from(neg) << (ebits + mbits);
+    let max_code = (1u128 << (ebits + mbits)) - 1;
+    let ax = x.abs();
+    if ax == 0.0 {
+        return sign_bit;
+    }
+    if ax.is_infinite() {
+        return sign_bit | max_code;
+    }
+    let bias = (1i32 << (ebits - 1)) - 1;
+    let emin = 1 - bias;
+    let emax = ((1i32 << ebits) - 1) - bias;
+    let e = (((ax.to_bits() >> 52) & 0x7ff) as i32 - 1023).max(-1022);
+    if e > emax {
+        return sign_bit | max_code;
+    }
+    let n = round_scaled(ax, e.max(emin), mbits, mode, neg);
+    let bits = if e < emin {
+        n
+    } else {
+        (((e + bias) as u128) << mbits) + (n - (1u128 << mbits))
+    };
+    sign_bit | bits.min(max_code)
 }
 
 /// Whether a FINITE value too large for the format rounds to infinity (rather than stopping at
@@ -179,6 +233,10 @@ pub(crate) fn bits_of(x: Num, t: ElementKind) -> u128 {
     match (x, t) {
         (Num::F(f), ElementKind::F64) => u128::from(f.to_bits()),
         (Num::F(f), ElementKind::F32 | ElementKind::F32Strict) => u128::from((f as f32).to_bits()),
+        (Num::F(f), t) if is_mx_element(t) => {
+            let (e, m) = float_format(t).expect("an MX element has a format");
+            encode_mx(f, e, m, RoundMode::NearestEven)
+        }
         // A value HELD as a 16-bit float is already on its grid, so any mode agrees.
         (Num::F(f), t) if is_half(t) => {
             let (e, m) = float_format(t).expect("a half has a format");
@@ -201,6 +259,10 @@ pub(crate) fn num_of(bits: u128, t: ElementKind) -> Num {
         t if is_half(t) => {
             let (e, m) = float_format(t).expect("a half has a format");
             Num::F(decode_ieee(bits, e, m))
+        }
+        t if is_mx_element(t) => {
+            let (e, m) = float_format(t).expect("an MX element has a format");
+            Num::F(decode_mx(bits, e, m))
         }
         ElementKind::I8 => Num::I(i128::from(bits as u8 as i8)),
         ElementKind::I16 => Num::I(i128::from(bits as u16 as i16)),
@@ -382,6 +444,10 @@ pub(crate) fn cast_bits(x: Num, from: ElementKind, spec: CastSpec) -> u128 {
                     let (e, m) = float_format(t).expect("a half has a format");
                     encode_ieee(f, e, m, spec.round, spec.sat == Saturation::ClampFinite)
                 }
+                t if is_mx_element(t) => {
+                    let (e, m) = float_format(t).expect("an MX element has a format");
+                    encode_mx(f, e, m, spec.round)
+                }
                 _ => {
                     let max = f64::from(f32::MAX);
                     let r = if spec.sat == Saturation::ClampFinite && !f.is_nan() {
@@ -419,6 +485,10 @@ pub(crate) fn cast_bits(x: Num, from: ElementKind, spec: CastSpec) -> u128 {
                 t if is_half(t) => {
                     let (e, m) = float_format(t).expect("a half has a format");
                     encode_ieee(int_to_f64_sticky(i), e, m, spec.round, false)
+                }
+                t if is_mx_element(t) => {
+                    let (e, m) = float_format(t).expect("an MX element has a format");
+                    encode_mx(int_to_f64_sticky(i), e, m, spec.round)
                 }
                 _ => u128::from(int_to_f32(i, spec.round).to_bits()),
             }
@@ -487,6 +557,143 @@ mod tests {
         }
         v.extend(v.clone().into_iter().map(|x| -x));
         v
+    }
+
+    const MX: [(ElementKind, u32, u32, f64); 3] = [
+        (ElementKind::F4E2M1, 2, 1, 6.0),
+        (ElementKind::F6E2M3, 2, 3, 7.5),
+        (ElementKind::F6E3M2, 3, 2, 28.0),
+    ];
+
+    /// Every non-negative code of an MX format with its value, ascending (the grid).
+    fn mx_grid(e: u32, m: u32) -> Vec<(u128, f64)> {
+        (0..(1u128 << (e + m)))
+            .map(|c| (c, decode_mx(c, e, m)))
+            .collect()
+    }
+
+    /// The nearer of two adjacent grid points (`(code, value)`), a tie going to the even code.
+    fn nearest_tie_even(lo: (u128, f64), hi: (u128, f64), a: f64) -> f64 {
+        let (dl, dh) = (a - lo.1, hi.1 - a);
+        if dl < dh || (dl == dh && lo.0 % 2 == 0) {
+            lo.1
+        } else {
+            hi.1
+        }
+    }
+
+    /// The independent reference: pick from the explicit grid, by definition.
+    fn mx_reference(x: f64, e: u32, m: u32, mode: RoundMode) -> f64 {
+        if x.is_nan() {
+            return 0.0;
+        }
+        let grid = mx_grid(e, m);
+        let max = grid.last().expect("non-empty").1;
+        let a = x.abs().min(max);
+        let neg = x < 0.0;
+        let lo = grid
+            .iter()
+            .rfind(|(_, v)| *v <= a)
+            .expect("0 is on the grid");
+        let hi = grid
+            .iter()
+            .find(|(_, v)| *v >= a)
+            .expect("clamped into the grid");
+        let mag = if lo.1 == hi.1 {
+            lo.1
+        } else {
+            match mode {
+                RoundMode::TowardZero => lo.1,
+                // away from zero is the upper neighbour for a positive value, the lower for a
+                // negative one's magnitude, and the reverse for TowardNegInf
+                RoundMode::TowardPosInf => [hi.1, lo.1][usize::from(neg)],
+                RoundMode::TowardNegInf => [lo.1, hi.1][usize::from(neg)],
+                RoundMode::NearestEven => nearest_tie_even(*lo, *hi, a),
+            }
+        };
+        if neg { -mag } else { mag }
+    }
+
+    #[test]
+    fn mx_grids_match_the_ocp_tables() {
+        // OCP MX v1.0 element value sets (spot values read from the spec's tables).
+        let e2m1: Vec<f64> = mx_grid(2, 1).iter().take(8).map(|g| g.1).collect();
+        assert_eq!(e2m1, [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]);
+        for (_, e, m, max) in MX {
+            assert_eq!(mx_grid(e, m).last().expect("non-empty").1, max, "e{e}m{m}");
+        }
+        assert_eq!(
+            decode_mx(0b111_111, 3, 2),
+            -28.0,
+            "e3m2 has no NaN or Inf: all-ones is -28"
+        );
+        assert_eq!(decode_mx(0b011_111, 2, 3), 7.5);
+    }
+
+    #[test]
+    fn mx_encoder_equals_the_brute_force_grid_search_for_every_mode() {
+        let extra = [0.25, 0.75, 2.5, 5.0, 0.25 + 1e-12, 6.0 + 1e-9, 7.75, 29.0];
+        for (_, e, m, _) in MX {
+            for x in probes().into_iter().chain(extra) {
+                for mode in MODES {
+                    let got = decode_mx(encode_mx(x, e, m, mode), e, m);
+                    let want = mx_reference(x, e, m, mode);
+                    assert_eq!(got, want, "e{e}m{m} {x:e} under {mode:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mx_saturates_nan_goes_to_plus_zero_and_zero_keeps_its_sign() {
+        for (_, e, m, max) in MX {
+            let enc = |x: f64| encode_mx(x, e, m, RoundMode::NearestEven);
+            let sign = 1u128 << (e + m);
+            let max_code = sign - 1;
+            assert_eq!(
+                enc(f64::NAN),
+                0,
+                "NaN -> +0 (the IR's rule; hardware unverified)"
+            );
+            assert_eq!(enc(-f64::NAN), 0, "even a negative NaN");
+            assert_eq!(enc(f64::INFINITY), max_code);
+            assert_eq!(enc(f64::NEG_INFINITY), sign | max_code);
+            // the clamp edge: max, just past max
+            assert_eq!(decode_mx(enc(max), e, m), max);
+            assert_eq!(enc(max + 1e-9), max_code, "max + eps");
+            assert_eq!(enc(-max - 1e-9), sign | max_code, "-max - eps");
+            assert_eq!(enc(1.0e300), max_code);
+            for mode in MODES {
+                assert_eq!(
+                    encode_mx(1.0e300, e, m, mode),
+                    max_code,
+                    "no mode escapes to a non-finite code"
+                );
+                assert_eq!(encode_mx(-1.0e300, e, m, mode), sign | max_code);
+            }
+            assert_eq!(enc(0.0), 0);
+            assert_eq!(enc(-0.0), sign, "-0 keeps its sign bit");
+            assert_eq!(
+                enc(-1e-30),
+                sign,
+                "a negative value that rounds to zero is -0"
+            );
+        }
+    }
+
+    #[test]
+    fn integers_into_an_mx_element_round_once_and_saturate() {
+        let to = |i: i128| {
+            decode_mx(
+                encode_mx(int_to_f64_sticky(i), 2, 1, RoundMode::NearestEven),
+                2,
+                1,
+            )
+        };
+        assert_eq!(to(5), 4.0, "5 is a tie between 4 and 6: even code (4) wins");
+        assert_eq!(to(7), 6.0);
+        assert_eq!(to(-1_000_000), -6.0);
+        assert_eq!(to(i128::from(i64::MAX)), 6.0);
     }
 
     #[test]
