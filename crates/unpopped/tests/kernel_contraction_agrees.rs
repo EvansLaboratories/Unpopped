@@ -443,3 +443,92 @@ fn a_batched_epilogue_agrees() {
     let (want, got) = both(&op, &lhs, &rhs, &[2, 3, 4]);
     assert_eq!(got, want);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Ill-conditioned epilogues state their own bound (spec 7.1). Rounding the K-sum `s` once moves it
+// by at most half an ulp, so a post `f` can move by `k / 2` ulp of its result, `k = |s f'(s) / f(s)|`;
+// the bound for a cell is `ceil(k / 2) + 1` (the `+ 1` covers the post's own rounding). Each case
+// shows both sides: every cell is inside its stated bound, and the stated bound is not vacuous
+// because the default bound is broken somewhere (so loosening it is what the case needs).
+
+/// The `f64` K-sums of an `[m, 5] x [5, 4]` product, row-major.
+fn k_sums(lhs: &[f32], rhs: &[f32], m: usize) -> Vec<f64> {
+    (0..m)
+        .flat_map(|i| (0..4).map(move |j| (i, j)))
+        .map(|(i, j)| {
+            (0..5)
+                .map(|k| f64::from(lhs[i * 5 + k]) * f64::from(rhs[k * 4 + j]))
+                .sum()
+        })
+        .collect()
+}
+
+/// Run `epilogue` over `m` rows of the benign corpus; return `(ulps, bound)` per cell, with the
+/// bound from `condition(s)`.
+fn ulps_against_bound(epilogue: Expr, condition: impl Fn(f64) -> f64, m: usize) -> Vec<(u64, u64)> {
+    let l: Vec<f32> = (0..m * 5).map(|i| benign(i % 16) as f32).collect();
+    let r: Vec<f32> = (0..20).map(|i| benign(i + 3) as f32).collect();
+    let lhs = buffer(&[m as i64, 5], &[5, 1], |i| l[i]);
+    let rhs = buffer(&[5, 4], &[4, 1], |i| r[i]);
+    let op = OpDef::contraction(
+        "ill",
+        &[ElementKind::F32],
+        ContractionAxes::matmul(),
+        epilogue,
+    );
+    let (want, got) = both(&op, &lhs, &rhs, &[m as i64, 4]);
+    let f = |b: &[u8]| -> Vec<f32> {
+        b.chunks(4)
+            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .collect()
+    };
+    k_sums(&l, &r, m)
+        .into_iter()
+        .zip(f(&want).into_iter().zip(f(&got)))
+        .map(|(s, (w, g))| (ulps_f32(w, g), (condition(s) / 2.0).ceil() as u64 + 1))
+        .collect()
+}
+
+fn assert_states_its_own_bound(cells: &[(u64, u64)]) {
+    let over_default = cells.iter().filter(|(u, _)| *u > MAX_ULPS).count();
+    assert!(
+        over_default > 0,
+        "the default bound is never broken, so the case needs no bound of its own"
+    );
+    for (ulps, bound) in cells {
+        assert!(ulps <= bound, "{ulps} ulps exceed the stated bound {bound}");
+    }
+    // Tight: the stated bound is within a factor of three of what happens on the worst cell.
+    let (worst, bound) = cells
+        .iter()
+        .copied()
+        .max_by_key(|(u, _)| *u)
+        .expect("cells");
+    assert!(
+        bound <= 3 * worst,
+        "bound {bound} is more than three times the worst case {worst}"
+    );
+}
+
+#[test]
+fn a_cancelling_shift_states_its_own_bound() {
+    // 0.37 s + 1, condition number |0.37 s / (0.37 s + 1)|.
+    let cells = ulps_against_bound(
+        reduced(0) * konst(0.37) + konst(1.0),
+        |s| (0.37 * s / (0.37 * s + 1.0)).abs(),
+        12,
+    );
+    assert_states_its_own_bound(&cells);
+}
+
+#[test]
+fn silu_states_its_own_bound() {
+    // x * sigmoid(x): d/dx = sigmoid(x) (1 + x (1 - sigmoid(x))); condition number |x f' / f|.
+    let sig = |x: f64| 1.0 / (1.0 + (-x).exp());
+    let cells = ulps_against_bound(
+        reduced(0).silu(),
+        move |s| (1.0 + s * (1.0 - sig(s))).abs(),
+        12,
+    );
+    assert_states_its_own_bound(&cells);
+}
