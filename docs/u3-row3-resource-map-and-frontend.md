@@ -140,8 +140,11 @@ orders the row 3 and row 4 numbers at the gate (one minor bump, 0.33.0).
    and a layout-rule input are passive data plus name resolution; no variant selection and no address
    spaces, so hits 19 and 20 stay row 4's. The note goes in `PATENT-SWEEP.md` with the code PR.
 
-## 6. Open, for the PM
+## 6. PM rulings (2026-10-29), recorded
 
-- 2.3: `_with` siblings (recommended) or change the four signatures in place?
-- 2.5: does "together with I2's kernel-layer path" require the kernel-layer return in the same PR?
-- Fuel's 4 array-member kernels: std140 or scalar (Fuel measures; section 3).
+1. `*_with` siblings; the old `lift_*` delegate to them with no declared map (`None`, giving `Inferred`).
+   Additive for callers; only the `Frontend` `#[non_exhaustive]` change breaks.
+2. "With I2's kernel-layer path" means the same **release**, not the same PR: separate PRs, merged
+   back-to-back, published together. This lane's code PR is 0.33.0 (first breaking; Baracuda needs the
+   `Frontend` constructor); lane 1's row 4 is 0.33.1; one 0.33.x release.
+3. Still open and Fuel's: std140 or scalar for the 4 array-member kernels (section 3).
