@@ -265,3 +265,22 @@ fn forms_the_lift_does_not_cover_decline_with_a_reason() {
         Err(LiftDecline::UnsupportedForm("a Prod or empty stage list"))
     );
 }
+
+#[test]
+fn extremum_rows_that_never_cross_zero_agree() {
+    // A Max over an all-negative row and a Min over an all-positive row: an accumulator that
+    // starts at the sum identity (0) instead of the first element returns 0 for both.
+    let neg = buffer(ElementKind::F32, 2, 4, |i| -1.0 - i as f64 * 0.5);
+    let pos = buffer(ElementKind::F32, 2, 4, |i| 1.0 + i as f64 * 0.5);
+    for (stage_op, src) in [(ReduceOp::Max, &neg), (ReduceOp::Min, &pos)] {
+        let op = rr(
+            ElementKind::F32,
+            vec![stage(input(0), stage_op)],
+            reduced(0),
+        );
+        let (want, got) = both(&op, ElementKind::F32, src);
+        assert_eq!(got, want, "{stage_op:?}");
+        let first = f32::from_le_bytes(got[..4].try_into().unwrap());
+        assert_ne!(first, 0.0, "{stage_op:?}: the extremum is not the zero identity");
+    }
+}
