@@ -15,7 +15,7 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## `0.32.24` — docs: U3 row 4 design note, execution scopes and memory spaces
+## `0.32.26` — docs: U3 row 4 design note, execution scopes and memory spaces
 
 `docs/u3-row4-scopes-and-memory-spaces.md`: one `ScalarExpr::Exec` leaf, `LaunchShape`, `Place::Alloc` arrays (no pointer values), `Stmt::Barrier` with a conservative uniformity rule, and the per-thread driver, as one breaking increment (0.33.0). Design only; no code.
 
