@@ -209,123 +209,179 @@ pub fn lift_reduction_opdef(
     }
     check_common(op, dtype, rank)?;
 
-    let r = u32::from(rank);
-    let n = u32::from(op.n_inputs);
-    let reduced: Vec<u32> = if axes.is_empty() {
-        vec![r - 1]
-    } else {
-        (0..r).filter(|&d| axes.is_set(d as u8)).collect()
-    };
-    let kept: Vec<u32> = (0..r).filter(|d| !reduced.contains(d)).collect();
-    let counter = |d: u32| r + d;
-    let loaded = |k: u32| 2 * r + k;
-    let (acc, have, val) = (2 * r + n, 2 * r + n + 1, 2 * r + n + 2);
-    let f64k = ElementKind::F64;
-    let up = |e: ScalarExpr| {
-        if dtype == f64k {
-            e
-        } else {
-            ScalarExpr::Cast(Box::new(e), widen(f64k))
-        }
-    };
-    let local = ScalarExpr::Local;
-    let bx = Box::new;
-    let coords_of = |axes: &[u32]| axes.iter().map(|&d| local(counter(d))).collect::<Vec<_>>();
-
-    // One pass of the fold.
-    let mut inner: Vec<Stmt> = (0..n)
-        .map(|k| Stmt::Load {
-            local: loaded(k),
-            place: Place::Logical {
-                buffer: k,
-                coords: (0..r).map(|d| local(counter(d))).collect(),
-            },
-        })
-        .collect();
-    inner.push(Stmt::Let {
-        local: val,
-        init: up(substitute_inputs(&op.body, &loaded)),
-    });
-    inner.extend(fold_step(*rop, acc, have, val));
-
-    let mut reduce_loop = Block(inner);
-    for &d in reduced.iter().rev() {
-        reduce_loop = for_axis(d, r, reduce_loop);
-    }
-
-    let init = if matches!(rop, ReduceOp::Prod) {
-        1.0
-    } else {
-        0.0
-    };
-    let finalized = if matches!(rop, ReduceOp::Mean) {
-        let divisor = reduced
-            .iter()
-            .map(|&d| ScalarExpr::Cast(bx(local(d)), widen(f64k)))
-            .reduce(|a, b| ScalarExpr::Mul(bx(a), bx(b)))
-            .expect("a reduction has at least one reduced axis");
-        ScalarExpr::Div(bx(local(acc)), bx(divisor))
-    } else {
-        local(acc)
-    };
-    let stored = if dtype == f64k {
-        finalized
-    } else {
-        ScalarExpr::Cast(bx(finalized), widen(dtype))
-    };
-    let out_coords: Vec<ScalarExpr> = if *keepdim {
-        (0..r)
-            .map(|d| {
-                if kept.contains(&d) {
-                    local(counter(d))
-                } else {
-                    ScalarExpr::ConstInt(0, ElementKind::I32)
-                }
-            })
-            .collect()
-    } else {
-        coords_of(&kept)
-    };
-    let out_rank = u8::try_from(out_coords.len()).expect("rank is at most 8");
-
+    let sh = ReductionShape::new(op.n_inputs, dtype, rank, axes);
     let mut body = Block(vec![
         Stmt::Let {
-            local: acc,
-            init: up(ScalarExpr::Const(init)),
+            local: sh.acc,
+            init: sh.up(ScalarExpr::Const(if matches!(rop, ReduceOp::Prod) {
+                1.0
+            } else {
+                0.0
+            })),
         },
         Stmt::Let {
-            local: have,
+            local: sh.have,
             init: ScalarExpr::ConstInt(0, ElementKind::I32),
         },
     ]);
-    body.0.extend(reduce_loop.0);
+    body.0.extend(sh.reduce_loop(op, *rop).0);
+    let out_coords = sh.out_coords(*keepdim);
+    let out_rank = u8::try_from(out_coords.len()).expect("rank is at most 8");
     body.0.push(Stmt::Store {
         place: Place::Logical {
-            buffer: n,
+            buffer: sh.n,
             coords: out_coords,
         },
-        value: stored,
+        value: sh.stored(*rop),
     });
-    for &d in kept.iter().rev() {
-        body = for_axis(d, r, body);
+    for &d in sh.kept.iter().rev() {
+        body = for_axis(d, sh.r, body);
     }
 
-    let mut params: Vec<Param> = (0..n)
-        .map(|k| Param::buffer(format!("in{k}"), dtype, BufferRole::Read, Some(rank)))
-        .collect();
-    params.push(Param::buffer(
-        "out",
-        dtype,
-        BufferRole::Write,
-        Some(out_rank),
-    ));
-    params.extend((0..r).map(|d| Param::scalar(format!("n{d}"), ElementKind::I32, d)));
-    let mut locals = vec![LocalDecl::scalar(ElementKind::I32); 2 * usize::from(rank)];
-    locals.extend((0..n).map(|_| LocalDecl::scalar(dtype)));
-    locals.push(LocalDecl::scalar(f64k)); // acc
-    locals.push(LocalDecl::scalar(ElementKind::I32)); // have
-    locals.push(LocalDecl::scalar(f64k)); // val
+    let (params, locals) = sh.signature(out_rank);
     Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body))
+}
+
+/// The axis bookkeeping of a lifted reduction: which axes are kept and which are folded, and the
+/// local ids of the extents, counters, loaded inputs, accumulator, `have` flag and current value.
+struct ReductionShape {
+    dtype: ElementKind,
+    /// Input axis count.
+    r: u32,
+    /// Input count.
+    n: u32,
+    reduced: Vec<u32>,
+    kept: Vec<u32>,
+    acc: u32,
+    have: u32,
+    val: u32,
+}
+
+impl ReductionShape {
+    fn new(n_inputs: u8, dtype: ElementKind, rank: u8, axes: &unpopped_vocab::AxisMask) -> Self {
+        let (r, n) = (u32::from(rank), u32::from(n_inputs));
+        let reduced: Vec<u32> = if axes.is_empty() {
+            vec![r - 1]
+        } else {
+            (0..r).filter(|&d| axes.is_set(d as u8)).collect()
+        };
+        let kept = (0..r).filter(|d| !reduced.contains(d)).collect();
+        Self {
+            dtype,
+            r,
+            n,
+            reduced,
+            kept,
+            acc: 2 * r + n,
+            have: 2 * r + n + 1,
+            val: 2 * r + n + 2,
+        }
+    }
+
+    fn counter(&self, d: u32) -> u32 {
+        self.r + d
+    }
+
+    fn loaded(&self, k: u32) -> u32 {
+        2 * self.r + k
+    }
+
+    /// `e` widened to the `F64` accumulator width (a no-op for `F64` compute).
+    fn up(&self, e: ScalarExpr) -> ScalarExpr {
+        if self.dtype == ElementKind::F64 {
+            e
+        } else {
+            ScalarExpr::Cast(Box::new(e), widen(ElementKind::F64))
+        }
+    }
+
+    /// The reduced axes' loops, outermost ascending, around one pass of the fold.
+    fn reduce_loop(&self, op: &OpDef, rop: ReduceOp) -> Block {
+        let mut inner: Vec<Stmt> = (0..self.n)
+            .map(|k| Stmt::Load {
+                local: self.loaded(k),
+                place: Place::Logical {
+                    buffer: k,
+                    coords: (0..self.r)
+                        .map(|d| ScalarExpr::Local(self.counter(d)))
+                        .collect(),
+                },
+            })
+            .collect();
+        inner.push(Stmt::Let {
+            local: self.val,
+            init: self.up(substitute_inputs(&op.body, &|k| self.loaded(k))),
+        });
+        inner.extend(fold_step(rop, self.acc, self.have, self.val));
+        let mut nest = Block(inner);
+        for &d in self.reduced.iter().rev() {
+            nest = for_axis(d, self.r, nest);
+        }
+        nest
+    }
+
+    /// Output coordinates: the kept counters, with `0` for each reduced axis under `keepdim`.
+    fn out_coords(&self, keepdim: bool) -> Vec<ScalarExpr> {
+        if keepdim {
+            (0..self.r)
+                .map(|d| {
+                    if self.kept.contains(&d) {
+                        ScalarExpr::Local(self.counter(d))
+                    } else {
+                        ScalarExpr::ConstInt(0, ElementKind::I32)
+                    }
+                })
+                .collect()
+        } else {
+            self.kept
+                .iter()
+                .map(|&d| ScalarExpr::Local(self.counter(d)))
+                .collect()
+        }
+    }
+
+    /// The stored value: the accumulator (divided by the reduced extents for `Mean`), cast down
+    /// to the compute dtype once.
+    fn stored(&self, rop: ReduceOp) -> ScalarExpr {
+        let acc = ScalarExpr::Local(self.acc);
+        let finalized = if matches!(rop, ReduceOp::Mean) {
+            let divisor = self
+                .reduced
+                .iter()
+                .map(|&d| ScalarExpr::Cast(Box::new(ScalarExpr::Local(d)), widen(ElementKind::F64)))
+                .reduce(|a, b| ScalarExpr::Mul(Box::new(a), Box::new(b)))
+                .expect("a reduction has at least one reduced axis");
+            ScalarExpr::Div(Box::new(acc), Box::new(divisor))
+        } else {
+            acc
+        };
+        if self.dtype == ElementKind::F64 {
+            finalized
+        } else {
+            ScalarExpr::Cast(Box::new(finalized), widen(self.dtype))
+        }
+    }
+
+    /// Parameters (inputs, output, one `I32` extent per input axis) and local declarations.
+    fn signature(&self, out_rank: u8) -> (Vec<Param>, Vec<LocalDecl>) {
+        let rank = u8::try_from(self.r).expect("rank is at most 8");
+        let mut params: Vec<Param> = (0..self.n)
+            .map(|k| Param::buffer(format!("in{k}"), self.dtype, BufferRole::Read, Some(rank)))
+            .collect();
+        params.push(Param::buffer(
+            "out",
+            self.dtype,
+            BufferRole::Write,
+            Some(out_rank),
+        ));
+        params.extend((0..self.r).map(|d| Param::scalar(format!("n{d}"), ElementKind::I32, d)));
+        let mut locals = vec![LocalDecl::scalar(ElementKind::I32); 2 * self.r as usize];
+        locals.extend((0..self.n).map(|_| LocalDecl::scalar(self.dtype)));
+        locals.push(LocalDecl::scalar(ElementKind::F64)); // acc
+        locals.push(LocalDecl::scalar(ElementKind::I32)); // have
+        locals.push(LocalDecl::scalar(ElementKind::F64)); // val
+        (params, locals)
+    }
 }
 
 /// A float-to-float (or int-to-float) conversion that rounds to nearest even and never traps.
