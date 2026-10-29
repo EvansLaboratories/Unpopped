@@ -15,7 +15,8 @@
 use unpopped_vocab::{AxisMask, ElementKind};
 
 use crate::ir::{
-    Access, BinaryOp, CastSpec, OpDef, ReduceOp, RoundMode, Saturation, ScalarExpr, WriteIndex,
+    Access, BinaryOp, CastSpec, ContractionAxes, OpDef, ReduceOp, RoundMode, Saturation,
+    ScalarExpr, WriteIndex,
 };
 use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 use crate::types::map_children;
@@ -29,6 +30,8 @@ pub enum LiftDecline {
     NotElementwise,
     /// The op is not `Access::Reduction` (for [`lift_reduction_opdef`]).
     NotReduction,
+    /// The op is not `Access::Contraction` (for [`lift_contraction_opdef`]).
+    NotContraction,
     /// The op is not `Access::Scan` (for [`lift_scan_opdef`]).
     NotScan,
     /// More than one output, a per-output dtype, a gather/scatter, a runtime base offset or a
@@ -643,4 +646,215 @@ fn extremum_step(rop: ReduceOp, acc: u32, have: u32, val: u32) -> Vec<Stmt> {
             value: ScalarExpr::ConstInt(1, ElementKind::I32),
         },
     ]
+}
+
+// ---------------------------------------------------------------------------------------------
+// Contraction
+
+/// Lift a float `Access::Contraction`, plain `[M,K]x[K,N]` or batched `[B,M,K]x[B,K,N]`, computed
+/// at `dtype` (`F32` or `F64`), with the identity epilogue (`Reduced(0)`) and no fused bias.
+///
+/// The oracle reads each operand by its physical strides at the logical `(m, k)` / `(k, n)`
+/// coordinate (so transposed and broadcast operands need nothing extra: that is what
+/// `Place::Logical` does), widens both factors to `f64`, multiplies and accumulates in `f64` with
+/// `k` ascending, and rounds once at the store. The kernel does the same: nested `For` over
+/// `b`, `m`, `n`, an inner `For` over `k`, an `F64` accumulator, `Cast` up on each factor.
+///
+/// Parameters: `lhs`, `rhs` (`Read`), `out` (`Write`), then `I32` extents `[B,] M, N, K`.
+///
+/// # Errors
+///
+/// A [`LiftDecline`].
+pub fn lift_contraction_opdef(op: &OpDef, dtype: ElementKind) -> Result<KernelFn, LiftDecline> {
+    let batched = check_contraction(op, dtype)?;
+    let sh = ContractionShape::new(dtype, batched);
+    let k_loop = for_axis(
+        sh.k,
+        sh.axes,
+        Block(vec![
+            sh.load(0, &sh.lhs_coords(), sh.a),
+            sh.load(1, &sh.rhs_coords(), sh.b),
+            Stmt::Assign {
+                local: sh.acc,
+                value: ScalarExpr::Add(
+                    Box::new(ScalarExpr::Local(sh.acc)),
+                    Box::new(ScalarExpr::Mul(
+                        Box::new(sh.up(ScalarExpr::Local(sh.a))),
+                        Box::new(sh.up(ScalarExpr::Local(sh.b))),
+                    )),
+                ),
+            },
+        ]),
+    );
+    let mut body = Block(vec![Stmt::Let {
+        local: sh.acc,
+        init: sh.up(ScalarExpr::Const(0.0)),
+    }]);
+    body.0.extend(k_loop.0);
+    body.0.push(Stmt::Store {
+        place: Place::Logical {
+            buffer: 2,
+            coords: sh.out_coords(),
+        },
+        value: sh.stored(),
+    });
+    for d in sh.outer_axes().into_iter().rev() {
+        body = for_axis(d, sh.axes, body);
+    }
+    let (params, locals) = sh.signature();
+    Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body))
+}
+
+/// `true` when batched. The op must be exactly a plain or a batched matmul with the identity
+/// epilogue, two inputs (no fused bias) and float compute.
+fn check_contraction(op: &OpDef, dtype: ElementKind) -> Result<bool, LiftDecline> {
+    let Access::Contraction { axes, epilogue, .. } = &op.access else {
+        return Err(LiftDecline::NotContraction);
+    };
+    if !matches!(dtype, ElementKind::F32 | ElementKind::F64) {
+        return Err(LiftDecline::UnsupportedForm("a non-float contraction"));
+    }
+    if !matches!(epilogue, ScalarExpr::Reduced(0)) {
+        return Err(LiftDecline::UnsupportedForm("a fused epilogue or bias"));
+    }
+    let batched = *axes == ContractionAxes::batched_matmul();
+    if !batched && *axes != ContractionAxes::matmul() {
+        return Err(LiftDecline::UnsupportedForm(
+            "a contraction other than matmul",
+        ));
+    }
+    if op.n_inputs != 2 {
+        return Err(LiftDecline::UnsupportedForm("a fused bias input"));
+    }
+    check_plain(op, dtype, if batched { 3 } else { 2 })?;
+    Ok(batched)
+}
+
+/// Local ids of a lifted contraction: extents `0..axes` in the order `[B,] M, N, K`, counters
+/// `axes..2*axes`, then the two loaded factors and the accumulator.
+struct ContractionShape {
+    dtype: ElementKind,
+    batched: bool,
+    /// Loop-axis count: 3 plain (M, N, K), 4 batched (B, M, N, K).
+    axes: u32,
+    m: u32,
+    n: u32,
+    k: u32,
+    a: u32,
+    b: u32,
+    acc: u32,
+}
+
+impl ContractionShape {
+    fn new(dtype: ElementKind, batched: bool) -> Self {
+        let axes = if batched { 4 } else { 3 };
+        let off = u32::from(batched);
+        Self {
+            dtype,
+            batched,
+            axes,
+            m: off,
+            n: off + 1,
+            k: off + 2,
+            a: 2 * axes,
+            b: 2 * axes + 1,
+            acc: 2 * axes + 2,
+        }
+    }
+
+    fn counter(&self, d: u32) -> ScalarExpr {
+        ScalarExpr::Local(self.axes + d)
+    }
+
+    /// The loop axes outside the `k` loop, outermost first: `[B,] M, N`.
+    fn outer_axes(&self) -> Vec<u32> {
+        (0..self.k).collect()
+    }
+
+    fn lhs_coords(&self) -> Vec<ScalarExpr> {
+        let mut c: Vec<ScalarExpr> = if self.batched {
+            vec![self.counter(0)]
+        } else {
+            vec![]
+        };
+        c.push(self.counter(self.m));
+        c.push(self.counter(self.k));
+        c
+    }
+
+    fn rhs_coords(&self) -> Vec<ScalarExpr> {
+        let mut c: Vec<ScalarExpr> = if self.batched {
+            vec![self.counter(0)]
+        } else {
+            vec![]
+        };
+        c.push(self.counter(self.k));
+        c.push(self.counter(self.n));
+        c
+    }
+
+    fn out_coords(&self) -> Vec<ScalarExpr> {
+        let mut c: Vec<ScalarExpr> = if self.batched {
+            vec![self.counter(0)]
+        } else {
+            vec![]
+        };
+        c.push(self.counter(self.m));
+        c.push(self.counter(self.n));
+        c
+    }
+
+    fn load(&self, buffer: u32, coords: &[ScalarExpr], local: u32) -> Stmt {
+        Stmt::Load {
+            local,
+            place: Place::Logical {
+                buffer,
+                coords: coords.to_vec(),
+            },
+        }
+    }
+
+    /// `e` widened to the `F64` accumulator width (a no-op for `F64` compute).
+    fn up(&self, e: ScalarExpr) -> ScalarExpr {
+        if self.dtype == ElementKind::F64 {
+            e
+        } else {
+            ScalarExpr::Cast(Box::new(e), widen(ElementKind::F64))
+        }
+    }
+
+    fn stored(&self) -> ScalarExpr {
+        let acc = ScalarExpr::Local(self.acc);
+        if self.dtype == ElementKind::F64 {
+            acc
+        } else {
+            ScalarExpr::Cast(Box::new(acc), widen(self.dtype))
+        }
+    }
+
+    fn signature(&self) -> (Vec<Param>, Vec<LocalDecl>) {
+        let rank = if self.batched { 3 } else { 2 };
+        let buf = |name: &str, role| Param::buffer(name, self.dtype, role, Some(rank));
+        let mut params = vec![
+            buf("lhs", BufferRole::Read),
+            buf("rhs", BufferRole::Read),
+            buf("out", BufferRole::Write),
+        ];
+        let names = if self.batched {
+            vec!["b", "m", "n", "k"]
+        } else {
+            vec!["m", "n", "k"]
+        };
+        params.extend(
+            names
+                .into_iter()
+                .zip(0u32..)
+                .map(|(nm, d)| Param::scalar(nm, ElementKind::I32, d)),
+        );
+        let mut locals = vec![LocalDecl::scalar(ElementKind::I32); 2 * self.axes as usize];
+        locals.push(LocalDecl::scalar(self.dtype)); // a
+        locals.push(LocalDecl::scalar(self.dtype)); // b
+        locals.push(LocalDecl::scalar(ElementKind::F64)); // acc
+        (params, locals)
+    }
 }
