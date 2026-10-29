@@ -45,7 +45,8 @@
 //! The grammar crate is named in exactly one place ([`parse_slang`]).
 
 use crate::ir::{BinaryOp, Expr, OpDef, ReduceOp, ScalarExpr, UnaryOp};
-use crate::lift::{LiftError, Lifted, binary_fn, unary_fn};
+use crate::lift::{LiftError, LiftProvenance, Lifted, binary_fn, unary_fn};
+use crate::resource_map::ResourceMap;
 use tree_sitter::{Node, Parser, Tree};
 use unpopped_vocab::ElementKind;
 
@@ -100,6 +101,7 @@ const SLANG_RESIDUE: &[&str] = &[
 /// reason it moved out is narrower than neutrality: it is the grammar
 /// *dependency*, not the act of parsing.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct Frontend {
     /// Language name, for diagnostics.
     pub name: &'static str,
@@ -121,6 +123,30 @@ pub struct Frontend {
     /// is what lets a target-specific crate hand one in without this crate
     /// depending on any grammar at all.
     pub parse: fn(&str) -> Option<Tree>,
+}
+
+impl Frontend {
+    /// A frontend from its six parts, in field order. The way to build one from another
+    /// crate: `Frontend` is `#[non_exhaustive]`, so a struct literal is not available
+    /// outside this crate and a future field is not a breaking change.
+    #[must_use]
+    pub const fn new(
+        name: &'static str,
+        kernel_marker: &'static str,
+        residue: &'static [&'static str],
+        out_name: &'static str,
+        in_prefix: &'static str,
+        parse: fn(&str) -> Option<Tree>,
+    ) -> Self {
+        Self {
+            name,
+            kernel_marker,
+            residue,
+            out_name,
+            in_prefix,
+            parse,
+        }
+    }
 }
 
 /// Slang: `numthreads` compute kernels, `output`/`input{K}` buffers.
@@ -157,15 +183,97 @@ fn prepared(fe: &Frontend, src: &str) -> Result<Tree, LiftError> {
 ///
 /// Recognizes `{out_name}[i] = <expr>;` where the body is arithmetic over
 /// `{in_prefix}K[i]`, literals, and math intrinsics; refuses anything else as a
-/// typed [`LiftError`] residue.
+/// typed [`LiftError`] residue. Buffers are found by the frontend's naming
+/// convention; see [`lift_elementwise_with`] to declare them.
 pub fn lift_elementwise(
     fe: &Frontend,
     src: &str,
     name: &str,
     dtypes: &[ElementKind],
 ) -> Result<Lifted, LiftError> {
+    lift_elementwise_with(fe, src, name, dtypes, None)
+}
+
+/// [`lift_elementwise`] with the buffers and `Params` declared by `resources`.
+///
+/// With `Some(map)` the output is the map's one `Write`/`ReadWrite` buffer, operand `K` is
+/// the map's `K`th `Read` buffer in declaration order (whatever the source calls it), and a
+/// declared `Params` field is `ScalarExpr::Param(K)`. A name the map does not declare is
+/// [`LiftError::UndeclaredResource`], never a fallback to inference. With `None` this is
+/// [`lift_elementwise`].
+pub fn lift_elementwise_with(
+    fe: &Frontend,
+    src: &str,
+    name: &str,
+    dtypes: &[ElementKind],
+    resources: Option<&ResourceMap>,
+) -> Result<Lifted, LiftError> {
     let tree = prepared(fe, src)?;
-    lift_store(&tree, src, name, dtypes, fe.out_name, fe.in_prefix)
+    let names = Names::resolve(fe, resources)?;
+    lift_store(&tree, src, name, dtypes, &names).map(|l| finished(l, resources))
+}
+
+/// The names a lift resolves buffers and `Params` through: the frontend's naming
+/// convention, or a caller's declared [`ResourceMap`].
+struct Names<'a> {
+    out: &'a str,
+    in_prefix: &'a str,
+    /// `Some` exactly when a [`ResourceMap`] was supplied: operand `K` is `inputs[K]`.
+    inputs: Option<Vec<&'a str>>,
+    /// `Params` field names, in `ScalarExpr::Param` order (empty when inferred).
+    params: Vec<&'a str>,
+}
+
+impl<'a> Names<'a> {
+    fn resolve(fe: &'a Frontend, map: Option<&'a ResourceMap>) -> Result<Self, LiftError> {
+        let Some(map) = map else {
+            return Ok(Names {
+                out: fe.out_name,
+                in_prefix: fe.in_prefix,
+                inputs: None,
+                params: Vec::new(),
+            });
+        };
+        map.check()
+            .map_err(|e| LiftError::BadResourceMap(format!("{e:?}")))?;
+        let out = map
+            .output_name()
+            .ok_or_else(|| LiftError::BadResourceMap("no output buffer".into()))?;
+        Ok(Names {
+            out,
+            in_prefix: fe.in_prefix,
+            inputs: Some(map.input_names()),
+            params: map.param_names(),
+        })
+    }
+
+    fn declared(&self) -> bool {
+        self.inputs.is_some()
+    }
+
+    /// The operand index `base` names, or `None` when it names no operand.
+    fn input(&self, base: &str) -> Option<u8> {
+        match &self.inputs {
+            Some(names) => names
+                .iter()
+                .position(|n| *n == base)
+                .and_then(|k| u8::try_from(k).ok()),
+            None => base
+                .strip_prefix(self.in_prefix)
+                .and_then(|d| d.parse().ok()),
+        }
+    }
+}
+
+/// Stamp how the buffers were found onto a finished lift.
+fn finished(mut lifted: Lifted, map: Option<&ResourceMap>) -> Lifted {
+    lifted.provenance = if map.is_some() {
+        LiftProvenance::Declared
+    } else {
+        LiftProvenance::Inferred
+    };
+    lifted.resources = map.cloned();
+    lifted
 }
 
 /// Lift a naive accumulator-loop full **reduction** into an [`OpDef`].
@@ -181,8 +289,20 @@ pub fn lift_reduction(
     name: &str,
     dtypes: &[ElementKind],
 ) -> Result<Lifted, LiftError> {
+    lift_reduction_with(fe, src, name, dtypes, None)
+}
+
+/// [`lift_reduction`] with declared resources; see [`lift_elementwise_with`].
+pub fn lift_reduction_with(
+    fe: &Frontend,
+    src: &str,
+    name: &str,
+    dtypes: &[ElementKind],
+    resources: Option<&ResourceMap>,
+) -> Result<Lifted, LiftError> {
     let tree = prepared(fe, src)?;
-    lift_reduce_store(&tree, src, name, dtypes, fe.out_name, fe.in_prefix)
+    let names = Names::resolve(fe, resources)?;
+    lift_reduce_store(&tree, src, name, dtypes, &names).map(|l| finished(l, resources))
 }
 
 /// Lift a naive inclusive-forward **scan** (prefix cumulative) into an
@@ -202,8 +322,20 @@ pub fn lift_scan(
     name: &str,
     dtypes: &[ElementKind],
 ) -> Result<Lifted, LiftError> {
+    lift_scan_with(fe, src, name, dtypes, None)
+}
+
+/// [`lift_scan`] with declared resources; see [`lift_elementwise_with`].
+pub fn lift_scan_with(
+    fe: &Frontend,
+    src: &str,
+    name: &str,
+    dtypes: &[ElementKind],
+    resources: Option<&ResourceMap>,
+) -> Result<Lifted, LiftError> {
     let tree = prepared(fe, src)?;
-    lift_scan_store(&tree, src, name, dtypes, fe.out_name, fe.in_prefix)
+    let names = Names::resolve(fe, resources)?;
+    lift_scan_store(&tree, src, name, dtypes, &names).map(|l| finished(l, resources))
 }
 
 /// Lift a kernel of unknown op-class: elementwise, then reduction, then scan
@@ -214,9 +346,20 @@ pub fn lift(
     name: &str,
     dtypes: &[ElementKind],
 ) -> Result<Lifted, LiftError> {
-    lift_elementwise(fe, src, name, dtypes)
-        .or_else(|_| lift_reduction(fe, src, name, dtypes))
-        .or_else(|_| lift_scan(fe, src, name, dtypes))
+    lift_with(fe, src, name, dtypes, None)
+}
+
+/// [`lift`] with declared resources; see [`lift_elementwise_with`].
+pub fn lift_with(
+    fe: &Frontend,
+    src: &str,
+    name: &str,
+    dtypes: &[ElementKind],
+    resources: Option<&ResourceMap>,
+) -> Result<Lifted, LiftError> {
+    lift_elementwise_with(fe, src, name, dtypes, resources)
+        .or_else(|_| lift_reduction_with(fe, src, name, dtypes, resources))
+        .or_else(|_| lift_scan_with(fe, src, name, dtypes, resources))
 }
 
 /// Refuse the first construct we cannot express in the IR — it belongs in the
@@ -237,15 +380,15 @@ fn lift_store(
     src: &str,
     name: &str,
     dtypes: &[ElementKind],
-    out_name: &str,
-    in_prefix: &str,
+    names: &Names,
 ) -> Result<Lifted, LiftError> {
+    let out_name = names.out;
     let (idx_var, rhs) =
         find_out_store(tree.root_node(), src, out_name).ok_or(LiftError::NotElementwise)?;
     let mut w = Walk {
         src,
         idx_var,
-        in_prefix,
+        names,
         max_input: None,
         locals: local_bindings(tree.root_node(), src),
         resolving: Vec::new(),
@@ -255,6 +398,8 @@ fn lift_store(
     Ok(Lifted {
         op: OpDef::elementwise(name, n_inputs, dtypes, Expr(body)),
         n_inputs,
+        provenance: LiftProvenance::Inferred,
+        resources: None,
     })
 }
 
@@ -266,21 +411,21 @@ fn lift_scan_store(
     src: &str,
     name: &str,
     dtypes: &[ElementKind],
-    out_name: &str,
-    in_prefix: &str,
+    names: &Names,
 ) -> Result<Lifted, LiftError> {
+    let out_name = names.out;
     let acc = find_running_out_store(tree.root_node(), src, out_name).ok_or_else(|| {
         LiftError::Unrecognized(format!("no running `{out_name}[i] = acc` scan store"))
     })?;
     let (op, pre_node) = find_accumulation(tree.root_node(), src, &acc).ok_or_else(|| {
         LiftError::Unrecognized(format!("no recognizable scan update of `{acc}`"))
     })?;
-    let idx_var = first_input_index(pre_node, src, in_prefix)
+    let idx_var = first_input_index(pre_node, src, names)
         .ok_or_else(|| LiftError::Unrecognized("scan body reads no inK[idx]".into()))?;
     let mut w = Walk {
         src,
         idx_var,
-        in_prefix,
+        names,
         max_input: None,
         locals: local_bindings(tree.root_node(), src),
         resolving: Vec::new(),
@@ -300,6 +445,8 @@ fn lift_scan_store(
             crate::ir::reduced(0),
         ),
         n_inputs,
+        provenance: LiftProvenance::Inferred,
+        resources: None,
     })
 }
 
@@ -341,21 +488,21 @@ fn lift_reduce_store(
     src: &str,
     name: &str,
     dtypes: &[ElementKind],
-    out_name: &str,
-    in_prefix: &str,
+    names: &Names,
 ) -> Result<Lifted, LiftError> {
+    let out_name = names.out;
     let acc = find_scalar_out_store(tree.root_node(), src, out_name).ok_or_else(|| {
         LiftError::Unrecognized(format!("no scalar `{out_name}[..] = acc` store"))
     })?;
     let (op, body_node) = find_accumulation(tree.root_node(), src, &acc).ok_or_else(|| {
         LiftError::Unrecognized(format!("no recognizable reduce update of `{acc}`"))
     })?;
-    let idx_var = first_input_index(body_node, src, in_prefix)
+    let idx_var = first_input_index(body_node, src, names)
         .ok_or_else(|| LiftError::Unrecognized("reduction body reads no inK[idx]".into()))?;
     let mut w = Walk {
         src,
         idx_var,
-        in_prefix,
+        names,
         max_input: None,
         locals: local_bindings(tree.root_node(), src),
         resolving: Vec::new(),
@@ -365,6 +512,8 @@ fn lift_reduce_store(
     Ok(Lifted {
         op: OpDef::reduction(name, n_inputs, dtypes, Expr(body), op),
         n_inputs,
+        provenance: LiftProvenance::Inferred,
+        resources: None,
     })
 }
 
@@ -491,21 +640,18 @@ fn classify_reduce_rhs<'t>(rhs: Node<'t>, src: &str, acc: &str) -> Option<(Reduc
 
 /// The index identifier of the first `{in_prefix}{K}[idx]` read in `node` — the
 /// reduced-axis loop variable the body iterates over.
-fn first_input_index(node: Node, src: &str, in_prefix: &str) -> Option<String> {
+fn first_input_index(node: Node, src: &str, names: &Names) -> Option<String> {
     if node.kind() == "subscript_expression"
         && let Some(base) = node
             .child_by_field_name("argument")
             .and_then(|a| a.utf8_text(src.as_bytes()).ok())
-        && base
-            .strip_prefix(in_prefix)
-            .and_then(|d| d.parse::<u8>().ok())
-            .is_some()
+        && names.input(base).is_some()
     {
         return subscript_index(node, src);
     }
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        if let Some(idx) = first_input_index(child, src, in_prefix) {
+        if let Some(idx) = first_input_index(child, src, names) {
             return Some(idx);
         }
     }
@@ -642,7 +788,7 @@ fn collect_binding_sites<'t>(
 struct Walk<'a> {
     src: &'a str,
     idx_var: String,
-    in_prefix: &'a str,
+    names: &'a Names<'a>,
     max_input: Option<u8>,
     /// See [`local_bindings`]. Consulted only when [`Walk::expr`] hits a bare
     /// `identifier` it cannot otherwise place — never used to rewrite source,
@@ -716,15 +862,16 @@ impl<'a> Walk<'a> {
             }
             "subscript_expression" => {
                 let base = self.text(self.field(n, "argument")?);
-                let k: u8 = base
-                    .strip_prefix(self.in_prefix)
-                    .and_then(|d| d.parse().ok())
-                    .ok_or_else(|| {
+                let k: u8 = self.names.input(base).ok_or_else(|| {
+                    if self.names.declared() {
+                        LiftError::UndeclaredResource(base.to_string())
+                    } else {
                         LiftError::Unrecognized(format!(
                             "read '{base}[..]' (not {}K)",
-                            self.in_prefix
+                            self.names.in_prefix
                         ))
-                    })?;
+                    }
+                })?;
                 let idx = subscript_index(n, self.src)
                     .ok_or_else(|| LiftError::Unrecognized("index".into()))?;
                 if idx != self.idx_var {
@@ -787,7 +934,17 @@ impl<'a> Walk<'a> {
                         self.resolving.pop();
                         result
                     }
-                    None => Err(LiftError::Unrecognized(format!("identifier '{name}'"))),
+                    None => {
+                        if let Some(k) = self.names.params.iter().position(|p| *p == name) {
+                            u8::try_from(k)
+                                .map(ScalarExpr::Param)
+                                .map_err(|_| LiftError::BadResourceMap("more than 255 Params".into()))
+                        } else if self.names.declared() {
+                            Err(LiftError::UndeclaredResource(name))
+                        } else {
+                            Err(LiftError::Unrecognized(format!("identifier '{name}'")))
+                        }
+                    }
                 }
             }
             other => Err(LiftError::Unrecognized(format!("node '{other}'"))),

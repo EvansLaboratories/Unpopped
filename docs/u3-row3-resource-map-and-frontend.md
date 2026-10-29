@@ -105,8 +105,11 @@ return itself stays I2's. If the PM means the code to land in one PR, say so at 
   for scalar-only members the three rules give the same offsets. They differ only for **array members**,
   which the corpus has in 4 kernels. Which rule Fuel's host struct assumes for those 4 stays
   **UNVERIFIED and Fuel's to measure** (spec section 6); this row makes it a stated input instead of an
-  implicit one, and `ResourceMap::check` rejects an offset that is not valid under the stated rule for the
-  member's type (so a Std140 map with an unpadded array fails, which is the discriminating case).
+  implicit one. **As built, `ParamField` is a scalar member** (a type and an offset), so a map cannot yet
+  describe an array member at all, and `ResourceMap::check` applies the manifest's scalar alignment and
+  overlap rules, which are the same under all three rules. The 4 array kernels are therefore outside what
+  a map can describe until Fuel's answer says what an array field needs; this note does not claim they
+  are covered.
 - The cost of getting it wrong is bounded: the lift does not use the offsets (it resolves names);
   only the manifest built from the map carries them.
 
@@ -132,7 +135,7 @@ orders the row 3 and row 4 numbers at the gate (one minor bump, 0.33.0).
    fails (`NotElementwise`/`Unrecognized`) without one. Operand order follows the map, shown by a map that
    declares the buffers in the reverse of source order.
 3. An undeclared name with a map present is `UndeclaredResource`, not a silent fallback.
-4. `ResourceMap::check` on each defect, plus the Std140-array case from section 3.
+4. `ResourceMap::check` on each defect, plus a misaligned `Params` field (array members are not representable, section 3).
 5. Mutation-checked, each mutant named: operand order by declaration swapped to by-name, provenance
    hard-coded `Declared`, fallback-to-inference on a miss, the rule check skipped.
 6. `tests/neutral_core_names_no_cuda_grammar.rs` still passes (the map names no language).

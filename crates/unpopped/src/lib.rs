@@ -80,6 +80,7 @@ pub mod kernel;
 pub mod kernel_lift;
 pub mod kisc;
 pub mod lift;
+pub mod resource_map;
 pub mod link;
 pub mod numerics;
 pub mod optimize;
@@ -120,7 +121,8 @@ pub use jit::{
     ArtifactKind, Compiler, JitBudget, JitError, JitRequest, JitResponse, Recipe, StubCompiler,
     SynthKernel, synthesize,
 };
-pub use lift::{ConsumeRefusal, LiftError, Lifted, lift_elementwise};
+pub use lift::{ConsumeRefusal, LiftError, LiftProvenance, Lifted, lift_elementwise};
+pub use resource_map::{DeclaredBuffer, ResourceMap, ResourceMapError};
 pub use link::{LinkEntry, emit_link_registry, link_entry};
 pub use optimize::{optimize, optimize_top_k};
 pub use oracle::{Fidelity, TypedBuffer, compare, evaluate};

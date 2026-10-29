@@ -348,7 +348,7 @@ fn scalar_bytes(t: ElementKind) -> Option<u32> {
     }
 }
 
-fn check_entry(e: &EntryManifest) -> Result<(), ManifestError> {
+pub(crate) fn check_entry(e: &EntryManifest) -> Result<(), ManifestError> {
     let name = || e.name.clone();
     if e.workgroup_size.contains(&0) {
         return Err(ManifestError::ZeroWorkgroup(name()));
