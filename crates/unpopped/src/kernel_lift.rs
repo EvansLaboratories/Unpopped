@@ -12,7 +12,7 @@
 //! Views (strides, broadcast, reversal) live behind `Place::Logical`, exactly where the oracle
 //! applies them.
 
-use unpopped_vocab::ElementKind;
+use unpopped_vocab::{AxisMask, ElementKind};
 
 use crate::ir::{
     Access, BinaryOp, CastSpec, OpDef, ReduceOp, RoundMode, Saturation, ScalarExpr, WriteIndex,
@@ -191,6 +191,47 @@ pub fn lift_reduction_opdef(
     dtype: ElementKind,
     rank: u8,
 ) -> Result<KernelFn, LiftDecline> {
+    let (rop, axes, keepdim) = check_reduction(op, dtype, rank)?;
+    let sh = ReductionShape::new(op.n_inputs, dtype, rank, axes);
+    let mut body = Block(vec![
+        Stmt::Let {
+            local: sh.acc,
+            init: sh.up(ScalarExpr::Const(if matches!(rop, ReduceOp::Prod) {
+                1.0
+            } else {
+                0.0
+            })),
+        },
+        Stmt::Let {
+            local: sh.have,
+            init: ScalarExpr::ConstInt(0, ElementKind::I32),
+        },
+    ]);
+    body.0.extend(sh.reduce_loop(op, rop).0);
+    let out_coords = sh.out_coords(keepdim);
+    let out_rank = u8::try_from(out_coords.len()).expect("rank is at most 8");
+    body.0.push(Stmt::Store {
+        place: Place::Logical {
+            buffer: sh.n,
+            coords: out_coords,
+        },
+        value: sh.stored(rop),
+    });
+    for &d in sh.kept.iter().rev() {
+        body = for_axis(d, sh.r, body);
+    }
+
+    let (params, locals) = sh.signature(out_rank);
+    Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body))
+}
+
+/// The reduction's op, axis set and `keepdim` once the op is known to be liftable: a float
+/// reduction with the identity post-expression and a plain body.
+fn check_reduction(
+    op: &OpDef,
+    dtype: ElementKind,
+    rank: u8,
+) -> Result<(ReduceOp, AxisMask, bool), LiftDecline> {
     let Access::Reduction {
         op: rop,
         axes,
@@ -208,38 +249,7 @@ pub fn lift_reduction_opdef(
         return Err(LiftDecline::UnsupportedForm("a fused post-expression"));
     }
     check_common(op, dtype, rank)?;
-
-    let sh = ReductionShape::new(op.n_inputs, dtype, rank, axes);
-    let mut body = Block(vec![
-        Stmt::Let {
-            local: sh.acc,
-            init: sh.up(ScalarExpr::Const(if matches!(rop, ReduceOp::Prod) {
-                1.0
-            } else {
-                0.0
-            })),
-        },
-        Stmt::Let {
-            local: sh.have,
-            init: ScalarExpr::ConstInt(0, ElementKind::I32),
-        },
-    ]);
-    body.0.extend(sh.reduce_loop(op, *rop).0);
-    let out_coords = sh.out_coords(*keepdim);
-    let out_rank = u8::try_from(out_coords.len()).expect("rank is at most 8");
-    body.0.push(Stmt::Store {
-        place: Place::Logical {
-            buffer: sh.n,
-            coords: out_coords,
-        },
-        value: sh.stored(*rop),
-    });
-    for &d in sh.kept.iter().rev() {
-        body = for_axis(d, sh.r, body);
-    }
-
-    let (params, locals) = sh.signature(out_rank);
-    Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body))
+    Ok((*rop, *axes, *keepdim))
 }
 
 /// The axis bookkeeping of a lifted reduction: which axes are kept and which are folded, and the
@@ -258,7 +268,7 @@ struct ReductionShape {
 }
 
 impl ReductionShape {
-    fn new(n_inputs: u8, dtype: ElementKind, rank: u8, axes: &unpopped_vocab::AxisMask) -> Self {
+    fn new(n_inputs: u8, dtype: ElementKind, rank: u8, axes: AxisMask) -> Self {
         let (r, n) = (u32::from(rank), u32::from(n_inputs));
         let reduced: Vec<u32> = if axes.is_empty() {
             vec![r - 1]
