@@ -214,3 +214,16 @@ Re-read triggers: US20250285207A1 on grant; US11886833B2, US20180157465A1 and EP
 #### Note, 0.32.16: U3 artifact/manifest and capability-set types (2026-10-29)
 
 New surface is passive data (a binding/params manifest, a keyed capability set) with a validity check; no variant selection, address-space qualifiers or graphics operation, so hits 19 and 20 stay as item 4 above says: **not covered, to be read before U3 builds scopes and memory spaces (build row 4)**. Not a new claim-shaped surface; no new read taken.
+
+#### Claim read, hits 19 and 20, for U3 row 4 (2026-10-29)
+
+NOT legal advice; NOT a freedom-to-operate opinion. Method: Google Patents pages fetched through a summarising tool that returned the independent claims as short verbatim excerpts, not full claim text; status/expiry are Google's own unverified assumptions. Read against the design in `u3-row4-scopes-and-memory-spaces.md`, not shipped code.
+
+| Patent | Independent claim, as excerpted | Element Unpopped row 4 lacks | Verdict |
+|---|---|---|---|
+| US10726606 (ARM, active to ~2039) | operating a graphics processor running a graphics pipeline; several variants of a shader program; monitor the shading stage; select a variant for subsequent threads; variants run on a test region | graphics pipeline, runtime monitoring of executing threads, test-region trial | outside as read; row 4 adds no variant selection |
+| US12412230 (Microsoft, active to ~2035) | capture a snapshot of an executing application; identify shaders in it; vary compilation parameters (register limits); re-execute the snapshot to compute performance metrics | application snapshot capture and replay, register-limit parameters | outside as read |
+| WO2013070636 (NVIDIA, ceased per Google) | identify a memory access targeting a generic space; ascend the use-def chain of its pointer; retarget it to a specific space | pointer values and use-def pointer analysis: row 4 has no pointer values (D-R4-3), arrays are named by allocation id | outside as read; **re-read if `Place::Ptr` is ever added** |
+| US20100122264 (Intel, active per Google) | shared memory semantics between a CPU and a GPU, pointers passed and data structures shared as is | a CPU/GPU shared address space; the interpreter and emitters pass no pointers | outside as read |
+
+Limits: US12412230 and WO2013070636 claim text came through the tool's excerpting; US10726606 claim 1 excerpt omits connecting clauses. The conclusions rest on elements named as absent, which are each absent from the design. No verdict beyond "outside as read" is offered.
