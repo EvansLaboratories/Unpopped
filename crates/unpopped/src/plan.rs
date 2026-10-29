@@ -1488,12 +1488,12 @@ fn assert_valid_views(op: &OpDef, key: &StructureKey) {
             View::Layout { shape, .. } => {
                 assert!(
                     matches!(op.access, Access::Elementwise),
-                    "OpDef '{name}': input {i} Layout view is admitted only on Access::Elementwise in v1 \n                     (its extents are the iteration extents, which a {}-class op does not have)",
+                    "OpDef '{name}': input {i} Layout view is admitted only on Access::Elementwise in v1 (its extents are the iteration extents, which a {}-class op does not have)",
                     access_tag(&op.access)
                 );
                 assert!(
                     o.bcast.is_empty(),
-                    "OpDef '{name}': input {i} has a Layout view AND a broadcast mask                      ({:#04x}) -- the view's strides are the truth for this input, so                      the operand must carry no key broadcast (express a broadcast as a                      stride 0 in the view instead)",
+                    "OpDef '{name}': input {i} has a Layout view AND a broadcast mask ({:#04x}): the view's strides are the truth for this input, so the operand must carry no key broadcast (write a broadcast as a stride 0 in the view instead)",
                     o.bcast.0
                 );
                 assert!(
