@@ -2,7 +2,7 @@
 //! The **declared resource map** a frontend lift can be given (U3 build row 3,
 //! `docs/u3-row3-resource-map-and-frontend.md`).
 //!
-//! Without a map, [`crate::convert`] finds a kernel's buffers by *name convention*
+//! Without a map, `convert` finds a kernel's buffers by *name convention*
 //! (`out`/`in{K}`, `output`/`input{K}`). That is brittle by measurement: 0 of Fuel's 147
 //! Slang kernels lift on it. A [`ResourceMap`] is the caller saying what the buffers and the
 //! `Params` block are, and the lift resolves names through it.
@@ -10,7 +10,7 @@
 //! It is the *input* half of what a [`crate::artifact::KernelManifest`] entry later reports,
 //! so it reuses that module's vocabulary ([`BindingRole`], [`Packing`], [`ParamsLayout`]) and
 //! is checked by the same rules. It names no language, and it is not a field of
-//! [`crate::convert::Frontend`] (which stays `Copy` and `const`-constructible).
+//! `convert::Frontend` (which stays `Copy` and `const`-constructible).
 
 use unpopped_vocab::ElementKind;
 
