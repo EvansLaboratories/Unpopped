@@ -326,12 +326,7 @@ fn forms_the_lift_does_not_cover_decline_with_a_reason() {
         lift_scatter_opdef(&fmax, ElementKind::F32, 2),
         Err(LiftDecline::UnsupportedForm("a float atomic max or min"))
     );
-    // bincount's per-output dtype is the plain-addressing check's decline.
+    // bincount, the scatter with a per-output (count) dtype, lifts: `kernel_bincount_agrees.rs`.
     let bc = OpDef::bincount("b", ElementKind::I32);
-    assert_eq!(
-        lift_scatter_opdef(&bc, ElementKind::I32, 1),
-        Err(LiftDecline::UnsupportedForm(
-            "multi-output or a per-output dtype"
-        ))
-    );
+    assert!(lift_scatter_opdef(&bc, ElementKind::I32, 1).is_ok());
 }
