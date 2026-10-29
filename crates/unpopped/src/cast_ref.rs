@@ -14,11 +14,152 @@
 //! - **integer to float**: round per `RoundMode` (exact when the integer fits).
 //! - **integer to integer**: `Wrap` truncates two's-complement, `Clamp` saturates.
 //!
-//! Only `{f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32}` are defined (`types::check_cast`).
+//! Only `{f16, bf16, f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32}` are defined
+//! (`types::check_cast`). The 16-bit floats go through [`encode_ieee`], one rounding from
+//! the exact value; f32 and f64 keep their hardware-checked paths.
 
 use crate::ir::{CastSpec, RoundMode, Saturation};
-use crate::types::{int_range, is_cast_float, typed_bits};
+use crate::types::{float_format, int_range, is_cast_float_endpoint, typed_bits};
 use unpopped_vocab::ElementKind;
+
+/// Whether `t` is one of the 16-bit floats, which the generic IEEE helpers below encode.
+fn is_half(t: ElementKind) -> bool {
+    matches!(t, ElementKind::F16 | ElementKind::Bf16)
+}
+
+/// Decode the IEEE-shaped bit pattern `bits` of a `(ebits, mbits)` float to its exact `f64`.
+///
+/// Exact for every format up to binary32 (and binary64 itself): it computes
+/// `significand * 2^exponent` with a power-of-two scale, never a rounding step.
+#[cfg(test)]
+pub(crate) fn decode_ieee(bits: u128, ebits: u32, mbits: u32) -> f64 {
+    let sign = if (bits >> (ebits + mbits)) & 1 == 1 {
+        -1.0
+    } else {
+        1.0
+    };
+    let exp = ((bits >> mbits) & ((1u128 << ebits) - 1)) as i32;
+    let mant = (bits & ((1u128 << mbits) - 1)) as f64;
+    let bias = (1i32 << (ebits - 1)) - 1;
+    let top = (1i32 << ebits) - 1;
+    let scale = |e: i32| 2f64.powi(e);
+    let mag = if exp == 0 {
+        mant * scale(1 - bias - mbits as i32)
+    } else if exp == top {
+        if mant == 0.0 { f64::INFINITY } else { f64::NAN }
+    } else {
+        (1.0 + mant * scale(-(mbits as i32))) * scale(exp - bias)
+    };
+    sign * mag
+}
+
+/// `ax` (a positive finite value) in units of the last place of a format with `mbits`
+/// mantissa bits whose exponent is `eff`, rounded to an integer under `mode`.
+///
+/// The scaling by a power of two is exact in `f64`, so the only rounding is the one asked for.
+fn round_scaled(ax: f64, eff: i32, mbits: u32, mode: RoundMode, neg: bool) -> u128 {
+    let q = ax * 2f64.powi(mbits as i32 - eff);
+    let fl = q.floor();
+    let frac = q - fl;
+    let n = fl as u128;
+    let up = match mode {
+        RoundMode::NearestEven => frac > 0.5 || (frac == 0.5 && n % 2 == 1),
+        RoundMode::TowardZero => false,
+        RoundMode::TowardNegInf => frac > 0.0 && neg,
+        RoundMode::TowardPosInf => frac > 0.0 && !neg,
+    };
+    n + u128::from(up)
+}
+
+/// Whether a FINITE value too large for the format rounds to infinity (rather than stopping at
+/// the largest finite value) under `mode`: nearest does, and a directed mode does only when it
+/// points toward the overflowing side.
+fn overflows_to_infinity(mode: RoundMode, neg: bool) -> bool {
+    match mode {
+        RoundMode::NearestEven => true,
+        RoundMode::TowardZero => false,
+        RoundMode::TowardNegInf => neg,
+        RoundMode::TowardPosInf => !neg,
+    }
+}
+
+/// `x` rounded to the `(ebits, mbits)` IEEE-shaped float under `mode`, as that format's bits.
+///
+/// Single rounding from the exact value, so no double-rounding through `f32`. `clamp_finite`
+/// sends every overflow (infinite input included) to the largest finite value; otherwise an
+/// overflow follows the rounding direction (nearest-even goes to infinity, a directed mode
+/// that points away from the overflow side stops at the largest finite value). A NaN keeps
+/// its sign and becomes the format's quiet NaN.
+pub(crate) fn encode_ieee(
+    x: f64,
+    ebits: u32,
+    mbits: u32,
+    mode: RoundMode,
+    clamp_finite: bool,
+) -> u128 {
+    let sign_bit = u128::from(x.is_sign_negative()) << (ebits + mbits);
+    let exp_all = (1u128 << ebits) - 1;
+    let max_finite = (exp_all << mbits) - 1;
+    let neg = x.is_sign_negative();
+    if x.is_nan() {
+        return sign_bit | (exp_all << mbits) | (1u128 << (mbits - 1));
+    }
+    let overflow = || {
+        let to_inf = !clamp_finite && overflows_to_infinity(mode, neg);
+        sign_bit | if to_inf { exp_all << mbits } else { max_finite }
+    };
+    let ax = x.abs();
+    if ax == 0.0 {
+        return sign_bit;
+    }
+    if ax.is_infinite() {
+        // Exactly representable, so no rounding direction applies: only ClampFinite moves it.
+        return sign_bit
+            | if clamp_finite {
+                max_finite
+            } else {
+                exp_all << mbits
+            };
+    }
+    let bias = (1i32 << (ebits - 1)) - 1;
+    let emin = 1 - bias;
+    // Unbiased binary exponent of the exact value (f64 subnormals sit far below every
+    // target format's range, so the clamp to `emin` below handles them).
+    let e = (((ax.to_bits() >> 52) & 0x7ff) as i32 - 1023).max(-1022);
+    if e > bias {
+        return overflow();
+    }
+    let n = round_scaled(ax, e.max(emin), mbits, mode, neg);
+    let bits = if e < emin {
+        // Subnormal range: `n` is the mantissa field, and `n == 2^mbits` carries into the
+        // exponent field as the smallest normal.
+        n
+    } else {
+        // Normal: `n` in `[2^mbits, 2^(mbits+1)]`; `n == 2^(mbits+1)` carries into the exponent.
+        (((e + bias) as u128) << mbits) + (n - (1u128 << mbits))
+    };
+    if bits > max_finite {
+        return overflow();
+    }
+    sign_bit | bits
+}
+
+/// `i` as an `f64` that preserves every rounding decision a narrower target can make: exact
+/// below 2^53, and above it truncated to 53 bits with the last bit forced odd when anything
+/// was dropped (round-to-odd), so rounding it again to at most 24 bits matches rounding `i`.
+fn int_to_f64_sticky(i: i128) -> f64 {
+    let m = i.unsigned_abs();
+    let bits = 128 - m.leading_zeros();
+    let v = if bits <= 53 {
+        m as f64
+    } else {
+        let s = bits - 53;
+        let kept = m >> s;
+        let lost = m & ((1u128 << s) - 1) != 0;
+        ((kept | u128::from(lost)) as f64) * 2f64.powi(s as i32)
+    };
+    if i < 0 { -v } else { v }
+}
 
 /// A scalar value in the reference's two exact domains.
 #[derive(Copy, Clone, Debug)]
@@ -38,6 +179,11 @@ pub(crate) fn bits_of(x: Num, t: ElementKind) -> u128 {
     match (x, t) {
         (Num::F(f), ElementKind::F64) => u128::from(f.to_bits()),
         (Num::F(f), ElementKind::F32 | ElementKind::F32Strict) => u128::from((f as f32).to_bits()),
+        // A value HELD as a 16-bit float is already on its grid, so any mode agrees.
+        (Num::F(f), t) if is_half(t) => {
+            let (e, m) = float_format(t).expect("a half has a format");
+            encode_ieee(f, e, m, RoundMode::NearestEven, false)
+        }
         (Num::I(i), t) if int_range(t).is_some() => {
             let width = typed_bits(t).expect("integer types in the table have a width");
             (i as u128) & ((1u128 << width) - 1)
@@ -52,6 +198,10 @@ pub(crate) fn num_of(bits: u128, t: ElementKind) -> Num {
     match t {
         ElementKind::F64 => Num::F(f64::from_bits(bits as u64)),
         ElementKind::F32 | ElementKind::F32Strict => Num::F(f64::from(f32::from_bits(bits as u32))),
+        t if is_half(t) => {
+            let (e, m) = float_format(t).expect("a half has a format");
+            Num::F(decode_ieee(bits, e, m))
+        }
         ElementKind::I8 => Num::I(i128::from(bits as u8 as i8)),
         ElementKind::I16 => Num::I(i128::from(bits as u16 as i16)),
         ElementKind::I32 => Num::I(i128::from(bits as u32 as i32)),
@@ -221,13 +371,17 @@ pub(crate) fn cast_bits(x: Num, from: ElementKind, spec: CastSpec) -> u128 {
         crate::types::check_cast(from, spec).is_ok(),
         "cast_ref: {from:?} -> {spec:?} is not a defined conversion"
     );
-    match (is_cast_float(from), is_cast_float(to)) {
+    match (is_cast_float_endpoint(from), is_cast_float_endpoint(to)) {
         (true, true) => {
             let Num::F(f) = x else {
                 panic!("cast_ref: float source with integer value")
             };
             match to {
                 ElementKind::F64 => u128::from(f.to_bits()),
+                t if is_half(t) => {
+                    let (e, m) = float_format(t).expect("a half has a format");
+                    encode_ieee(f, e, m, spec.round, spec.sat == Saturation::ClampFinite)
+                }
                 _ => {
                     let max = f64::from(f32::MAX);
                     let r = if spec.sat == Saturation::ClampFinite && !f.is_nan() {
@@ -262,6 +416,10 @@ pub(crate) fn cast_bits(x: Num, from: ElementKind, spec: CastSpec) -> u128 {
             };
             match to {
                 ElementKind::F64 => u128::from(int_to_f64(i, spec.round).to_bits()),
+                t if is_half(t) => {
+                    let (e, m) = float_format(t).expect("a half has a format");
+                    encode_ieee(int_to_f64_sticky(i), e, m, spec.round, false)
+                }
                 _ => u128::from(int_to_f32(i, spec.round).to_bits()),
             }
         }
@@ -285,6 +443,175 @@ mod tests {
 
     fn spec(to: ElementKind, round: RoundMode, sat: Saturation) -> CastSpec {
         CastSpec { to, round, sat }
+    }
+
+    const MODES: [RoundMode; 4] = [
+        RoundMode::NearestEven,
+        RoundMode::TowardZero,
+        RoundMode::TowardNegInf,
+        RoundMode::TowardPosInf,
+    ];
+
+    /// Probe values: every f32 boundary region the 16-bit formats care about, both signs.
+    fn probes() -> Vec<f64> {
+        let mut v = vec![
+            0.0,
+            1.0,
+            1.5,
+            65504.0,
+            65519.9,
+            65520.0,
+            65536.0,
+            1.0e-8,
+            5.960_464_477_539_063e-8,
+            2.980_232_238_769_531_3e-8,
+            3.4e38,
+            3.39e38,
+            1.0e300,
+            1.0 + 2f64.powi(-11),
+            1.0 + 2f64.powi(-8),
+            1.0 + 2f64.powi(-24),
+            f64::INFINITY,
+            f64::MAX,
+            f64::MIN_POSITIVE,
+            5e-324,
+        ];
+        let mut s = 0x9e37_79b9_7f4a_7c15u64;
+        for _ in 0..4000 {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            // spread across the exponent range of every format
+            let e = (s % 160) as i32 - 100;
+            v.push((1.0 + (s >> 12) as f64 / (1u64 << 52) as f64) * 2f64.powi(e));
+        }
+        v.extend(v.clone().into_iter().map(|x| -x));
+        v
+    }
+
+    #[test]
+    fn every_16_bit_pattern_survives_decode_then_encode() {
+        for (e, m) in [(5, 10), (8, 7)] {
+            for bits in 0u128..=0xffff {
+                let x = decode_ieee(bits, e, m);
+                let back = encode_ieee(x, e, m, RoundMode::NearestEven, false);
+                if x.is_nan() {
+                    assert!(decode_ieee(back, e, m).is_nan(), "{bits:#x}");
+                } else {
+                    assert_eq!(back, bits, "e{e}m{m} pattern {bits:#x} -> {x}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_generic_encoder_agrees_with_the_hardware_f32_conversion() {
+        // binary32 is the one format with a hardware reference: all four modes against
+        // the independent `f64_to_f32` (nearest-even is `as f32`).
+        for x in probes() {
+            for mode in MODES {
+                let want = f64_to_f32(x, mode).to_bits();
+                let got = encode_ieee(x, 8, 23, mode, false) as u32;
+                if x.is_nan() {
+                    continue;
+                }
+                assert_eq!(got, want, "{x:e} under {mode:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn directed_rounding_brackets_the_value_and_nearest_is_the_closer_neighbour() {
+        for (e, m) in [(5, 10), (8, 7)] {
+            for x in probes() {
+                let d = |mode| decode_ieee(encode_ieee(x, e, m, mode, false), e, m);
+                let (dn, up, tz, ne) = (
+                    d(RoundMode::TowardNegInf),
+                    d(RoundMode::TowardPosInf),
+                    d(RoundMode::TowardZero),
+                    d(RoundMode::NearestEven),
+                );
+                assert!(dn <= x && x <= up, "e{e}m{m} {x:e}: [{dn}, {up}]");
+                assert_eq!(tz, if x < 0.0 { up } else { dn }, "toward zero {x:e}");
+                if dn != up {
+                    // inexact: the neighbours are adjacent and nearest picks the closer one
+                    assert!(ne == dn || ne == up);
+                    if dn.is_finite() && up.is_finite() {
+                        assert!((x - ne).abs() <= (x - dn).abs().min((x - up).abs()) + 0.0);
+                    }
+                } else {
+                    assert_eq!(ne, dn);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn half_overflow_follows_the_direction_and_clamp_finite_never_reaches_infinity() {
+        let f16 = |x: f64, mode, clamp| decode_ieee(encode_ieee(x, 5, 10, mode, clamp), 5, 10);
+        // 65520 is the midpoint between f16's max finite (65504) and 2^16: ties-to-even goes up.
+        assert_eq!(f16(65519.0, RoundMode::NearestEven, false), 65504.0);
+        assert_eq!(f16(65520.0, RoundMode::NearestEven, false), f64::INFINITY);
+        assert_eq!(f16(1.0e9, RoundMode::TowardZero, false), 65504.0);
+        assert_eq!(f16(1.0e9, RoundMode::TowardPosInf, false), f64::INFINITY);
+        assert_eq!(f16(-1.0e9, RoundMode::TowardPosInf, false), -65504.0);
+        assert_eq!(
+            f16(-1.0e9, RoundMode::TowardNegInf, false),
+            f64::NEG_INFINITY
+        );
+        for mode in MODES {
+            assert_eq!(f16(f64::INFINITY, mode, true), 65504.0, "{mode:?}");
+            assert_eq!(f16(-1.0e30, mode, true), -65504.0, "{mode:?}");
+        }
+        assert!(
+            f16(f64::NAN, RoundMode::NearestEven, true).is_nan(),
+            "NaN stays NaN"
+        );
+    }
+
+    #[test]
+    fn subnormal_and_zero_edges_of_the_16_bit_formats() {
+        let f16 = |x: f64, mode| encode_ieee(x, 5, 10, mode, false);
+        let tiny = 2f64.powi(-24); // f16's smallest subnormal
+        assert_eq!(f16(tiny, RoundMode::NearestEven), 1);
+        assert_eq!(
+            f16(tiny / 2.0, RoundMode::NearestEven),
+            0,
+            "tie to even goes to zero"
+        );
+        assert_eq!(f16(tiny * 0.75, RoundMode::NearestEven), 1);
+        assert_eq!(
+            f16(tiny / 4.0, RoundMode::TowardPosInf),
+            1,
+            "directed up from below the grid"
+        );
+        assert_eq!(f16(-tiny / 4.0, RoundMode::TowardNegInf), 0x8001);
+        assert_eq!(
+            f16(-0.0, RoundMode::NearestEven),
+            0x8000,
+            "the sign of zero survives"
+        );
+        // the largest subnormal rounds up into the smallest normal
+        assert_eq!(
+            f16(2f64.powi(-14) - tiny / 4.0, RoundMode::NearestEven),
+            0x0400
+        );
+    }
+
+    #[test]
+    fn integers_round_once_into_a_16_bit_float_even_above_2_pow_53() {
+        let to_bf16 = |i: i128, mode| encode_ieee(int_to_f64_sticky(i), 8, 7, mode, false);
+        // 2^62 + 1 sits just above a bf16 value; a naive `as f64` would round it away.
+        let i = (1i128 << 62) + 1;
+        let below = encode_ieee(2f64.powi(62), 8, 7, RoundMode::NearestEven, false);
+        assert_eq!(to_bf16(i, RoundMode::TowardZero), below);
+        assert_eq!(to_bf16(i, RoundMode::NearestEven), below);
+        assert_eq!(
+            to_bf16(i, RoundMode::TowardPosInf),
+            below + 1,
+            "must see the dropped bit"
+        );
+        assert_eq!(to_bf16(-i, RoundMode::TowardNegInf), (below + 1) | 0x8000);
     }
 
     #[test]
