@@ -532,3 +532,161 @@ fn silu_states_its_own_bound() {
     );
     assert_states_its_own_bound(&cells);
 }
+
+// ---------------------------------------------------------------------------------------------
+// The fused per-column bias (`OpDef::contraction_bias`): `Input(2)` is a `[N]` buffer read at the
+// output column and broadcast over the rows. The kernel takes it as buffer 3.
+
+/// Run a bias op through the oracle and the lifted kernel on `lhs` `[m, 5]`, `rhs` `[5, 4]` and a
+/// `[4]` bias, all at the compute dtype of `lhs`.
+fn both_bias(
+    op: &OpDef,
+    lhs: &TypedBuffer,
+    rhs: &TypedBuffer,
+    bias: &TypedBuffer,
+) -> (Vec<u8>, Vec<u8>) {
+    let dtype = lhs.dtype;
+    let (m, k, n) = (lhs.shape[0], lhs.shape[1], rhs.shape[1]);
+    let out_shape = [m, n];
+    let desc =
+        |tb: &TypedBuffer| OperandDesc::new(tb.shape.len(), &tb.shape, &tb.strides, dtype, 256);
+    let out = OperandDesc::new(2, &out_shape, &[n, 1], dtype, 256);
+    let ops = [desc(lhs), desc(rhs), desc(bias), out];
+    let mut facts = CellFacts::new();
+    facts.contraction_declared = true;
+    facts.weight_operand = Some(1);
+    facts.contraction_roles = Some(ContractionRoles::gemm(2, 0));
+    let key = derive_structure_key(&ops, &facts, ArchSku::Sm89).expect("the key derives");
+    let plan = try_build_plan(op, &key).expect("the bias contraction plans");
+    let inputs = [lhs.clone(), rhs.clone(), bias.clone()];
+    let want = evaluate(&plan, &ops, &inputs, &[]).remove(0).bytes;
+
+    let kernel = lift_contraction_opdef(op, dtype).expect("the bias contraction lifts");
+    assert_eq!(
+        check_kernel(&kernel),
+        Ok(()),
+        "a lifted kernel is well formed"
+    );
+    let mut args = vec![
+        KernelArg::Buffer(lhs.clone()),
+        KernelArg::Buffer(rhs.clone()),
+        KernelArg::Buffer(TypedBuffer::new(
+            dtype,
+            out_shape.to_vec(),
+            vec![n, 1],
+            vec![0u8; 8 * (m * n) as usize],
+        )),
+        KernelArg::Buffer(bias.clone()),
+    ];
+    for e in [m, n, k] {
+        args.push(KernelArg::Int(i128::from(e)));
+    }
+    run_kernel(&kernel, &mut args).expect("the kernel runs");
+    let KernelArg::Buffer(got) = &args[2] else {
+        unreachable!()
+    };
+    (want.clone(), got.bytes[..want.len()].to_vec())
+}
+
+fn bias_relu(dtype: ElementKind) -> OpDef {
+    OpDef::contraction_bias("mbr", &[dtype], (reduced(0) + input(2)).relu())
+}
+
+#[test]
+fn f64_bias_is_byte_exact_and_indexed_by_column() {
+    // 3 rows, 4 columns: a bias read at the row coordinate (or not broadcast) cannot agree, and
+    // its four values are distinct so a column mix-up is visible.
+    let lhs = buffer_f64(&[3, 5], benign);
+    let rhs = buffer_f64(&[5, 4], |i| benign(i + 3));
+    let bias = buffer_f64(&[4], |j| [-0.5, 1.25, -3.0, 0.75][j]);
+    for (name, op) in [
+        ("bias relu", bias_relu(ElementKind::F64)),
+        (
+            "bias scaled",
+            OpDef::contraction_bias(
+                "bs",
+                &[ElementKind::F64],
+                reduced(0) * input(2) + konst(1.0),
+            ),
+        ),
+    ] {
+        let (want, got) = both_bias(&op, &lhs, &rhs, &bias);
+        assert_eq!(got, want, "{name}");
+    }
+    // Control: the bias is not ignored. The same op with a zero bias answers differently.
+    let zero = buffer_f64(&[4], |_| 0.0);
+    let op = OpDef::contraction_bias("bz", &[ElementKind::F64], reduced(0) + input(2));
+    let with = both_bias(&op, &lhs, &rhs, &bias).1;
+    let without = both_bias(&op, &lhs, &rhs, &zero).1;
+    assert_ne!(with, without, "the bias reaches the output");
+}
+
+#[test]
+fn f32_bias_is_within_the_tolerance() {
+    let lhs = buffer(&[3, 5], &[5, 1], |i| benign(i) as f32);
+    let rhs = buffer(&[5, 4], &[4, 1], |i| benign(i + 3) as f32);
+    let bias = buffer(&[4], &[1], |j| [-0.5f32, 1.25, -3.0, 0.75][j]);
+    let (want, got) = both_bias(&bias_relu(ElementKind::F32), &lhs, &rhs, &bias);
+    let worst = max_ulps_f32(&want, &got);
+    assert!(worst <= MAX_ULPS, "{worst} ulps apart (bound {MAX_ULPS})");
+}
+
+#[test]
+fn a_cancelling_bias_states_its_own_bound() {
+    // `s + b` with `b = -0.9 s0` per column cancels to a tenth of `s`: the condition number of
+    // the sum is `k = |s / (s + b)|` and rounding `s` once moves the result by up to `k / 2` ulp
+    // of it, so the bound for a cell is `ceil(k / 2) + 1` (spec 7.1; the `+ 1` is the add's own
+    // rounding). Both sides: every cell is inside its bound, and the default bound is broken
+    // somewhere, so the case needs the bound it states.
+    let m = 12usize;
+    let l: Vec<f32> = (0..m * 5).map(|i| benign(i % 16) as f32).collect();
+    let r: Vec<f32> = (0..20).map(|i| benign(i + 3) as f32).collect();
+    let sums = k_sums(&l, &r, m);
+    let b: Vec<f32> = (0..4).map(|j| (-0.9 * sums[j]) as f32).collect();
+    let lhs = buffer(&[m as i64, 5], &[5, 1], |i| l[i]);
+    let rhs = buffer(&[5, 4], &[4, 1], |i| r[i]);
+    let bias = buffer(&[4], &[1], |j| b[j]);
+    let op = OpDef::contraction_bias("cb", &[ElementKind::F32], reduced(0) + input(2));
+    let (want, got) = both_bias(&op, &lhs, &rhs, &bias);
+    let f = |x: &[u8]| -> Vec<f32> {
+        x.chunks(4)
+            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .collect()
+    };
+    let cells: Vec<(u64, u64)> = sums
+        .iter()
+        .enumerate()
+        .zip(f(&want).into_iter().zip(f(&got)))
+        .map(|((idx, s), (w, g))| {
+            let bj = f64::from(b[idx % 4]);
+            let k = (s / (s + bj)).abs();
+            (ulps_f32(w, g), (k / 2.0).ceil() as u64 + 1)
+        })
+        .collect();
+    assert_states_its_own_bound(&cells);
+}
+
+#[test]
+fn a_bias_epilogue_reading_a_foreign_input_declines() {
+    // Control: the bias form lifts.
+    assert!(lift_contraction_opdef(&bias_relu(ElementKind::F32), ElementKind::F32).is_ok());
+    let decline = Err(LiftDecline::UnsupportedLeaf(
+        "an Input in a contraction epilogue",
+    ));
+    // `Input(0)` is the lhs, not a bias, and `Input(3)` is past the three inputs.
+    for leaf in [0u8, 3] {
+        let op = OpDef::contraction_bias("bad", &[ElementKind::F32], reduced(0) + input(leaf));
+        assert_eq!(
+            lift_contraction_opdef(&op, ElementKind::F32),
+            decline,
+            "Input({leaf})"
+        );
+    }
+    // A batched contraction carries no bias.
+    let mut op = batched();
+    op.n_inputs = 3;
+    assert_eq!(
+        lift_contraction_opdef(&op, ElementKind::F32),
+        Err(LiftDecline::UnsupportedForm("a batched fused bias input"))
+    );
+}
