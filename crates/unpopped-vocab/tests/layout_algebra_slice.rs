@@ -46,22 +46,25 @@ fn rand_tuple_layout(r: &mut Rng) -> Layout {
     Layout::new(IntTuple::Tuple(s), IntTuple::Tuple(d)).unwrap()
 }
 
+/// Keep or fix (at a random valid coordinate) each top-level mode.
+fn rand_pattern(r: &mut Rng, modes: &[Layout]) -> Vec<SliceCrd> {
+    let pick = |r: &mut Rng, m: &Layout| {
+        if r.range(0, 1) == 0 {
+            SliceCrd::All
+        } else {
+            SliceCrd::At(r.range(0, m.size() - 1))
+        }
+    };
+    modes.iter().map(|m| pick(r, m)).collect()
+}
+
 fn check_slice(f: &dyn Fn(&Layout, &SliceCrd) -> Result<(Layout, i64), LayoutError>) -> R {
     let mut r = Rng(21);
     let (mut partial, mut total) = (0, 0);
     for _ in 0..1500 {
         let l = rand_tuple_layout(&mut r);
         let modes = l.modes();
-        let pats: Vec<SliceCrd> = modes
-            .iter()
-            .map(|m| {
-                if r.range(0, 1) == 0 {
-                    SliceCrd::All
-                } else {
-                    SliceCrd::At(r.range(0, m.size() - 1))
-                }
-            })
-            .collect();
+        let pats = rand_pattern(&mut r, &modes);
         let (sub, off) = f(&l, &SliceCrd::Tuple(pats.clone()))
             .map_err(|e| format!("{l} sliced by {pats:?}: {e}"))?;
         let kept: Vec<usize> = (0..modes.len())
