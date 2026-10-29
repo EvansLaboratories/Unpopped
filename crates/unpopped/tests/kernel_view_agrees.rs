@@ -77,83 +77,76 @@ fn body_of() -> ScalarExpr {
     )
 }
 
-fn run(dtype: ElementKind, case: &Case) {
+/// What the oracle writes for the viewed op on `case`.
+fn oracle_out(dtype: ElementKind, case: &Case, op: &OpDef, in0: &TypedBuffer) -> Vec<u8> {
     let rank = case.shape.len();
-    let n: i64 = case.shape.iter().product();
-    let strides: Vec<i64> = (0..rank)
-        .map(|d| case.shape[d + 1..].iter().product())
-        .collect();
-    let in0 = buffer(dtype, &case.shape, &strides, 0, n as usize, 1);
-    let op = OpDef::elementwise("v", 2, &[dtype], Expr(body_of()))
-        .with_views(vec![View::Identity, case.view.clone()]);
     let d = |t: &TypedBuffer| OperandDesc::new(t.shape.len(), &t.shape, &t.strides, dtype, 256);
-    let out_desc = OperandDesc::new(rank, &case.shape, &strides, dtype, 256);
-    let ops = [d(&in0), d(&case.oracle_in1), out_desc];
-    let cat = OpCategory::BinaryElementwise;
-    let key = structure_key(cat, &ops, ArchSku::Sm89);
-    let plan = try_build_plan(&op, &key).expect("the viewed op plans");
-    let len = n as usize * width(dtype);
-    let want = evaluate(&plan, &ops, &[in0.clone(), case.oracle_in1.clone()], &[])
+    let out_desc = OperandDesc::new(rank, &case.shape, &strides_of(&case.shape), dtype, 256);
+    let ops = [d(in0), d(&case.oracle_in1), out_desc];
+    let key = structure_key(OpCategory::BinaryElementwise, &ops, ArchSku::Sm89);
+    let plan = try_build_plan(op, &key).expect("the viewed op plans");
+    let len = case.shape.iter().product::<i64>() as usize * width(dtype);
+    evaluate(&plan, &ops, &[in0.clone(), case.oracle_in1.clone()], &[])
         .remove(0)
         .bytes[..len]
-        .to_vec();
+        .to_vec()
+}
 
-    let kernel = lift_elementwise_opdef(&op, dtype, rank as u8).expect("the viewed op lifts");
+/// What `op`, lifted, writes on the buffers the kernel is bound to; `Err` when it traps.
+fn kernel_out(
+    dtype: ElementKind,
+    case: &Case,
+    op: &OpDef,
+    in0: &TypedBuffer,
+) -> Result<Vec<u8>, String> {
+    let rank = case.shape.len();
+    let len = case.shape.iter().product::<i64>() as usize * width(dtype);
+    let kernel = lift_elementwise_opdef(op, dtype, rank as u8).expect("the op lifts");
     assert_eq!(
         check_kernel(&kernel),
         Ok(()),
         "a lifted kernel is well formed"
     );
     let mut args = vec![
-        KernelArg::Buffer(in0),
+        KernelArg::Buffer(in0.clone()),
         KernelArg::Buffer(case.kernel_in1.clone()),
         KernelArg::Buffer(TypedBuffer::new(
             dtype,
             case.shape.clone(),
-            strides,
+            strides_of(&case.shape),
             vec![0; len],
         )),
     ];
     args.extend(case.shape.iter().map(|&e| KernelArg::Int(i128::from(e))));
-    run_kernel(&kernel, &mut args).expect("the kernel runs");
+    run_kernel(&kernel, &mut args).map_err(|e| format!("{e:?}"))?;
     let KernelArg::Buffer(got) = &args[2] else {
         unreachable!()
     };
-    assert_eq!(&got.bytes[..len], &want[..], "{:?}", case.view);
+    Ok(got.bytes[..len].to_vec())
+}
+
+fn run(dtype: ElementKind, case: &Case) {
+    let n: i64 = case.shape.iter().product();
+    let in0 = buffer(
+        dtype,
+        &case.shape,
+        &strides_of(&case.shape),
+        0,
+        n as usize,
+        1,
+    );
+    let op = OpDef::elementwise("v", 2, &[dtype], Expr(body_of()))
+        .with_views(vec![View::Identity, case.view.clone()]);
+    let want = oracle_out(dtype, case, &op, &in0);
+    let got = kernel_out(dtype, case, &op, &in0).expect("the kernel runs");
+    assert_eq!(got, want, "{:?}", case.view);
 
     // Control (a Permute is lift code, the other views are bindings): the same bound buffers under
     // the view-free op either trap or give a different answer, so the agreement above depends on the
     // lift reordering the producer coordinates.
     if matches!(case.view, View::Permute { .. }) {
         let plain = OpDef::elementwise("v", 2, &[dtype], Expr(body_of()));
-        let blind = lift_elementwise_opdef(&plain, dtype, rank as u8).expect("lifts");
-        let mut args = vec![
-            KernelArg::Buffer(buffer(
-                dtype,
-                &case.shape,
-                &strides_of(&case.shape),
-                0,
-                n as usize,
-                1,
-            )),
-            KernelArg::Buffer(case.kernel_in1.clone()),
-            KernelArg::Buffer(TypedBuffer::new(
-                dtype,
-                case.shape.clone(),
-                strides_of(&case.shape),
-                vec![0; len],
-            )),
-        ];
-        args.extend(case.shape.iter().map(|&e| KernelArg::Int(i128::from(e))));
-        let differs = match run_kernel(&blind, &mut args) {
-            Err(_) => true,
-            Ok(()) => {
-                let KernelArg::Buffer(g) = &args[2] else {
-                    unreachable!()
-                };
-                g.bytes[..len] != want[..]
-            }
-        };
+        let differs = kernel_out(dtype, case, &plain, &in0).map_or(true, |g| g != want);
         assert!(
             differs,
             "ignoring the permute must not reproduce the oracle"

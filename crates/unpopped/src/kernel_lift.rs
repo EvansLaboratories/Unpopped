@@ -85,55 +85,53 @@ pub fn lift_elementwise_opdef(
     check_liftable(op, dtype, rank)?;
     let r = u32::from(rank);
     let n = u32::from(op.n_inputs);
-    let counter = |d: u32| r + d;
     let loaded = |k: u32| 2 * r + k;
-    let coords = || {
-        (0..r)
-            .map(|d| ScalarExpr::Local(counter(d)))
-            .collect::<Vec<_>>()
-    };
-    let buffer = |b: u32| Place::Logical {
-        buffer: b,
-        coords: coords(),
-    };
-    // An input read through a `Permute` view takes its coordinates in the producer's axis order:
-    // iteration axis `d` indexes producer axis `perm[d]`.
-    let input_place = |k: u32| match op.views.get(k as usize) {
-        Some(View::Permute { perm }) => {
-            let mut at = coords();
-            for (d, &a) in perm.iter().enumerate() {
-                at[usize::from(a)] = ScalarExpr::Local(counter(d as u32));
-            }
-            Place::Logical {
-                buffer: k,
-                coords: at,
-            }
-        }
-        _ => buffer(k),
-    };
-
     let mut inner: Vec<Stmt> = (0..n)
         .map(|k| Stmt::Load {
             local: loaded(k),
-            place: input_place(k),
+            place: counter_place(k, r, op.views.get(k as usize)),
         })
         .collect();
     inner.push(Stmt::Store {
-        place: buffer(n),
+        place: counter_place(n, r, None),
         value: substitute_inputs(&op.body, &loaded),
     });
     // Wrap outward: the last axis is the innermost loop (row-major order).
     let mut body = Block(inner);
     for d in (0..r).rev() {
         body = Block(vec![Stmt::For {
-            local: counter(d),
+            local: r + d,
             start: ScalarExpr::ConstInt(0, ElementKind::I32),
             end: ScalarExpr::Local(d),
             step: ScalarExpr::ConstInt(1, ElementKind::I32),
             body,
         }]);
     }
+    let (params, locals) = elementwise_signature(op.n_inputs, dtype, rank);
+    Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body))
+}
 
+/// `buffer` at the loop counters of a rank-`r` kernel (counters are locals `r..2r`). An input read
+/// through a `Permute` view takes its coordinates in the producer's axis order: iteration axis `d`
+/// indexes producer axis `perm[d]`, so the producer coordinate on `perm[d]` is the counter of `d`.
+fn counter_place(buffer: u32, r: u32, view: Option<&View>) -> Place {
+    let mut coords: Vec<ScalarExpr> = (0..r).map(|d| ScalarExpr::Local(r + d)).collect();
+    if let Some(View::Permute { perm }) = view {
+        for (d, &a) in perm.iter().enumerate() {
+            coords[usize::from(a)] = ScalarExpr::Local(r + d as u32);
+        }
+    }
+    Place::Logical { buffer, coords }
+}
+
+/// The Elementwise kernel's parameters (inputs, output, one `I32` extent per axis) and locals
+/// (extents, counters, one loaded value per input).
+fn elementwise_signature(
+    n_inputs: u8,
+    dtype: ElementKind,
+    rank: u8,
+) -> (Vec<Param>, Vec<LocalDecl>) {
+    let (r, n) = (u32::from(rank), u32::from(n_inputs));
     let mut params: Vec<Param> = (0..n)
         .map(|k| Param::buffer(format!("in{k}"), dtype, BufferRole::Read, Some(rank)))
         .collect();
@@ -141,7 +139,7 @@ pub fn lift_elementwise_opdef(
     params.extend((0..r).map(|d| Param::scalar(format!("n{d}"), ElementKind::I32, d)));
     let mut locals = vec![LocalDecl::scalar(ElementKind::I32); 2 * usize::from(rank)];
     locals.extend((0..n).map(|_| LocalDecl::scalar(dtype)));
-    Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body))
+    (params, locals)
 }
 
 fn check_liftable(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<(), LiftDecline> {
