@@ -101,12 +101,13 @@ return itself stays I2's. If the PM means the code to land in one PR, say so at 
   This is the row 1 rule ("a manifest that does not say is not a manifest") applied to the input.
 - It is per map, not per `Frontend`, because it is a property of a pipeline-layout family
   (`2s1u`, `3s1u`), which is Fuel's dialect, not of the language (spec section 3, item 5).
-- Fuel measured every `Params` field in the corpus as scalar (`SLANG-SEAM-REQUIREMENTS.md:74` region), and
-  for scalar-only members the three rules give the same offsets. They differ only for **array members**,
-  which the corpus has in 4 kernels. Which rule Fuel's host struct assumes for those 4 stays
-  **UNVERIFIED and Fuel's to measure** (spec section 6); this row makes it a stated input instead of an
-  implicit one, and `ResourceMap::check` rejects an offset that is not valid under the stated rule for the
-  member's type (so a Std140 map with an unpadded array fails, which is the discriminating case).
+- Fuel measured all 147 Slang kernels at its `origin/main` (146 `Params` structs, 635 fields): zero
+  array, vector or nested fields, so std140 and scalar layout give the same offsets today
+  (`SLANG-SEAM-REQUIREMENTS.md:74`; an earlier claim of "4 fixed-array kernels" was wrong and is
+  retracted). No array members exist in Fuel's measured corpus. `ParamField` is a scalar member (a type
+  and an offset) and cannot represent one: a limit stated for future corpora, not a gap in the current
+  one. `ResourceMap::check` applies the manifest's scalar alignment and overlap rules, which are the same
+  under all three rules. What this row adds is that the rule is a stated input instead of an implicit one.
 - The cost of getting it wrong is bounded: the lift does not use the offsets (it resolves names);
   only the manifest built from the map carries them.
 
@@ -132,7 +133,7 @@ orders the row 3 and row 4 numbers at the gate (one minor bump, 0.33.0).
    fails (`NotElementwise`/`Unrecognized`) without one. Operand order follows the map, shown by a map that
    declares the buffers in the reverse of source order.
 3. An undeclared name with a map present is `UndeclaredResource`, not a silent fallback.
-4. `ResourceMap::check` on each defect, plus the Std140-array case from section 3.
+4. `ResourceMap::check` on each defect, plus a misaligned `Params` field (array members are not representable, section 3).
 5. Mutation-checked, each mutant named: operand order by declaration swapped to by-name, provenance
    hard-coded `Declared`, fallback-to-inference on a miss, the rule check skipped.
 6. `tests/neutral_core_names_no_cuda_grammar.rs` still passes (the map names no language).
@@ -147,4 +148,4 @@ orders the row 3 and row 4 numbers at the gate (one minor bump, 0.33.0).
 2. "With I2's kernel-layer path" means the same **release**, not the same PR: separate PRs, merged
    back-to-back, published together. This lane's code PR is 0.33.0 (first breaking; Baracuda needs the
    `Frontend` constructor); lane 1's row 4 is 0.33.1; one 0.33.x release.
-3. Still open and Fuel's: std140 or scalar for the 4 array-member kernels (section 3).
+3. Closed by Fuel's measurement: no array members in the corpus, so std140 == scalar today (section 3).
