@@ -142,16 +142,24 @@ struct Run {
     idx: TypedBuffer,
 }
 
-fn run(
+/// The op, its operand descriptions and the buffers it reads, built once for both layers.
+struct Setup {
+    op: OpDef,
+    ops: Vec<OperandDesc>,
+    inputs: Vec<TypedBuffer>,
+    idx: TypedBuffer,
+}
+
+fn setup(
     case: Case,
     oob: OobPolicy,
     dtype: ElementKind,
     index_dtype: ElementKind,
     bias: bool,
-    fill: u8,
-) -> Run {
+) -> Setup {
     let n_data = (case.data[0] * case.data[1]) as usize;
     let n_out = (case.out[0] * case.out[1]) as usize;
+    let out_strides = [case.out[1], 1];
     let data = TypedBuffer::new(
         dtype,
         case.data.to_vec(),
@@ -159,41 +167,50 @@ fn run(
         float_bytes(dtype, n_data),
     );
     let idx = index_buffer(case, index_dtype);
-    let bias_buf = TypedBuffer::new(
-        dtype,
-        case.out.to_vec(),
-        vec![case.out[1], 1],
-        float_bytes(dtype, n_out + 3)[width(dtype) * 3..].to_vec(),
-    );
-    let op = make_op(case, oob, dtype, index_dtype, bias);
-
-    let out_strides = [case.out[1], 1];
     let mut ops = vec![
         desc(case.data, &[case.data[1], 1], dtype),
         desc(case.out, &idx.strides, index_dtype),
     ];
-    let mut inputs = vec![data.clone(), idx.clone()];
+    let mut inputs = vec![data, idx.clone()];
     if bias {
         ops.push(desc(case.out, &out_strides, dtype));
-        inputs.push(bias_buf.clone());
+        inputs.push(TypedBuffer::new(
+            dtype,
+            case.out.to_vec(),
+            out_strides.to_vec(),
+            float_bytes(dtype, n_out + 3)[width(dtype) * 3..].to_vec(),
+        ));
     }
     ops.push(desc(case.out, &out_strides, dtype));
-    let key = try_structure_key(OpCategory::BinaryElementwise, &ops, ArchSku::Sm89).expect("a key");
-    let plan = try_build_plan(&op, &key).expect("the gather plans");
-    let len = n_out * width(dtype);
-    let want = evaluate(&plan, &ops, &inputs, &[]).remove(0).bytes[..len].to_vec();
+    Setup {
+        op: make_op(case, oob, dtype, index_dtype, bias),
+        ops,
+        inputs,
+        idx,
+    }
+}
 
-    let kernel = lift_gather_opdef(&op, dtype, 2).expect("the gather lifts");
+/// What the oracle writes for `s`.
+fn oracle_out(s: &Setup, len: usize) -> Vec<u8> {
+    let key =
+        try_structure_key(OpCategory::BinaryElementwise, &s.ops, ArchSku::Sm89).expect("a key");
+    let plan = try_build_plan(&s.op, &key).expect("the gather plans");
+    evaluate(&plan, &s.ops, &s.inputs, &[]).remove(0).bytes[..len].to_vec()
+}
+
+/// What the lifted kernel writes for `s`, its output starting as `fill` bytes.
+fn kernel_out(s: &Setup, case: Case, dtype: ElementKind, len: usize, fill: u8) -> Vec<u8> {
+    let kernel = lift_gather_opdef(&s.op, dtype, 2).expect("the gather lifts");
     assert_eq!(
         check_kernel(&kernel),
         Ok(()),
         "a lifted kernel is well formed"
     );
-    let mut args: Vec<KernelArg> = inputs.into_iter().map(KernelArg::Buffer).collect();
+    let mut args: Vec<KernelArg> = s.inputs.iter().cloned().map(KernelArg::Buffer).collect();
     args.push(KernelArg::Buffer(TypedBuffer::new(
         dtype,
         case.out.to_vec(),
-        out_strides.to_vec(),
+        vec![case.out[1], 1],
         vec![fill; len],
     )));
     args.extend(case.out.iter().map(|&e| KernelArg::Int(i128::from(e))));
@@ -204,10 +221,23 @@ fn run(
     let KernelArg::Buffer(out) = &args[args.len() - 4] else {
         unreachable!()
     };
+    out.bytes[..len].to_vec()
+}
+
+fn run(
+    case: Case,
+    oob: OobPolicy,
+    dtype: ElementKind,
+    index_dtype: ElementKind,
+    bias: bool,
+    fill: u8,
+) -> Run {
+    let s = setup(case, oob, dtype, index_dtype, bias);
+    let len = (case.out[0] * case.out[1]) as usize * width(dtype);
     Run {
-        want,
-        got: out.bytes[..len].to_vec(),
-        idx,
+        want: oracle_out(&s, len),
+        got: kernel_out(&s, case, dtype, len, fill),
+        idx: s.idx,
     }
 }
 
