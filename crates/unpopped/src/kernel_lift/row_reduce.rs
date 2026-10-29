@@ -162,7 +162,7 @@ impl Row {
             local: val,
             init: self.up(self.bind(&stage.pre, s)),
         });
-        inner.extend(fold_step(stage.op, acc, have, val));
+        inner.extend(fold_step(stage.op, acc, have, val, false));
         let last = self.r - 1;
         let finalised = if matches!(stage.op, ReduceOp::Mean) {
             let k = ScalarExpr::Cast(Box::new(local(last)), widen(ElementKind::F64));

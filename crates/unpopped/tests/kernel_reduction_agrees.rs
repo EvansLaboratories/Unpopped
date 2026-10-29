@@ -273,10 +273,12 @@ fn forms_the_lift_does_not_cover_decline_with_a_reason() {
         )),
     );
     assert!(lift_reduction_opdef(&post, ElementKind::F32, 2).is_ok());
-    // An integer reduction.
-    let int = OpDef::reduction("i", 1, &[ElementKind::I32], Expr(input(0).0), ReduceOp::Sum);
+    // A narrow integer reduction (`I32` and `I64` lift: `kernel_int_reduce_scan_agrees.rs`).
+    let int = OpDef::reduction("i", 1, &[ElementKind::I16], Expr(input(0).0), ReduceOp::Sum);
     assert_eq!(
-        lift_reduction_opdef(&int, ElementKind::I32, 2),
-        Err(LiftDecline::UnsupportedForm("a non-float reduction"))
+        lift_reduction_opdef(&int, ElementKind::I16, 2),
+        Err(LiftDecline::UnsupportedForm(
+            "a reduction outside F32, F64, I32 and I64"
+        ))
     );
 }

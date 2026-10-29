@@ -168,13 +168,17 @@ emitter, which is why they can land under the seam hold.
   after the first four: `Contraction` (identity epilogue), `Im2Col`, `Window` (identity post), `RowReduce`
   (tolerance mode, below), and `RowSort` (below).
 
-- **RowSort** (`lift_row_sort_opdef`, `tests/kernel_row_sort_agrees.rs`): byte-exact, every `SortOut` and `SortLimit`, `F32` and `F64`. The kernel is a
+- **RowSort** (`lift_row_sort_opdef`, `tests/kernel_row_sort_agrees.rs`): byte-exact, every `SortOut` and `SortLimit`, `F32`, `F64` and `I32`. The kernel is a
   *rank sort*, not the oracle's `sort_by`: each element counts the elements before it under `(key, original index)` with NaN
   greatest, and is stored at that rank. Descending swaps the keys of the comparison and keeps the index tiebreak, so ties keep
   ascending original index in both directions. Values move by `Load`/`Store`, so NaN payloads and the sign of zero are kept.
-  The `TopK` guard `rank < k_out` is a loop that runs once or not at all (`for t in rank..min(rank + 1, k_out)`), because the
-  interpreter has no integer comparison. For the same reason integer keys decline. Open: an integer comparison in the
-  intent layer, then `I32`/`I64` sorts.
+  The `TopK` guard `rank < k_out` is a loop that runs once or not at all (`for t in rank..min(rank + 1, k_out)`), because an `If`
+  condition is a compute-dtype comparison. The interpreter compares integers (`eval_int` has the six comparisons, 1 or 0 at the compute
+  type), so `I32` keys sort too; `I64` plans but declines, because the oracle orders keys through `f64`, which collapses large
+  64-bit keys. Integer **reductions and scans** (`lift_reduction_opdef`, `lift_scan_opdef`, `tests/kernel_int_reduce_scan_agrees.rs`)
+  lift at `I32` and `I64`: an accumulator of the dtype itself (the oracle folds integers exactly and wraps, and wrapping at the width
+  commutes with the store's truncation), the identities `0`, `1` and the type's extremes, no NaN arm. An integer `Mean` and a fused post
+  at an integer dtype decline.
 
 ### 7.1 Two agreement modes, and the oracle as a tolerance referee
 

@@ -19,7 +19,7 @@ use crate::ir::{
     ScalarExpr, WriteIndex,
 };
 use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
-use crate::types::map_children;
+use crate::types::{int_range, map_children};
 
 mod im2col;
 mod post;
@@ -227,11 +227,7 @@ pub fn lift_reduction_opdef(
     let mut body = Block(vec![
         Stmt::Let {
             local: sh.acc,
-            init: sh.up(ScalarExpr::Const(if matches!(rop, ReduceOp::Prod) {
-                1.0
-            } else {
-                0.0
-            })),
+            init: sh.fold_identity(rop),
         },
         Stmt::Let {
             local: sh.have,
@@ -321,7 +317,7 @@ fn scan_pass(
         init: sh.up(substitute_inputs(pre, &|k| sh.loaded(k))),
     });
     let write = scan_write(sh, sop, post, all_counters());
-    let fold = fold_step(sop, sh.acc, sh.have, sh.val);
+    let fold = fold_step(sop, sh.acc, sh.have, sh.val, sh.is_int());
     if exclusive {
         pass.extend(write);
         pass.extend(fold);
@@ -416,12 +412,10 @@ fn check_scan(
     else {
         return Err(LiftDecline::NotScan);
     };
-    if !matches!(dtype, ElementKind::F32 | ElementKind::F64) {
-        return Err(LiftDecline::UnsupportedForm("a non-float scan"));
-    }
     if matches!(sop, ReduceOp::Mean) {
         return Err(LiftDecline::UnsupportedForm("a Mean scan (not a monoid)"));
     }
+    check_accumulated_dtype(dtype, *sop, post, "a scan")?;
     let post = if matches!(post, ScalarExpr::Reduced(0)) {
         None
     } else {
@@ -442,6 +436,16 @@ fn check_scan(
 /// compute dtype. The infinities are built from their bit patterns (`Bitcast` of an integer
 /// constant) because a JSON number cannot be infinite and a kernel is authored as JSON.
 fn scan_identity(rop: ReduceOp, dtype: ElementKind) -> ScalarExpr {
+    if let Some((lo, hi)) = int_range(dtype) {
+        // The integer extremes (the oracle's `int_extreme`); only I32 and I64 lift, so they fit.
+        let v = match rop {
+            ReduceOp::Prod => 1,
+            ReduceOp::Max => lo,
+            ReduceOp::Min => hi,
+            ReduceOp::Sum | ReduceOp::Mean => 0,
+        };
+        return ScalarExpr::ConstInt(i64::try_from(v).expect("an I32 or I64 extreme"), dtype);
+    }
     let infinity = |neg: bool| {
         let (bits, int_ty) = if dtype == ElementKind::F64 {
             let v = if neg {
@@ -468,6 +472,40 @@ fn scan_identity(rop: ReduceOp, dtype: ElementKind) -> ScalarExpr {
     }
 }
 
+/// Compute dtypes whose reductions and scans lift as integers: the plan's integer dtypes that the
+/// kernel interpreter folds exactly at their own width.
+fn is_int_kernel_dtype(dtype: ElementKind) -> bool {
+    matches!(dtype, ElementKind::I32 | ElementKind::I64)
+}
+
+/// A reduction or scan lifts at a float dtype, or at an integer one with no `Mean` (an integer
+/// mean has no oracle rounding to match) and no fused post (whose tolerance mode is float-only).
+fn check_accumulated_dtype(
+    dtype: ElementKind,
+    rop: ReduceOp,
+    post: &ScalarExpr,
+    what: &'static str,
+) -> Result<(), LiftDecline> {
+    if matches!(dtype, ElementKind::F32 | ElementKind::F64) {
+        return Ok(());
+    }
+    if !is_int_kernel_dtype(dtype) {
+        return Err(LiftDecline::UnsupportedForm(match what {
+            "a scan" => "a scan outside F32, F64, I32 and I64",
+            _ => "a reduction outside F32, F64, I32 and I64",
+        }));
+    }
+    if matches!(rop, ReduceOp::Mean) {
+        return Err(LiftDecline::UnsupportedForm("an integer Mean"));
+    }
+    if !matches!(post, ScalarExpr::Reduced(0)) {
+        return Err(LiftDecline::UnsupportedForm(
+            "a fused post at an integer dtype",
+        ));
+    }
+    Ok(())
+}
+
 /// The reduction's op, axis set and `keepdim` once the op is known to be liftable: a float
 /// reduction with the identity post-expression and a plain body.
 fn check_reduction(
@@ -485,9 +523,7 @@ fn check_reduction(
     else {
         return Err(LiftDecline::NotReduction);
     };
-    if !matches!(dtype, ElementKind::F32 | ElementKind::F64) {
-        return Err(LiftDecline::UnsupportedForm("a non-float reduction"));
-    }
+    check_accumulated_dtype(dtype, *rop, post, "a reduction")?;
     let post = if matches!(post, ScalarExpr::Reduced(0)) {
         None
     } else {
@@ -548,9 +584,35 @@ impl ReductionShape {
         2 * self.r + k
     }
 
-    /// `e` widened to the `F64` accumulator width (a no-op for `F64` compute).
+    /// An integer compute dtype: the accumulator is the dtype itself (the oracle folds integers
+    /// exactly and wraps, and wrapping at the dtype's width commutes with the store's truncation).
+    fn is_int(&self) -> bool {
+        is_int_kernel_dtype(self.dtype)
+    }
+
+    /// The accumulator's and the current value's type.
+    fn acc_ty(&self) -> ElementKind {
+        if self.is_int() {
+            self.dtype
+        } else {
+            ElementKind::F64
+        }
+    }
+
+    /// The fold's starting value: the monoid's `0` or `1` (a `Max`/`Min` is guarded by `have`).
+    fn fold_identity(&self, rop: ReduceOp) -> ScalarExpr {
+        let one = matches!(rop, ReduceOp::Prod);
+        if self.is_int() {
+            ScalarExpr::ConstInt(i64::from(one), self.dtype)
+        } else {
+            self.up(ScalarExpr::Const(if one { 1.0 } else { 0.0 }))
+        }
+    }
+
+    /// `e` widened to the `F64` accumulator width (a no-op for `F64` compute and for integers,
+    /// whose accumulator is the dtype).
     fn up(&self, e: ScalarExpr) -> ScalarExpr {
-        if self.dtype == ElementKind::F64 {
+        if self.dtype == ElementKind::F64 || self.is_int() {
             e
         } else {
             ScalarExpr::Cast(Box::new(e), widen(ElementKind::F64))
@@ -574,7 +636,7 @@ impl ReductionShape {
             local: self.val,
             init: self.up(substitute_inputs(&op.body, &|k| self.loaded(k))),
         });
-        inner.extend(fold_step(rop, self.acc, self.have, self.val));
+        inner.extend(fold_step(rop, self.acc, self.have, self.val, self.is_int()));
         let mut nest = Block(inner);
         for &d in self.reduced.iter().rev() {
             nest = for_axis(d, self.r, nest);
@@ -617,7 +679,7 @@ impl ReductionShape {
         } else {
             acc
         };
-        if self.dtype == ElementKind::F64 {
+        if self.dtype == ElementKind::F64 || self.is_int() {
             finalized
         } else {
             ScalarExpr::Cast(Box::new(finalized), widen(self.dtype))
@@ -659,9 +721,9 @@ impl ReductionShape {
         params.extend((0..self.r).map(|d| Param::scalar(format!("n{d}"), ElementKind::I32, d)));
         let mut locals = vec![LocalDecl::scalar(ElementKind::I32); 2 * self.r as usize];
         locals.extend((0..self.n).map(|_| LocalDecl::scalar(self.dtype)));
-        locals.push(LocalDecl::scalar(ElementKind::F64)); // acc
+        locals.push(LocalDecl::scalar(self.acc_ty())); // acc
         locals.push(LocalDecl::scalar(ElementKind::I32)); // have
-        locals.push(LocalDecl::scalar(ElementKind::F64)); // val
+        locals.push(LocalDecl::scalar(self.acc_ty())); // val
         (params, locals)
     }
 }
@@ -687,7 +749,7 @@ fn for_axis(d: u32, r: u32, inner: Block) -> Block {
 }
 
 /// The oracle's `fold_step` for a float accumulator `acc` (an `F64` local) and value `val`.
-fn fold_step(rop: ReduceOp, acc: u32, have: u32, val: u32) -> Vec<Stmt> {
+fn fold_step(rop: ReduceOp, acc: u32, have: u32, val: u32, int: bool) -> Vec<Stmt> {
     let l = ScalarExpr::Local;
     let bx = Box::new;
     match rop {
@@ -699,13 +761,13 @@ fn fold_step(rop: ReduceOp, acc: u32, have: u32, val: u32) -> Vec<Stmt> {
             local: acc,
             value: ScalarExpr::Mul(bx(l(acc)), bx(l(val))),
         }],
-        ReduceOp::Max | ReduceOp::Min => extremum_step(rop, acc, have, val),
+        ReduceOp::Max | ReduceOp::Min => extremum_step(rop, acc, have, val, int),
     }
 }
 
 /// `Max` / `Min` step: `if !have { acc = v } else if v != v { acc = v } else if better(v, acc)
 /// { acc = v }`, then `have = 1` (the oracle's `!have || v.is_nan() || better`).
-fn extremum_step(rop: ReduceOp, acc: u32, have: u32, val: u32) -> Vec<Stmt> {
+fn extremum_step(rop: ReduceOp, acc: u32, have: u32, val: u32, int: bool) -> Vec<Stmt> {
     let l = ScalarExpr::Local;
     let bx = Box::new;
     let set = |v: u32| Stmt::Assign {
@@ -723,10 +785,15 @@ fn extremum_step(rop: ReduceOp, acc: u32, have: u32, val: u32) -> Vec<Stmt> {
         then: Block(vec![set(val)]),
         els: Block(vec![]),
     };
-    let nan_check = Stmt::If {
-        cond: ScalarExpr::Binary(BinaryOp::CmpNe, bx(l(val)), bx(l(val))),
-        then: Block(vec![set(val)]),
-        els: Block(vec![keep_going]),
+    // An integer is never NaN, so its step has no NaN arm.
+    let nan_check = if int {
+        keep_going
+    } else {
+        Stmt::If {
+            cond: ScalarExpr::Binary(BinaryOp::CmpNe, bx(l(val)), bx(l(val))),
+            then: Block(vec![set(val)]),
+            els: Block(vec![keep_going]),
+        }
     };
     vec![
         Stmt::If {

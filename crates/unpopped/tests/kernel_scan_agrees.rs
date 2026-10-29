@@ -210,10 +210,12 @@ fn forms_the_lift_does_not_cover_decline_with_a_reason() {
         )),
     );
     assert!(lift_scan_opdef(&post, ElementKind::F32, 2).is_ok());
-    // An integer scan.
-    let int = OpDef::scan_simple("i", &[ElementKind::I32], ReduceOp::Sum, 1, false, false);
+    // A narrow integer scan (`I32` and `I64` lift: `kernel_int_reduce_scan_agrees.rs`).
+    let int = OpDef::scan_simple("i", &[ElementKind::I16], ReduceOp::Sum, 1, false, false);
     assert_eq!(
-        lift_scan_opdef(&int, ElementKind::I32, 2),
-        Err(LiftDecline::UnsupportedForm("a non-float scan"))
+        lift_scan_opdef(&int, ElementKind::I16, 2),
+        Err(LiftDecline::UnsupportedForm(
+            "a scan outside F32, F64, I32 and I64"
+        ))
     );
 }
