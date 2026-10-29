@@ -189,4 +189,24 @@ Open items from that read:
 1. **US10949182B2 claim 1** is the closest of the five to the lifts. An adopter that analyses loop nests for parallelism, derives grid/block sizes from loop bounds and emits a launch directive (the Baracuda and Fuel CUDA emitters) was not read and should be charted separately. Re-read it if U3 or any emitter starts deriving launch geometry. The code check behind "the Slang emitter hard-codes the geometry" was one `git grep` on `origin/main` (2026-10-28), not a full read.
 2. **US8671401B2**: Google's status and expiry disagree; check the USPTO record if it ever matters.
 3. **The Apple family is protected by the absence of graphics.** Re-read it if Unpopped gains graphics or shader operations (a Slang fragment or vertex path, texture sampling) or address-space qualifiers (U3 memory spaces).
-4. Hits 15-18 and 21 (MX hardware, shared-exponent and block floating point, LUT decode, min/max reduction NaN rules) were **not** read in this read; a second claim read is pending. Hits 19 and 20 (shader variant selection; address spaces) are **not covered: U3 is not built**, so they are out of scope for the current publish and must be read before U3 builds those features.
+4. Hits 19 and 20 (shader variant selection; address spaces) are **not covered: U3 is not built**, so they are out of scope for the current publish and must be read before U3 builds those features.
+5. **The MX codec is NOT in this publish scope.** On `origin/main` the three MX element kinds (`F4E2M1`, `F6E2M3`, `F6E3M2`) are type rows and structure-key identity only; `unpopped-cpu-c` still declines them (no codec) and the scale kinds `F8E8M0`/`F8E6M2` are declined as compute dtypes, so nothing computes or stores a scale. The verdicts below were made against that state; if a codec or block-scale lowering lands, re-read per the triggers in the table.
+
+#### Part 2: MX, block floating point, lookup decode, reduction hits (added 2026-10-29)
+
+Source: the PM's second claim read (record: `C:/Projects/.lane-state/patent-reads/unpopped-kernel-layer-part2.md`), Google Patents claim text (machine-converted), **independent claims only**, 2026-10-28; specifications, prosecution history, claim construction and national phases were not read. **NOT legal advice; NOT a freedom-to-operate opinion.**
+
+| hit | patent | verdict | limitation(s) Unpopped lacks | status per Google |
+|---|---|---|---|---|
+| 15 | US20250285207A1 | outside as read | a hardware decoder and opcode, an execution resource chosen by a variant selector that is part of the block data type, a shared-scale block data type | pending application; **re-read when it grants** |
+| 16 | US11886833B2 | outside as read | a two-level hierarchy of shared exponents (subset exponents, a derived third exponent, difference values) and the recited multiplier/shifter/adder hardware chain; "tile size" is not in the independent claims | Active |
+| 17 | US20180157465A1 | outside as read | block floating-point representation with a common exponent, an output-driven exponent update, a configured circuit | Active |
+| 17 | EP3791260A1 | outside as read | multi-tiered shared-exponent BFP, mantissa dot products with shifting | Active (national validity not checked) |
+| 18 | WO2024152124A1 | outside as read | a lookup table implementing a convolution from packed weights and activations | Ceased (national phases not checked) |
+| 18 | US9483265B2 | outside as read | every independent claim is limited to automatic speech recognition (vector permute decode of quantized features) | "Expired - Fee Related" beside an expiry estimate of 2035-04-23 (inconsistent; unverified) |
+| 21 | US12393530B2, US12301450B2, US11929919B2, US12244489B2 | outside as read each | network switch and reduction-engine claims (multicast frames, arming, timers, topology) | Active |
+| 21 | US7228324B2 | outside as read | a floating-point max/min circuit | "Expired - Lifetime" |
+
+The NaN-propagation rule of `Max`/`Min` is not recited in any independent claim of the hit-21 patents.
+
+Re-read triggers: US20250285207A1 on grant; US11886833B2, US20180157465A1 and EP3791260A1 if MX block-scale computation, multi-level scales or mantissa dot products are added. The part-2 read also noted that this doc's earlier wording for hit 16 ("with a tile size") is not in the claims as read.

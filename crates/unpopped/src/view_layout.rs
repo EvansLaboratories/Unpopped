@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! [`View`] as a [`Layout`]: the bridge between the four-variant read-through
-//! enum and the layout algebra of `unpopped_vocab::layout_algebra`.
+//! [`View`] as a [`Layout`]: the bridge between the read-through enum and the
+//! layout algebra of `unpopped_vocab::layout_algebra`.
 //!
-//! Additive and one-way-safe: it changes no IR type, key or codec. A `View` is
-//! a statement about *which producer address an iteration coordinate reads*;
-//! given the iteration extents and the producer's physical strides, that is a
-//! [`Layout`], and [`view_to_layout`] builds it. [`layout_to_view`] goes back
-//! only when one of the four variants says exactly the same thing, and returns
-//! `None` otherwise: it never returns a nearest `View`.
+//! A `View` is a statement about *which producer address an iteration
+//! coordinate reads*; given the iteration extents and the producer's physical
+//! strides, that is a [`Layout`], and [`view_to_layout`] builds it (a
+//! [`View::Layout`] carries its own extents and strides and ignores the
+//! producer's). [`layout_to_view`] goes back with the producer-relative variant
+//! (`Identity`/`Broadcast`/`Permute`) when one says exactly the same thing, else
+//! with [`View::Layout`] for a flat layout, and `None` for a nested one: it never
+//! returns a nearest `View`.
 //!
 //! **Axis order.** The oracle and emitters iterate LAST-AXIS-FASTEST; a
 //! `Layout` indexes FIRST-MODE-FASTEST. So the layout's modes are the
@@ -35,6 +37,8 @@ pub enum ViewLayoutError {
     RankMismatch,
     /// A `Permute` that is not a permutation of `0..rank`.
     NotAPermutation,
+    /// A `Layout` view whose extents differ from `iter_shape`.
+    ExtentMismatch,
     /// A `Broadcast` view names an axis whose producer stride is not 0 (the key
     /// drives the address math, so a view-only broadcast would be a lie).
     BroadcastDisagrees {
@@ -54,6 +58,9 @@ impl std::fmt::Display for ViewLayoutError {
         match self {
             Self::RankMismatch => {
                 write!(f, "iteration shape and producer strides disagree in rank")
+            }
+            Self::ExtentMismatch => {
+                write!(f, "Layout view extents differ from the iteration shape")
             }
             Self::NotAPermutation => write!(f, "Permute is not a permutation of 0..rank"),
             Self::BroadcastDisagrees { axis } => {
@@ -84,7 +91,20 @@ pub fn view_to_layout(
     producer_strides: &[i64],
 ) -> Result<Layout, ViewLayoutError> {
     let rank = iter_shape.len();
-    if rank == 0 || rank > 8 || producer_strides.len() != rank {
+    if rank == 0 || rank > 8 {
+        return Err(ViewLayoutError::RankMismatch);
+    }
+    // A `Layout` view carries its own strides and never consults the producer's.
+    if let View::Layout { shape, stride } = view {
+        if shape.len() != rank || stride.len() != rank {
+            return Err(ViewLayoutError::RankMismatch);
+        }
+        if shape.as_slice() != iter_shape {
+            return Err(ViewLayoutError::ExtentMismatch);
+        }
+        return Ok(reversed_layout(shape, stride)?);
+    }
+    if producer_strides.len() != rank {
         return Err(ViewLayoutError::RankMismatch);
     }
     let strides: Vec<i64> = match view {
@@ -101,6 +121,7 @@ pub fn view_to_layout(
                 .map(|&p| producer_strides[usize::from(p)])
                 .collect()
         }
+        View::Layout { .. } => unreachable!("handled above"),
         View::Broadcast { bcast } => {
             for (d, &s) in producer_strides.iter().enumerate() {
                 if bcast.is_set(d as u8) && s != 0 {
@@ -132,8 +153,7 @@ fn is_permutation(perm: &[u8], rank: usize) -> bool {
         })
 }
 
-/// The `View` that reads `producer_strides` exactly as `layout` does, or `None`
-/// when none of the four variants says that.
+/// The `View` that reads exactly as `layout` does, or `None` for a nested layout.
 ///
 /// `layout` must be flat (depth at most 1: one mode per iteration axis, in the
 /// reverse axis order [`view_to_layout`] produces). Returns:
@@ -143,16 +163,34 @@ fn is_permutation(perm: &[u8], rank: usize) -> bool {
 /// - [`View::Permute`] when a *unique* assignment of producer axes reproduces
 ///   every stride, none being a broadcast (Permute and Broadcast stay
 ///   orthogonal in v1);
-/// - `None` otherwise, including an ambiguous permutation.
+/// - otherwise (a foreign stride, a permute-and-broadcast mix, an ambiguous
+///   permutation, a rank different from the producer's) [`View::Layout`] with the
+///   layout's own extents and strides, which says exactly the same thing.
 ///
 /// [`View::Reshape`] is never returned: a same-rank reshape reads exactly like
 /// `Identity`, which is returned instead.
 #[must_use]
 pub fn layout_to_view(layout: &Layout, producer_strides: &[i64]) -> Option<View> {
-    if layout.depth() > 1 || producer_strides.is_empty() {
+    if layout.depth() > 1 {
         return None;
     }
     let modes = layout.flat_modes();
+    if modes.is_empty() || modes.len() > 8 {
+        return None;
+    }
+    producer_relative_view(&modes, producer_strides).or_else(|| {
+        // Exactly what the layout says, in iteration-axis order.
+        let (shape, stride) = modes.iter().rev().copied().unzip();
+        Some(View::Layout { shape, stride })
+    })
+}
+
+/// `Identity` / `Broadcast` / `Permute` when one reads like `modes` (reverse axis
+/// order) over `producer_strides`; `None` otherwise.
+fn producer_relative_view(modes: &[(i64, i64)], producer_strides: &[i64]) -> Option<View> {
+    if producer_strides.is_empty() {
+        return None;
+    }
     let rank = producer_strides.len();
     if modes.len() != rank || rank > 8 {
         return None;
