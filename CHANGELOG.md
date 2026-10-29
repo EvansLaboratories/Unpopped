@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.31.7` — feat (additive): `Layout::select`, `take`, `slice` (with `SliceCrd`) and `tile_to_shape` (U6 part 3, #117)
+
+`select`/`take` pick top-level modes; `slice(&SliceCrd)` fixes some coordinates and keeps others, returning the kept layout and the offset (`kept(j) + offset == self(full coordinate)`); `tile_to_shape(target)` replicates a block to cover `target` as `(block_i, tiles_i)` per dimension, tiles after the whole block (declines non-multiples with `NotDivisible`). New file `layout_algebra/slice.rs`; tests in `tests/layout_algebra_slice.rs`, each against a deliberately broken variant. Proposed number; the PM allocates.
+
 ## `0.31.6` — feat (additive): `Layout::right_inverse` and `Layout::left_inverse` (U6 part 2, #117)
 
 `right_inverse` returns `R` with `self(R(i)) == i` for every `i < size(R)`, chaining the modes whose stride equals the extent covered so far (the two-sided inverse for a bijection onto `[0, size)`); `left_inverse` of an injective layout is `right_inverse((self, complement(self, cosize(self))))` and declines what `complement` declines. Property tests in `tests/layout_algebra_inverse.rs`, each against a deliberately broken variant. Not yet: slicing, `select`/`take`, `tile_to_shape`. Proposed number; the PM allocates.
