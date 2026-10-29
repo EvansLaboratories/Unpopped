@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.32.27` — docs: the U3 row 3 design note, the resource map and the `Frontend` change (#113)
+
+`docs/u3-row3-resource-map-and-frontend.md`, docs only, no code: `Frontend` goes `#[non_exhaustive]` with a `const fn new`; a per-call `ResourceMap` (buffers plus a `Params` layout whose `LayoutRule` has no default) enters through `*_with` siblings of the four `lift_*` entry points, which keep their signatures; `Lifted` records `Declared` or `Inferred`; the layout rule is data in the map, not a `Frontend` field. Names no change to `ElementKind`, `OperandDesc`, `ArchSku` or `ScalarExpr`. The PM's rulings on its open questions are in its section 6. Proposed number; the PM allocates.
+
 ## `0.32.25` — test: runtime base offsets on the gather and scatter lifts (U2, #113)
 
 `tests/kernel_gather_scatter_offset_agrees.rs`: a gather and a scatter-add with `BaseOffset::Runtime` on every operand agree with the oracle on offset, junk-padded buffers, leave the padding untouched, and disagree once any one input's offset is dropped. Test and docs only; no lift change (the offset is the argument buffer's `base_offset`, so the lifted kernels were already offset-free).
