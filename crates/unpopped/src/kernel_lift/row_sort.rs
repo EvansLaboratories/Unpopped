@@ -9,9 +9,10 @@
 //! in both directions). Values move by `Load`/`Store`, which carry raw bits, so NaN payloads and
 //! the sign of zero survive exactly as the oracle's raw-bit copy keeps them.
 //!
-//! The `TopK` cap needs "store only if `rank < k_out`", and the kernel interpreter has no integer
-//! comparison, so the guard is a loop that runs once or not at all: `for t in rank..min(rank + 1,
-//! k_out)`. Integer keys are declined for the same reason (their comparison is an integer one).
+//! The `TopK` cap needs "store only if `rank < k_out`", and `If` conditions are compute-dtype
+//! comparisons, so the guard is a loop that runs once or not at all: `for t in rank..min(rank + 1,
+//! k_out)`. `I32` keys use the same comparisons; `x != x` is never true for them,
+//! so the NaN arms are dead code there.
 
 use unpopped_vocab::ElementKind;
 
@@ -20,8 +21,8 @@ use super::{LiftDecline, check_plain};
 use crate::ir::{Access, BinaryOp, OpDef, ScalarExpr, SortLimit, SortOrder, SortOut};
 use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 
-/// Lift a float `Access::RowSort` over `rank` axes (the sorted axis is the innermost), computed at
-/// `dtype` (`F32` or `F64`). Byte-exact against the oracle for every `SortOut` and `SortLimit`.
+/// Lift an `Access::RowSort` over `rank` axes (the sorted axis is the innermost), computed at
+/// `dtype` (a float or an `I32`). Byte-exact against the oracle for every `SortOut` and `SortLimit`.
 ///
 /// Parameters: the input (`Read`), then the value output (`Write`, input dtype) unless the sort
 /// writes indices only, then the `I32` index output (`Write`) unless it writes values only, then
@@ -60,8 +61,16 @@ fn check_row_sort(
     else {
         return Err(LiftDecline::NotRowSort);
     };
-    if !matches!(dtype, ElementKind::F32 | ElementKind::F64) {
-        return Err(LiftDecline::UnsupportedForm("a non-float row sort"));
+    // The plan gate admits `I32` among the integers. `I64` is declined although it plans: the oracle
+    // orders keys through `f64`, which collapses distinct 64-bit values, so an exact kernel would
+    // disagree with it on large keys.
+    if !matches!(
+        dtype,
+        ElementKind::F32 | ElementKind::F64 | ElementKind::I32
+    ) {
+        return Err(LiftDecline::UnsupportedForm(
+            "a row sort outside F32, F64 and I32 (the oracle sorts I64 through f64, which collapses large keys)",
+        ));
     }
     if !stable {
         return Err(LiftDecline::UnsupportedForm("an unstable row sort"));
