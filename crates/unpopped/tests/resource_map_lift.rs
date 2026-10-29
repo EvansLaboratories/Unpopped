@@ -23,7 +23,14 @@ fn rd(name: &str, index: u32) -> DeclaredBuffer {
 }
 
 fn wr(name: &str, index: u32) -> DeclaredBuffer {
-    DeclaredBuffer::new(name, 0, index, BindingRole::Write, K::F32, Packing::Unpacked)
+    DeclaredBuffer::new(
+        name,
+        0,
+        index,
+        BindingRole::Write,
+        K::F32,
+        Packing::Unpacked,
+    )
 }
 
 fn map(buffers: Vec<DeclaredBuffer>) -> ResourceMap {
@@ -134,9 +141,15 @@ fn reduction_scan_and_the_dispatcher_take_the_map() {
         void csum(uint3 tid : SV_DispatchThreadID){ float acc = 0.0f; for (uint i=0;i<256;i++){ acc += src[i]; dst[i] = acc; } }";
     let m = map(vec![wr("dst", 0), rd("src", 1)]);
     for (name, l) in [
-        ("reduction", lift_reduction_with(&SLANG, sum, "x", F32, Some(&m))),
+        (
+            "reduction",
+            lift_reduction_with(&SLANG, sum, "x", F32, Some(&m)),
+        ),
         ("scan", lift_scan_with(&SLANG, csum, "x", F32, Some(&m))),
-        ("dispatch/reduction", lift_with(&SLANG, sum, "x", F32, Some(&m))),
+        (
+            "dispatch/reduction",
+            lift_with(&SLANG, sum, "x", F32, Some(&m)),
+        ),
         ("dispatch/scan", lift_with(&SLANG, csum, "x", F32, Some(&m))),
     ] {
         let l = l.unwrap_or_else(|e| panic!("{name}: {e:?}"));

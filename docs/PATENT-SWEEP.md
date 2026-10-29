@@ -214,3 +214,7 @@ Re-read triggers: US20250285207A1 on grant; US11886833B2, US20180157465A1 and EP
 #### Note, 0.32.16: U3 artifact/manifest and capability-set types (2026-10-29)
 
 New surface is passive data (a binding/params manifest, a keyed capability set) with a validity check; no variant selection, address-space qualifiers or graphics operation, so hits 19 and 20 stay as item 4 above says: **not covered, to be read before U3 builds scopes and memory spaces (build row 4)**. Not a new claim-shaped surface; no new read taken.
+
+#### Note, 0.33.0: U3 row 3, declared resource map and `Frontend` constructor (2026-10-29)
+
+New surface is a caller-supplied description of a kernel's buffers and `Params` block, name resolution through it, and a provenance flag (declared or inferred); plus a constructor for an existing descriptor type. No variant selection, no address-space qualifier, no graphics operation, no new IR leaf. Hits 19 and 20 therefore stay as item 4 above says: **not covered, to be read before U3 build row 4 (scopes and memory spaces)**. Not a new claim-shaped surface; no new read taken in this note.

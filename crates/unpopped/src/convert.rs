@@ -936,9 +936,9 @@ impl<'a> Walk<'a> {
                     }
                     None => {
                         if let Some(k) = self.names.params.iter().position(|p| *p == name) {
-                            u8::try_from(k)
-                                .map(ScalarExpr::Param)
-                                .map_err(|_| LiftError::BadResourceMap("more than 255 Params".into()))
+                            u8::try_from(k).map(ScalarExpr::Param).map_err(|_| {
+                                LiftError::BadResourceMap("more than 255 Params".into())
+                            })
                         } else if self.names.declared() {
                             Err(LiftError::UndeclaredResource(name))
                         } else {
