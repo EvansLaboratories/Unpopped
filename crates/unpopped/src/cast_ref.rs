@@ -125,6 +125,18 @@ pub(crate) fn encode_mx(x: f64, ebits: u32, mbits: u32, mode: RoundMode) -> u128
     sign_bit | bits.min(max_code)
 }
 
+/// Whether a FINITE value too large for the format rounds to infinity (rather than stopping at
+/// the largest finite value) under `mode`: nearest does, and a directed mode does only when it
+/// points toward the overflowing side.
+fn overflows_to_infinity(mode: RoundMode, neg: bool) -> bool {
+    match mode {
+        RoundMode::NearestEven => true,
+        RoundMode::TowardZero => false,
+        RoundMode::TowardNegInf => neg,
+        RoundMode::TowardPosInf => !neg,
+    }
+}
+
 /// `x` rounded to the `(ebits, mbits)` IEEE-shaped float under `mode`, as that format's bits.
 ///
 /// Single rounding from the exact value, so no double-rounding through `f32`. `clamp_finite`
@@ -146,15 +158,8 @@ pub(crate) fn encode_ieee(
     if x.is_nan() {
         return sign_bit | (exp_all << mbits) | (1u128 << (mbits - 1));
     }
-    // Which way a result that overflows goes: `true` = infinity.
     let overflow = || {
-        let to_inf = !clamp_finite
-            && match mode {
-                RoundMode::NearestEven => true,
-                RoundMode::TowardZero => false,
-                RoundMode::TowardNegInf => neg,
-                RoundMode::TowardPosInf => !neg,
-            };
+        let to_inf = !clamp_finite && overflows_to_infinity(mode, neg);
         sign_bit | if to_inf { exp_all << mbits } else { max_finite }
     };
     let ax = x.abs();
@@ -568,6 +573,16 @@ mod tests {
             .collect()
     }
 
+    /// The nearer of two adjacent grid points (`(code, value)`), a tie going to the even code.
+    fn nearest_tie_even(lo: (u128, f64), hi: (u128, f64), a: f64) -> f64 {
+        let (dl, dh) = (a - lo.1, hi.1 - a);
+        if dl < dh || (dl == dh && lo.0 % 2 == 0) {
+            lo.1
+        } else {
+            hi.1
+        }
+    }
+
     /// The independent reference: pick from the explicit grid, by definition.
     fn mx_reference(x: f64, e: u32, m: u32, mode: RoundMode) -> f64 {
         if x.is_nan() {
@@ -590,32 +605,11 @@ mod tests {
         } else {
             match mode {
                 RoundMode::TowardZero => lo.1,
-                RoundMode::TowardPosInf => {
-                    if neg {
-                        lo.1
-                    } else {
-                        hi.1
-                    }
-                }
-                RoundMode::TowardNegInf => {
-                    if neg {
-                        hi.1
-                    } else {
-                        lo.1
-                    }
-                }
-                RoundMode::NearestEven => {
-                    let (dl, dh) = (a - lo.1, hi.1 - a);
-                    if dl < dh {
-                        lo.1
-                    } else if dh < dl {
-                        hi.1
-                    } else if lo.0 % 2 == 0 {
-                        lo.1
-                    } else {
-                        hi.1
-                    }
-                }
+                // away from zero is the upper neighbour for a positive value, the lower for a
+                // negative one's magnitude, and the reverse for TowardNegInf
+                RoundMode::TowardPosInf => [hi.1, lo.1][usize::from(neg)],
+                RoundMode::TowardNegInf => [lo.1, hi.1][usize::from(neg)],
+                RoundMode::NearestEven => nearest_tie_even(*lo, *hi, a),
             }
         };
         if neg { -mag } else { mag }
