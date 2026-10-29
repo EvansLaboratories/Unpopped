@@ -431,18 +431,14 @@ fn the_oracle_narrows_f32_to_f16_and_bf16_with_the_stated_rounding() {
     let c = run_cast(ElementKind::F16, clamped, &xs).to_f64_vec();
     assert_eq!(&c[1..6], &[65504.0, 65504.0, 65504.0, -65504.0, 65504.0]);
     assert!(c[6].is_nan(), "ClampFinite leaves NaN");
-    let down = CastSpec {
-        round: RoundMode::TowardZero,
-        ..cast(ElementKind::Bf16)
+    let bf16 = |round| {
+        let spec = CastSpec {
+            round,
+            ..cast(ElementKind::Bf16)
+        };
+        run_cast(ElementKind::Bf16, spec, &[1.000_488_3]).to_f64_vec()[0]
     };
-    let up = CastSpec {
-        round: RoundMode::TowardPosInf,
-        ..cast(ElementKind::Bf16)
-    };
-    let (lo, hi) = (
-        run_cast(ElementKind::Bf16, down, &[1.000_488_3]).to_f64_vec()[0],
-        run_cast(ElementKind::Bf16, up, &[1.000_488_3]).to_f64_vec()[0],
-    );
+    let (lo, hi) = (bf16(RoundMode::TowardZero), bf16(RoundMode::TowardPosInf));
     assert_eq!(lo, 1.0);
     assert_eq!(
         hi,
