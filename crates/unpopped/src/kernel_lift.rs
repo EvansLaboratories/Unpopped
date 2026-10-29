@@ -16,7 +16,7 @@ use unpopped_vocab::{AxisMask, ElementKind};
 
 use crate::ir::{
     Access, BinaryOp, CastSpec, ContractionAxes, OpDef, ReduceOp, RoundMode, Saturation,
-    ScalarExpr, WriteIndex,
+    ScalarExpr, View, WriteIndex,
 };
 use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 use crate::types::{int_range, map_children};
@@ -96,11 +96,26 @@ pub fn lift_elementwise_opdef(
         buffer: b,
         coords: coords(),
     };
+    // An input read through a `Permute` view takes its coordinates in the producer's axis order:
+    // iteration axis `d` indexes producer axis `perm[d]`.
+    let input_place = |k: u32| match op.views.get(k as usize) {
+        Some(View::Permute { perm }) => {
+            let mut at = coords();
+            for (d, &a) in perm.iter().enumerate() {
+                at[usize::from(a)] = ScalarExpr::Local(counter(d as u32));
+            }
+            Place::Logical {
+                buffer: k,
+                coords: at,
+            }
+        }
+        _ => buffer(k),
+    };
 
     let mut inner: Vec<Stmt> = (0..n)
         .map(|k| Stmt::Load {
             local: loaded(k),
-            place: buffer(k),
+            place: input_place(k),
         })
         .collect();
     inner.push(Stmt::Store {
@@ -133,7 +148,8 @@ fn check_liftable(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<(), LiftDe
     if !matches!(op.access, Access::Elementwise) {
         return Err(LiftDecline::NotElementwise);
     }
-    check_common(op, dtype, rank)
+    check_plain_with(op, dtype, rank, false, true)?;
+    leaves_ok(&op.body)
 }
 
 /// The conditions every lifted access shares: rank, one output, plain addressing, one dtype,
@@ -146,16 +162,18 @@ fn check_common(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<(), LiftDecl
 /// [`check_common`] without the body-leaf check (a `Scan` keeps its `Reduced(0)` post in
 /// `body`, and its value expression in `pre`).
 fn check_plain(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<(), LiftDecline> {
-    check_plain_with(op, dtype, rank, false)
+    check_plain_with(op, dtype, rank, false, false)
 }
 
 /// [`check_plain`], optionally admitting a gathered read (only the gather lift builds the
-/// address math for one).
+/// address math for one) and per-input views (only the Elementwise lift builds the read-through
+/// for them; every other lift would silently ignore one).
 fn check_plain_with(
     op: &OpDef,
     dtype: ElementKind,
     rank: u8,
     allow_gather: bool,
+    views: bool,
 ) -> Result<(), LiftDecline> {
     if rank == 0 || rank > 8 {
         return Err(LiftDecline::BadRank);
@@ -182,12 +200,16 @@ fn check_plain_with(
             "a runtime base offset outside Elementwise",
         ));
     }
-    if op
-        .views
-        .iter()
-        .any(|v| !matches!(v, crate::ir::View::Identity))
-    {
-        return Err(LiftDecline::UnsupportedForm("a non-identity view"));
+    if op.views.iter().any(|v| !v.is_identity()) {
+        if !views {
+            return Err(LiftDecline::UnsupportedForm("a non-identity view"));
+        }
+        // A view is a per-input read-through, `views[i]` for `Input(i)`, well formed for the
+        // iteration rank.
+        if op.views.len() != usize::from(op.n_inputs) || !op.views.iter().all(|v| v.is_valid(rank))
+        {
+            return Err(LiftDecline::UnsupportedForm("an ill-formed view"));
+        }
     }
     if op.dtypes.iter().any(|d| *d != dtype) {
         return Err(LiftDecline::MixedDtypes);

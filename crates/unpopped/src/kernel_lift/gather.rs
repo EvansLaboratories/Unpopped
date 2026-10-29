@@ -78,7 +78,7 @@ fn check_gather(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Gather, Lift
     ) {
         return Err(LiftDecline::UnsupportedForm("a non-integer gather index"));
     }
-    check_plain_with(op, dtype, rank, true)?;
+    check_plain_with(op, dtype, rank, true, false)?;
     leaves_ok(&op.body)?;
     if usize::from(axis) >= usize::from(rank)
         || usize::from(index) >= usize::from(op.n_inputs)
