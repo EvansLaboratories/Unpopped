@@ -93,12 +93,14 @@ Queries (all 2026-10-28):
 
 | patent | what the search summary says | why flagged | claims |
 |---|---|---|---|
-| US20230289304A1 | NVIDIA: hardware unit swizzles data as it loads a tensor into shared memory, fixed patterns per layout, to avoid bank conflicts | swizzle for bank-conflict avoidance (`Swizzle`) | unread |
-| US12141082B2 | continuation of the above; swizzle encoded as 8x8 lookup tables | same | unread |
-| US20240176663A1 | NVIDIA: tensor map cache storage, repeats the bank-swizzling description | same | unread |
-| US20210064987A1 | NVIDIA: reinterprets a tensor with overlapping strides so logical elements share memory (stride-0 / overlapping-stride layouts) | `Layout` allows stride 0 and overlapping strides | unread |
+| US20230289304A1 | NVIDIA: hardware unit swizzles data as it loads a tensor into shared memory, fixed patterns per layout, to avoid bank conflicts | swizzle for bank-conflict avoidance (`Swizzle`) | published application, same family as the grant below; **outside as read**, superseded by the grant |
+| US12141082B2 | continuation of the above; swizzle encoded as 8x8 lookup tables | same | granted; all 5 independent claims read by the PM: **outside as read** (needs memory-access hardware circuits asynchronously transferring data; this module has none) |
+| US20240176663A1 | NVIDIA: tensor map cache storage, repeats the bank-swizzling description | same | pending; published claims read by the PM: **outside as read** (needs tensor acceleration circuits and tensor maps in cache); low-medium confidence, current claims unread |
+| US20210064987A1 | NVIDIA: reinterprets a tensor with overlapping strides so logical elements share memory (stride-0 / overlapping-stride layouts) | `Layout` allows stride 0 and overlapping strides | pending, allowed 2026-06-17; published claims read by the PM: **outside as read** (convolution on image data / re-dimensioned tensor); low-medium confidence, allowed claims unread |
 
-Not read: **no claim of any hit above was read.** Verdict: **not cleared, not assessed.** The TMA family describes a hardware unit; `Swizzle` here is an arithmetic function in a vocabulary crate, which is a difference of kind, but that is a reading of titles and summaries, not of claims. Needs the PM's claim-reading pass (`tools/patent-claims.py`) before any "clear".
+Reads (PM agent, 2026-10-28, Google Patents text only, not USPTO PDFs, specifications not read; record C:/Projects/.lane-state/patent-reads/u6-layout.md): the four rows above say what was read. Wording is **outside as read**, not "clear"; nothing reads on `layout_algebra`. **Triggers:** re-read US20240176663A1 and US20210064987A1 when either grants; the continuation US12499052B2 is unread.
+
+Not read, from the search: the claims of any paper hit and of other result-list patents (US20170200094A1, US20230004365A1, KR20210021258A). Verdict: the four listed patents are **outside as read** (PM, independent claims, see Reads); everything else the search returned is not assessed.
 
 ## Limitations
 - AI-assisted search by one model in one session; the search tool returns general web results, mostly papers, and found no patent for several ideas (2, 4, 9, 13, 14). **A null from this tool is not evidence that no patent exists**: the same tool did find patents on other queries, but it is not a patent database and cannot be queried by claim language, class or assignee.
