@@ -63,8 +63,10 @@
 //! Other dtypes, strided / broadcast / reduction schedules, additional
 //! backends, FKC emission, and the algebraic optimizer are the growth path.
 
+pub mod artifact;
 pub mod backend;
 pub mod capability;
+pub mod capset;
 mod cast_ref;
 pub mod cfamily;
 pub mod contract;

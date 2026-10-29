@@ -15,9 +15,13 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## `0.32.15` — feat (additive): integer windows lift at `I32` and `I64` (U2, #113)
+## `0.32.17` — feat (additive): integer windows lift at `I32` and `I64` (U2, #113)
 
 `lift_window_opdef` now lifts `Sum`, `Max` and `Min` pools at `I32` and `I64` (the accumulator is the dtype, as for integer reductions and scans), byte-identical to the oracle over three geometries that pad, stride and dilate (`tests/kernel_int_window_agrees.rs`: wrap-around sums, an all-negative `Max` window and an all-positive `Min` window as controls read from the oracle). An integer `Mean`, a fused post at an integer dtype and the narrower integers decline with a reason. **`RowReduce` stays float-only by the plan's rule** (`RowReduce requires a float dtype`), so there is no integer row reduction to lift; and the plan refuses a window made only of padding (`2*pad_lo <= span`), so the lift's no-valid-tap `Max`/`Min` identity is unreachable through it and is not tested. Mutation-checked: the accumulator start `0` to `1` and an `F64` result local at an integer dtype each turn the new tests red; routing the `Max`/`Min` fold's `int` flag to `false` is an equivalent mutant (an integer is never NaN, so the NaN arm it keeps is dead). No trait or struct shape change. Proposed number; the PM allocates.
+
+## `0.32.16` — feat (additive): the U3 artifact/manifest types and the capability set, standalone (U3 rows 1 and 2)
+
+New modules `unpopped::artifact` (`KernelArtifact` `Source`|`SpirV`, `KernelManifest`, `EntryManifest`, `Binding`, `ParamsLayout`, `ToolchainRecord`, `LayoutRule` with no default; `KernelManifest::check`) and `unpopped::capset` (`CapabilitySet`, `Capability`, `CapKey`, `CapValue`, `CapSource` reported/measured/declared, `DenormMode` defaulting to `Unknown`). Types only: the seam hold is in force, so nothing touches `GeneratedKernel`, `Backend` or `Frontend`, and no backend reads them. An unrecorded capability is unknown, never denied (`dtype_support` answers `NotExpressible`); a capability key is recorded once. The variants of `Packing`, `BindingKind` and `CapKey` are the spec sketch, not a ruling. `Params` members of a type with no plain scalar size (FP8, MX) are refused, not skipped. `tests/artifact_and_capability_types.rs` (14 tests); ten seeded mutants, all red. Proposed number; the PM allocates.
 
 ## `0.32.14` — feat (additive): integer reductions and scans lift at `I32` and `I64` (U2, #113)
 
