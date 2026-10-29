@@ -190,9 +190,10 @@ and the epilogue on that. Consequences, stated so nobody has to rediscover them:
 - The stage folds themselves (accumulator width, ascending order, NaN-keeping `Max`/`Min`) stay exactly the oracle's;
   only the hand-off between stages and into the epilogue is rounded.
 
-A `Reduction` post is lifted the same way (`tests/kernel_reduction_post_agrees.rs`, same bound). `Scan` posts and
-`Contraction` epilogues can be lifted the same way and would be held to the same bound; they decline today
-(`LiftDecline::UnsupportedForm`), and each is its own PR.
+`Reduction` and `Scan` posts are lifted the same way (`tests/kernel_reduction_post_agrees.rs`,
+`tests/kernel_scan_post_agrees.rs`, same bound; a scan post may also read the element at its position). A
+`Contraction` epilogue can be lifted the same way and would be held to the same bound; it declines today
+(`LiftDecline::UnsupportedForm`), and is its own PR.
 
 ## 8. Which U2 choices constrain U3's `ProgramModel` and resource manifest
 

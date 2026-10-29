@@ -263,8 +263,10 @@ pub fn lift_reduction_opdef(
 /// `+inf`), folds each pre-mapped element into it (the `Max`/`Min` NaN rule as in a reduction) and
 /// writes the prefix after the fold (inclusive) or before it (exclusive), walking the axis
 /// descending for a reverse scan. The kernel does the same with an `F64` prefix local and one
-/// `Cast` down at each `Store`. Only the identity post-expression (`Reduced(0)`) lifts, for the
-/// reason a reduction's fused post does not.
+/// `Cast` down at each `Store`. The identity post-expression (`Reduced(0)`) is byte-exact; a fused
+/// post lifts in tolerance mode, with `Reduced(0)` bound to the prefix rounded once to the compute
+/// dtype and its `Input(k)` leaves to the elements loaded at the position (`docs/ir-kernel-layer.md`
+/// 7.1), as a reduction's does.
 ///
 /// Parameters and locals are laid out as for [`lift_reduction_opdef`], with the output the same
 /// rank as the input.
