@@ -192,10 +192,10 @@ fn the_tolerance_is_not_vacuous() {
 
 #[test]
 fn a_wide_accumulator_is_required_under_a_post() {
-    // 1e8 + 1 - 1e8 = 1 in f64; an f32 accumulator would give 0. Window 0 (pad 1) holds taps
-    // {pad, 1e8, 1}; window 1 holds {1, -1e8, 0.5} -> check the second, which needs the 1.
+    // Window 1 (pad 1, stride 2, size 3) covers positions 1..=3: 1e8, 1, -1e8. The f64 fold gives
+    // 1; an f32 accumulator loses the 1 against 1e8 and gives 0.
     let src = buffer(ElementKind::F32, 1, |i| {
-        [1.0e8, 1.0, -1.0e8, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0][i]
+        [0.0, 1.0e8, 1.0, -1.0e8, 0.0, 0.0, 0.0, 0.0, 0.0][i]
     });
     let op = window(
         ElementKind::F32,
@@ -206,8 +206,7 @@ fn a_wide_accumulator_is_required_under_a_post() {
     let (want, got) = both(&op, ElementKind::F32, &src);
     assert!(max_ulps_f32(&want, &got) <= MAX_ULPS);
     let cell = |i: usize| f32::from_le_bytes(got[4 * i..4 * i + 4].try_into().unwrap());
-    // Window 1 covers positions 1..4: 1 + (-1e8) + 0.5 in f64 is -99999998.5 -> x2.
-    assert_eq!(cell(1), 2.0 * (1.0f64 - 1.0e8 + 0.5) as f32);
+    assert_eq!(cell(1), 2.0, "twice the f64 sum 1.0");
 }
 
 #[test]
