@@ -147,6 +147,7 @@ impl ResourceMap {
     }
 
     /// The output buffer's name. Only meaningful after [`check`](Self::check).
+    #[cfg(feature = "convert")]
     pub(crate) fn output_name(&self) -> Option<&str> {
         self.buffers
             .iter()
@@ -155,6 +156,7 @@ impl ResourceMap {
     }
 
     /// Operand names, in operand order (`Read` buffers in declaration order).
+    #[cfg(feature = "convert")]
     pub(crate) fn input_names(&self) -> Vec<&str> {
         self.buffers
             .iter()
@@ -164,6 +166,7 @@ impl ResourceMap {
     }
 
     /// `Params` field names, in `ScalarExpr::Param` order.
+    #[cfg(feature = "convert")]
     pub(crate) fn param_names(&self) -> Vec<&str> {
         self.params
             .iter()
