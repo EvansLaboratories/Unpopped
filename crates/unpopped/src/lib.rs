@@ -74,6 +74,8 @@ pub mod dispatch_artifact;
 pub mod exactness;
 pub mod ir;
 pub mod jit;
+pub mod kernel;
+pub mod kernel_lift;
 pub mod kisc;
 pub mod lift;
 pub mod link;
