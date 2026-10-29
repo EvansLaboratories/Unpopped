@@ -3818,6 +3818,49 @@ mod tests {
         }
     }
 
+    /// A packed `Select` mask picks per lane: lane `i` of the result is the first arm's lane `i`
+    /// when the condition's lane `i` is non-zero, else the second's. Integer and float mask
+    /// lanes are both tested `!= 0` (a float `-0.0` is false, a NaN true), exactly as a scalar
+    /// `Select` condition. Evaluated directly: the plan gate declines packed bodies.
+    #[test]
+    fn a_packed_select_mask_chooses_each_lane_independently() {
+        let leaf = |_: u8| Val::Float(0.0);
+        let none = |_: u8| -> Val { unreachable!() };
+        let ev = Eval {
+            dtype: ElementKind::F32,
+            params: &[],
+            leaf: &leaf,
+            reduced: &none,
+            coord: &none,
+        };
+        let c = |v: f64| ScalarExpr::Const(v);
+        let pack = |xs: Vec<ScalarExpr>| ScalarExpr::Pack(xs);
+        let a = pack(vec![c(10.0), c(20.0), c(30.0), c(40.0)]);
+        let b = pack(vec![c(-1.0), c(-2.0), c(-3.0), c(-4.0)]);
+        let ints = pack(
+            [0i64, 5, 0, -7]
+                .map(|v| ScalarExpr::ConstInt(v, ElementKind::I32))
+                .to_vec(),
+        );
+        let floats = pack(vec![c(0.0), c(-0.0), c(f64::NAN), c(0.5)]);
+        let lane = |mask: &ScalarExpr, i: u8| {
+            let sel = ScalarExpr::Select(
+                Box::new(mask.clone()),
+                Box::new(a.clone()),
+                Box::new(b.clone()),
+            );
+            eval(&ScalarExpr::Extract(Box::new(sel), i), &ev).f64()
+        };
+        let got: Vec<f64> = (0..4).map(|i| lane(&ints, i)).collect();
+        assert_eq!(got, [-1.0, 20.0, -3.0, 40.0], "integer mask lanes");
+        let got: Vec<f64> = (0..4).map(|i| lane(&floats, i)).collect();
+        assert_eq!(
+            got,
+            [-1.0, -2.0, 30.0, 40.0],
+            "float mask: -0.0 false, NaN true"
+        );
+    }
+
     /// The shared sign/magnitude masks, checked against an **independently
     /// authored** width table rather than against themselves.
     ///

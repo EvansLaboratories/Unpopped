@@ -259,12 +259,34 @@ fn a_whole_value_select_takes_a_scalar_condition_and_packed_arms() {
     let b = p2(input(1).0, input(0).0);
     let sel = ScalarExpr::Select(bx(input(0).0), bx(a.clone()), bx(b.clone()));
     assert_eq!(infer_ty(&sel, F32), Ok(Ty::Packed(F32, 2)));
-    // A packed condition is a later slice.
-    let bad = ScalarExpr::Select(bx(a.clone()), bx(a), bx(b));
-    assert!(matches!(
-        infer_ty(&bad, F32),
-        Err(TypeError::PackedOperand { node: "Select" })
-    ));
+    // A packed condition with the arms' lane count is a lane-wise mask.
+    let masked = ScalarExpr::Select(bx(a.clone()), bx(a.clone()), bx(b.clone()));
+    assert_eq!(infer_ty(&masked, F32), Ok(Ty::Packed(F32, 2)));
+    let i = |v| ScalarExpr::ConstInt(v, ElementKind::I32);
+    let int_mask = ScalarExpr::Select(bx(p2(i(0), i(1))), bx(a.clone()), bx(b.clone()));
+    assert_eq!(
+        infer_ty(&int_mask, F32),
+        Ok(Ty::Packed(F32, 2)),
+        "the mask lanes may be any scalar type"
+    );
+    // Controls: each shape that is NOT a lane-wise mask stays refused.
+    let four = pack(vec![input(0).0, input(1).0, input(0).0, input(1).0]);
+    for bad in [
+        // lane count differs from the arms'
+        ScalarExpr::Select(bx(four), bx(a.clone()), bx(b.clone())),
+        // packed mask over scalar arms
+        ScalarExpr::Select(bx(a.clone()), bx(input(0).0), bx(input(1).0)),
+        // packed arms of different lane counts
+        ScalarExpr::Select(bx(a.clone()), bx(a.clone()), bx(pack(vec![input(0).0; 4]))),
+    ] {
+        assert!(
+            matches!(
+                infer_ty(&bad, F32),
+                Err(TypeError::PackedOperand { node: "Select" })
+            ),
+            "{bad:?}"
+        );
+    }
 }
 
 #[test]
@@ -339,7 +361,12 @@ fn lane_of_distributes_every_lane_wise_operator() {
         (
             // The condition is a whole-value scalar and is not lane-selected.
             ScalarExpr::Select(bx(input(1).0), bx(a.clone()), bx(b.clone())),
-            ScalarExpr::Select(bx(input(1).0), bx(a0.clone()), bx(b0)),
+            ScalarExpr::Select(bx(input(1).0), bx(a0.clone()), bx(b0.clone())),
+        ),
+        (
+            // A packed condition is lane-selected like the arms (lane-wise mask).
+            ScalarExpr::Select(bx(c.clone()), bx(a.clone()), bx(b.clone())),
+            ScalarExpr::Select(bx(ScalarExpr::Const(5.0)), bx(a0.clone()), bx(b0.clone())),
         ),
         (
             ScalarExpr::Cast(bx(a), spec),
