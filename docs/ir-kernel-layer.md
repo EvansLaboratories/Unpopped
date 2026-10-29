@@ -163,10 +163,18 @@ emitter, which is why they can land under the seam hold.
   reversed input is already handled by the view behind `Place::Logical`.
 - **Reduction**, **Scan**, **RowReduce**: one accumulator local per `ReduceStage` / scan state, `For` over the
   reduced axis in the order the oracle folds (this order is part of the agreement; a reordering is U5).
-- Anything the lifting cannot express is a typed `LiftDecline`, never a partial kernel. `RowSort` and the
-  multi-output and write-index forms are **out of v0**; each gets its own PR with its own differential. Landed
+- Anything the lifting cannot express is a typed `LiftDecline`, never a partial kernel. The
+  multi-output (other than `RowSort`'s) and write-index forms are **out of v0**; each gets its own PR with its own differential. Landed
   after the first four: `Contraction` (identity epilogue), `Im2Col`, `Window` (identity post), `RowReduce`
-  (tolerance mode, below).
+  (tolerance mode, below), and `RowSort` (below).
+
+- **RowSort** (`lift_row_sort_opdef`, `tests/kernel_row_sort_agrees.rs`): byte-exact, every `SortOut` and `SortLimit`, `F32` and `F64`. The kernel is a
+  *rank sort*, not the oracle's `sort_by`: each element counts the elements before it under `(key, original index)` with NaN
+  greatest, and is stored at that rank. Descending swaps the keys of the comparison and keeps the index tiebreak, so ties keep
+  ascending original index in both directions. Values move by `Load`/`Store`, so NaN payloads and the sign of zero are kept.
+  The `TopK` guard `rank < k_out` is a loop that runs once or not at all (`for t in rank..min(rank + 1, k_out)`), because the
+  interpreter has no integer comparison. For the same reason integer keys decline. Open: an integer comparison in the
+  intent layer, then `I32`/`I64` sorts.
 
 ### 7.1 Two agreement modes, and the oracle as a tolerance referee
 
