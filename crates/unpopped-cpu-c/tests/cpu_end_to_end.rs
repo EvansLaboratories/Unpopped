@@ -2251,6 +2251,9 @@ fn oracle_value(bits: u128, t: ElementKind) -> Result<i128, f64> {
         ElementKind::U8 => Ok(i128::from(bits as u8)),
         ElementKind::U16 => Ok(i128::from(bits as u16)),
         ElementKind::U32 => Ok(i128::from(bits as u32)),
+        // The harness prints every integer through `long long`, so a u64 above i64::MAX reads
+        // back negative; compare in that same view (the bits are what is under test).
+        ElementKind::U64 => Ok(i128::from(bits as u64 as i64)),
         ElementKind::F32 | ElementKind::F32Strict => Err(f64::from(f32::from_bits(bits as u32))),
         ElementKind::F64 => Err(f64::from_bits(bits as u64)),
         other => panic!("typed e2e: unsupported output {other:?}"),
@@ -2623,6 +2626,71 @@ fn integer_index_arithmetic_wraps_like_the_oracle_in_a_real_compiler() {
         push("square", c() * c(), t);
     }
     run_typed_cases(cases);
+}
+
+/// `u64` arithmetic against the oracle in a real compiler. cpu_c has no `u64` Cast spelling (its
+/// conversion helpers are `long long` based, so it declines rather than approximate), so the
+/// operand is a `Bitcast` of an f64 edge value: every 64-bit pattern, including those above
+/// `i64::MAX`, reaches the unsigned arithmetic.
+#[test]
+fn u64_arithmetic_wraps_like_the_oracle_in_a_real_compiler() {
+    use ElementKind::*;
+    use unpopped::ir::{BinaryOp, konst_int};
+    let xs = typed_edges();
+    let mut cases = Vec::new();
+    let ks: [i64; 6] = [1, 3, i64::MAX, 4_294_967_296, 3_037_000_500, 0];
+    let c = || input(0).bitcast(U64);
+    let mut push = |name: &str, body: Expr, out: ElementKind| {
+        cases.push((format!("u64_{name}"), body, F64, out, xs.clone()));
+    };
+    for (i, k) in ks.iter().enumerate() {
+        push(&format!("add{i}"), c() + konst_int(*k, U64), U64);
+        push(&format!("sub{i}"), c() - konst_int(*k, U64), U64);
+        push(&format!("rsub{i}"), konst_int(*k, U64) - c(), U64);
+        push(&format!("mul{i}"), c() * konst_int(*k, U64), U64);
+        push(&format!("min{i}"), c().min(konst_int(*k, U64)), U64);
+        push(&format!("max{i}"), c().max(konst_int(*k, U64)), U64);
+        push(
+            &format!("lt{i}"),
+            c().binary(BinaryOp::CmpLt, konst_int(*k, U64)),
+            F64,
+        );
+        push(
+            &format!("selint{i}"),
+            (c() - konst_int(*k, U64)).select(konst_int(*k, U64), c()),
+            U64,
+        );
+    }
+    push("square", c() * c(), U64);
+    run_typed_cases(cases);
+}
+
+/// A `u64` Cast is declined, not approximated: cpu_c's conversion helpers go through
+/// `long long`, which cannot hold the `u64` range. The control is the same cast to `u32`.
+#[test]
+fn a_u64_cast_is_declined_by_cpu_c_with_a_reason() {
+    use ElementKind::*;
+    let op = |to| {
+        let mut op = OpDef::elementwise(
+            "to_int",
+            1,
+            &[F64],
+            input(0).cast(to, RoundMode::TowardZero, Saturation::Clamp),
+        );
+        op.out_dtype = Some(to);
+        (op, to)
+    };
+    let key = |to| {
+        let a = OperandDesc::new(1, &[7], &[1], F64, 256);
+        let o = OperandDesc::new(1, &[7], &[1], to, 256);
+        structure_key(OpCategory::UnaryElementwise, &[a, o], ArchSku::Sm89)
+    };
+    let (u32_op, _) = op(U32);
+    unpopped::try_generate(&u32_op, &key(U32), &CpuC).expect("control: f64 -> u32 generates");
+    let (u64_op, _) = op(U64);
+    let err =
+        unpopped::try_generate(&u64_op, &key(U64), &CpuC).expect_err("f64 -> u64 must decline");
+    assert!(format!("{err:?}").contains("u64"), "{err:?}");
 }
 
 #[test]
