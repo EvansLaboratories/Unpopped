@@ -188,8 +188,15 @@ emitter, which is why they can land under the seam hold.
   guards the **store**: `Skip` leaves the cell, `ZeroFill` writes zero, `Clamp` stores the clamped read. The source extent along the
   gathered axis is one extra scalar parameter, typed as the index so the comparisons are same-typed. A 1-D index is a rank-`r` buffer
   with stride 0 on the other axes, as the oracle reads it. The oracle zeroes its output, so `Skip` and `ZeroFill` agree with it on a
-  zeroed kernel output; they differ only on a pre-filled one, which has its own test. Open: scatter (`write_index`), base offsets and
-  non-identity views, each still declined by `check_plain`.
+  zeroed kernel output; they differ only on a pre-filled one, which has its own test. Open: scatter (`write_index`) and non-identity
+  views, each still declined by `check_plain`.
+- **Runtime base offsets** (`tests/kernel_base_offset_agrees.rs`): an Elementwise op carrying `BaseOffset::Runtime` on some inputs and/or the
+  output (the plan admits them on Elementwise only). The IR defines the offset as a launch argument added to the operand's base before
+  any address math; the kernel layer's argument buffer already has that field (`TypedBuffer::base_offset`, applied by the interpreter to
+  every `Place` access), so **the lifted kernel is the offset-free one and the caller binds the offset in the buffer**. The lifts
+  therefore only stop declining it. Each test buffer sits in junk padding on both sides, and a control reruns the kernel with an
+  input's offset dropped to show the agreement depends on it. Open (U3): a backend that emits source from a `KernelFn` has no
+  parameter that carries the offset (the spec's "no argument ABI" finding), so how it reaches a launch is the seam's question.
 
 ### 7.1 Two agreement modes, and the oracle as a tolerance referee
 

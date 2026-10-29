@@ -56,8 +56,9 @@ pub enum LiftDecline {
     NotRowSort,
     /// No input has a `ReadIndex::Indexed` read (for [`lift_gather_opdef`]).
     NotGather,
-    /// More than one output, a per-output dtype, a gather/scatter, a runtime base offset or a
-    /// non-identity view: forms this increment does not lift.
+    /// More than one output, a per-output dtype, a gather/scatter (outside their own lifts), a
+    /// runtime base offset outside Elementwise or a non-identity view: forms this increment does
+    /// not lift.
     UnsupportedForm(&'static str),
     /// The body reads an intent-layer leaf that has no kernel-layer meaning yet.
     UnsupportedLeaf(&'static str),
@@ -168,8 +169,18 @@ fn check_plain_with(
     {
         return Err(LiftDecline::UnsupportedForm("gather or scatter"));
     }
-    if !op.base_offsets.is_empty() || !op.out_base_offset.is_zero() {
-        return Err(LiftDecline::UnsupportedForm("a runtime base offset"));
+    // A runtime base offset is a launch argument added to the operand's base before any address
+    // math, which is what an argument buffer's `base_offset` is in the kernel layer: the lifted
+    // kernel is the offset-free one, and the caller binds the offset in the buffer. The plan admits
+    // one on an Elementwise op only.
+    if !op.base_offsets.is_empty() && op.base_offsets.len() != usize::from(op.n_inputs) {
+        return Err(LiftDecline::UnsupportedForm("an ill-formed base_offsets"));
+    }
+    let offset = op.base_offsets.iter().any(|b| !b.is_zero()) || !op.out_base_offset.is_zero();
+    if offset && !matches!(op.access, Access::Elementwise) {
+        return Err(LiftDecline::UnsupportedForm(
+            "a runtime base offset outside Elementwise",
+        ));
     }
     if op
         .views
