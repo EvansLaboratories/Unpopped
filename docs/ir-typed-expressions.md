@@ -108,9 +108,15 @@ reviewable. fp4/fp6/MX element kinds (`F4E2M1`, `F6E2M3`, `F6E3M2`) became `Elem
 
 ## 8. Integer index expressions (slice 5, landed)
 
-`CoordInt(axis, T)`, `ConstInt(v, T)` and integer arithmetic inside a float op. `T` is `I32`, `I64` or
-`U32` for the leaves (`check_int_leaf`; a constant must be in range); the arithmetic also accepts the
+`CoordInt(axis, T)`, `ConstInt(v, T)` and integer arithmetic inside a float op. `T` is `I32`, `I64`,
+`U32` or `U64` for the leaves (`check_int_leaf`; a constant must be in range); the arithmetic also accepts the
 other integer types a `Cast` produces (`I8`, `I16`, `U8`, `U16`).
+
+**`U64` (0.30.5, PM ruling B 2026-10-28).** `U64` is a leaf type, a `Cast` endpoint and an arithmetic type (wrapping at 64 bits, zero-extended, `Cast`
+float to `U64` saturates at `u64::MAX` with NaN to 0). A `ConstInt` literal's payload is still an `i64`, so a `U64` literal is limited to
+`0..=i64::MAX` and a negative one is `IllegalIntLeaf`, never a wrap; larger values are reached with `Cast`, arithmetic or `CoordInt`. Widening the payload
+would change the `Lowering::const_int` seam and waits for it (ROADMAP row, owner lane 1). cpu_c spells `U64` constants, arithmetic and `Bitcast`
+but DECLINES a `Cast` to or from `U64` (its conversion helpers are `long long` based and cannot hold the range); Slang has no typed `Cast` seam.
 
 **What exists at an integer type** (every other operator refuses an integer operand with
 `TypeError::IntegerOperand { node, ty }`, and an integer compute dtype is unaffected, because the
