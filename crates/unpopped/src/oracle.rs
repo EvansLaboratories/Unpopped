@@ -2433,10 +2433,16 @@ fn eval_elementwise(
         let vals: Vec<Val> = (0..n_outputs)
             .map(|j| {
                 if oob_zero {
-                    // The op's zero fill. `Val::Int(0)` rather than
-                    // `Val::Float(0.0)` so an integer output stores an exact 0
-                    // rather than a float that has to round back.
-                    Val::Int(0)
+                    // The op's zero fill, in the output's own domain: `Val::Int(0)`
+                    // for an integer output (an exact 0 rather than a float that
+                    // has to round back), `Val::Float(0.0)` otherwise (a float
+                    // output has no integer encoding, and embedding's output is a
+                    // float: `encode_int` panicked on it before).
+                    if is_int(plan.out_dtype_of(j)) {
+                        Val::Int(0)
+                    } else {
+                        Val::Float(0.0)
+                    }
                 } else {
                     eval(bodies[j], &ev)
                 }

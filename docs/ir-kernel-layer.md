@@ -182,6 +182,15 @@ emitter, which is why they can land under the seam hold.
   Integer **windows** (`Sum`/`Max`/`Min`, `tests/kernel_int_window_agrees.rs`) lift the same way; `RowReduce` is float-only in the plan, so
   it has no integer form.
 
+- **Gather** (`lift_gather_opdef`, `tests/kernel_gather_agrees.rs`): byte-exact, an Elementwise op with one `ReadIndex::Indexed` input
+  (torch `gather`, `index_select`, embedding), index dtype `I32`/`I64`/`U32`, every `OobPolicy`. The kernel loads the index once per cell,
+  clamps it into the source's extent with integer `Min`/`Max` (so no load is out of bounds, as the oracle's emitter contract says), then
+  guards the **store**: `Skip` leaves the cell, `ZeroFill` writes zero, `Clamp` stores the clamped read. The source extent along the
+  gathered axis is one extra scalar parameter, typed as the index so the comparisons are same-typed. A 1-D index is a rank-`r` buffer
+  with stride 0 on the other axes, as the oracle reads it. The oracle zeroes its output, so `Skip` and `ZeroFill` agree with it on a
+  zeroed kernel output; they differ only on a pre-filled one, which has its own test. Open: scatter (`write_index`), base offsets and
+  non-identity views, each still declined by `check_plain`.
+
 ### 7.1 Two agreement modes, and the oracle as a tolerance referee
 
 **Byte-exact is the default**, and the only mode for a post-expression or epilogue that is the identity
