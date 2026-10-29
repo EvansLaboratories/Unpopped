@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.31.1` — feat (additive): `Cast` rows for `F16` and `Bf16` (U1, #112)
+
+`F16` and `Bf16` are now `Cast` endpoints, both directions, against `{f32, f32s, f64, i8..i64, u8..u32}` and each other (`types::is_cast_float_endpoint`, `float_format`; `is_cast_float` is unchanged and still means a compute float, so an `F16` compute dtype is still declined by the plan gate). `check_cast` accepts them with the float rules (float to float: `Wrap`/`ClampFinite`; float to int: `Clamp`; int to float: `Wrap`), `Bitcast` accepts `F16`/`Bf16` against 16-bit integers, and `rounding_matters` compares exponent range AND significand (f16 to bf16 and bf16 to f16 are both inexact despite equal width). The oracle reference rounds once from the exact value (`cast_ref::encode_ieee`, all four `RoundMode`s, overflow follows the direction, `ClampFinite` clamps infinities, integers above 2^53 go through round-to-odd so there is no double rounding); it is cross-checked against the hardware `f32` conversion and exhaustively over all 65536 patterns of each format. No emitter spells them yet: CpuC has no C type and declines, Slang is unchanged (baracuda/Fuel own those spellings). Packed elements `F16`/`Bf16` now type, still declined by the plan gate until a packed seam lands. Behaviour change for callers: `check_cast(F16, ..)` and `check_bitcast(F16, U16)` used to be `Err`.
+
 ## `0.31.0` — feat (BREAKING): `ScalarExpr::Local` and the kernel layer's types and scope checker (U2, #113)
 
 New leaf `ScalarExpr::Local(u32)` (and `DagNode::Local`): a read of a kernel-layer local. It has meaning only inside a `KernelFn`, so `types::infer`/`infer_ty` refuse it (`TypeError::LocalOutsideKernel`, new variant), the plan gate declines an `OpDef` body containing one (`types::has_local`), and every emitter-facing site declines it (`DeclinedOp::Kernel`, new variant); `ScalarExpr` is exhaustive, so every downstream `match` must choose. `types::infer_ty_in(e, compute, local_types)` types an expression inside a kernel.
