@@ -188,8 +188,7 @@ emitter, which is why they can land under the seam hold.
   guards the **store**: `Skip` leaves the cell, `ZeroFill` writes zero, `Clamp` stores the clamped read. The source extent along the
   gathered axis is one extra scalar parameter, typed as the index so the comparisons are same-typed. A 1-D index is a rank-`r` buffer
   with stride 0 on the other axes, as the oracle reads it. The oracle zeroes its output, so `Skip` and `ZeroFill` agree with it on a
-  zeroed kernel output; they differ only on a pre-filled one, which has its own test. Open: scatter (`write_index`) and non-identity
-  views, each still declined by `check_plain`.
+  zeroed kernel output; they differ only on a pre-filled one, which has its own test.
 - **Runtime base offsets** (`tests/kernel_base_offset_agrees.rs`): an Elementwise op carrying `BaseOffset::Runtime` on some inputs and/or the
   output (the plan admits them on Elementwise only). The IR defines the offset as a launch argument added to the operand's base before
   any address math; the kernel layer's argument buffer already has that field (`TypedBuffer::base_offset`, applied by the interpreter to
@@ -209,6 +208,13 @@ emitter, which is why they can land under the seam hold.
   `Permute` on its two factors as *recognition metadata* (`tests/kernel_contraction_view_agrees.rs`). The oracle reads the factors through
   the bound operand's own strides and never reads the view, so a transposed factor is a transposed binding and the kernel must stay the
   view-free one (reordering coordinates there would transpose twice); a view on a fused bias, which the oracle does read, declines.
+- **Scatter** (`lift_scatter_opdef`, `tests/kernel_scatter_agrees.rs`): byte-exact, an Elementwise op whose output is
+  `WriteIndex::ScatterIndexed` (torch `scatter`, `scatter_add`, `index_add`), `Assign`/`AtomicAdd`/`AtomicMax`/`AtomicMin`, a full-shape
+  or 1-D index. The iteration is the **source's**; the destination's extent along the axis is one more scalar parameter; an
+  out-of-range target (`< 0` or `>= extent`) is skipped. The atomics are a serial read-modify-write, exact because the kernel walks
+  the cells in the oracle's order (a duplicate target under `Assign` is last-writer-wins in that order). The kernel never zeroes the
+  destination: the caller owns its start value, and the oracle's zero start is what makes `AtomicAdd` a count (one test adds into a
+  destination holding 100). `bincount` (a per-output dtype) still declines. Open: a base offset on a scatter has no test of its own yet; views decline.
 
 ### 7.1 Two agreement modes, and the oracle as a tolerance referee
 
