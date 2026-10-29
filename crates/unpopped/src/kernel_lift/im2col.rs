@@ -73,23 +73,23 @@ struct Geometry {
     dilation: (u8, u8),
 }
 
-fn int(v: i64) -> ScalarExpr {
+pub(super) fn int(v: i64) -> ScalarExpr {
     ScalarExpr::ConstInt(v, ElementKind::I32)
 }
 
-fn local(l: u32) -> ScalarExpr {
+pub(super) fn local(l: u32) -> ScalarExpr {
     ScalarExpr::Local(l)
 }
 
-fn add(a: ScalarExpr, b: ScalarExpr) -> ScalarExpr {
+pub(super) fn add(a: ScalarExpr, b: ScalarExpr) -> ScalarExpr {
     ScalarExpr::Add(Box::new(a), Box::new(b))
 }
 
-fn sub(a: ScalarExpr, b: ScalarExpr) -> ScalarExpr {
+pub(super) fn sub(a: ScalarExpr, b: ScalarExpr) -> ScalarExpr {
     ScalarExpr::Sub(Box::new(a), Box::new(b))
 }
 
-fn mul(a: ScalarExpr, b: ScalarExpr) -> ScalarExpr {
+pub(super) fn mul(a: ScalarExpr, b: ScalarExpr) -> ScalarExpr {
     ScalarExpr::Mul(Box::new(a), Box::new(b))
 }
 
@@ -98,7 +98,7 @@ fn bin(op: BinaryOp, a: ScalarExpr, b: ScalarExpr) -> ScalarExpr {
 }
 
 /// Non-zero exactly when `index` is outside `[0, local(extent))`.
-fn outside(index: u32, extent: u32) -> ScalarExpr {
+pub(super) fn outside(index: u32, extent: u32) -> ScalarExpr {
     let last = sub(local(extent), int(1));
     let clamped = bin(
         BinaryOp::Max,
