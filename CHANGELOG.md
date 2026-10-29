@@ -15,7 +15,7 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## `0.32.22` — feat (additive): `lift_scatter_opdef`, the scatter lift (U2, #113)
+## `0.32.23` — feat (additive): `lift_scatter_opdef`, the scatter lift (U2, #113)
 
 `lift_scatter_opdef` lifts an `Access::Elementwise` op whose output is a `WriteIndex::ScatterIndexed` write (`scatter`, `scatter_add`, `index_add`; `Assign`, `AtomicAdd`, `AtomicMax`, `AtomicMin`; index dtype `I32`/`I64`/`U32`; full-shape and 1-D indexes on axis 0 and 1), byte-identical to the oracle (`tests/kernel_scatter_agrees.rs`). The iteration is the source's; the destination extent along the axis is one more scalar parameter; out-of-range targets are skipped; the atomics are a serial read-modify-write in the oracle's order, so even a duplicate target under `Assign` agrees (last writer, same order). The kernel does not zero the destination (the caller owns the start value; a test adds into a destination holding 100). New `LiftDecline::NotScatter`; a float atomic max/min, a non-`Skip` policy and `bincount` (per-output dtype) decline with a reason. Mutation-checked, each killed by named tests: `CmpGe` to `CmpGt`, `CmpLt` to `CmpLe`, the add combine replaced by a max, the max and min combines swapped, and the destination written at the counters instead of the index. No trait or struct shape change. Proposed number (after #173's 0.32.18); the PM allocates.
 
