@@ -15,9 +15,12 @@ use unpopped_vocab::ElementKind;
 
 #[path = "support/cc.rs"]
 mod cc;
+#[path = "support/kernel_data.rs"]
+mod kernel_data;
 #[path = "support/kernel_run.rs"]
 mod kernel_run;
-use kernel_run::{F32, F64, agree, run_c, run_c_mutated, same_bytes, zeroed};
+use kernel_data::zeroed;
+use kernel_run::{F32, F64, agree, run_c, run_c_mutated, same_bytes};
 
 const VALUES: [f64; 12] = [
     1.0e8,
@@ -249,7 +252,7 @@ fn f64s(vs: &[f64]) -> Vec<Vec<u8>> {
 }
 
 fn agrees(got: &[Vec<u8>], want: &[Vec<u8>], dtype: ElementKind) -> bool {
-    std::panic::catch_unwind(|| same_bytes("nan", got, want, dtype, 0)).is_ok()
+    std::panic::catch_unwind(|| same_bytes("nan", got, want, &[dtype], 0)).is_ok()
 }
 
 #[test]
@@ -271,6 +274,12 @@ fn nan_is_equal_only_to_nan() {
     ] {
         assert!(!agrees(&f32s(&[a]), &f32s(&[b]), F32), "{a:?} vs {b:?}");
     }
+    // An integer buffer is compared byte for byte whatever its bits look like as a float: these two
+    // are both NaN as `f32` and different as `i32` (the dtype is the buffer's, not the kernel's).
+    let (x, y) = (0x7fc0_0000_i32, 0xffc0_0000_u32 as i32);
+    let ints = |v: i32| vec![v.to_le_bytes().to_vec()];
+    assert!(!agrees(&ints(x), &ints(y), ElementKind::I32));
+    assert!(agrees(&ints(x), &ints(x), ElementKind::I32));
     for (a, b) in [(f64::NAN, 1.0), (f64::INFINITY, f64::NAN), (-0.0, 0.0)] {
         assert!(!agrees(&f64s(&[a]), &f64s(&[b]), F64), "{a:?} vs {b:?}");
     }

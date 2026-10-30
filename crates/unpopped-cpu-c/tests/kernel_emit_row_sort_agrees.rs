@@ -21,9 +21,12 @@ use unpopped_vocab::ElementKind;
 
 #[path = "support/cc.rs"]
 mod cc;
+#[path = "support/kernel_data.rs"]
+mod kernel_data;
 #[path = "support/kernel_run.rs"]
 mod kernel_run;
-use kernel_run::{F32, F64, agree, run_c_mutated, zeroed};
+use kernel_data::zeroed;
+use kernel_run::{F32, F64, agree, run_c_mutated};
 
 const I32: ElementKind = ElementKind::I32;
 

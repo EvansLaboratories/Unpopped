@@ -18,9 +18,12 @@ use unpopped_vocab::{AxisMask, ElementKind};
 
 #[path = "support/cc.rs"]
 mod cc;
+#[path = "support/kernel_data.rs"]
+mod kernel_data;
 #[path = "support/kernel_run.rs"]
 mod kernel_run;
-use kernel_run::{F32, F64, agree, agree_within, run_c_mutated, ulps, zeroed};
+use kernel_data::zeroed;
+use kernel_run::{F32, F64, agree, agree_within, run_c_mutated, ulps};
 
 const ROWS: i64 = 5;
 const COLS: i64 = 6;

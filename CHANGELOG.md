@@ -15,6 +15,20 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.34.9` — test: cpu_c kernel emitter agrees with the interpreter on Gather, Scatter and Im2Col (E1b, part 4; E1b complete for float kernels)
+
+**Tests and docs only; no API or behaviour change.** `unpopped-cpu-c/tests/kernel_emit_gather_scatter_agrees.rs` and `kernel_emit_im2col_agrees.rs` compile and run lifted kernels and compare output bytes with `run_kernel` (bit-exact except NaN sign/payload). Gather: `Skip`, `Clamp` and `ZeroFill` with `I32`, `I64` and `U32` index buffers, both axes, a broadcast 1-D index and `F64`. Scatter: `Assign` and `AtomicAdd` with the same index types, both axes, `index_add` and `F64`. Im2Col: padding, stride, dilation, batch and channels, a rectangular input and window, `F64`. The output starts non-zero (`7.0`), so `Skip` is distinguishable from `ZeroFill` and an unwritten cell shows; the index corpus holds negatives, the last valid row, one past it, far-out values and each index type's extremes. The emitter needed no change.
+
+Seeded mutants on the emitted C, all caught: the gather and scatter negative-index and one-past-the-end tests off by one, the clamp's lower branch inverted, a scatter-add turned into an assign, and, for Im2Col, the clamp's upper limit one too high (row and column), the tap test inverted (row and column) and the pad value changed from the typed zero. (Two mutants I first tried, `>` to `>=` in a clamp at zero, were equivalent and are not kept.)
+
+**Not emitted yet, and pinned:** an integer compute dtype (`Scatter`/`Gather` over `I32`/`I64` data, `Bincount`, `AtomicMax`/`AtomicMin` on integers, integer reductions and scans) is `LowerError::UnsupportedKernel` from `admit` (`integer_compute_is_a_typed_decline`); that is the next emitter change, not a test gap.
+
+Harness correction: `same_bytes` judged every output buffer by the kernel's compute dtype, so an `I32` index buffer written by an `F32` kernel (RowSort's) was compared as `f32` with NaNs canonicalised. It now takes each buffer's own dtype; `nan_is_equal_only_to_nan` gains the control that two integers that are both NaN as `f32` still differ. No earlier result changed (the indices there are small, so never NaN as `f32`). `tests/support/kernel_run.rs` also binds `I64` and `U32` buffers.
+
+Also recorded (docs): the 2026-10-30 parser/emitter ownership assignments (SPIR-V, GLSL, HLSL, WGSL to Vulkane; HIP C++ to Rockfish; SYCL/DPC++ to Bonefish; Metal and Slang owners open) in `docs/parser-emitter-ownership-map.md` section 9, which supersedes that map's earlier "Vulkane is not a stakeholder" finding.
+
+The serial loop is a correctness reference, not a performance or device-timing claim (PM ruling 2026-10-30).
+
 ## `0.34.8` — test: cpu_c kernel emitter agrees with the interpreter on RowReduce and RowSort (E1b, part 3)
 
 **Tests and docs only; no API or behaviour change.** `unpopped-cpu-c/tests/kernel_emit_row_reduce_agrees.rs` and `kernel_emit_row_sort_agrees.rs` compile and run lifted `Access::RowReduce` and `Access::RowSort` kernels and compare output bytes with `run_kernel`. RowReduce: the four identity epilogues, an all-negative `Max` and all-positive `Min` row, NaN/infinity rows, and softmax, a centred quotient and an RMS norm (`F32` within 3 ulps, tolerance mode; `F64` exact). RowSort: every `SortOut`, full and capped (`k_out` 1, 3, 11), both directions, `F32`/`F64`, rank 2 and 3, over a corpus of ties, both zeros, infinities and NaNs of several signs and payloads; values are bit-exact except NaN sign/payload, indices exact. The emitter needed no change.

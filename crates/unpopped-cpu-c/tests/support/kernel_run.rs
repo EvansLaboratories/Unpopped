@@ -22,7 +22,17 @@ pub(crate) fn ctype(t: ElementKind) -> &'static str {
     match t {
         ElementKind::F32 => "float",
         ElementKind::F64 => "double",
+        ElementKind::I64 => "long long",
+        ElementKind::U32 => "unsigned int",
         _ => "int",
+    }
+}
+
+/// Bytes per element of the dtypes the driver binds.
+pub(crate) fn width(t: ElementKind) -> usize {
+    match t {
+        ElementKind::F64 | ElementKind::I64 => 8,
+        _ => 4,
     }
 }
 
@@ -33,38 +43,9 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// `n` distinct values that exercise rounding (not representable in a short decimal).
-pub(crate) fn values(t: ElementKind, n: usize, seed: u32) -> Vec<u8> {
-    (0..n)
-        .flat_map(|i| {
-            let x = f64::from((i as u32 * 7919 + seed * 104_729) % 2003) / 97.0 - 10.0;
-            match t {
-                ElementKind::F64 => x.to_le_bytes().to_vec(),
-                ElementKind::F32 => (x as f32).to_le_bytes().to_vec(),
-                _ => (x as i32).to_le_bytes().to_vec(),
-            }
-        })
-        .collect()
-}
-
-pub(crate) fn dense(t: ElementKind, shape: &[i64], seed: u32) -> TypedBuffer {
-    let n = shape.iter().product::<i64>() as usize;
-    let mut strides = vec![1i64; shape.len()];
-    for d in (0..shape.len().saturating_sub(1)).rev() {
-        strides[d] = strides[d + 1] * shape[d + 1];
-    }
-    TypedBuffer::new(t, shape.to_vec(), strides, values(t, n, seed))
-}
-
-pub(crate) fn zeroed(t: ElementKind, shape: &[i64]) -> TypedBuffer {
-    let mut b = dense(t, shape, 0);
-    b.bytes.fill(0);
-    b
-}
-
 /// The C declarations that give buffer argument `i` its storage, shape and strides.
 pub(crate) fn bind_buffer(i: usize, b: &TypedBuffer) -> String {
-    let n = b.bytes.len() / (if b.dtype == F64 { 8 } else { 4 });
+    let n = b.bytes.len() / width(b.dtype);
     let lst = |v: &[i64]| {
         v.iter()
             .map(|x| format!("{x}LL"))
@@ -92,12 +73,12 @@ pub(crate) fn driver(k: &KernelFn, name: &str, args: &[KernelArg]) -> String {
     for (i, (p, a)) in k.params.iter().zip(args).enumerate() {
         match a {
             KernelArg::Buffer(b) => {
-                let n = b.bytes.len() / (if b.dtype == F64 { 8 } else { 4 });
+                let n = b.bytes.len() / width(b.dtype);
                 s.push_str(&bind_buffer(i, b));
                 call.push(format!("b{i}, s{i}, t{i}, {}LL", b.base_offset));
                 if matches!(&p.kind, unpopped::kernel::ParamKind::Buffer { role, .. } if *role != BufferRole::Read)
                 {
-                    outs.push((i, n * (if b.dtype == F64 { 8 } else { 4 })));
+                    outs.push((i, n * width(b.dtype)));
                 }
             }
             KernelArg::Int(v) => call.push(format!("{v}")),
@@ -214,18 +195,22 @@ pub(crate) fn canonical_nans(v: &[u8], dtype: ElementKind) -> Vec<u8> {
         .collect()
 }
 
-/// Output buffers agree: bit-exact except NaN sign/payload ([`canonical_nans`]), or for `F32` within `tol` ulps (the oracle evaluates a
+/// Output buffers agree, each judged by its **own** dtype in `dtypes` (a kernel's compute dtype
+/// says nothing about an `I32` index buffer it writes): a float buffer is bit-exact except NaN
+/// sign/payload ([`canonical_nans`]), or for `F32` within `tol` ulps (the oracle evaluates a
 /// compound `f32` expression at `f64` and rounds once, where `float` C rounds every operation;
-/// the spec's tolerance mode, section 7.1). `F64` is always byte-exact.
+/// the spec's tolerance mode, section 7.1); `F64` is always bit-exact except NaN sign/payload;
+/// any other dtype is compared byte for byte.
 pub(crate) fn same_bytes(
     tag: &str,
     got: &[Vec<u8>],
     want: &[Vec<u8>],
-    dtype: ElementKind,
+    dtypes: &[ElementKind],
     tol: u64,
 ) {
     assert_eq!(got.len(), want.len(), "{tag}: buffer count");
-    for (g, w) in got.iter().zip(want) {
+    assert_eq!(dtypes.len(), want.len(), "{tag}: dtype count");
+    for ((g, w), &dtype) in got.iter().zip(want).zip(dtypes) {
         if dtype == F32 && tol > 0 {
             let f = |v: &[u8]| {
                 v.chunks(4)
@@ -270,7 +255,7 @@ pub(crate) fn agree_within(tag: &str, k: &KernelFn, args: Vec<KernelArg>, tol: u
                 "{tag}: the interpreter finished, the C reported {}",
                 c.status
             );
-            let want: Vec<Vec<u8>> =
+            let (want, dtypes): (Vec<Vec<u8>>, Vec<ElementKind>) =
                 k.params
                     .iter()
                     .zip(&interp)
@@ -278,11 +263,11 @@ pub(crate) fn agree_within(tag: &str, k: &KernelFn, args: Vec<KernelArg>, tol: u
                         (
                             unpopped::kernel::ParamKind::Buffer { role, .. },
                             KernelArg::Buffer(b),
-                        ) if *role != BufferRole::Read => Some(b.bytes.clone()),
+                        ) if *role != BufferRole::Read => Some((b.bytes.clone(), b.dtype)),
                         _ => None,
                     })
-                    .collect();
-            same_bytes(tag, &c.outs, &want, k.compute, tol);
+                    .unzip();
+            same_bytes(tag, &c.outs, &want, &dtypes, tol);
         }
         Err(KernelTrap::OutOfBounds { .. }) => {
             assert_eq!(c.status, 1, "{tag}: interpreter OutOfBounds")
