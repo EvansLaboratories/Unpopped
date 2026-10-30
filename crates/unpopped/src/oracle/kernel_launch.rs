@@ -3,13 +3,13 @@
 //! runs every thread of a launched [`KernelFn`], block by block, in plain Rust.
 //!
 //! Within a block the threads run in **lockstep phases between barriers**. Each thread is a
-//! resumable evaluation ([`super::kernel_resume`]); a phase runs every runnable thread until it
+//! resumable evaluation (`kernel_resume`, private); a phase runs every runnable thread until it
 //! reaches a `Barrier` or finishes. When every thread of the barrier's scope (the block, or the
 //! subgroup) is waiting at the same barrier statement, they all advance. A thread that finishes
 //! while peers wait for it, or threads waiting at different barriers with none releasable, is
 //! [`KernelTrap::BarrierMismatch`].
 //!
-//! The memory rules ([`super::kernel_mem`]):
+//! The memory rules (`kernel_mem`, private):
 //!
 //! * **Shared memory is not zero-filled.** A read of an element no thread stored is
 //!   [`KernelTrap::UninitializedShared`]; a zero would hide the missing-barrier bug the memory
