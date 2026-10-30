@@ -15,6 +15,16 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.34.7` — test: cpu_c kernel emitter agrees with the interpreter on Contraction and Window (E1b, part 2)
+
+**Tests and docs only; no API or behaviour change.** `unpopped-cpu-c/tests/kernel_emit_contraction_window_agrees.rs` compiles and runs lifted matmul (`F32`/`F64`, dense and column-major operands) and batched matmul kernels, and 1-D `Sum`/`Max`/`Min`/`Mean` windows (padded and strided, both `Mean` divisors, dilation, `F32`/`F64`), comparing output bytes with `run_kernel`. The emitter needed no change. The two `Mean` divisors are shown to give different bytes, so one divisor for both could not pass.
+
+Seeded mutants, both caught: the contraction accumulator declared `float` (3.5 becomes 2.5) and the window accumulator declared `float` (1 becomes 0), made on the emitted C.
+
+One harness correction: a NaN made by an operation (`inf - inf`, `0 * inf`) has the host's sign (x86: negative) where the interpreter makes the positive one. The exact comparison now treats any two NaNs as equal (`canonical_nans` in `tests/support/kernel_run.rs`); every non-NaN byte is still compared exactly. Earlier E1a/E1b tests never produced such a NaN, so none changed result.
+
+The serial loop is a correctness reference, not a performance or device-timing claim (PM ruling 2026-10-30). Not here: RowReduce, RowSort, Im2Col, Gather, Scatter.
+
 ## `0.34.6` — test: cpu_c kernel emitter agrees with the interpreter on Reduction and Scan (E1b, part 1)
 
 **Tests and docs only; no API or behaviour change.** `unpopped-cpu-c/tests/kernel_emit_reduce_agrees.rs` lowers lifted `Access::Reduction` and `Access::Scan` kernels (`lift_reduction_opdef`, `lift_scan_opdef`) with `CpuC::lower_kernel`, compiles the C, runs it and compares output bytes with `run_kernel`: every `ReduceOp` over the last axis and over the outer axis with `keepdim`, every scan monoid forward-inclusive and reverse-exclusive, `F32` and `F64`. The corpus holds NaN (first and mid-row), signed zeros, infinities, an all-negative row and a row that cancels in `f32` but not in `f64`. Fused posts (tolerance mode) agree within 3 ulps for `F32` and byte-exact for `F64`. The emitter needed no change: the E1a statement spelling already covers these kernels.
