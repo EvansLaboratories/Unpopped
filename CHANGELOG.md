@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.34.8` — test: cpu_c kernel emitter agrees with the interpreter on RowReduce and RowSort (E1b, part 3)
+
+**Tests and docs only; no API or behaviour change.** `unpopped-cpu-c/tests/kernel_emit_row_reduce_agrees.rs` and `kernel_emit_row_sort_agrees.rs` compile and run lifted `Access::RowReduce` and `Access::RowSort` kernels and compare output bytes with `run_kernel`. RowReduce: the four identity epilogues, an all-negative `Max` and all-positive `Min` row, NaN/infinity rows, and softmax, a centred quotient and an RMS norm (`F32` within 3 ulps, tolerance mode; `F64` exact). RowSort: every `SortOut`, full and capped (`k_out` 1, 3, 11), both directions, `F32`/`F64`, rank 2 and 3, over a corpus of ties, both zeros, infinities and NaNs of several signs and payloads; values are bit-exact except NaN sign/payload, indices exact. The emitter needed no change.
+
+Seeded mutants, all caught, on the emitted C: the stage accumulator declared `float` (sum 3.5 becomes 2.5); a float stage accumulator under softmax tolerance mode leaves the 3-ulp bound (row `[0, -18.42 x 100]`, so the tolerance is not vacuous); the sort comparator with its two tie-breaks (`<=` and `<`) swapped and with its NaN test inverted each change the output bytes.
+
+The serial loop is a correctness reference, not a performance or device-timing claim (PM ruling 2026-10-30). Not here: Im2Col, Gather, Scatter (E1b, next PR).
+
 ## `0.34.7` — test: cpu_c kernel emitter agrees with the interpreter on Contraction and Window (E1b, part 2)
 
 **Tests and docs only; no API or behaviour change.** `unpopped-cpu-c/tests/kernel_emit_contraction_window_agrees.rs` compiles and runs lifted matmul (`F32`/`F64`, dense and column-major operands) and batched matmul kernels, and 1-D `Sum`/`Max`/`Min`/`Mean` windows (padded and strided, both `Mean` divisors, dilation, `F32`/`F64`), comparing output bytes with `run_kernel` (bit-exact except NaN sign/payload, below). The emitter needed no change. The two `Mean` divisors are shown to give different bytes, so one divisor for both could not pass.
