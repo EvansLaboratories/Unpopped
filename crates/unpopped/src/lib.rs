@@ -87,6 +87,7 @@ pub mod oracle;
 pub mod pattern;
 pub mod plan;
 pub mod recipe;
+pub mod resource_map;
 pub mod shape;
 pub mod telemetry;
 mod text;
@@ -120,7 +121,7 @@ pub use jit::{
     ArtifactKind, Compiler, JitBudget, JitError, JitRequest, JitResponse, Recipe, StubCompiler,
     SynthKernel, synthesize,
 };
-pub use lift::{ConsumeRefusal, LiftError, Lifted, lift_elementwise};
+pub use lift::{ConsumeRefusal, LiftError, LiftProvenance, Lifted, lift_elementwise};
 pub use link::{LinkEntry, emit_link_registry, link_entry};
 pub use optimize::{optimize, optimize_top_k};
 pub use oracle::{Fidelity, TypedBuffer, compare, evaluate};
@@ -128,6 +129,7 @@ pub use pattern::{PatternError, PatternNode, derive_pattern, to_fkc};
 pub use plan::{
     ContractionDecline, HalfArith, KernelPlan, PlanError, Schedule, build_plan, half_arith_for,
 };
+pub use resource_map::{DeclaredBuffer, ResourceMap, ResourceMapError};
 pub use shape::{
     SYMBOLIC, ShapeError, ShapeRuleForm, output_shape, pooled_axis_dim_expr, shape_rule_form,
     windowed_extent,

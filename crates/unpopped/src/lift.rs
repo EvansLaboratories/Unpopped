@@ -65,6 +65,12 @@ pub enum LiftError {
         /// The admissibility gate's own reason.
         detail: String,
     },
+    /// A [`crate::resource_map::ResourceMap`] was supplied and the source names a buffer or
+    /// `Params` field it does not declare. There is **no fallback to name inference**: a
+    /// declared map that is wrong must be loud.
+    UndeclaredResource(String),
+    /// The supplied [`crate::resource_map::ResourceMap`] failed its own check.
+    BadResourceMap(String),
 }
 
 /// The KISS-Consume refusal category of a [`LiftError`] — machine-actionable, so a
@@ -105,17 +111,39 @@ impl LiftError {
             // first is not. That is a vocabulary observation for KISS, not a
             // licence to mint a fifth category here.
             LiftError::DtypeNotAdmissible { .. } => ConsumeRefusal::InexpressibleResidue,
+            // The caller's declaration, not the kernel, is what failed to match: the kernel
+            // may be perfectly expressible, so this is the recognizer-gap category.
+            LiftError::UndeclaredResource(_) | LiftError::BadResourceMap(_) => {
+                ConsumeRefusal::UnrecognizedButExpressible
+            }
         }
     }
 }
 
 /// A successfully lifted elementwise op.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Lifted {
     /// The neutral-IR op, ready for `generate(&op, &key, &backend)`.
     pub op: OpDef,
     /// Number of input operands the body references (`in0..in{n-1}`).
     pub n_inputs: u8,
+    /// Whether the buffers were declared by the caller or inferred from names.
+    pub provenance: LiftProvenance,
+    /// The resource map the lift resolved names through; `None` exactly when
+    /// [`provenance`](Self::provenance) is [`LiftProvenance::Inferred`].
+    pub resources: Option<crate::resource_map::ResourceMap>,
+}
+
+/// How a lift found its buffers. A kernel lifted by name inference must be countable as
+/// such and cannot pass as declared.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LiftProvenance {
+    /// The caller supplied a [`crate::resource_map::ResourceMap`].
+    Declared,
+    /// Buffers were found by the frontend's naming convention.
+    Inferred,
 }
 
 /// Lift a grid-stride elementwise CUDA kernel's body into an [`OpDef`] named
@@ -169,7 +197,12 @@ pub fn lift_elementwise(
             });
         }
     }
-    Ok(Lifted { op, n_inputs })
+    Ok(Lifted {
+        op,
+        n_inputs,
+        provenance: LiftProvenance::Inferred,
+        resources: None,
+    })
 }
 
 /// Find the first `out[<idx>] = <rhs>;` store and return `(rhs, idx_var)`.
