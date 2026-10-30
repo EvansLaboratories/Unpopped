@@ -15,7 +15,7 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## `0.34.3` — docs: E1 design note, reference emitters beyond `Schedule::Scalar`
+## `0.34.4` — docs: E1 design note, reference emitters beyond `Schedule::Scalar`
 
 **Docs only; no code, API or behaviour change.** `docs/e1-emit-from-the-kernel-layer.md` frames ROADMAP row E1: the options (grow `Backend::lower` per schedule, emit from a lifted `KernelFn`, or stop), a recommendation (emit from `KernelFn`, staged cpu-c first, differential against `run_kernel`), the trait shape and argument ABI it needs, and four decisions for the PM. Also records that cpu-c's module docs say "panics" where the emitter returns a typed `UnsupportedSchedule` decline.
 
