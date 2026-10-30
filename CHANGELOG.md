@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.34.12` — docs: ownership map records Slang as Vulkane's
+
+**Docs only; no code, no API, no behaviour change.** `docs/parser-emitter-ownership-map.md` sections 1 and 9 now say Vulkane owns Slang (CireSnave 2026-10-30), with the handover in `vulkane` `docs/design/slang-parser-emitter-handover.md` (vulkane#107). `unpopped-slang` is untouched and stays in-tree until `vulkane-slang-emit` is published.
+
 ## `0.34.11` — docs: ROADMAP E10 closed as not checkable in `validate_row_sort`; E1c and E2 move to Vulkane
 
 **Docs only; no code, no API, no behaviour change.** `k <= 1024` is the contract of the out-of-tree CUDA bitonic variant (the base rank sort has no limit), and `validate_row_sort` runs on a `StructureKey` with no numeric extents, so it cannot check it. ROADMAP owner column for E1c and E2 is now Vulkane (PM ruling 2026-10-30).
