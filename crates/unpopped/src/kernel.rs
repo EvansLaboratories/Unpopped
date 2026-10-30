@@ -12,7 +12,8 @@
 //!
 //! U3 row 4 adds execution ids ([`ScalarExpr::Exec`]), a launch shape, memory-space allocations
 //! ([`Place::Alloc`]) and [`Stmt::Barrier`] (`docs/u3-row4-scopes-and-memory-spaces.md`); the checker
-//! knows them, the interpreter does not run them yet.
+//! knows them, and `oracle::kernel_launch::run_launch` runs them (`run_kernel` runs unlaunched
+//! kernels only).
 //!
 //! Deliberately **not** here yet (each is named in the spec): `Stmt::Call` (needs a module type,
 //! spec unknown U-2), pointer values (`Place::Ptr`), the effect set (computed when a consumer

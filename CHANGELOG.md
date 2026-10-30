@@ -15,6 +15,18 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.34.2` — feat: `Barrier` in `run_launch`, the resumable evaluator and barrier-aware data races (U3 row 4, PR 3)
+
+**Additive.** `run_launch` now runs kernels with `Stmt::Barrier`. Each thread of a block is a resumable evaluation (an explicit frame stack, `oracle::kernel_resume`, because a barrier can sit inside a loop); a phase runs every runnable thread until it reaches a barrier or finishes, and when every thread of the barrier's scope (the block, or the subgroup) waits at the same barrier statement they all advance. `KernelTrap::BarrierMismatch` (new): a thread finished while peers waited for it (a `Return` before a barrier, which the checker allows), or the threads of a scope waited at different barriers and none could be released.
+
+**`DataRace` is now barrier-aware.** Every access carries who made it and how many barriers had released around it. Two accesses to one element, one of them a write, conflict unless ordered: same thread, or the same block with a block barrier between them, or the same subgroup with a subgroup or block barrier between them. Accesses by different blocks are never ordered. Readers are tracked until the next write, so the write-after-read hazard (a fast thread's next-round store against a slow thread's read of the last round) is caught.
+
+`run_kernel` and the lifting differential keep the recursive evaluator (design note section 5). The resumable one is a second implementation of loop semantics, so `tests/kernel_resume_agrees.rs` runs nested loops with `Break`, `Continue`, an early `Return` and a `While` through both and compares the output over six inputs that reach different branches.
+
+Tests: `tests/kernel_barriers_run.rs` (tile reverse, barriers in a loop with and without the second barrier, subgroup versus block scope, global ordering inside and across blocks, mismatch by `Return` at both scopes), `tests/kernel_resume_agrees.rs`, and unit tests on `release` for the guards a checked kernel cannot reach. Every new rule was mutated in the source: 33 mutants, each turned a named test red; seven survived the first round (a readers-by-thread-index bug, a missing zero-step test, and the `release` guards that no checked kernel can fire), and each now has a test that kills it.
+
+**With this row 4 is complete:** ids, launch shape, shared/private arrays, barriers with a uniformity rule, and a driver that runs them. Not here: `Constant` initializers, atomics, cluster scope, pointer values (design note section 8).
+
 ## `0.34.1` — feat: `run_launch`, the per-thread driver for barrier-free kernels (U3 row 4, PR 2)
 
 **Additive.** `oracle::kernel_launch::{run_launch, run_launch_with_subgroup}` run every thread of a launched kernel, block by block (x fastest), threads one after another. `Exec` ids evaluate (`ThreadIdx`, `BlockIdx`, `BlockDim`, `GridDim`, `LaneId`, `SubgroupId`, `SubgroupSize`); the subgroup size is the launch range's minimum unless the caller passes one inside the range. `Shared` (per block) and `Private` (per thread) allocations are real storage, sized by `Static` or by the integer argument a `Param` extent names.
