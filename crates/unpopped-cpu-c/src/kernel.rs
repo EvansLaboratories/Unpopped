@@ -54,9 +54,17 @@ fn admit(k: &KernelFn) -> Result<(), LowerError> {
             "a launch shape or an allocation (U3 row 4) is not emitted yet",
         ));
     }
-    if !matches!(k.compute, ElementKind::F32 | ElementKind::F64) {
+    if !matches!(
+        k.compute,
+        ElementKind::F32
+            | ElementKind::F64
+            | ElementKind::I32
+            | ElementKind::I64
+            | ElementKind::U32
+            | ElementKind::U64
+    ) {
         return Err(refuse(format!(
-            "compute dtype {:?}; only F32 and F64",
+            "compute dtype {:?}; only F32, F64, I32, I64, U32 and U64",
             k.compute
         )));
     }
@@ -269,7 +277,17 @@ fn literal(dtype: ElementKind, v: f64) -> Result<Spelling, LowerError> {
     }))
 }
 
-fn infix(op: unpopped::ir::ArithOp, a: String, b: String) -> Result<Spelling, LowerError> {
+/// Infix arithmetic: a plain C operator on a float compute dtype, a wrapping integer form on an
+/// integer one (C's signed overflow is undefined).
+fn infix(
+    dtype: ElementKind,
+    op: unpopped::ir::ArithOp,
+    a: String,
+    b: String,
+) -> Result<Spelling, LowerError> {
+    if typed::is_int_compute(dtype) {
+        return typed::cpu_int_arith(op, a, b, dtype);
+    }
     Ok(Spelling::Spelled(format!("({a} {} {b})", op.c_operator())))
 }
 
@@ -279,7 +297,14 @@ pub(crate) fn lower_kernel(k: &KernelFn) -> Result<GeneratedKernel, LowerError> 
     let dtype = k.compute;
     let tys: Vec<Ty> = k.locals.iter().map(|d| d.ty()).collect();
     let un = |op, x: String| cpu_unary(op, x, dtype);
-    let bin = |op, a: String, b: String| cpu_binary(op, a, b, dtype);
+    let bin = |op, a: String, b: String| {
+        if typed::is_int_compute(dtype) {
+            typed::cpu_int_binary(op, a, b, dtype)
+        } else {
+            cpu_binary(op, a, b, dtype)
+        }
+    };
+    let ar = |op, a: String, b: String| infix(dtype, op, a, b);
     let sel = |c, a, b| cpu_select(c, a, b, dtype);
     let fm = |a, b, c| cpu_fma(a, b, c, dtype);
     let cs = |x: String, from, spec| typed::cpu_cast(x, from, spec);
@@ -291,7 +316,7 @@ pub(crate) fn lower_kernel(k: &KernelFn) -> Result<GeneratedKernel, LowerError> 
     let io = |op, t, operands: Vec<String>| typed::cpu_int_op(op, t, &operands, dtype);
     let local = |i: u32| Ok(Spelling::Spelled(format!("l{i}")));
     let lowering = Lowering::builder(&no_input_leaf, &un, &bin)
-        .arith(&infix)
+        .arith(&ar)
         .select(&sel)
         .fma(&fm)
         .cast(&cs)

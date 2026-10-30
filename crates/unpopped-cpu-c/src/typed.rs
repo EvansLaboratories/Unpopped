@@ -223,6 +223,8 @@ pub(crate) fn cpu_int_op(
     };
     let (one, zero) = match compute {
         ElementKind::F64 => ("1.0", "0.0"),
+        // An integer compute dtype's comparison is the integer 1/0.
+        ElementKind::I32 | ElementKind::I64 | ElementKind::U32 | ElementKind::U64 => ("1", "0"),
         _ => ("1.0f", "0.0f"),
     };
     let arith = |sym: &str| {
@@ -279,4 +281,66 @@ pub(crate) fn cpu_int_op(
         }
     };
     Ok(Spelling::Spelled(spelled))
+}
+
+/// Is `t` an integer the kernel emitter computes in (the dtypes `cpu_int_op` wraps at)?
+pub(crate) fn is_int_compute(t: ElementKind) -> bool {
+    matches!(
+        t,
+        ElementKind::I32 | ElementKind::I64 | ElementKind::U32 | ElementKind::U64
+    )
+}
+
+/// An infix `+ - *` over an integer COMPUTE dtype: wrapping, through the unsigned type
+/// ([`cpu_int_op`]). Integer `/` has no spelling here: the oracle's rule for a zero divisor and
+/// for `MIN / -1` is not one the emitter has been taught, so it declines rather than inherit C's.
+pub(crate) fn cpu_int_arith(
+    op: unpopped::ir::ArithOp,
+    a: String,
+    b: String,
+    t: ElementKind,
+) -> Result<Spelling, LowerError> {
+    use unpopped::backend::IntOp;
+    use unpopped::ir::ArithOp;
+    let iop = match op {
+        ArithOp::Add => IntOp::Add,
+        ArithOp::Sub => IntOp::Sub,
+        ArithOp::Mul => IntOp::Mul,
+        other => {
+            return decline(
+                DeclinedOp::Integer,
+                format!("cpu_c has no integer spelling for the infix {other:?}"),
+            );
+        }
+    };
+    cpu_int_op(iop, t, &[a, b], t)
+}
+
+/// A non-infix binary over an integer COMPUTE dtype: `Max`/`Min`/comparisons through
+/// [`cpu_int_op`], the bitwise `& | ^` as C operators. Shifts and the logical ops decline: a
+/// signed left shift of a negative is undefined in C and the emitter has not been taught the
+/// oracle's rule for an oversized count.
+pub(crate) fn cpu_int_binary(
+    op: unpopped::ir::BinaryOp,
+    a: String,
+    b: String,
+    t: ElementKind,
+) -> Result<Spelling, LowerError> {
+    use unpopped::backend::IntOp;
+    use unpopped::ir::BinaryOp;
+    let iop = match op {
+        BinaryOp::Max => IntOp::Max,
+        BinaryOp::Min => IntOp::Min,
+        o if o.is_cmp() => IntOp::Cmp(o),
+        BinaryOp::BitAnd => return Ok(Spelling::Spelled(format!("({a} & {b})"))),
+        BinaryOp::BitOr => return Ok(Spelling::Spelled(format!("({a} | {b})"))),
+        BinaryOp::BitXor => return Ok(Spelling::Spelled(format!("({a} ^ {b})"))),
+        other => {
+            return decline(
+                DeclinedOp::Integer,
+                format!("cpu_c has no integer-compute spelling for {other:?}"),
+            );
+        }
+    };
+    cpu_int_op(iop, t, &[a, b], t)
 }

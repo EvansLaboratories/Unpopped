@@ -7,11 +7,10 @@
 //!
 //! The output starts **non-zero** (the oracle's zeroed output cannot tell `Skip` from `ZeroFill`),
 //! and the index corpus holds negatives, the last valid row, one past it, far-out values and the
-//! index type's extremes. Float kernels only: an integer compute dtype is not emitted yet
-//! (`UnsupportedKernel`), which `integer_compute_is_a_typed_decline` pins. The serial C is a
-//! correctness reference; nothing is timed.
+//! index type's extremes. Float kernels only; the integer compute dtypes are in
+//! `kernel_emit_int_scatter_agrees.rs`. The serial C is a correctness reference; nothing is timed.
 
-use unpopped::backend::{Backend, LowerError};
+use unpopped::backend::Backend;
 use unpopped::ir::{OobPolicy, OpDef};
 use unpopped::kernel::{KernelFn, check_kernel};
 use unpopped::kernel_lift::{lift_gather_opdef, lift_scatter_opdef};
@@ -214,17 +213,10 @@ fn scatters_agree_for_assign_and_add() {
 }
 
 #[test]
-fn integer_compute_is_a_typed_decline() {
-    // Control: the float scatter lowers. The integer one is refused with the typed decline, not
-    // spelled by default and not a panic.
+fn the_float_gather_and_scatter_lower() {
+    // The integer compute dtypes are in `kernel_emit_int_scatter_agrees.rs`.
     let (k, _) = scatter(FULL0, true, F32, I32);
     assert!(CpuC.lower_kernel(&k).is_ok());
-    let op = OpDef::scatter_add("s", &[I32], 0, I32);
-    let ik = lift_scatter_opdef(&op, I32, 2).expect("the integer scatter lifts");
-    assert!(matches!(
-        CpuC.lower_kernel(&ik),
-        Err(LowerError::UnsupportedKernel { .. })
-    ));
 }
 
 /// What the C reports for `k` on `a` once `from` is replaced by `to` in its source (the anchor

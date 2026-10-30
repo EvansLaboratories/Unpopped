@@ -24,6 +24,7 @@ pub(crate) fn ctype(t: ElementKind) -> &'static str {
         ElementKind::F64 => "double",
         ElementKind::I64 => "long long",
         ElementKind::U32 => "unsigned int",
+        ElementKind::U64 => "unsigned long long",
         _ => "int",
     }
 }
@@ -31,7 +32,7 @@ pub(crate) fn ctype(t: ElementKind) -> &'static str {
 /// Bytes per element of the dtypes the driver binds.
 pub(crate) fn width(t: ElementKind) -> usize {
     match t {
-        ElementKind::F64 | ElementKind::I64 => 8,
+        ElementKind::F64 | ElementKind::I64 | ElementKind::U64 => 8,
         _ => 4,
     }
 }

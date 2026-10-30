@@ -13,6 +13,7 @@ pub(crate) fn values(t: ElementKind, n: usize, seed: u32) -> Vec<u8> {
             match t {
                 ElementKind::F64 => x.to_le_bytes().to_vec(),
                 ElementKind::F32 => (x as f32).to_le_bytes().to_vec(),
+                ElementKind::I64 | ElementKind::U64 => (x as i64).to_le_bytes().to_vec(),
                 _ => (x as i32).to_le_bytes().to_vec(),
             }
         })
