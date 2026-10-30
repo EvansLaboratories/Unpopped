@@ -227,3 +227,7 @@ NOT legal advice; NOT a freedom-to-operate opinion. Method: Google Patents pages
 | US20100122264 (Intel, active per Google) | shared memory semantics between a CPU and a GPU, pointers passed and data structures shared as is | a CPU/GPU shared address space; the interpreter and emitters pass no pointers | outside as read |
 
 Limits: US12412230 and WO2013070636 claim text came through the tool's excerpting; US10726606 claim 1 excerpt omits connecting clauses. The conclusions rest on elements named as absent, which are each absent from the design. No verdict beyond "outside as read" is offered.
+
+#### Note, 0.33.0: U3 row 3, declared resource map and `Frontend` constructor (2026-10-29)
+
+New surface is a caller-supplied description of a kernel's buffers and `Params` block, name resolution through it, and a provenance flag (declared or inferred); plus a constructor for an existing descriptor type. No variant selection, no address-space qualifier, no graphics operation, no new IR leaf. Hits 19 and 20 therefore stay as item 4 above says: **not covered, to be read before U3 build row 4 (scopes and memory spaces)**. Not a new claim-shaped surface; no new read taken in this note.

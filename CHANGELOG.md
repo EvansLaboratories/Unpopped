@@ -15,11 +15,28 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## `0.32.26` — docs: U3 row 4 design note, execution scopes and memory spaces
+## `0.33.0` — docs: U3 row 4 design note, execution scopes and memory spaces
 
 `docs/u3-row4-scopes-and-memory-spaces.md`: one `ScalarExpr::Exec` leaf, `LaunchShape`, `Place::Alloc` arrays (no pointer values), `Stmt::Barrier` with a conservative uniformity rule, and the per-thread driver, as one breaking increment (0.33.0). Design only; no code. The barrier-uniformity check (D-R4-5) is conservative and will reject some correct programs; the cases are listed in the note for a later relaxation row.
 
 `SECURITY.md` added with the supported-versions text: the latest line gets security fixes, an older line only when the backport is small, no period promised. Lines 0.25.x-0.32.x are not supported by default under it.
+
+## `0.33.0` — feat (BREAKING): `Frontend` is `#[non_exhaustive]`; the declared `ResourceMap` and the `lift_*_with` entry points (U3 row 3, #113)
+
+**Breaking:** `convert::Frontend` is now `#[non_exhaustive]`, so a struct literal no longer compiles outside this crate. Build one with the new `const fn Frontend::new(name, kernel_marker, residue, out_name, in_prefix, parse)` (today's six fields, in order); `SLANG` is unchanged. **Migration:** Baracuda's `baracuda-cuda-parse` `CUDA` const (`Frontend { .. }` at `lib.rs:72`) becomes one `Frontend::new(..)` call. Fuel builds no `Frontend` (a grep of `fuel/crates` finds none).
+
+**Additive:** `resource_map::{ResourceMap, DeclaredBuffer, ResourceMapError}`; `convert::{lift_elementwise_with, lift_reduction_with, lift_scan_with, lift_with}` taking `Option<&ResourceMap>` (the four existing `lift_*` keep their signatures and call them with `None`); `LiftProvenance { Declared, Inferred }`; `LiftError::{UndeclaredResource, BadResourceMap}` (`LiftError` was already `#[non_exhaustive]`, both map to `UnrecognizedButExpressible`). With a map, the output is the one `Write`/`ReadWrite` buffer, operand `K` is the `K`th `Read` buffer in declaration order whatever the source calls it, and a declared `Params` field is `ScalarExpr::Param(K)`; a name the map does not declare is `UndeclaredResource`, never a fallback to inference. `Lifted` gains `provenance` and `resources` and becomes `#[non_exhaustive]` (a grep of `baracuda/crates` for `Lifted {` finds no consumer literal).
+
+**Migration note for the two consumers (PM requirement c):** no change to `ElementKind`, `OperandDesc`, `ArchSku` or `ScalarExpr` (`git diff 4b5bedc -- crates/unpopped/src/ir.rs crates/unpopped-vocab/src` is empty), so Fuel's contact is untouched and Baracuda needs no new `ScalarExpr` arm or typed decline from this row; row 4 carries the new leaves. No array members exist in Fuel's measured corpus (147 kernels, 635 `Params` fields, none array, vector or nested), so std140 and scalar layout agree today; `ParamField` cannot represent one, a limit stated for future corpora. Tests: `tests/resource_map_lift.rs` (9). Mutation-checked, each killed by named tests: operand index reversed (3 tests), provenance hard-coded `Declared` (2), the undeclared-name branch replaced by fallback (2), `ResourceMap::check` skipped (1); `position` to `rposition` is an equivalent mutant (names are unique) and was replaced by the reversal. Proposed number; the PM allocates (0.33.0 first of the 0.33.x release, row 4 follows as 0.33.1).
+
+
+## `0.32.27` — docs: the U3 row 3 design note, the resource map and the `Frontend` change (#113)
+
+`docs/u3-row3-resource-map-and-frontend.md`, docs only, no code: `Frontend` goes `#[non_exhaustive]` with a `const fn new`; a per-call `ResourceMap` (buffers plus a `Params` layout whose `LayoutRule` has no default) enters through `*_with` siblings of the four `lift_*` entry points, which keep their signatures; `Lifted` records `Declared` or `Inferred`; the layout rule is data in the map, not a `Frontend` field. Names no change to `ElementKind`, `OperandDesc`, `ArchSku` or `ScalarExpr`. The PM's rulings on its open questions are in its section 6. Proposed number; the PM allocates.
+
+## `0.32.25` — test: runtime base offsets on the gather and scatter lifts (U2, #113)
+
+`tests/kernel_gather_scatter_offset_agrees.rs`: a gather and a scatter-add with `BaseOffset::Runtime` on every operand agree with the oracle on offset, junk-padded buffers, leave the padding untouched, and disagree once any one input's offset is dropped. Test and docs only; no lift change (the offset is the argument buffer's `base_offset`, so the lifted kernels were already offset-free).
 
 ## `0.32.24` — feat (additive): `bincount` lifts (U2, #113)
 
