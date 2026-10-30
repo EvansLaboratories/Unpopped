@@ -1293,14 +1293,15 @@ fn packed_decline() -> Spelling {
     })
 }
 
-/// The decline for a kernel-layer `Local` leaf: it has meaning only inside a
+/// The decline for a kernel-layer `Local` or `Exec` leaf (`leaf` names it): it has meaning only inside a
 /// `kernel::KernelFn`, which no emitter receives yet, and the plan gate rejects an `OpDef`
 /// body containing one, so reaching it means a hand-built body skipped the gate.
-fn local_decline() -> Spelling {
+fn local_decline(leaf: &str) -> Spelling {
     Spelling::Declined(Decline::UnsupportedOp {
         op: DeclinedOp::Kernel,
-        why: "a kernel-layer Local reached an emitter; the kernel layer has no lowering seam yet"
-            .to_string(),
+        why: format!(
+            "a kernel-layer {leaf} reached an emitter; the kernel layer has no lowering seam yet"
+        ),
     })
 }
 
@@ -1530,7 +1531,8 @@ pub fn lower_expr(e: &ScalarExpr, lo: &Lowering<'_>) -> Result<Spelling, LowerEr
         ScalarExpr::Pack(_) | ScalarExpr::Extract(..) | ScalarExpr::BitcastPacked(..) => {
             return Ok(packed_decline());
         }
-        ScalarExpr::Local(_) => return Ok(local_decline()),
+        ScalarExpr::Local(_) => return Ok(local_decline("Local")),
+        ScalarExpr::Exec(_) => return Ok(local_decline("Exec")),
         ScalarExpr::Qualified(x, n) => {
             let Some((op, kids)) = QualOp::of(x) else {
                 return Ok(qualified_child_decline(*n));
@@ -1797,7 +1799,8 @@ fn lower_node(
         DagNode::Pack(_) | DagNode::Extract(..) | DagNode::BitcastPacked(..) => {
             return Ok(packed_decline());
         }
-        DagNode::Local(_) => return Ok(local_decline()),
+        DagNode::Local(_) => return Ok(local_decline("Local")),
+        DagNode::Exec(_) => return Ok(local_decline("Exec")),
         DagNode::Qualified(x, n) => {
             let Some((op, kids)) = QualOp::of_node(dag.node(x)) else {
                 return Ok(qualified_child_decline(n));

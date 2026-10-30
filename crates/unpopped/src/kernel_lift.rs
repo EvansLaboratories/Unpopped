@@ -237,6 +237,7 @@ fn leaves_ok(e: &ScalarExpr) -> Result<(), LiftDecline> {
         ScalarExpr::Param(_) => return Err(LiftDecline::UnsupportedLeaf("Param")),
         ScalarExpr::Reduced(_) => return Err(LiftDecline::UnsupportedLeaf("Reduced")),
         ScalarExpr::Local(_) => return Err(LiftDecline::UnsupportedLeaf("Local")),
+        ScalarExpr::Exec(_) => return Err(LiftDecline::UnsupportedLeaf("Exec")),
         _ => {}
     }
     map_children(e, &mut |c| leaves_ok(c).map(|()| c.clone())).map(|_| ())

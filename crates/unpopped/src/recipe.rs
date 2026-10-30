@@ -418,7 +418,8 @@ fn expr_to_recipe(e: &ScalarExpr, reduced: &[String]) -> Option<String> {
         | E::Pack(_)
         | E::Extract(..)
         | E::BitcastPacked(..)
-        | E::Local(_) => {
+        | E::Local(_)
+        | E::Exec(_) => {
             return None;
         }
         // No KISS-Ops token carries a rounding mode, ftz or an approximate form.

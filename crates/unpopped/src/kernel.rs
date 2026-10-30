@@ -10,15 +10,22 @@
 //! [`check_kernel`] is the scope and type checker. Its error for each rule is pinned by a
 //! known-bad mutation in `tests/kernel_layer.rs`, each paired with the unmutated program passing.
 //!
+//! U3 row 4 adds execution ids ([`ScalarExpr::Exec`]), a launch shape, memory-space allocations
+//! ([`Place::Alloc`]) and [`Stmt::Barrier`] (`docs/u3-row4-scopes-and-memory-spaces.md`); the checker
+//! knows them, the interpreter does not run them yet.
+//!
 //! Deliberately **not** here yet (each is named in the spec): `Stmt::Call` (needs a module type,
-//! spec unknown U-2), pointers and memory spaces (U3), the effect set (computed when a consumer
+//! spec unknown U-2), pointer values (`Place::Ptr`), the effect set (computed when a consumer
 //! asks), and any producer other than `lift_opdef`.
 
 use serde::{Deserialize, Serialize};
 use unpopped_vocab::ElementKind;
 
+pub use crate::kernel_check::check_kernel;
+
+use crate::exec::{AllocDecl, LaunchShape, Scope};
 use crate::ir::ScalarExpr;
-use crate::types::{self, Ty, TypeError};
+use crate::types::{Ty, TypeError};
 
 /// What a buffer parameter may do. Checked by [`check_kernel`] against every `Load` and `Store`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,11 +39,11 @@ pub enum BufferRole {
 }
 
 impl BufferRole {
-    const fn reads(self) -> bool {
+    pub(crate) const fn reads(self) -> bool {
         matches!(self, Self::Read | Self::ReadWrite)
     }
 
-    const fn writes(self) -> bool {
+    pub(crate) const fn writes(self) -> bool {
         matches!(self, Self::Write | Self::ReadWrite)
     }
 }
@@ -135,9 +142,9 @@ impl LocalDecl {
     }
 }
 
-/// A storage location named by **logical** coordinates: the element the operand's view
-/// (strides, broadcast, reversal) selects, as the oracle's writeback does. Pointers and memory
-/// spaces are U3's and add variants; this one keeps meaning "through the view".
+/// A storage location. `Logical` is named by **logical** coordinates: the element the operand's
+/// view (strides, broadcast, reversal) selects, as the oracle's writeback does; it keeps meaning
+/// "through the view". `Alloc` is an element of a declared array in a memory space.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Place {
@@ -147,6 +154,14 @@ pub enum Place {
         buffer: u32,
         /// One integer expression per axis.
         coords: Vec<ScalarExpr>,
+    },
+    /// The element at flat `index` of the allocation `alloc` (decision D-R4-3: arrays by id, no
+    /// pointer values).
+    Alloc {
+        /// Index into [`KernelFn::allocs`].
+        alloc: u32,
+        /// An integer expression: the flat element index.
+        index: ScalarExpr,
     },
 }
 
@@ -222,6 +237,12 @@ pub enum Stmt {
     Continue,
     /// Leave the kernel.
     Return,
+    /// Wait until every thread of `scope` (`Subgroup` or `Block`) reaches this statement. Must not
+    /// sit under thread-divergent control (`KernelError::BarrierDivergent`).
+    Barrier {
+        /// The group that synchronizes.
+        scope: Scope,
+    },
 }
 
 /// A kernel: the program of one logical thread.
@@ -239,6 +260,12 @@ pub struct KernelFn {
     pub locals: Vec<LocalDecl>,
     /// The program.
     pub body: Block,
+    /// The launch geometry; `None` is one logical thread (the whole of U2).
+    #[serde(default)]
+    pub launch: Option<LaunchShape>,
+    /// Arrays in memory spaces, indexed by [`Place::Alloc::alloc`].
+    #[serde(default)]
+    pub allocs: Vec<AllocDecl>,
 }
 
 impl KernelFn {
@@ -257,7 +284,23 @@ impl KernelFn {
             params,
             locals,
             body,
+            launch: None,
+            allocs: Vec::new(),
         }
+    }
+
+    /// The same kernel launched with `launch`.
+    #[must_use]
+    pub fn with_launch(mut self, launch: LaunchShape) -> Self {
+        self.launch = Some(launch);
+        self
+    }
+
+    /// The same kernel with the allocations `allocs`.
+    #[must_use]
+    pub fn with_allocs(mut self, allocs: Vec<AllocDecl>) -> Self {
+        self.allocs = allocs;
+        self
     }
 }
 
@@ -327,297 +370,41 @@ pub enum KernelError {
         /// The id.
         local: u32,
     },
-}
-
-/// Per-walk state: which locals are in scope, which are protected from `Assign`.
-struct Scope {
-    in_scope: Vec<bool>,
-    ever_declared: Vec<bool>,
-    param_local: Vec<bool>,
-    counter_local: Vec<bool>,
-    tys: Vec<Ty>,
-    loop_depth: u32,
-}
-
-/// Check that `k` is well formed (`docs/ir-kernel-layer.md` section 4).
-///
-/// # Errors
-///
-/// The first [`KernelError`], walking statements in program order and each statement's
-/// expressions before its effects.
-pub fn check_kernel(k: &KernelFn) -> Result<(), KernelError> {
-    let n = k.locals.len();
-    let mut sc = Scope {
-        in_scope: vec![false; n],
-        ever_declared: vec![false; n],
-        param_local: vec![false; n],
-        counter_local: vec![false; n],
-        tys: k.locals.iter().map(|d| d.ty()).collect(),
-        loop_depth: 0,
-    };
-    for p in &k.params {
-        if let ParamKind::Scalar { ty, local } = &p.kind {
-            let i = *local as usize;
-            let Some(decl) = k.locals.get(i) else {
-                return Err(KernelError::UnknownLocal { local: *local });
-            };
-            if sc.in_scope[i] {
-                return Err(KernelError::Redeclared { local: *local });
-            }
-            if decl.ty() != Ty::Scalar(*ty) {
-                return Err(KernelError::TypeMismatch {
-                    what: "scalar parameter and its local",
-                });
-            }
-            sc.in_scope[i] = true;
-            sc.ever_declared[i] = true;
-            sc.param_local[i] = true;
-        }
-    }
-    check_block(k, &k.body, &mut sc)
-}
-
-fn check_block(k: &KernelFn, b: &Block, sc: &mut Scope) -> Result<(), KernelError> {
-    let mut declared_here: Vec<usize> = Vec::new();
-    let mut terminated = false;
-    for st in &b.0 {
-        if terminated {
-            return Err(KernelError::Unreachable);
-        }
-        terminated = check_stmt(k, st, sc, &mut declared_here)?;
-    }
-    for i in declared_here {
-        sc.in_scope[i] = false;
-    }
-    Ok(())
-}
-
-/// Check one statement; `Ok(true)` when it unconditionally leaves the block (`Break`,
-/// `Continue`, `Return`).
-fn check_stmt(
-    k: &KernelFn,
-    st: &Stmt,
-    sc: &mut Scope,
-    declared_here: &mut Vec<usize>,
-) -> Result<bool, KernelError> {
-    match st {
-        Stmt::Let { local, init } => {
-            let ty = check_expr(k, init, sc)?;
-            declare(k, *local, ty, sc, declared_here)?;
-        }
-        Stmt::Load { local, place } => check_load(k, *local, place, sc, declared_here)?,
-        Stmt::Assign { local, value } => check_assign(k, *local, value, sc)?,
-        Stmt::Store { place, value } => check_store(k, place, value, sc)?,
-        Stmt::If { cond, then, els } => {
-            scalar_cond(k, cond, sc)?;
-            check_block(k, then, sc)?;
-            check_block(k, els, sc)?;
-        }
-        Stmt::For {
-            local,
-            start,
-            end,
-            step,
-            body,
-        } => check_for(k, *local, [start, end, step], body, sc)?,
-        Stmt::While { cond, body } => {
-            scalar_cond(k, cond, sc)?;
-            in_loop(k, body, sc)?;
-        }
-        Stmt::Break | Stmt::Continue => {
-            if sc.loop_depth == 0 {
-                return Err(KernelError::BreakOutsideLoop);
-            }
-            return Ok(true);
-        }
-        Stmt::Return => return Ok(true),
-    }
-    Ok(false)
-}
-
-fn check_load(
-    k: &KernelFn,
-    local: u32,
-    place: &Place,
-    sc: &mut Scope,
-    declared_here: &mut Vec<usize>,
-) -> Result<(), KernelError> {
-    let (elem, role) = check_place(k, place, sc)?;
-    if !role.reads() {
-        let Place::Logical { buffer, .. } = place;
-        return Err(KernelError::ReadFromWriteOnly { buffer: *buffer });
-    }
-    declare(k, local, Ty::Scalar(elem), sc, declared_here)
-}
-
-fn check_store(
-    k: &KernelFn,
-    place: &Place,
-    value: &ScalarExpr,
-    sc: &Scope,
-) -> Result<(), KernelError> {
-    let (elem, role) = check_place(k, place, sc)?;
-    if !role.writes() {
-        let Place::Logical { buffer, .. } = place;
-        return Err(KernelError::WriteToReadOnly { buffer: *buffer });
-    }
-    if check_expr(k, value, sc)? != Ty::Scalar(elem) {
-        return Err(KernelError::TypeMismatch { what: "Store" });
-    }
-    Ok(())
-}
-
-fn check_assign(
-    k: &KernelFn,
-    local: u32,
-    value: &ScalarExpr,
-    sc: &Scope,
-) -> Result<(), KernelError> {
-    let ty = check_expr(k, value, sc)?;
-    use_local(k, local, sc)?;
-    let i = local as usize;
-    if sc.param_local[i] {
-        return Err(KernelError::ParamAssigned { local });
-    }
-    if sc.counter_local[i] {
-        return Err(KernelError::CounterAssigned { local });
-    }
-    if sc.tys[i] != ty {
-        return Err(KernelError::TypeMismatch { what: "Assign" });
-    }
-    Ok(())
-}
-
-/// A `For`: three integer bounds of one type, a counter declared by the loop itself, and a body
-/// that may `Break` and `Continue`.
-fn check_for(
-    k: &KernelFn,
-    local: u32,
-    bounds: [&ScalarExpr; 3],
-    body: &Block,
-    sc: &mut Scope,
-) -> Result<(), KernelError> {
-    let t0 = check_expr(k, bounds[0], sc)?;
-    let t1 = check_expr(k, bounds[1], sc)?;
-    let t2 = check_expr(k, bounds[2], sc)?;
-    let int = matches!(t0, Ty::Scalar(e) if types::int_range(e).is_some());
-    if t0 != t1 || t1 != t2 || !int {
-        return Err(KernelError::TypeMismatch { what: "For bounds" });
-    }
-    let mut counter = Vec::new();
-    declare(k, local, t0, sc, &mut counter)?;
-    sc.counter_local[local as usize] = true;
-    let r = in_loop(k, body, sc);
-    sc.counter_local[local as usize] = false;
-    sc.in_scope[local as usize] = false;
-    r
-}
-
-/// Check `body` one loop deeper.
-fn in_loop(k: &KernelFn, body: &Block, sc: &mut Scope) -> Result<(), KernelError> {
-    sc.loop_depth += 1;
-    let r = check_block(k, body, sc);
-    sc.loop_depth -= 1;
-    r
-}
-
-fn declare(
-    k: &KernelFn,
-    local: u32,
-    ty: Ty,
-    sc: &mut Scope,
-    declared_here: &mut Vec<usize>,
-) -> Result<(), KernelError> {
-    let i = local as usize;
-    if i >= k.locals.len() {
-        return Err(KernelError::UnknownLocal { local });
-    }
-    if sc.in_scope[i] {
-        return Err(KernelError::Redeclared { local });
-    }
-    if sc.tys[i] != ty {
-        return Err(KernelError::TypeMismatch {
-            what: "declaration and its local",
-        });
-    }
-    sc.in_scope[i] = true;
-    sc.ever_declared[i] = true;
-    declared_here.push(i);
-    Ok(())
-}
-
-fn use_local(k: &KernelFn, local: u32, sc: &Scope) -> Result<(), KernelError> {
-    let i = local as usize;
-    if i >= k.locals.len() {
-        return Err(KernelError::UnknownLocal { local });
-    }
-    if sc.in_scope[i] {
-        Ok(())
-    } else if sc.ever_declared[i] {
-        Err(KernelError::OutOfScope { local })
-    } else {
-        Err(KernelError::UseBeforeLet { local })
-    }
-}
-
-fn scalar_cond(k: &KernelFn, cond: &ScalarExpr, sc: &Scope) -> Result<(), KernelError> {
-    match check_expr(k, cond, sc)? {
-        Ty::Scalar(_) => Ok(()),
-        Ty::Packed(..) => Err(KernelError::TypeMismatch {
-            what: "condition (a packed value has no truth value)",
-        }),
-    }
-}
-
-fn check_place(
-    k: &KernelFn,
-    p: &Place,
-    sc: &Scope,
-) -> Result<(ElementKind, BufferRole), KernelError> {
-    let Place::Logical { buffer, coords } = p;
-    let bad = KernelError::BadPlace { buffer: *buffer };
-    let Some(Param {
-        kind: ParamKind::Buffer { elem, role, rank },
-        ..
-    }) = k.params.get(*buffer as usize)
-    else {
-        return Err(bad);
-    };
-    if rank.is_some_and(|r| usize::from(r) != coords.len()) {
-        return Err(bad);
-    }
-    for c in coords {
-        let int = matches!(check_expr(k, c, sc)?, Ty::Scalar(e) if types::int_range(e).is_some());
-        if !int {
-            return Err(bad);
-        }
-    }
-    Ok((*elem, *role))
-}
-
-/// Type an expression inside a kernel: reject intent-layer leaves, check every `Local` is in
-/// scope, then defer to [`types::infer_ty_in`] with the declared local types.
-fn check_expr(k: &KernelFn, e: &ScalarExpr, sc: &Scope) -> Result<Ty, KernelError> {
-    walk(k, e, sc)?;
-    types::infer_ty_in(e, k.compute, &sc.tys).map_err(KernelError::Type)
-}
-
-fn walk(k: &KernelFn, e: &ScalarExpr, sc: &Scope) -> Result<(), KernelError> {
-    match e {
-        ScalarExpr::Local(i) => return use_local(k, *i, sc),
-        ScalarExpr::Input(_)
-        | ScalarExpr::Param(_)
-        | ScalarExpr::Reduced(_)
-        | ScalarExpr::Coord(_)
-        | ScalarExpr::CoordInt(..) => {
-            return Err(KernelError::IntentLeaf {
-                node: types::node_name(e),
-            });
-        }
-        _ => {}
-    }
-    for x in types::operands(e) {
-        walk(k, x, sc)?;
-    }
-    Ok(())
+    /// An `Exec` leaf or a `Barrier` in a kernel whose `launch` is `None`.
+    ExecWithoutLaunch,
+    /// An `Exec` axis above 2.
+    ExecAxisOutOfRange {
+        /// The axis.
+        axis: u8,
+    },
+    /// A launch with a zero extent, or a subgroup range that is empty or starts at 0.
+    BadLaunch,
+    /// `LaneId`, `SubgroupId` or `SubgroupSize` in a launch that names no subgroup size.
+    SubgroupIdWithoutSubgroup,
+    /// An allocation declared in `MemorySpace::Global` (a global buffer is a buffer parameter).
+    AllocSpace {
+        /// The allocation index.
+        alloc: u32,
+    },
+    /// An allocation whose extent is a zero `Static`, or a `Param` that is not an integer scalar
+    /// parameter local.
+    AllocExtent {
+        /// The allocation index.
+        alloc: u32,
+    },
+    /// A `Store` to a `Constant` allocation.
+    WriteToConstant {
+        /// The allocation index.
+        alloc: u32,
+    },
+    /// A `Shared` allocation used in a kernel with no launch (shared memory is per block).
+    SharedWithoutLaunch {
+        /// The allocation index.
+        alloc: u32,
+    },
+    /// A `Barrier` whose scope is not `Subgroup` or `Block`.
+    BadBarrierScope,
+    /// A `Barrier` under control that may differ between the threads of its scope. The rule is
+    /// conservative (decision D-R4-5): it rejects some uniform programs.
+    BarrierDivergent,
 }

@@ -15,6 +15,20 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.34.0` — feat (BREAKING): execution ids, launch shape, memory-space allocations and `Barrier` in the kernel layer (U3 row 4, PR 1: types and checker)
+
+**Breaking:** `ir::ScalarExpr` and `ir::DagNode`/`DagKey` gain one variant, `Exec(exec::ExecId)` (decision D-R4-1: one leaf, a `#[non_exhaustive]` payload), and `kernel::Stmt` gains `Barrier { scope }`. Every exhaustive `match` on them needs an arm (inside this workspace: `backend`, `cfamily`, `contract`, `jit`, `optimize`, `oracle`, `pattern`, `plan`, `recipe`, `types`, `kernel_lift`, `unpopped-slang`). An `Exec` leaf is opaque like `Local`: never an `Input`, never folded, typed `U32` (D-R4-2), refused by the plan gate (`types::has_local` now covers it), declined by every `Backend` with a typed decline, and declined by the OpDef lifts (`UnsupportedLeaf("Exec")`).
+
+**Additive:** new module `exec` (`Scope`, `ExecId`, `LaunchShape`, `SubgroupSize`, `MemorySpace`, `Extent`, `AllocDecl`); `KernelFn::{launch, allocs}` (both `#[serde(default)]`; `KernelFn::new` sets them empty, so every existing producer is unchanged) with `with_launch`/`with_allocs`; `kernel::Place::Alloc { alloc, index }` (arrays by id, no pointer values: D-R4-3); eleven `KernelError` variants (`ExecWithoutLaunch`, `ExecAxisOutOfRange`, `BadLaunch`, `SubgroupIdWithoutSubgroup`, `AllocSpace`, `AllocExtent`, `WriteToConstant`, `SharedWithoutLaunch`, `BadBarrierScope`, `BarrierDivergent`; a `Barrier` in an unlaunched kernel is `ExecWithoutLaunch`). `check_kernel` moved to a private `kernel_check` module and is re-exported from `kernel` unchanged.
+
+**D-R4-5 over-rejects, on purpose.** `BarrierDivergent` is a conservative taint rule (every `Exec` read and every global, shared or private load is divergent; control and loop-carried flow are followed to a fixed point). It never accepts a divergent barrier and refuses some uniform programs; the four the design note names are pinned in `tests/kernel_barrier.rs` as `rejected_1..4`, so a relaxation is a deliberate test flip.
+
+**Not run yet.** The interpreter traps `KernelTrap::Unsupported` (by name) on a kernel with a launch or allocations; `run_launch` is PR 2 and 3 of the row. A kernel can *check* and not *run* for now.
+
+**Migration note for the two consumers:** re-vendor for the two new variants; the leaf list is `ScalarExpr::Exec(ExecId)`, `DagNode::Exec`, `Stmt::Barrier`, `Place::Alloc`, `KernelFn.launch/allocs`. No change to `ElementKind`, `OperandDesc`, `ArchSku`, `Frontend` or `Backend`.
+
+Tests: `tests/kernel_exec.rs` (every checker rule with a one-change mutation and a control) and `tests/kernel_barrier.rs`; each rule was also mutated in the source and caught.
+
 ## `0.33.1` — docs: U3 row 4 design note, execution scopes and memory spaces
 
 `docs/u3-row4-scopes-and-memory-spaces.md`: one `ScalarExpr::Exec` leaf, `LaunchShape`, `Place::Alloc` arrays (no pointer values), `Stmt::Barrier` with a conservative uniformity rule, and the per-thread driver, as one breaking increment (0.33.0). Design only; no code. The barrier-uniformity check (D-R4-5) is conservative and will reject some correct programs; the cases are listed in the note for a later relaxation row.

@@ -1579,6 +1579,9 @@ fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
         ScalarExpr::Local(_) => panic!(
             "oracle: a kernel-layer Local outside a kernel (the plan gate rejects an OpDef body containing one)"
         ),
+        ScalarExpr::Exec(_) => panic!(
+            "oracle: a kernel-layer Exec outside a kernel (the plan gate rejects an OpDef body containing one)"
+        ),
         ScalarExpr::Input(i) => (ev.leaf)(*i),
         ScalarExpr::Const(v) => Val::Float(*v),
         ScalarExpr::Param(i) => Val::Float(ev.params[*i as usize]),
@@ -3512,7 +3515,8 @@ fn arith_steps(e: &ScalarExpr) -> u32 {
         | ScalarExpr::Coord(_)
         | ScalarExpr::CoordInt(..)
         | ScalarExpr::ConstInt(..)
-        | ScalarExpr::Local(_) => 0,
+        | ScalarExpr::Local(_)
+        | ScalarExpr::Exec(_) => 0,
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)

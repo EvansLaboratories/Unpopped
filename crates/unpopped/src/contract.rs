@@ -1242,7 +1242,8 @@ fn scan_params(e: &ScalarExpr, out: &mut Vec<u8>) {
         | ScalarExpr::Coord(_)
         | ScalarExpr::CoordInt(..)
         | ScalarExpr::ConstInt(..)
-        | ScalarExpr::Local(_) => {}
+        | ScalarExpr::Local(_)
+        | ScalarExpr::Exec(_) => {}
         ScalarExpr::Unary(_, x) => scan_params(x, out),
         ScalarExpr::Cast(x, _)
         | ScalarExpr::Bitcast(x, _)
@@ -1397,7 +1398,8 @@ fn is_exact_on_every_target(e: &ScalarExpr) -> bool {
         | ScalarExpr::Coord(_)
         | ScalarExpr::CoordInt(..)
         | ScalarExpr::ConstInt(..)
-        | ScalarExpr::Local(_) => true,
+        | ScalarExpr::Local(_)
+        | ScalarExpr::Exec(_) => true,
         ScalarExpr::Binary(op, a, b) => {
             op.is_int_only() && is_exact_on_every_target(a) && is_exact_on_every_target(b)
         }
@@ -1533,7 +1535,8 @@ fn ulp_sum(e: &ScalarExpr) -> f64 {
         | ScalarExpr::Coord(_)
         | ScalarExpr::CoordInt(..)
         | ScalarExpr::ConstInt(..)
-        | ScalarExpr::Local(_) => 0.0,
+        | ScalarExpr::Local(_)
+        | ScalarExpr::Exec(_) => 0.0,
         ScalarExpr::Unary(op, x) => ulp_sum(x) + unary_ulp(*op),
         ScalarExpr::Binary(op, a, b) => ulp_sum(a) + ulp_sum(b) + binary_ulp(*op),
         ScalarExpr::Add(a, b)
@@ -1703,7 +1706,8 @@ pub(crate) fn expr_contains_cmp(e: &ScalarExpr) -> bool {
         | ScalarExpr::Coord(_)
         | ScalarExpr::CoordInt(..)
         | ScalarExpr::ConstInt(..)
-        | ScalarExpr::Local(_) => false,
+        | ScalarExpr::Local(_)
+        | ScalarExpr::Exec(_) => false,
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
@@ -1753,7 +1757,8 @@ fn expr_contains_select(e: &ScalarExpr) -> bool {
         | ScalarExpr::Coord(_)
         | ScalarExpr::CoordInt(..)
         | ScalarExpr::ConstInt(..)
-        | ScalarExpr::Local(_) => false,
+        | ScalarExpr::Local(_)
+        | ScalarExpr::Exec(_) => false,
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)

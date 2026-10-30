@@ -311,6 +311,10 @@ pub enum ScalarExpr {
     /// local declarations, so [`crate::types::infer`] refuses it (`TypeError::LocalOutsideKernel`)
     /// and the plan gate declines any `OpDef` body that contains one.
     Local(u32),
+    /// An execution id of the launch (`docs/u3-row4-scopes-and-memory-spaces.md` section 2): type
+    /// `U32`. A leaf with meaning only inside a `crate::kernel::KernelFn` that has a launch shape;
+    /// opaque to the optimizer, refused by [`crate::types::infer`] and the plan gate like `Local`.
+    Exec(crate::exec::ExecId),
     /// A **packed value** of 2 or 4 scalar lanes (`half2`/`float4`-style), lane `i` being
     /// child `i` (`docs/ir-typed-expressions.md` section 9). Children share one scalar type;
     /// a lane is never itself packed. Only [`ScalarExpr::Extract`] consumes it in this
@@ -1270,6 +1274,8 @@ pub enum DagNode {
     BitcastPacked(NodeId, ElementKind, u8),
     /// A kernel-layer local read ([`ScalarExpr::Local`]). (Leaf.)
     Local(u32),
+    /// A kernel-layer execution id ([`ScalarExpr::Exec`]). (Leaf.)
+    Exec(crate::exec::ExecId),
 }
 
 impl DagNode {
@@ -1443,6 +1449,7 @@ impl ExprDag {
             DagNode::CoordInt(d, t) => ScalarExpr::CoordInt(d, t),
             DagNode::ConstInt(v, t) => ScalarExpr::ConstInt(v, t),
             DagNode::Local(i) => ScalarExpr::Local(i),
+            DagNode::Exec(id) => ScalarExpr::Exec(id),
             DagNode::Add(a, b) => {
                 ScalarExpr::Add(Box::new(self.rebuild(a)), Box::new(self.rebuild(b)))
             }
@@ -1512,6 +1519,7 @@ enum DagKey {
     Extract(NodeId, u8),
     BitcastPacked(NodeId, ElementKind, u8),
     Local(u32),
+    Exec(crate::exec::ExecId),
 }
 
 impl DagKey {
@@ -1528,6 +1536,7 @@ impl DagKey {
             DagNode::CoordInt(d, t) => DagKey::CoordInt(d, t),
             DagNode::ConstInt(v, t) => DagKey::ConstInt(v, t),
             DagNode::Local(i) => DagKey::Local(i),
+            DagNode::Exec(id) => DagKey::Exec(id),
             DagNode::Add(a, b) => DagKey::Add(a, b),
             DagNode::Sub(a, b) => DagKey::Sub(a, b),
             DagNode::Mul(a, b) => DagKey::Mul(a, b),
@@ -1560,6 +1569,7 @@ impl DagBuilder {
             ScalarExpr::CoordInt(d, t) => DagNode::CoordInt(*d, *t),
             ScalarExpr::ConstInt(v, t) => DagNode::ConstInt(*v, *t),
             ScalarExpr::Local(i) => DagNode::Local(*i),
+            ScalarExpr::Exec(id) => DagNode::Exec(*id),
             ScalarExpr::Add(a, b) => {
                 let (a, b) = (self.intern(a), self.intern(b));
                 DagNode::Add(a, b)
@@ -1648,7 +1658,8 @@ fn node_children(n: &DagNode) -> Vec<NodeId> {
         | DagNode::Coord(_)
         | DagNode::CoordInt(..)
         | DagNode::ConstInt(..)
-        | DagNode::Local(..) => Vec::new(),
+        | DagNode::Local(..)
+        | DagNode::Exec(..) => Vec::new(),
         DagNode::Unary(_, x)
         | DagNode::Cast(x, _)
         | DagNode::Bitcast(x, _)
