@@ -19,6 +19,8 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 `docs/u3-row4-scopes-and-memory-spaces.md`: one `ScalarExpr::Exec` leaf, `LaunchShape`, `Place::Alloc` arrays (no pointer values), `Stmt::Barrier` with a conservative uniformity rule, and the per-thread driver, as one breaking increment (0.33.0). Design only; no code. The barrier-uniformity check (D-R4-5) is conservative and will reject some correct programs; the cases are listed in the note for a later relaxation row.
 
+`SECURITY.md` added with the supported-versions text: the latest line gets security fixes, an older line only when the backport is small, no period promised. Lines 0.25.x-0.32.x are not supported by default under it.
+
 ## `0.32.24` — feat (additive): `bincount` lifts (U2, #113)
 
 `lift_scatter_opdef` now lifts `OpDef::bincount`, the one scatter whose output dtype is not its compute dtype: one integer input that is also its own index, a constant body, and an `I32` count destination, lifted as `out[x[i]] += ConstInt(c)` at the count dtype (`tests/kernel_bincount_agrees.rs`, 3: `I32` and `I64` data against the oracle, the in-range total and the unhit bin as controls, and the declines). Any other per-output dtype declines (`"a per-output dtype that is not a count"`: a non-integer constant, a non-add combine, a float count). Writing the test found the oracle bug fixed in 0.32.20 (`bincount` counted only the first `bins` elements of its input). Mutation-checked, each killed by a named test: the increment off by one, the add-only guard removed, the destination local typed as the compute dtype, and the count path bypassed. No trait or struct shape change.
