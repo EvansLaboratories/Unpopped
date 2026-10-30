@@ -15,7 +15,7 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## `0.33.1` — feat (BREAKING): execution ids, launch shape, memory-space allocations and `Barrier` in the kernel layer (U3 row 4, PR 1: types and checker)
+## `0.34.0` — feat (BREAKING): execution ids, launch shape, memory-space allocations and `Barrier` in the kernel layer (U3 row 4, PR 1: types and checker)
 
 **Breaking:** `ir::ScalarExpr` and `ir::DagNode`/`DagKey` gain one variant, `Exec(exec::ExecId)` (decision D-R4-1: one leaf, a `#[non_exhaustive]` payload), and `kernel::Stmt` gains `Barrier { scope }`. Every exhaustive `match` on them needs an arm (inside this workspace: `backend`, `cfamily`, `contract`, `jit`, `optimize`, `oracle`, `pattern`, `plan`, `recipe`, `types`, `kernel_lift`, `unpopped-slang`). An `Exec` leaf is opaque like `Local`: never an `Input`, never folded, typed `U32` (D-R4-2), refused by the plan gate (`types::has_local` now covers it), declined by every `Backend` with a typed decline, and declined by the OpDef lifts (`UnsupportedLeaf("Exec")`).
 
