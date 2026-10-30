@@ -231,3 +231,8 @@ Limits: US12412230 and WO2013070636 claim text came through the tool's excerptin
 #### Note, 0.33.0: U3 row 3, declared resource map and `Frontend` constructor (2026-10-29)
 
 New surface is a caller-supplied description of a kernel's buffers and `Params` block, name resolution through it, and a provenance flag (declared or inferred); plus a constructor for an existing descriptor type. No variant selection, no address-space qualifier, no graphics operation, no new IR leaf. Hits 19 and 20 therefore stay as item 4 above says: **not covered, to be read before U3 build row 4 (scopes and memory spaces)**. Not a new claim-shaped surface; no new read taken in this note.
+
+
+#### Note, 0.34.0: U3 row 4 PR 1, execution ids, launch shape, memory-space arrays and `Barrier` (2026-10-30)
+
+The surface built is what the claim read above (2026-10-29) was taken against: one `Exec` leaf, a launch shape, arrays named by allocation id (no pointer values, no `Place::Ptr`), a conservative barrier-uniformity check, and no variant selection, graphics pipeline, snapshot replay or CPU/GPU shared address space. Scope did not grow past the design, so that read stands and no new read was taken. Hits 19 and 20 are covered for this surface; **re-read WO2013070636 if `Place::Ptr` is ever added** (unchanged from the table).
