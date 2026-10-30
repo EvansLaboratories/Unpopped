@@ -18,9 +18,12 @@ use unpopped_vocab::ElementKind;
 
 #[path = "support/cc.rs"]
 mod cc;
+#[path = "support/kernel_data.rs"]
+mod kernel_data;
 #[path = "support/kernel_run.rs"]
 mod kernel_run;
-use kernel_run::{F32, F64, agree, agree_within, run_c_mutated, ulps, zeroed};
+use kernel_data::zeroed;
+use kernel_run::{F32, F64, agree, agree_within, run_c_mutated, ulps};
 
 const VALUES: [f64; 13] = [
     1.0e8, 1.0, -1.0e8, 0.5, 3.25, -2.0, 7.0, 0.1, -0.75, 12.0, -5.5, 0.3, 2.0,

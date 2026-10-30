@@ -10,6 +10,8 @@ uses external parsers and emitters. Parsers read in a kernel language and
 convert it to Unpopped's IR. Emitters write out a kernel language from
 Unpopped's IR. Unpopped is supposed to only be the piece in the middle."*
 
+> **Update 2026-10-30 (CireSnave, relayed verbatim by the PM): ownership is now assigned for SPIR-V, GLSL, HLSL, WGSL, HIP C++ and SYCL/DPC++; see section 9. This supersedes the "Vulkane is NOT a stakeholder" finding below (that finding measured what Vulkane contained on 2026-09-24, not who should own a target) and the "Metal / GLSL: Fuel is the only candidate" rows.**
+
 ## 1. Inventory: every parser and emitter that exists today
 
 ### Emit side — already split (measured, not re-litigated)
@@ -217,3 +219,18 @@ This is a proposal for the gate; no registry code has been written.
   claim about the two reference emitters (not yet fixed in this doc's commit —
   flagged for the same PR that acts on this gate, since the PM asked for it
   fixed "while you are in there").
+
+## 9. Ownership update, 2026-10-30
+
+CireSnave, 2026-10-30, as relayed by the PM (the relay ends in an ellipsis; the part after "backend maintainer" was not relayed): *"Vulkane should own SPIR-V and create a parser and emitter. HIP C++ should be owned by Rockfish and Rockfish should write the parser and emitter for that. Bonefish should own SYCL/DPC++ and create the parser and emitter for that. Vulkane should own GLSL, HLSL, and WGSL and create the parsers and emitters for those. The Metal Shading Language needs a backend maintainer..."*
+
+| Target language | Owner | Parser and emitter written by | Status |
+|---|---|---|---|
+| SPIR-V | Vulkane | Vulkane | assigned 2026-10-30 |
+| GLSL, HLSL, WGSL | Vulkane | Vulkane | assigned 2026-10-30 |
+| HIP C++ | Rockfish (new project; crate reserved, lane not started) | Rockfish | assigned 2026-10-30 |
+| SYCL / DPC++ | Bonefish (new project; crate reserved, lane not started) | Bonefish | assigned 2026-10-30 |
+| Metal Shading Language | **open: needs a backend maintainer** | none yet | CireSnave: "needs a backend maintainer" |
+| Slang | **open: Fuel or another owner, CireSnave's call** | | unchanged |
+
+Unpopped holds neither the parser nor the emitter for any target above; it keeps the IR, the traits and the two reference emitters (`unpopped-cpu-c`, `unpopped-slang`). The IR-union work (ROADMAP I*) is unchanged by this. Recorded here without a code change.
