@@ -5,7 +5,7 @@
 //! Each trap has a program that raises it and its nearest legal variant that does not, so a test
 //! goes red if the check is deleted, not merely if the interpreter breaks.
 
-use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
+use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace};
 use unpopped::ir::ScalarExpr;
 use unpopped::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 use unpopped::oracle::TypedBuffer;
@@ -421,18 +421,7 @@ fn run_launch_needs_a_launch_and_run_kernel_refuses_one() {
 }
 
 #[test]
-fn a_barrier_and_a_constant_read_are_declined_by_name() {
-    let barrier = kernel(
-        vec![Stmt::Barrier {
-            scope: Scope::Block,
-        }],
-        vec![],
-        launch(1, 1),
-    );
-    assert!(matches!(
-        run_launch(&barrier, &mut args(1)),
-        Err(KernelTrap::Unsupported(m)) if m.contains("Barrier")
-    ));
+fn a_constant_read_is_declined_by_name() {
     let constant = kernel(
         vec![Stmt::Load {
             local: Y,

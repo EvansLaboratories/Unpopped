@@ -19,7 +19,7 @@
 //! * Anything else (a packed value, an integer operation outside the subset above, a float
 //!   expression that reads a non-compute local) is [`KernelTrap::Unsupported`], never a guess.
 
-use super::kernel_launch::ThreadCtx;
+use super::kernel_mem::ThreadCtx;
 use super::{
     Eval, TypedBuffer, Val, eval, int_val, panic_reduced, raw_to_i128, read_elem, store_val,
 };
@@ -79,6 +79,9 @@ pub enum KernelTrap {
         /// The allocation index.
         alloc: u32,
     },
+    /// Threads of one barrier's scope did not all reach the same barrier: one finished while
+    /// peers waited, or they waited at different barriers and none could be released.
+    BarrierMismatch,
     /// Two threads touched one element with no ordering between them and at least one wrote it:
     /// a store racing a store, or a read of another thread's store.
     DataRace,
@@ -94,9 +97,9 @@ enum Flow {
 pub(super) struct Machine<'a> {
     pub(super) k: &'a KernelFn,
     pub(super) local_tys: Vec<Ty>,
-    locals: Vec<Option<Val>>,
+    pub(super) locals: Vec<Option<Val>>,
     args: &'a mut [KernelArg],
-    steps: u64,
+    pub(super) steps: u64,
     /// Present only under `run_launch`: which thread this is, and the memory it shares.
     pub(super) ctx: Option<ThreadCtx<'a>>,
 }
@@ -142,7 +145,7 @@ impl<'a> Machine<'a> {
         self.exec_block(&k.body).map(|_| ())
     }
 
-    fn bind_args(&mut self) -> Result<(), KernelTrap> {
+    pub(super) fn bind_args(&mut self) -> Result<(), KernelTrap> {
         for (p, a) in self.k.params.iter().zip(self.args.iter()) {
             match (&p.kind, a) {
                 (ParamKind::Buffer { elem, .. }, KernelArg::Buffer(b)) if b.dtype == *elem => {}
@@ -166,7 +169,7 @@ impl<'a> Machine<'a> {
         Ok(())
     }
 
-    fn tick(&mut self) -> Result<(), KernelTrap> {
+    pub(super) fn tick(&mut self) -> Result<(), KernelTrap> {
         self.steps += 1;
         if self.steps > STEP_LIMIT {
             Err(KernelTrap::StepLimit)
@@ -188,21 +191,8 @@ impl<'a> Machine<'a> {
 
     fn exec_stmt(&mut self, st: &Stmt) -> Result<Flow, KernelTrap> {
         match st {
-            Stmt::Let { local, init } => {
-                let v = self.eval_expr(init)?;
-                self.locals[*local as usize] = Some(v);
-            }
-            Stmt::Load { local, place } => {
-                let v = self.load(place)?;
-                self.locals[*local as usize] = Some(v);
-            }
-            Stmt::Assign { local, value } => {
-                let v = self.eval_expr(value)?;
-                self.locals[*local as usize] = Some(v);
-            }
-            Stmt::Store { place, value } => {
-                let v = self.eval_expr(value)?;
-                self.store(place, v)?;
+            Stmt::Let { .. } | Stmt::Load { .. } | Stmt::Assign { .. } | Stmt::Store { .. } => {
+                self.exec_simple(st)?;
             }
             Stmt::If { cond, then, els } => {
                 let taken = self.truthy(cond)?;
@@ -228,9 +218,35 @@ impl<'a> Machine<'a> {
             Stmt::Break => return Ok(Flow::Break),
             Stmt::Continue => return Ok(Flow::Continue),
             Stmt::Return => return Ok(Flow::Return),
-            Stmt::Barrier { .. } => return Err(KernelTrap::Unsupported("Barrier (U3 row 4 PR 3)")),
+            Stmt::Barrier { .. } => {
+                return Err(KernelTrap::Unsupported("Barrier (run_launch runs it)"));
+            }
         }
         Ok(Flow::Next)
+    }
+
+    /// A statement with no control flow: shared by the recursive evaluator and the resumable one.
+    pub(super) fn exec_simple(&mut self, st: &Stmt) -> Result<(), KernelTrap> {
+        match st {
+            Stmt::Let { local, init } => {
+                let v = self.eval_expr(init)?;
+                self.locals[*local as usize] = Some(v);
+            }
+            Stmt::Load { local, place } => {
+                let v = self.load(place)?;
+                self.locals[*local as usize] = Some(v);
+            }
+            Stmt::Assign { local, value } => {
+                let v = self.eval_expr(value)?;
+                self.locals[*local as usize] = Some(v);
+            }
+            Stmt::Store { place, value } => {
+                let v = self.eval_expr(value)?;
+                self.store(place, v)?;
+            }
+            _ => unreachable!("exec_simple is called for straight-line statements only"),
+        }
+        Ok(())
     }
 
     /// The three bounds are read once, before the first pass; the counter is a local the body
@@ -269,7 +285,7 @@ impl<'a> Machine<'a> {
         Ok(Flow::Next)
     }
 
-    fn truthy(&mut self, cond: &ScalarExpr) -> Result<bool, KernelTrap> {
+    pub(super) fn truthy(&mut self, cond: &ScalarExpr) -> Result<bool, KernelTrap> {
         Ok(match self.eval_expr(cond)? {
             Val::Raw(b, dt) if types::int_range(dt).is_some() => raw_to_i128(b, dt) != 0,
             v => super::round_to_compute(v.f64(), self.k.compute) != 0.0,
