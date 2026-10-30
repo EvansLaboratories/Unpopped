@@ -1,7 +1,7 @@
 [package]
 name = "unpopped-slang"
 version = "0.34.12"
-description = "The Slang compute-shader emitter for Unpopped, and the first idiomatically non-C-family one: HLSL overloaded intrinsics rather than C's suffixed math functions, `StructuredBuffer` operands, and a `[numthreads]` entry. It exists as much to shake C-shaped assumptions out of the neutral seam as to serve Slang — a backend that cannot reuse the C spellers is what proves the seam is a seam."
+description = "DEPRECATED: superseded by vulkane-slang-emit (Vulkane owns Slang). The Slang compute-shader emitter for Unpopped, and the first idiomatically non-C-family one: HLSL overloaded intrinsics rather than C's suffixed math functions, `StructuredBuffer` operands, and a `[numthreads]` entry. It exists as much to shake C-shaped assumptions out of the neutral seam as to serve Slang — a backend that cannot reuse the C spellers is what proves the seam is a seam."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -12,6 +12,9 @@ keywords = ["kernel", "codegen", "compiler", "slang", "shader"]
 categories = ["compilers", "development-tools", "graphics"]
 # License texts duplicated into the crate directory so they ship in the published
 # tarball; see the `unpopped` manifest for why.
+
+[badges]
+maintenance = { status = "deprecated" }
 
 [features]
 # Lift emitted Slang back to the IR — the residue round-trip contract the "one IR,
