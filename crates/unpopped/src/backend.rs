@@ -378,6 +378,18 @@ pub enum LowerError {
         /// The gate's refusal, typed.
         source: crate::plan::PlanError,
     },
+    /// **The backend does not lower a [`KernelFn`](crate::kernel::KernelFn)**, or lowers
+    /// only part of the kernel layer and this kernel is outside it (a statement, a dtype,
+    /// a memory space or a launch shape it has not been taught).
+    ///
+    /// This is [`Backend::lower_kernel`]'s own refusal, and its default. It is a separate
+    /// variant on purpose: [`Self::UnsupportedOp`] means "no spelling for an expression
+    /// node", and a caller that matches on it to retry another op must not be handed a
+    /// backend that has no kernel path at all.
+    UnsupportedKernel {
+        /// Why, in the backend's own words.
+        detail: String,
+    },
 }
 
 impl From<crate::plan::PlanError> for LowerError {
@@ -555,6 +567,7 @@ impl std::fmt::Display for LowerError {
             Self::UnsupportedOp { detail } => write!(f, "unsupported op: {detail}"),
             Self::UnsupportedPlanShape { detail } => write!(f, "unsupported plan shape: {detail}"),
             Self::InadmissiblePlan { source } => write!(f, "inadmissible plan: {source}"),
+            Self::UnsupportedKernel { detail } => write!(f, "unsupported kernel: {detail}"),
         }
     }
 }
@@ -633,6 +646,35 @@ pub trait Backend {
     /// numerical bug, which is strictly worse — see the "decline, do not fall
     /// through" note in `tests/neutral_spelling.rs`.
     fn lower(&self, plan: &crate::plan::KernelPlan<'_>) -> Result<GeneratedKernel, LowerError>;
+    /// Lower a kernel-layer [`KernelFn`](crate::kernel::KernelFn) to source, or say why it
+    /// cannot (`docs/e1-emit-from-the-kernel-layer.md`; PM ruling 2026-10-30).
+    ///
+    /// **Defaulted, so every existing backend compiles unchanged and keeps `lower`.** The
+    /// default is the typed refusal [`LowerError::UnsupportedKernel`]: no panic, and not
+    /// [`LowerError::UnsupportedOp`], which would let a caller mistake "this backend has no
+    /// kernel path" for "this expression node has no spelling".
+    ///
+    /// A backend that lowers kernels overrides this, checks the kernel with
+    /// [`check_kernel`](crate::kernel::check_kernel) itself (its input is data, and the
+    /// checker is the only gate), and refuses with `UnsupportedKernel` anything it has not
+    /// been taught. **Refuse rather than approximate** applies as it does to `lower`.
+    ///
+    /// # Errors
+    ///
+    /// [`LowerError::UnsupportedKernel`] by default and for any kernel outside the backend's
+    /// coverage; other variants as for [`Backend::lower`].
+    fn lower_kernel(
+        &self,
+        kernel: &crate::kernel::KernelFn,
+    ) -> Result<GeneratedKernel, LowerError> {
+        Err(LowerError::UnsupportedKernel {
+            detail: format!(
+                "backend `{}` does not lower kernel-layer kernels (kernel `{}`)",
+                self.name(),
+                kernel.name
+            ),
+        })
+    }
     /// Whether the backend can lower `dtype` **on `target`**. The JIT trust
     /// boundary checks this *before* [`Backend::lower`] so an unlowerable dtype
     /// is a typed decline, not a lowering panic. (AOT op authoring is trusted,
@@ -830,6 +872,15 @@ pub struct Lowering<'a> {
     /// temporary whose type is not the compute type (the result of a `Cast` or
     /// `Bitcast`). `None` makes the node decline rather than guess a declaration.
     pub type_name: &'a dyn Fn(ElementKind) -> Option<String>,
+    /// Spelling of a kernel-layer local ([`ScalarExpr::Local`]), by local id. Only
+    /// [`Backend::lower_kernel`] produces a body containing one. The default declines (a
+    /// `Local` outside a kernel has no meaning), as it did before the kernel layer had an
+    /// emitter.
+    pub local: &'a dyn Fn(u32) -> Result<Spelling, LowerError>,
+    /// The declared type of each kernel local, indexed by local id, so a typed node
+    /// (`Cast`, `Bitcast`, an integer operation) over a `Local` can type its operand.
+    /// Empty (the default) outside a kernel.
+    pub locals: &'a [crate::types::Ty],
     /// Constant-literal spelling ([`ScalarExpr::Const`]).
     ///
     /// A seam rather than a fixed call to [`const_lit`] because the correct
@@ -907,6 +958,14 @@ mod default_seam {
             op: DeclinedOp::Reduced(i),
             why: format!(
                 "a Reduced({i}) leaf reached an emitter with no `reduced` seam. Only a                  row-reduction emitter produces such a body; either supply                  `.reduced(..)` or route this body to a reduction schedule."
+            ),
+        }))
+    };
+    pub(super) static LOCAL: fn(u32) -> Result<Spelling, LowerError> = |i| {
+        Ok(Spelling::Declined(Decline::UnsupportedOp {
+            op: DeclinedOp::Kernel,
+            why: format!(
+                "a kernel-layer Local({i}) reached an emitter with no `local` seam; a Local has                  meaning only inside `Backend::lower_kernel`, which supplies `.local(..)`"
             ),
         }))
     };
@@ -1045,6 +1104,8 @@ impl<'a> Lowering<'a> {
                 leaf,
                 reduced: &default_seam::REDUCED,
                 coord: &default_seam::COORD,
+                local: &default_seam::LOCAL,
+                locals: &[],
                 unary,
                 binary,
                 arith: &default_seam::ARITH,
@@ -1143,6 +1204,18 @@ impl<'a> LoweringBuilder<'a> {
         f: &'a dyn Fn(QualOp, Vec<String>, Numerics) -> Result<Spelling, LowerError>,
     ) -> Self {
         self.inner.qualified = f;
+        self
+    }
+    /// Spelling of a kernel-layer `Local`; see [`Lowering::local`].
+    #[must_use]
+    pub fn local(mut self, f: &'a dyn Fn(u32) -> Result<Spelling, LowerError>) -> Self {
+        self.inner.local = f;
+        self
+    }
+    /// Declared types of the kernel locals; see [`Lowering::locals`].
+    #[must_use]
+    pub fn local_types(mut self, tys: &'a [crate::types::Ty]) -> Self {
+        self.inner.locals = tys;
         self
     }
     /// Declare the op's compute dtype so `Cast`/`Bitcast` operands can be typed; see
@@ -1400,7 +1473,7 @@ fn int_node<'e>(
     let value = if matches!(op, IntOp::Select) { 1 } else { 0 };
     let types: Vec<Option<ElementKind>> = kids[value..]
         .iter()
-        .map(|k| crate::types::infer(k, compute).ok())
+        .map(|k| infer_lo(k, compute, lo).ok())
         .collect();
     Some(int_route(compute, &types)?.map(|t| (op, t, kids)))
 }
@@ -1423,7 +1496,7 @@ fn int_node_of_dag(
     let value = if matches!(op, IntOp::Select) { 1 } else { 0 };
     let types: Vec<Option<ElementKind>> = kids[value..]
         .iter()
-        .map(|&k| crate::types::infer(&dag.node_expr(k), compute).ok())
+        .map(|&k| infer_lo(&dag.node_expr(k), compute, lo).ok())
         .collect();
     Some(int_route(compute, &types)?.map(|t| (op, t, kids)))
 }
@@ -1434,6 +1507,18 @@ fn mixed_int_decline(why: String) -> Spelling {
         op: DeclinedOp::Integer,
         why,
     })
+}
+
+/// [`crate::types::infer`] with the kernel locals `lo` declares, so a `Local` operand has a type.
+fn infer_lo(
+    e: &ScalarExpr,
+    compute: ElementKind,
+    lo: &Lowering<'_>,
+) -> Result<ElementKind, crate::types::TypeError> {
+    match crate::types::infer_ty_in(e, compute, lo.locals)? {
+        crate::types::Ty::Scalar(t) => Ok(t),
+        crate::types::Ty::Packed(_, lanes) => Err(crate::types::TypeError::PackedResult { lanes }),
+    }
 }
 
 /// The type of a `Cast`/`Bitcast` operand, or the typed decline that says why it
@@ -1451,7 +1536,7 @@ fn typed_source(
                 .to_string(),
         }));
     };
-    crate::types::infer(x, compute).map_err(|e| {
+    infer_lo(x, compute, lo).map_err(|e| {
         Spelling::Declined(Decline::UnsupportedOp {
             op,
             why: format!("ill-typed Cast/Bitcast operand: {e:?}"),
@@ -1531,7 +1616,7 @@ pub fn lower_expr(e: &ScalarExpr, lo: &Lowering<'_>) -> Result<Spelling, LowerEr
         ScalarExpr::Pack(_) | ScalarExpr::Extract(..) | ScalarExpr::BitcastPacked(..) => {
             return Ok(packed_decline());
         }
-        ScalarExpr::Local(_) => return Ok(local_decline("Local")),
+        ScalarExpr::Local(i) => return (lo.local)(*i),
         ScalarExpr::Exec(_) => return Ok(local_decline("Exec")),
         ScalarExpr::Qualified(x, n) => {
             let Some((op, kids)) = QualOp::of(x) else {
@@ -1799,7 +1884,7 @@ fn lower_node(
         DagNode::Pack(_) | DagNode::Extract(..) | DagNode::BitcastPacked(..) => {
             return Ok(packed_decline());
         }
-        DagNode::Local(_) => return Ok(local_decline("Local")),
+        DagNode::Local(i) => return (lo.local)(i),
         DagNode::Exec(_) => return Ok(local_decline("Exec")),
         DagNode::Qualified(x, n) => {
             let Some((op, kids)) = QualOp::of_node(dag.node(x)) else {
