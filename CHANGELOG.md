@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.33.1` — docs: U3 row 4 design note, execution scopes and memory spaces
+
+`docs/u3-row4-scopes-and-memory-spaces.md`: one `ScalarExpr::Exec` leaf, `LaunchShape`, `Place::Alloc` arrays (no pointer values), `Stmt::Barrier` with a conservative uniformity rule, and the per-thread driver, as one breaking increment (0.33.0). Design only; no code. The barrier-uniformity check (D-R4-5) is conservative and will reject some correct programs; the cases are listed in the note for a later relaxation row.
+
+`SECURITY.md` added with the supported-versions text: the latest line gets security fixes, an older line only when the backport is small, no period promised. Lines 0.25.x-0.32.x are not supported by default under it.
+
 ## `0.33.0` — feat (BREAKING): `Frontend` is `#[non_exhaustive]`; the declared `ResourceMap` and the `lift_*_with` entry points (U3 row 3, #113)
 
 **Breaking:** `convert::Frontend` is now `#[non_exhaustive]`, so a struct literal no longer compiles outside this crate. Build one with the new `const fn Frontend::new(name, kernel_marker, residue, out_name, in_prefix, parse)` (today's six fields, in order); `SLANG` is unchanged. **Migration:** Baracuda's `baracuda-cuda-parse` `CUDA` const (`Frontend { .. }` at `lib.rs:72`) becomes one `Frontend::new(..)` call. Fuel builds no `Frontend` (a grep of `fuel/crates` finds none).
