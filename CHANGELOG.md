@@ -15,6 +15,16 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.34.0` — feat: `run_launch`, the per-thread driver for barrier-free kernels (U3 row 4, PR 2)
+
+**Additive.** `oracle::kernel_launch::{run_launch, run_launch_with_subgroup}` run every thread of a launched kernel, block by block (x fastest), threads one after another. `Exec` ids evaluate (`ThreadIdx`, `BlockIdx`, `BlockDim`, `GridDim`, `LaneId`, `SubgroupId`, `SubgroupSize`); the subgroup size is the launch range's minimum unless the caller passes one inside the range. `Shared` (per block) and `Private` (per thread) allocations are real storage, sized by `Static` or by the integer argument a `Param` extent names.
+
+`KernelTrap` (already `#[non_exhaustive]`) gains `AllocOutOfBounds`, `UninitializedShared`, `UninitializedPrivate` and `DataRace`. **Shared memory is not zero-filled**: a read of an element no thread stored traps, so a missing barrier cannot hide behind a zero. **`DataRace`**: two threads touching one element with at least one write, for global buffers across the whole launch and for shared memory within a block. That covers the store/store case and a read of another thread's store; sequential execution would otherwise let the order the threads happen to run in satisfy it. v0's "later store wins" was sound for one thread only.
+
+Declined by name, not guessed: a `Barrier` statement (PR 3), reading a `Constant` allocation (`AllocDecl` has no initializer), and anything `run_kernel` already declines. `run_kernel` still runs only unlaunched kernels and now says to use `run_launch` for the others. `run_launch` on an unlaunched kernel is `ArgMismatch`.
+
+Tests: `tests/kernel_launch.rs`; each trap has a program that raises it and its nearest legal variant. 16 source mutants of the driver each turned a named test red; two survived at first (a "several readers" bit that cannot fire without barriers, now removed with a note for PR 3, and a shared-read race test that accepted either of two traps, now exact).
+
 ## `0.34.0` — feat (BREAKING): execution ids, launch shape, memory-space allocations and `Barrier` in the kernel layer (U3 row 4, PR 1: types and checker)
 
 **Breaking:** `ir::ScalarExpr` and `ir::DagNode`/`DagKey` gain one variant, `Exec(exec::ExecId)` (decision D-R4-1: one leaf, a `#[non_exhaustive]` payload), and `kernel::Stmt` gains `Barrier { scope }`. Every exhaustive `match` on them needs an arm (inside this workspace: `backend`, `cfamily`, `contract`, `jit`, `optimize`, `oracle`, `pattern`, `plan`, `recipe`, `types`, `kernel_lift`, `unpopped-slang`). An `Exec` leaf is opaque like `Local`: never an `Input`, never folded, typed `U32` (D-R4-2), refused by the plan gate (`types::has_local` now covers it), declined by every `Backend` with a typed decline, and declined by the OpDef lifts (`UnsupportedLeaf("Exec")`).
