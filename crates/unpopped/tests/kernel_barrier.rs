@@ -263,6 +263,37 @@ fn a_divergence_carried_round_a_loop_is_seen() {
 }
 
 #[test]
+fn a_divergence_that_needs_two_rounds_to_reach_the_barrier_is_seen() {
+    // for i in 0..n { if a { barrier }; a = b; b = tid }: b is divergent after one walk, a only
+    // after two, and the barrier reads a. One walk plus the check would miss it.
+    divergent(vec![
+        Stmt::Let {
+            local: V,
+            init: ci(0),
+        },
+        Stmt::Let {
+            local: W,
+            init: ci(0),
+        },
+        for_(
+            I,
+            local(N),
+            vec![
+                if_(local(V), vec![barrier()]),
+                Stmt::Assign {
+                    local: V,
+                    value: local(W),
+                },
+                Stmt::Assign {
+                    local: W,
+                    value: to_i32(exec(ExecId::ThreadIdx(0))),
+                },
+            ],
+        ),
+    ]);
+}
+
+#[test]
 fn a_barrier_before_a_divergent_break_in_the_same_loop_is_rejected() {
     // for i in 0..n { barrier; if tid { break } }: pass two starts with fewer threads.
     divergent(vec![for_(
