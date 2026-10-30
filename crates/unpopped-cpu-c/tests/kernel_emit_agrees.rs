@@ -420,7 +420,7 @@ fn control_flow() -> KernelFn {
                 els: Block(vec![]),
             },
             Stmt::If {
-                cond: cmp(BinaryOp::CmpLt, ci(3), l(3)),
+                cond: cmp(BinaryOp::CmpEq, l(3), ci(3)),
                 then: Block(vec![Stmt::Break]),
                 els: Block(vec![]),
             },
@@ -435,6 +435,11 @@ fn control_flow() -> KernelFn {
         body: Block(vec![inner, acc(10.25)]),
     };
     let tail = [
+        Stmt::If {
+            cond: cmp(BinaryOp::CmpLt, l(0), ci(3)),
+            then: Block(vec![acc(1000.0)]),
+            els: Block(vec![acc(2000.0)]),
+        },
         Stmt::While {
             cond: cmp(BinaryOp::CmpLt, l(5), ci(3)),
             body: Block(vec![
