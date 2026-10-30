@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.34.11` — docs: ROADMAP E10 closed as not checkable in `validate_row_sort`; E1c and E2 move to Vulkane
+
+**Docs only; no code, no API, no behaviour change.** `k <= 1024` is the contract of the out-of-tree CUDA bitonic variant (the base rank sort has no limit), and `validate_row_sort` runs on a `StructureKey` with no numeric extents, so it cannot check it. ROADMAP owner column for E1c and E2 is now Vulkane (PM ruling 2026-10-30).
+
 ## `0.34.10` — feat: the cpu_c kernel emitter spells integer compute (`I32`, `I64`, `U32`, `U64`) (E1b-int)
 
 **Behaviour change in `CpuC::lower_kernel` only; no API change.** A `KernelFn` whose compute dtype is `I32`, `I64`, `U32` or `U64` was `LowerError::UnsupportedKernel` and is now emitted as serial C; every other dtype (16-bit, narrow, packed) is still that typed decline. In the integer forms, `+ - *` wrap in two's complement through the unsigned type (C's signed overflow is undefined), `Select` tests its condition against zero and moves the arm, `Max`/`Min` and the comparisons yield the integer 1/0, and `& | ^` are the C operators. Integer `/`, shifts and the logical operators decline with a typed reason (the oracle's rules for a zero divisor and an oversized shift are not ones the emitter has been taught).
