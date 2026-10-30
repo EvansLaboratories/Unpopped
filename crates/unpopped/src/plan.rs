@@ -915,7 +915,8 @@ fn contraction_epilogue_admissible(e: &crate::ir::ScalarExpr, n_inputs: u8) -> b
         | E::Coord(_)
         | E::CoordInt(..)
         | E::ConstInt(..)
-        | E::Local(_) => false,
+        | E::Local(_)
+        | E::Exec(_) => false,
         E::Unary(_, x) => contraction_epilogue_admissible(x, n_inputs),
         E::Cast(x, _)
         | E::Bitcast(x, _)
@@ -1252,7 +1253,7 @@ fn assert_valid_multi_output(op: &OpDef, key: &StructureKey) {
             ScalarExpr::CoordInt(d, _) => panic!(
                 "OpDef '{name}': multi-output body must not read CoordInt({d}) — v1 is                  elementwise-map only (a multi-output coordinate kernel is deferred)"
             ),
-            ScalarExpr::ConstInt(..) | ScalarExpr::Local(_) => {}
+            ScalarExpr::ConstInt(..) | ScalarExpr::Local(_) | ScalarExpr::Exec(_) => {}
             ScalarExpr::Unary(_, x) => check_body(x, n_inputs, name),
             ScalarExpr::Cast(x, _)
             | ScalarExpr::Bitcast(x, _)
@@ -1978,7 +1979,8 @@ pub(crate) fn check_no_half_nextafter(op: &OpDef, dtype: ElementKind) -> Result<
             | ScalarExpr::Coord(_)
             | ScalarExpr::CoordInt(..)
             | ScalarExpr::ConstInt(..)
-            | ScalarExpr::Local(_) => false,
+            | ScalarExpr::Local(_)
+            | ScalarExpr::Exec(_) => false,
             ScalarExpr::Add(a, b)
             | ScalarExpr::Sub(a, b)
             | ScalarExpr::Mul(a, b)
@@ -2198,7 +2200,8 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
             ScalarExpr::Pack(_)
             | ScalarExpr::Extract(..)
             | ScalarExpr::BitcastPacked(..)
-            | ScalarExpr::Local(_) => {
+            | ScalarExpr::Local(_)
+            | ScalarExpr::Exec(_) => {
                 return Err(format!(
                     "op '{op_name}': Pack/Extract are not lowerable yet (packed values have no emitter seam)"
                 ));
@@ -2624,7 +2627,8 @@ pub(crate) fn check_complex_op_admissibility(
             ScalarExpr::Pack(_)
             | ScalarExpr::Extract(..)
             | ScalarExpr::BitcastPacked(..)
-            | ScalarExpr::Local(_) => reject("Pack/Extract", "packed values have no lowering yet"),
+            | ScalarExpr::Local(_)
+            | ScalarExpr::Exec(_) => reject("Pack/Extract", "packed values have no lowering yet"),
             ScalarExpr::Qualified(..) => reject(
                 "Qualified",
                 "rounding/ftz/approx qualifiers are f32-compute only in v1",
@@ -2701,7 +2705,8 @@ pub(crate) fn check_bool_op_admissibility(op: &OpDef, dtype: ElementKind) -> Res
             ScalarExpr::Pack(_)
             | ScalarExpr::Extract(..)
             | ScalarExpr::BitcastPacked(..)
-            | ScalarExpr::Local(_) => reject("Pack/Extract", "packed values have no lowering yet"),
+            | ScalarExpr::Local(_)
+            | ScalarExpr::Exec(_) => reject("Pack/Extract", "packed values have no lowering yet"),
             ScalarExpr::Qualified(..) => reject(
                 "Qualified",
                 "rounding/ftz/approx qualifiers are f32-compute only in v1",
@@ -2881,6 +2886,7 @@ pub(crate) fn expr_contains_coord(e: &ScalarExpr) -> bool {
         | ScalarExpr::Const(_)
         | ScalarExpr::ConstInt(..)
         | ScalarExpr::Local(_)
+        | ScalarExpr::Exec(_)
         | ScalarExpr::Param(_)
         | ScalarExpr::Reduced(_) => false,
         ScalarExpr::Unary(_, x) => expr_contains_coord(x),
@@ -2938,7 +2944,7 @@ pub(crate) fn check_coord_admissibility(op: &OpDef, key: &StructureKey) -> Resul
             | ScalarExpr::Const(_)
             | ScalarExpr::Param(_)
             | ScalarExpr::Reduced(_) => Ok(()),
-            ScalarExpr::ConstInt(..) | ScalarExpr::Local(_) => Ok(()),
+            ScalarExpr::ConstInt(..) | ScalarExpr::Local(_) | ScalarExpr::Exec(_) => Ok(()),
             ScalarExpr::CoordInt(d, _) => {
                 if !elementwise {
                     return Err(PlanError::InadmissibleOpInCell {
@@ -3114,7 +3120,7 @@ pub(crate) fn check_typed_admissibility(op: &OpDef, dtype: ElementKind) -> Resul
     }
     if all_exprs.iter().any(|e| crate::types::has_local(e)) {
         return in_cell(format!(
-            "op '{}': Local is a kernel-layer leaf (docs/ir-kernel-layer.md); an OpDef body must not contain one",
+            "op '{}': Local and Exec are kernel-layer leaves (docs/ir-kernel-layer.md); an OpDef body must not contain one",
             op.name
         ));
     }
@@ -3201,7 +3207,8 @@ pub(crate) fn check_typed_admissibility(op: &OpDef, dtype: ElementKind) -> Resul
             | ScalarExpr::Coord(_)
             | ScalarExpr::CoordInt(..)
             | ScalarExpr::ConstInt(..)
-            | ScalarExpr::Local(_) => Ok(()),
+            | ScalarExpr::Local(_)
+            | ScalarExpr::Exec(_) => Ok(()),
         }
     }
     walk(&op.body, dtype, true).map_err(|why| PlanError::InadmissibleOpAtDtype {
@@ -3320,7 +3327,8 @@ pub(crate) fn check_fma_admissibility(op: &OpDef, dtype: ElementKind) -> Result<
             | ScalarExpr::Coord(_)
             | ScalarExpr::CoordInt(..)
             | ScalarExpr::ConstInt(..)
-            | ScalarExpr::Local(_) => false,
+            | ScalarExpr::Local(_)
+            | ScalarExpr::Exec(_) => false,
             ScalarExpr::Unary(_, x) => has_fma(x),
             ScalarExpr::Cast(x, _)
             | ScalarExpr::Bitcast(x, _)
@@ -3553,7 +3561,7 @@ fn assert_valid_reduction_post(op: &OpDef) {
             ScalarExpr::CoordInt(d, _) => panic!(
                 "OpDef '{name}': reduction post-expr must not read CoordInt({d}) — Coord                  is Elementwise-only (a coordinate along a folded axis is ambiguous)"
             ),
-            ScalarExpr::ConstInt(..) | ScalarExpr::Local(_) => {}
+            ScalarExpr::ConstInt(..) | ScalarExpr::Local(_) | ScalarExpr::Exec(_) => {}
             ScalarExpr::Unary(_, x) => walk(x, name),
             ScalarExpr::Cast(x, _)
             | ScalarExpr::Bitcast(x, _)
@@ -3768,7 +3776,7 @@ pub(crate) fn check_row_reduce(
                     "RowReduce forbids Coord({d}) — the RowReduce stages/epilogue iterate                      the (row, j) space, not an elementwise output coordinate space;                      Coord is Elementwise-only in 0d"
                 ),
             }),
-            ScalarExpr::CoordInt(..) | ScalarExpr::ConstInt(..) | ScalarExpr::Local(_) => {
+            ScalarExpr::CoordInt(..) | ScalarExpr::ConstInt(..) | ScalarExpr::Local(_) | ScalarExpr::Exec(_) => {
                 Err(PlanError::InadmissibleOpInCell {
                     detail: "RowReduce forbids integer-typed leaves (CoordInt/ConstInt) — they                              are Elementwise-only in v1"
                         .to_string(),
@@ -3962,7 +3970,8 @@ fn validate_scan(op: &OpDef, key: &StructureKey, axis: u8, reverse: bool, exclus
             | ScalarExpr::Coord(_)
             | ScalarExpr::CoordInt(..)
             | ScalarExpr::ConstInt(..)
-            | ScalarExpr::Local(_) => {}
+            | ScalarExpr::Local(_)
+            | ScalarExpr::Exec(_) => {}
             ScalarExpr::Unary(_, x) => check(x, n_inputs, allow_reduced, ctx, name),
             ScalarExpr::Cast(x, _)
             | ScalarExpr::Bitcast(x, _)
@@ -4203,7 +4212,8 @@ fn validate_window(
             | ScalarExpr::Coord(_)
             | ScalarExpr::CoordInt(..)
             | ScalarExpr::ConstInt(..)
-            | ScalarExpr::Local(_) => {}
+            | ScalarExpr::Local(_)
+            | ScalarExpr::Exec(_) => {}
             ScalarExpr::Unary(_, x) => check(x, n_inputs, allow_reduced, ctx, name),
             ScalarExpr::Cast(x, _)
             | ScalarExpr::Bitcast(x, _)

@@ -86,6 +86,11 @@ struct Machine<'a> {
 /// A [`KernelTrap`].
 pub fn run_kernel(k: &KernelFn, args: &mut [KernelArg]) -> Result<(), KernelTrap> {
     check_kernel(k).map_err(KernelTrap::Malformed)?;
+    if k.launch.is_some() || !k.allocs.is_empty() {
+        return Err(KernelTrap::Unsupported(
+            "launch shape and memory-space allocations (U3 row 4 PR 2)",
+        ));
+    }
     if args.len() != k.params.len() {
         return Err(KernelTrap::ArgMismatch("one argument per parameter"));
     }
@@ -187,6 +192,7 @@ impl Machine<'_> {
             Stmt::Break => return Ok(Flow::Break),
             Stmt::Continue => return Ok(Flow::Continue),
             Stmt::Return => return Ok(Flow::Return),
+            Stmt::Barrier { .. } => return Err(KernelTrap::Unsupported("Barrier (U3 row 4 PR 3)")),
         }
         Ok(Flow::Next)
     }
@@ -238,7 +244,9 @@ impl Machine<'_> {
 
     /// The element offset of `place` through the buffer's view, bounds-checked against its shape.
     fn offset(&mut self, place: &Place) -> Result<(usize, usize), KernelTrap> {
-        let Place::Logical { buffer, coords } = place;
+        let Place::Logical { buffer, coords } = place else {
+            return Err(KernelTrap::Unsupported("Place::Alloc (U3 row 4 PR 2)"));
+        };
         let mut cs = Vec::with_capacity(coords.len());
         for c in coords {
             let Ty::Scalar(t) = types::infer_ty_in(c, self.k.compute, &self.local_tys)

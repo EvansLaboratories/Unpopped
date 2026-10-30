@@ -525,6 +525,7 @@ pub fn lane_of(e: &ScalarExpr, i: u8) -> Result<ScalarExpr, TypeError> {
         | ScalarExpr::CoordInt(..)
         | ScalarExpr::ConstInt(..)
         | ScalarExpr::Local(_)
+        | ScalarExpr::Exec(_)
         | ScalarExpr::Extract(..)
         | ScalarExpr::BitcastPacked(..) => return Err(TypeError::NotPacked { node: node_name(e) }),
         _ => return Err(TypeError::PackedOperand { node: node_name(e) }),
@@ -575,7 +576,8 @@ pub(crate) fn operands(e: &ScalarExpr) -> Vec<&ScalarExpr> {
         | ScalarExpr::Coord(_)
         | ScalarExpr::CoordInt(..)
         | ScalarExpr::ConstInt(..)
-        | ScalarExpr::Local(_) => vec![],
+        | ScalarExpr::Local(_)
+        | ScalarExpr::Exec(_) => vec![],
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
@@ -603,6 +605,7 @@ pub(crate) const fn node_name(e: &ScalarExpr) -> &'static str {
         ScalarExpr::CoordInt(..) => "CoordInt",
         ScalarExpr::ConstInt(..) => "ConstInt",
         ScalarExpr::Local(_) => "Local",
+        ScalarExpr::Exec(_) => "Exec",
         ScalarExpr::Add(..) => "Add",
         ScalarExpr::Sub(..) => "Sub",
         ScalarExpr::Mul(..) => "Mul",
@@ -663,6 +666,9 @@ fn node_ty(
             check_int_leaf(*t, Some(*v))?;
             Ok(*t)
         }
+        // Every execution id is a `U32` (decision D-R4-2); whether the kernel has a launch for
+        // it to read is `check_kernel`'s business, as scope is for `Local`.
+        ScalarExpr::Exec(_) => Ok(ElementKind::U32),
         ScalarExpr::Add(..) => same("Add", k[0], k[1]),
         ScalarExpr::Sub(..) => same("Sub", k[0], k[1]),
         ScalarExpr::Mul(..) => same("Mul", k[0], k[1]),
@@ -744,7 +750,8 @@ pub fn has_qualified(e: &ScalarExpr) -> bool {
         | ScalarExpr::Coord(_)
         | ScalarExpr::CoordInt(..)
         | ScalarExpr::ConstInt(..)
-        | ScalarExpr::Local(_) => false,
+        | ScalarExpr::Local(_)
+        | ScalarExpr::Exec(_) => false,
         ScalarExpr::Unary(_, x)
         | ScalarExpr::Cast(x, _)
         | ScalarExpr::Bitcast(x, _)
@@ -762,10 +769,12 @@ pub fn has_qualified(e: &ScalarExpr) -> bool {
     }
 }
 
-/// `true` when `e` contains a [`ScalarExpr::Local`] leaf (meaningful only inside a kernel).
+/// `true` when `e` contains a [`ScalarExpr::Local`] or [`ScalarExpr::Exec`] leaf (both meaningful
+/// only inside a kernel).
 #[must_use]
 pub fn has_local(e: &ScalarExpr) -> bool {
-    matches!(e, ScalarExpr::Local(_)) || operands(e).into_iter().any(has_local)
+    matches!(e, ScalarExpr::Local(_) | ScalarExpr::Exec(_))
+        || operands(e).into_iter().any(has_local)
 }
 
 /// `true` when `e` contains a [`ScalarExpr::Pack`] or [`ScalarExpr::Extract`] node.
@@ -780,7 +789,8 @@ pub fn has_packed(e: &ScalarExpr) -> bool {
         | ScalarExpr::Coord(_)
         | ScalarExpr::CoordInt(..)
         | ScalarExpr::ConstInt(..)
-        | ScalarExpr::Local(_) => false,
+        | ScalarExpr::Local(_)
+        | ScalarExpr::Exec(_) => false,
         ScalarExpr::Unary(_, x) | ScalarExpr::Cast(x, _) | ScalarExpr::Bitcast(x, _) => {
             has_packed(x)
         }
@@ -815,6 +825,8 @@ pub fn is_typed(e: &ScalarExpr) -> bool {
         ScalarExpr::CoordInt(..) | ScalarExpr::ConstInt(..) => true,
         // A local's type comes from its kernel's declaration, never the compute dtype.
         ScalarExpr::Local(_) => true,
+        // An execution id is `U32`, never the compute dtype.
+        ScalarExpr::Exec(_) => true,
         ScalarExpr::Unary(_, x) | ScalarExpr::Qualified(x, _) => is_typed(x),
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
@@ -863,7 +875,8 @@ pub(crate) fn map_children<E>(
         | S::Coord(_)
         | S::CoordInt(..)
         | S::ConstInt(..)
-        | S::Local(_) => e.clone(),
+        | S::Local(_)
+        | S::Exec(_) => e.clone(),
         S::Add(a, b) => S::Add(bx(f(a))?, bx(f(b))?),
         S::Sub(a, b) => S::Sub(bx(f(a))?, bx(f(b))?),
         S::Mul(a, b) => S::Mul(bx(f(a))?, bx(f(b))?),
