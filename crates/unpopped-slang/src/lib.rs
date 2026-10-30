@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
+//! **DEPRECATED: this crate is superseded by [`vulkane-slang-emit`](https://crates.io/crates/vulkane-slang-emit).**
+//! CireSnave ruled 2026-10-30 that Vulkane owns Slang in this ecosystem, so the Slang
+//! emitter moved there with its history intact (`vulkane-slang-emit` 0.16.10 was imported
+//! blob-for-blob from this crate at `unpopped` 0.34.11). This is the last `unpopped-slang`
+//! release; new Slang work lands in `vulkane-slang-emit`. Handover:
+//! `vulkane` `docs/design/slang-parser-emitter-handover.md`.
+//!
 //! IR→Slang compute-shader lowering — the third backend (v1), and the **first
 //! idiomatically non-C-family emitter**.
 //!
