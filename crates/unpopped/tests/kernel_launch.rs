@@ -563,9 +563,9 @@ fn a_read_of_an_element_a_lower_thread_stored_races() {
 
 #[test]
 fn a_shared_read_of_another_threads_store_is_the_missing_barrier_bug() {
-    // tile[t] = x; y = tile[(t + 1) % 4]. With a barrier between them this is the standard
-    // neighbour read; without one it is a race, and the sequential driver must say so rather
-    // than let thread 0's store satisfy thread 3's read.
+    // tile[t] = x; y = tile[0]. With a barrier between them this is a broadcast from thread 0;
+    // without one, thread 1 reads what thread 0 stored, and the sequential driver must say so
+    // rather than let the order the threads happen to run in satisfy the read.
     let t = exec(ExecId::ThreadIdx(0));
     let build = |read_at: ScalarExpr| {
         kernel(
@@ -587,19 +587,14 @@ fn a_shared_read_of_another_threads_store_is_the_missing_barrier_bug() {
         )
     };
     run_launch(&build(t.clone()), &mut args(4)).expect("control: its own element");
-    // Thread 0 reads tile[3] before thread 3 has run: uninitialized, which is also the bug.
-    let r = run_launch(&build(sub(u(3), t.clone())), &mut args(4));
-    assert!(
-        matches!(
-            r,
-            Err(KernelTrap::UninitializedShared { .. } | KernelTrap::DataRace)
-        ),
-        "{r:?}"
+    assert_eq!(
+        run_launch(&build(u(0)), &mut args(4)),
+        Err(KernelTrap::DataRace)
     );
 }
 
 #[test]
-fn many_readers_then_a_writer_race() {
+fn readers_then_a_later_writer_race() {
     // Every thread reads in-out element 0 (a broadcast), then thread 3 stores it.
     let t = exec(ExecId::ThreadIdx(0));
     let build = |writer: ScalarExpr| {

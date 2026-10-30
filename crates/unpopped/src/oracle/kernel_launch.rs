@@ -34,12 +34,15 @@ use crate::types::{self, Ty};
 /// `(block linear index, thread linear index in its block)`.
 type Who = (u32, u32);
 
-/// What has touched one element: the writer, and the readers as "none / one / several".
+/// What has touched one element: the writer, and the first reader.
+///
+/// Threads run one after another, so the first reader is the earliest thread to read; any later
+/// writer is a different thread and conflicts. PR 3 (barriers, interleaved phases) needs a
+/// "several readers" bit here, because there the writer can be the first reader.
 #[derive(Default)]
 struct Access {
     writer: Option<Who>,
     reader: Option<Who>,
-    many_readers: bool,
 }
 
 /// Element accesses keyed by `(buffer or allocation index, element offset)`.
@@ -52,16 +55,12 @@ fn touch(log: &mut Log, key: (u32, usize), who: Who, write: bool) -> Result<(), 
         return Err(KernelTrap::DataRace);
     }
     if write {
-        if a.many_readers || a.reader.is_some_and(|r| r != who) {
+        if a.reader.is_some_and(|r| r != who) {
             return Err(KernelTrap::DataRace);
         }
         a.writer = Some(who);
     } else {
-        match a.reader {
-            None => a.reader = Some(who),
-            Some(r) if r != who => a.many_readers = true,
-            Some(_) => {}
-        }
+        a.reader.get_or_insert(who);
     }
     Ok(())
 }
