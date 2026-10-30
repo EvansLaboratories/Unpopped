@@ -15,6 +15,18 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.34.5` — feat: `Backend::lower_kernel` and the cpu_c serial-C kernel emitter (E1a)
+
+**Additive.** `Backend::lower_kernel(&KernelFn)` is a new **defaulted** trait method (PM ruling 2026-10-30), so every existing backend, Baracuda's and Fuel's included, compiles unchanged; the default returns the new typed decline `LowerError::UnsupportedKernel` (not `UnsupportedOp`, never a panic). `Lowering` gains a `local` seam and `local_types`, so a typed node over a kernel `Local` can be spelled and typed.
+
+`unpopped-cpu-c` overrides it: a `KernelFn` becomes **serial C**, one logical thread, returning `0`, `1` (out of bounds) or `2` (zero loop step), which are the interpreter's traps. Coverage in E1a: `F32`/`F64` compute, buffers and scalars the C type table spells, no launch, allocation, barrier or packed local; anything else is `UnsupportedKernel`. Constants are cast to the compute type so an `f32` expression rounds per operation like `float`, not once at double.
+
+**This is a correctness reference. The serial loop is not a performance claim and no 4070 or other device timing follows from it** (PM ruling 2026-10-30; the parallel mapping is stage E1d, its own note and ruling).
+
+Tests: `unpopped-cpu-c/tests/kernel_emit_agrees.rs` compiles the emitted C with the host compiler and compares output bytes with `run_kernel` (F64 byte-exact; F32 compound expressions within 3 ulps, the spec's tolerance mode, plus an exact per-operation check in Rust that the interpreter cannot make), with 12 seeded mutants all caught; `unpopped-conformance/tests/lower_kernel_default_is_the_typed_decline.rs` pins the default for `Slang`, a bare backend and an overriding backend, with five sabotages (panic, `Ok`, `UnsupportedOp`, empty and unattributed reason) all caught. The host-compiler driver moved verbatim to `tests/support/cc.rs`. Also fixed: cpu_c's module docs said unsupported schedules "panic"; they return `UnsupportedSchedule`.
+
+Not here (E1b onward): Reduction, Scan, Contraction, Window, RowReduce, RowSort, Im2Col, Gather, Scatter through this path; Slang; a `ResourceMap` parameter (Slang needs one; cpu_c's argument layout is fixed and documented in `kernel.rs`, so the E1 note's `bindings` parameter is deferred to the Slang stage).
+
 ## `0.34.4` — docs: E1 design note, reference emitters beyond `Schedule::Scalar`
 
 **Docs only; no code, API or behaviour change.** `docs/e1-emit-from-the-kernel-layer.md` frames ROADMAP row E1: the options (grow `Backend::lower` per schedule, emit from a lifted `KernelFn`, or stop), a recommendation (emit from `KernelFn`, staged cpu-c first, differential against `run_kernel`), the trait shape and argument ABI it needs, and four decisions for the PM. Also records that cpu-c's module docs say "panics" where the emitter returns a typed `UnsupportedSchedule` decline.

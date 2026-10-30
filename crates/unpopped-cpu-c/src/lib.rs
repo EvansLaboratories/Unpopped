@@ -35,9 +35,9 @@
 //!   narrow floats (FP8, and `F16`/`Bf16` since 0.15.0) are stored in an integer
 //!   carrier and computed at `float` through a codec emitted with the kernel.
 //! - Schedules: only [`Schedule::Scalar`] (the scalar contiguous Elementwise
-//!   path). Every other schedule (Vectorized/Strided/Reduction/…) panics clearly
-//!   — AOT authoring is trusted, so a panic is the honest v1 boundary (the same
-//!   convention as the CUDA emitter's unsupported arms). Because the scalar
+//!   path). Every other schedule (Vectorized/Strided/Reduction/…) is a typed
+//!   [`LowerError::UnsupportedSchedule`] decline. Kernel-layer kernels take the
+//!   separate [`Backend::lower_kernel`] path (serial C, `kernel.rs`). Because the scalar
 //!   schedule is only ever chosen for a contiguous, single-output, view/gather/
 //!   scatter/offset/coord-free Elementwise cell, accepting only it inherently
 //!   excludes every complex case.
@@ -56,6 +56,7 @@ use unpopped::ir::{BinaryOp, ExprDag, UnaryOp, is_bit_or_sign_move};
 use unpopped::plan::{KernelPlan, Schedule};
 use unpopped_vocab::{ElementKind, TargetId};
 
+mod kernel;
 mod qualified;
 mod typed;
 
@@ -147,6 +148,13 @@ impl Backend for CpuC {
                 DtypeSupport::Unsupported
             }
         }
+    }
+
+    fn lower_kernel(
+        &self,
+        kernel: &unpopped::kernel::KernelFn,
+    ) -> Result<GeneratedKernel, LowerError> {
+        kernel::lower_kernel(kernel)
     }
 
     fn lower(&self, plan: &KernelPlan<'_>) -> Result<GeneratedKernel, LowerError> {
