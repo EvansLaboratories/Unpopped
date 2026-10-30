@@ -19,7 +19,9 @@ use unpopped_vocab::ElementKind;
 mod cc;
 #[path = "support/kernel_run.rs"]
 mod kernel_run;
-use kernel_run::{F32, F64, I32, agree, agree_within, dense, run_c, zeroed};
+use kernel_run::{F32, F64, agree, agree_within, dense, run_c, zeroed};
+
+const I32: ElementKind = ElementKind::I32;
 
 fn elementwise(name: &str, n_in: u8, dtype: ElementKind, body: ScalarExpr) -> OpDef {
     OpDef::elementwise(name, n_in, &[dtype], Expr(body))
