@@ -188,7 +188,33 @@ pub(crate) fn ulps(a: f32, b: f32) -> u64 {
     key(a).abs_diff(key(b))
 }
 
-/// Output buffers agree: byte for byte, or for `F32` within `tol` ulps (the oracle evaluates a
+/// `v` with every NaN replaced by one canonical NaN.
+///
+/// **What this stops distinguishing: the sign and payload of a NaN, and nothing else.** An
+/// operation that makes a NaN (`inf - inf`, `0 * inf`) gets the host's choice of sign (x86 makes
+/// the negative one) where the interpreter makes the positive one. That is not semantic here: the
+/// spec treats NaN as one value and no op in the kernel language reads a NaN's sign or payload.
+/// Every other bit pattern, `-0.0` vs `0.0` and the infinities included, is still compared
+/// exactly; `nan_is_equal_only_to_nan` (kernel_emit_contraction_window_agrees.rs) keeps it so.
+pub(crate) fn canonical_nans(v: &[u8], dtype: ElementKind) -> Vec<u8> {
+    let w = if dtype == F64 { 8 } else { 4 };
+    v.chunks(w)
+        .flat_map(|c| {
+            let nan = if w == 8 {
+                f64::from_le_bytes(c.try_into().unwrap()).is_nan()
+            } else {
+                f32::from_le_bytes(c.try_into().unwrap()).is_nan()
+            };
+            match (nan, w) {
+                (false, _) => c.to_vec(),
+                (true, 8) => f64::NAN.to_le_bytes().to_vec(),
+                (true, _) => f32::NAN.to_le_bytes().to_vec(),
+            }
+        })
+        .collect()
+}
+
+/// Output buffers agree: bit-exact except NaN sign/payload ([`canonical_nans`]), or for `F32` within `tol` ulps (the oracle evaluates a
 /// compound `f32` expression at `f64` and rounds once, where `float` C rounds every operation;
 /// the spec's tolerance mode, section 7.1). `F64` is always byte-exact.
 pub(crate) fn same_bytes(
@@ -213,6 +239,12 @@ pub(crate) fn same_bytes(
                     ulps(a, b)
                 );
             }
+        } else if dtype == F32 || dtype == F64 {
+            assert_eq!(
+                canonical_nans(g, dtype),
+                canonical_nans(w, dtype),
+                "{tag}: output bytes differ"
+            );
         } else {
             assert_eq!(g, w, "{tag}: output bytes differ");
         }

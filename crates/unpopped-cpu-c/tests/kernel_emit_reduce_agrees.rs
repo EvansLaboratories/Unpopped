@@ -201,7 +201,7 @@ fn post(x: ScalarExpr) -> Expr {
 #[test]
 fn fused_posts_agree_within_the_tolerance() {
     // The post is compound, so F32 is tolerance mode (<= 3 ulps, as in the E1a elementwise
-    // differential); F64 stays byte-exact.
+    // differential); F64 stays bit-exact except NaN sign/payload.
     for dtype in [F32, F64] {
         let tol = if dtype == F32 { 3 } else { 0 };
         let red = OpDef::reduction_post(

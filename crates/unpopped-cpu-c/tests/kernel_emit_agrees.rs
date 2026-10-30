@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! **The emitted C agrees with the kernel interpreter** (`docs/e1-emit-from-the-kernel-layer.md`,
 //! stage E1a): a kernel is lowered by `CpuC::lower_kernel`, compiled with a real host C compiler,
-//! run, and its output buffers compared **byte for byte** with `oracle::kernel_eval::run_kernel`
+//! run, and its output buffers compared **byte for byte** (bit-exact except NaN sign/payload, see `same_bytes`) with `oracle::kernel_eval::run_kernel`
 //! on the same arguments. The traps (`OutOfBounds`, `ZeroStep`) must agree too.
 //!
 //! The serial C is a correctness reference. Nothing here times anything.
