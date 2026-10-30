@@ -76,7 +76,7 @@ impl AllocMem {
     fn new(dtype: ElementKind, len: usize) -> Self {
         Self {
             dtype,
-            bytes: vec![0; (len * usize::from(elem_bits(dtype))).div_ceil(8)],
+            bytes: vec![0; (len * elem_bits(dtype)).div_ceil(8)],
             init: vec![false; len],
         }
     }
@@ -275,9 +275,8 @@ impl Machine<'_> {
             .ctx
             .as_mut()
             .expect("alloc_index found a launch context");
-        match space {
-            MemorySpace::Shared => touch(&mut c.block.log, (alloc, i), c.who, false)?,
-            _ => {}
+        if space == MemorySpace::Shared {
+            touch(&mut c.block.log, (alloc, i), c.who, false)?;
         }
         let trap = if space == MemorySpace::Shared {
             KernelTrap::UninitializedShared { alloc }
@@ -303,9 +302,8 @@ impl Machine<'_> {
             .ctx
             .as_mut()
             .expect("alloc_index found a launch context");
-        match space {
-            MemorySpace::Shared => touch(&mut c.block.log, (alloc, i), c.who, true)?,
-            _ => {}
+        if space == MemorySpace::Shared {
+            touch(&mut c.block.log, (alloc, i), c.who, true)?;
         }
         let m = alloc_mem_mut(c, alloc, space).expect("the space holds an instance");
         store_val(v, m.dtype, &mut m.bytes, i);

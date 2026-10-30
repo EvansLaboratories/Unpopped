@@ -15,7 +15,7 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## `0.34.0` — feat: `run_launch`, the per-thread driver for barrier-free kernels (U3 row 4, PR 2)
+## `0.34.1` — feat: `run_launch`, the per-thread driver for barrier-free kernels (U3 row 4, PR 2)
 
 **Additive.** `oracle::kernel_launch::{run_launch, run_launch_with_subgroup}` run every thread of a launched kernel, block by block (x fastest), threads one after another. `Exec` ids evaluate (`ThreadIdx`, `BlockIdx`, `BlockDim`, `GridDim`, `LaneId`, `SubgroupId`, `SubgroupSize`); the subgroup size is the launch range's minimum unless the caller passes one inside the range. `Shared` (per block) and `Private` (per thread) allocations are real storage, sized by `Static` or by the integer argument a `Param` extent names.
 
