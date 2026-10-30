@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.34.13` — `unpopped-slang` is deprecated: the final release
+
+**Docs and metadata only; no code, no API, no behaviour change.** `unpopped-slang` carries a crate-doc notice, a "DEPRECATED" description and the crates.io `deprecated` maintenance badge, all pointing to `vulkane-slang-emit` (Vulkane owns Slang, CireSnave 2026-10-30; handover `vulkane` `docs/design/slang-parser-emitter-handover.md`, vulkane#107). Only `unpopped-slang` is published at this version; the other crates stay at their published versions. The crate is removed from the tree in the next PR.
+
 ## `0.34.12` — docs: ownership map records Slang as Vulkane's
 
 **Docs only; no code, no API, no behaviour change.** `docs/parser-emitter-ownership-map.md` sections 1 and 9 now say Vulkane owns Slang (CireSnave 2026-10-30), with the handover in `vulkane` `docs/design/slang-parser-emitter-handover.md` (vulkane#107). `unpopped-slang` is untouched and stays in-tree until `vulkane-slang-emit` is published.
