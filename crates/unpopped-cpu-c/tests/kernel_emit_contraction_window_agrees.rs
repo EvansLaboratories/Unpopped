@@ -17,7 +17,7 @@ use unpopped_vocab::ElementKind;
 mod cc;
 #[path = "support/kernel_run.rs"]
 mod kernel_run;
-use kernel_run::{F32, F64, agree, run_c, run_c_mutated, zeroed};
+use kernel_run::{F32, F64, agree, run_c, run_c_mutated, same_bytes, zeroed};
 
 const VALUES: [f64; 12] = [
     1.0e8,
@@ -238,4 +238,40 @@ fn the_window_accumulator_is_f64_in_the_emitted_c() {
     let acc = accumulator(&k);
     assert_eq!(first_out("win_acc", &k, &a, &acc, false), 1.0);
     assert_eq!(first_out("win_acc", &k, &a, &acc, true), 0.0);
+}
+
+fn f32s(vs: &[f32]) -> Vec<Vec<u8>> {
+    vec![vs.iter().flat_map(|v| v.to_le_bytes()).collect()]
+}
+
+fn f64s(vs: &[f64]) -> Vec<Vec<u8>> {
+    vec![vs.iter().flat_map(|v| v.to_le_bytes()).collect()]
+}
+
+fn agrees(got: &[Vec<u8>], want: &[Vec<u8>], dtype: ElementKind) -> bool {
+    std::panic::catch_unwind(|| same_bytes("nan", got, want, dtype, 0)).is_ok()
+}
+
+#[test]
+fn nan_is_equal_only_to_nan() {
+    // The loosening: a NaN of either sign equals a NaN of either sign (positive control).
+    let neg32 = f32::from_bits(0xffc0_0000);
+    let neg64 = f64::from_bits(0xfff8_0000_0000_0000);
+    assert!(agrees(&f32s(&[neg32]), &f32s(&[f32::NAN]), F32));
+    assert!(agrees(&f64s(&[neg64]), &f64s(&[f64::NAN]), F64));
+    // Everything else still fails, in both directions and both widths.
+    for (a, b) in [
+        (f32::NAN, 1.0),
+        (1.0, f32::NAN),
+        (f32::INFINITY, f32::NAN),
+        (f32::NAN, f32::NEG_INFINITY),
+        (0.0, f32::NAN),
+        (-0.0, 0.0),
+        (f32::INFINITY, f32::NEG_INFINITY),
+    ] {
+        assert!(!agrees(&f32s(&[a]), &f32s(&[b]), F32), "{a:?} vs {b:?}");
+    }
+    for (a, b) in [(f64::NAN, 1.0), (f64::INFINITY, f64::NAN), (-0.0, 0.0)] {
+        assert!(!agrees(&f64s(&[a]), &f64s(&[b]), F64), "{a:?} vs {b:?}");
+    }
 }
