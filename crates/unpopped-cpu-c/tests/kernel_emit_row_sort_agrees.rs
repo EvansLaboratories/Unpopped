@@ -10,11 +10,13 @@
 //! friendly corpus would pass a comparator that got any of those wrong. The serial C is a
 //! correctness reference; nothing is timed.
 
+use unpopped::backend::Backend;
 use unpopped::ir::{Access, OpDef, SortLimit, SortOrder, SortOut};
 use unpopped::kernel::{KernelFn, check_kernel};
 use unpopped::kernel_lift::lift_row_sort_opdef;
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
+use unpopped_cpu_c::CpuC;
 use unpopped_vocab::ElementKind;
 
 #[path = "support/cc.rs"]
@@ -148,12 +150,14 @@ fn the_corpus_catches_a_wrong_comparator() {
     // the output bytes of the corpus (the unmutated C agrees with the interpreter above), or the
     // corpus could not tell a wrong tie-break or NaN rule from a right one.
     let (k, args) = build(F32, SortOrder::Asc, SortOut::Both, None, &[4, 11]);
+    let src = CpuC.lower_kernel(&k).expect("the sort lowers").source;
     let outs = |tag: &str, from: &str, to: &str| {
         run_c_mutated(tag, &k, &args, |s| {
             if from.is_empty() {
                 return s;
             }
             assert!(s.contains(from), "the anchor `{from}` is in the emitted C");
+            assert_eq!(s, src, "the mutation starts from the emitter's own output");
             s.replace(from, to)
         })
         .expect("a host C compiler")
