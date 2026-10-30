@@ -63,15 +63,17 @@ fn cmp(op: BinaryOp, a: ScalarExpr, b: ScalarExpr) -> ScalarExpr {
     ScalarExpr::Binary(op, Box::new(a), Box::new(b))
 }
 
-/// Nested loops with `Continue`, `Break` and an early `Return`, plus a `While`: every control
-/// construct the resumable evaluator re-implements.
-fn control_flow() -> KernelFn {
-    const I: u32 = 1;
-    const J: u32 = 2;
-    const ACC: u32 = 3;
-    const K: u32 = 4;
-    let add_f = |v: f64| ScalarExpr::Add(Box::new(local(ACC)), Box::new(ScalarExpr::Const(v)));
-    let inner = Stmt::For {
+const I: u32 = 1;
+const J: u32 = 2;
+const ACC: u32 = 3;
+const K: u32 = 4;
+
+fn add_f(v: f64) -> ScalarExpr {
+    ScalarExpr::Add(Box::new(local(ACC)), Box::new(ScalarExpr::Const(v)))
+}
+
+fn inner_loop() -> Stmt {
+    Stmt::For {
         local: J,
         start: ci(0),
         end: ci(6),
@@ -92,14 +94,17 @@ fn control_flow() -> KernelFn {
                 value: add_f(1.0),
             },
         ]),
-    };
-    let outer = Stmt::For {
+    }
+}
+
+fn outer_loop() -> Stmt {
+    Stmt::For {
         local: I,
         start: ci(0),
         end: local(N),
         step: ci(1),
         body: Block(vec![
-            inner,
+            inner_loop(),
             Stmt::If {
                 cond: cmp(BinaryOp::CmpEq, local(I), ci(3)),
                 then: Block(vec![Stmt::Break]),
@@ -110,17 +115,12 @@ fn control_flow() -> KernelFn {
                 value: add_f(10.0),
             },
         ]),
-    };
-    let body = vec![
-        Stmt::Let {
-            local: ACC,
-            init: ScalarExpr::Const(0.0),
-        },
-        Stmt::Let {
-            local: K,
-            init: ci(0),
-        },
-        outer,
+    }
+}
+
+/// The `While` loop, the stores and the early `Return`.
+fn tail_stmts() -> Vec<Stmt> {
+    vec![
         Stmt::While {
             cond: cmp(BinaryOp::CmpLt, local(K), ci(3)),
             body: Block(vec![
@@ -147,7 +147,24 @@ fn control_flow() -> KernelFn {
             place: buf(1, ci(1)),
             value: local(ACC),
         },
+    ]
+}
+
+/// Nested loops with `Continue`, `Break` and an early `Return`, plus a `While`: every control
+/// construct the resumable evaluator re-implements.
+fn control_flow() -> KernelFn {
+    let mut body = vec![
+        Stmt::Let {
+            local: ACC,
+            init: ScalarExpr::Const(0.0),
+        },
+        Stmt::Let {
+            local: K,
+            init: ci(0),
+        },
+        outer_loop(),
     ];
+    body.extend(tail_stmts());
     KernelFn::new(
         "control",
         F32,
