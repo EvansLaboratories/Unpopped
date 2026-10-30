@@ -1,6 +1,6 @@
 # U3 row 4: execution scopes, memory spaces and the per-thread driver (design note)
 
-Status: **PR 1 (types, leaf, checker) implemented; the driver (PRs 2 and 3) is not.** Originally design only. Written because `u3-program-model-and-seam.md` sections 2.1-2.2 name the
+Status: **PRs 1 (types, leaf, checker) and 2 (`run_launch` without barriers) implemented; barriers and the resumable evaluator (PR 3) are not.** Originally design only. Written because `u3-program-model-and-seam.md` sections 2.1-2.2 name the
 shapes ("`Scope` enum, id leaves, `Alloc`, `Place::Ptr`") without fixing them, and the PM's task for this row
 (2026-10-29) said to land a design note before code when the leaves are not already specified. Every choice
 below marked **DECISION** is open to the PM's ruling; the rest follows from the spec and the code at

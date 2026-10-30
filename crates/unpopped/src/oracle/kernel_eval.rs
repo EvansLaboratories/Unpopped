@@ -19,6 +19,7 @@
 //! * Anything else (a packed value, an integer operation outside the subset above, a float
 //!   expression that reads a non-compute local) is [`KernelTrap::Unsupported`], never a guess.
 
+use super::kernel_launch::ThreadCtx;
 use super::{
     Eval, TypedBuffer, Val, eval, int_val, panic_reduced, raw_to_i128, read_elem, store_val,
 };
@@ -62,6 +63,25 @@ pub enum KernelTrap {
     },
     /// A construct this interpreter does not evaluate (named), by design not guessed at.
     Unsupported(&'static str),
+    /// An index outside a launched kernel's allocation (never wrapped, never silent).
+    AllocOutOfBounds {
+        /// The allocation index.
+        alloc: u32,
+    },
+    /// A read of a `Shared` element no thread has stored. Shared memory is not zero-filled: a
+    /// zero would hide the missing-barrier bug the memory space exists to catch.
+    UninitializedShared {
+        /// The allocation index.
+        alloc: u32,
+    },
+    /// A read of a `Private` element this thread has not stored.
+    UninitializedPrivate {
+        /// The allocation index.
+        alloc: u32,
+    },
+    /// Two threads touched one element with no ordering between them and at least one wrote it:
+    /// a store racing a store, or a read of another thread's store.
+    DataRace,
 }
 
 enum Flow {
@@ -71,12 +91,14 @@ enum Flow {
     Return,
 }
 
-struct Machine<'a> {
-    k: &'a KernelFn,
-    local_tys: Vec<Ty>,
+pub(super) struct Machine<'a> {
+    pub(super) k: &'a KernelFn,
+    pub(super) local_tys: Vec<Ty>,
     locals: Vec<Option<Val>>,
     args: &'a mut [KernelArg],
     steps: u64,
+    /// Present only under `run_launch`: which thread this is, and the memory it shares.
+    pub(super) ctx: Option<ThreadCtx<'a>>,
 }
 
 /// Run `k` on `args` (one per parameter, in order). Buffers are updated in place.
@@ -88,24 +110,38 @@ pub fn run_kernel(k: &KernelFn, args: &mut [KernelArg]) -> Result<(), KernelTrap
     check_kernel(k).map_err(KernelTrap::Malformed)?;
     if k.launch.is_some() || !k.allocs.is_empty() {
         return Err(KernelTrap::Unsupported(
-            "launch shape and memory-space allocations (U3 row 4 PR 2)",
+            "a launched or allocating kernel runs under run_launch, not run_kernel",
         ));
     }
     if args.len() != k.params.len() {
         return Err(KernelTrap::ArgMismatch("one argument per parameter"));
     }
-    let mut m = Machine {
-        k,
-        local_tys: k.locals.iter().map(|d| d.ty()).collect(),
-        locals: vec![None; k.locals.len()],
-        args,
-        steps: 0,
-    };
-    m.bind_args()?;
-    m.exec_block(&k.body).map(|_| ())
+    Machine::new(k, args, None).run_body()
 }
 
-impl Machine<'_> {
+impl<'a> Machine<'a> {
+    pub(super) fn new(
+        k: &'a KernelFn,
+        args: &'a mut [KernelArg],
+        ctx: Option<ThreadCtx<'a>>,
+    ) -> Self {
+        Self {
+            k,
+            local_tys: k.locals.iter().map(|d| d.ty()).collect(),
+            locals: vec![None; k.locals.len()],
+            args,
+            steps: 0,
+            ctx,
+        }
+    }
+
+    /// Bind the arguments and run the body to completion (one logical thread).
+    pub(super) fn run_body(&mut self) -> Result<(), KernelTrap> {
+        self.bind_args()?;
+        let k = self.k;
+        self.exec_block(&k.body).map(|_| ())
+    }
+
     fn bind_args(&mut self) -> Result<(), KernelTrap> {
         for (p, a) in self.k.params.iter().zip(self.args.iter()) {
             match (&p.kind, a) {
@@ -273,7 +309,11 @@ impl Machine<'_> {
     }
 
     fn load(&mut self, place: &Place) -> Result<Val, KernelTrap> {
+        if let Place::Alloc { alloc, index } = place {
+            return self.alloc_load(*alloc, index);
+        }
         let (b, off) = self.offset(place)?;
+        self.note_global(b, off, false)?;
         let KernelArg::Buffer(tb) = &self.args[b] else {
             unreachable!("offset() returned a buffer");
         };
@@ -281,7 +321,11 @@ impl Machine<'_> {
     }
 
     fn store(&mut self, place: &Place, v: Val) -> Result<(), KernelTrap> {
+        if let Place::Alloc { alloc, index } = place {
+            return self.alloc_store(*alloc, index, v);
+        }
         let (b, off) = self.offset(place)?;
+        self.note_global(b, off, true)?;
         let KernelArg::Buffer(tb) = &mut self.args[b] else {
             unreachable!("offset() returned a buffer");
         };
@@ -306,7 +350,7 @@ impl Machine<'_> {
         }
     }
 
-    fn eval_int(&self, e: &ScalarExpr, t: ElementKind) -> Result<i128, KernelTrap> {
+    pub(super) fn eval_int(&self, e: &ScalarExpr, t: ElementKind) -> Result<i128, KernelTrap> {
         let two = |a: &ScalarExpr, b: &ScalarExpr| -> Result<(i128, i128), KernelTrap> {
             Ok((self.eval_int(a, t)?, self.eval_int(b, t)?))
         };
@@ -320,6 +364,7 @@ impl Machine<'_> {
                     ));
                 }
             },
+            ScalarExpr::Exec(id) => wrap(t, self.exec_val(*id)?),
             ScalarExpr::Add(a, b) => {
                 let (x, y) = two(a, b)?;
                 wrap(t, x + y)
@@ -342,23 +387,26 @@ impl Machine<'_> {
             }
             // A comparison yields the compute type's 1 or 0, as the oracle does; its operands are
             // integers of their own type, not necessarily `t`.
-            ScalarExpr::Binary(op, a, b) if op.is_cmp() => {
-                let (x, y) = (self.eval_operand_int(a)?, self.eval_operand_int(b)?);
-                i128::from(match op {
-                    BinaryOp::CmpEq => x == y,
-                    BinaryOp::CmpNe => x != y,
-                    BinaryOp::CmpLt => x < y,
-                    BinaryOp::CmpLe => x <= y,
-                    BinaryOp::CmpGt => x > y,
-                    _ => x >= y,
-                })
-            }
+            ScalarExpr::Binary(op, a, b) if op.is_cmp() => self.eval_cmp(*op, a, b)?,
             _ => {
                 return Err(KernelTrap::Unsupported(
                     "integer expression outside the v0 subset",
                 ));
             }
         })
+    }
+
+    /// A comparison of two integer operands: `1` or `0`.
+    fn eval_cmp(&self, op: BinaryOp, a: &ScalarExpr, b: &ScalarExpr) -> Result<i128, KernelTrap> {
+        let (x, y) = (self.eval_operand_int(a)?, self.eval_operand_int(b)?);
+        Ok(i128::from(match op {
+            BinaryOp::CmpEq => x == y,
+            BinaryOp::CmpNe => x != y,
+            BinaryOp::CmpLt => x < y,
+            BinaryOp::CmpLe => x <= y,
+            BinaryOp::CmpGt => x > y,
+            _ => x >= y,
+        }))
     }
 
     /// An integer operand evaluated at its own inferred type.
@@ -391,6 +439,8 @@ impl Machine<'_> {
     fn reads_only_compute_locals(&self, e: &ScalarExpr) -> bool {
         match e {
             ScalarExpr::Local(i) => self.local_tys[*i as usize] == Ty::Scalar(self.k.compute),
+            // An execution id is a U32, never a compute-dtype local; its parent runs node by node.
+            ScalarExpr::Exec(_) => false,
             _ => types::operands(e)
                 .into_iter()
                 .all(|c| self.reads_only_compute_locals(c)),
