@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.34.6` — test: cpu_c kernel emitter agrees with the interpreter on Reduction and Scan (E1b, part 1)
+
+**Tests and docs only; no API or behaviour change.** `unpopped-cpu-c/tests/kernel_emit_reduce_agrees.rs` lowers lifted `Access::Reduction` and `Access::Scan` kernels (`lift_reduction_opdef`, `lift_scan_opdef`) with `CpuC::lower_kernel`, compiles the C, runs it and compares output bytes with `run_kernel`: every `ReduceOp` over the last axis and over the outer axis with `keepdim`, every scan monoid forward-inclusive and reverse-exclusive, `F32` and `F64`. The corpus holds NaN (first and mid-row), signed zeros, infinities, an all-negative row and a row that cancels in `f32` but not in `f64`. Fused posts (tolerance mode) agree within 3 ulps for `F32` and byte-exact for `F64`. The emitter needed no change: the E1a statement spelling already covers these kernels.
+
+Seeded mutants, each caught: the generated accumulator declared `float` instead of `double` (reduction row 0 gives `-0.5` not `0.5`), the scan prefix declared `float` (element 2 gives `0` not `1`), and the same prefix mutant under a fused post, which leaves the 3-ulp bound (so the tolerance is not vacuous). The kernel checker rejects an `F32` accumulator, so these mutate the emitted source; `tests/support/kernel_run.rs` gains `run_c_mutated` for that.
+
+The serial loop is a correctness reference, not a performance or device-timing claim (PM ruling 2026-10-30). Not here: Contraction, Window, RowReduce, RowSort, Im2Col, Gather, Scatter (E1b, next PRs).
+
 ## `0.34.5` — feat: `Backend::lower_kernel` and the cpu_c serial-C kernel emitter (E1a)
 
 **Additive.** `Backend::lower_kernel(&KernelFn)` is a new **defaulted** trait method (PM ruling 2026-10-30), so every existing backend, Baracuda's and Fuel's included, compiles unchanged; the default returns the new typed decline `LowerError::UnsupportedKernel` (not `UnsupportedOp`, never a panic). `Lowering` gains a `local` seam and `local_types`, so a typed node over a kernel `Local` can be spelled and typed.

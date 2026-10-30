@@ -17,7 +17,6 @@ use crate::cc;
 
 pub(crate) const F32: ElementKind = ElementKind::F32;
 pub(crate) const F64: ElementKind = ElementKind::F64;
-pub(crate) const I32: ElementKind = ElementKind::I32;
 
 pub(crate) fn ctype(t: ElementKind) -> &'static str {
     match t {
@@ -128,6 +127,17 @@ pub(crate) struct Ran {
 }
 
 pub(crate) fn run_c(tag: &str, k: &KernelFn, args: &[KernelArg]) -> Option<Ran> {
+    run_c_mutated(tag, k, args, |src| src)
+}
+
+/// [`run_c`] with `mutate` applied to the generated source before it is compiled: a seeded
+/// mutant of the emitter's output, for the tests that prove a construct is observable.
+pub(crate) fn run_c_mutated(
+    tag: &str,
+    k: &KernelFn,
+    args: &[KernelArg],
+    mutate: impl FnOnce(String) -> String,
+) -> Option<Ran> {
     let Some(compiler) = cc::find_compiler() else {
         eprintln!("SKIP {tag}: no host C compiler");
         return None;
@@ -138,7 +148,16 @@ pub(crate) fn run_c(tag: &str, k: &KernelFn, args: &[KernelArg]) -> Option<Ran> 
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("kernel_emit");
     std::fs::create_dir_all(&dir).unwrap();
     let (c, exe) = (dir.join(format!("{tag}.c")), dir.join(format!("{tag}.exe")));
-    std::fs::write(&c, format!("{}\n{}", g.source, driver(k, &g.name, args))).unwrap();
+    let source = mutate(g.source.clone());
+    std::fs::write(
+        &c,
+        format!(
+            "{source}
+{}",
+            driver(k, &g.name, args)
+        ),
+    )
+    .unwrap();
     compiler
         .compile(&c, &exe, true)
         .unwrap_or_else(|e| panic!("{tag}: {e}\n{}", g.source));
