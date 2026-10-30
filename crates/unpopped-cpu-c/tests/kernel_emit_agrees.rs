@@ -6,237 +6,20 @@
 //!
 //! The serial C is a correctness reference. Nothing here times anything.
 
-use std::fmt::Write as _;
-use std::path::PathBuf;
-use std::process::Command;
-
 use unpopped::backend::{Backend, LowerError};
 use unpopped::ir::{BinaryOp, Expr, OpDef, ScalarExpr, UnaryOp, View, input};
 use unpopped::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 use unpopped::kernel_lift::lift_elementwise_opdef;
 use unpopped::oracle::TypedBuffer;
-use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap, run_kernel};
+use unpopped::oracle::kernel_eval::KernelArg;
 use unpopped_cpu_c::CpuC;
 use unpopped_vocab::ElementKind;
 
 #[path = "support/cc.rs"]
 mod cc;
-
-const F32: ElementKind = ElementKind::F32;
-const F64: ElementKind = ElementKind::F64;
-const I32: ElementKind = ElementKind::I32;
-
-fn ctype(t: ElementKind) -> &'static str {
-    match t {
-        ElementKind::F32 => "float",
-        ElementKind::F64 => "double",
-        _ => "int",
-    }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().fold(String::new(), |mut s, b| {
-        let _ = write!(s, "{b},");
-        s
-    })
-}
-
-/// `n` distinct values that exercise rounding (not representable in a short decimal).
-fn values(t: ElementKind, n: usize, seed: u32) -> Vec<u8> {
-    (0..n)
-        .flat_map(|i| {
-            let x = f64::from((i as u32 * 7919 + seed * 104_729) % 2003) / 97.0 - 10.0;
-            match t {
-                ElementKind::F64 => x.to_le_bytes().to_vec(),
-                ElementKind::F32 => (x as f32).to_le_bytes().to_vec(),
-                _ => (x as i32).to_le_bytes().to_vec(),
-            }
-        })
-        .collect()
-}
-
-fn dense(t: ElementKind, shape: &[i64], seed: u32) -> TypedBuffer {
-    let n = shape.iter().product::<i64>() as usize;
-    let mut strides = vec![1i64; shape.len()];
-    for d in (0..shape.len().saturating_sub(1)).rev() {
-        strides[d] = strides[d + 1] * shape[d + 1];
-    }
-    TypedBuffer::new(t, shape.to_vec(), strides, values(t, n, seed))
-}
-
-fn zeroed(t: ElementKind, shape: &[i64]) -> TypedBuffer {
-    let mut b = dense(t, shape, 0);
-    b.bytes.fill(0);
-    b
-}
-
-/// The C `main` that binds `args`, calls the kernel and prints the status then each writable
-/// buffer's bytes.
-fn driver(k: &KernelFn, name: &str, args: &[KernelArg]) -> String {
-    let mut s = String::from("#include <stdio.h>\n#include <string.h>\nint main(void) {\n");
-    let mut call = Vec::new();
-    let mut outs = Vec::new();
-    for (i, (p, a)) in k.params.iter().zip(args).enumerate() {
-        match a {
-            KernelArg::Buffer(b) => {
-                let n = b.bytes.len() / (if b.dtype == F64 { 8 } else { 4 });
-                let t = ctype(b.dtype);
-                let _ = writeln!(s, "  static unsigned char r{i}[] = {{{}}};", hex(&b.bytes));
-                let _ = writeln!(
-                    s,
-                    "  static {t} b{i}[{n}]; memcpy(b{i}, r{i}, sizeof r{i});"
-                );
-                let lst = |v: &[i64]| {
-                    v.iter()
-                        .map(|x| format!("{x}LL"))
-                        .collect::<Vec<_>>()
-                        .join(",")
-                };
-                let _ = writeln!(
-                    s,
-                    "  static long long s{i}[] = {{{}}}, t{i}[] = {{{}}};",
-                    lst(&b.shape),
-                    lst(&b.strides)
-                );
-                call.push(format!("b{i}, s{i}, t{i}, {}LL", b.base_offset));
-                if matches!(&p.kind, unpopped::kernel::ParamKind::Buffer { role, .. } if *role != BufferRole::Read)
-                {
-                    outs.push((i, n * (if b.dtype == F64 { 8 } else { 4 })));
-                }
-            }
-            KernelArg::Int(v) => call.push(format!("{v}")),
-            KernelArg::Float(v) => call.push(format!("{v:?}")),
-            other => panic!("an argument kind the driver cannot bind: {other:?}"),
-        }
-    }
-    let _ = writeln!(
-        s,
-        "  int st = {name}({});\n  printf(\"%d\\n\", st);",
-        call.join(", ")
-    );
-    for (i, len) in outs {
-        let _ = writeln!(
-            s,
-            "  for (int j = 0; j < {len}; ++j) printf(\"%02x\", ((unsigned char*)b{i})[j]);\n  printf(\"\\n\");"
-        );
-    }
-    s.push_str("  return 0;\n}\n");
-    s
-}
-
-/// What the C program printed: its status and the bytes of each writable buffer.
-struct Ran {
-    status: i32,
-    outs: Vec<Vec<u8>>,
-}
-
-fn run_c(tag: &str, k: &KernelFn, args: &[KernelArg]) -> Option<Ran> {
-    let Some(compiler) = cc::find_compiler() else {
-        eprintln!("SKIP {tag}: no host C compiler");
-        return None;
-    };
-    let g = CpuC
-        .lower_kernel(k)
-        .unwrap_or_else(|e| panic!("{tag}: lowering refused: {e}"));
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("kernel_emit");
-    std::fs::create_dir_all(&dir).unwrap();
-    let (c, exe) = (dir.join(format!("{tag}.c")), dir.join(format!("{tag}.exe")));
-    std::fs::write(&c, format!("{}\n{}", g.source, driver(k, &g.name, args))).unwrap();
-    compiler
-        .compile(&c, &exe, true)
-        .unwrap_or_else(|e| panic!("{tag}: {e}\n{}", g.source));
-    let out = Command::new(&exe).output().unwrap();
-    assert!(out.status.success(), "{tag}: the program crashed");
-    let text = String::from_utf8_lossy(&out.stdout).into_owned();
-    let mut lines = text.lines();
-    let status = lines.next().unwrap().trim().parse().unwrap();
-    let outs = lines
-        .map(|l| {
-            (0..l.len() / 2)
-                .map(|i| u8::from_str_radix(&l[2 * i..2 * i + 2], 16).unwrap())
-                .collect()
-        })
-        .collect();
-    Some(Ran { status, outs })
-}
-
-/// Distance in representable `f32` values; two NaNs are equal.
-fn ulps(a: f32, b: f32) -> u64 {
-    if a.is_nan() || b.is_nan() {
-        return u64::from(a.is_nan() != b.is_nan()) * u64::MAX;
-    }
-    let key = |x: f32| {
-        let i = i64::from(x.to_bits() as i32);
-        if i < 0 { i64::from(i32::MIN) - i } else { i }
-    };
-    key(a).abs_diff(key(b))
-}
-
-/// Output buffers agree: byte for byte, or for `F32` within `tol` ulps (the oracle evaluates a
-/// compound `f32` expression at `f64` and rounds once, where `float` C rounds every operation;
-/// the spec's tolerance mode, section 7.1). `F64` is always byte-exact.
-fn same_bytes(tag: &str, got: &[Vec<u8>], want: &[Vec<u8>], dtype: ElementKind, tol: u64) {
-    assert_eq!(got.len(), want.len(), "{tag}: buffer count");
-    for (g, w) in got.iter().zip(want) {
-        if dtype == F32 && tol > 0 {
-            let f = |v: &[u8]| {
-                v.chunks(4)
-                    .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
-                    .collect::<Vec<_>>()
-            };
-            for (i, (a, b)) in f(g).into_iter().zip(f(w)).enumerate() {
-                assert!(
-                    ulps(a, b) <= tol,
-                    "{tag}: element {i}: C {a:?} vs interpreter {b:?} ({} ulps > {tol})",
-                    ulps(a, b)
-                );
-            }
-        } else {
-            assert_eq!(g, w, "{tag}: output bytes differ");
-        }
-    }
-}
-
-/// Run `k` both ways on `args` and assert they agree exactly.
-fn agree(tag: &str, k: &KernelFn, args: Vec<KernelArg>) {
-    agree_within(tag, k, args, 0);
-}
-
-/// [`agree`] with an `F32` tolerance of `tol` ulps.
-fn agree_within(tag: &str, k: &KernelFn, args: Vec<KernelArg>, tol: u64) {
-    let Some(c) = run_c(tag, k, &args) else {
-        return;
-    };
-    let mut interp = args;
-    let r = run_kernel(k, &mut interp);
-    match r {
-        Ok(()) => {
-            assert_eq!(
-                c.status, 0,
-                "{tag}: the interpreter finished, the C reported {}",
-                c.status
-            );
-            let want: Vec<Vec<u8>> =
-                k.params
-                    .iter()
-                    .zip(&interp)
-                    .filter_map(|(p, a)| match (&p.kind, a) {
-                        (
-                            unpopped::kernel::ParamKind::Buffer { role, .. },
-                            KernelArg::Buffer(b),
-                        ) if *role != BufferRole::Read => Some(b.bytes.clone()),
-                        _ => None,
-                    })
-                    .collect();
-            same_bytes(tag, &c.outs, &want, k.compute, tol);
-        }
-        Err(KernelTrap::OutOfBounds { .. }) => {
-            assert_eq!(c.status, 1, "{tag}: interpreter OutOfBounds")
-        }
-        Err(KernelTrap::ZeroStep) => assert_eq!(c.status, 2, "{tag}: interpreter ZeroStep"),
-        Err(e) => panic!("{tag}: unexpected interpreter trap {e:?}"),
-    }
-}
+#[path = "support/kernel_run.rs"]
+mod kernel_run;
+use kernel_run::{F32, F64, I32, agree, agree_within, dense, run_c, zeroed};
 
 fn elementwise(name: &str, n_in: u8, dtype: ElementKind, body: ScalarExpr) -> OpDef {
     OpDef::elementwise(name, n_in, &[dtype], Expr(body))
@@ -400,14 +183,28 @@ fn a_permuted_view_agrees() {
 
 /// A hand-written kernel with every control construct: `For` with a negative step, nested loops
 /// with `Break` and `Continue`, a `While`, an `If` and an early `Return`.
-fn control_flow() -> KernelFn {
-    let l = ScalarExpr::Local;
-    let ci = |v| ScalarExpr::ConstInt(v, I32);
-    let cmp = |op, a, b| ScalarExpr::Binary(op, bx(a), bx(b));
-    let acc = |v: f64| Stmt::Assign {
+fn l(i: u32) -> ScalarExpr {
+    ScalarExpr::Local(i)
+}
+
+fn ci(v: i64) -> ScalarExpr {
+    ScalarExpr::ConstInt(v, I32)
+}
+
+fn cmp(op: BinaryOp, a: ScalarExpr, b: ScalarExpr) -> ScalarExpr {
+    ScalarExpr::Binary(op, bx(a), bx(b))
+}
+
+/// `acc += v` on the float accumulator, local 2.
+fn acc(v: f64) -> Stmt {
+    Stmt::Assign {
         local: 2,
         value: ScalarExpr::Add(bx(l(2)), bx(c(v))),
-    };
+    }
+}
+
+/// The nested loops: a descending outer `For` over a `Continue`/`Break` inner `For`.
+fn nested_loops() -> Stmt {
     let inner = Stmt::For {
         local: 3,
         start: ci(0),
@@ -427,14 +224,18 @@ fn control_flow() -> KernelFn {
             acc(1.5),
         ]),
     };
-    let outer = Stmt::For {
+    Stmt::For {
         local: 4,
         start: l(0),
         end: ci(-1),
         step: ci(-1),
         body: Block(vec![inner, acc(10.25)]),
-    };
-    let tail = [
+    }
+}
+
+/// The `If`/`else`, the `While`, the stores and the early `Return`.
+fn tail_stmts() -> Vec<Stmt> {
+    vec![
         Stmt::If {
             cond: cmp(BinaryOp::CmpLt, l(0), ci(3)),
             then: Block(vec![acc(1000.0)]),
@@ -469,7 +270,10 @@ fn control_flow() -> KernelFn {
             },
             value: l(2),
         },
-    ];
+    ]
+}
+
+fn control_flow() -> KernelFn {
     let mut body = vec![
         Stmt::Let {
             local: 2,
@@ -479,9 +283,9 @@ fn control_flow() -> KernelFn {
             local: 5,
             init: ci(0),
         },
-        outer,
+        nested_loops(),
     ];
-    body.extend(tail);
+    body.extend(tail_stmts());
     KernelFn::new(
         "control",
         F32,
@@ -510,7 +314,7 @@ fn control_flow_agrees_over_many_extents() {
 }
 
 #[test]
-fn an_out_of_bounds_access_and_a_zero_step_trap_the_same_way() {
+fn an_out_of_bounds_access_traps_the_same_way() {
     let oob = KernelFn::new(
         "oob",
         F32,
@@ -534,6 +338,10 @@ fn an_out_of_bounds_access_and_a_zero_step_trap_the_same_way() {
             vec![KernelArg::Buffer(zeroed(F32, &[3])), KernelArg::Int(i)],
         );
     }
+}
+
+#[test]
+fn a_zero_step_traps_the_same_way() {
     let zero = KernelFn::new(
         "zero",
         F32,

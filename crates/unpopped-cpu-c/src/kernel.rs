@@ -252,42 +252,46 @@ fn signature(k: &KernelFn, name: &str) -> Result<String, LowerError> {
     Ok(format!("int {name}(\n    {})", args.join(",\n    ")))
 }
 
+/// The leaf seam: a kernel has no `Input` leaves (the checker rejects them).
+fn no_input_leaf(i: u8) -> Result<Spelling, LowerError> {
+    Ok(Spelling::Declined(Decline::UnsupportedOp {
+        op: DeclinedOp::Kernel,
+        why: format!("an Input({i}) leaf inside a kernel; the checker rejects it"),
+    }))
+}
+
+/// A literal, cast to the compute type: a bare C literal is a `double`, and a `float` expression
+/// containing one would be evaluated in double and rounded once at the end.
+fn literal(dtype: ElementKind, v: f64) -> Result<Spelling, LowerError> {
+    Ok(Spelling::Spelled(match dtype {
+        ElementKind::F32 => format!("((float){})", const_lit(v)),
+        _ => const_lit(v),
+    }))
+}
+
+fn infix(op: unpopped::ir::ArithOp, a: String, b: String) -> Result<Spelling, LowerError> {
+    Ok(Spelling::Spelled(format!("({a} {} {b})", op.c_operator())))
+}
+
 /// Lower `k` to a C function. See the module docs for the contract.
 pub(crate) fn lower_kernel(k: &KernelFn) -> Result<GeneratedKernel, LowerError> {
     admit(k)?;
-    let name = format!("unpopped_cpu_kernel_{}", ident(&k.name));
     let dtype = k.compute;
     let tys: Vec<Ty> = k.locals.iter().map(|d| d.ty()).collect();
-    let leaf = |i: u8| {
-        Ok(Spelling::Declined(Decline::UnsupportedOp {
-            op: DeclinedOp::Kernel,
-            why: format!("an Input({i}) leaf inside a kernel; the checker rejects it"),
-        }))
-    };
     let un = |op, x: String| cpu_unary(op, x, dtype);
     let bin = |op, a: String, b: String| cpu_binary(op, a, b, dtype);
-    let ar = |op: unpopped::ir::ArithOp, a: String, b: String| {
-        Ok(Spelling::Spelled(format!("({a} {} {b})", op.c_operator())))
-    };
     let sel = |c, a, b| cpu_select(c, a, b, dtype);
     let fm = |a, b, c| cpu_fma(a, b, c, dtype);
     let cs = |x: String, from, spec| typed::cpu_cast(x, from, spec);
     let bc = |x: String, from, to| typed::cpu_bitcast(x, from, to);
     let tn = |t| typed::c_type(t).map(str::to_string);
     let ql = |op, operands, n| qualified::cpu_qualified(op, operands, n, dtype);
-    // A literal is cast to the compute type: a bare C literal is a `double`, and a `float`
-    // expression containing one would be evaluated in double and rounded once at the end.
-    let cst = |v| {
-        Ok(Spelling::Spelled(match dtype {
-            ElementKind::F32 => format!("((float){})", const_lit(v)),
-            _ => const_lit(v),
-        }))
-    };
+    let cst = |v| literal(dtype, v);
     let ci = |v, t| typed::cpu_const_int(v, t);
     let io = |op, t, operands: Vec<String>| typed::cpu_int_op(op, t, &operands, dtype);
     let local = |i: u32| Ok(Spelling::Spelled(format!("l{i}")));
-    let lowering = Lowering::builder(&leaf, &un, &bin)
-        .arith(&ar)
+    let lowering = Lowering::builder(&no_input_leaf, &un, &bin)
+        .arith(&infix)
         .select(&sel)
         .fma(&fm)
         .cast(&cs)
@@ -301,9 +305,15 @@ pub(crate) fn lower_kernel(k: &KernelFn) -> Result<GeneratedKernel, LowerError> 
         .local(&local)
         .local_types(&tys)
         .build();
+    emit(k, &lowering)
+}
+
+/// Spell the whole function with the seams `lo` carries.
+fn emit(k: &KernelFn, lo: &Lowering<'_>) -> Result<GeneratedKernel, LowerError> {
+    let name = format!("unpopped_cpu_kernel_{}", ident(&k.name));
     let mut e = Emitter {
         k,
-        lo: &lowering,
+        lo,
         out: String::new(),
         depth: 1,
         fresh: 0,
