@@ -15,6 +15,16 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.34.10` — feat: the cpu_c kernel emitter spells integer compute (`I32`, `I64`, `U32`, `U64`) (E1b-int)
+
+**Behaviour change in `CpuC::lower_kernel` only; no API change.** A `KernelFn` whose compute dtype is `I32`, `I64`, `U32` or `U64` was `LowerError::UnsupportedKernel` and is now emitted as serial C; every other dtype (16-bit, narrow, packed) is still that typed decline. In the integer forms, `+ - *` wrap in two's complement through the unsigned type (C's signed overflow is undefined), `Select` tests its condition against zero and moves the arm, `Max`/`Min` and the comparisons yield the integer 1/0, and `& | ^` are the C operators. Integer `/`, shifts and the logical operators decline with a typed reason (the oracle's rules for a zero divisor and an oversized shift are not ones the emitter has been taught).
+
+`unpopped-cpu-c/tests/kernel_emit_int_reduce_agrees.rs` (reductions over both axes, scans in both directions and exclusivities, a scan pre-map, 1-D windows with padding, stride and dilation) and `kernel_emit_int_scatter_agrees.rs` (gather with `Skip`/`Clamp`/`ZeroFill`, scatter with `Assign`/`AtomicAdd`/`AtomicMax`/`AtomicMin`, `bincount` at both index widths) compile and run lifted kernels and compare output bytes with `run_kernel`: bit-exact. The corpus wraps (`MAX + 1`, a product past the width), has an all-negative `Max` row and an all-positive `Min` row, and a destination that starts non-zero.
+
+Seeded mutants on the emitted C, all caught: a `Max` turned into a `Min`, the `Max` first-element rule removed (the accumulator then stays 0 on an all-negative row), the wrapping add narrowed to 16 bits, the scatter's negative-index and one-past-the-end tests off by one, an `AtomicMax` that kept the smaller, and a `bincount` that added 2. (A first narrowing mutant on one row was equivalent, the row cancels under truncation; it is judged on a row that does not.) `integer_compute_is_a_typed_decline` is replaced by `unsupported_integer_widths_are_still_a_typed_decline`, which pins the 16-bit refusal. Test harness: `kernel_run.rs` binds `U64`, and `kernel_data.rs` builds 8-byte `I64`/`U64` elements (a zeroed `I64` buffer had been half its size).
+
+The serial loop is a correctness reference, not a performance or device-timing claim (PM ruling 2026-10-30).
+
 ## `0.34.9` — test: cpu_c kernel emitter agrees with the interpreter on Gather, Scatter and Im2Col (E1b, part 4; E1b complete for float kernels)
 
 **Tests and docs only; no API or behaviour change.** `unpopped-cpu-c/tests/kernel_emit_gather_scatter_agrees.rs` and `kernel_emit_im2col_agrees.rs` compile and run lifted kernels and compare output bytes with `run_kernel` (bit-exact except NaN sign/payload). Gather: `Skip`, `Clamp` and `ZeroFill` with `I32`, `I64` and `U32` index buffers, both axes, a broadcast 1-D index and `F64`. Scatter: `Assign` and `AtomicAdd` with the same index types, both axes, `index_add` and `F64`. Im2Col: padding, stride, dilation, batch and channels, a rectangular input and window, `F64`. The output starts non-zero (`7.0`), so `Skip` is distinguishable from `ZeroFill` and an unwritten cell shows; the index corpus holds negatives, the last valid row, one past it, far-out values and each index type's extremes. The emitter needed no change.

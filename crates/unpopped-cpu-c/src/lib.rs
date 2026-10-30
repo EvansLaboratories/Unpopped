@@ -665,6 +665,12 @@ fn cpu_select(c: String, a: String, b: String, dtype: ElementKind) -> Result<Spe
     let spelled = match dtype {
         ElementKind::F32 | ElementKind::F32Strict => select_f32(c, a, b),
         ElementKind::F64 => select_f64(c, a, b),
+        // An integer compute dtype tests the condition against zero in its own type and moves
+        // the arm unconverted.
+        ElementKind::I32 | ElementKind::I64 | ElementKind::U32 | ElementKind::U64 => {
+            let t = typed::c_type(dtype).expect("an integer compute dtype has a C type");
+            format!("((({c}) != 0) ? ({t})({a}) : ({t})({b}))")
+        }
         _ => {
             return Ok(Spelling::Declined(Decline::UnsupportedDtypeForOp {
                 op: DeclinedOp::Select,
