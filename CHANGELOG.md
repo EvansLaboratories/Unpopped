@@ -15,7 +15,7 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## `0.34.2` — docs: PATENT-SWEEP full independent-claim read for the 0.34.x publish
+## `0.34.3` — docs: PATENT-SWEEP full independent-claim read for the 0.34.x publish
 
 **Docs only; no code, API or behaviour change.** `docs/PATENT-SWEEP.md` gains a section that reads every independent claim, in full, of the hits the earlier passes read from excerpts only (US10726606B2, US12412230B2, WO2013070636A1, US20100122264A1) or left unread (US20120254497A1, US20080109795A1, US12299766B2, EP4318225A1, US20240045677A1, US20240045654A1, EP1620793B1). Wording is "outside as read", not legal advice; none of the independent claims read is met by the `unpopped*` crates as described, and the section records re-read triggers and the one broad claim (US20100122264A1 claim 1) that no adopter has been charted against.
 
