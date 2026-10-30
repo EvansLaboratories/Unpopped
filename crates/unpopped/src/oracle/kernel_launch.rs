@@ -136,6 +136,17 @@ pub fn run_launch_with_subgroup(
         .iter()
         .map(|a| alloc_len(k, args, a))
         .collect::<Result<Vec<_>, _>>()?;
+    run_grid(k, launch, &lens, sg, args)
+}
+
+/// Run the blocks of the grid in row-major order (x fastest), sharing one global access log.
+fn run_grid(
+    k: &KernelFn,
+    launch: LaunchShape,
+    lens: &[usize],
+    sg: u32,
+    args: &mut [KernelArg],
+) -> Result<(), KernelTrap> {
     let mut global = Log::new();
     let [bx, by, bz] = launch.block;
     for gz in 0..launch.grid[2] {
@@ -143,7 +154,7 @@ pub fn run_launch_with_subgroup(
             for gx in 0..launch.grid[0] {
                 let block_lin = gx + launch.grid[0] * (gy + launch.grid[1] * gz);
                 let mut block = BlockMem {
-                    shared: instances(k, &lens, MemorySpace::Shared),
+                    shared: instances(k, lens, MemorySpace::Shared),
                     log: Log::new(),
                 };
                 for tz in 0..bz {
@@ -157,7 +168,7 @@ pub fn run_launch_with_subgroup(
                                 thread_lin,
                                 subgroup: sg,
                                 who: (block_lin, thread_lin),
-                                private: instances(k, &lens, MemorySpace::Private),
+                                private: instances(k, lens, MemorySpace::Private),
                                 block: &mut block,
                                 global: &mut global,
                             };

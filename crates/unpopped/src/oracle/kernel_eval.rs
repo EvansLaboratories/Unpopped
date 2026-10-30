@@ -387,23 +387,26 @@ impl<'a> Machine<'a> {
             }
             // A comparison yields the compute type's 1 or 0, as the oracle does; its operands are
             // integers of their own type, not necessarily `t`.
-            ScalarExpr::Binary(op, a, b) if op.is_cmp() => {
-                let (x, y) = (self.eval_operand_int(a)?, self.eval_operand_int(b)?);
-                i128::from(match op {
-                    BinaryOp::CmpEq => x == y,
-                    BinaryOp::CmpNe => x != y,
-                    BinaryOp::CmpLt => x < y,
-                    BinaryOp::CmpLe => x <= y,
-                    BinaryOp::CmpGt => x > y,
-                    _ => x >= y,
-                })
-            }
+            ScalarExpr::Binary(op, a, b) if op.is_cmp() => self.eval_cmp(*op, a, b)?,
             _ => {
                 return Err(KernelTrap::Unsupported(
                     "integer expression outside the v0 subset",
                 ));
             }
         })
+    }
+
+    /// A comparison of two integer operands: `1` or `0`.
+    fn eval_cmp(&self, op: BinaryOp, a: &ScalarExpr, b: &ScalarExpr) -> Result<i128, KernelTrap> {
+        let (x, y) = (self.eval_operand_int(a)?, self.eval_operand_int(b)?);
+        Ok(i128::from(match op {
+            BinaryOp::CmpEq => x == y,
+            BinaryOp::CmpNe => x != y,
+            BinaryOp::CmpLt => x < y,
+            BinaryOp::CmpLe => x <= y,
+            BinaryOp::CmpGt => x > y,
+            _ => x >= y,
+        }))
     }
 
     /// An integer operand evaluated at its own inferred type.
