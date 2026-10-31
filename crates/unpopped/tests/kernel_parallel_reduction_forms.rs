@@ -281,12 +281,23 @@ fn with_post(dtype: ElementKind, rop: ReduceOp, post: Expr) -> OpDef {
     OpDef::reduction_post("p", 1, &[dtype], input(0) * input(0), rop, post)
 }
 
+const POST_SHAPE: [i64; 2] = [9, 37];
+const POST_OUT: [i64; 1] = [9];
+
+fn serial_cells(op: &OpDef, dtype: ElementKind) -> Vec<f64> {
+    let k = lift_reduction_opdef(op, dtype, 2).unwrap();
+    run(&k, dtype, &POST_SHAPE, &POST_OUT, false)
+}
+
+fn launched_cells(op: &OpDef, dtype: ElementKind, block: u32, grid: u32) -> Vec<f64> {
+    let k = launched(op, dtype, 2, block, grid);
+    run(&k, dtype, &POST_SHAPE, &POST_OUT, true)
+}
+
 #[test]
-fn a_fused_post_runs_on_the_finalised_fold() {
-    let shape = [9i64, 37];
-    let out = [9i64];
+fn a_max_post_is_bit_exact_against_the_serial_kernel() {
     for dtype in [F32, F64] {
-        // Max is order-independent, so the whole op is bit-exact against the serial kernel.
+        // Max is order-independent, so the whole op (fold, then post) equals the serial kernel.
         let smax = OpDef::reduction_post(
             "smax",
             1,
@@ -295,51 +306,30 @@ fn a_fused_post_runs_on_the_finalised_fold() {
             ReduceOp::Max,
             reduced(0) * konst(0.3) - konst(1.0),
         );
-        let want = run(
-            &lift_reduction_opdef(&smax, dtype, 2).unwrap(),
-            dtype,
-            &shape,
-            &out,
-            false,
-        );
+        let want = serial_cells(&smax, dtype);
         for (grid, block) in GEOMETRIES {
-            let got = run(
-                &launched(&smax, dtype, 2, block, grid),
-                dtype,
-                &shape,
-                &out,
-                true,
-            );
+            let got = launched_cells(&smax, dtype, block, grid);
             assert_eq!(got, want, "{dtype:?} smax grid {grid} block {block}");
         }
-        // Sum/Mean with a sqrt post: block 1 is the serial order; other blocks stay within a
-        // relative 1e-9 of it (the Sum differs by the E1d-2 bound, the sqrt halves it).
+    }
+}
+
+#[test]
+fn a_sum_or_mean_post_is_serial_at_block_one_and_close_elsewhere() {
+    // Block 1 is the serial order; other blocks stay within a relative tolerance of it (the Sum
+    // differs by the E1d-2 bound, and the sqrt halves the relative difference).
+    for dtype in [F32, F64] {
+        let tol = if dtype == F32 { 1e-5 } else { 1e-12 };
         for (rop, post) in [
             (ReduceOp::Sum, reduced(0).sqrt()),
             (ReduceOp::Mean, (reduced(0) + konst(1.0e-3)).sqrt()),
         ] {
             let op = with_post(dtype, rop, post);
-            let serial = run(
-                &lift_reduction_opdef(&op, dtype, 2).unwrap(),
-                dtype,
-                &shape,
-                &out,
-                false,
-            );
-            assert_eq!(
-                run(&launched(&op, dtype, 2, 1, 3), dtype, &shape, &out, true),
-                serial
-            );
+            let serial = serial_cells(&op, dtype);
+            assert_eq!(launched_cells(&op, dtype, 1, 3), serial);
             for (grid, block) in GEOMETRIES {
-                let got = run(
-                    &launched(&op, dtype, 2, block, grid),
-                    dtype,
-                    &shape,
-                    &out,
-                    true,
-                );
+                let got = launched_cells(&op, dtype, block, grid);
                 for (g, w) in got.iter().zip(&serial) {
-                    let tol = if dtype == F32 { 1e-5 } else { 1e-12 };
                     assert!(
                         (g - w).abs() <= tol * w.abs().max(1.0),
                         "{dtype:?} {rop:?} {g} vs {w}"

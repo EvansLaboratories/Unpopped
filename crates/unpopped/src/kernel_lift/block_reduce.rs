@@ -62,15 +62,7 @@ pub fn lift_reduction_opdef_launched(
     check_order_independent(&sh, rop)?;
     let t = Tree {
         sh: &sh,
-        fold: Fold {
-            rop,
-            block,
-            acc: sh.acc,
-            have: sh.have,
-            val: sh.val,
-            partner_have: sh.red + 1,
-            int: sh.is_int(),
-        },
+        fold: Fold::of_shape(&sh, rop, block),
     };
 
     let mut row = vec![
@@ -157,6 +149,20 @@ pub(super) struct Fold {
 }
 
 impl Fold {
+    /// The fold over a reduction shape's accumulator, `have` flag and value locals; the partner's
+    /// `have` flag lives in the local after `red`.
+    fn of_shape(sh: &ReductionShape, rop: ReduceOp, block: u32) -> Self {
+        Self {
+            rop,
+            block,
+            acc: sh.acc,
+            have: sh.have,
+            val: sh.val,
+            partner_have: sh.red + 1,
+            int: sh.is_int(),
+        }
+    }
+
     pub(super) fn has_flag(&self) -> bool {
         matches!(self.rop, ReduceOp::Max | ReduceOp::Min)
     }
