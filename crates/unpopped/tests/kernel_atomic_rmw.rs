@@ -3,8 +3,8 @@
 //! launch interpreter applies the combine exactly and reports a `DataRace` only for a conflict that
 //! involves a plain access (`docs/ir-kernel-layer.md`, "Atomics").
 
-use unpopped::exec::LaunchShape;
-use unpopped::ir::ScalarExpr;
+use unpopped::exec::{ExecId, LaunchShape};
+use unpopped::ir::{BinaryOp, ScalarExpr};
 use unpopped::kernel::{
     AtomicOp, BufferRole, KernelError, KernelFn, Param, Place, Stmt, check_kernel,
 };
@@ -84,6 +84,46 @@ fn an_atomic_and_a_plain_access_to_one_element_race() {
             I32,
             BufferRole::ReadWrite,
             vec![plain, atomic(AtomicOp::Add, 1)],
+        );
+        k.locals = vec![unpopped::kernel::LocalDecl::scalar(I32)];
+        assert_eq!(check_kernel(&k), Ok(()));
+        assert_eq!(launch(&k, 0), Err(KernelTrap::DataRace));
+    }
+}
+
+/// The atomic comes first, and the plain access is made by the last thread of the launch, so
+/// nothing runs after it: only the earlier atomics can make it race.
+#[test]
+fn a_plain_access_after_an_atomic_races_too() {
+    let store = Stmt::Store {
+        place: cell(),
+        value: ScalarExpr::ConstInt(1, I32),
+    };
+    let load = Stmt::Load {
+        local: 0,
+        place: cell(),
+    };
+    let is = |id, v| {
+        ScalarExpr::Binary(
+            BinaryOp::CmpEq,
+            Box::new(ScalarExpr::Exec(id)),
+            Box::new(ScalarExpr::ConstInt(v, ElementKind::U32)),
+        )
+    };
+    for plain in [store, load] {
+        let last = Stmt::If {
+            cond: is(ExecId::BlockIdx(0), 2),
+            then: unpopped::kernel::Block(vec![Stmt::If {
+                cond: is(ExecId::ThreadIdx(0), 3),
+                then: unpopped::kernel::Block(vec![plain]),
+                els: unpopped::kernel::Block(vec![]),
+            }]),
+            els: unpopped::kernel::Block(vec![]),
+        };
+        let mut k = kernel(
+            I32,
+            BufferRole::ReadWrite,
+            vec![atomic(AtomicOp::Add, 1), last],
         );
         k.locals = vec![unpopped::kernel::LocalDecl::scalar(I32)];
         assert_eq!(check_kernel(&k), Ok(()));
