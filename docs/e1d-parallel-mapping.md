@@ -1,0 +1,106 @@
+# E1d: parallel mapping from the kernel layer, and the patent re-read it triggers
+
+**Status: design note, docs only. Awaiting the PM's ruling.** PM task 2026-10-31, item (2): write the E1d note and re-read
+US10949182B2. `docs/e1-emit-from-the-kernel-layer.md` section 6 names E1d ("grid-stride over the outer loop; block-tree
+`RowReduce` with `Barrier`") and section 7.4 says E1d is the stage that triggers the patent re-read. Not legal advice and not
+a freedom-to-operate opinion; see "What this read is" below.
+
+## What exists, and who owns what
+
+- The kernel layer already has the parallel vocabulary: `KernelFn::launch: Option<LaunchShape>`, `ScalarExpr::Exec(ExecId)`,
+  `Stmt::Barrier`, `Shared` allocations, and `run_launch`, which runs every thread of a launch in plain Rust
+  (`docs/u3-row4-scopes-and-memory-spaces.md`, all three PRs landed). A `LaunchShape` is a **declared property of the kernel**;
+  nothing in this crate computes one.
+- `run_kernel` runs a kernel as one logical thread and is the oracle for every lift differential.
+- Emitters: cpu-c is serial by nature. The Slang emitter (E1c) is **Vulkane's** since 2026-10-30; CUDA is Baracuda's. So E1d's
+  emitter half is not this lane's. What this lane can own is the **target-neutral half**: a transform from a serial `KernelFn`
+  to a `KernelFn` with a `LaunchShape`, proved against `run_kernel` by `run_launch`, which needs no GPU and runs on GitHub.
+
+## The design
+
+**E1d-0, grid-stride elementwise.** A transform `parallelize(kernel, axis, block) -> KernelFn` takes a kernel whose outer
+`For` is declared parallel and rewrites it to `For i in gid .. n step gridDim*blockDim`, with
+`gid = BlockIdx*BlockDim + ThreadIdx` read from `Exec` leaves. `block` (threads per block) and the grid are **inputs** to the
+transform, carried in the resulting `LaunchShape`; the grid is a fixed number chosen by the caller (a device-class constant,
+for example some multiple of the multiprocessor count), not derived from `n`. Correctness for any grid is the point of a
+grid-stride loop, so a test can run grids of 1, 3 and 7 blocks against the serial result.
+
+**E1d-1, block-tree `RowReduce`.** One cooperating block reduces a row: each thread accumulates a strided slice into a
+`Shared` cell, then a log-step tree with a `Barrier` between rounds, then thread 0 stores. To keep the block count independent
+of the row count, blocks stride over rows too (`row = BlockIdx; row < rows; row += GridDim`). The accumulation **order** differs
+from the serial fold, so this stage is bit-exact only where the reduction is order-independent (integer, `Max`/`Min`) and a
+documented tolerance case for float `Sum`; that is a numerics ruling for the PM, not assumed here.
+
+**Parallelism is declared, never discovered.** The lift knows which axes are independent because of the `Access` family it
+lifted (every output coordinate of an Elementwise op; every row of a `RowReduce`), so it marks the axis parallel. The transform
+trusts the mark; the proof is the differential, not an analysis. This is deliberate, and the patent section below is why.
+
+**The emitters consume the result.** A backend that receives a `KernelFn` with a `launch` spells `Exec` as its thread ids
+(`SV_DispatchThreadID`/`threadIdx` and so on) and reports the declared `LaunchShape` in its manifest so the host launches it.
+Unpopped emits no launch directive.
+
+## Patent re-read: US10949182B2 (MathWorks, "Systems and methods for generating code for parallel processing units")
+
+Read 2026-10-31 on the Google Patents text, `patents.google.com/patent/US10949182B2/en`: status Active, priority 2016-11-17,
+granted 2021-03-16, **estimated expiry 2037-11-16** (Google's own assumption, not a legal conclusion; the 2026-10-25 sweep
+recorded "no expiry shown"). 77 claims; independent claims **1, 15, 26, 30, 44, 58, 64, 70, 74**. I read the full text of 1, 15,
+26, 30 and 44. Claims 30 and 44 repeat claim 1's steps word for word (as a medium and an apparatus). I also read the opening
+elements of 58, 64, 70 and 74 (they match 15 and 26 as the medium/apparatus forms); I did not read their closing elements.
+
+| independent claim | what it requires (as read) | does the E1d design do it? |
+|---|---|---|
+| 1, 30, 44 | generate an IR; identify a nested loop of for-loops with loop bounds; **apply a parallel loop analysis check** to pick the loops suitable for parallel execution; **determine the number of thread blocks and threads per block based on one or more of the loop bounds**; convert the loops to a kernel; **add a kernel launch directive** carrying those two numbers | **No on three elements.** Parallelism is declared by the lift from the op family, with no analysis check; the grid is a caller-chosen constant and the grid-stride and row-stride loops make correctness and block count independent of any loop bound; no launch directive is emitted |
+| 15, 58, 64 | partition the IR into serial and parallel segments; convert a **serial segment between two parallel segments into a single-thread, single-block kernel**; add a launch directive | **No.** There is no serial/parallel partitioning and no single-thread kernel is generated; thread 0 storing a reduction result inside one kernel is not a separate kernel |
+| 26, 70, 74 | a table mapping sequential function calls to predefined parallel library calls (FFT, DNN, BLAS, SOLVER libraries), substituted on a match | **No.** No library-call substitution exists in this IR or in E1d |
+
+Dependent claims 5 and 6 compute the thread count from the loop-iteration product and the device warp size, and claim 7/8 a grid
+dimension from the iteration count; the design does none of these for the same reason as claim 1's fourth element.
+
+**Reading: outside as read**, for the E1d design as written, on the claims above. The word is **not** "clear".
+
+The design constraints that keep it there, to be enforced as written rules rather than remembered:
+
+1. No pass in this crate derives a block or grid count, or a thread count, from a loop bound or an iteration count.
+   `LaunchShape` values come from the caller or a device-class table. (A `Param(local)` extent in `LaunchShape` is a launch-time
+   scalar the host supplies; it is not computed by us from a bound.)
+2. No pass decides which loops are parallel by inspecting them. The mark comes from the lift's `Access` family.
+3. No emitter in this repo writes a launch directive. The manifest reports the declared shape.
+4. If anyone proposes an automatic dependence/independence analysis, a derived geometry, or a launch statement, **stop and
+   re-read this patent first.**
+
+## What this read is, and is not
+
+- **Is:** the claim text of the nine independent claims as published on Google Patents, compared against a written design.
+- **Is not:** a read of the specification, the USPTO file wrapper or prosecution history (which can narrow a claim's scope), or
+  of any claim by number beyond those named above; not a read of what Baracuda's or Fuel's CUDA emitters do (the 2026-10-25 sweep
+  said they "should be charted separately" and that is still true); not a legal opinion; and the design is not code yet, so the
+  re-read must be repeated against the code when E1d-0 lands.
+- The earlier sweep's "the Slang emitter hard-codes `[numthreads(256, 1, 1)]`" is no longer a statement about this repo (the Slang
+  emitter moved to Vulkane); the E1d constraint that matters here is rule 3.
+
+## Decisions for the PM
+
+1. **Scope**: this lane owns the target-neutral transform and its `run_launch` proof (E1d-0, E1d-1); the Slang spelling is
+   Vulkane's (E1c follow-on) and CUDA's is Baracuda's. Recommend yes.
+2. **Declared-parallel axes** with the proof by differential, no analysis pass (rule 2). Recommend yes; it also keeps the lift
+   simple.
+3. **Float `Sum` order** in E1d-1: accept a documented tolerance bound against the serial fold, or restrict block-tree
+   `RowReduce` to order-independent reductions first. Recommend restrict first, tolerance later with its own note.
+4. **Patent rules 1-4** recorded as standing constraints in `PATENT-SWEEP.md` and `ROADMAP.md` section 5 once ruled.
+5. **Stages**: E1d-0 as one PR (transform plus `run_launch` differential on grids 1, 3, 7), E1d-1 as a second.
+
+## Proof obligations if ruled
+
+- E1d-0: for each Elementwise family, `run_launch(parallelize(k), grid g)` equals `run_kernel(k)` byte for byte, for grids
+  `{1, 3, 7}` and block sizes `{1, 32, 256}`, over the existing lift differential inputs. A mutant that drops the stride
+  (each thread does one element only) must go red on `n > grid*block`; a mutant that breaks `gid` must go red.
+- E1d-1: the same per reduction kind, with the order-independence caveat above; a mutant that removes a `Barrier` must be
+  reported by the checker's `BarrierMismatch`/`DataRace`, not by luck.
+- A text check that no source file in `crates/` contains a launch-directive spelling such as `<<<` or `dispatch` in an emitter
+  that runs from this repo (rule 3), so the constraint is enforced by a test rather than by memory.
+
+## Provenance
+
+Claim text read from the downloaded Google Patents page on 2026-10-31 (claims 1, 15, 26, 30, 44 in full; the dependent claims
+cited by number). Kernel-layer facts from `docs/u3-row4-scopes-and-memory-spaces.md` and `docs/e1-emit-from-the-kernel-layer.md`
+at `origin/main` `bcfae84`. Expiry and status are Google Patents' displayed assumptions.
