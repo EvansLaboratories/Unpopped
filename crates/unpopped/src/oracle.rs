@@ -1427,13 +1427,11 @@ fn binary_op_int(op: BinaryOp, a: i128, b: i128, dt: ElementKind) -> i128 {
         BinaryOp::BitOr => wrap_for(a | b, w, dt),
         BinaryOp::BitXor => wrap_for(a ^ b, w, dt),
         BinaryOp::Shl => {
-            // Out-of-range shift amounts are architecture-inherited UB; clamp to
-            // keep the interpreter total (never exercised by valid inputs).
-            if (0..i128::from(w)).contains(&b) {
-                wrap_for(a << (b as u32), w, dt)
-            } else {
-                0
-            }
+            // The count's bits are read as unsigned and taken modulo the promoted width `w`
+            // (`docs/int-div-shift-semantics.md` rule 3), as the kernel interpreter does. `w` is a
+            // power of two, so the mask is the modulo, and for a negative `b` it reads the
+            // two's-complement bits.
+            wrap_for(a << ((b & i128::from(w - 1)) as u32), w, dt)
         }
         BinaryOp::Shr => {
             // C's `>>` is ARITHMETIC on a signed operand and LOGICAL on an
@@ -1442,13 +1440,8 @@ fn binary_op_int(op: BinaryOp, a: i128, b: i128, dt: ElementKind) -> i128 {
             // shift of a non-negative value is already logical. The `a < 0` tail
             // is therefore unreachable for an unsigned dtype, which is what makes
             // `u32 >> k` correct rather than sign-propagating.
-            if (0..i128::from(w)).contains(&b) {
-                wrap_for(a >> (b as u32), w, dt)
-            } else if a < 0 {
-                -1
-            } else {
-                0
-            }
+            // The count is taken modulo the promoted width, as for `Shl`.
+            wrap_for(a >> ((b & i128::from(w - 1)) as u32), w, dt)
         }
         BinaryOp::LogicalAnd => i128::from(a != 0 && b != 0),
         BinaryOp::LogicalOr => i128::from(a != 0 || b != 0),
@@ -6591,18 +6584,22 @@ mod scalar_math_pins {
         assert_eq!(binary_op_int(Shl, 1, 31, i), i128::from(i32::MIN));
         assert_eq!(
             binary_op_int(Shl, 1, 32, i),
-            0,
-            "b == width is out of range"
+            1,
+            "a count of the width reads as 0 (modulo the width)"
         );
-        assert_eq!(binary_op_int(Shl, 1, -1, i), 0);
+        assert_eq!(
+            binary_op_int(Shl, 1, -1, i),
+            i128::from(i32::MIN),
+            "-1 reads as 31"
+        );
         assert_eq!(
             binary_op_int(Shr, -8, 1, i),
             -4,
             "arithmetic on a signed operand"
         );
-        assert_eq!(binary_op_int(Shr, -8, 32, i), -1);
-        assert_eq!(binary_op_int(Shr, 8, 32, i), 0);
-        // `a < 0` -> `<=`: a zero operand shifted out of range stays zero.
+        assert_eq!(binary_op_int(Shr, -8, 32, i), -8, "32 reads as 0");
+        assert_eq!(binary_op_int(Shr, 8, 32, i), 8);
+        assert_eq!(binary_op_int(Shr, -8, 33, i), -4, "33 reads as 1");
         assert_eq!(binary_op_int(Shr, 0, 32, i), 0);
         assert_eq!(binary_op_int(Shr, 0, -1, i), 0);
         assert_eq!(binary_op_int(Shr, -1, 31, i), -1);
@@ -6614,11 +6611,11 @@ mod scalar_math_pins {
             1,
             "logical on an unsigned operand"
         );
-        assert_eq!(binary_op_int(Shl, 1, 32, u), 0);
+        assert_eq!(binary_op_int(Shl, 1, 32, u), 1);
         let l = ElementKind::I64;
         assert_eq!(binary_op_int(Shl, 1, 32, l), 1 << 32);
         assert_eq!(binary_op_int(Shl, 1, 63, l), i128::from(i64::MIN));
-        assert_eq!(binary_op_int(Shl, 1, 64, l), 0);
+        assert_eq!(binary_op_int(Shl, 1, 64, l), 1);
         assert_eq!(binary_op_int(Shl, 1, 63, ElementKind::U64), 1 << 63);
         // 8-bit dtypes promote to int: no wrap at 8 bits during the op.
         assert_eq!(binary_op_int(Shl, 200, 1, ElementKind::U8), 400);

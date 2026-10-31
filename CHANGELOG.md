@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.39.1` — the plan-level oracle takes a shift count modulo the width (openclownfish#26)
+
+`oracle::evaluate` on an integer `Shl`/`Shr` used to answer `0` (`Shl`) or the sign fill / `0` (`Shr`) for a count outside `0..width`; only the kernel interpreter and the cpu-c kernel emitter modelled rule 3 of `docs/int-div-shift-semantics.md` (count read as unsigned bits, modulo the promoted width: 64 for 64-bit types, 32 for every narrower one). A backend that adopted the ruled guards therefore disagreed with the referee on every out-of-range count (found by openclownfish's differential test). The oracle now follows the rule: `1 << 32` at `I32` is `1`, `-8 >> 32` is `-8`, a count of `-1` reads as `W - 1`. Inputs inside `0..width` are unchanged, and the plan gate still states the caller contract for emitters that have not adopted the guards. Tests: `tests/oracle_shift_counts_follow_the_ruled_rule.rs` (`I32`/`U32`/`I64`/`U64`, `Shl` and `Shr`, six values by eight counts through `oracle::evaluate`, against the host's `wrapping_shl`/`wrapping_shr`; red before the change at `1 << 32`), and the inline `integer_bitwise_and_shift_ops_wrap_at_the_promotion_width` expectations are updated.
+
 ## `0.39.0` — Breaking: a window with no in-bounds tap is declined, not answered with the monoid identity (KISS-OPS-6.13-0010/-0011)
 
 CireSnave board 345 "B" (KISS 0.6.53, KISS#751): an output window must have at least one tap on a real input element (`p = o*stride - pad_lo + kk*dilation` inside `[0, k_in)`), a producer must not write a shape that breaks it and **a reader must decline it**. The plan gate's `2*pad <= dilation*(size-1) + 1` assert does not enforce this at dilation > 1 (control `n=1, k=2, d=2, s=1, p=1` passes it and its one window has no real tap), and the plan gate sees no extents, so the rule is checked where the extents are known.
