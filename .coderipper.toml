@@ -2,7 +2,7 @@
 #
 # `reachability` cannot see a consumer: a published library's `pub` items are called by other programs, not by the
 # crate itself. These two crates are published (no `publish = false`), and every `pub` item reachable from the crate
-# root is the API, in the semver promise (CHANGELOG.md). `unpopped-cpu-c` and `unpopped-slang` need no entry: the
+# root is the API, in the semver promise (CHANGELOG.md). `unpopped-cpu-c` needs no entry: the
 # 2026-10-24 sweep found nothing else in them once their own tests were counted. `unpopped-conformance` is never
 # published and has no library surface.
 

@@ -13,7 +13,7 @@
 //! ⚠️ **The exception is CROSS-PROJECT and cannot reach anything here.** The
 //! clause after *"so"* is the rule's test: a number earns the exception by
 //! answering *"which Unpopped does this work with"* from **another** project.
-//! `unpopped-cpu-c` and `unpopped-slang` are inside this one, so their numbers
+//! `unpopped-cpu-c` is inside this one, so their numbers
 //! answer nothing. The crate the exception was written for is
 //! `baracuda-cuda-emit`, and it lives in Baracuda.
 //!
@@ -136,9 +136,8 @@ fn the_extractor_reads_distinct_crates_and_a_real_version_each() {
     assert!(
         versions.contains_key("unpopped")
             && versions.contains_key("unpopped-vocab")
-            && versions.contains_key("unpopped-cpu-c")
-            && versions.contains_key("unpopped-slang"),
-        "the four published crates must all be found by name, or the map is not \
+            && versions.contains_key("unpopped-cpu-c"),
+        "the three published crates must all be found by name, or the map is not \
          what the assertion above is ranging over: {versions:?}"
     );
 

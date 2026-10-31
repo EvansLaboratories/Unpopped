@@ -35,7 +35,7 @@ Each backend is its own crate implementing `unpopped::Backend` for its target:
 |---|---|
 | CUDA | [`baracuda-cuda-emit`](https://github.com/ciresnave/baracuda) — the `Cuda` emitter, its NVRTC compiler, and the Fuel synthesizer |
 | CPU (C99) | `unpopped-cpu-c` — the portable reference emitter |
-| Slang | `unpopped-slang` |
+| Slang | `vulkane-slang-emit` (Vulkane; moved from `unpopped-slang`) |
 
 Unpopped hosts **a normative reference emitter per target**, each in its own
 crate outside the core. A project that originates an emitter may keep owning it,

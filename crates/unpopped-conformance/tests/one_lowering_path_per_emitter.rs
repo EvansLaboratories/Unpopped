@@ -44,7 +44,9 @@ fn each_reference_emitter_serves_exactly_one_schedule() {
         .parent()
         .expect("crates/");
 
-    for krate in ["unpopped-cpu-c", "unpopped-slang"] {
+    // The one in-tree reference emitter (the Slang one lives in Vulkane).
+    let krate = "unpopped-cpu-c";
+    {
         let path = root.join(krate).join("src/lib.rs");
         let src = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));

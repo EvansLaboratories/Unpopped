@@ -4,10 +4,10 @@
 //! unchanged; the default must not panic, must not return `Ok`, and must not be
 //! `UnsupportedOp`, which means "no spelling for an expression node").
 //!
-//! Every in-tree backend is checked: `Slang` (no override, so the default itself) and `CpuC`
-//! (overridden, so a kernel outside its coverage reaches the same variant by its own path), plus a
-//! bare backend that implements only the required methods, which is what a downstream backend
-//! looks like.
+//! Every in-tree backend is checked: `CpuC` (overridden, so a kernel outside its coverage reaches
+//! the variant by its own path) and a bare backend that implements only the required methods, which
+//! is what a downstream backend looks like and which exercises the default itself. The Slang
+//! emitter's half of this check lives with it, in Vulkane's `vulkane-slang-emit`.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -16,7 +16,6 @@ use unpopped::exec::{LaunchShape, Scope};
 use unpopped::kernel::{Block, KernelFn, Stmt};
 use unpopped::plan::KernelPlan;
 use unpopped_cpu_c::CpuC;
-use unpopped_slang::Slang;
 use unpopped_vocab::{ElementKind, TargetId};
 
 /// A downstream-shaped backend: only what the trait requires.
@@ -66,7 +65,6 @@ fn typed_decline(who: &str, backend: &dyn Backend, k: &KernelFn) {
 
 #[test]
 fn a_backend_without_a_kernel_path_declines_with_the_typed_variant() {
-    typed_decline("slang (the default)", &Slang, &empty());
     typed_decline("bare (the default)", &Bare, &empty());
 }
 

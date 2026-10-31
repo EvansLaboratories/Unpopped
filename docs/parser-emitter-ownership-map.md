@@ -20,7 +20,7 @@ Unpopped's IR. Unpopped is supposed to only be the piece in the middle."*
 |---|---|---|---|
 | CUDA | `baracuda-cuda-emit` | Baracuda | out-of-tree, owned |
 | CPU (C99) | `unpopped-cpu-c` | Unpopped | in-tree |
-| Slang | `unpopped-slang` (moving to `vulkane-slang-emit`) | Unpopped until the handover, then Vulkane (2026-10-30) | in-tree until Vulkane has published its emitter |
+| Slang | `vulkane-slang-emit` (moved from `unpopped-slang`) | Vulkane (2026-10-30) | handover done: `vulkane-slang-emit` 0.17.0 published, `unpopped-slang` removed from this workspace in 0.36.0 (last release 0.35.3) |
 
 `unpopped-cpu-c` and `unpopped-slang` are both **published** on crates.io since
 0.1.0 (2026-08-19), now 0.3.0 — verified against `docs/deferred.md`'s own
@@ -231,6 +231,6 @@ CireSnave, 2026-10-30, as relayed by the PM (the relay ends in an ellipsis; the 
 | HIP C++ | Rockfish (new project; crate reserved, lane not started) | Rockfish | assigned 2026-10-30 |
 | SYCL / DPC++ | Bonefish (new project; crate reserved, lane not started) | Bonefish | assigned 2026-10-30 |
 | Metal Shading Language | **open: needs a backend maintainer** | none yet | CireSnave: "needs a backend maintainer" |
-| Slang | Vulkane | Vulkane | assigned 2026-10-30 (CireSnave: *"Vulkane now owns Slang in our ecosystem."*); handover sequence in `vulkane` `docs/design/slang-parser-emitter-handover.md` (vulkane#107). `unpopped-slang` stays in-tree and unedited until `vulkane-slang-emit` is published, then Unpopped removes it and cuts a final deprecating release |
+| Slang | Vulkane | Vulkane | assigned 2026-10-30 (CireSnave: *"Vulkane now owns Slang in our ecosystem."*); handover sequence in `vulkane` `docs/design/slang-parser-emitter-handover.md` (vulkane#107). `unpopped-slang` stayed in-tree and unedited until `vulkane-slang-emit` was published; Unpopped then cut the deprecating release (0.34.13) and removed the crate (0.36.0) |
 
 Unpopped holds neither the parser nor the emitter for any target above; it keeps the IR, the traits and one reference emitter (`unpopped-cpu-c`). `unpopped-slang` is the exception only until the handover completes; the Slang parser (`parse_slang`, `SLANG`, `SLANG_RESIDUE`) leaves `convert.rs` for `vulkane-slang-parse`. The IR-union work (ROADMAP I*) is unchanged by this. Recorded here without a code change.

@@ -27,9 +27,9 @@ them live inside the core.
 unpopped` builds with no emitter in its dependency graph. Cross-emitter evidence
 lives in `unpopped-conformance` so no emitter dev-depends on a sibling.
 
-The two reference emitters are **published** — `unpopped-cpu-c` and
-`unpopped-slang` have been on crates.io since 0.1.0 (2026-08-19) and are at
-current versions on crates.io. They were held back once on the argument that a
+The in-tree reference emitter is **published** — `unpopped-cpu-c` has been on
+crates.io since 0.1.0 (2026-08-19). `unpopped-slang` (published 0.1.0 to 0.35.3)
+moved to Vulkane as `vulkane-slang-emit`; this repository no longer contains it. They were held back once on the argument that a
 `Backend` trait known to be moving would hand a third party breaking changes;
 the hold was lifted four days later and the history is in
 [`docs/deferred.md`](docs/deferred.md) §A.
@@ -38,7 +38,7 @@ the hold was lifted four days later and the history is in
 |---|---|---|
 | CUDA | [`baracuda-cuda-emit`](https://github.com/ciresnave/baracuda) | Baracuda |
 | CPU (C99) | `unpopped-cpu-c` (in-tree, published) | Unpopped |
-| Slang | `unpopped-slang` (in-tree, published) | Unpopped |
+| Slang | [`vulkane-slang-emit`](https://github.com/ciresnave/vulkane) (moved from `unpopped-slang`) | Vulkane |
 
 A project that originates an emitter may keep owning it — Baracuda's CUDA
 emitter is theirs, and stays theirs. The umbrella exists so a third party
