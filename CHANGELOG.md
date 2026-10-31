@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.39.3` — E1d-6: `lift_gather_opdef_launched` (additive)
+
+New `kernel_lift::lift_gather_opdef_launched(op, dtype, rank, block, grid)`: the gather's outermost output axis is a grid-stride loop; bit-exact against the serial gather for every `grid`/`block` and every out-of-range policy. A launched Scatter is not provided (no atomic read-modify-write statement in the kernel IR; see `docs/e1d-parallel-mapping.md`). Tests: `tests/kernel_parallel_gather_agrees.rs`.
+
 ## `0.39.2` — E1d-5: `lift_scan_opdef_launched`, a chunked block scan; E1d-6: grid-stride `lift_window_opdef_launched`, `lift_im2col_opdef_launched`, `lift_contraction_opdef_launched` and `lift_row_sort_opdef_launched` (additive)
 
 `unpopped-cpu-c` now ships a `README.md` (the publish warned that it had none).

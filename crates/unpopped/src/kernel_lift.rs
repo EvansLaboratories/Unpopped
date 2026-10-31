@@ -170,6 +170,25 @@ pub fn lift_window_opdef_launched(
     grid_stride_outermost(lift_window_opdef(op, dtype, rank)?, block, grid)
 }
 
+/// [`lift_gather_opdef`] launched on `grid` blocks of `block` threads (E1d-6): the outermost output
+/// axis is a grid-stride loop. Every output cell reads its own index and its own source element
+/// and is written by exactly one thread, so the kernel is bit-exact against the serial one for every
+/// `grid` and `block`, whatever the out-of-range policy (a skipped cell leaves its prior bytes).
+///
+/// # Errors
+///
+/// A [`LiftDecline`]: those of [`lift_gather_opdef`], and [`LiftDecline::BadLaunch`] for a zero
+/// `block` or `grid`. A rank-0 gather has no loop and declines.
+pub fn lift_gather_opdef_launched(
+    op: &OpDef,
+    dtype: ElementKind,
+    rank: u8,
+    block: u32,
+    grid: u32,
+) -> Result<KernelFn, LiftDecline> {
+    grid_stride_outermost(lift_gather_opdef(op, dtype, rank)?, block, grid)
+}
+
 /// [`lift_im2col_opdef`] launched on `grid` blocks of `block` threads (E1d-6): the outermost
 /// output axis is a grid-stride loop. Every output element is a gather of one input element (or a
 /// typed zero), so the kernel is bit-exact against the serial one for every `grid` and `block`.
