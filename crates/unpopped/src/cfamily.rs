@@ -31,7 +31,7 @@
 
 use crate::ir::{ArithOp, BinaryOp, ScalarExpr, UnaryOp, is_admissible_int_reduction_operand};
 use crate::plan::KernelPlan;
-use unpopped_vocab::ElementKind;
+use unpopped_vocab::{AxisMask, ElementKind};
 
 /// The C **storage** type for a dtype, or `None` if this module can't spell it.
 ///
@@ -1272,6 +1272,81 @@ pub fn param_args(e: &ScalarExpr, param_ctype: &str) -> String {
         .iter()
         .map(|i| format!(", {param_ctype} p{i}"))
         .collect()
+}
+
+/// The element-offset expression of a strided operand: `{coord}{d}*{stride}_{si}` for each
+/// iteration axis `d` that does not broadcast, joined with ` + `, or `0` when every axis does.
+///
+/// Broadcast axes (`bcast`) have stride 0 and drop out. `perm` is the
+/// [`View::Permute`](crate::ir::View::Permute) the operand is read through: iteration axis `d`
+/// pairs with the producer stride at `perm[d]` (a transposed read, no copy); `None` pairs axis `d`
+/// with stride `d`. `coord` is the coordinate-variable prefix (`"c"` for `c0`, `c1`, ...; a kernel
+/// with two coordinate spaces passes another) and `stride` the stride-argument prefix (`"s0"` for
+/// `s0_0`, `s0_1`, ...; `"so"` for the output).
+///
+/// This is the one spelling the CUDA emitter (`baracuda-cuda-emit`) and the OpenCL C emitter
+/// (`openclownfish-clc`) each kept a private copy of. The output is byte-identical to theirs.
+///
+/// # Panics
+///
+/// If `perm` is `Some` and shorter than `rank`.
+#[must_use]
+pub fn strided_offset_expr(
+    bcast: AxisMask,
+    coord: &str,
+    stride: &str,
+    rank: usize,
+    perm: Option<&[u8]>,
+) -> String {
+    let terms: Vec<String> = (0..rank)
+        .filter(|&d| !bcast.is_set(d as u8))
+        .map(|d| {
+            let si = perm.map_or(d, |p| usize::from(p[d]));
+            format!("{coord}{d}*{stride}_{si}")
+        })
+        .collect();
+    if terms.is_empty() {
+        "0".to_owned()
+    } else {
+        terms.join(" + ")
+    }
+}
+
+/// The row-major (last-axis-fastest) unravel of a linear index into per-axis coordinates, as C-family
+/// statements: for each axis in `axes` (pass them high to low: `(0..rank).rev()` for a dense
+/// unravel, the kept axes reversed for a reduction) one line declaring `{ctype} {coord(a)}` from
+/// `{lin} % {shape(a)}` and dividing `{lin}` down.
+///
+/// `ctype` is the target's wide signed integer (`"long long"` in CUDA C, `"long"` in OpenCL C),
+/// `lin` the mutable linear-index variable already in scope, `indent` the leading whitespace of each
+/// line. `guard` adds the empty-axis defense (an extent of 0 yields coordinate 0 and leaves `lin`
+/// alone) that a generic helper called with arbitrary shapes needs; an inline kernel omits it
+/// because an empty tensor runs zero iterations. With `ctype = "long long"` the output is
+/// byte-identical to `baracuda-cuda-emit`'s `emit_unravel_decomp`.
+#[must_use]
+pub fn unravel_decomp(
+    axes: impl IntoIterator<Item = usize>,
+    indent: &str,
+    lin: &str,
+    ctype: &str,
+    coord: impl Fn(usize) -> String,
+    shape: impl Fn(usize) -> String,
+    guard: bool,
+) -> String {
+    let mut s = String::new();
+    for a in axes {
+        let (cv, sh) = (coord(a), shape(a));
+        if guard {
+            s.push_str(&format!(
+                "{indent}{ctype} {cv} = ({sh} == 0) ? 0 : ({lin} % ({ctype}){sh}); if ({sh} != 0) {lin} /= ({ctype}){sh};\n"
+            ));
+        } else {
+            s.push_str(&format!(
+                "{indent}{ctype} {cv} = {lin} % {sh}; {lin} /= {sh};\n"
+            ));
+        }
+    }
+    s
 }
 
 #[cfg(test)]
