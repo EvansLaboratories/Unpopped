@@ -23,7 +23,7 @@ use super::kernel_mem::ThreadCtx;
 use super::{
     Eval, TypedBuffer, Val, eval, int_val, panic_reduced, raw_to_i128, read_elem, store_val,
 };
-use crate::ir::{BinaryOp, ScalarExpr};
+use crate::ir::{BinaryOp, Saturation, ScalarExpr};
 use crate::kernel::{Block, KernelError, KernelFn, ParamKind, Place, Stmt, check_kernel};
 use crate::types::{self, Ty, map_children};
 use unpopped_vocab::ElementKind;
@@ -381,6 +381,11 @@ impl<'a> Machine<'a> {
                 }
             },
             ScalarExpr::Exec(id) => wrap(t, self.exec_val(*id)?),
+            // An integer-to-integer cast that wraps: the operand at its own type, then into `t`.
+            // Saturating casts stay outside the subset.
+            ScalarExpr::Cast(x, spec) if spec.to == t && spec.sat == Saturation::Wrap => {
+                wrap(t, self.eval_operand_int(x)?)
+            }
             ScalarExpr::Add(a, b) => {
                 let (x, y) = two(a, b)?;
                 wrap(t, x + y)

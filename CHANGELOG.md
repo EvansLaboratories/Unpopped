@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.35.4` — E1d-0: an Elementwise kernel launched with a grid-stride loop (additive)
+
+`kernel_lift::lift_elementwise_opdef_launched(op, dtype, rank, block, grid)` lifts an Elementwise op with its outermost output axis as a grid-stride loop on `grid` blocks of `block` threads along axis 0, and a `LaunchShape` to match; `LiftDecline::BadLaunch` (new variant of a `#[non_exhaustive]` enum) refuses a zero `block` or `grid`. The geometry is the caller's, never derived from an extent, and the parallel axis is declared by the lift from the op family, not found by inspecting loops (`docs/e1d-parallel-mapping.md`). The kernel interpreter's integer evaluator now accepts a wrapping integer-to-integer `Cast` (the U32 execution ids become the I32 counter); a saturating one still refuses. Proof: `run_launch` equals `run_kernel` byte for byte across grids 1/3/7 and blocks 1 to 256 over three ops with special values, and four seeded mutants (drop the stride, drop the block factor of the start, drop the cast wrap, accept any saturation) each go red. A new conformance test fails the build if any `crates/*/src` file contains a launch spelling.
+
 ## `0.35.3` — `Frontend` carries its own math-call tables
 
 **Additive; no breaking change.** `Frontend` gains `unary_fn` and `binary_fn` (function pointers from a source-language math-call name to the IR op), defaulting in `Frontend::new` to the CUDA spellings it has always recognised, and a const `Frontend::with_intrinsics(unary, binary)` to override them. A language that overloads the math names (OpenCL C `exp`/`sqrt`/`pow`) can now lift them; asked for by openclownfish. `Frontend` is `#[non_exhaustive]` and `new` keeps its six arguments, so no caller changes. First slice of ROADMAP I1; the CUDA default tables stay in core until `baracuda-cuda-parse` supplies its own. The `parse` docs now say the shared walkers need a `tree-sitter-cpp`-shaped grammar (`indices` field).

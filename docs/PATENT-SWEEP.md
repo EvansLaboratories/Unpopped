@@ -261,3 +261,13 @@ Notes:
 3. The items of the 2026-10-29 "Open items" list stand, with these changes: item 4 (hits 19 and 20 not covered) is **superseded** by the table above for the row 4 surface as built.
 4. **Re-read triggers:** WO2013070636A1 and the pointer-sharing family if `Place::Ptr` or any pointer value is added; US10726606B2 and US12412230B2 if the crates ever select among kernel variants from run-time measurement, capture and replay an application, or sweep register limits; US20080109795A1 if a front end separates mixed CPU/GPU source or emits GPU binary.
 5. Not read in this pass (hit 21's, 15's and the layout hits' reads stand from the PM's reads above): US20240176663A1 and US20210064987A1 current claims on grant, and the continuation US12499052B2.
+
+## Standing constraints from the E1d re-read (PM ruling 2026-10-31)
+
+From `docs/e1d-parallel-mapping.md`: US10949182B2 independent claims 1, 15, 26, 30 and 44 were read in full on 2026-10-31 and the E1d design is **outside as read** (never "clear"). These four rules keep it there:
+
+1. No pass in this crate derives a block, grid or thread count from a loop bound or an iteration count; `LaunchShape` values come from the caller or a device-class table.
+2. No pass decides which loops are parallel by inspecting them; the mark comes from the lift's `Access` family.
+3. No emitter in this repo writes a launch directive (a launch statement or dispatch call carrying block and thread counts); the manifest reports the declared shape. Enforced by `crates/unpopped-conformance/tests/no_source_in_this_workspace_writes_a_launch_directive.rs`.
+4. Any proposal to add an automatic dependence analysis, a derived geometry, or a launch statement: stop and re-read US10949182B2 first.
+

@@ -14,6 +14,7 @@
 
 use unpopped_vocab::{AxisMask, ElementKind};
 
+use crate::exec::{ExecId, LaunchShape};
 use crate::ir::{
     Access, BinaryOp, CastSpec, ContractionAxes, OpDef, ReduceOp, RoundMode, Saturation,
     ScalarExpr, View, WriteIndex,
@@ -70,6 +71,8 @@ pub enum LiftDecline {
     MixedDtypes,
     /// Rank is zero or more than the 8 the structure key allows.
     BadRank,
+    /// A launched lift was asked for zero blocks or zero threads per block.
+    BadLaunch,
 }
 
 /// Lift the Elementwise `op` computed at `dtype` over `rank` output axes.
@@ -113,6 +116,54 @@ pub fn lift_elementwise_opdef(
     }
     let (params, locals) = elementwise_signature(op.n_inputs, dtype, rank);
     Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body))
+}
+
+/// [`lift_elementwise_opdef`] launched on `grid` blocks of `block` threads along axis 0 (E1d-0,
+/// `docs/e1d-parallel-mapping.md`).
+///
+/// The outermost output axis becomes a **grid-stride loop**: thread `t` of block `b` starts at
+/// `b * block + t` and steps by `grid * block`, so the result is the same for every `grid` and
+/// `block`, and `grid`/`block` are the caller's, never derived from an extent. Every output
+/// coordinate of an Elementwise op is independent of the others, which is what makes the axis
+/// parallel; the lift declares that from the op family (nothing inspects the loops), and the
+/// proof is the differential against the serial kernel, not an analysis.
+///
+/// # Errors
+///
+/// A [`LiftDecline`]: those of [`lift_elementwise_opdef`], and [`LiftDecline::BadLaunch`] for a
+/// zero `block` or `grid`.
+pub fn lift_elementwise_opdef_launched(
+    op: &OpDef,
+    dtype: ElementKind,
+    rank: u8,
+    block: u32,
+    grid: u32,
+) -> Result<KernelFn, LiftDecline> {
+    if block == 0 || grid == 0 {
+        return Err(LiftDecline::BadLaunch);
+    }
+    let mut k = lift_elementwise_opdef(op, dtype, rank)?;
+    let Some(Stmt::For { start, step, .. }) = k.body.0.first_mut() else {
+        return Err(LiftDecline::UnsupportedForm(
+            "an elementwise kernel's outermost statement is a loop",
+        ));
+    };
+    let exec = |id: ExecId| ScalarExpr::Exec(id);
+    let u32_product = |a: ScalarExpr, b: ScalarExpr| ScalarExpr::Mul(Box::new(a), Box::new(b));
+    let counter_type = |e: ScalarExpr| ScalarExpr::Cast(Box::new(e), widen(ElementKind::I32));
+    *start = counter_type(ScalarExpr::Add(
+        Box::new(u32_product(
+            exec(ExecId::BlockIdx(0)),
+            exec(ExecId::BlockDim(0)),
+        )),
+        Box::new(exec(ExecId::ThreadIdx(0))),
+    ));
+    *step = counter_type(u32_product(
+        exec(ExecId::GridDim(0)),
+        exec(ExecId::BlockDim(0)),
+    ));
+    k.launch = Some(LaunchShape::new([block, 1, 1], [grid, 1, 1]));
+    Ok(k)
 }
 
 /// `buffer` at the loop counters of a rank-`r` kernel (counters are locals `r..2r`). An input read
