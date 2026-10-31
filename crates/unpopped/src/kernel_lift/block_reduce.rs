@@ -44,12 +44,12 @@ pub fn lift_reduction_opdef_launched(
     let (rop, axes, keepdim, post) = check_reduction(op, dtype, rank)?;
     let sh = ReductionShape::new(op.n_inputs, dtype, rank, axes);
     check_order_independent(&sh, rop, post.is_some())?;
-
-    let tid = || ScalarExpr::Exec(ExecId::ThreadIdx(0));
-    let at = |e: ScalarExpr| ScalarExpr::Cast(Box::new(e), widen(ElementKind::I32));
-    let uconst = |v: u32| ScalarExpr::ConstInt(i64::from(v), ElementKind::U32);
-    let has_flag = matches!(rop, ReduceOp::Max | ReduceOp::Min);
-    let partner_have = sh.red;
+    let t = Tree {
+        sh: &sh,
+        rop,
+        block,
+        has_flag: matches!(rop, ReduceOp::Max | ReduceOp::Min),
+    };
 
     let mut row = vec![
         Stmt::Let {
@@ -61,114 +61,20 @@ pub fn lift_reduction_opdef_launched(
             init: ScalarExpr::ConstInt(0, ElementKind::I32),
         },
     ];
-    // This thread's strided slice of the reduced axis.
-    let mut slice = sh.reduce_loop(op, rop).0;
-    let Some(Stmt::For { start, step, .. }) = slice.first_mut() else {
-        return Err(LiftDecline::UnsupportedForm(
-            "a reduction's fold is a loop over the reduced axis",
-        ));
-    };
-    *start = at(tid());
-    *step = at(ScalarExpr::Exec(ExecId::BlockDim(0)));
-    row.extend(slice);
-
-    let shared = |alloc: u32, index: ScalarExpr| Place::Alloc { alloc, index };
-    let publish = |me: ScalarExpr| {
-        let mut v = vec![Stmt::Store {
-            place: shared(0, me.clone()),
-            value: ScalarExpr::Local(sh.acc),
-        }];
-        if has_flag {
-            v.push(Stmt::Store {
-                place: shared(1, me),
-                value: ScalarExpr::Local(sh.have),
-            });
-        }
-        v
-    };
-    row.extend(publish(at(tid())));
-    row.push(Stmt::Barrier {
-        scope: Scope::Block,
-    });
-    let mut s = block / 2;
-    while s > 0 {
-        let partner = at(ScalarExpr::Add(Box::new(tid()), Box::new(uconst(s))));
-        let mut then = vec![Stmt::Load {
-            local: sh.val,
-            place: shared(0, partner.clone()),
-        }];
-        let combine = fold_step(rop, sh.acc, sh.have, sh.val, sh.is_int());
-        if has_flag {
-            then.push(Stmt::Load {
-                local: partner_have,
-                place: shared(1, partner),
-            });
-            // A partner that folded nothing carries no value to combine.
-            then.push(Stmt::If {
-                cond: ScalarExpr::Local(partner_have),
-                then: Block(combine),
-                els: Block(vec![]),
-            });
-        } else {
-            then.extend(combine);
-        }
-        then.extend(publish(at(tid())));
-        row.push(Stmt::If {
-            cond: ScalarExpr::Binary(BinaryOp::CmpLt, Box::new(tid()), Box::new(uconst(s))),
-            then: Block(then),
-            els: Block(vec![]),
-        });
-        row.push(Stmt::Barrier {
-            scope: Scope::Block,
-        });
-        s /= 2;
-    }
+    row.extend(t.slice(op)?);
+    row.extend(t.publish());
+    row.push(barrier());
+    row.extend(t.rounds());
     let out_coords = sh.out_coords(keepdim);
     let out_rank = u8::try_from(out_coords.len()).expect("rank is at most 8");
-    row.push(Stmt::If {
-        cond: ScalarExpr::Binary(BinaryOp::CmpEq, Box::new(tid()), Box::new(uconst(0))),
-        then: Block(vec![Stmt::Store {
-            place: Place::Logical {
-                buffer: sh.n,
-                coords: out_coords,
-            },
-            value: sh.stored(rop),
-        }]),
-        els: Block(vec![]),
-    });
+    row.push(t.thread0_stores(out_coords));
 
-    let mut body = Block(row);
-    for &d in sh.kept.iter().rev() {
-        body = for_axis(d, sh.r, body);
-    }
-    // Blocks stride over the outermost kept axis: `row = BlockIdx; row < n; row += GridDim`.
-    let Some(Stmt::For { start, step, .. }) = body.0.first_mut() else {
-        return Err(LiftDecline::UnsupportedForm(
-            "a reduction's outermost statement is a loop",
-        ));
-    };
-    *start = at(ScalarExpr::Exec(ExecId::BlockIdx(0)));
-    *step = at(ScalarExpr::Exec(ExecId::GridDim(0)));
-
+    let body = block_strided_rows(&sh, Block(row))?;
     let (params, mut locals) = sh.signature(out_rank);
-    locals.push(LocalDecl::scalar(ElementKind::I32)); // partner_have
-    let mut allocs = vec![AllocDecl::new(
-        "partial",
-        MemorySpace::Shared,
-        sh.acc_ty(),
-        Extent::Static(block),
-    )];
-    if has_flag {
-        allocs.push(AllocDecl::new(
-            "partial_have",
-            MemorySpace::Shared,
-            ElementKind::I32,
-            Extent::Static(block),
-        ));
-    }
+    locals.push(LocalDecl::scalar(ElementKind::I32)); // the partner's `have`
     Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body)
         .with_launch(LaunchShape::new([block, 1, 1], [grid, 1, 1]))
-        .with_allocs(allocs))
+        .with_allocs(t.allocs()))
 }
 
 /// The forms this lift takes: an order-independent fold, no post, one reduced axis, one or more
@@ -199,4 +105,164 @@ fn check_order_independent(
         ));
     }
     Ok(())
+}
+
+fn barrier() -> Stmt {
+    Stmt::Barrier {
+        scope: Scope::Block,
+    }
+}
+
+fn thread() -> ScalarExpr {
+    ScalarExpr::Exec(ExecId::ThreadIdx(0))
+}
+
+fn uconst(v: u32) -> ScalarExpr {
+    ScalarExpr::ConstInt(i64::from(v), ElementKind::U32)
+}
+
+/// An unsigned id as the `I32` the counters and indices are.
+fn as_i32(e: ScalarExpr) -> ScalarExpr {
+    ScalarExpr::Cast(Box::new(e), widen(ElementKind::I32))
+}
+
+fn shared(alloc: u32, index: ScalarExpr) -> Place {
+    Place::Alloc { alloc, index }
+}
+
+/// The pieces of one block's tree: allocation 0 holds the partial accumulators and, for
+/// `Max`/`Min`, allocation 1 the partials' `have` flags.
+struct Tree<'a> {
+    sh: &'a ReductionShape,
+    rop: ReduceOp,
+    block: u32,
+    has_flag: bool,
+}
+
+impl Tree<'_> {
+    /// This thread's strided slice of the reduced axis: `reduced = tid; < n; += BlockDim`.
+    fn slice(&self, op: &OpDef) -> Result<Vec<Stmt>, LiftDecline> {
+        let mut slice = self.sh.reduce_loop(op, self.rop).0;
+        let Some(Stmt::For { start, step, .. }) = slice.first_mut() else {
+            return Err(LiftDecline::UnsupportedForm(
+                "a reduction's fold is a loop over the reduced axis",
+            ));
+        };
+        *start = as_i32(thread());
+        *step = as_i32(ScalarExpr::Exec(ExecId::BlockDim(0)));
+        Ok(slice)
+    }
+
+    /// Write this thread's accumulator (and `have` flag) to its own slot.
+    fn publish(&self) -> Vec<Stmt> {
+        let me = as_i32(thread());
+        let mut v = vec![Stmt::Store {
+            place: shared(0, me.clone()),
+            value: ScalarExpr::Local(self.sh.acc),
+        }];
+        if self.has_flag {
+            v.push(Stmt::Store {
+                place: shared(1, me),
+                value: ScalarExpr::Local(self.sh.have),
+            });
+        }
+        v
+    }
+
+    /// `block/2, block/4, ... 1`: threads below `s` fold in the partial `s` slots up, then every
+    /// thread meets at a `Barrier`.
+    fn rounds(&self) -> Vec<Stmt> {
+        let mut out = Vec::new();
+        let mut s = self.block / 2;
+        while s > 0 {
+            out.push(Stmt::If {
+                cond: ScalarExpr::Binary(BinaryOp::CmpLt, Box::new(thread()), Box::new(uconst(s))),
+                then: Block(self.round_body(s)),
+                els: Block(vec![]),
+            });
+            out.push(barrier());
+            s /= 2;
+        }
+        out
+    }
+
+    /// One thread's work in the round with stride `s`: load the partner's partial, fold it in,
+    /// publish the result.
+    fn round_body(&self, s: u32) -> Vec<Stmt> {
+        let sh = self.sh;
+        let partner_have = sh.red;
+        let partner = as_i32(ScalarExpr::Add(Box::new(thread()), Box::new(uconst(s))));
+        let mut body = vec![Stmt::Load {
+            local: sh.val,
+            place: shared(0, partner.clone()),
+        }];
+        let combine = fold_step(self.rop, sh.acc, sh.have, sh.val, sh.is_int());
+        if self.has_flag {
+            body.push(Stmt::Load {
+                local: partner_have,
+                place: shared(1, partner),
+            });
+            // A partner that folded nothing carries no value to combine.
+            body.push(Stmt::If {
+                cond: ScalarExpr::Local(partner_have),
+                then: Block(combine),
+                els: Block(vec![]),
+            });
+        } else {
+            body.extend(combine);
+        }
+        body.extend(self.publish());
+        body
+    }
+
+    /// Thread 0 holds the row's result in its accumulator and stores it.
+    fn thread0_stores(&self, coords: Vec<ScalarExpr>) -> Stmt {
+        Stmt::If {
+            cond: ScalarExpr::Binary(BinaryOp::CmpEq, Box::new(thread()), Box::new(uconst(0))),
+            then: Block(vec![Stmt::Store {
+                place: Place::Logical {
+                    buffer: self.sh.n,
+                    coords,
+                },
+                value: self.sh.stored(self.rop),
+            }]),
+            els: Block(vec![]),
+        }
+    }
+
+    fn allocs(&self) -> Vec<AllocDecl> {
+        let extent = Extent::Static(self.block);
+        let mut allocs = vec![AllocDecl::new(
+            "partial",
+            MemorySpace::Shared,
+            self.sh.acc_ty(),
+            extent,
+        )];
+        if self.has_flag {
+            allocs.push(AllocDecl::new(
+                "partial_have",
+                MemorySpace::Shared,
+                ElementKind::I32,
+                extent,
+            ));
+        }
+        allocs
+    }
+}
+
+/// Wrap `row` in the kept axes' loops and make the outermost one block-strided:
+/// `row = BlockIdx; row < n; row += GridDim`.
+fn block_strided_rows(sh: &ReductionShape, row: Block) -> Result<Block, LiftDecline> {
+    let mut body = row;
+    for &d in sh.kept.iter().rev() {
+        body = for_axis(d, sh.r, body);
+    }
+    let Some(Stmt::For { start, step, .. }) = body.0.first_mut() else {
+        return Err(LiftDecline::UnsupportedForm(
+            "a reduction's outermost statement is a loop",
+        ));
+    };
+    *start = as_i32(ScalarExpr::Exec(ExecId::BlockIdx(0)));
+    *step = as_i32(ScalarExpr::Exec(ExecId::GridDim(0)));
+    Ok(body)
 }

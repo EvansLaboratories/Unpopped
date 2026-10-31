@@ -13,10 +13,10 @@
 //! The corpus has no `-0.0`: a `Max`/`Min` over both zeros is order-dependent in the sign of the
 //! zero (documented in `kernel_lift/block_reduce.rs`), so it is not claimed here.
 //!
-//! Six broken copies of the launched kernel must **disagree** (or trap), each by breaking one
+//! Six broken copies of the launched kernel (the tests after the geometry sweep) must **disagree** (or trap), each by breaking one
 //! thing; a `Barrier` removed must be reported by the race checker, not by luck.
 
-use unpopped::ir::{Expr, OpDef, ReduceOp, input};
+use unpopped::ir::{Expr, OpDef, ReduceOp, ScalarExpr, input};
 use unpopped::kernel::{Block, KernelFn, Stmt, check_kernel};
 use unpopped::kernel_lift::{LiftDecline, lift_reduction_opdef, lift_reduction_opdef_launched};
 use unpopped::oracle::TypedBuffer;
@@ -242,154 +242,158 @@ fn mutate(k: &KernelFn, f: impl FnOnce(&mut Block)) -> KernelFn {
     m
 }
 
-/// Each break below must be seen. `want` is the serial answer; `Max` over `F32` has the NaN rule
-/// and threads with nothing to fold (block 64 > 37 columns), `Sum` over `I32` double-counts.
+/// A launched kernel with its serial answer, so a broken copy can be compared to it.
+struct Rig {
+    kernel: KernelFn,
+    dtype: ElementKind,
+    shape: Vec<i64>,
+    strides: Vec<i64>,
+    want: Vec<u8>,
+}
+
+impl Rig {
+    fn new(rop: ReduceOp, dtype: ElementKind, block: u32, grid: u32) -> Self {
+        let (op, shape, strides) = case(rop, dtype, false, false);
+        let serial = lift_reduction_opdef(&op, dtype, 2).expect("lifts");
+        let want = run(&serial, dtype, &shape, &strides, false).expect("the serial kernel runs");
+        let kernel = lift_reduction_opdef_launched(&op, dtype, 2, block, grid).expect("lifts");
+        let rig = Self {
+            kernel,
+            dtype,
+            shape,
+            strides,
+            want,
+        };
+        // Control: the unbroken kernel agrees, or every check below proves nothing.
+        assert_eq!(rig.launch(&rig.kernel), Ok(rig.want.clone()));
+        rig
+    }
+
+    fn launch(&self, k: &KernelFn) -> Result<Vec<u8>, KernelTrap> {
+        run(k, self.dtype, &self.shape, &self.strides, true)
+    }
+
+    fn broken(&self, f: impl FnOnce(&mut Block)) -> Result<Vec<u8>, KernelTrap> {
+        self.launch(&mutate(&self.kernel, f))
+    }
+
+    fn disagrees(&self, f: impl FnOnce(&mut Block)) -> bool {
+        self.broken(f) != Ok(self.want.clone())
+    }
+}
+
+fn remove_barrier(b: &mut Block, nth: usize) {
+    let rb = row_block(b).expect("a row block");
+    let at = barrier_positions(rb)[nth];
+    rb.0.remove(at);
+}
+
+/// `Sum` over `I32` on 8-thread blocks: a double count or a missed partial changes the answer.
+fn sum_rig() -> Rig {
+    Rig::new(ReduceOp::Sum, I32, 8, 3)
+}
+
 #[test]
-fn a_broken_tree_disagrees_or_traps() {
-    let (max_op, shape, strides) = case(ReduceOp::Max, F32, false, false);
-    let (sum_op, sshape, sstrides) = case(ReduceOp::Sum, I32, false, false);
-    let serial = |op: &OpDef, d, sh: &[i64], st: &[i64]| {
-        let k = lift_reduction_opdef(op, d, 2).expect("lifts");
-        run(&k, d, sh, st, false).expect("runs")
-    };
-    let want_max = serial(&max_op, F32, &shape, &strides);
-    let want_sum = serial(&sum_op, I32, &sshape, &sstrides);
-    let max_k = lift_reduction_opdef_launched(&max_op, F32, 2, 64, 3).expect("lifts");
-    let sum_k = lift_reduction_opdef_launched(&sum_op, I32, 2, 8, 3).expect("lifts");
-    // Controls: the unbroken kernels agree, or the checks below prove nothing.
-    assert_eq!(
-        run(&max_k, F32, &shape, &strides, true),
-        Ok(want_max.clone())
-    );
-    assert_eq!(
-        run(&sum_k, I32, &sshape, &sstrides, true),
-        Ok(want_sum.clone())
-    );
-
-    // 1. The first Barrier removed: a thread reads a partner's slot with no ordering.
-    let no_barrier = mutate(&sum_k, |b| {
-        let rb = row_block(b).expect("a row block");
-        let at = barrier_positions(rb)[0];
-        rb.0.remove(at);
-    });
+fn a_removed_first_barrier_reads_unwritten_shared_memory() {
     // Before any round has published, the reader finds the shared array unwritten.
-    assert!(
-        matches!(
-            run(&no_barrier, I32, &sshape, &sstrides, true),
-            Err(KernelTrap::UninitializedShared { .. })
-        ),
-        "a removed Barrier is reported by the checker"
-    );
-    // Between two rounds, a thread reads a slot another thread is writing: a race, by name.
-    let mid_barrier = mutate(&sum_k, |b| {
-        let rb = row_block(b).expect("a row block");
-        let at = barrier_positions(rb)[1];
-        rb.0.remove(at);
-    });
-    assert!(
-        matches!(
-            run(&mid_barrier, I32, &sshape, &sstrides, true),
-            Err(KernelTrap::DataRace)
-        ),
-        "a removed round Barrier is a DataRace"
-    );
+    assert!(matches!(
+        sum_rig().broken(|b| remove_barrier(b, 0)),
+        Err(KernelTrap::UninitializedShared { .. })
+    ));
+}
 
-    // 2. The last tree round dropped: thread 0 never combines thread 1's partial.
-    let short_tree = mutate(&sum_k, |b| {
+#[test]
+fn a_removed_round_barrier_is_a_data_race() {
+    // Between two rounds, a thread reads a slot another thread is writing: a race, by name.
+    assert!(matches!(
+        sum_rig().broken(|b| remove_barrier(b, 1)),
+        Err(KernelTrap::DataRace)
+    ));
+}
+
+#[test]
+fn a_dropped_last_round_disagrees() {
+    // Thread 0 never combines thread 1's partial.
+    assert!(sum_rig().disagrees(|b| {
         let rb = row_block(b).expect("a row block");
         let last = *barrier_positions(rb).last().expect("barriers");
         rb.0.drain(last - 1..=last);
-    });
-    assert_ne!(
-        run(&short_tree, I32, &sshape, &sstrides, true),
-        Ok(want_sum.clone())
-    );
+    }));
+}
 
-    // 3. Every thread folds the whole row (step 1): a Sum counts each element once per thread.
-    let no_stride = mutate(&sum_k, |b| {
+#[test]
+fn an_unstrided_slice_double_counts() {
+    // Every thread folds the whole row (step 1): a Sum counts each element once per thread.
+    assert!(sum_rig().disagrees(|b| {
         let rb = row_block(b).expect("a row block");
         let Some(Stmt::For { step, .. }) = rb.0.iter_mut().find(|s| matches!(s, Stmt::For { .. }))
         else {
             panic!("the slice loop")
         };
-        *step = unpopped::ir::ScalarExpr::ConstInt(1, I32);
-    });
-    assert_ne!(
-        run(&no_stride, I32, &sshape, &sstrides, true),
-        Ok(want_sum.clone())
-    );
+        *step = ScalarExpr::ConstInt(1, I32);
+    }));
+}
 
-    // 4. The combine ignores the partner's `have` flag: a thread with nothing to fold (block 64 >
-    //    37 columns) contributes its identity 0, which beats every negative Max.
-    let ignores_have = mutate(&max_k, |b| {
+#[test]
+fn blocks_starting_at_row_zero_skip_rows() {
+    // With 3 blocks, rows other than 0, 3, 6 are never written.
+    assert!(sum_rig().disagrees(|b| {
+        let Some(Stmt::For { start, .. }) = b.0.first_mut() else {
+            panic!("the row loop")
+        };
+        *start = ScalarExpr::ConstInt(0, I32);
+    }));
+}
+
+/// A combine that ignores the partner's `have` flag lets a thread with nothing to fold (block 64 >
+/// 37 columns) contribute its identity 0, which beats every negative `Max`. The shared corpus has
+/// positives in every row, so this needs an all-negative input of its own.
+#[test]
+fn a_combine_that_ignores_have_picks_up_an_empty_threads_zero() {
+    let (op, ..) = case(ReduceOp::Max, F32, false, false);
+    let launched = lift_reduction_opdef_launched(&op, F32, 2, 64, 3).expect("lifts");
+    let serial = lift_reduction_opdef(&op, F32, 2).expect("lifts");
+    let ignores_have = mutate(&launched, |b| {
         let rb = row_block(b).expect("a row block");
         for s in &mut rb.0 {
             let Stmt::If { then, .. } = s else { continue };
             for t in &mut then.0 {
                 if let Stmt::If {
-                    cond: unpopped::ir::ScalarExpr::Local(_),
+                    cond: ScalarExpr::Local(_),
                     then: inner,
                     ..
                 } = t
                 {
-                    let inner = std::mem::take(&mut inner.0);
                     *t = Stmt::If {
-                        cond: unpopped::ir::ScalarExpr::ConstInt(1, I32),
-                        then: Block(inner),
+                        cond: ScalarExpr::ConstInt(1, I32),
+                        then: Block(std::mem::take(&mut inner.0)),
                         els: Block(vec![]),
                     };
                 }
             }
         }
     });
-    let all_negative = {
+    let negative = |k: &KernelFn, launch: bool| {
+        let vals: Vec<u8> = (0..ROWS * COLS)
+            .flat_map(|i| (-1.0f32 - (i % 5) as f32).to_le_bytes())
+            .collect();
         let mut a = vec![
-            KernelArg::Buffer(TypedBuffer::new(
-                F32,
-                vec![ROWS, COLS],
-                vec![COLS, 1],
-                (0..ROWS * COLS)
-                    .flat_map(|i| (-1.0f32 - (i % 5) as f32).to_le_bytes())
-                    .collect(),
-            )),
+            KernelArg::Buffer(TypedBuffer::new(F32, vec![ROWS, COLS], vec![COLS, 1], vals)),
             KernelArg::Buffer(TypedBuffer::new(F32, vec![ROWS], vec![1], vec![0u8; 36])),
             KernelArg::Int(i128::from(ROWS)),
             KernelArg::Int(i128::from(COLS)),
         ];
-        let serial_k = lift_reduction_opdef(&max_op, F32, 2).expect("lifts");
-        let mut b = a.clone();
-        run_kernel(&serial_k, &mut b).expect("serial");
-        let good = run_launch(&max_k, &mut a.clone());
-        assert!(good.is_ok(), "the unbroken kernel runs");
-        let bad = run_launch(&ignores_have, &mut a).map(|()| a);
-        (b, bad)
-    };
-    let (serial_args, bad) = all_negative;
-    let KernelArg::Buffer(want_neg) = &serial_args[1] else {
-        unreachable!()
-    };
-    let got_neg = bad.map(|a| {
+        if launch {
+            run_launch(k, &mut a)?;
+        } else {
+            run_kernel(k, &mut a)?;
+        }
         let KernelArg::Buffer(o) = &a[1] else {
-            unreachable!()
+            unreachable!("the output follows the input")
         };
-        o.bytes.clone()
-    });
-    assert_ne!(
-        got_neg,
-        Ok(want_neg.bytes.clone()),
-        "a Max over all-negative rows must not pick up an empty thread's 0"
-    );
-
-    // 5. Blocks start at row 0 instead of BlockIdx: with 3 blocks, rows other than 0, 3, 6 are
-    //    never written.
-    let wrong_start = mutate(&sum_k, |b| {
-        let Some(Stmt::For { start, .. }) = b.0.first_mut() else {
-            panic!("the row loop")
-        };
-        *start = unpopped::ir::ScalarExpr::ConstInt(0, I32);
-    });
-    assert_ne!(
-        run(&wrong_start, I32, &sshape, &sstrides, true),
-        Ok(want_sum)
-    );
+        Ok::<_, KernelTrap>(o.bytes.clone())
+    };
+    let want = negative(&serial, false).expect("serial");
+    assert_eq!(negative(&launched, true), Ok(want.clone()), "the control");
+    assert_ne!(negative(&ignores_have, true), Ok(want));
 }
