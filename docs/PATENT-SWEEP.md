@@ -176,7 +176,7 @@ Source: a read run for the PM on 2026-10-28 (record: `C:/Projects/.lane-state/pa
 
 | hit | patent | verdict | limitation(s) Unpopped lacks | status per Google |
 |---|---|---|---|---|
-| 10 | US10949182B2 | outside as read | claims 1/30/44: a parallel-loop analysis, block/thread counts computed from loop bounds, a launch directive (the Slang emitter hard-codes `[numthreads(256, 1, 1)]`); 15/58/64: a serial-segment single-thread kernel; 26/70/74: a library-call substitution table | Active, no expiry shown |
+| 10 | US10949182B2 | outside as read | claims 1/30/44: a parallel-loop analysis, block/thread counts computed from loop bounds, a launch directive (the Slang emitter hard-codes `[numthreads(256, 1, 1)]`); 15/58/64: a serial-segment single-thread kernel; 26/70/74: a library-call substitution table | Active; estimated expiry 2037-11-16 (Google Patents' own assumption, read 2026-10-31; this sweep first read it as "no expiry shown"). E1d re-read 2026-10-31: `docs/e1d-parallel-mapping.md` |
 | 11 | US8671401B2 | outside as read | break-mark sub-graph splitting, instantiating only the elements a tile needs, tiling a series of loop nests | "Expired - Fee Related" and an estimated expiry of 2031-05-23 on the same page (inconsistent; status unverified) |
 | 12 | US11288108B2 | outside as read | a rewrite that adds array-size parameters and bounds guards, loading the rewritten module in a virtual machine, modifying host source | Active, est. 2040-09-22 |
 | 13 | US9275426B2 | outside as read | runtime detection of the GPU's computation language, dual-language macros | Active, est. 2033-06-21 |

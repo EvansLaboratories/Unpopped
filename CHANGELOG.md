@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.35.2` — docs: E1d parallel mapping design note and the US10949182B2 re-read
+
+**Docs only; no code, no API, no behaviour change.** `docs/e1d-parallel-mapping.md` designs the target-neutral parallel transform (declared-parallel axes, a caller-chosen grid with grid-stride loops, block-tree `RowReduce`) and re-reads US10949182B2's independent claims against it: outside as read, not clear. `docs/PATENT-SWEEP.md` row 10 now records the estimated expiry Google Patents shows (2037-11-16, read 2026-10-31), where it said none was shown.
+
 ## `0.35.1` — docs: integer division, remainder and shift semantics, measured per target (design note)
 
 **Docs only; no code, no API, no behaviour change.** `docs/int-div-shift-semantics.md` records what C11, the C++ draft, PTX ISA 9.4, LLVM, OpenCL C 3.0, GLSL 4.60.8, SPIR-V and WGSL each specify for integer division by zero, `MIN / -1` and a shift count at or above the width, with sections cited, and recommends one total IR rule (WGSL's division cases, shift count modulo the width). Awaiting the PM's ruling; integer `Div` stays rejected and `Shl`/`Shr` keep their caller contract until then.
