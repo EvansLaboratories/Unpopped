@@ -398,6 +398,17 @@ impl<'a> Machine<'a> {
                 let (x, y) = two(a, b)?;
                 wrap(t, x * y)
             }
+            // Integer division, remainder-free: the total definition of `docs/int-div-shift-semantics.md`
+            // (PM ruling 2026-10-31): a zero divisor gives the dividend, and so does `MIN / -1`.
+            ScalarExpr::Div(a, b) => {
+                let (x, y) = two(a, b)?;
+                int_div(t, x, y)
+            }
+            // Shifts read the count as unsigned bits, modulo the promoted width.
+            ScalarExpr::Binary(op @ (BinaryOp::Shl | BinaryOp::Shr), a, b) => {
+                let (x, y) = two(a, b)?;
+                int_shift(t, matches!(op, BinaryOp::Shl), x, y)
+            }
             ScalarExpr::Binary(op @ (BinaryOp::Min | BinaryOp::Max), a, b) => {
                 let (x, y) = two(a, b)?;
                 if matches!(op, BinaryOp::Min) {
@@ -546,6 +557,31 @@ impl<'a> Machine<'a> {
         }
         map_children(e, &mut |c| self.rewrite(c, slots))
     }
+}
+
+/// `x / y` at integer type `t`, total (`docs/int-div-shift-semantics.md`, rules 1 and 2): `y == 0` gives
+/// `x`; so does `MIN / -1` (the wrapping result); otherwise the quotient truncated toward zero.
+fn int_div(t: ElementKind, x: i128, y: i128) -> i128 {
+    let (lo, _) = types::int_range(t).expect("int_div is called with an integer type");
+    if y == 0 || (lo < 0 && x == lo && y == -1) {
+        return x;
+    }
+    x / y
+}
+
+/// `x << y` or `x >> y` at integer type `t` (rule 3): the count's bits read as unsigned, taken modulo
+/// the promoted width, which is 64 for a 64-bit type and 32 for every narrower one (an 8- or 16-bit
+/// operand promotes to `int`, PM ruling 2026-10-31). `<<` discards the bits shifted out and is defined
+/// for a negative or overflowing `x`; `>>` is arithmetic on a signed type and logical on an unsigned one.
+fn int_shift(t: ElementKind, left: bool, x: i128, y: i128) -> i128 {
+    let width: u128 = if types::typed_bits(t) == Some(64) {
+        64
+    } else {
+        32
+    };
+    // `y as u128` sign-extends a negative count, whose low bits are its two's-complement bits.
+    let k = (y as u128 & (width - 1)) as u32;
+    if left { wrap(t, x << k) } else { x >> k }
 }
 
 /// `v` wrapped to `t`'s width (two's complement for signed, modulo for unsigned).
