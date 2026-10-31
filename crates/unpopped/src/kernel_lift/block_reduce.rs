@@ -57,9 +57,15 @@ pub fn lift_reduction_opdef_launched(
     check_order_independent(&sh, rop, post.is_some())?;
     let t = Tree {
         sh: &sh,
-        rop,
-        block,
-        has_flag: matches!(rop, ReduceOp::Max | ReduceOp::Min),
+        fold: Fold {
+            rop,
+            block,
+            acc: sh.acc,
+            have: sh.have,
+            val: sh.val,
+            partner_have: sh.red,
+            int: sh.is_int(),
+        },
     };
 
     let mut row = vec![
@@ -73,9 +79,9 @@ pub fn lift_reduction_opdef_launched(
         },
     ];
     row.extend(t.slice(op)?);
-    row.extend(t.publish());
+    row.extend(t.fold.publish());
     row.push(barrier());
-    row.extend(t.rounds());
+    row.extend(t.fold.rounds());
     let out_coords = sh.out_coords(keepdim);
     let out_rank = u8::try_from(out_coords.len()).expect("rank is at most 8");
     row.push(t.thread0_stores(out_coords));
@@ -85,7 +91,7 @@ pub fn lift_reduction_opdef_launched(
     locals.push(LocalDecl::scalar(ElementKind::I32)); // the partner's `have`
     Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body)
         .with_launch(LaunchShape::new([block, 1, 1], [grid, 1, 1]))
-        .with_allocs(t.allocs()))
+        .with_allocs(t.fold.allocs(sh.acc_ty())))
 }
 
 /// The forms this lift takes: an order-independent fold (or a float `Sum`/`Mean` with a declared
@@ -120,63 +126,60 @@ fn check_order_independent(
     Ok(())
 }
 
-fn barrier() -> Stmt {
+pub(super) fn barrier() -> Stmt {
     Stmt::Barrier {
         scope: Scope::Block,
     }
 }
 
-fn thread() -> ScalarExpr {
+pub(super) fn thread() -> ScalarExpr {
     ScalarExpr::Exec(ExecId::ThreadIdx(0))
 }
 
-fn uconst(v: u32) -> ScalarExpr {
+pub(super) fn uconst(v: u32) -> ScalarExpr {
     ScalarExpr::ConstInt(i64::from(v), ElementKind::U32)
 }
 
 /// An unsigned id as the `I32` the counters and indices are.
-fn as_i32(e: ScalarExpr) -> ScalarExpr {
+pub(super) fn as_i32(e: ScalarExpr) -> ScalarExpr {
     ScalarExpr::Cast(Box::new(e), widen(ElementKind::I32))
 }
 
-fn shared(alloc: u32, index: ScalarExpr) -> Place {
+pub(super) fn shared(alloc: u32, index: ScalarExpr) -> Place {
     Place::Alloc { alloc, index }
 }
 
-/// The pieces of one block's tree: allocation 0 holds the partial accumulators and, for
-/// `Max`/`Min`, allocation 1 the partials' `have` flags.
-struct Tree<'a> {
-    sh: &'a ReductionShape,
-    rop: ReduceOp,
-    block: u32,
-    has_flag: bool,
+/// The cooperative fold shared by every block-tree lift: the locals a thread folds into, and the
+/// geometry of the log-step tree that combines the threads' partials. Allocation 0 holds the
+/// partial accumulators and, for `Max`/`Min`, allocation 1 the partials' `have` flags.
+pub(super) struct Fold {
+    pub(super) rop: ReduceOp,
+    pub(super) block: u32,
+    /// The thread's accumulator, `have` flag and loaded partner value.
+    pub(super) acc: u32,
+    pub(super) have: u32,
+    pub(super) val: u32,
+    /// Where a round loads the partner's `have` flag (`Max`/`Min` only).
+    pub(super) partner_have: u32,
+    pub(super) int: bool,
 }
 
-impl Tree<'_> {
-    /// This thread's strided slice of the reduced axis: `reduced = tid; < n; += BlockDim`.
-    fn slice(&self, op: &OpDef) -> Result<Vec<Stmt>, LiftDecline> {
-        let mut slice = self.sh.reduce_loop(op, self.rop).0;
-        let Some(Stmt::For { start, step, .. }) = slice.first_mut() else {
-            return Err(LiftDecline::UnsupportedForm(
-                "a reduction's fold is a loop over the reduced axis",
-            ));
-        };
-        *start = as_i32(thread());
-        *step = as_i32(ScalarExpr::Exec(ExecId::BlockDim(0)));
-        Ok(slice)
+impl Fold {
+    pub(super) fn has_flag(&self) -> bool {
+        matches!(self.rop, ReduceOp::Max | ReduceOp::Min)
     }
 
     /// Write this thread's accumulator (and `have` flag) to its own slot.
-    fn publish(&self) -> Vec<Stmt> {
+    pub(super) fn publish(&self) -> Vec<Stmt> {
         let me = as_i32(thread());
         let mut v = vec![Stmt::Store {
             place: shared(0, me.clone()),
-            value: ScalarExpr::Local(self.sh.acc),
+            value: ScalarExpr::Local(self.acc),
         }];
-        if self.has_flag {
+        if self.has_flag() {
             v.push(Stmt::Store {
                 place: shared(1, me),
-                value: ScalarExpr::Local(self.sh.have),
+                value: ScalarExpr::Local(self.have),
             });
         }
         v
@@ -184,7 +187,7 @@ impl Tree<'_> {
 
     /// `block/2, block/4, ... 1`: threads below `s` fold in the partial `s` slots up, then every
     /// thread meets at a `Barrier`.
-    fn rounds(&self) -> Vec<Stmt> {
+    pub(super) fn rounds(&self) -> Vec<Stmt> {
         let mut out = Vec::new();
         let mut s = self.block / 2;
         while s > 0 {
@@ -202,22 +205,20 @@ impl Tree<'_> {
     /// One thread's work in the round with stride `s`: load the partner's partial, fold it in,
     /// publish the result.
     fn round_body(&self, s: u32) -> Vec<Stmt> {
-        let sh = self.sh;
-        let partner_have = sh.red;
         let partner = as_i32(ScalarExpr::Add(Box::new(thread()), Box::new(uconst(s))));
         let mut body = vec![Stmt::Load {
-            local: sh.val,
+            local: self.val,
             place: shared(0, partner.clone()),
         }];
-        let combine = fold_step(self.rop, sh.acc, sh.have, sh.val, sh.is_int());
-        if self.has_flag {
+        let combine = fold_step(self.rop, self.acc, self.have, self.val, self.int);
+        if self.has_flag() {
             body.push(Stmt::Load {
-                local: partner_have,
+                local: self.partner_have,
                 place: shared(1, partner),
             });
             // A partner that folded nothing carries no value to combine.
             body.push(Stmt::If {
-                cond: ScalarExpr::Local(partner_have),
+                cond: ScalarExpr::Local(self.partner_have),
                 then: Block(combine),
                 els: Block(vec![]),
             });
@@ -226,6 +227,47 @@ impl Tree<'_> {
         }
         body.extend(self.publish());
         body
+    }
+
+    /// The shared arrays the tree needs, `acc_ty` being the accumulator's element type.
+    pub(super) fn allocs(&self, acc_ty: ElementKind) -> Vec<AllocDecl> {
+        let extent = Extent::Static(self.block);
+        let mut allocs = vec![AllocDecl::new(
+            "partial",
+            MemorySpace::Shared,
+            acc_ty,
+            extent,
+        )];
+        if self.has_flag() {
+            allocs.push(AllocDecl::new(
+                "partial_have",
+                MemorySpace::Shared,
+                ElementKind::I32,
+                extent,
+            ));
+        }
+        allocs
+    }
+}
+
+/// One block's tree over a [`ReductionShape`].
+struct Tree<'a> {
+    sh: &'a ReductionShape,
+    fold: Fold,
+}
+
+impl Tree<'_> {
+    /// This thread's strided slice of the reduced axis: `reduced = tid; < n; += BlockDim`.
+    fn slice(&self, op: &OpDef) -> Result<Vec<Stmt>, LiftDecline> {
+        let mut slice = self.sh.reduce_loop(op, self.fold.rop).0;
+        let Some(Stmt::For { start, step, .. }) = slice.first_mut() else {
+            return Err(LiftDecline::UnsupportedForm(
+                "a reduction's fold is a loop over the reduced axis",
+            ));
+        };
+        *start = as_i32(thread());
+        *step = as_i32(ScalarExpr::Exec(ExecId::BlockDim(0)));
+        Ok(slice)
     }
 
     /// Thread 0 holds the row's result in its accumulator and stores it.
@@ -237,29 +279,10 @@ impl Tree<'_> {
                     buffer: self.sh.n,
                     coords,
                 },
-                value: self.sh.stored(self.rop),
+                value: self.sh.stored(self.fold.rop),
             }]),
             els: Block(vec![]),
         }
-    }
-
-    fn allocs(&self) -> Vec<AllocDecl> {
-        let extent = Extent::Static(self.block);
-        let mut allocs = vec![AllocDecl::new(
-            "partial",
-            MemorySpace::Shared,
-            self.sh.acc_ty(),
-            extent,
-        )];
-        if self.has_flag {
-            allocs.push(AllocDecl::new(
-                "partial_have",
-                MemorySpace::Shared,
-                ElementKind::I32,
-                extent,
-            ));
-        }
-        allocs
     }
 }
 

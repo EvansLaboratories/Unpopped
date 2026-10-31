@@ -112,7 +112,7 @@ combine the partials with the serial fold's own step; thread 0 stores. Blocks st
   and the sign of a zero when both `+0` and `-0` occur in a `Max`/`Min` (the serial fold keeps the first, the tree whichever it
   combines first). The proof corpus has no `-0.0`.
 - **Declined** with a typed `LiftDecline`: float `Prod` (float `Sum`/`Mean` are E1d-2, below), integer `Mean`, a fused post, more than one reduced axis, no kept axis (a rank-1 reduction), a non-power-of-two `block`.
-  `Access::RowReduce` (float, multi-stage, tolerance-mode) is the next stage, E1d-2.
+  `Access::RowReduce` (float, multi-stage, tolerance-mode) is E1d-3, below.
 - **The barrier checker** treated every `Exec` leaf as thread-divergent, so a barrier inside a block-strided row loop was
   rejected. `BlockIdx`, `BlockDim` and `GridDim` are now uniform (every thread of a block reads the same value); `ThreadIdx`,
   the lane and subgroup ids stay divergent, and the pinned over-rejections are unchanged.
@@ -147,6 +147,33 @@ reproducible run-to-run for a fixed (grid, block); write the order in the note a
   plain-Rust reimplementation of the order above (bit for bit); a dropped last round and an unstrided slice are each seen.
   Scope: the proof is the kernel interpreter's (`run_launch`); an emitter that contracts `acc + x` into an FMA, or reorders the
   tree, is outside this claim and has its own test.
+
+## E1d-3 as built
+
+`lift_row_reduce_opdef_launched(op, dtype, rank, block, grid)` (`kernel_lift/row_reduce_launched.rs`) is `Access::RowReduce` on the
+block-tree. The serial lift (`lift_row_reduce_opdef`) is the specification: it rounds each stage once to the compute dtype and runs
+later stages and the epilogue on that (tolerance mode against the oracle, 2 ulp at `F32`). The launched lift keeps every one of those
+choices and changes only who does the folding.
+
+- **Per row, one block**, blocks striding over the outermost leading axis (`row = BlockIdx; += GridDim`), `rank >= 2`.
+- **Stage order.** For stage `s = 0, 1, ...`: thread `t` folds columns `t, t+B, t+2B, ...` ascending into an `F64` accumulator over the
+  stage's `pre` expression (which may read `Reduced(u)`, `u < s`); the partials are published and combined by the E1d-1 tree
+  (`acc[t] = acc[t] (op) acc[t+k]`, `k = B/2 ... 1`, a `Barrier` after the publish and after each round); thread 0 finalises (`Mean`
+  divides by the row length), rounds once to the compute dtype and stores the result in `Shared` slot `s`; a `Barrier`; every thread
+  loads the slot into its `Reduced(s)` local. After the last stage every thread runs the epilogue over columns `t, t+B, ...`, reading
+  the loaded stage results. The broadcast barrier is what makes a stage result visible to the next stage's and the epilogue's readers;
+  the stage-result slots are distinct per stage, so no stage overwrites a slot another thread may still read.
+- **Numerics.** A `Max`/`Min` stage is a set function: bit-exact against the serial lift (except NaN payload and a zero's sign, as in
+  E1d-1). A `Sum`/`Mean` stage's `F64` accumulation meets the E1d-2 bound, `gamma_(n-1) * sum|x_i|`, and is rounded once exactly as the
+  serial lift rounds it, so its stage value differs from the serial lift's by at most that bound plus, at `F32`, one rounding step at a
+  boundary. The epilogue then runs on the stage values it is given, so a later stage or epilogue that amplifies a stage value (an `exp`,
+  a division by a stage value) can move an output cell by more than the stage's own difference; the proof bounds softmax and RMS norm at
+  4 ulps of the serial lift on its corpus, which is a measurement of that corpus and not a bound for every input. The result is
+  reproducible for a fixed `(grid, block)` and does not depend on `grid`. At `block = 1` the tree is empty and the bytes equal the
+  serial lift's.
+- **Declined:** rank 1, a `Prod` stage, an empty stage list, an integer dtype, a non-power-of-two `block`, a zero `grid`.
+- **Proof:** `tests/kernel_parallel_row_reduce_agrees.rs`, listed in `CHANGELOG.md` 0.38.5. Same scope statement as E1d-2: the proof is
+  the kernel interpreter's (`run_launch`).
 
 ## Provenance
 
