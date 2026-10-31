@@ -3,8 +3,8 @@
 //! source-language side of the translation hub, built on **tree-sitter**.
 //!
 //! Instead of a hand-written parser (the pilot in `lift.rs`), these frontends
-//! reuse mature tree-sitter grammars (here `tree-sitter-slang`; CUDA's lives in
-//! Baracuda's `baracuda-cuda-parse`, see below): parse
+//! reuse mature tree-sitter grammars (none is bundled here: CUDA's lives in
+//! Baracuda's `baracuda-cuda-parse`, Slang's in Vulkane's `vulkane-slang-parse`, see below): parse
 //! source into an error-tolerant CST, recognize the expressible idioms
 //! (grid-stride / dispatch elementwise, …) into the neutral IR (`OpDef`), and
 //! keep whatever doesn't map as a typed [`LiftError`] residue
@@ -12,10 +12,9 @@
 //! Error tolerance is a feature — unrecognized constructs stay as intact subtrees
 //! we refuse rather than mis-lift; portability scales with the lift fraction.
 //!
-//! Because `tree-sitter-slang` is built on `tree-sitter-cpp`, a Slang elementwise
-//! store parses into the SAME `assignment_expression` / `subscript_expression` /
-//! `binary_expression` node shapes as CUDA (`tree-sitter-cuda` is built on it
-//! too) — so ONE CST walk serves every C-family language, differing only in
+//! Because `tree-sitter-slang` and `tree-sitter-cuda` are both built on `tree-sitter-cpp`, a
+//! Slang elementwise store parses into the SAME `assignment_expression` /
+//! `subscript_expression` / `binary_expression` node shapes as CUDA — so ONE CST walk serves every C-family language, differing only in
 //! naming conventions (`out`/`in` are HLSL keywords, so Slang uses
 //! `output`/`input{k}`) and the kernel/residue markers.
 //!
@@ -28,11 +27,11 @@
 //! naming, and a `parse` function pointer), and [`lift_elementwise`],
 //! [`lift_reduction`], [`lift_scan`] and [`lift`] take one.
 //!
-//! [`SLANG`] is the one supplied here. A caller defines any other, and
+//! No descriptor is supplied here: a caller defines one with [`Frontend::new`], and
 //! `a_caller_defined_frontend_lifts_through_the_shared_walkers` proves the walkers
 //! read the descriptor rather than hardcoding this crate's.
 //!
-//! # CUDA is not here (0.30.0)
+//! # No grammar is here (CUDA left in 0.30.0, Slang in 0.37.0)
 //!
 //! `parse_cuda`, the CUDA residue list, the `CUDA` descriptor and the
 //! `tree-sitter-cuda` dependency moved out: Baracuda owns CUDA in this ecosystem
@@ -42,33 +41,16 @@
 //! tests; the CUDA golden vectors live in `baracuda-cuda-parse/tests/convert.rs`.
 //! `tests/neutral_core_names_no_cuda_grammar.rs` guards the absence.
 //!
-//! The grammar crate is named in exactly one place ([`parse_slang`]).
+//! Slang followed in 0.37.0: `parse_slang`, the Slang residue list, the `SLANG` descriptor and
+//! the `tree-sitter-slang` dependency are gone from the shipped crate (the emitter and the
+//! parser are Vulkane's: `vulkane-slang-emit`, `vulkane-slang-parse`). The tests build their own
+//! Slang `Frontend` from a dev-dependency.
 
 use crate::ir::{BinaryOp, Expr, OpDef, ReduceOp, ScalarExpr, UnaryOp};
-use crate::lift::{LiftError, LiftProvenance, Lifted, binary_fn, unary_fn};
+use crate::lift::{LiftError, LiftProvenance, Lifted};
 use crate::resource_map::ResourceMap;
-use tree_sitter::{Node, Parser, Tree};
+use tree_sitter::{Node, Tree};
 use unpopped_vocab::ElementKind;
-
-/// Parse Slang source into a tree-sitter CST.
-pub fn parse_slang(src: &str) -> Option<Tree> {
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_slang::LANGUAGE_SLANG.into())
-        .ok()?;
-    parser.parse(src, None)
-}
-
-/// Slang constructs that aren't IR-expressible — group-shared memory, barriers, atomics.
-const SLANG_RESIDUE: &[&str] = &[
-    "groupshared",
-    "GroupMemoryBarrier",
-    "DeviceMemoryBarrier",
-    "AllMemoryBarrier",
-    "InterlockedAdd",
-    "InterlockedCompareExchange",
-    "RWByteAddressBuffer",
-];
 
 /// What a source language contributes to lifting — everything that is NOT the
 /// CST walk.
@@ -178,21 +160,6 @@ impl Frontend {
         }
     }
 }
-
-/// Slang: `numthreads` compute kernels, `output`/`input{K}` buffers.
-///
-/// The buffer names differ from CUDA's because `out` and `in` are **HLSL
-/// keywords** — a language constraint, not a style choice.
-pub const SLANG: Frontend = Frontend {
-    name: "slang",
-    kernel_marker: "numthreads",
-    residue: SLANG_RESIDUE,
-    out_name: "output",
-    in_prefix: "input",
-    parse: parse_slang,
-    unary_fn,
-    binary_fn,
-};
 
 /// The four-step preamble every lifter shares: kernel marker, residue refusal,
 /// parse, then hand the CST to a walker.
@@ -998,6 +965,36 @@ impl<'a> Walk<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Slang front end, defined here: the core carries no grammar. `tree-sitter-slang` is a
+    /// dev-dependency, and `Frontend::new` is the entry point a per-target crate uses.
+    const SLANG_RESIDUE: &[&str] = &[
+        "groupshared",
+        "GroupMemoryBarrier",
+        "DeviceMemoryBarrier",
+        "AllMemoryBarrier",
+        "InterlockedAdd",
+        "InterlockedCompareExchange",
+        "RWByteAddressBuffer",
+    ];
+
+    fn parse_slang(src: &str) -> Option<tree_sitter::Tree> {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_slang::LANGUAGE_SLANG.into())
+            .ok()?;
+        parser.parse(src, None)
+    }
+
+    /// Slang: `numthreads` compute kernels, `output`/`input{K}` buffers (`out` and `in` are HLSL keywords).
+    const SLANG: Frontend = Frontend::new(
+        "slang",
+        "numthreads",
+        SLANG_RESIDUE,
+        "output",
+        "input",
+        parse_slang,
+    );
 
     const F32: &[ElementKind] = &[ElementKind::F32];
 

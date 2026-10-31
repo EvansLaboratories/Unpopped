@@ -11,8 +11,8 @@
 
 use unpopped::artifact::{BindingRole, LayoutRule, Packing, ParamField, ParamsLayout};
 use unpopped::convert::{
-    Frontend, SLANG, lift, lift_elementwise, lift_elementwise_with, lift_reduction_with,
-    lift_scan_with, lift_with, parse_slang,
+    Frontend, lift, lift_elementwise, lift_elementwise_with, lift_reduction_with, lift_scan_with,
+    lift_with,
 };
 use unpopped::ir::ScalarExpr;
 use unpopped::resource_map::{DeclaredBuffer, ResourceMap, ResourceMapError};
@@ -20,6 +20,36 @@ use unpopped::{LiftError, LiftProvenance};
 use unpopped_vocab::ElementKind as K;
 
 const F32: &[K] = &[K::F32];
+
+/// The Slang front end, defined here: the core carries no grammar. `tree-sitter-slang` is a
+/// dev-dependency, and `Frontend::new` is the entry point a per-target crate uses.
+const SLANG_RESIDUE: &[&str] = &[
+    "groupshared",
+    "GroupMemoryBarrier",
+    "DeviceMemoryBarrier",
+    "AllMemoryBarrier",
+    "InterlockedAdd",
+    "InterlockedCompareExchange",
+    "RWByteAddressBuffer",
+];
+
+fn parse_slang(src: &str) -> Option<tree_sitter::Tree> {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_slang::LANGUAGE_SLANG.into())
+        .ok()?;
+    parser.parse(src, None)
+}
+
+/// Slang: `numthreads` compute kernels, `output`/`input{K}` buffers (`out` and `in` are HLSL keywords).
+const SLANG: Frontend = Frontend::new(
+    "slang",
+    "numthreads",
+    SLANG_RESIDUE,
+    "output",
+    "input",
+    parse_slang,
+);
 
 fn rd(name: &str, index: u32) -> DeclaredBuffer {
     DeclaredBuffer::new(name, 0, index, BindingRole::Read, K::F32, Packing::Unpacked)

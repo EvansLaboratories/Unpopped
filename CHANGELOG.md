@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.37.0` — BREAKING: the core carries no Slang grammar (`parse_slang`, `SLANG`, `tree-sitter-slang` removed)
+
+`unpopped::convert::{parse_slang, SLANG}` and the `tree-sitter-slang` dependency are gone, and the `convert` feature now enables only `tree-sitter` (the shared C-family walkers and the `Frontend` type). The Slang front end is Vulkane's: use `vulkane-slang-parse` 0.17.0 (`vulkane_slang_parse::{SLANG, parse_slang}`) with `lift`, `lift_elementwise`, `lift_reduction`, `lift_scan` here, or build a `Frontend` with `Frontend::new`. CUDA left the same way in 0.30.0 (`baracuda-cuda-parse`). The walkers, `Frontend`, `Frontend::new` and `with_intrinsics` are unchanged. This crate's own tests and the `slang_corpus_report` example build a Slang `Frontend` from `tree-sitter-slang`, now a dev-dependency only; `tests/neutral_core_names_no_cuda_grammar.rs` guards the shipped manifest and `convert.rs` (its controls prove the shipped/dev split lands where it should).
+
 ## `0.36.0` — BREAKING: `unpopped-slang` leaves the workspace (it is Vulkane's, as `vulkane-slang-emit`)
 
 The Slang emitter moved to Vulkane (PM ruling 2026-10-30, CireSnave: *"Vulkane now owns Slang in our ecosystem."*): `vulkane-slang-emit` 0.17.0 is published with the code and its history, and the three conformance cells that spanned both emitters (`cell_token_is_not_a_computation`, `dtype_lowering_coverage`, `lower_kernel_default_is_the_typed_decline`) live in its `tests/`, with `unpopped-cpu-c` as their dev-dependency. This release deletes `crates/unpopped-slang`, its workspace dependency and the conformance crate's dev-dependency. The first two cells keep their `CpuC` halves here (`cell_token_is_not_a_computation`, `lower_kernel_default_is_the_typed_decline`); the dtype matrix, which compared the two emitters, is gone from this repo.
