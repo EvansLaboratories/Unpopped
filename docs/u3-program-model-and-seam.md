@@ -31,7 +31,7 @@ Facts, read from `origin/main` (not asserted from memory):
 | Frontend buffer naming | `Frontend { out_name, in_prefix }`: `out`/`in{K}` (CUDA) or `output`/`input{K}` (Slang) | **Yes.** Declared by name convention, not by reading declarations; 0 of 147 Fuel kernels lift on it (4 of 147 after a naming fix). | `convert.rs`, ROADMAP E13 |
 | Frontend kernel entry | `kernel_marker: &str`, a substring (`__global__`, `numthreads`) | Yes. Slang has entry attributes and two-entry files (R3). | `convert.rs` |
 | Frontend refusal | `residue: &[&str]`, a substring list that refuses `groupshared`, `Interlocked*` | Yes in effect: the union design (D1) replaces refusal by a kernel-layer body, after U4/U5. | `ir-union-design.md` section 4 |
-| Frontend grammar | `parse: fn(&str) -> Option<tree_sitter::Tree>` | No language, but it makes tree-sitter 0.26 part of the public type. | `convert.rs` |
+| Frontend grammar | `parse: fn(&str) -> Option<tree_sitter::Tree>` | No language, but it makes tree-sitter 0.27 part of the public type. | `convert.rs` |
 | Schedule | cpu-c and Slang accept only `Schedule::Scalar` (ROADMAP E1) | Neutral, but a measurement of how little of the seam is exercised off CUDA. | ROADMAP E1 |
 
 Nothing in this list is changed by this document.
