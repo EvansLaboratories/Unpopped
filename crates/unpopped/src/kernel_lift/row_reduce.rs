@@ -48,7 +48,7 @@ pub fn lift_row_reduce_opdef(
     Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body))
 }
 
-fn check_row_reduce(
+pub(super) fn check_row_reduce(
     op: &OpDef,
     dtype: ElementKind,
     rank: u8,
@@ -73,15 +73,15 @@ fn check_row_reduce(
 /// Local ids. Extents `0..r`; counters `r..2r` (the last is the position along the row); then, per
 /// phase (each stage, then the epilogue), one loaded local per input; then, per stage, the `F64`
 /// accumulator, the `have` flag, the current `F64` value and the rounded stage result.
-struct Row {
-    dtype: ElementKind,
-    r: u32,
-    n: u32,
-    stages: u32,
+pub(super) struct Row {
+    pub(super) dtype: ElementKind,
+    pub(super) r: u32,
+    pub(super) n: u32,
+    pub(super) stages: u32,
 }
 
 impl Row {
-    fn new(n_inputs: u8, dtype: ElementKind, rank: u8, stages: usize) -> Self {
+    pub(super) fn new(n_inputs: u8, dtype: ElementKind, rank: u8, stages: usize) -> Self {
         Self {
             dtype,
             r: u32::from(rank),
@@ -90,20 +90,20 @@ impl Row {
         }
     }
 
-    fn counter(&self, d: u32) -> u32 {
+    pub(super) fn counter(&self, d: u32) -> u32 {
         self.r + d
     }
 
-    fn loaded(&self, phase: u32, k: u32) -> u32 {
+    pub(super) fn loaded(&self, phase: u32, k: u32) -> u32 {
         2 * self.r + phase * self.n + k
     }
 
     /// First local of stage `s`'s four.
-    fn stage_base(&self, s: u32) -> u32 {
+    pub(super) fn stage_base(&self, s: u32) -> u32 {
         2 * self.r + (self.stages + 1) * self.n + 4 * s
     }
 
-    fn up(&self, e: ScalarExpr) -> ScalarExpr {
+    pub(super) fn up(&self, e: ScalarExpr) -> ScalarExpr {
         if self.dtype == ElementKind::F64 {
             e
         } else {
@@ -111,7 +111,7 @@ impl Row {
         }
     }
 
-    fn down(&self, e: ScalarExpr) -> ScalarExpr {
+    pub(super) fn down(&self, e: ScalarExpr) -> ScalarExpr {
         if self.dtype == ElementKind::F64 {
             e
         } else {
@@ -120,7 +120,7 @@ impl Row {
     }
 
     /// `for counter(d) in 0..extent(d) { inner }`.
-    fn for_lead(&self, d: u32, inner: Block) -> Block {
+    pub(super) fn for_lead(&self, d: u32, inner: Block) -> Block {
         Block(vec![Stmt::For {
             local: self.counter(d),
             start: int(0),
@@ -132,7 +132,7 @@ impl Row {
 
     /// The expression with `Input(k)` read from phase `phase`'s loaded locals and `Reduced(t)` from
     /// stage `t`'s rounded result.
-    fn bind(&self, e: &ScalarExpr, phase: u32) -> ScalarExpr {
+    pub(super) fn bind(&self, e: &ScalarExpr, phase: u32) -> ScalarExpr {
         bind(e, &|leaf| match leaf {
             ScalarExpr::Input(k) => Some(local(self.loaded(phase, u32::from(*k)))),
             ScalarExpr::Reduced(t) => Some(local(self.stage_base(u32::from(*t)) + 3)),
@@ -140,7 +140,7 @@ impl Row {
         })
     }
 
-    fn loads(&self, phase: u32) -> Vec<Stmt> {
+    pub(super) fn loads(&self, phase: u32) -> Vec<Stmt> {
         (0..self.n)
             .map(|k| Stmt::Load {
                 local: self.loaded(phase, k),
@@ -153,7 +153,7 @@ impl Row {
     }
 
     /// One stage: fold the row into an `F64` accumulator, then round the finalised value once.
-    fn stage(&self, s: usize, stage: &ReduceStage) -> Vec<Stmt> {
+    pub(super) fn stage(&self, s: usize, stage: &ReduceStage) -> Vec<Stmt> {
         let s = u32::try_from(s).expect("a handful of stages");
         let base = self.stage_base(s);
         let (acc, have, val, red) = (base, base + 1, base + 2, base + 3);
@@ -188,7 +188,7 @@ impl Row {
     }
 
     /// The full-width output: the epilogue over the inputs and the rounded stage results.
-    fn epilogue(&self, epilogue: &ScalarExpr) -> Stmt {
+    pub(super) fn epilogue(&self, epilogue: &ScalarExpr) -> Stmt {
         let mut inner = self.loads(self.stages);
         inner.push(Stmt::Store {
             place: Place::Logical {
@@ -200,7 +200,7 @@ impl Row {
         self.for_lead(self.r - 1, Block(inner)).0.remove(0)
     }
 
-    fn signature(&self) -> (Vec<Param>, Vec<LocalDecl>) {
+    pub(super) fn signature(&self) -> (Vec<Param>, Vec<LocalDecl>) {
         let rank = u8::try_from(self.r).expect("rank is at most 8");
         let mut params: Vec<Param> = (0..self.n)
             .map(|k| Param::buffer(format!("in{k}"), self.dtype, BufferRole::Read, Some(rank)))
