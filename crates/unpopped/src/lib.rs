@@ -26,8 +26,9 @@
 //! # Where the emitters went
 //!
 //! Every reference emitter now lives in its own crate: `unpopped-cpu-c` (the
-//! portable-C99 one), `unpopped-slang`. The CUDA emitter has always been
-//! external, in `baracuda-cuda-emit`.
+//! portable-C99 one). The CUDA emitter has always been external, in
+//! `baracuda-cuda-emit`, and the Slang emitter moved to Vulkane (`vulkane-slang-emit`)
+//! in 0.36.0.
 //!
 //! This is the umbrella model — **Unpopped is a standard with a normative
 //! reference emitter per target**, and a standard that ships one target's

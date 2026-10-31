@@ -39,7 +39,6 @@ use unpopped::backend::Backend;
 use unpopped::ir::{OpDef, input};
 use unpopped::try_generate;
 use unpopped_cpu_c::CpuC;
-use unpopped_slang::Slang;
 use unpopped_vocab::{
     ArchSku, DispatchEntry, DispatchTable, ElementKind, Implementor, OpCategory, OperandDesc,
     Provenance, StructureKey, structure_key,
@@ -67,7 +66,7 @@ fn sum_and_product() -> (OpDef, OpDef) {
 
 #[test]
 fn every_emitter_gives_two_computations_one_token_and_two_sources() {
-    let backends: [&dyn Backend; 2] = [&CpuC, &Slang];
+    let backends: [&dyn Backend; 1] = [&CpuC];
     let key = cell();
     let (sum, prod) = sum_and_product();
     let mut checked = 0;
@@ -118,7 +117,7 @@ fn every_emitter_gives_two_computations_one_token_and_two_sources() {
         key.to_token(),
         "a different cell must stamp a different token"
     );
-    assert_eq!(checked, 2, "both reference emitters must be measured");
+    assert_eq!(checked, 1, "the in-tree reference emitter must be measured");
 }
 
 /// The consequence: a cell holds **one** route, so it must hold one computation.
