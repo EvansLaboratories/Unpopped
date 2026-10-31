@@ -276,3 +276,40 @@ fn the_wrapped_value_not_just_its_low_bytes_is_what_the_operation_yields() {
     assert_eq!(negative(Op::Shr, min, 31), 1, "arithmetic: stays negative");
     assert_eq!(negative(Op::Div, 5, 0), 0, "5 / 0 is 5, not negative");
 }
+
+/// Integer remainder is not a new operation: it is spelled from the total `Div` with one guard on a
+/// zero divisor. `a - (a / b) * b` alone gives `a` for `b == 0` (the PM's point, 2026-10-31), but
+/// `MIN % -1` already comes out `0` because `MIN / -1` wraps to `MIN`. The explicit rule is the host's
+/// `checked_rem(..).unwrap_or(0)`: `0` for a zero divisor and for `MIN % -1`, the dividend's sign
+/// otherwise.
+#[test]
+fn integer_remainder_is_the_guarded_form_over_the_total_division() {
+    for t in [I32, ElementKind::I64] {
+        let (a, b) = pairs(t, Op::Div);
+        let q = run(t, Op::Div, &a, &b).expect("runs");
+        for i in 0..a.len() {
+            let (x, y, d) = (a[i], b[i], q[i]);
+            let derived = if y == 0 {
+                0
+            } else {
+                // Wrapping arithmetic at the type's width, as `Mul` and `Sub` do.
+                let wrap = |v: i128| {
+                    let m = 1i128 << (8 * width(t));
+                    let v = v.rem_euclid(m);
+                    if v >= m / 2 { v - m } else { v }
+                };
+                wrap(x - wrap(d * y))
+            };
+            let want = match t {
+                I32 => i128::from((x as i32).checked_rem(y as i32).unwrap_or(0)),
+                _ => i128::from((x as i64).checked_rem(y as i64).unwrap_or(0)),
+            };
+            assert_eq!(derived, want, "{t:?} {x} % {y}");
+            let naive = x - d * y;
+            assert!(
+                y != 0 || naive == x,
+                "the unguarded form gives the dividend for a zero divisor: that is why the guard is needed"
+            );
+        }
+    }
+}
