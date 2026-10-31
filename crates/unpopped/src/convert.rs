@@ -122,7 +122,21 @@ pub struct Frontend {
     /// **only** member that needs a grammar crate, so keeping it a plain pointer
     /// is what lets a target-specific crate hand one in without this crate
     /// depending on any grammar at all.
+    ///
+    /// The shared walkers read C-family node and field names, notably a
+    /// `subscript_expression`'s `indices` field, so the grammar must be
+    /// `tree-sitter-cpp`-shaped (`tree-sitter-c` names that field `index`, and a lift
+    /// through it finds no operand).
     pub parse: fn(&str) -> Option<Tree>,
+    /// A one-argument math call's name in this language to the IR op it computes, or
+    /// `None` (the lift then refuses `name(_)` as unrecognized). [`Frontend::new`]
+    /// defaults it to CUDA's spellings (`expf`, `sqrtf`, ...); a language that spells
+    /// them otherwise (OpenCL C overloads `exp`/`sqrt`) supplies its own through
+    /// [`Frontend::with_intrinsics`]. Map a fast-math variant (`__expf`) to `None`, not to
+    /// the accurate op: lifting it would strip a numerics-changing choice silently.
+    pub unary_fn: fn(&str) -> Option<UnaryOp>,
+    /// The two-argument counterpart of [`Frontend::unary_fn`]; same default and override.
+    pub binary_fn: fn(&str) -> Option<BinaryOp>,
 }
 
 impl Frontend {
@@ -145,6 +159,22 @@ impl Frontend {
             out_name,
             in_prefix,
             parse,
+            unary_fn: crate::lift::unary_fn,
+            binary_fn: crate::lift::binary_fn,
+        }
+    }
+
+    /// This frontend with its own math-call tables in place of CUDA's defaults.
+    #[must_use]
+    pub const fn with_intrinsics(
+        self,
+        unary_fn: fn(&str) -> Option<UnaryOp>,
+        binary_fn: fn(&str) -> Option<BinaryOp>,
+    ) -> Self {
+        Self {
+            unary_fn,
+            binary_fn,
+            ..self
         }
     }
 }
@@ -160,6 +190,8 @@ pub const SLANG: Frontend = Frontend {
     out_name: "output",
     in_prefix: "input",
     parse: parse_slang,
+    unary_fn,
+    binary_fn,
 };
 
 /// The four-step preamble every lifter shares: kernel marker, residue refusal,
@@ -218,6 +250,8 @@ pub fn lift_elementwise_with(
 struct Names<'a> {
     out: &'a str,
     in_prefix: &'a str,
+    unary_fn: fn(&str) -> Option<UnaryOp>,
+    binary_fn: fn(&str) -> Option<BinaryOp>,
     /// `Some` exactly when a [`ResourceMap`] was supplied: operand `K` is `inputs[K]`.
     inputs: Option<Vec<&'a str>>,
     /// `Params` field names, in `ScalarExpr::Param` order (empty when inferred).
@@ -230,6 +264,8 @@ impl<'a> Names<'a> {
             return Ok(Names {
                 out: fe.out_name,
                 in_prefix: fe.in_prefix,
+                unary_fn: fe.unary_fn,
+                binary_fn: fe.binary_fn,
                 inputs: None,
                 params: Vec::new(),
             });
@@ -242,6 +278,8 @@ impl<'a> Names<'a> {
         Ok(Names {
             out,
             in_prefix: fe.in_prefix,
+            unary_fn: fe.unary_fn,
+            binary_fn: fe.binary_fn,
             inputs: Some(map.input_names()),
             params: map.param_names(),
         })
@@ -898,12 +936,12 @@ impl<'a> Walk<'a> {
                 let args: Vec<Node> = args_node.named_children(&mut cursor).collect();
                 match args.len() {
                     1 => {
-                        let op = unary_fn(fname)
+                        let op = (self.names.unary_fn)(fname)
                             .ok_or_else(|| LiftError::Unrecognized(format!("call '{fname}(_)'")))?;
                         Ok(ScalarExpr::Unary(op, Box::new(self.expr(args[0])?)))
                     }
                     2 => {
-                        let op = binary_fn(fname).ok_or_else(|| {
+                        let op = (self.names.binary_fn)(fname).ok_or_else(|| {
                             LiftError::Unrecognized(format!("call '{fname}(_,_)'"))
                         })?;
                         Ok(ScalarExpr::Binary(
@@ -976,6 +1014,12 @@ mod tests {
     /// bindings move out: hand in a `Frontend`, get the neutral walk.
     #[test]
     fn a_caller_defined_frontend_lifts_through_the_shared_walkers() {
+        fn toy_unary(name: &str) -> Option<UnaryOp> {
+            (name == "root").then_some(UnaryOp::Sqrt)
+        }
+        fn toy_binary(name: &str) -> Option<BinaryOp> {
+            (name == "peak").then_some(BinaryOp::FmaxIeee)
+        }
         const MINE: Frontend = Frontend {
             name: "toy",
             kernel_marker: "TOY_KERNEL",
@@ -985,6 +1029,8 @@ mod tests {
             // Reuses the Slang grammar because the CST shapes are C-family; the
             // point under test is the descriptor, not the grammar.
             parse: parse_slang,
+            unary_fn: toy_unary,
+            binary_fn: toy_binary,
         };
         let src = "TOY_KERNEL void k(float* dst, const float* src0, const float* src1) {\
                    int i = 0; dst[i] = src0[i] + src1[i]; }";
@@ -1014,6 +1060,52 @@ mod tests {
         assert!(matches!(
             lift_elementwise(&MINE, &with_own_residue, "toy", F32),
             Err(LiftError::Inexpressible(_))
+        ));
+    }
+
+    /// A frontend's own math-call tables are the ones the walk consults: its names lift, and
+    /// CUDA's default spellings do not leak in. `SLANG` (default tables) is the control.
+    #[test]
+    fn a_frontends_math_call_tables_are_read_not_cudas() {
+        fn mine_unary(name: &str) -> Option<UnaryOp> {
+            (name == "root").then_some(UnaryOp::Sqrt)
+        }
+        fn mine_binary(name: &str) -> Option<BinaryOp> {
+            (name == "peak").then_some(BinaryOp::FmaxIeee)
+        }
+        let mine = SLANG.with_intrinsics(mine_unary, mine_binary);
+        let wrap = |body: &str| {
+            format!(
+                "StructuredBuffer<float> input0;\nStructuredBuffer<float> input1;\n\
+                 RWStructuredBuffer<float> output;\n[numthreads(256, 1, 1)]\n\
+                 void k(uint3 tid : SV_DispatchThreadID) {{ uint i = tid.x; output[i] = {body}; }}"
+            )
+        };
+        let root = wrap("root(input0[i])");
+        let peak = wrap("peak(input0[i], input1[i])");
+        let cuda = wrap("sqrtf(input0[i])");
+        assert_eq!(
+            lift_elementwise(&mine, &root, "k", F32).unwrap().op.body,
+            ScalarExpr::Unary(UnaryOp::Sqrt, Box::new(ScalarExpr::Input(0)))
+        );
+        assert_eq!(
+            lift_elementwise(&mine, &peak, "k", F32).unwrap().op.body,
+            ScalarExpr::Binary(
+                BinaryOp::FmaxIeee,
+                Box::new(ScalarExpr::Input(0)),
+                Box::new(ScalarExpr::Input(1))
+            )
+        );
+        // The override replaces CUDA's table: `sqrtf` is no longer recognized here...
+        assert!(matches!(
+            lift_elementwise(&mine, &cuda, "k", F32),
+            Err(LiftError::Unrecognized(_))
+        ));
+        // ...while the default frontend still recognizes it and refuses `root`.
+        assert!(lift_elementwise(&SLANG, &cuda, "k", F32).is_ok());
+        assert!(matches!(
+            lift_elementwise(&SLANG, &root, "k", F32),
+            Err(LiftError::Unrecognized(_))
         ));
     }
 
