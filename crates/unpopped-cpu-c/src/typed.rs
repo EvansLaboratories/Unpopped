@@ -40,6 +40,43 @@ static long long unp_sat_f2ll(double y, long long lo, long long hi) {
 static long long unp_clamp_ll(long long v, long long lo, long long hi) {
     return v > hi ? hi : (v < lo ? lo : v);
 }
+/* Integer division and shifts, total (docs/int-div-shift-semantics.md, PM ruling 2026-10-31): a zero
+   divisor and MIN / -1 give the dividend; the shift count is read as unsigned bits modulo the width;
+   << goes through the unsigned type so a negative or overflowing value is defined; >> of a negative
+   is spelled arithmetic without relying on the implementation-defined C operator. The division is
+   evaluated only when the guard passes (a select over both arms would divide by zero). */
+static int unp_div_i32(int a, int b) {
+    if (b == 0 || (a == -2147483647 - 1 && b == -1)) return a;
+    return a / b;
+}
+static long long unp_div_i64(long long a, long long b) {
+    if (b == 0 || (a == -9223372036854775807LL - 1 && b == -1)) return a;
+    return a / b;
+}
+static unsigned int unp_div_u32(unsigned int a, unsigned int b) { return b == 0 ? a : a / b; }
+static unsigned long long unp_div_u64(unsigned long long a, unsigned long long b) {
+    return b == 0 ? a : a / b;
+}
+static int unp_shl_i32(int a, int c) { return (int)((unsigned int)a << ((unsigned int)c & 31u)); }
+static int unp_shr_i32(int a, int c) {
+    unsigned int k = (unsigned int)c & 31u;
+    return a < 0 ? ~(~a >> k) : a >> k;
+}
+static long long unp_shl_i64(long long a, long long c) {
+    return (long long)((unsigned long long)a << ((unsigned long long)c & 63ull));
+}
+static long long unp_shr_i64(long long a, long long c) {
+    unsigned long long k = (unsigned long long)c & 63ull;
+    return a < 0 ? ~(~a >> k) : a >> k;
+}
+static unsigned int unp_shl_u32(unsigned int a, unsigned int c) { return a << (c & 31u); }
+static unsigned int unp_shr_u32(unsigned int a, unsigned int c) { return a >> (c & 31u); }
+static unsigned long long unp_shl_u64(unsigned long long a, unsigned long long c) {
+    return a << (c & 63ull);
+}
+static unsigned long long unp_shr_u64(unsigned long long a, unsigned long long c) {
+    return a >> (c & 63ull);
+}
 ";
 
 /// The C type of a value in the typed table.
@@ -292,8 +329,8 @@ pub(crate) fn is_int_compute(t: ElementKind) -> bool {
 }
 
 /// An infix `+ - *` over an integer COMPUTE dtype: wrapping, through the unsigned type
-/// ([`cpu_int_op`]). Integer `/` has no spelling here: the oracle's rule for a zero divisor and
-/// for `MIN / -1` is not one the emitter has been taught, so it declines rather than inherit C's.
+/// ([`cpu_int_op`]), and `/` through the total helper (`unp_div_*`: a zero divisor and `MIN / -1` give
+/// the dividend, as the kernel interpreter does).
 pub(crate) fn cpu_int_arith(
     op: unpopped::ir::ArithOp,
     a: String,
@@ -306,6 +343,7 @@ pub(crate) fn cpu_int_arith(
         ArithOp::Add => IntOp::Add,
         ArithOp::Sub => IntOp::Sub,
         ArithOp::Mul => IntOp::Mul,
+        ArithOp::Div => return int_helper_call("div", a, b, t),
         other => {
             return decline(
                 DeclinedOp::Integer,
@@ -316,10 +354,32 @@ pub(crate) fn cpu_int_arith(
     cpu_int_op(iop, t, &[a, b], t)
 }
 
+/// A call of the total integer helper `unp_{name}_{type}` ([`TYPED_HELPERS`]) for `Div`, `Shl` or `Shr`.
+fn int_helper_call(
+    name: &str,
+    a: String,
+    b: String,
+    t: ElementKind,
+) -> Result<Spelling, LowerError> {
+    let ty = match t {
+        ElementKind::I32 => "i32",
+        ElementKind::I64 => "i64",
+        ElementKind::U32 => "u32",
+        ElementKind::U64 => "u64",
+        other => {
+            return decline(
+                DeclinedOp::Integer,
+                format!("cpu_c has no integer {name} at {other:?}"),
+            );
+        }
+    };
+    Ok(Spelling::Spelled(format!("unp_{name}_{ty}({a}, {b})")))
+}
+
 /// A non-infix binary over an integer COMPUTE dtype: `Max`/`Min`/comparisons through
-/// [`cpu_int_op`], the bitwise `& | ^` as C operators. Shifts and the logical ops decline: a
-/// signed left shift of a negative is undefined in C and the emitter has not been taught the
-/// oracle's rule for an oversized count.
+/// [`cpu_int_op`], the bitwise `& | ^` as C operators, and `<<` / `>>` through the total helpers
+/// (`unp_shl_*` / `unp_shr_*`: the count modulo the width, defined for a negative or overflowing
+/// value). The logical ops decline.
 pub(crate) fn cpu_int_binary(
     op: unpopped::ir::BinaryOp,
     a: String,
@@ -335,6 +395,8 @@ pub(crate) fn cpu_int_binary(
         BinaryOp::BitAnd => return Ok(Spelling::Spelled(format!("({a} & {b})"))),
         BinaryOp::BitOr => return Ok(Spelling::Spelled(format!("({a} | {b})"))),
         BinaryOp::BitXor => return Ok(Spelling::Spelled(format!("({a} ^ {b})"))),
+        BinaryOp::Shl => return int_helper_call("shl", a, b, t),
+        BinaryOp::Shr => return int_helper_call("shr", a, b, t),
         other => {
             return decline(
                 DeclinedOp::Integer,

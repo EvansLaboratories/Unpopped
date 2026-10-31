@@ -661,6 +661,14 @@ pub enum BinaryOp {
     /// `Input`s (the plan gate's 8-bit composition pin — the shift AMOUNT and,
     /// for `Shr`, the shifted value observe the un-truncated promoted value,
     /// so a composed operand's result would depend on DAG sharing).
+    ///
+    /// **At the kernel layer the count is defined (0.38.3; PM ruling 2026-10-31,
+    /// `docs/int-div-shift-semantics.md`).** The kernel interpreter and the cpu-c kernel emitter
+    /// read the count's bits as unsigned and take it modulo the promoted width: 64 for a 64-bit
+    /// type, **32 for every narrower one, `S8`/`U8` included** (promote-then-truncate, unchanged).
+    /// `Shl` discards the bits shifted out and is defined for a negative or overflowing left
+    /// operand. The caller contract above still describes the plan path until each emitter adopts
+    /// the rule (ROADMAP E16).
     Shl,
     /// Bitwise right shift `a >> b` — int-only. Matches
     /// `binary_bitwise_right_shift_int.cu` exactly: **arithmetic** shift on
@@ -675,7 +683,8 @@ pub enum BinaryOp {
     /// store truncation is exact. Same 8-bit leaf-operand pin as
     /// [`BinaryOp::Shl`]: `Shr` observes the un-truncated promoted value of a
     /// composed operand in BOTH positions (the shifted value's high bits and
-    /// the amount), so at `S8`/`U8` both operands must be leaf `Input`s.
+    /// the amount), so at `S8`/`U8` both operands must be leaf `Input`s. At the kernel layer the
+    /// count is taken modulo the promoted width (see [`BinaryOp::Shl`]).
     Shr,
     /// Logical AND — **U8 (Bool) only**. Matches `binary_logical_and_bool.cu`'s
     /// `LogicalAndFunctor` exactly: `(a != 0 && b != 0) ? 1 : 0` — each input

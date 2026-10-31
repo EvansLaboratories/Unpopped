@@ -1,8 +1,25 @@
 # Integer division, remainder and shift: one IR rule, measured per target
 
-**Status: design note, docs only. Awaiting the PM's ruling.** PM task 2026-10-31: per target, what division by zero,
-`MIN / -1` and a shift count `>= width` do, measured from each spec with the section cited; then the IR rule and which
-targets must decline. Nothing in code changes until the PM rules.
+**Status: RULED 2026-10-31 as recommended; implemented at the kernel layer in 0.38.3.** PM task 2026-10-31: per target, what
+division by zero, `MIN / -1` and a shift count `>= width` do, measured from each spec with the section cited; then the IR
+rule and which targets must decline. The ruling: rules 1-3 stand; open point 1, keep `N = 32` for `S8`/`U8`
+(promote-then-truncate, unchanged behaviour, stated in the `Shl`/`Shr` docs); point 2, WGSL's zero divisor giving the
+dividend, accepted; point 3, integer `Rem` is this lane's call but must give `0` for `b == 0` and for `MIN / -1`, which
+`a - (a / b) * b` alone does not for a zero divisor (it gives `a`).
+
+**What is done (0.38.3).** The kernel interpreter evaluates `Div`, `Shl` and `Shr` on `I32`/`I64`/`U32`/`U64` by these rules;
+the cpu-c *kernel* emitter spells them through total helpers (`unp_div_*`, `unp_shl_*`, `unp_shr_*`); boundary vectors run
+the interpreter against host-native integers and the compiled C against the interpreter, with a seeded mutant per guard.
+**Integer remainder** is not a new operation: it is `Select(b == 0, 0, a - (a / b) * b)` over the total `Div` (`MIN % -1`
+already comes out `0` because `MIN / -1` wraps to `MIN`); the test pins it against `checked_rem(..).unwrap_or(0)`.
+
+**What is not done.** The intent-layer plan gate still refuses integer `Div` (an `OpDef` an emitter will lower through
+`Backend::lower`), and `Shl`/`Shr` there keep the architecture-inherited caller contract, because the emitters outside this
+repository (Baracuda CUDA, Vulkane Slang/SPIR-V, openclownfish OpenCL C, Rockfish HIP) would otherwise receive bare `/` and
+`<<`. Each adopts the guards on its own schedule with the same boundary vectors (GPU targets on the self-hosted runner, never
+`#[ignore]`); the gate opens when they have. ROADMAP E16.
+
+_The note below is the measured design as written before the ruling._
 
 ## Where the IR stands today
 
