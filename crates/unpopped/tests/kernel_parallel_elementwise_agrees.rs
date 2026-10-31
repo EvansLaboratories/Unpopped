@@ -189,16 +189,26 @@ fn a_zero_geometry_is_a_typed_decline_and_a_valid_one_is_not() {
 /// The interpreter's integer `Cast` (which the grid-stride start and step use to turn `U32` ids into
 /// the `I32` counter): a wrapping cast reinterprets, so `u32::MAX` becomes `-1`; a saturating one is
 /// still outside the subset and refuses rather than guessing.
-#[test]
-fn an_integer_cast_wraps_and_a_saturating_one_refuses() {
-    use unpopped::ir::{CastSpec, RoundMode, Saturation};
-    use unpopped::kernel::{Block, BufferRole, LocalDecl, Param, Place};
+fn store_i32(at: i64, local: u32) -> Stmt {
+    use unpopped::kernel::Place;
+    Stmt::Store {
+        place: Place::Logical {
+            buffer: 0,
+            coords: vec![ScalarExpr::ConstInt(at, ElementKind::I32)],
+        },
+        value: ScalarExpr::Local(local),
+    }
+}
+
+fn cast_kernel(sat: unpopped::ir::Saturation) -> KernelFn {
+    use unpopped::ir::{CastSpec, RoundMode};
+    use unpopped::kernel::{Block, BufferRole, LocalDecl, Param};
     let spec = |sat| CastSpec {
         to: ElementKind::I32,
         round: RoundMode::NearestEven,
         sat,
     };
-    let kernel = |sat| {
+    {
         KernelFn::new(
             "cast",
             ElementKind::I32,
@@ -222,13 +232,7 @@ fn an_integer_cast_wraps_and_a_saturating_one_refuses() {
                     local: 1,
                     init: ScalarExpr::Cast(bx(ScalarExpr::Local(0)), spec(sat)),
                 },
-                Stmt::Store {
-                    place: Place::Logical {
-                        buffer: 0,
-                        coords: vec![ScalarExpr::ConstInt(0, ElementKind::I32)],
-                    },
-                    value: ScalarExpr::Local(1),
-                },
+                store_i32(0, 1),
                 // A comparison reads the cast's value itself (a store would truncate an unwrapped
                 // one to the same four bytes), so it is what tells a wrapped cast from a raw one.
                 Stmt::Let {
@@ -239,17 +243,14 @@ fn an_integer_cast_wraps_and_a_saturating_one_refuses() {
                         bx(ScalarExpr::ConstInt(0, ElementKind::I32)),
                     ),
                 },
-                Stmt::Store {
-                    place: Place::Logical {
-                        buffer: 0,
-                        coords: vec![ScalarExpr::ConstInt(1, ElementKind::I32)],
-                    },
-                    value: ScalarExpr::Local(2),
-                },
+                store_i32(1, 2),
             ]),
         )
-    };
-    let run = |k: &KernelFn| {
+    }
+}
+
+fn run_cast(k: &KernelFn) -> Result<(i32, i32), KernelTrap> {
+    {
         let mut a = vec![KernelArg::Buffer(TypedBuffer::new(
             ElementKind::I32,
             vec![2],
@@ -263,10 +264,15 @@ fn an_integer_cast_wraps_and_a_saturating_one_refuses() {
             let word = |i: usize| i32::from_le_bytes(b.bytes[i * 4..i * 4 + 4].try_into().unwrap());
             (word(0), word(1))
         })
-    };
-    assert_eq!(run(&kernel(Saturation::Wrap)), Ok((-1, 1)));
+    }
+}
+
+#[test]
+fn an_integer_cast_wraps_and_a_saturating_one_refuses() {
+    use unpopped::ir::Saturation;
+    assert_eq!(run_cast(&cast_kernel(Saturation::Wrap)), Ok((-1, 1)));
     assert!(matches!(
-        run(&kernel(Saturation::Clamp)),
+        run_cast(&cast_kernel(Saturation::Clamp)),
         Err(KernelTrap::Unsupported(_))
     ));
 }
