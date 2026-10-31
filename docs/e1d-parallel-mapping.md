@@ -111,8 +111,7 @@ combine the partials with the serial fold's own step; thread 0 stores. Blocks st
   associative and commutative) and float `Max`/`Min` (NaN-keeping). Exceptions, as for every float kernel here: NaN payload,
   and the sign of a zero when both `+0` and `-0` occur in a `Max`/`Min` (the serial fold keeps the first, the tree whichever it
   combines first). The proof corpus has no `-0.0`.
-- **Declined** with a typed `LiftDecline`: float `Sum`/`Prod`/`Mean` (the order is observable; needs its own tolerance note),
-  integer `Mean`, a fused post, more than one reduced axis, no kept axis (a rank-1 reduction), a non-power-of-two `block`.
+- **Declined** with a typed `LiftDecline`: float `Prod` (float `Sum`/`Mean` are E1d-2, below), integer `Mean`, a fused post, more than one reduced axis, no kept axis (a rank-1 reduction), a non-power-of-two `block`.
   `Access::RowReduce` (float, multi-stage, tolerance-mode) is the next stage, E1d-2.
 - **The barrier checker** treated every `Exec` leaf as thread-divergent, so a barrier inside a block-strided row loop was
   rejected. `BlockIdx`, `BlockDim` and `GridDim` are now uniform (every thread of a block reads the same value); `ThreadIdx`,
@@ -122,6 +121,32 @@ combine the partials with the serial fold's own step; thread 0 stores. Blocks st
   37-wide row, so threads with nothing to fold are exercised). Six broken copies must disagree or trap: a removed first
   `Barrier` (`UninitializedShared`), a removed round `Barrier` (`DataRace`), a dropped last round, an unstrided slice, a combine
   that ignores the partner's `have` flag (seen on an all-negative `Max`), and a wrong block start.
+
+## E1d-2 as built
+
+`lift_reduction_opdef_launched` also accepts a float `Sum` and `Mean`, held to a declared bound instead of the serial kernel's bytes
+(PM ruling 2026-10-31: "allowed with a DECLARED bound: error <= gamma_(n-1) * sum|x_i| against the oracle, and the result
+reproducible run-to-run for a fixed (grid, block); write the order in the note and test both").
+
+- **The order**, fixed by `(grid, block)` and nothing else. With `B = block`: thread `t` folds the row's elements `t, t+B, t+2B, ...`
+  ascending into an `f64` accumulator starting at `0.0`; then for `s = B/2, B/4, ..., 1` each thread `t < s` sets
+  `acc[t] = acc[t] + acc[t+s]` (the thread's own partial is the left operand); thread 0 holds the total, divides it by the reduced
+  extent for `Mean`, and rounds once to the compute dtype. A block wider than the row leaves threads with nothing to fold: they
+  contribute `0.0`, which is exact. At `B = 1` this is the serial order, so the bytes equal the serial kernel's.
+- **The bound.** Let `u = 2^-53` and `gamma_k = k u / (1 - k u)`. Any order of the same `n - 1` additions in `f64` has
+  `|computed - exact| <= gamma_(n-1) * sum|x_i|` (the standard summation bound); the launched sum meets it, plus the half ulp of the
+  final rounding when the compute dtype is `F32`. For `Mean` everything is divided by `n`. Against the serial kernel, which meets the
+  same bound, the difference is at most twice that. The bound is stated in absolute terms on purpose: on a cancelling row (`1e8`,
+  `-1e8`, ...) it is large against `|exact|`, and no relative claim is made there.
+- **Reproducibility.** The same `(grid, block)` gives the same bytes on every run; the bytes do not depend on `grid` (a row's order is
+  fixed by `block`; `grid` only chooses which block handles which row).
+- **Still declined:** float `Prod`, integer `Mean`, a fused post, several reduced axes, no kept axis (as in E1d-1).
+- **Proof** (`tests/kernel_parallel_reduction_float_sum_bound.rs`): over `F32` and `F64`, `Sum` and `Mean`, six geometries (one thread to
+  a block wider than the row), five rows (benign, cancelling, huge/tiny, `0.1`, mixed signs; the reference is a Neumaier sum): the
+  bound against the near-exact value and against the serial kernel; run-to-run and grid independence; the kernel's bytes equal a
+  plain-Rust reimplementation of the order above (bit for bit); a dropped last round and an unstrided slice are each seen.
+  Scope: the proof is the kernel interpreter's (`run_launch`); an emitter that contracts `acc + x` into an FMA, or reorders the
+  tree, is outside this claim and has its own test.
 
 ## Provenance
 
