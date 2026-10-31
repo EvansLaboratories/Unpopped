@@ -175,6 +175,22 @@ choices and changes only who does the folding.
 - **Proof:** `tests/kernel_parallel_row_reduce_agrees.rs`, listed in `CHANGELOG.md` 0.38.5. Same scope statement as E1d-2: the proof is
   the kernel interpreter's (`run_launch`).
 
+## E1d-4 as built
+
+`lift_reduction_opdef_launched` (E1d-1, E1d-2) now also takes the three forms it declined:
+
+- **Several reduced axes.** The fold loop nest is the serial lift's; only the outermost reduced axis is thread-strided (`i = tid; < n; += BlockDim`),
+  so thread `t` folds, in row-major order, everything under the indices `t, t+B, ...` of that axis. Parallelism is limited by that axis's
+  extent (a block wider than it leaves threads idle, which is exact for `Sum` and handled by `have` for `Max`/`Min`); correctness is not.
+  The tree and the bound are unchanged (the bound holds for any order of the same additions); `Mean` divides by the product of the reduced
+  extents.
+- **No kept axis.** One output: the row is wrapped in `if BlockIdx == 0`, so only block 0 works and `grid` is irrelevant to the result.
+  The condition is uniform across the block, so the `Barrier`s inside are legal.
+- **A fused post.** Thread 0 holds the total; it rounds the finalised fold once to the compute dtype and the post reads that as `Reduced(0)`,
+  the serial lift's own rule. A `Max`/`Min` op with a post is therefore bit-exact against the serial kernel; a `Sum`/`Mean` op is the written
+  order followed by the same post, and equal to the serial bytes at `block = 1`. A post may not read an `Input` (as in the serial lift).
+- **Proof:** `tests/kernel_parallel_reduction_forms.rs`.
+
 ## E1d-5 as built
 
 `lift_scan_opdef_launched(op, dtype, rank, block, grid)` (`kernel_lift/scan_launched.rs`) is `Access::Scan` on the block. Let `B = block`, `n` the
@@ -213,6 +229,7 @@ An emitter owns the wavefront/warp width (and any other device fact: shared-memo
 target-neutral; the same plan lowers to a 32-wide and a 64-wide target and each emitter reads its width from its target. The launch shape in a
 `KernelFn` is a *declared property of the kernel* (E1d rules), not a hardware width. (PM ruling 2026-10-31, on Rockfish's finding that the plan carries no
 wavefront size: the emitter owns it. `generate()` does not optimize, so emitters also round their own constants.)
+
 
 ## Provenance
 

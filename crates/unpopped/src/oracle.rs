@@ -1427,13 +1427,11 @@ fn binary_op_int(op: BinaryOp, a: i128, b: i128, dt: ElementKind) -> i128 {
         BinaryOp::BitOr => wrap_for(a | b, w, dt),
         BinaryOp::BitXor => wrap_for(a ^ b, w, dt),
         BinaryOp::Shl => {
-            // Out-of-range shift amounts are architecture-inherited UB; clamp to
-            // keep the interpreter total (never exercised by valid inputs).
-            if (0..i128::from(w)).contains(&b) {
-                wrap_for(a << (b as u32), w, dt)
-            } else {
-                0
-            }
+            // The count's bits are read as unsigned and taken modulo the promoted width `w`
+            // (`docs/int-div-shift-semantics.md` rule 3), as the kernel interpreter does. `w` is a
+            // power of two, so the mask is the modulo, and for a negative `b` it reads the
+            // two's-complement bits.
+            wrap_for(a << ((b & i128::from(w - 1)) as u32), w, dt)
         }
         BinaryOp::Shr => {
             // C's `>>` is ARITHMETIC on a signed operand and LOGICAL on an
@@ -1442,13 +1440,8 @@ fn binary_op_int(op: BinaryOp, a: i128, b: i128, dt: ElementKind) -> i128 {
             // shift of a non-negative value is already logical. The `a < 0` tail
             // is therefore unreachable for an unsigned dtype, which is what makes
             // `u32 >> k` correct rather than sign-propagating.
-            if (0..i128::from(w)).contains(&b) {
-                wrap_for(a >> (b as u32), w, dt)
-            } else if a < 0 {
-                -1
-            } else {
-                0
-            }
+            // The count is taken modulo the promoted width, as for `Shl`.
+            wrap_for(a >> ((b & i128::from(w - 1)) as u32), w, dt)
         }
         BinaryOp::LogicalAnd => i128::from(a != 0 && b != 0),
         BinaryOp::LogicalOr => i128::from(a != 0 || b != 0),
@@ -3158,6 +3151,19 @@ fn eval_window(
     let out = &operands[n_in];
     let k_in = in0.shape[rank - 1];
     let k_out = out.shape[rank - 1];
+    // KISS-OPS-6.13-0011: a reader declines a window with no in-bounds tap (the oracle used to
+    // answer with the monoid identity). The oracle has no error channel, so it panics, as its
+    // other precondition failures do, with the typed error's text.
+    if let Err(e) = crate::window_taps::check_window_taps(
+        k_in,
+        k_out,
+        u32::from(size),
+        u32::from(stride),
+        u32::from(dilation),
+        u32::from(pad_lo),
+    ) {
+        panic!("oracle: {e}");
+    }
     let total_out = prod(&out.shape[..rank]).max(0);
     let n_rows = if k_out > 0 { total_out / k_out } else { 0 };
     let int_acc = is_int(plan.dtype);
@@ -6578,18 +6584,22 @@ mod scalar_math_pins {
         assert_eq!(binary_op_int(Shl, 1, 31, i), i128::from(i32::MIN));
         assert_eq!(
             binary_op_int(Shl, 1, 32, i),
-            0,
-            "b == width is out of range"
+            1,
+            "a count of the width reads as 0 (modulo the width)"
         );
-        assert_eq!(binary_op_int(Shl, 1, -1, i), 0);
+        assert_eq!(
+            binary_op_int(Shl, 1, -1, i),
+            i128::from(i32::MIN),
+            "-1 reads as 31"
+        );
         assert_eq!(
             binary_op_int(Shr, -8, 1, i),
             -4,
             "arithmetic on a signed operand"
         );
-        assert_eq!(binary_op_int(Shr, -8, 32, i), -1);
-        assert_eq!(binary_op_int(Shr, 8, 32, i), 0);
-        // `a < 0` -> `<=`: a zero operand shifted out of range stays zero.
+        assert_eq!(binary_op_int(Shr, -8, 32, i), -8, "32 reads as 0");
+        assert_eq!(binary_op_int(Shr, 8, 32, i), 8);
+        assert_eq!(binary_op_int(Shr, -8, 33, i), -4, "33 reads as 1");
         assert_eq!(binary_op_int(Shr, 0, 32, i), 0);
         assert_eq!(binary_op_int(Shr, 0, -1, i), 0);
         assert_eq!(binary_op_int(Shr, -1, 31, i), -1);
@@ -6601,11 +6611,11 @@ mod scalar_math_pins {
             1,
             "logical on an unsigned operand"
         );
-        assert_eq!(binary_op_int(Shl, 1, 32, u), 0);
+        assert_eq!(binary_op_int(Shl, 1, 32, u), 1);
         let l = ElementKind::I64;
         assert_eq!(binary_op_int(Shl, 1, 32, l), 1 << 32);
         assert_eq!(binary_op_int(Shl, 1, 63, l), i128::from(i64::MIN));
-        assert_eq!(binary_op_int(Shl, 1, 64, l), 0);
+        assert_eq!(binary_op_int(Shl, 1, 64, l), 1);
         assert_eq!(binary_op_int(Shl, 1, 63, ElementKind::U64), 1 << 63);
         // 8-bit dtypes promote to int: no wrap at 8 bits during the op.
         assert_eq!(binary_op_int(Shl, 200, 1, ElementKind::U8), 400);
@@ -7259,9 +7269,12 @@ mod fold_pins {
     }
 
     #[test]
-    fn an_average_window_over_only_padding_is_zero_not_nan() {
+    #[should_panic(expected = "has no in-bounds tap")]
+    fn a_window_over_only_padding_is_declined_not_answered_with_zero() {
         // Two taps three apart with two cells of padding each side: the middle output's
-        // taps (-1 and 2) both miss the two-element row, so its divisor would be 0.
+        // taps (-1 and 2) both miss the two-element row. Before 0.39.0 the oracle answered 0
+        // here (the expected values were [7, 0, 5, 3, 0, 1]); KISS-OPS-6.13-0011 makes a reader
+        // decline such a window, so the oracle now panics naming it.
         let f = ElementKind::F32;
         let got = f32s(&window(
             ReduceOp::Mean,
@@ -7276,7 +7289,7 @@ mod fold_pins {
             3,
             TypedBuffer::from_f32(&[2, 2], &[5.0, 7.0, 1.0, 3.0]),
         ));
-        assert_eq!(got, [7.0, 0.0, 5.0, 3.0, 0.0, 1.0]);
+        panic!("the oracle must have declined, got {got:?}");
     }
 
     #[test]

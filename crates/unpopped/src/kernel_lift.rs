@@ -40,7 +40,7 @@ pub use row_reduce_launched::lift_row_reduce_opdef_launched;
 pub use row_sort::lift_row_sort_opdef;
 pub use scan_launched::lift_scan_opdef_launched;
 pub use scatter::lift_scatter_opdef;
-pub use window::lift_window_opdef;
+pub use window::{lift_window_opdef, lift_window_opdef_for_extents};
 
 /// Why an `OpDef` was not lifted.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,6 +79,9 @@ pub enum LiftDecline {
     BadRank,
     /// A launched lift was asked for zero blocks or zero threads per block.
     BadLaunch,
+    /// A window output has no in-bounds tap at the given extents (KISS-OPS-6.13-0011; see
+    /// [`crate::window_taps`]).
+    WindowWithoutRealTap(crate::window_taps::WindowNoRealTap),
 }
 
 /// Lift the Elementwise `op` computed at `dtype` over `rank` output axes.
