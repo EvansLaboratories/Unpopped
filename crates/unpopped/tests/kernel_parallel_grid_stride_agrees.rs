@@ -9,11 +9,12 @@
 //! block size that is not a power of two. Two broken copies (a step of 1 and a wrong start) must
 //! disagree.
 
-use unpopped::ir::{ContractionAxes, OpDef, ReduceOp, reduced};
+use unpopped::ir::{ContractionAxes, OpDef, ReduceOp, SortOrder, reduced};
 use unpopped::kernel::{KernelFn, Stmt, check_kernel};
 use unpopped::kernel_lift::{
     LiftDecline, lift_contraction_opdef, lift_contraction_opdef_launched, lift_im2col_opdef,
-    lift_im2col_opdef_launched, lift_window_opdef, lift_window_opdef_launched,
+    lift_im2col_opdef_launched, lift_row_sort_opdef, lift_row_sort_opdef_launched,
+    lift_window_opdef, lift_window_opdef_launched,
 };
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, run_kernel};
@@ -286,4 +287,70 @@ fn matmul_and_batched_matmul_are_bit_exact_on_every_geometry() {
             assert_eq!(got, want, "batch {batch:?} grid {grid} block {block}");
         }
     }
+}
+
+/// A row-sort argument list: input `[rows, cols]` with ties, NaN and both zeros, a values output
+/// and an `I32` index output, then the two extents.
+fn sort_args(rows: i64, cols: i64) -> Vec<KernelArg> {
+    let src = f32_buffer(&[rows, cols], |i| VALUES[(i * 3 + i / 4) % VALUES.len()]);
+    let cells = (rows * cols) as usize;
+    let vals = TypedBuffer::new(
+        F32,
+        vec![rows, cols],
+        strides(&[rows, cols]),
+        vec![0xAB; cells * 4],
+    );
+    let idx = TypedBuffer::new(
+        ElementKind::I32,
+        vec![rows, cols],
+        strides(&[rows, cols]),
+        vec![0xAB; cells * 4],
+    );
+    vec![
+        KernelArg::Buffer(src),
+        KernelArg::Buffer(vals),
+        KernelArg::Buffer(idx),
+        KernelArg::Int(i128::from(rows)),
+        KernelArg::Int(i128::from(cols)),
+    ]
+}
+
+fn sorted_bytes(k: &KernelFn, mut args: Vec<KernelArg>, launch: bool) -> Vec<Vec<u8>> {
+    if launch {
+        run_launch(k, &mut args).expect("the launch runs");
+    } else {
+        run_kernel(k, &mut args).expect("the serial kernel runs");
+    }
+    args[1..3]
+        .iter()
+        .map(|a| {
+            let KernelArg::Buffer(b) = a else {
+                unreachable!("buffers")
+            };
+            b.bytes.clone()
+        })
+        .collect()
+}
+
+#[test]
+fn a_row_sort_is_bit_exact_on_every_geometry_and_a_rank_one_sort_declines() {
+    for order in [SortOrder::Asc, SortOrder::Desc] {
+        let op = OpDef::row_sort_indices("s", F32, order);
+        let serial = lift_row_sort_opdef(&op, F32, 2).unwrap();
+        let want = sorted_bytes(&serial, sort_args(9, 13), false);
+        for (grid, block) in GEOMETRIES {
+            let k = lift_row_sort_opdef_launched(&op, F32, 2, block, grid).expect("lifts");
+            assert_eq!(check_kernel(&k), Ok(()), "a lifted kernel is well formed");
+            assert_eq!(
+                sorted_bytes(&k, sort_args(9, 13), true),
+                want,
+                "{order:?} grid {grid} block {block}"
+            );
+        }
+    }
+    let op = OpDef::row_sort_indices("s", F32, SortOrder::Asc);
+    assert!(matches!(
+        lift_row_sort_opdef_launched(&op, F32, 1, 8, 2),
+        Err(LiftDecline::UnsupportedForm(_))
+    ));
 }

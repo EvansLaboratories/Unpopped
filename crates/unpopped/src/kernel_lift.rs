@@ -202,6 +202,31 @@ pub fn lift_contraction_opdef_launched(
     grid_stride_outermost(lift_contraction_opdef(op, dtype)?, block, grid)
 }
 
+/// [`lift_row_sort_opdef`] launched on `grid` blocks of `block` threads (E1d-6): the outermost
+/// leading axis (the rows) is a grid-stride loop and each thread sorts whole rows with the serial
+/// kernel's algorithm, so the kernel is bit-exact against the serial one for every `grid` and
+/// `block` (the sort is a deterministic total order over `(key, index)`).
+///
+/// # Errors
+///
+/// A [`LiftDecline`]: those of [`lift_row_sort_opdef`], [`LiftDecline::UnsupportedForm`] for a
+/// rank-1 sort (the only loop is the sort itself), and [`LiftDecline::BadLaunch`] for a zero
+/// `block` or `grid`.
+pub fn lift_row_sort_opdef_launched(
+    op: &OpDef,
+    dtype: ElementKind,
+    rank: u8,
+    block: u32,
+    grid: u32,
+) -> Result<KernelFn, LiftDecline> {
+    if rank < 2 {
+        return Err(LiftDecline::UnsupportedForm(
+            "a launched row sort needs a leading axis of rows to stride over",
+        ));
+    }
+    grid_stride_outermost(lift_row_sort_opdef(op, dtype, rank)?, block, grid)
+}
+
 /// Make the outermost loop of `k` a grid-stride loop and declare the launch: thread `t` of block
 /// `b` starts at `b * block + t` and steps by `grid * block`. The caller's lift has declared the
 /// axis independent from its op family; nothing here inspects the loops.
