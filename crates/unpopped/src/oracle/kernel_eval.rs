@@ -19,12 +19,12 @@
 //! * Anything else (a packed value, an integer operation outside the subset above, a float
 //!   expression that reads a non-compute local) is [`KernelTrap::Unsupported`], never a guess.
 
-use super::kernel_mem::ThreadCtx;
+use super::kernel_mem::{AccessKind, ThreadCtx};
 use super::{
     Eval, TypedBuffer, Val, eval, int_val, panic_reduced, raw_to_i128, read_elem, store_val,
 };
 use crate::ir::{BinaryOp, Saturation, ScalarExpr};
-use crate::kernel::{Block, KernelError, KernelFn, ParamKind, Place, Stmt, check_kernel};
+use crate::kernel::{AtomicOp, Block, KernelError, KernelFn, ParamKind, Place, Stmt, check_kernel};
 use crate::types::{self, Ty, map_children};
 use unpopped_vocab::ElementKind;
 
@@ -191,7 +191,11 @@ impl<'a> Machine<'a> {
 
     fn exec_stmt(&mut self, st: &Stmt) -> Result<Flow, KernelTrap> {
         match st {
-            Stmt::Let { .. } | Stmt::Load { .. } | Stmt::Assign { .. } | Stmt::Store { .. } => {
+            Stmt::Let { .. }
+            | Stmt::Load { .. }
+            | Stmt::Assign { .. }
+            | Stmt::Store { .. }
+            | Stmt::AtomicRmw { .. } => {
                 self.exec_simple(st)?;
             }
             Stmt::If { cond, then, els } => {
@@ -243,6 +247,10 @@ impl<'a> Machine<'a> {
             Stmt::Store { place, value } => {
                 let v = self.eval_expr(value)?;
                 self.store(place, v)?;
+            }
+            Stmt::AtomicRmw { op, place, value } => {
+                let v = self.eval_expr(value)?;
+                self.atomic_rmw(*op, place, v)?;
             }
             _ => unreachable!("exec_simple is called for straight-line statements only"),
         }
@@ -329,11 +337,36 @@ impl<'a> Machine<'a> {
             return self.alloc_load(*alloc, index);
         }
         let (b, off) = self.offset(place)?;
-        self.note_global(b, off, false)?;
+        self.note_global(b, off, AccessKind::Read)?;
         let KernelArg::Buffer(tb) = &self.args[b] else {
             unreachable!("offset() returned a buffer");
         };
         Ok(Val::Raw(read_elem(&tb.bytes, off, tb.dtype), tb.dtype))
+    }
+
+    /// An atomic read-modify-write of a global integer element: logged as an atomic access (it
+    /// races only with a plain access), the combine computed at the element type and wrapped.
+    fn atomic_rmw(&mut self, op: AtomicOp, place: &Place, v: Val) -> Result<(), KernelTrap> {
+        let (b, off) = self.offset(place)?;
+        self.note_global(b, off, AccessKind::Atomic)?;
+        let KernelArg::Buffer(tb) = &mut self.args[b] else {
+            unreachable!("offset() returned a buffer");
+        };
+        let dt = tb.dtype;
+        let Val::Raw(bits, vdt) = v else {
+            return Err(KernelTrap::Unsupported("a non-integer atomic operand"));
+        };
+        let (old, new) = (
+            raw_to_i128(read_elem(&tb.bytes, off, dt), dt),
+            raw_to_i128(bits, vdt),
+        );
+        let r = match op {
+            AtomicOp::Add => wrap(dt, old + new),
+            AtomicOp::Max => old.max(new),
+            AtomicOp::Min => old.min(new),
+        };
+        store_val(int_val(r, dt), dt, &mut tb.bytes, off);
+        Ok(())
     }
 
     fn store(&mut self, place: &Place, v: Val) -> Result<(), KernelTrap> {
@@ -341,7 +374,7 @@ impl<'a> Machine<'a> {
             return self.alloc_store(*alloc, index, v);
         }
         let (b, off) = self.offset(place)?;
-        self.note_global(b, off, true)?;
+        self.note_global(b, off, AccessKind::Write)?;
         let KernelArg::Buffer(tb) = &mut self.args[b] else {
             unreachable!("offset() returned a buffer");
         };

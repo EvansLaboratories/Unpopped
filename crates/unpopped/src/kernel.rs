@@ -244,6 +244,33 @@ pub enum Stmt {
         /// The group that synchronizes.
         scope: Scope,
     },
+    /// An atomic read-modify-write of one element of a global buffer: `*place = *place (op) value`
+    /// as one indivisible step (**relaxed**: it orders nothing else, and a [`Stmt::Barrier`] is the
+    /// only ordering a kernel has). The old value is not returned. Two atomics on one element never
+    /// race, whatever threads or blocks issue them; an atomic and a plain access to one element do,
+    /// unless a barrier orders them (`docs/ir-kernel-layer.md`, "Atomics"). v1: a global buffer
+    /// (`ReadWrite`) place and an integer element type; the result wraps at the element width.
+    AtomicRmw {
+        /// The combine.
+        op: AtomicOp,
+        /// The element updated.
+        place: Place,
+        /// The operand (the buffer's element type).
+        value: ScalarExpr,
+    },
+}
+
+/// The combine of a [`Stmt::AtomicRmw`]. Each is associative and commutative on integers, so the
+/// result does not depend on the order the threads issue them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum AtomicOp {
+    /// `old + value`, wrapping at the element width.
+    Add,
+    /// The larger of the two.
+    Max,
+    /// The smaller of the two.
+    Min,
 }
 
 /// A kernel: the program of one logical thread.
@@ -349,6 +376,11 @@ pub enum KernelError {
     WriteToReadOnly {
         /// The buffer parameter index.
         buffer: u32,
+    },
+    /// An `AtomicRmw` outside the v1 form: a `ReadWrite` global buffer element of an integer type.
+    AtomicUnsupported {
+        /// What is wrong.
+        what: &'static str,
     },
     /// A `Load` from a buffer that is not `Read` or `ReadWrite`.
     ReadFromWriteOnly {

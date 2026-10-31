@@ -42,10 +42,21 @@ fn unordered(prev: Stamp, now: Stamp) -> bool {
     !(by_block || by_subgroup)
 }
 
-/// What has touched one element: the last writer and the readers since.
+/// How an access touches an element.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum AccessKind {
+    Read,
+    Write,
+    /// An atomic read-modify-write: it conflicts with a plain access, never with another atomic.
+    Atomic,
+}
+
+/// What has touched one element: the last plain writer, the atomics since (one per thread) and
+/// the plain readers since.
 #[derive(Default)]
 pub(super) struct Access {
     writer: Option<Stamp>,
+    atomics: Vec<Stamp>,
     readers: Vec<Stamp>,
 }
 
@@ -57,19 +68,39 @@ pub(super) fn touch(
     log: &mut Log,
     key: (u32, usize),
     now: Stamp,
-    write: bool,
+    kind: AccessKind,
 ) -> Result<(), KernelTrap> {
     let a = log.entry(key).or_default();
     if a.writer.is_some_and(|w| unordered(w, now)) {
         return Err(KernelTrap::DataRace);
     }
-    if write {
-        if a.readers.iter().any(|r| unordered(*r, now)) {
-            return Err(KernelTrap::DataRace);
+    if kind != AccessKind::Atomic && a.atomics.iter().any(|t| unordered(*t, now)) {
+        return Err(KernelTrap::DataRace);
+    }
+    if kind != AccessKind::Read && a.readers.iter().any(|r| unordered(*r, now)) {
+        return Err(KernelTrap::DataRace);
+    }
+    match kind {
+        AccessKind::Write => {
+            a.writer = Some(now);
+            a.atomics.clear();
+            a.readers.clear();
         }
-        a.writer = Some(now);
-        a.readers.clear();
-    } else if let Some(r) = a
+        AccessKind::Atomic => match a
+            .atomics
+            .iter_mut()
+            .find(|t| t.block == now.block && t.thread == now.thread)
+        {
+            Some(t) => *t = now,
+            None => a.atomics.push(now),
+        },
+        AccessKind::Read => note_reader(a, now),
+    }
+    Ok(())
+}
+
+fn note_reader(a: &mut Access, now: Stamp) {
+    if let Some(r) = a
         .readers
         .iter_mut()
         .find(|r| r.block == now.block && r.thread == now.thread)
@@ -78,7 +109,6 @@ pub(super) fn touch(
     } else {
         a.readers.push(now);
     }
-    Ok(())
 }
 
 /// The storage of one allocation instance, with a per-element "has been stored" bit.
@@ -156,11 +186,11 @@ impl ThreadCtx<'_> {
         alloc: u32,
         i: usize,
         space: MemorySpace,
-        write: bool,
+        kind: AccessKind,
     ) -> Result<(), KernelTrap> {
         if space == MemorySpace::Shared {
             let now = self.stamp();
-            touch(&mut self.block.log, (alloc, i), now, write)?;
+            touch(&mut self.block.log, (alloc, i), now, kind)?;
         }
         Ok(())
     }
@@ -189,12 +219,12 @@ impl Machine<'_> {
         &mut self,
         buffer: usize,
         off: usize,
-        write: bool,
+        kind: AccessKind,
     ) -> Result<(), KernelTrap> {
         match &mut self.ctx {
             Some(c) => {
                 let now = c.stamp();
-                touch(c.global, (buffer as u32, off), now, write)
+                touch(c.global, (buffer as u32, off), now, kind)
             }
             None => Ok(()),
         }
@@ -232,7 +262,7 @@ impl Machine<'_> {
             .ctx
             .as_mut()
             .expect("alloc_index found a launch context");
-        c.log_shared(alloc, i, space, false)?;
+        c.log_shared(alloc, i, space, AccessKind::Read)?;
         let trap = if space == MemorySpace::Shared {
             KernelTrap::UninitializedShared { alloc }
         } else {
@@ -257,7 +287,7 @@ impl Machine<'_> {
             .ctx
             .as_mut()
             .expect("alloc_index found a launch context");
-        c.log_shared(alloc, i, space, true)?;
+        c.log_shared(alloc, i, space, AccessKind::Write)?;
         let m = c
             .mem_mut(alloc, space)
             .expect("the space holds an instance");

@@ -96,7 +96,11 @@ impl Machine<'_> {
         stack: &mut Vec<Frame<'k>>,
     ) -> Result<Option<Stop>, KernelTrap> {
         match st {
-            Stmt::Let { .. } | Stmt::Load { .. } | Stmt::Assign { .. } | Stmt::Store { .. } => {
+            Stmt::Let { .. }
+            | Stmt::Load { .. }
+            | Stmt::Assign { .. }
+            | Stmt::Store { .. }
+            | Stmt::AtomicRmw { .. } => {
                 self.exec_simple(st)?;
             }
             Stmt::If { cond, then, els } => {

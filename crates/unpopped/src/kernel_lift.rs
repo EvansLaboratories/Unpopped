@@ -39,7 +39,7 @@ pub use row_reduce::lift_row_reduce_opdef;
 pub use row_reduce_launched::lift_row_reduce_opdef_launched;
 pub use row_sort::lift_row_sort_opdef;
 pub use scan_launched::lift_scan_opdef_launched;
-pub use scatter::lift_scatter_opdef;
+pub use scatter::{lift_scatter_opdef, lift_scatter_opdef_launched};
 pub use window::{lift_window_opdef, lift_window_opdef_for_extents};
 
 /// Why an `OpDef` was not lifted.

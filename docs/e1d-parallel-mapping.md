@@ -225,9 +225,11 @@ general (two indices can write one cell). Proof: `tests/kernel_parallel_grid_str
 
 `lift_gather_opdef_launched` is the same grid-stride over the gather's outermost output axis: each output cell reads its own index and source element and is
 written by one thread, so it is bit-exact for every `(grid, block)` and every out-of-range policy (a skipped cell keeps its prior bytes). Proof:
-`tests/kernel_parallel_gather_agrees.rs`. **A launched Scatter is not provided:** two source cells can write one destination cell, the kernel IR has no
-atomic read-modify-write statement, and the serial lift's `AtomicAdd`/`AtomicMax`/`AtomicMin` are a plain `Load` then `Store`, which races across threads
-(the launch interpreter reports `DataRace`). It waits on an atomic statement in the kernel IR.
+`tests/kernel_parallel_gather_agrees.rs`. `lift_scatter_opdef_launched` grid-strides the source's outermost axis and combines with `Stmt::AtomicRmw` (`docs/ir-kernel-layer.md` section 5a), because two
+source cells can name one destination cell and the serial lift's `Load` then `Store` would race (the launch interpreter reports `DataRace`). Integer
+`AtomicAdd`/`AtomicMax`/`AtomicMin` are order-independent, so the destination is bit-exact against the serial kernel for every `(grid, block)`. An `Assign`
+(duplicates would make the winner depend on the schedule) and a float add (order-dependent) decline. Proof: `tests/kernel_parallel_scatter_agrees.rs`,
+`tests/kernel_atomic_rmw.rs`.
 
 ## Who owns a hardware width
 

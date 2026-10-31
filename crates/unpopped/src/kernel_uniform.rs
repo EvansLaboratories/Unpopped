@@ -116,7 +116,7 @@ impl Walk<'_> {
                     self.mark(*local);
                 }
             }
-            Stmt::Store { .. } | Stmt::Return => {}
+            Stmt::Store { .. } | Stmt::AtomicRmw { .. } | Stmt::Return => {}
             Stmt::If { cond, then, els } => {
                 let d = div || self.expr(cond);
                 self.block(then, d, poisoned)?;
