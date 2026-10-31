@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.35.0` — BREAKING: `tree-sitter` 0.26 → 0.27 (the `convert` feature)
+
+`Frontend::parse` returns a `tree_sitter::Tree`, so the grammar-runtime version is part of this crate's public API: every external `Frontend` (Baracuda's CUDA frontend, openclownfish, `vulkane-slang-parse`) must build its `Tree` with `tree-sitter` 0.27 to link against this release. No `unpopped` source changed; `tree-sitter-slang` 0.3.1 (already the latest) builds against 0.27. CireSnave's standing rule is every dependency on its latest version. `cargo test --workspace --all-features` (129 test results, 0 failed) and `clippy --workspace --all-targets --all-features -D warnings` pass.
+
 ## `0.34.13` — `unpopped-slang` is deprecated: the final release
 
 **Docs and metadata only; no code, no API, no behaviour change.** `unpopped-slang` carries a crate-doc notice, a "DEPRECATED" description and the crates.io `deprecated` maintenance badge, all pointing to `vulkane-slang-emit` (Vulkane owns Slang, CireSnave 2026-10-30; handover `vulkane` `docs/design/slang-parser-emitter-handover.md`, vulkane#107). Only `unpopped-slang` is published at this version; the other crates stay at their published versions. The crate is removed from the tree in the next PR.
