@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.35.3` — `Frontend` carries its own math-call tables
+
+**Additive; no breaking change.** `Frontend` gains `unary_fn` and `binary_fn` (function pointers from a source-language math-call name to the IR op), defaulting in `Frontend::new` to the CUDA spellings it has always recognised, and a const `Frontend::with_intrinsics(unary, binary)` to override them. A language that overloads the math names (OpenCL C `exp`/`sqrt`/`pow`) can now lift them; asked for by openclownfish. `Frontend` is `#[non_exhaustive]` and `new` keeps its six arguments, so no caller changes. First slice of ROADMAP I1; the CUDA default tables stay in core until `baracuda-cuda-parse` supplies its own. The `parse` docs now say the shared walkers need a `tree-sitter-cpp`-shaped grammar (`indices` field).
+
 ## `0.35.2` — docs: E1d parallel mapping design note and the US10949182B2 re-read
 
 **Docs only; no code, no API, no behaviour change.** `docs/e1d-parallel-mapping.md` designs the target-neutral parallel transform (declared-parallel axes, a caller-chosen grid with grid-stride loops, block-tree `RowReduce`) and re-reads US10949182B2's independent claims against it: outside as read, not clear. `docs/PATENT-SWEEP.md` row 10 now records the estimated expiry Google Patents shows (2037-11-16, read 2026-10-31), where it said none was shown.
