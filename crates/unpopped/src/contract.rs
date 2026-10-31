@@ -2097,7 +2097,7 @@ pub(crate) fn revision_hash(src: &str) -> u64 {
     revision_hash_of(src, None)
 }
 
-/// [`revision_hash`] extended over a binary payload: after the source bytes, a ` words ` tag and
+/// [`revision_hash`] extended over a binary payload: after the source bytes, a `\0words\0` tag and
 /// each word little-endian. `None` is the source-only hash, byte for byte.
 pub(crate) fn revision_hash_of(src: &str, words: Option<&[u32]>) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -2107,7 +2107,7 @@ pub(crate) fn revision_hash_of(src: &str, words: Option<&[u32]>) -> u64 {
     };
     src.bytes().for_each(&mut feed);
     if let Some(words) = words {
-        b" words ".iter().copied().for_each(&mut feed);
+        b"\0words\0".iter().copied().for_each(&mut feed);
         words
             .iter()
             .flat_map(|w| w.to_le_bytes())
