@@ -191,6 +191,46 @@ choices and changes only who does the folding.
   order followed by the same post, and equal to the serial bytes at `block = 1`. A post may not read an `Input` (as in the serial lift).
 - **Proof:** `tests/kernel_parallel_reduction_forms.rs`.
 
+## E1d-5 as built
+
+`lift_scan_opdef_launched(op, dtype, rank, block, grid)` (`kernel_lift/scan_launched.rs`) is `Access::Scan` on the block. Let `B = block`, `n` the
+row length, `c = ceil(n / B)`. Scan positions are numbered `j = 0..n-1` in scan order (position `j` for a forward scan, `n-1-j` for a reverse one).
+
+- **Phase 1, totals.** Thread `t` folds the scan positions `[t*c, min(t*c + c, n))` in ascending `j` into an accumulator that starts at the monoid
+  identity (`0`, `1`, or for `Max`/`Min` the first element through the `have` flag) and publishes it to `Shared`.
+- **Phase 2, offsets.** For `d = 1, 2, 4, ... < B`: every thread `t >= d` sets `total[t] = total[t] (op) total[t-d]` (own value on the left), all
+  reads of the round before any write (`Barrier` between). Thread `t`'s offset is the result of thread `t-1` (the identity for thread 0).
+- **Phase 3, writes.** Thread `t` starts from its offset and walks its chunk again, writing the prefix as the serial scan does: before the fold when
+  exclusive, after it when inclusive, a fused post reading the prefix rounded once to the compute dtype.
+- **Numerics.** `Max`/`Min` and integer `Sum`/`Prod` are order-independent: bit-exact against the serial scan (NaN payload and the sign of a zero in
+  `Max`/`Min` excepted, as in E1d-1). A float `Sum` output is the `f64` sum of at most `n` elements added in the order above, so it meets
+  `gamma_(n-1) * sum|x_i|` over its own prefix plus the half ulp of the single rounding, is reproducible for a fixed `block`, does not depend on `grid`, and
+  equals the serial scan at `B = 1`. A float `Prod` declines (as in E1d-1); `Mean` is not a monoid.
+- **Chunk size.** `c` is computed in the kernel from the row length (a counting loop: the kernel integer subset has no division or shift in a float
+  kernel). It decides only which thread does which positions. The launch shape stays the caller's: no pass derives a block or grid count from a
+  bound (E1d rules).
+- **A `have` guard on the partner is not needed** and is not emitted: chunks are contiguous from the front, so a thread with elements never has an empty lower
+  partner, and an empty partner holds the identity, which a fold leaves unchanged. (A seeded mutant that ignored such a guard was not caught, which is
+  how this was found.)
+- **Proof:** `tests/kernel_parallel_scan_agrees.rs`.
+
+## E1d-6 as built
+
+`lift_window_opdef_launched`, `lift_im2col_opdef_launched`, `lift_contraction_opdef_launched` and `lift_row_sort_opdef_launched` (in `kernel_lift.rs`) are E1d-0's transform applied to four more families whose output cells
+are independent: the outermost output axis becomes `i = BlockIdx*BlockDim + ThreadIdx; i < n; i += GridDim*BlockDim`, the rest of the serial kernel is
+untouched. Each cell folds its own taps in the serial lift's order (window) or gathers one element (im2col), so there is no reordering, no `Shared`
+memory and no `Barrier`, and the result is **bit-exact** against the serial kernel for every `(grid, block)`, floats included. Parallelism is declared from
+the op family, never found by inspecting loops. A contraction thread runs the serial `k`-ascending accumulation for its output cells. A row-sort thread sorts whole rows with the serial algorithm (a total order over `(key, index)`, so bit-exact); a rank-1 sort has no leading axis and declines. Gather follows the same pattern and is not done yet; Scatter is not parallel in
+general (two indices can write one cell). Proof: `tests/kernel_parallel_grid_stride_agrees.rs`.
+
+## Who owns a hardware width
+
+An emitter owns the wavefront/warp width (and any other device fact: shared-memory size, register file). A `KernelPlan` carries none, so a plan stays
+target-neutral; the same plan lowers to a 32-wide and a 64-wide target and each emitter reads its width from its target. The launch shape in a
+`KernelFn` is a *declared property of the kernel* (E1d rules), not a hardware width. (PM ruling 2026-10-31, on Rockfish's finding that the plan carries no
+wavefront size: the emitter owns it. `generate()` does not optimize, so emitters also round their own constants.)
+
+
 ## Provenance
 
 Claim text read from the downloaded Google Patents page on 2026-10-31 (claims 1, 15, 26, 30, 44 in full; the dependent claims

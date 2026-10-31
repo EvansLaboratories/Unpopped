@@ -29,6 +29,7 @@ mod post;
 mod row_reduce;
 mod row_reduce_launched;
 mod row_sort;
+mod scan_launched;
 mod scatter;
 mod window;
 pub use block_reduce::lift_reduction_opdef_launched;
@@ -37,6 +38,7 @@ pub use im2col::lift_im2col_opdef;
 pub use row_reduce::lift_row_reduce_opdef;
 pub use row_reduce_launched::lift_row_reduce_opdef_launched;
 pub use row_sort::lift_row_sort_opdef;
+pub use scan_launched::lift_scan_opdef_launched;
 pub use scatter::lift_scatter_opdef;
 pub use window::{lift_window_opdef, lift_window_opdef_for_extents};
 
@@ -146,13 +148,98 @@ pub fn lift_elementwise_opdef_launched(
     block: u32,
     grid: u32,
 ) -> Result<KernelFn, LiftDecline> {
+    grid_stride_outermost(lift_elementwise_opdef(op, dtype, rank)?, block, grid)
+}
+
+/// [`lift_window_opdef`] launched on `grid` blocks of `block` threads (E1d-6): the outermost
+/// output axis is a grid-stride loop, exactly as for an Elementwise op. Every output cell of a
+/// window op is computed from its own taps in the serial lift's order, so the kernel is
+/// **bit-exact** against the serial one for every `grid` and `block` (no reordering, no barrier).
+///
+/// # Errors
+///
+/// A [`LiftDecline`]: those of [`lift_window_opdef`], and [`LiftDecline::BadLaunch`] for a zero
+/// `block` or `grid`.
+pub fn lift_window_opdef_launched(
+    op: &OpDef,
+    dtype: ElementKind,
+    rank: u8,
+    block: u32,
+    grid: u32,
+) -> Result<KernelFn, LiftDecline> {
+    grid_stride_outermost(lift_window_opdef(op, dtype, rank)?, block, grid)
+}
+
+/// [`lift_im2col_opdef`] launched on `grid` blocks of `block` threads (E1d-6): the outermost
+/// output axis is a grid-stride loop. Every output element is a gather of one input element (or a
+/// typed zero), so the kernel is bit-exact against the serial one for every `grid` and `block`.
+///
+/// # Errors
+///
+/// A [`LiftDecline`]: those of [`lift_im2col_opdef`], and [`LiftDecline::BadLaunch`] for a zero
+/// `block` or `grid`.
+pub fn lift_im2col_opdef_launched(
+    op: &OpDef,
+    dtype: ElementKind,
+    block: u32,
+    grid: u32,
+) -> Result<KernelFn, LiftDecline> {
+    grid_stride_outermost(lift_im2col_opdef(op, dtype)?, block, grid)
+}
+
+/// [`lift_contraction_opdef`] launched on `grid` blocks of `block` threads (E1d-6): the outermost
+/// output axis (the batch, or `M` for a plain matmul) is a grid-stride loop and each thread runs the
+/// serial `k`-ascending accumulation for its output cells, so the kernel is bit-exact against the
+/// serial one for every `grid` and `block`.
+///
+/// # Errors
+///
+/// A [`LiftDecline`]: those of [`lift_contraction_opdef`], and [`LiftDecline::BadLaunch`] for a
+/// zero `block` or `grid`.
+pub fn lift_contraction_opdef_launched(
+    op: &OpDef,
+    dtype: ElementKind,
+    block: u32,
+    grid: u32,
+) -> Result<KernelFn, LiftDecline> {
+    grid_stride_outermost(lift_contraction_opdef(op, dtype)?, block, grid)
+}
+
+/// [`lift_row_sort_opdef`] launched on `grid` blocks of `block` threads (E1d-6): the outermost
+/// leading axis (the rows) is a grid-stride loop and each thread sorts whole rows with the serial
+/// kernel's algorithm, so the kernel is bit-exact against the serial one for every `grid` and
+/// `block` (the sort is a deterministic total order over `(key, index)`).
+///
+/// # Errors
+///
+/// A [`LiftDecline`]: those of [`lift_row_sort_opdef`], [`LiftDecline::UnsupportedForm`] for a
+/// rank-1 sort (the only loop is the sort itself), and [`LiftDecline::BadLaunch`] for a zero
+/// `block` or `grid`.
+pub fn lift_row_sort_opdef_launched(
+    op: &OpDef,
+    dtype: ElementKind,
+    rank: u8,
+    block: u32,
+    grid: u32,
+) -> Result<KernelFn, LiftDecline> {
+    if rank < 2 {
+        return Err(LiftDecline::UnsupportedForm(
+            "a launched row sort needs a leading axis of rows to stride over",
+        ));
+    }
+    grid_stride_outermost(lift_row_sort_opdef(op, dtype, rank)?, block, grid)
+}
+
+/// Make the outermost loop of `k` a grid-stride loop and declare the launch: thread `t` of block
+/// `b` starts at `b * block + t` and steps by `grid * block`. The caller's lift has declared the
+/// axis independent from its op family; nothing here inspects the loops.
+fn grid_stride_outermost(mut k: KernelFn, block: u32, grid: u32) -> Result<KernelFn, LiftDecline> {
     if block == 0 || grid == 0 {
         return Err(LiftDecline::BadLaunch);
     }
-    let mut k = lift_elementwise_opdef(op, dtype, rank)?;
     let Some(Stmt::For { start, step, .. }) = k.body.0.first_mut() else {
         return Err(LiftDecline::UnsupportedForm(
-            "an elementwise kernel's outermost statement is a loop",
+            "a kernel's outermost statement is a loop",
         ));
     };
     let exec = |id: ExecId| ScalarExpr::Exec(id);
@@ -409,6 +496,31 @@ pub fn lift_scan_opdef(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Kerne
     Ok(KernelFn::new(op.name.clone(), dtype, params, locals, row))
 }
 
+/// The counters of every axis, as the coordinates of the current position.
+fn scan_counters(sh: &ReductionShape) -> Vec<ScalarExpr> {
+    (0..sh.r)
+        .map(|d| ScalarExpr::Local(sh.counter(d)))
+        .collect()
+}
+
+/// Load the inputs at the current position and pre-map them into `val`.
+fn scan_loads(sh: &ReductionShape, pre: &ScalarExpr) -> Vec<Stmt> {
+    let mut pass: Vec<Stmt> = (0..sh.n)
+        .map(|k| Stmt::Load {
+            local: sh.loaded(k),
+            place: Place::Logical {
+                buffer: k,
+                coords: scan_counters(sh),
+            },
+        })
+        .collect();
+    pass.push(Stmt::Let {
+        local: sh.val,
+        init: sh.up(substitute_inputs(pre, &|k| sh.loaded(k))),
+    });
+    pass
+}
+
 /// One position of the scan: load the inputs, pre-map, fold into the prefix, and write the prefix
 /// after the fold (inclusive) or before it (exclusive).
 fn scan_pass(
@@ -418,25 +530,8 @@ fn scan_pass(
     pre: &ScalarExpr,
     post: Option<&ScalarExpr>,
 ) -> Vec<Stmt> {
-    let all_counters = || {
-        (0..sh.r)
-            .map(|d| ScalarExpr::Local(sh.counter(d)))
-            .collect::<Vec<_>>()
-    };
-    let mut pass: Vec<Stmt> = (0..sh.n)
-        .map(|k| Stmt::Load {
-            local: sh.loaded(k),
-            place: Place::Logical {
-                buffer: k,
-                coords: all_counters(),
-            },
-        })
-        .collect();
-    pass.push(Stmt::Let {
-        local: sh.val,
-        init: sh.up(substitute_inputs(pre, &|k| sh.loaded(k))),
-    });
-    let write = scan_write(sh, sop, post, all_counters());
+    let mut pass = scan_loads(sh, pre);
+    let write = scan_write(sh, sop, post, scan_counters(sh));
     let fold = fold_step(sop, sh.acc, sh.have, sh.val, sh.is_int());
     if exclusive {
         pass.extend(write);
