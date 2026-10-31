@@ -16,7 +16,6 @@
 //! the roster.
 
 use crate::backend::GeneratedKernel;
-use crate::contract::revision_hash;
 use crate::ir::OpDef;
 use unpopped_vocab::StructureKey;
 
@@ -38,7 +37,7 @@ pub fn link_entry(_op: &OpDef, key: &StructureKey, kernel: &GeneratedKernel) -> 
     LinkEntry {
         entry_point: kernel.name.clone(),
         structure_key: key.to_token(),
-        revision_hash: revision_hash(&kernel.source),
+        revision_hash: kernel.revision_hash(),
     }
 }
 

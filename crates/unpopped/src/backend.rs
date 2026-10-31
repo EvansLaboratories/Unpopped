@@ -58,7 +58,7 @@ pub struct Provenance {
     /// Scope, stated precisely because it is easy to overclaim: caching on the key
     /// alone is *already* forbidden — KISS-Synth §6.7-0004 requires a cache hit to
     /// match `(structure_key, revision_hash)`, and this crate's
-    /// `kernel_revision_hash` is FNV-1a over the emitted **source**, i.e. over the
+    /// `kernel_revision_hash` is FNV-1a over the emitted **source** (and the binary words when a backend supplies them), i.e. over the
     /// product rather than the recipe. A lowering change therefore already yields
     /// a different hash. So this field is **not** what closes that hole, and it is
     /// not a substitute for the revision hash.
@@ -93,12 +93,13 @@ pub struct Provenance {
     pub generator: String,
 }
 
-/// A generated kernel: its exported symbol name and source text.
+/// A generated kernel: its exported symbol name and source text, and for a binary target the
+/// compiled words.
 ///
-/// `#[non_exhaustive]`: a backend artifact grows a structured payload later (the
-/// Vulkane review's #1/#2 — a SPIR-V `[u32]` word stream + an ABI/binding manifest
-/// can't ride a `String`). Reserving the shape now lets that land in a minor
-/// version. Out-of-crate backends build kernels through [`GeneratedKernel::new`].
+/// `#[non_exhaustive]`: a backend artifact grows a structured payload (the Vulkane review's #1/#2 —
+/// a SPIR-V `[u32]` word stream + an ABI/binding manifest can't ride a `String`). The word stream
+/// landed in 0.37.1 as [`GeneratedKernel::with_words`]; the ABI/binding manifest is still ahead
+/// (ROADMAP E5). Out-of-crate backends build kernels through [`GeneratedKernel::new`].
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct GeneratedKernel {
@@ -109,6 +110,8 @@ pub struct GeneratedKernel {
     /// Set by [`crate::generate`]; `None` on a fragment a backend built directly.
     /// Private so only the core can stamp it — see [`GeneratedKernel::provenance`].
     provenance: Option<Provenance>,
+    /// The compiled binary (a SPIR-V word stream), for a target whose artifact is not text.
+    words: Option<Vec<u32>>,
 }
 
 impl GeneratedKernel {
@@ -124,7 +127,33 @@ impl GeneratedKernel {
             name,
             source,
             provenance: None,
+            words: None,
         }
+    }
+
+    /// The same kernel carrying the binary the target runs (a SPIR-V `[u32]` word stream).
+    ///
+    /// [`source`](Self::source) stays the human text the words were built from; the words ride
+    /// beside it. They are part of the kernel's identity: [`GeneratedKernel::revision_hash`] covers
+    /// them, so recompiling the same source into different words re-mints the revision.
+    #[must_use]
+    pub fn with_words(mut self, words: Vec<u32>) -> Self {
+        self.words = Some(words);
+        self
+    }
+
+    /// The compiled binary, if the backend produced one.
+    #[must_use]
+    pub fn words(&self) -> Option<&[u32]> {
+        self.words.as_deref()
+    }
+
+    /// The revision hash the contract and the link registry carry: FNV-1a over the source, and,
+    /// when [`words`](Self::words) is `Some`, over a tag and each word little-endian. A kernel
+    /// without words hashes exactly as it did before 0.37.1.
+    #[must_use]
+    pub fn revision_hash(&self) -> u64 {
+        crate::contract::revision_hash_of(&self.source, self.words())
     }
 
     /// What this kernel was baked against, or `None` if it is a raw fragment.
