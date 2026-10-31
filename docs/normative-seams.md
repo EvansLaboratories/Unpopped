@@ -214,7 +214,7 @@ live on the side that cannot run the adopter's tests.
 
 | | |
 |---|---|
-| **What we decide** | That every window overlaps the input by ≥1 tap — so `Max`/`Min` folds **peel the first element** and no `±inf` identity is ever materialised |
+| **What we decide** | That every output window has at least one tap on a real input element (the real-tap rule, CireSnave 2026-10-31, "Go with option C.") — so `Max`/`Min` folds **peel the first element** and no `±inf` identity is ever materialised. `2*pad <= dilation*(size-1) + 1` is the simple sufficient check an emitter may use instead of testing each window; it is not the requirement |
 | **Where** | `unpopped::plan` `plan.rs:3399`/`3405`; `ReduceOp`'s doc states the consequence |
 | **Status** | **MEASURED**, here and independently by baracuda |
 
