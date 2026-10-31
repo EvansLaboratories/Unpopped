@@ -184,6 +184,24 @@ pub fn lift_im2col_opdef_launched(
     grid_stride_outermost(lift_im2col_opdef(op, dtype)?, block, grid)
 }
 
+/// [`lift_contraction_opdef`] launched on `grid` blocks of `block` threads (E1d-6): the outermost
+/// output axis (the batch, or `M` for a plain matmul) is a grid-stride loop and each thread runs the
+/// serial `k`-ascending accumulation for its output cells, so the kernel is bit-exact against the
+/// serial one for every `grid` and `block`.
+///
+/// # Errors
+///
+/// A [`LiftDecline`]: those of [`lift_contraction_opdef`], and [`LiftDecline::BadLaunch`] for a
+/// zero `block` or `grid`.
+pub fn lift_contraction_opdef_launched(
+    op: &OpDef,
+    dtype: ElementKind,
+    block: u32,
+    grid: u32,
+) -> Result<KernelFn, LiftDecline> {
+    grid_stride_outermost(lift_contraction_opdef(op, dtype)?, block, grid)
+}
+
 /// Make the outermost loop of `k` a grid-stride loop and declare the launch: thread `t` of block
 /// `b` starts at `b * block + t` and steps by `grid * block`. The caller's lift has declared the
 /// axis independent from its op family; nothing here inspects the loops.

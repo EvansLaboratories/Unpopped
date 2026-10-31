@@ -9,11 +9,11 @@
 //! block size that is not a power of two. Two broken copies (a step of 1 and a wrong start) must
 //! disagree.
 
-use unpopped::ir::{OpDef, ReduceOp};
+use unpopped::ir::{ContractionAxes, OpDef, ReduceOp, reduced};
 use unpopped::kernel::{KernelFn, Stmt, check_kernel};
 use unpopped::kernel_lift::{
-    LiftDecline, lift_im2col_opdef, lift_im2col_opdef_launched, lift_window_opdef,
-    lift_window_opdef_launched,
+    LiftDecline, lift_contraction_opdef, lift_contraction_opdef_launched, lift_im2col_opdef,
+    lift_im2col_opdef_launched, lift_window_opdef, lift_window_opdef_launched,
 };
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, run_kernel};
@@ -230,4 +230,60 @@ fn an_unstrided_loop_and_a_wrong_start_are_seen() {
         seen(&offset, &src, &want),
         "a start that skips row 0 leaves it unwritten"
     );
+}
+
+/// `[b,] m, n, k` contraction operands: dense row-major buffers of a planted-value pattern.
+fn contraction_args(batch: Option<i64>, m: i64, n: i64, k: i64) -> Vec<KernelArg> {
+    let lead: Vec<i64> = batch.into_iter().collect();
+    let shape = |a: i64, b: i64| [lead.clone(), vec![a, b]].concat();
+    let buf = |s: Vec<i64>, f: fn(usize) -> f64| f32_buffer(&s, f);
+    let lhs = buf(shape(m, k), |i| VALUES[(i * 5) % VALUES.len()]);
+    let rhs = buf(shape(k, n), |i| VALUES[(i * 7 + 2) % VALUES.len()]);
+    let out_shape = shape(m, n);
+    let cells: i64 = out_shape.iter().product();
+    let out = TypedBuffer::new(
+        F32,
+        out_shape.clone(),
+        strides(&out_shape),
+        vec![0xAB; cells as usize * 4],
+    );
+    let mut args = vec![
+        KernelArg::Buffer(lhs),
+        KernelArg::Buffer(rhs),
+        KernelArg::Buffer(out),
+    ];
+    args.extend(
+        lead.iter()
+            .chain(&[m, n, k])
+            .map(|&e| KernelArg::Int(i128::from(e))),
+    );
+    args
+}
+
+fn contraction_bytes(k: &KernelFn, mut args: Vec<KernelArg>, launch: bool) -> Vec<u8> {
+    if launch {
+        run_launch(k, &mut args).expect("the launch runs");
+    } else {
+        run_kernel(k, &mut args).expect("the serial kernel runs");
+    }
+    let KernelArg::Buffer(out) = &args[2] else {
+        unreachable!("the output is the third buffer")
+    };
+    out.bytes.clone()
+}
+
+#[test]
+fn matmul_and_batched_matmul_are_bit_exact_on_every_geometry() {
+    let plain = OpDef::contraction("mm", &[F32], ContractionAxes::matmul(), reduced(0));
+    let batched = OpDef::contraction("bmm", &[F32], ContractionAxes::batched_matmul(), reduced(0));
+    for (op, batch) in [(plain, None), (batched, Some(3))] {
+        let serial = lift_contraction_opdef(&op, F32).unwrap();
+        let want = contraction_bytes(&serial, contraction_args(batch, 6, 7, 5), false);
+        for (grid, block) in GEOMETRIES {
+            let k = lift_contraction_opdef_launched(&op, F32, block, grid).expect("lifts");
+            assert_eq!(check_kernel(&k), Ok(()), "a lifted kernel is well formed");
+            let got = contraction_bytes(&k, contraction_args(batch, 6, 7, 5), true);
+            assert_eq!(got, want, "batch {batch:?} grid {grid} block {block}");
+        }
+    }
 }
