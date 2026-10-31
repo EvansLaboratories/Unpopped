@@ -214,7 +214,7 @@ live on the side that cannot run the adopter's tests.
 
 | | |
 |---|---|
-| **What we decide** | That every window overlaps the input by ≥1 tap — so `Max`/`Min` folds **peel the first element** and no `±inf` identity is ever materialised |
+| **What we decide** | That every output window has at least one tap on a real input element (the real-tap rule, the Unpopped lane's user, 2026-10-31, "Go with option C.", reported by the lane and unverified by the PM) — so `Max`/`Min` folds **peel the first element** and no `±inf` identity is ever materialised. KISS-OPS-6.13-0010/-0011 (board 345 "B"): a producer MUST NOT write a shape with such a window and a reader MUST decline it. `2*pad <= dilation*(size-1) + 1` does **not** enforce this at dilation > 1 (n=1, k=2, d=2, s=1, p=1 passes it and its window has no in-bounds tap), so it is a screen, not the requirement |
 | **Where** | `unpopped::plan` `plan.rs:3399`/`3405`; `ReduceOp`'s doc states the consequence |
 | **Status** | **MEASURED**, here and independently by baracuda |
 
