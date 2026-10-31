@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.35.1` — docs: integer division, remainder and shift semantics, measured per target (design note)
+
+**Docs only; no code, no API, no behaviour change.** `docs/int-div-shift-semantics.md` records what C11, the C++ draft, PTX ISA 9.4, LLVM, OpenCL C 3.0, GLSL 4.60.8, SPIR-V and WGSL each specify for integer division by zero, `MIN / -1` and a shift count at or above the width, with sections cited, and recommends one total IR rule (WGSL's division cases, shift count modulo the width). Awaiting the PM's ruling; integer `Div` stays rejected and `Shl`/`Shr` keep their caller contract until then.
+
 ## `0.35.0` — BREAKING: `tree-sitter` 0.26 → 0.27 (the `convert` feature)
 
 `Frontend::parse` returns a `tree_sitter::Tree`, so the grammar-runtime version is part of this crate's public API: every external `Frontend` (Baracuda's CUDA frontend, openclownfish, `vulkane-slang-parse`) must build its `Tree` with `tree-sitter` 0.27 to link against this release. No `unpopped` source changed; `tree-sitter-slang` 0.3.1 (already the latest) builds against 0.27. CireSnave's standing rule is every dependency on its latest version. `cargo test --workspace --all-features` (129 test results, 0 failed) and `clippy --workspace --all-targets --all-features -D warnings` pass.
