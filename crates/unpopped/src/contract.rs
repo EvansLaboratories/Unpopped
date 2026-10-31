@@ -751,7 +751,7 @@ pub fn contract_with_exactness(
     s.push_str(&format!("entry_point: {}\n", kernel.name));
     s.push_str(&format!(
         "kernel_revision_hash: \"{:016x}\"\n",
-        revision_hash(&kernel.source)
+        kernel.revision_hash()
     ));
 
     // oob_policy (Model-A gather, Fuel Q3): advertise the out-of-bounds semantics
@@ -2092,11 +2092,26 @@ fn dtype_size(dt: ElementKind) -> u32 {
 
 /// 64-bit FNV-1a over the kernel source — the `ImplId.kernel_revision_hash` base.
 /// Stable and dependency-free (unlike `DefaultHasher`, which is unspecified).
+#[cfg(test)]
 pub(crate) fn revision_hash(src: &str) -> u64 {
+    revision_hash_of(src, None)
+}
+
+/// [`revision_hash`] extended over a binary payload: after the source bytes, a ` words ` tag and
+/// each word little-endian. `None` is the source-only hash, byte for byte.
+pub(crate) fn revision_hash_of(src: &str, words: Option<&[u32]>) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in src.bytes() {
+    let mut feed = |b: u8| {
         h ^= u64::from(b);
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    };
+    src.bytes().for_each(&mut feed);
+    if let Some(words) = words {
+        b" words ".iter().copied().for_each(&mut feed);
+        words
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .for_each(&mut feed);
     }
     h
 }
@@ -2416,6 +2431,20 @@ mod tests {
     fn revision_hash_is_source_sensitive() {
         assert_ne!(revision_hash("kernel a"), revision_hash("kernel b"));
         assert_eq!(revision_hash("stable"), revision_hash("stable"));
+    }
+
+    /// A kernel without words hashes as it always did (FNV-1a of "a", the published value), and
+    /// words change the hash: for the same source, for a different word, and for a different order.
+    #[test]
+    fn revision_hash_covers_the_words_and_leaves_text_kernels_alone() {
+        assert_eq!(revision_hash("a"), 0xaf63_dc4c_8601_ec8c, "FNV-1a(\"a\")");
+        assert_eq!(revision_hash_of("a", None), revision_hash("a"));
+        let base = revision_hash_of("a", Some(&[1, 2]));
+        assert_ne!(base, revision_hash("a"), "words are part of the identity");
+        assert_ne!(base, revision_hash_of("a", Some(&[1, 3])));
+        assert_ne!(base, revision_hash_of("a", Some(&[2, 1])));
+        assert_ne!(revision_hash_of("a", Some(&[])), revision_hash("a"));
+        assert_eq!(base, revision_hash_of("a", Some(&[1, 2])), "deterministic");
     }
 
     #[test]
