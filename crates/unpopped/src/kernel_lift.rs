@@ -22,6 +22,7 @@ use crate::ir::{
 use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 use crate::types::{int_range, map_children};
 
+mod block_reduce;
 mod gather;
 mod im2col;
 mod post;
@@ -29,6 +30,7 @@ mod row_reduce;
 mod row_sort;
 mod scatter;
 mod window;
+pub use block_reduce::lift_reduction_opdef_launched;
 pub use gather::lift_gather_opdef;
 pub use im2col::lift_im2col_opdef;
 pub use row_reduce::lift_row_reduce_opdef;

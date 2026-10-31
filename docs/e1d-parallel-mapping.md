@@ -99,6 +99,30 @@ The design constraints that keep it there, to be enforced as written rules rathe
 - A text check that no source file in `crates/` contains a launch-directive spelling such as `<<<` or `dispatch` in an emitter
   that runs from this repo (rule 3), so the constraint is enforced by a test rather than by memory.
 
+## E1d-1 as built
+
+`kernel_lift::lift_reduction_opdef_launched(op, dtype, rank, block, grid)` (`kernel_lift/block_reduce.rs`). Per output, one
+block: each thread folds `reduced = tid; < n; += BlockDim` into a private accumulator, publishes it to a `Shared` array
+(`partial`, plus `partial_have` for `Max`/`Min`), and `block/2, block/4, ... 1` tree rounds (`if tid < s`, then a `Barrier`)
+combine the partials with the serial fold's own step; thread 0 stores. Blocks stride over the outermost kept axis
+(`row = BlockIdx; += GridDim`). Geometry is the caller's; `block` must be a power of two.
+
+- **Accepted** (order-independent, so bit-exact against the serial kernel): integer `Sum`/`Prod`/`Max`/`Min` (wrapping is
+  associative and commutative) and float `Max`/`Min` (NaN-keeping). Exceptions, as for every float kernel here: NaN payload,
+  and the sign of a zero when both `+0` and `-0` occur in a `Max`/`Min` (the serial fold keeps the first, the tree whichever it
+  combines first). The proof corpus has no `-0.0`.
+- **Declined** with a typed `LiftDecline`: float `Sum`/`Prod`/`Mean` (the order is observable; needs its own tolerance note),
+  integer `Mean`, a fused post, more than one reduced axis, no kept axis (a rank-1 reduction), a non-power-of-two `block`.
+  `Access::RowReduce` (float, multi-stage, tolerance-mode) is the next stage, E1d-2.
+- **The barrier checker** treated every `Exec` leaf as thread-divergent, so a barrier inside a block-strided row loop was
+  rejected. `BlockIdx`, `BlockDim` and `GridDim` are now uniform (every thread of a block reads the same value); `ThreadIdx`,
+  the lane and subgroup ids stay divergent, and the pinned over-rejections are unchanged.
+- **Proof** (`tests/kernel_parallel_reduction_agrees.rs`): `run_launch` equals the serial kernel byte for byte over six
+  reduction kinds, three axis/keepdim layouts and seven geometries (one thread to 12 blocks of 16; a 64-wide block over a
+  37-wide row, so threads with nothing to fold are exercised). Six broken copies must disagree or trap: a removed first
+  `Barrier` (`UninitializedShared`), a removed round `Barrier` (`DataRace`), a dropped last round, an unstrided slice, a combine
+  that ignores the partner's `have` flag (seen on an all-negative `Max`), and a wrong block start.
+
 ## Provenance
 
 Claim text read from the downloaded Google Patents page on 2026-10-31 (claims 1, 15, 26, 30, 44 in full; the dependent claims
