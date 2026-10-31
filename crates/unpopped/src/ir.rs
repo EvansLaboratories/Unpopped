@@ -667,8 +667,9 @@ pub enum BinaryOp {
     /// read the count's bits as unsigned and take it modulo the promoted width: 64 for a 64-bit
     /// type, **32 for every narrower one, `S8`/`U8` included** (promote-then-truncate, unchanged).
     /// `Shl` discards the bits shifted out and is defined for a negative or overflowing left
-    /// operand. The caller contract above still describes the plan path until each emitter adopts
-    /// the rule (ROADMAP E16).
+    /// operand. The plan-level referee, `oracle::evaluate`, takes the count the same way since 0.39.1
+    /// (it used to answer `0` or the sign fill). The caller contract above still describes what a
+    /// plan-path emitter may rely on until each emitter adopts the rule (ROADMAP E16).
     Shl,
     /// Bitwise right shift `a >> b` — int-only. Matches
     /// `binary_bitwise_right_shift_int.cu` exactly: **arithmetic** shift on
