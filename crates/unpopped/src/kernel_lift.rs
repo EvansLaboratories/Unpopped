@@ -29,6 +29,7 @@ mod post;
 mod row_reduce;
 mod row_reduce_launched;
 mod row_sort;
+mod scan_launched;
 mod scatter;
 mod window;
 pub use block_reduce::lift_reduction_opdef_launched;
@@ -37,6 +38,7 @@ pub use im2col::lift_im2col_opdef;
 pub use row_reduce::lift_row_reduce_opdef;
 pub use row_reduce_launched::lift_row_reduce_opdef_launched;
 pub use row_sort::lift_row_sort_opdef;
+pub use scan_launched::lift_scan_opdef_launched;
 pub use scatter::lift_scatter_opdef;
 pub use window::lift_window_opdef;
 
@@ -406,6 +408,31 @@ pub fn lift_scan_opdef(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Kerne
     Ok(KernelFn::new(op.name.clone(), dtype, params, locals, row))
 }
 
+/// The counters of every axis, as the coordinates of the current position.
+fn scan_counters(sh: &ReductionShape) -> Vec<ScalarExpr> {
+    (0..sh.r)
+        .map(|d| ScalarExpr::Local(sh.counter(d)))
+        .collect()
+}
+
+/// Load the inputs at the current position and pre-map them into `val`.
+fn scan_loads(sh: &ReductionShape, pre: &ScalarExpr) -> Vec<Stmt> {
+    let mut pass: Vec<Stmt> = (0..sh.n)
+        .map(|k| Stmt::Load {
+            local: sh.loaded(k),
+            place: Place::Logical {
+                buffer: k,
+                coords: scan_counters(sh),
+            },
+        })
+        .collect();
+    pass.push(Stmt::Let {
+        local: sh.val,
+        init: sh.up(substitute_inputs(pre, &|k| sh.loaded(k))),
+    });
+    pass
+}
+
 /// One position of the scan: load the inputs, pre-map, fold into the prefix, and write the prefix
 /// after the fold (inclusive) or before it (exclusive).
 fn scan_pass(
@@ -415,25 +442,8 @@ fn scan_pass(
     pre: &ScalarExpr,
     post: Option<&ScalarExpr>,
 ) -> Vec<Stmt> {
-    let all_counters = || {
-        (0..sh.r)
-            .map(|d| ScalarExpr::Local(sh.counter(d)))
-            .collect::<Vec<_>>()
-    };
-    let mut pass: Vec<Stmt> = (0..sh.n)
-        .map(|k| Stmt::Load {
-            local: sh.loaded(k),
-            place: Place::Logical {
-                buffer: k,
-                coords: all_counters(),
-            },
-        })
-        .collect();
-    pass.push(Stmt::Let {
-        local: sh.val,
-        init: sh.up(substitute_inputs(pre, &|k| sh.loaded(k))),
-    });
-    let write = scan_write(sh, sop, post, all_counters());
+    let mut pass = scan_loads(sh, pre);
+    let write = scan_write(sh, sop, post, scan_counters(sh));
     let fold = fold_step(sop, sh.acc, sh.have, sh.val, sh.is_int());
     if exclusive {
         pass.extend(write);
