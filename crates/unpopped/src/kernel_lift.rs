@@ -145,13 +145,55 @@ pub fn lift_elementwise_opdef_launched(
     block: u32,
     grid: u32,
 ) -> Result<KernelFn, LiftDecline> {
+    grid_stride_outermost(lift_elementwise_opdef(op, dtype, rank)?, block, grid)
+}
+
+/// [`lift_window_opdef`] launched on `grid` blocks of `block` threads (E1d-6): the outermost
+/// output axis is a grid-stride loop, exactly as for an Elementwise op. Every output cell of a
+/// window op is computed from its own taps in the serial lift's order, so the kernel is
+/// **bit-exact** against the serial one for every `grid` and `block` (no reordering, no barrier).
+///
+/// # Errors
+///
+/// A [`LiftDecline`]: those of [`lift_window_opdef`], and [`LiftDecline::BadLaunch`] for a zero
+/// `block` or `grid`.
+pub fn lift_window_opdef_launched(
+    op: &OpDef,
+    dtype: ElementKind,
+    rank: u8,
+    block: u32,
+    grid: u32,
+) -> Result<KernelFn, LiftDecline> {
+    grid_stride_outermost(lift_window_opdef(op, dtype, rank)?, block, grid)
+}
+
+/// [`lift_im2col_opdef`] launched on `grid` blocks of `block` threads (E1d-6): the outermost
+/// output axis is a grid-stride loop. Every output element is a gather of one input element (or a
+/// typed zero), so the kernel is bit-exact against the serial one for every `grid` and `block`.
+///
+/// # Errors
+///
+/// A [`LiftDecline`]: those of [`lift_im2col_opdef`], and [`LiftDecline::BadLaunch`] for a zero
+/// `block` or `grid`.
+pub fn lift_im2col_opdef_launched(
+    op: &OpDef,
+    dtype: ElementKind,
+    block: u32,
+    grid: u32,
+) -> Result<KernelFn, LiftDecline> {
+    grid_stride_outermost(lift_im2col_opdef(op, dtype)?, block, grid)
+}
+
+/// Make the outermost loop of `k` a grid-stride loop and declare the launch: thread `t` of block
+/// `b` starts at `b * block + t` and steps by `grid * block`. The caller's lift has declared the
+/// axis independent from its op family; nothing here inspects the loops.
+fn grid_stride_outermost(mut k: KernelFn, block: u32, grid: u32) -> Result<KernelFn, LiftDecline> {
     if block == 0 || grid == 0 {
         return Err(LiftDecline::BadLaunch);
     }
-    let mut k = lift_elementwise_opdef(op, dtype, rank)?;
     let Some(Stmt::For { start, step, .. }) = k.body.0.first_mut() else {
         return Err(LiftDecline::UnsupportedForm(
-            "an elementwise kernel's outermost statement is a loop",
+            "a kernel's outermost statement is a loop",
         ));
     };
     let exec = |id: ExecId| ScalarExpr::Exec(id);

@@ -198,6 +198,15 @@ row length, `c = ceil(n / B)`. Scan positions are numbered `j = 0..n-1` in scan 
   how this was found.)
 - **Proof:** `tests/kernel_parallel_scan_agrees.rs`.
 
+## E1d-6 as built
+
+`lift_window_opdef_launched` and `lift_im2col_opdef_launched` (in `kernel_lift.rs`) are E1d-0's transform applied to two more families whose output cells
+are independent: the outermost output axis becomes `i = BlockIdx*BlockDim + ThreadIdx; i < n; i += GridDim*BlockDim`, the rest of the serial kernel is
+untouched. Each cell folds its own taps in the serial lift's order (window) or gathers one element (im2col), so there is no reordering, no `Shared`
+memory and no `Barrier`, and the result is **bit-exact** against the serial kernel for every `(grid, block)`, floats included. Parallelism is declared from
+the op family, never found by inspecting loops. Contraction, Gather and RowSort follow the same pattern and are not done yet; Scatter is not parallel in
+general (two indices can write one cell). Proof: `tests/kernel_parallel_grid_stride_agrees.rs`.
+
 ## Who owns a hardware width
 
 An emitter owns the wavefront/warp width (and any other device fact: shared-memory size, register file). A `KernelPlan` carries none, so a plan stays
