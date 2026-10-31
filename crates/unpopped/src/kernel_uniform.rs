@@ -3,7 +3,9 @@
 //! section 4): a `Barrier` is defined only if every thread of its scope reaches it, so the checker
 //! rejects one that sits under control that may differ between threads.
 //!
-//! A conservative taint analysis. A value is *divergent* if it reads an `Exec` leaf or a `Load`
+//! A conservative taint analysis. A value is *divergent* if it reads an `Exec` leaf that differs
+//! between the threads of a barrier's scope (everything but `BlockIdx`, `BlockDim` and `GridDim`,
+//! which every thread of a block, and so of a subgroup, reads alike) or a `Load`
 //! from global, shared or private memory, or flows from one. The analysis is flow-insensitive per
 //! local (a local assigned a divergent value anywhere is divergent everywhere) and iterated to a
 //! fixed point, so a value carried round a loop is still seen. A `Barrier` is rejected under an
@@ -11,7 +13,7 @@
 //! or `Continue` that sat under such control. It rejects some correct programs and never accepts
 //! a divergent barrier; the four known over-rejections are pinned in `tests/kernel_barrier.rs`.
 
-use crate::exec::MemorySpace;
+use crate::exec::{ExecId, MemorySpace};
 use crate::ir::ScalarExpr;
 use crate::kernel::{Block, KernelError, KernelFn, Place, Stmt};
 use crate::types::operands;
@@ -53,7 +55,10 @@ impl Walk<'_> {
 
     fn expr(&self, e: &ScalarExpr) -> bool {
         match e {
-            ScalarExpr::Exec(_) => true,
+            ScalarExpr::Exec(id) => !matches!(
+                id,
+                ExecId::BlockIdx(_) | ExecId::BlockDim(_) | ExecId::GridDim(_)
+            ),
             ScalarExpr::Local(i) => self.divergent[*i as usize],
             _ => operands(e).into_iter().any(|x| self.expr(x)),
         }

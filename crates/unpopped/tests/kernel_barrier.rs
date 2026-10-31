@@ -133,6 +133,28 @@ fn a_barrier_in_a_loop_bounded_by_a_parameter_is_accepted() {
     ok(vec![for_(I, local(N), vec![barrier()])]);
 }
 
+/// The ids every thread of a block reads alike are uniform: a block-strided row loop around a
+/// barrier is the shape of a block-tree reduction (E1d-1). `ThreadIdx` stays divergent.
+#[test]
+fn a_barrier_under_block_level_exec_ids_is_accepted_and_under_thread_ids_is_not() {
+    let strided = |start: ExecId, step: ExecId| Stmt::For {
+        local: I,
+        start: to_i32(exec(start)),
+        end: local(N),
+        step: to_i32(exec(step)),
+        body: Block(vec![barrier()]),
+    };
+    ok(vec![strided(ExecId::BlockIdx(0), ExecId::GridDim(0))]);
+    ok(vec![strided(ExecId::BlockDim(0), ExecId::BlockDim(0))]);
+    assert_eq!(
+        check_kernel(&kernel(vec![strided(
+            ExecId::ThreadIdx(0),
+            ExecId::GridDim(0)
+        )])),
+        Err(KernelError::BarrierDivergent)
+    );
+}
+
 #[test]
 fn a_barrier_under_a_condition_on_a_parameter_is_accepted() {
     ok(vec![if_(local(N), vec![barrier()])]);
