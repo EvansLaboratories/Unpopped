@@ -1,6 +1,6 @@
 [package]
 name = "unpopped"
-version = "0.36.0"
+version = "0.37.0"
 description = "A vendor-neutral kernel generator: the backend-agnostic IR, plan, transform pipeline, contracts and dispatch artifacts, plus the `Backend` and `Compiler` traits a target implements. Ships a portable-C99 reference backend and a CPU oracle, so it builds and self-tests with no device, no driver, and no vendor dependency. Device backends live under their own vendor identity and depend on this crate — the CUDA emitter, its NVRTC compiler and the Fuel synthesizer live in `baracuda-cuda-emit`. Pre-1.0 and moving; pin exact versions."
 edition.workspace = true
 rust-version.workspace = true
@@ -23,7 +23,7 @@ readme = "README.md"
 # existing Slang kernels into the neutral IR (CUDA's frontend is Baracuda's `baracuda-cuda-parse`). Optional so the published
 # default build stays lean — the grammars compile C via the `cc` crate; enable with
 # `--features convert`.
-convert = ["dep:tree-sitter", "dep:tree-sitter-slang"]
+convert = ["dep:tree-sitter"]
 
 [dependencies]
 unpopped-vocab = { workspace = true }
@@ -39,14 +39,16 @@ libm = "0.2"
 # `--lib` tests exercise it under the default feature set.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Converter frontends (`convert` feature): reuse mature tree-sitter grammars to lift
-# Slang source into the IR instead of hand-writing parsers. Error-tolerant
-# CSTs — unrecognized constructs stay as residue (the "keep the rest in the source
-# language" contract). tree-sitter-slang extends tree-sitter-cpp + tree-sitter-hlsl.
+# Converter walkers (`convert` feature): lift C-family kernels through a `Frontend` the
+# caller supplies (CUDA: `baracuda-cuda-parse`; Slang: `vulkane-slang-parse`). This crate
+# carries no grammar. Error-tolerant CSTs — unrecognized constructs stay as residue (the
+# "keep the rest in the source language" contract).
 tree-sitter = { version = "0.27", optional = true }
-tree-sitter-slang = { version = "0.3", optional = true }
 
 [dev-dependencies]
+# Only the tests and the corpus example: a Slang `Frontend` to drive the shared walkers.
+# The shipped crate names no grammar (`tests/neutral_core_names_no_cuda_grammar.rs`).
+tree-sitter-slang = "0.3"
 # kiss-ref: the spec-exact KISS reference impl — the single source of truth this
 # crate's numerical tests assert against (the oracle.rs consolidation). DEV-only,
 # so it is NOT in the published lib's dependency graph and `cargo publish` stays
