@@ -13,6 +13,8 @@ the interpreter against host-native integers and the compiled C against the inte
 **Integer remainder** is not a new operation: it is `Select(b == 0, 0, a - (a / b) * b)` over the total `Div` (`MIN % -1`
 already comes out `0` because `MIN / -1` wraps to `MIN`); the test pins it against `checked_rem(..).unwrap_or(0)`.
 
+**Plan-level oracle (0.39.1).** `oracle::evaluate` follows rule 3 for `Shl`/`Shr` too (openclownfish#26).
+
 **What is not done.** The intent-layer plan gate still refuses integer `Div` (an `OpDef` an emitter will lower through
 `Backend::lower`), and `Shl`/`Shr` there keep the architecture-inherited caller contract, because the emitters outside this
 repository (Baracuda CUDA, Vulkane Slang/SPIR-V, openclownfish OpenCL C, Rockfish HIP) would otherwise receive bare `/` and
