@@ -101,7 +101,11 @@ pub struct JitResponse {
 }
 
 /// A synthesized kernel.
+///
+/// `#[non_exhaustive]` since 0.38.0: build one with [`SynthKernel::new`], so a field added later is
+/// not a break.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct SynthKernel {
     /// Linkable entry-point symbol (matches the contract's `entry_point`).
     pub entry_point: String,
@@ -113,13 +117,35 @@ pub struct SynthKernel {
     pub kind: ArtifactKind,
 }
 
+impl SynthKernel {
+    /// A synthesized kernel from its parts.
+    #[must_use]
+    pub fn new(entry_point: String, source: String, artifact: Vec<u8>, kind: ArtifactKind) -> Self {
+        Self {
+            entry_point,
+            source,
+            artifact,
+            kind,
+        }
+    }
+}
+
 /// Provenance of a [`SynthKernel::artifact`].
+///
+/// `#[non_exhaustive]` since 0.38.0: a new target's artifact is a new variant, not a break, so a
+/// consumer's `match` needs a wildcard arm (refuse what you do not know, as for [`ArtifactKind::Stub`]).
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ArtifactKind {
     /// Compiled PTX (driver-JIT-linked; portable across SMs of the arch).
     Ptx,
     /// Compiled cubin (SM-specific machine code).
     Cubin,
+    /// A HIP code object (ELF bytes, per GPU architecture; hipRTC or `hipcc --genco` output).
+    HipCodeObject,
+    /// SPIR-V, as little-endian bytes of the `[u32]` word stream (an emitter that returns the words
+    /// itself uses [`crate::backend::GeneratedKernel::with_words`] instead).
+    SpirV,
     /// A stand-in artifact ([`StubCompiler`]) — **not loadable**; a device-module
     /// loader must refuse it rather than feed it to the driver.
     Stub,
