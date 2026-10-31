@@ -56,6 +56,7 @@ blob changed, not on a schedule, and record the commit in `kiss/README.md`.
   without re-reading US8146066B2 (est. expiry 2030-07); see `docs/PATENT-SWEEP.md`.
 - `cargo public-api` and `cargo semver-checks` are not installed here; an API
   diff in a PR is "read, not a tool run".
+- **Launch geometry is never derived (PM ruling 2026-10-31, US10949182B2; `docs/PATENT-SWEEP.md`, "Standing constraints from the E1d re-read").** No pass derives block/grid/thread counts from a loop bound, none decides which loops are parallel by inspecting them, and no emitter in this repo writes a launch directive (a test enforces the last). Wording stays "outside as read", never "clear".
 
 ## 6. Spec-to-roadmap audit (PM task, CireSnave's idea, 2026-10-24)
 
