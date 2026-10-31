@@ -95,6 +95,12 @@ jobs:
   # until 2026-08-21 nobody had ever built against it. This job READS the
   # declaration rather than restating it, so the thing under test and the thing
   # declared cannot drift apart.
+  #
+  # What is claimed is exactly what is measured: the SHIPPED crates BUILD on the declared
+  # version, and `unpopped-vocab` / `unpopped-cpu-c` also TEST on it. `unpopped`'s own tests run
+  # on stable (the `verify` and `all-features` jobs) because its dev-dependency
+  # `tree-sitter-slang` pulls `tree-sitter-language`, which needs rustc 1.90, and a dev-dependency
+  # is resolved for any `cargo test -p unpopped`. Shipped code is covered by the build step.
   msrv:
     runs-on: ubuntu-latest
     steps:
@@ -106,7 +112,8 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "declared MSRV: $v"
       - run: rustup toolchain install ${{ steps.msrv.outputs.version }} --profile minimal
-      - run: cargo +${{ steps.msrv.outputs.version }} test --workspace
+      - run: cargo +${{ steps.msrv.outputs.version }} build -p unpopped -p unpopped-vocab -p unpopped-cpu-c
+      - run: cargo +${{ steps.msrv.outputs.version }} test -p unpopped-vocab -p unpopped-cpu-c
 
   # THE OPTIONAL FEATURES, WHICH NOTHING ELSE HERE COMPILES.
   #
