@@ -9,8 +9,19 @@
 //! arithmetic is associative and commutative) and float `Max`/`Min` (a set function, with the
 //! oracle's NaN-keeping rule). It is bit-exact against the serial kernel except for NaN payload
 //! and the sign of a zero when `+0` and `-0` both occur in a `Max`/`Min` (the serial fold keeps
-//! the first, the tree keeps whichever it combines first). A float `Sum`/`Mean` declines: it needs
-//! a documented tolerance, which is its own decision (`docs/e1d-parallel-mapping.md`).
+//! the first, the tree keeps whichever it combines first).
+//!
+//! A float `Sum`/`Mean` is **not** order-independent and is accepted with a declared bound
+//! (PM ruling 2026-10-31, E1d-2), not bit-exactness. The order is fixed by `(grid, block)` and by
+//! nothing else, so the result is reproducible run to run: thread `t` folds elements `t`, `t + B`,
+//! `t + 2B`, ... in ascending order into an `f64` accumulator (`B` is `block`); the tree then adds
+//! `acc[t] + acc[t + s]` for `s = B/2, B/4, ..., 1`, left operand first; thread 0 holds the total,
+//! divides it by the reduced extent for `Mean`, and rounds once to the compute dtype. The error
+//! against the exact sum is at most `gamma_(n-1) * sum|x_i|` with `u = 2^-53` (the standard
+//! summation bound, which holds for every order of the same `n` additions), plus the half ulp of the
+//! final rounding; against the serial kernel it is at most twice that. `docs/e1d-parallel-mapping.md`
+//! states the bound and `tests/kernel_parallel_reduction_float_sum_bound.rs` checks it. `Prod` of a
+//! float still declines.
 //!
 //! The geometry is the caller's and never derived from an extent; the parallel axes are declared
 //! from the op family, not found by inspecting loops (`docs/PATENT-SWEEP.md`, E1d rules).
@@ -29,7 +40,7 @@ use unpopped_vocab::ElementKind;
 ///
 /// A [`LiftDecline`]: those of [`super::lift_reduction_opdef`]; [`LiftDecline::BadLaunch`] for a
 /// zero `grid`, or a `block` that is zero or not a power of two; and
-/// [`LiftDecline::UnsupportedForm`] for a float `Sum`/`Prod`/`Mean` (order-dependent), a fused
+/// [`LiftDecline::UnsupportedForm`] for a float `Prod` or an integer `Mean`, a fused
 /// post, a reduction over more than one axis, or one with no kept axis.
 pub fn lift_reduction_opdef_launched(
     op: &OpDef,
@@ -77,8 +88,8 @@ pub fn lift_reduction_opdef_launched(
         .with_allocs(t.allocs()))
 }
 
-/// The forms this lift takes: an order-independent fold, no post, one reduced axis, one or more
-/// kept axes.
+/// The forms this lift takes: an order-independent fold (or a float `Sum`/`Mean` with a declared
+/// bound), no post, one reduced axis, one or more kept axes.
 fn check_order_independent(
     sh: &ReductionShape,
     rop: ReduceOp,
@@ -86,12 +97,14 @@ fn check_order_independent(
 ) -> Result<(), LiftDecline> {
     let independent = match rop {
         ReduceOp::Max | ReduceOp::Min => true,
-        ReduceOp::Sum | ReduceOp::Prod => sh.is_int(),
-        _ => false,
+        // A float Sum or Mean has a declared bound instead (module docs); an integer Mean is not a fold.
+        ReduceOp::Sum => true,
+        ReduceOp::Prod => sh.is_int(),
+        ReduceOp::Mean => !sh.is_int(),
     };
     if !independent {
         return Err(LiftDecline::UnsupportedForm(
-            "a float Sum, Prod or Mean in a launched reduction (its order is observable)",
+            "an integer Mean or a float Prod in a launched reduction (not order-independent, and no declared bound)",
         ));
     }
     if has_post {

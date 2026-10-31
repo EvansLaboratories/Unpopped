@@ -176,8 +176,8 @@ fn every_geometry_gives_the_serial_bytes() {
 }
 
 #[test]
-fn an_order_dependent_or_unsupported_form_declines() {
-    let (sum, ..) = case(ReduceOp::Sum, F32, false, false);
+fn a_form_with_neither_order_independence_nor_a_bound_declines() {
+    let (sum, ..) = case(ReduceOp::Prod, F32, false, false);
     let (mean, ..) = case(ReduceOp::Mean, I32, false, false);
     let (max, ..) = case(ReduceOp::Max, F32, false, false);
     for (op, dtype) in [(&sum, F32), (&mean, I32)] {
