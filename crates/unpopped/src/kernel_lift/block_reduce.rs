@@ -23,6 +23,12 @@
 //! states the bound and `tests/kernel_parallel_reduction_float_sum_bound.rs` checks it. `Prod` of a
 //! float still declines.
 //!
+//! **Several reduced axes** are accepted: thread `t` takes the indices `t, t + B, ...` of the
+//! outermost reduced axis and folds every element under each, in row-major order; `Mean` divides by
+//! the product of the reduced extents. **No kept axis** (one output) is accepted: block 0 does the
+//! row and other blocks idle. A **fused post** runs on thread 0, on the finalised fold rounded once
+//! to the compute dtype, exactly as the serial lift does.
+//!
 //! The geometry is the caller's and never derived from an extent; the parallel axes are declared
 //! from the op family, not found by inspecting loops (`docs/PATENT-SWEEP.md`, E1d rules).
 
@@ -40,8 +46,7 @@ use unpopped_vocab::ElementKind;
 ///
 /// A [`LiftDecline`]: those of [`super::lift_reduction_opdef`]; [`LiftDecline::BadLaunch`] for a
 /// zero `grid`, or a `block` that is zero or not a power of two; and
-/// [`LiftDecline::UnsupportedForm`] for a float `Prod` or an integer `Mean`, a fused
-/// post, a reduction over more than one axis, or one with no kept axis.
+/// [`LiftDecline::UnsupportedForm`] for a float `Prod` or an integer `Mean`.
 pub fn lift_reduction_opdef_launched(
     op: &OpDef,
     dtype: ElementKind,
@@ -54,18 +59,10 @@ pub fn lift_reduction_opdef_launched(
     }
     let (rop, axes, keepdim, post) = check_reduction(op, dtype, rank)?;
     let sh = ReductionShape::new(op.n_inputs, dtype, rank, axes);
-    check_order_independent(&sh, rop, post.is_some())?;
+    check_order_independent(&sh, rop)?;
     let t = Tree {
         sh: &sh,
-        fold: Fold {
-            rop,
-            block,
-            acc: sh.acc,
-            have: sh.have,
-            val: sh.val,
-            partner_have: sh.red,
-            int: sh.is_int(),
-        },
+        fold: Fold::of_shape(&sh, rop, block),
     };
 
     let mut row = vec![
@@ -84,23 +81,20 @@ pub fn lift_reduction_opdef_launched(
     row.extend(t.fold.rounds());
     let out_coords = sh.out_coords(keepdim);
     let out_rank = u8::try_from(out_coords.len()).expect("rank is at most 8");
-    row.push(t.thread0_stores(out_coords));
+    row.push(t.thread0_stores(out_coords, post));
 
     let body = block_strided_rows(&sh, Block(row))?;
     let (params, mut locals) = sh.signature(out_rank);
+    locals.push(LocalDecl::scalar(dtype)); // red: the finalised fold, rounded once (a fused post reads it)
     locals.push(LocalDecl::scalar(ElementKind::I32)); // the partner's `have`
     Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body)
         .with_launch(LaunchShape::new([block, 1, 1], [grid, 1, 1]))
         .with_allocs(t.fold.allocs(sh.acc_ty())))
 }
 
-/// The forms this lift takes: an order-independent fold (or a float `Sum`/`Mean` with a declared
-/// bound), no post, one reduced axis, one or more kept axes.
-fn check_order_independent(
-    sh: &ReductionShape,
-    rop: ReduceOp,
-    has_post: bool,
-) -> Result<(), LiftDecline> {
+/// The forms this lift takes: an order-independent fold, or a float `Sum`/`Mean` with a declared
+/// bound.
+fn check_order_independent(sh: &ReductionShape, rop: ReduceOp) -> Result<(), LiftDecline> {
     let independent = match rop {
         ReduceOp::Max | ReduceOp::Min => true,
         // A float Sum or Mean has a declared bound instead (module docs); an integer Mean is not a fold.
@@ -111,16 +105,6 @@ fn check_order_independent(
     if !independent {
         return Err(LiftDecline::UnsupportedForm(
             "an integer Mean or a float Prod in a launched reduction (not order-independent, and no declared bound)",
-        ));
-    }
-    if has_post {
-        return Err(LiftDecline::UnsupportedForm(
-            "a fused post in a launched reduction",
-        ));
-    }
-    if sh.reduced.len() != 1 || sh.kept.is_empty() {
-        return Err(LiftDecline::UnsupportedForm(
-            "a launched reduction needs one reduced axis and at least one kept axis",
         ));
     }
     Ok(())
@@ -165,6 +149,20 @@ pub(super) struct Fold {
 }
 
 impl Fold {
+    /// The fold over a reduction shape's accumulator, `have` flag and value locals; the partner's
+    /// `have` flag lives in the local after `red`.
+    fn of_shape(sh: &ReductionShape, rop: ReduceOp, block: u32) -> Self {
+        Self {
+            rop,
+            block,
+            acc: sh.acc,
+            have: sh.have,
+            val: sh.val,
+            partner_have: sh.red + 1,
+            int: sh.is_int(),
+        }
+    }
+
     pub(super) fn has_flag(&self) -> bool {
         matches!(self.rop, ReduceOp::Max | ReduceOp::Min)
     }
@@ -271,24 +269,41 @@ impl Tree<'_> {
     }
 
     /// Thread 0 holds the row's result in its accumulator and stores it.
-    fn thread0_stores(&self, coords: Vec<ScalarExpr>) -> Stmt {
+    /// With a fused post, thread 0 rounds the finalised fold once and the post reads that.
+    fn thread0_stores(&self, coords: Vec<ScalarExpr>, post: Option<&ScalarExpr>) -> Stmt {
+        let mut then = Block(vec![]);
+        let value = self.sh.stored_value(self.fold.rop, post, &mut then);
+        then.0.push(Stmt::Store {
+            place: Place::Logical {
+                buffer: self.sh.n,
+                coords,
+            },
+            value,
+        });
         Stmt::If {
             cond: ScalarExpr::Binary(BinaryOp::CmpEq, Box::new(thread()), Box::new(uconst(0))),
-            then: Block(vec![Stmt::Store {
-                place: Place::Logical {
-                    buffer: self.sh.n,
-                    coords,
-                },
-                value: self.sh.stored(self.fold.rop),
-            }]),
+            then,
             els: Block(vec![]),
         }
     }
 }
 
 /// Wrap `row` in the kept axes' loops and make the outermost one block-strided:
-/// `row = BlockIdx; row < n; row += GridDim`.
+/// `row = BlockIdx; row < n; row += GridDim`. With no kept axis there is one output: block 0 does
+/// it and the other blocks are idle (`if BlockIdx == 0`, uniform across the block).
 fn block_strided_rows(sh: &ReductionShape, row: Block) -> Result<Block, LiftDecline> {
+    if sh.kept.is_empty() {
+        let block_zero = ScalarExpr::Binary(
+            BinaryOp::CmpEq,
+            Box::new(ScalarExpr::Exec(ExecId::BlockIdx(0))),
+            Box::new(uconst(0)),
+        );
+        return Ok(Block(vec![Stmt::If {
+            cond: block_zero,
+            then: row,
+            els: Block(vec![]),
+        }]));
+    }
     let mut body = row;
     for &d in sh.kept.iter().rev() {
         body = for_axis(d, sh.r, body);

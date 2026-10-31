@@ -199,20 +199,6 @@ fn a_form_with_neither_order_independence_nor_a_bound_declines() {
             "block {block} grid {grid}"
         );
     }
-    // No kept axis (a rank-1 reduction) is outside this form.
-    let one_d = OpDef::reduction_axes(
-        "r",
-        1,
-        &[F32],
-        Expr(input(0).0),
-        ReduceOp::Max,
-        AxisMask::EMPTY,
-        false,
-    );
-    assert!(matches!(
-        lift_reduction_opdef_launched(&one_d, F32, 1, 8, 2),
-        Err(LiftDecline::UnsupportedForm(_))
-    ));
 }
 
 /// The block that holds the `Barrier`s directly.

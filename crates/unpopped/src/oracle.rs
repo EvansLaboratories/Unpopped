@@ -3151,6 +3151,19 @@ fn eval_window(
     let out = &operands[n_in];
     let k_in = in0.shape[rank - 1];
     let k_out = out.shape[rank - 1];
+    // KISS-OPS-6.13-0011: a reader declines a window with no in-bounds tap (the oracle used to
+    // answer with the monoid identity). The oracle has no error channel, so it panics, as its
+    // other precondition failures do, with the typed error's text.
+    if let Err(e) = crate::window_taps::check_window_taps(
+        k_in,
+        k_out,
+        u32::from(size),
+        u32::from(stride),
+        u32::from(dilation),
+        u32::from(pad_lo),
+    ) {
+        panic!("oracle: {e}");
+    }
     let total_out = prod(&out.shape[..rank]).max(0);
     let n_rows = if k_out > 0 { total_out / k_out } else { 0 };
     let int_acc = is_int(plan.dtype);
@@ -7256,9 +7269,12 @@ mod fold_pins {
     }
 
     #[test]
-    fn an_average_window_over_only_padding_is_zero_not_nan() {
+    #[should_panic(expected = "has no in-bounds tap")]
+    fn a_window_over_only_padding_is_declined_not_answered_with_zero() {
         // Two taps three apart with two cells of padding each side: the middle output's
-        // taps (-1 and 2) both miss the two-element row, so its divisor would be 0.
+        // taps (-1 and 2) both miss the two-element row. Before 0.39.0 the oracle answered 0
+        // here (the expected values were [7, 0, 5, 3, 0, 1]); KISS-OPS-6.13-0011 makes a reader
+        // decline such a window, so the oracle now panics naming it.
         let f = ElementKind::F32;
         let got = f32s(&window(
             ReduceOp::Mean,
@@ -7273,7 +7289,7 @@ mod fold_pins {
             3,
             TypedBuffer::from_f32(&[2, 2], &[5.0, 7.0, 1.0, 3.0]),
         ));
-        assert_eq!(got, [7.0, 0.0, 5.0, 3.0, 0.0, 1.0]);
+        panic!("the oracle must have declined, got {got:?}");
     }
 
     #[test]

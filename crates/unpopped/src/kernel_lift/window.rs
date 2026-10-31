@@ -86,6 +86,33 @@ struct Geometry {
     post: Option<ScalarExpr>,
 }
 
+/// [`lift_window_opdef`] for a window axis whose extents are known: declines, with
+/// [`LiftDecline::WindowWithoutRealTap`], a window op for which some output window has no
+/// in-bounds tap at input extent `k_in` and output extent `k_out` (KISS-OPS-6.13-0011).
+///
+/// # Errors
+///
+/// A [`LiftDecline`].
+pub fn lift_window_opdef_for_extents(
+    op: &OpDef,
+    dtype: ElementKind,
+    rank: u8,
+    k_in: i64,
+    k_out: i64,
+) -> Result<KernelFn, LiftDecline> {
+    let g = check_window(op, dtype, rank)?;
+    crate::window_taps::check_window_taps(
+        k_in,
+        k_out,
+        u32::from(g.size),
+        u32::from(g.stride),
+        u32::from(g.dilation),
+        u32::from(g.pad_lo),
+    )
+    .map_err(LiftDecline::WindowWithoutRealTap)?;
+    lift_window_opdef(op, dtype, rank)
+}
+
 fn check_window(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Geometry, LiftDecline> {
     let Access::Window {
         op: wop,
