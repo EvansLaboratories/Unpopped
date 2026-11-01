@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.40.3` — docs: panic text as a cross-repo API, measured (ROADMAP C11)
+
+`docs/normative-seams.md` section 6 now records a measurement (predicate, refs, per-repo counts, what it does and does not show) in place of the reported 34. No code change.
+
 ## `0.40.2` — `AtomicRmw` on a `Shared` allocation (additive)
 
 `Stmt::AtomicRmw` now also accepts a `Place::Alloc` into a `Shared` allocation (integer element, relaxed, same race rule as a global element: an atomic conflicts with a plain access, never with another atomic). `Private` and `Constant` allocations are refused (`KernelError::AtomicUnsupported`). The interpreter traps an atomic on a `Shared` element nothing has stored (`UninitializedShared`). No existing kernel changes meaning. Tests: `tests/kernel_atomic_shared.rs` (a block counter; the barrier after the init and the barrier before the read each deleted is a `DataRace`; the refusals).
