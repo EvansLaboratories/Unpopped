@@ -24,7 +24,7 @@ const ALLOWED: &[(&str, usize, &str)] = &[
     ),
     (
         "crates/unpopped/tests/compare_for_plan.rs",
-        3,
+        7,
         "the tests of the compelled-band API (a deliberately loose band is the subject)",
     ),
     (
