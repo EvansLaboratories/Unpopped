@@ -2591,16 +2591,25 @@ fn eval_reduction(
     let mut out = alloc_output(plan, operands, n_in, 0);
     let out_dt = plan.out_dtype_of(0);
     let int_acc = is_int(plan.dtype);
-    // Mirror the emitter's reduction scope (the integer-reduction scope contract:
-    // I32/I64 only, no integer Mean) instead of silently
-    // mis-computing: integer reductions are I32/I64 only, and integer Mean is out
-    // of scope (the emitter asserts `!(int_acc && Mean)`). Keep the oracle's
-    // out-of-scope-PANIC convention (cf. eval_scan/eval_window/eval_row_reduce)
-    // rather than returning the un-divided sum for a buildable I32/S8/U8 Mean plan.
+    // Integer reductions: `I32`/`I64` (the emitter's scope) and, from 0.40.13, the narrow `I8`/`U8`/
+    // `I16`/`U16` (ROADMAP E19), which fold at the dtype's width like the elementwise `Add`/`Mul`: the
+    // accumulator is exact `i128` and the store wraps it to the dtype, which for `Sum` and `Prod`
+    // equals wrapping at every step, and `Max`/`Min` are exact. Integer Mean is out of scope (the
+    // emitter asserts `!(int_acc && Mean)`); keep the oracle's out-of-scope-PANIC convention
+    // (cf. eval_scan/eval_window/eval_row_reduce) rather than returning the un-divided sum for a
+    // buildable integer Mean plan. Any other integer dtype (`U32`, `U64`) is still out of scope.
     if int_acc {
         assert!(
-            matches!(plan.dtype, ElementKind::I32 | ElementKind::I64),
-            "oracle: integer reduction dtype {:?} out of scope (emitter: I32/I64 only)",
+            matches!(
+                plan.dtype,
+                ElementKind::I32
+                    | ElementKind::I64
+                    | ElementKind::I8
+                    | ElementKind::U8
+                    | ElementKind::I16
+                    | ElementKind::U16
+            ),
+            "oracle: integer reduction dtype {:?} out of scope (I8/U8/I16/U16/I32/I64 only)",
             plan.dtype
         );
         assert!(

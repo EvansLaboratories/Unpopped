@@ -50,17 +50,41 @@ macro_rules! check {
         let sum = vals.iter().fold(0 as $t, |a, b| a.wrapping_add(*b));
         let prod = vals.iter().fold(1 as $t, |a, b| a.wrapping_mul(*b));
         let (mx, mn) = (*vals.iter().max().unwrap(), *vals.iter().min().unwrap());
-        assert_eq!(reduce($dtype, ReduceOp::Sum, &wide, w), sum as i128, "Sum {:?}", $dtype);
-        assert_eq!(reduce($dtype, ReduceOp::Prod, &wide, w), prod as i128, "Prod {:?}", $dtype);
-        assert_eq!(reduce($dtype, ReduceOp::Max, &wide, w), mx as i128, "Max {:?}", $dtype);
-        assert_eq!(reduce($dtype, ReduceOp::Min, &wide, w), mn as i128, "Min {:?}", $dtype);
+        assert_eq!(
+            reduce($dtype, ReduceOp::Sum, &wide, w),
+            sum as i128,
+            "Sum {:?}",
+            $dtype
+        );
+        assert_eq!(
+            reduce($dtype, ReduceOp::Prod, &wide, w),
+            prod as i128,
+            "Prod {:?}",
+            $dtype
+        );
+        assert_eq!(
+            reduce($dtype, ReduceOp::Max, &wide, w),
+            mx as i128,
+            "Max {:?}",
+            $dtype
+        );
+        assert_eq!(
+            reduce($dtype, ReduceOp::Min, &wide, w),
+            mn as i128,
+            "Min {:?}",
+            $dtype
+        );
     }};
 }
 
 #[test]
 fn signed_narrow_reductions_wrap_at_the_dtype_width() {
     check!(ElementKind::I8, i8, vec![100, 100, 100, -128, 127, -1, 5]);
-    check!(ElementKind::I16, i16, vec![30000, 30000, -32768, 32767, -1, 7]);
+    check!(
+        ElementKind::I16,
+        i16,
+        vec![30000, 30000, -32768, 32767, -1, 7]
+    );
 }
 
 #[test]
