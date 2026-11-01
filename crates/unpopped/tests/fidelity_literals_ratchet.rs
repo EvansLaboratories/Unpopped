@@ -30,12 +30,12 @@ const ALLOWED: &[(&str, usize, &str)] = &[
     (
         "crates/unpopped/tests/wide_integer_comparison.rs",
         6,
-        "tests of `compare` itself on integers wider than f64's mantissa",
+        "tests of `compare` itself on hand-built integer buffers wider than f64's mantissa (no plan exists)",
     ),
     (
         "crates/unpopped/tests/a_flushing_device_declines_exact.rs",
         1,
-        "a test of the derivation's refusal for a flushing device",
+        "a pattern in a test of the derivation's output (`required_fidelity_with_exactness` returns a tolerant band)",
     ),
     (
         "crates/unpopped-cpu-c/tests/required_fidelity.rs",
@@ -45,7 +45,7 @@ const ALLOWED: &[(&str, usize, &str)] = &[
     (
         "crates/unpopped-cpu-c/tests/complex_domain.rs",
         5,
-        "complex-domain comparisons; to migrate to `compare_for_plan`",
+        "tests of `compare` on hand-built complex buffers (no plan exists, so `compare_for_plan` cannot apply)",
     ),
 ];
 
