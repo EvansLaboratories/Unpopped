@@ -6,7 +6,9 @@ use unpopped_vocab::ElementKind;
 
 use crate::exec::{Extent, MemorySpace, Scope as ExecScope};
 use crate::ir::ScalarExpr;
-use crate::kernel::{Block, BufferRole, KernelError, KernelFn, Param, ParamKind, Place, Stmt};
+use crate::kernel::{
+    AtomicOp, Block, BufferRole, KernelError, KernelFn, Param, ParamKind, Place, Stmt,
+};
 use crate::types::{self, Ty};
 
 /// Per-walk state: which locals are in scope, which are protected from `Assign`.
@@ -122,7 +124,7 @@ fn check_stmt(
         Stmt::Load { local, place } => check_load(k, *local, place, sc, declared_here)?,
         Stmt::Assign { local, value } => check_assign(k, *local, value, sc)?,
         Stmt::Store { place, value } => check_store(k, place, value, sc)?,
-        Stmt::AtomicRmw { place, value, .. } => check_atomic(k, place, value, sc)?,
+        Stmt::AtomicRmw { op, place, value } => check_atomic(k, *op, place, value, sc)?,
         Stmt::If { cond, then, els } => {
             scalar_cond(k, cond, sc)?;
             check_block(k, then, sc)?;
@@ -198,6 +200,7 @@ fn check_store(
 /// that type.
 fn check_atomic(
     k: &KernelFn,
+    op: AtomicOp,
     place: &Place,
     value: &ScalarExpr,
     sc: &Scope,
@@ -220,9 +223,11 @@ fn check_atomic(
             what: "an atomic on a buffer that is not ReadWrite",
         });
     }
-    if crate::types::int_range(elem).is_none() {
+    let float_add =
+        matches!(op, AtomicOp::Add) && matches!(elem, ElementKind::F32 | ElementKind::F64);
+    if crate::types::int_range(elem).is_none() && !float_add {
         return Err(KernelError::AtomicUnsupported {
-            what: "an atomic on a non-integer element (v1: integers only)",
+            what: "an atomic on a non-integer element (only an F32/F64 Add is admitted)",
         });
     }
     if check_expr(k, value, sc)? != Ty::Scalar(elem) {

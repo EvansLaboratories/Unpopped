@@ -13,8 +13,8 @@ use std::collections::HashMap;
 
 use unpopped_vocab::ElementKind;
 
-use super::kernel_eval::{KernelTrap, Machine, atomic_combine};
-use super::{Val, elem_bits, int_val, raw_to_i128, read_elem, store_val};
+use super::kernel_eval::{KernelTrap, Machine, atomic_apply};
+use super::{Val, elem_bits, read_elem, store_val};
 use crate::exec::{ExecId, LaunchShape, MemorySpace};
 use crate::ir::ScalarExpr;
 use crate::kernel::AtomicOp;
@@ -302,9 +302,8 @@ impl Machine<'_> {
         let Val::Raw(bits, vdt) = v else {
             return Err(KernelTrap::Unsupported("a non-integer atomic operand"));
         };
-        let old = raw_to_i128(read_elem(&m.bytes, i, m.dtype), m.dtype);
-        let r = atomic_combine(op, m.dtype, old, raw_to_i128(bits, vdt));
-        store_val(int_val(r, m.dtype), m.dtype, &mut m.bytes, i);
+        let r = atomic_apply(op, m.dtype, read_elem(&m.bytes, i, m.dtype), bits, vdt)?;
+        store_val(r, m.dtype, &mut m.bytes, i);
         Ok(())
     }
 

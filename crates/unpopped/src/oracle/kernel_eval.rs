@@ -359,16 +359,8 @@ impl<'a> Machine<'a> {
         let Val::Raw(bits, vdt) = v else {
             return Err(KernelTrap::Unsupported("a non-integer atomic operand"));
         };
-        let (old, new) = (
-            raw_to_i128(read_elem(&tb.bytes, off, dt), dt),
-            raw_to_i128(bits, vdt),
-        );
-        store_val(
-            int_val(atomic_combine(op, dt, old, new), dt),
-            dt,
-            &mut tb.bytes,
-            off,
-        );
+        let r = atomic_apply(op, dt, read_elem(&tb.bytes, off, dt), bits, vdt)?;
+        store_val(r, dt, &mut tb.bytes, off);
         Ok(())
     }
 
@@ -597,12 +589,37 @@ impl<'a> Machine<'a> {
 
 /// `x / y` at integer type `t`, total (`docs/int-div-shift-semantics.md`, rules 1 and 2): `y == 0` gives
 /// `x`; so does `MIN / -1` (the wrapping result); otherwise the quotient truncated toward zero.
-/// `old (op) new` at the element type `t`: `Add` wraps, `Max`/`Min` select.
-pub(super) fn atomic_combine(op: AtomicOp, t: ElementKind, old: i128, new: i128) -> i128 {
-    match op {
-        AtomicOp::Add => wrap(t, old + new),
-        AtomicOp::Max => old.max(new),
-        AtomicOp::Min => old.min(new),
+/// `old (op) new` at the element type `t`, from the raw bits of both. Integers: `Add` wraps,
+/// `Max`/`Min` select. `F32`/`F64` `Add`: one correctly rounded add in the element type (an `f32`
+/// sum of two `f32` is exact in an `f64`, so adding there and rounding once is the same number).
+pub(super) fn atomic_apply(
+    op: AtomicOp,
+    t: ElementKind,
+    old: u128,
+    new: u128,
+    new_ty: ElementKind,
+) -> Result<Val, KernelTrap> {
+    match (t, op) {
+        (ElementKind::F32, AtomicOp::Add) => {
+            let sum = f32::from_bits(old as u32) + f32::from_bits(new as u32);
+            Ok(Val::Raw(u128::from(sum.to_bits()), t))
+        }
+        (ElementKind::F64, AtomicOp::Add) => {
+            let sum = f64::from_bits(old as u64) + f64::from_bits(new as u64);
+            Ok(Val::Raw(u128::from(sum.to_bits()), t))
+        }
+        _ if types::int_range(t).is_some() => {
+            let (a, b) = (raw_to_i128(old, t), raw_to_i128(new, new_ty));
+            Ok(int_val(
+                match op {
+                    AtomicOp::Add => wrap(t, a + b),
+                    AtomicOp::Max => a.max(b),
+                    AtomicOp::Min => a.min(b),
+                },
+                t,
+            ))
+        }
+        _ => Err(KernelTrap::Unsupported("an atomic outside the v1 form")),
     }
 }
 

@@ -130,6 +130,14 @@ returned.
 - **v1 form (`check_kernel`, `KernelError::AtomicUnsupported`).** A `ReadWrite` *global buffer* place or a `Shared` allocation element (since 0.40.2; not
   `Private`, `Constant`), an *integer* element type, a value of that type. `Add` wraps at the element width. `Max`/`Min`/`Add` on integers are associative and commutative, so the result does not
   depend on the schedule. A float `Add` is order-dependent (see `WriteCombine::is_fp_atomic_add`) and is not admitted.
+- **Float add (since 0.40.4; PM ruling 2026-11-01, option A of `docs/options-float-scatter-add.md`).** `Add` on an `F32`/`F64` element is admitted (`Max`/`Min` on floats are
+  not: NaN and signed-zero selection is unruled). **The IR leaves the accumulation order unspecified**: threads may reach a cell in any order, so a float result is
+  defined only inside a band, never as bytes. For a cell with `h` updates the summands are the cell's initial value and the `h` updates, `n = h + 1`, and
+  `|result - exact sum| <= gamma_(n-1) * sum(abs(x_i))`, `gamma_k = k*u / (1 - k*u)`, `u` the element type's unit roundoff (`2^-24` for `F32`). A cell nothing
+  names keeps its bytes exactly. Two atomics still never race: the order changes the value, not memory safety. The interpreter oracle adds in the order its
+  lockstep schedule reaches the cell (ascending source index for a scatter), one valid order; a conformance test compares **inside the band** and never asserts the
+  serial bytes. **This band deliberately differs from KISS-CONTRACT-6.8-0012 as clause-pinned in KISS#759** (ascending reference schedule, K1-calibrated `k`): ours is
+  order-independent (`sum(abs)` over every order) because a device's order is not the reference's; it is the bound for *this* IR statement, not a contract tolerance.
 - **Emitters.** `unpopped-cpu-c` refuses it (it emits no launches). A device emitter lowers it to its native atomic (`atomicAdd`/`atomicMax`/`atomicMin`,
   `InterlockedAdd`/`InterlockedMax`/`InterlockedMin`, `atomicrmw ... monotonic`) on the element's 32- or 64-bit integer type.
 

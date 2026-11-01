@@ -153,7 +153,7 @@ fn the_checker_admits_only_the_v1_form() {
         Err(KernelError::AtomicUnsupported { .. })
     ));
     assert!(matches!(
-        bad(ElementKind::F32, BufferRole::ReadWrite),
+        bad(ElementKind::F16, BufferRole::ReadWrite),
         Err(KernelError::AtomicUnsupported { .. })
     ));
     let wrong_value = kernel(
@@ -166,4 +166,24 @@ fn the_checker_admits_only_the_v1_form() {
         }],
     );
     assert!(check_kernel(&wrong_value).is_err());
+}
+
+#[test]
+fn a_float_add_is_admitted_for_f32_and_f64_only_and_max_min_are_not() {
+    for elem in [ElementKind::F32, ElementKind::F64] {
+        let check = |op| {
+            let body = vec![Stmt::AtomicRmw {
+                op,
+                place: cell(),
+                value: ScalarExpr::Const(1.0),
+            }];
+            let params = vec![Param::buffer("c", elem, BufferRole::ReadWrite, Some(1))];
+            let mut k = KernelFn::new("f", elem, params, vec![], unpopped::kernel::Block(body));
+            k.launch = Some(LaunchShape::new([4, 1, 1], [3, 1, 1]));
+            check_kernel(&k)
+        };
+        assert_eq!(check(AtomicOp::Add), Ok(()), "{elem:?} Add");
+        assert!(check(AtomicOp::Max).is_err(), "{elem:?} Max");
+        assert!(check(AtomicOp::Min).is_err(), "{elem:?} Min");
+    }
 }

@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.40.4` — float `AtomicRmw::Add` (F32/F64) and a launched float Scatter add (additive)
+
+`Stmt::AtomicRmw` admits `Add` on an `F32`/`F64` element (global buffer or `Shared`); float `Max`/`Min` stay refused. **Accumulation order is unspecified** (PM ruling 2026-11-01, option A): a result is defined only inside the band `gamma_(n-1) * sum(abs)` with `n` = the cell's hit count plus the initial value (`docs/ir-kernel-layer.md` section 5a, which also records that this band deliberately differs from KISS-CONTRACT-6.8-0012 as clause-pinned in KISS#759). `lift_scatter_opdef_launched` now accepts an `F32`/`F64` `AtomicAdd` destination; an `F16`/other float destination still declines. Tests: `tests/kernel_parallel_float_scatter_band.rs` (every cell in the band on five geometries, untouched cells exact, two host orders differ yet both in the band, a dropped update falls outside), `tests/kernel_atomic_rmw.rs`.
+
 ## `0.40.3` — docs: panic text as a cross-repo API, measured (ROADMAP C11)
 
 `docs/normative-seams.md` section 6 now records a measurement (predicate, refs, per-repo counts, what it does and does not show) in place of the reported 34. No code change.
