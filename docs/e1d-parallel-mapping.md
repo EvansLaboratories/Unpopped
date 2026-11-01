@@ -223,6 +223,14 @@ memory and no `Barrier`, and the result is **bit-exact** against the serial kern
 the op family, never found by inspecting loops. A contraction thread runs the serial `k`-ascending accumulation for its output cells. A row-sort thread sorts whole rows with the serial algorithm (a total order over `(key, index)`, so bit-exact); a rank-1 sort has no leading axis and declines. Gather follows the same pattern and is not done yet; Scatter is not parallel in
 general (two indices can write one cell). Proof: `tests/kernel_parallel_grid_stride_agrees.rs`.
 
+`lift_gather_opdef_launched` is the same grid-stride over the gather's outermost output axis: each output cell reads its own index and source element and is
+written by one thread, so it is bit-exact for every `(grid, block)` and every out-of-range policy (a skipped cell keeps its prior bytes). Proof:
+`tests/kernel_parallel_gather_agrees.rs`. `lift_scatter_opdef_launched` grid-strides the source's outermost axis and combines with `Stmt::AtomicRmw` (`docs/ir-kernel-layer.md` section 5a), because two
+source cells can name one destination cell and the serial lift's `Load` then `Store` would race (the launch interpreter reports `DataRace`). Integer
+`AtomicAdd`/`AtomicMax`/`AtomicMin` are order-independent, so the destination is bit-exact against the serial kernel for every `(grid, block)`. An `Assign`
+(duplicates would make the winner depend on the schedule) and a float add (order-dependent) decline. Proof: `tests/kernel_parallel_scatter_agrees.rs`,
+`tests/kernel_atomic_rmw.rs`.
+
 ## Who owns a hardware width
 
 An emitter owns the wavefront/warp width (and any other device fact: shared-memory size, register file). A `KernelPlan` carries none, so a plan stays

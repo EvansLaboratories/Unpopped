@@ -162,6 +162,7 @@ impl Emitter<'_> {
             Stmt::Continue => self.line("continue;"),
             Stmt::Return => self.line("return 0;"),
             Stmt::Barrier { .. } => return Err(refuse("a Barrier needs a launch (U3 row 4)")),
+            Stmt::AtomicRmw { .. } => return Err(refuse("an AtomicRmw needs a launch (U3 row 4)")),
         }
         Ok(())
     }

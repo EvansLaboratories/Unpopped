@@ -39,7 +39,7 @@ pub use row_reduce::lift_row_reduce_opdef;
 pub use row_reduce_launched::lift_row_reduce_opdef_launched;
 pub use row_sort::lift_row_sort_opdef;
 pub use scan_launched::lift_scan_opdef_launched;
-pub use scatter::lift_scatter_opdef;
+pub use scatter::{lift_scatter_opdef, lift_scatter_opdef_launched};
 pub use window::{lift_window_opdef, lift_window_opdef_for_extents};
 
 /// Why an `OpDef` was not lifted.
@@ -168,6 +168,25 @@ pub fn lift_window_opdef_launched(
     grid: u32,
 ) -> Result<KernelFn, LiftDecline> {
     grid_stride_outermost(lift_window_opdef(op, dtype, rank)?, block, grid)
+}
+
+/// [`lift_gather_opdef`] launched on `grid` blocks of `block` threads (E1d-6): the outermost output
+/// axis is a grid-stride loop. Every output cell reads its own index and its own source element
+/// and is written by exactly one thread, so the kernel is bit-exact against the serial one for every
+/// `grid` and `block`, whatever the out-of-range policy (a skipped cell leaves its prior bytes).
+///
+/// # Errors
+///
+/// A [`LiftDecline`]: those of [`lift_gather_opdef`], and [`LiftDecline::BadLaunch`] for a zero
+/// `block` or `grid`. A rank-0 gather has no loop and declines.
+pub fn lift_gather_opdef_launched(
+    op: &OpDef,
+    dtype: ElementKind,
+    rank: u8,
+    block: u32,
+    grid: u32,
+) -> Result<KernelFn, LiftDecline> {
+    grid_stride_outermost(lift_gather_opdef(op, dtype, rank)?, block, grid)
 }
 
 /// [`lift_im2col_opdef`] launched on `grid` blocks of `block` threads (E1d-6): the outermost

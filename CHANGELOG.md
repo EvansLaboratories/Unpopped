@@ -15,6 +15,16 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.40.0` — Breaking: `Stmt::AtomicRmw`; E1d-6: `lift_scatter_opdef_launched`
+
+**Breaking.** `kernel::Stmt` is exhaustive on purpose and gains a variant, `AtomicRmw { op: AtomicOp, place, value }` (new `AtomicOp { Add, Max, Min }`, new `KernelError::AtomicUnsupported`). A consumer that matches `Stmt` exhaustively must handle it (in this repo: `check_kernel`, the uniformity analysis, the interpreter and its resumable stepper, and `unpopped-cpu-c`, which refuses it as it refuses a `Barrier`). Semantics: relaxed, device-wide, global integer buffer element, no return value; two atomics never race, an atomic and a plain access to one element do (`docs/ir-kernel-layer.md` section 5a). Consumers checked: the only code outside this repo that names `Stmt` is a Vulkane test that pushes a `Barrier`; it does not match exhaustively.
+
+New `kernel_lift::lift_scatter_opdef_launched(op, dtype, rank, block, grid)`: the source's outermost axis is a grid-stride loop and every combine is an `AtomicRmw`; integer `AtomicAdd`/`AtomicMax`/`AtomicMin` are bit-exact against the serial scatter for every `grid`/`block`; `Assign` and a float add decline. Tests: `tests/kernel_atomic_rmw.rs`, `tests/kernel_parallel_scatter_agrees.rs`.
+
+## `0.39.3` — E1d-6: `lift_gather_opdef_launched` (additive)
+
+New `kernel_lift::lift_gather_opdef_launched(op, dtype, rank, block, grid)`: the gather's outermost output axis is a grid-stride loop; bit-exact against the serial gather for every `grid`/`block` and every out-of-range policy. (A launched Scatter follows in 0.40.0, with the atomic statement it needs.) Tests: `tests/kernel_parallel_gather_agrees.rs`.
+
 ## `0.39.2` — E1d-5: `lift_scan_opdef_launched`, a chunked block scan; E1d-6: grid-stride `lift_window_opdef_launched`, `lift_im2col_opdef_launched`, `lift_contraction_opdef_launched` and `lift_row_sort_opdef_launched` (additive)
 
 `unpopped-cpu-c` now ships a `README.md` (the publish warned that it had none).

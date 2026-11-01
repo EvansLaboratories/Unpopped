@@ -122,6 +122,7 @@ fn check_stmt(
         Stmt::Load { local, place } => check_load(k, *local, place, sc, declared_here)?,
         Stmt::Assign { local, value } => check_assign(k, *local, value, sc)?,
         Stmt::Store { place, value } => check_store(k, place, value, sc)?,
+        Stmt::AtomicRmw { place, value, .. } => check_atomic(k, place, value, sc)?,
         Stmt::If { cond, then, els } => {
             scalar_cond(k, cond, sc)?;
             check_block(k, then, sc)?;
@@ -189,6 +190,37 @@ fn check_store(
     }
     if check_expr(k, value, sc)? != Ty::Scalar(elem) {
         return Err(KernelError::TypeMismatch { what: "Store" });
+    }
+    Ok(())
+}
+
+/// An `AtomicRmw` (v1): a `ReadWrite` global buffer element of an integer type, and a value of
+/// that type.
+fn check_atomic(
+    k: &KernelFn,
+    place: &Place,
+    value: &ScalarExpr,
+    sc: &Scope,
+) -> Result<(), KernelError> {
+    let Place::Logical { buffer, .. } = place else {
+        return Err(KernelError::AtomicUnsupported {
+            what: "an atomic on an allocation (v1: global buffers only)",
+        });
+    };
+    let (elem, role) = check_place(k, place, sc)?;
+    if !(role.reads() && role.writes()) {
+        return Err(KernelError::AtomicUnsupported {
+            what: "an atomic on a buffer that is not ReadWrite",
+        });
+    }
+    if crate::types::int_range(elem).is_none() {
+        return Err(KernelError::AtomicUnsupported {
+            what: "an atomic on a non-integer element (v1: integers only)",
+        });
+    }
+    let _ = buffer;
+    if check_expr(k, value, sc)? != Ty::Scalar(elem) {
+        return Err(KernelError::TypeMismatch { what: "AtomicRmw" });
     }
     Ok(())
 }

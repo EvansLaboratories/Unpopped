@@ -19,7 +19,7 @@ use super::gather::place_at;
 use super::im2col::{int, local};
 use super::{Indexing, LiftDecline, check_plain_with, leaves_ok, substitute_inputs};
 use crate::ir::{Access, BinaryOp, OobPolicy, OpDef, ReadIndex, ScalarExpr, WriteCombine};
-use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Stmt};
+use crate::kernel::{AtomicOp, Block, BufferRole, KernelFn, LocalDecl, Param, Stmt};
 
 /// Lift a scatter: an Elementwise op with a `WriteIndex::ScatterIndexed` output (policy `Skip`,
 /// which is the only one the plan admits), a single output of the compute dtype, identity views and
@@ -38,7 +38,44 @@ pub fn lift_scatter_opdef(
     dtype: ElementKind,
     rank: u8,
 ) -> Result<KernelFn, LiftDecline> {
-    let s = check_scatter(op, dtype, rank)?;
+    build(check_scatter(op, dtype, rank)?, op, dtype, rank)
+}
+
+/// [`lift_scatter_opdef`] launched on `grid` blocks of `block` threads (E1d-6): the outermost
+/// source axis is a grid-stride loop and each combine is one [`Stmt::AtomicRmw`], so threads that
+/// scatter to one destination cell never race. Integer `AtomicAdd`, `AtomicMax` and `AtomicMin`
+/// are order-independent, so the destination is **bit-exact** against the serial kernel for every
+/// `grid` and `block`.
+///
+/// # Errors
+///
+/// A [`LiftDecline`]: those of [`lift_scatter_opdef`]; `UnsupportedForm` for an `Assign` (two
+/// sources can name one target, and the winner would depend on the schedule) and for a float
+/// `AtomicAdd` (its sum depends on the order); [`LiftDecline::BadLaunch`] for a zero `block` or
+/// `grid`.
+pub fn lift_scatter_opdef_launched(
+    op: &OpDef,
+    dtype: ElementKind,
+    rank: u8,
+    block: u32,
+    grid: u32,
+) -> Result<KernelFn, LiftDecline> {
+    let mut s = check_scatter(op, dtype, rank)?;
+    if matches!(s.combine, WriteCombine::Assign) {
+        return Err(LiftDecline::UnsupportedForm(
+            "a launched scatter that assigns (duplicate targets would race)",
+        ));
+    }
+    if crate::types::int_range(s.out_dtype).is_none() {
+        return Err(LiftDecline::UnsupportedForm(
+            "a launched scatter into a float destination (its sum is order-dependent)",
+        ));
+    }
+    s.atomic = true;
+    super::grid_stride_outermost(build(s, op, dtype, rank)?, block, grid)
+}
+
+fn build(s: Scatter, op: &OpDef, dtype: ElementKind, rank: u8) -> Result<KernelFn, LiftDecline> {
     let mut body = s.cell(op);
     for d in (0..s.r).rev() {
         body = Block(vec![Stmt::For {
@@ -55,6 +92,8 @@ pub fn lift_scatter_opdef(
 
 /// Local ids and the scatter's fields.
 struct Scatter {
+    /// Combine with an [`Stmt::AtomicRmw`] instead of a load and a store.
+    atomic: bool,
     dtype: ElementKind,
     /// The destination's element type: the compute dtype, or an integer count type (`bincount`).
     out_dtype: ElementKind,
@@ -102,6 +141,7 @@ fn check_scatter(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Scatter, Li
         return Err(LiftDecline::UnsupportedForm("an ill-formed scatter"));
     }
     Ok(Scatter {
+        atomic: false,
         dtype,
         out_dtype,
         count,
@@ -186,6 +226,20 @@ impl Scatter {
                 },
             ]
         };
+        if self.atomic {
+            let atomic = |op| {
+                vec![Stmt::AtomicRmw {
+                    op,
+                    place: self.dest(),
+                    value: value.clone(),
+                }]
+            };
+            return match self.combine {
+                WriteCombine::AtomicMax => atomic(AtomicOp::Max),
+                WriteCombine::AtomicMin => atomic(AtomicOp::Min),
+                _ => atomic(AtomicOp::Add),
+            };
+        }
         let extremum = |op| move |a, b| ScalarExpr::Binary(op, a, b);
         match self.combine {
             WriteCombine::Assign => vec![Stmt::Store {
