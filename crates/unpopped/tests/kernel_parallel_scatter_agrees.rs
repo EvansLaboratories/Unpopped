@@ -4,7 +4,8 @@
 //!
 //! Integer `AtomicAdd`, `AtomicMax` and `AtomicMin` are order-independent, so the destination must
 //! be bit-exact on every geometry even though sources name one target many times and some targets
-//! fall outside the destination. A launched `Assign` and a float add decline; a plain load and
+//! fall outside the destination. A launched `Assign` and an F16 add decline (an F32/F64 add is in
+//! `kernel_parallel_float_scatter_band.rs`); a plain load and
 //! store in place of the atomic is a `DataRace` (the reason the statement exists).
 
 use unpopped::ir::{OobPolicy, OpDef, WriteCombine, WriteIndex};
@@ -89,11 +90,11 @@ fn every_integer_combine_is_bit_exact_on_every_geometry() {
 }
 
 #[test]
-fn assign_and_a_float_add_decline() {
+fn assign_and_an_f16_add_decline() {
     let assign = lift_scatter_opdef_launched(&op(WriteCombine::Assign, I32), I32, 2, 2, 2);
     assert!(matches!(assign, Err(LiftDecline::UnsupportedForm(_))));
-    let f32_add = op(WriteCombine::AtomicAdd, ElementKind::F32);
-    let float = lift_scatter_opdef_launched(&f32_add, ElementKind::F32, 2, 2, 2);
+    let f16_add = op(WriteCombine::AtomicAdd, ElementKind::F16);
+    let float = lift_scatter_opdef_launched(&f16_add, ElementKind::F16, 2, 2, 2);
     assert!(matches!(float, Err(LiftDecline::UnsupportedForm(_))));
     let zero = lift_scatter_opdef_launched(&op(WriteCombine::AtomicAdd, I32), I32, 2, 0, 1);
     assert_eq!(zero.err(), Some(LiftDecline::BadLaunch));

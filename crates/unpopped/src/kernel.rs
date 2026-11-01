@@ -249,8 +249,9 @@ pub enum Stmt {
     /// only ordering a kernel has). The old value is not returned. Two atomics on one element never
     /// race, whatever threads or blocks issue them; an atomic and a plain access to one element do,
     /// unless a barrier orders them (`docs/ir-kernel-layer.md`, "Atomics"). v1: a global buffer
-    /// (`ReadWrite`) place or a `Shared` allocation element, an integer element type; the result
-    /// wraps at the element width.
+    /// (`ReadWrite`) place or a `Shared` allocation element, an integer element type (the result
+    /// wraps at the element width) or an `F32`/`F64` `Add` (accumulation order unspecified, so a
+    /// float result is defined only inside a band: section 5a).
     AtomicRmw {
         /// The combine.
         op: AtomicOp,

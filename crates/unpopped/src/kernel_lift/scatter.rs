@@ -45,13 +45,15 @@ pub fn lift_scatter_opdef(
 /// source axis is a grid-stride loop and each combine is one [`Stmt::AtomicRmw`], so threads that
 /// scatter to one destination cell never race. Integer `AtomicAdd`, `AtomicMax` and `AtomicMin`
 /// are order-independent, so the destination is **bit-exact** against the serial kernel for every
-/// `grid` and `block`.
+/// `grid` and `block`. An `F32`/`F64` `AtomicAdd` is **not** bit-exact: the order threads reach a
+/// cell is unspecified, so each cell equals the serial sum only inside the reassociation band of
+/// `docs/ir-kernel-layer.md` section 5a (the destination's initial value is one summand).
 ///
 /// # Errors
 ///
 /// A [`LiftDecline`]: those of [`lift_scatter_opdef`]; `UnsupportedForm` for an `Assign` (two
-/// sources can name one target, and the winner would depend on the schedule) and for a float
-/// `AtomicAdd` (its sum depends on the order); [`LiftDecline::BadLaunch`] for a zero `block` or
+/// sources can name one target, and the winner would depend on the schedule) and for a destination
+/// that is not an integer, `F32` or `F64`; [`LiftDecline::BadLaunch`] for a zero `block` or
 /// `grid`.
 pub fn lift_scatter_opdef_launched(
     op: &OpDef,
@@ -66,9 +68,11 @@ pub fn lift_scatter_opdef_launched(
             "a launched scatter that assigns (duplicate targets would race)",
         ));
     }
-    if crate::types::int_range(s.out_dtype).is_none() {
+    if crate::types::int_range(s.out_dtype).is_none()
+        && !matches!(s.out_dtype, ElementKind::F32 | ElementKind::F64)
+    {
         return Err(LiftDecline::UnsupportedForm(
-            "a launched scatter into a float destination (its sum is order-dependent)",
+            "a launched scatter into a destination that is not an integer, F32 or F64",
         ));
     }
     s.atomic = true;

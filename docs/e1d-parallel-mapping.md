@@ -228,7 +228,7 @@ written by one thread, so it is bit-exact for every `(grid, block)` and every ou
 `tests/kernel_parallel_gather_agrees.rs`. `lift_scatter_opdef_launched` grid-strides the source's outermost axis and combines with `Stmt::AtomicRmw` (`docs/ir-kernel-layer.md` section 5a), because two
 source cells can name one destination cell and the serial lift's `Load` then `Store` would race (the launch interpreter reports `DataRace`). Integer
 `AtomicAdd`/`AtomicMax`/`AtomicMin` are order-independent, so the destination is bit-exact against the serial kernel for every `(grid, block)`. An `Assign`
-(duplicates would make the winner depend on the schedule) and a float add (order-dependent) decline. Proof: `tests/kernel_parallel_scatter_agrees.rs`,
+(duplicates would make the winner depend on the schedule) and a destination that is not an integer, `F32` or `F64` decline. An `F32`/`F64` add (since 0.40.4) is launched with unspecified order: each cell is inside the band of `docs/ir-kernel-layer.md` section 5a, never asserted equal to the serial bytes (`tests/kernel_parallel_float_scatter_band.rs`). Proof: `tests/kernel_parallel_scatter_agrees.rs`,
 `tests/kernel_atomic_rmw.rs`.
 
 ## Who owns a hardware width
