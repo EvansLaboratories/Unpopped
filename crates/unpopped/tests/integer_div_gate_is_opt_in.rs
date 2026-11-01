@@ -7,7 +7,7 @@
 //! is refused exactly as before, by `try_generate` and by `try_build_plan` alike.
 
 use unpopped::backend::{Backend, DtypeSupport, GeneratedKernel, LowerError};
-use unpopped::ir::{Expr, OpDef, ScalarExpr, input};
+use unpopped::ir::{BinaryOp, Expr, OpDef, ScalarExpr, input};
 use unpopped::plan::{KernelPlan, PlanError, try_build_plan, try_build_plan_for};
 use unpopped::try_generate;
 use unpopped_vocab::{
@@ -67,6 +67,23 @@ fn idiv(dtype: ElementKind) -> OpDef {
     OpDef::elementwise("idiv", 2, &[dtype], input(0) / input(1))
 }
 
+/// An elementwise integer comparison (0.40.11).
+fn cmp(dtype: ElementKind) -> OpDef {
+    let body = ScalarExpr::Binary(BinaryOp::CmpLt, Box::new(input(0).0), Box::new(input(1).0));
+    OpDef::elementwise("lt", 2, &[dtype], Expr(body))
+}
+
+/// An elementwise integer `Select` whose condition is a bare input (no comparison inside, so only
+/// the `Select` arm of the gate decides it) (0.40.11).
+fn sel(dtype: ElementKind) -> OpDef {
+    let body = ScalarExpr::Select(
+        Box::new(input(0).0),
+        Box::new(input(0).0),
+        Box::new(input(1).0),
+    );
+    OpDef::elementwise("sel", 2, &[dtype], Expr(body))
+}
+
 fn with_const(dtype: ElementKind) -> OpDef {
     let c = Expr(ScalarExpr::ConstInt(3, dtype));
     OpDef::elementwise("addc", 1, &[dtype], input(0) + c)
@@ -80,7 +97,7 @@ fn a_backend_that_does_not_opt_in_is_refused_exactly_as_before() {
         ElementKind::U32,
         ElementKind::U64,
     ] {
-        for op in [idiv(dt), with_const(dt)] {
+        for op in [idiv(dt), with_const(dt), cmp(dt), sel(dt)] {
             let k = key(dt);
             let plain = try_build_plan(&op, &k).map(|_| ());
             assert!(
@@ -112,7 +129,7 @@ fn an_opted_in_backend_gets_int_div_and_const_int_at_the_defined_dtypes() {
         ElementKind::U32,
         ElementKind::U64,
     ] {
-        for op in [idiv(dt), with_const(dt)] {
+        for op in [idiv(dt), with_const(dt), cmp(dt), sel(dt)] {
             let k = key(dt);
             try_build_plan_for(&op, &k, &Total).expect("admitted for an opted-in backend");
             try_generate(&op, &k, &Total).expect("lowers through try_generate");
@@ -130,8 +147,14 @@ fn opting_in_widens_nothing_else() {
         ElementKind::I16,
         ElementKind::U16,
     ] {
-        let r = try_build_plan_for(&idiv(dt), &key(dt), &Total).map(|_| ());
-        assert!(r.is_err(), "{dt:?}: Div must stay refused, got {r:?}");
+        for op in [idiv(dt), cmp(dt), sel(dt)] {
+            let r = try_build_plan_for(&op, &key(dt), &Total).map(|_| ());
+            assert!(
+                r.is_err(),
+                "{dt:?} {}: must stay refused, got {r:?}",
+                op.name
+            );
+        }
     }
     try_build_plan_for(&idiv(ElementKind::F32), &key(ElementKind::F32), &Total)
         .expect("float Div is admitted regardless");

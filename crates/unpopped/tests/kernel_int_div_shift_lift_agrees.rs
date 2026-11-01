@@ -6,7 +6,8 @@
 //! The plan is built for a backend that declares `Backend::total_integer_ops` (0.40.7): without
 //! that the gate refuses integer `Div`. Every corpus carries the boundary cases the document
 //! lists, as a cross product (a zero divisor, `MIN / -1`, an oversized and a negative shift count).
-//! `Rem` is not here: its `Select` composition does not plan at an integer dtype (ROADMAP E16).
+//! `Rem` is here as the document gives it, `Select(b == 0, 0, a - (a / b) * b)`, which needs an integer
+//! `Select` and `CmpEq` (admitted for an opted-in backend from 0.40.10).
 
 use unpopped::backend::{Backend, DtypeSupport, GeneratedKernel, LowerError};
 use unpopped::ir::{BinaryOp, Expr, OpDef, ScalarExpr, input};
@@ -122,6 +123,24 @@ fn both(name: &str, dtype: ElementKind, body: ScalarExpr) -> (Vec<u8>, Vec<u8>) 
     (want, got.bytes.clone())
 }
 
+/// Assert the two byte images agree, naming the first differing operand pair when they do not.
+fn same(want: &[u8], got: &[u8], dtype: ElementKind, what: &str) {
+    let w = if matches!(dtype, ElementKind::I64 | ElementKind::U64) {
+        8
+    } else {
+        4
+    };
+    let vals = corpus(dtype);
+    for (k, (x, y)) in want.chunks(w).zip(got.chunks(w)).enumerate() {
+        let (i, j) = (k / vals.len(), k % vals.len());
+        assert_eq!(
+            x, y,
+            "{what} at {dtype:?}: a = {}, b = {} (oracle {x:?}, kernel {y:?})",
+            vals[i], vals[j]
+        );
+    }
+}
+
 fn a() -> ScalarExpr {
     input(0).0
 }
@@ -144,7 +163,55 @@ fn integer_div_and_shifts_agree_at_every_defined_width() {
         ];
         for (name, body) in forms {
             let (want, got) = both(name, dt, body);
-            assert_eq!(got, want, "{name} at {dt:?}");
+            same(&want, &got, dt, name);
+        }
+    }
+}
+
+/// `Rem` as the document gives it: `Select(b == 0, 0, a - (a / b) * b)` over the total `Div`.
+fn rem(dtype: ElementKind) -> ScalarExpr {
+    let zero = ScalarExpr::ConstInt(0, dtype);
+    let quot = ScalarExpr::Div(bx(a()), bx(b()));
+    let back = ScalarExpr::Mul(bx(quot), bx(b()));
+    let is_zero = ScalarExpr::Binary(BinaryOp::CmpEq, bx(b()), bx(zero.clone()));
+    ScalarExpr::Select(
+        bx(is_zero),
+        bx(zero),
+        bx(ScalarExpr::Sub(bx(a()), bx(back))),
+    )
+}
+
+#[test]
+fn the_rem_composition_agrees_at_every_defined_width() {
+    for dt in [
+        ElementKind::I32,
+        ElementKind::I64,
+        ElementKind::U32,
+        ElementKind::U64,
+    ] {
+        let (want, got) = both("rem", dt, rem(dt));
+        same(&want, &got, dt, "rem");
+    }
+}
+
+#[test]
+fn every_comparison_agrees_at_every_defined_width() {
+    for dt in [
+        ElementKind::I32,
+        ElementKind::I64,
+        ElementKind::U32,
+        ElementKind::U64,
+    ] {
+        for op in [
+            BinaryOp::CmpEq,
+            BinaryOp::CmpNe,
+            BinaryOp::CmpLt,
+            BinaryOp::CmpLe,
+            BinaryOp::CmpGt,
+            BinaryOp::CmpGe,
+        ] {
+            let (want, got) = both("cmp", dt, ScalarExpr::Binary(op, bx(a()), bx(b())));
+            same(&want, &got, dt, &format!("{op:?}"));
         }
     }
 }

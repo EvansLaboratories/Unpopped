@@ -448,6 +448,15 @@ impl<'a> Machine<'a> {
             // A comparison yields the compute type's 1 or 0, as the oracle does; its operands are
             // integers of their own type, not necessarily `t`.
             ScalarExpr::Binary(op, a, b) if op.is_cmp() => self.eval_cmp(*op, a, b)?,
+            // An integer `Select`: the integer condition tested `!= 0`, then ONE arm evaluated at `t`
+            // (the other is not, as in the float path). This is what an integer `Rem` composes from.
+            ScalarExpr::Select(c, a, b) => {
+                if self.eval_operand_int(c)? != 0 {
+                    self.eval_int(a, t)?
+                } else {
+                    self.eval_int(b, t)?
+                }
+            }
             _ => {
                 return Err(KernelTrap::Unsupported(
                     "integer expression outside the v0 subset",
