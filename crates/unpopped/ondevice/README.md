@@ -2354,7 +2354,7 @@ value/mask numeric proofs run on the GPU.
 **Fuel contract (honest miss — AOT-ONLY, confirmed against Fuel's sources):** this
 is the FIRST hetero (mixed-dtype) multi-output kernel and it emits **no FKC
 contract**. `contract()` returns `None` for every `n_outputs > 1` op structurally
-(`contract.rs:245`), BEFORE `derive_pattern` — Fuel has no dual `OpKind` for an
+(`contract.rs:345`, the `op.n_outputs() > 1` guard in `contract()`), BEFORE `derive_pattern` — Fuel has no dual `OpKind` for an
 elementwise multi-output, `PatternNode` is single-rooted (a forest of N output
 roots is inexpressible), and Fuel's only multi-output ABI is a single-buffer
 `return.bundle`. Fuel additionally has no `Dropout`/`BernoulliMask` `OpTag`, so a
@@ -2572,7 +2572,7 @@ across NaN/inf/−0/subnormal probes with NO exclusion (unlike topk, which was
 torch-faithful and had to exclude NaN/tie rows from its bespoke cross-check).
 
 **Fuel contract (honest miss — AOT-ONLY):** an im2col emits **no FKC contract**.
-`derive_pattern` rejects it as `NotElementwise` at `pattern.rs:229` BEFORE any body
+`derive_pattern` rejects it as `NotElementwise` at `pattern.rs:260-261` (the `Access::Elementwise` guard in `derive_pattern`) BEFORE any body
 walk (`Access::Im2Col` is non-Elementwise), so `pattern = None` and `contract()`
 withholds — the same wall that withholds Window/Scan/RowSort (pinned by
 `contract::tests::im2col_is_an_honest_miss_no_contract`). The AOT-only posture is
