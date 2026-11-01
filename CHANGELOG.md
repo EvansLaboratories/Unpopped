@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.40.15` — the plan oracle evaluates integer reductions at `I8`, `U8`, `I16` and `U16` (additive, ROADMAP E19)
+
+`oracle::evaluate` panicked on any integer reduction narrower than `I32` ("integer reduction dtype I8 out of scope"), so openclownfish X2 PR1 (#33), which lifts narrow-integer elementwise ops and scans, could not check a narrow reduction against the reference. It now evaluates `Sum`, `Prod`, `Max` and `Min` at `I8`/`U8`/`I16`/`U16` by the IR's own rule: arithmetic at an integer dtype wraps at the dtype's width, so a `Sum` is the wrapping fold and a `Prod` the wrapping product (the accumulator is exact `i128` and the store wraps, which equals wrapping at every step for `Sum` and `Prod`), and `Max`/`Min` are exact. `tests/oracle_narrow_int_reduction.rs` compares the oracle with the host's own `wrapping_add`, `wrapping_mul`, `max` and `min` over the native types, with values chosen to overflow; it was committed failing first. Integer `Mean` and the dtypes `U32`/`U64` are still out of scope (the same panic). The plan gate is unchanged. Not covered by this test: a heterogeneous-output narrow reduction (the any/all/count shapes); those now reach the oracle instead of panicking at the dtype check and are unverified here.
+
 ## `0.40.14` — docs: an options note for compelling callers to use `required_fidelity` (ROADMAP C5)
 
 `docs/options-compelled-fidelity.md`: measured counts of hand-picked `Fidelity` literals and `compare` call sites in Unpopped and the sibling repos (predicate and refs stated), the one asymmetry that shapes the fix (a band tighter than the entitlement is harmless, a looser one is the defect), four options, and a recommendation (`compare_for_plan` that derives the band, a refusal of a looser caller band, a ratchet test). Nothing is built; it needs a ruling. No code change.
