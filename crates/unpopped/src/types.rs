@@ -811,6 +811,15 @@ pub fn has_packed(e: &ScalarExpr) -> bool {
 /// this is `false` types to `compute` everywhere and needs no further type work.
 #[must_use]
 pub fn is_typed(e: &ScalarExpr) -> bool {
+    is_typed_beyond(e, None)
+}
+
+/// [`is_typed`], except that a `ConstInt` of exactly the `compute` dtype is not typed: at an integer
+/// compute dtype that leaf IS compute-typed. `None` is plain [`is_typed`]. Used only by the plan
+/// gate for a backend that declares `Backend::total_integer_ops`.
+#[must_use]
+pub(crate) fn is_typed_beyond(e: &ScalarExpr, compute: Option<ElementKind>) -> bool {
+    let is_typed = |x: &ScalarExpr| is_typed_beyond(x, compute);
     match e {
         ScalarExpr::Cast(..) | ScalarExpr::Bitcast(..) => true,
         // A packed value is never the compute dtype; `Extract` is typed because its operand is.
@@ -822,7 +831,8 @@ pub fn is_typed(e: &ScalarExpr) -> bool {
         | ScalarExpr::Coord(_) => false,
         // Integer-typed leaves are the typed expressions' second kind: their type is not
         // the compute dtype.
-        ScalarExpr::CoordInt(..) | ScalarExpr::ConstInt(..) => true,
+        ScalarExpr::ConstInt(_, t) => compute != Some(*t),
+        ScalarExpr::CoordInt(..) => true,
         // A local's type comes from its kernel's declaration, never the compute dtype.
         ScalarExpr::Local(_) => true,
         // An execution id is `U32`, never the compute dtype.

@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.40.7` — integer `Div` and `ConstInt` at an integer compute dtype, per backend (additive, ROADMAP E16)
+
+New defaulted `Backend::total_integer_ops(&self) -> bool` (`false`). A backend returning `true` declares that its `arith`/`binary`/`const_int` seams spell integer `Div`, `Shl`/`Shr` and integer constants by the total rule in `docs/int-div-shift-semantics.md` (the single source; not restated here). `try_generate` and `generate_variants` then admit an Elementwise integer `Div` at `I32`/`I64`/`U32`/`U64` and a `ConstInt` leaf at an integer compute dtype; new `plan::try_build_plan_for` and `plan::build_plan_for` take the backend. `try_build_plan` and `build_plan` are unchanged and still refuse both. A defaulted trait method breaks no implementor, so this is additive.
+
+**Baracuda, Vulkane and openclownfish are unaffected**: they do not override the method, so they are refused exactly as before and must opt in separately, each after adopting the guards and the boundary vectors. **Rockfish is the first opt-in.** `tests/integer_div_gate_is_opt_in.rs` pins the unchanged refusal of a backend that does not opt in.
+
 ## `0.40.6` — docs: two stale line cites in `ondevice/README.md` (ROADMAP X7, part)
 
 `contract.rs:245` is now `contract.rs:345` (the `op.n_outputs() > 1` guard) and `pattern.rs:229` is now `pattern.rs:260-261` (the `Access::Elementwise` guard), each named by what it guards so the next drift is readable. No code change.

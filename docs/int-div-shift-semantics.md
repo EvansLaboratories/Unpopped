@@ -21,6 +21,14 @@ repository (Baracuda CUDA, Vulkane Slang/SPIR-V, openclownfish OpenCL C, Rockfis
 `<<`. Each adopts the guards on its own schedule with the same boundary vectors (GPU targets on the self-hosted runner, never
 `#[ignore]`); the gate opens when they have. ROADMAP E16.
 
+**The gate opens per backend (0.40.7).** `Backend::total_integer_ops()` defaults to `false`; a backend that returns `true` is
+saying its `arith`/`binary`/`const_int` seams spell the rules above, and only then does `try_generate` admit an Elementwise
+integer `Div` at `I32`/`I64`/`U32`/`U64` and a `ConstInt` leaf at an integer compute dtype. A backend that does not override it is
+refused exactly as before (`tests/integer_div_gate_is_opt_in.rs`). This document stays the single source of the semantics; the
+method's docs and the CHANGELOG point here rather than restate them. `Shl`/`Shr` were already legal at `I32`/`I64` (8- and
+16-bit operands stay leaf-only) and are unchanged. Opted in so far: Rockfish (first); Baracuda, Vulkane and openclownfish are
+unaffected and opt in separately.
+
 _The note below is the measured design as written before the ruling._
 
 ## Where the IR stands today
