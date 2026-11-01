@@ -262,6 +262,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-cpp"
+version = "0.23.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df2196ea9d47b4ab4a31b9297eaa5a5d19a0b121dceb9f118f6790ad0ab94743"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-language"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -285,7 +295,7 @@ checksum = "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954"
 
 [[package]]
 name = "unpopped"
-version = "0.40.8"
+version = "0.40.9"
 dependencies = [
  "half",
  "kiss-classify-vocab",
@@ -295,13 +305,14 @@ dependencies = [
  "serde",
  "serde_json",
  "tree-sitter",
+ "tree-sitter-cpp",
  "tree-sitter-slang",
  "unpopped-vocab",
 ]
 
 [[package]]
 name = "unpopped-conformance"
-version = "0.40.8"
+version = "0.40.9"
 dependencies = [
  "unpopped",
  "unpopped-cpu-c",
@@ -310,7 +321,7 @@ dependencies = [
 
 [[package]]
 name = "unpopped-cpu-c"
-version = "0.40.8"
+version = "0.40.9"
 dependencies = [
  "kiss-ref-core",
  "unpopped",
@@ -319,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "unpopped-vocab"
-version = "0.40.8"
+version = "0.40.9"
 dependencies = [
  "float8",
  "half",

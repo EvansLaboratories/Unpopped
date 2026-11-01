@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.40.9` — lift a `Mean` post and exclusive/reverse scans from OpenCL C spellings (additive, ROADMAP E18 part 1)
+
+`convert::lift_reduction` recognises `out[0] = acc / (float)n` after `acc += in[i]` over `i < n` as `ReduceOp::Mean`; the divisor must be the loop bound, so `acc / (float)k` for any other `k` still declines. `convert::lift_scan` reads `out[i] = acc; acc += in[i];` (the store before the update) as exclusive and a `for` counting down to zero (`i >= 0` with `--i`, `i--` or `i -= 1`) as reverse; the two compose. A descending loop that stops anywhere else is declined rather than read as the forward scan, which it would otherwise have been silently. Forward inclusive scans are unchanged. `tests/opencl_idioms_lift.rs` takes openclownfish's snippets as input and parses them with `tree-sitter-cpp` (a new dev-dependency: `in` and `out` are keywords in the Slang grammar). The N-D `get_global_id(d)` and 2-D row-loop idioms are the next E18 PR.
+
 ## `0.40.8` — the plan-level oracle evaluates integer `Div` by the total rule (fix, ROADMAP E16)
 
 `oracle::evaluate` carried `unreachable!("integer Div is refused at the plan gate")` for an integer `Div`. 0.40.7 let a backend that declares `Backend::total_integer_ops` past that gate, so a plan for such a backend panicked in the oracle. It now follows `docs/int-div-shift-semantics.md` (single source; not restated): the same rule the kernel interpreter has, written separately. `tests/kernel_int_div_shift_lift_agrees.rs` runs `Div`, `Shl` and `Shr` at `I32`/`I64`/`U32`/`U64` over the full cross product of boundary values through the plan oracle and the lifted kernel, byte for byte; two seeded mutants (a zero divisor giving 0, floor instead of truncating division) are caught. The gate is unchanged, and so are Baracuda, Vulkane and openclownfish (not opted in).
