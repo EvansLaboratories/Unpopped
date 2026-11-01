@@ -2211,7 +2211,7 @@ pub(crate) fn check_int_op_admissibility_for(
         return Err(PlanError::InadmissibleOpAtDtype {
             dtype,
             detail: format!(
-                "op '{}': an integer Mean reduction has no defined semantics (no rounding rule                  for the quotient), so {dtype:?} must miss honestly; use Sum and divide, or a float dtype",
+                "op '{}': an integer Mean reduction has no defined semantics (no rounding rule for the quotient), so {dtype:?} must miss honestly; use Sum and divide, or a float dtype",
                 op.name
             ),
         });
