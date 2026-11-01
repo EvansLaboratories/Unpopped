@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.40.10` — FIX: the plan oracle's integer `Max`, `Min` and comparisons are exact above 2^53
+
+`oracle::evaluate` took `Max`, `Min` and every comparison at an INTEGER compute dtype through `f64`, which holds an integer exactly only up to 2^53. At `I64`/`U64` that is a **silent wrong value**: `max(2^53 + 1, 2^53 + 1)` came out `2^53`, and `i64::MAX == i64::MAX - 1` came out true. They are now exact `i128`. The unit test `oracle::int64_exactness_tests` compares the oracle with the host's own integer operators over `Max`, `Min` and all six comparisons at both dtypes and fails before this change.
+
+**Reach, measured at 0.40.8 (`b31af2b`):** no published plan could reach it. The plan gate refuses an integer elementwise `Max`/`Min` and an integer elementwise comparison, and the reduction-predicate comparison admits only leaves against 0 or 1. The wrong value was latent in the oracle and was found while testing the integer `Rem` work (which admits comparisons per backend); it is fixed here first, on its own, because it is a correctness fix. Older versions were not measured. A hand-built plan that bypasses the gate would have hit it.
+
 ## `0.40.9` — lift a `Mean` post and exclusive/reverse scans from OpenCL C spellings (additive, ROADMAP E18 part 1)
 
 `convert::lift_reduction` recognises `out[0] = acc / (float)n` after `acc += in[i]` over `i < n` as `ReduceOp::Mean`; the divisor must be the loop bound, so `acc / (float)k` for any other `k` still declines. `convert::lift_scan` reads `out[i] = acc; acc += in[i];` (the store before the update) as exclusive and a `for` counting down to zero (`i >= 0` with `--i`, `i--` or `i -= 1`) as reverse; the two compose. A descending loop that stops anywhere else is declined rather than read as the forward scan, which it would otherwise have been silently. Forward inclusive scans are unchanged. `tests/opencl_idioms_lift.rs` takes openclownfish's snippets as input and parses them with `tree-sitter-cpp` (a new dev-dependency: `in` and `out` are keywords in the Slang grammar). The N-D `get_global_id(d)` and 2-D row-loop idioms are the next E18 PR.

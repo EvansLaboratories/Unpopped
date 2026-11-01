@@ -1909,6 +1909,22 @@ fn arith(
     }
 }
 
+/// A comparison (the compute type's 1/0) or `Max`/`Min` over two integers, in exact `i128`. Going
+/// through `f64` (as the float path does) is exact only below 2^53: at a 64-bit compute dtype
+/// `max(2^53 + 1, 2^53 + 1)` came out `2^53` and `i64::MAX == i64::MAX - 1` came out true.
+fn int_cmp_or_extreme(op: BinaryOp, x: i128, y: i128) -> i128 {
+    match op {
+        BinaryOp::Max => x.max(y),
+        BinaryOp::Min => x.min(y),
+        BinaryOp::CmpEq => i128::from(x == y),
+        BinaryOp::CmpNe => i128::from(x != y),
+        BinaryOp::CmpLt => i128::from(x < y),
+        BinaryOp::CmpLe => i128::from(x <= y),
+        BinaryOp::CmpGt => i128::from(x > y),
+        _ => i128::from(x >= y),
+    }
+}
+
 /// `Binary` node: int-only ops (bitwise/shift/logical) route to the integer
 /// speller; `Nextafter` is dtype-aware; everything else is the float speller.
 fn eval_binary(op: BinaryOp, a: &ScalarExpr, b: &ScalarExpr, ev: &Eval<'_>) -> Val {
@@ -1918,6 +1934,13 @@ fn eval_binary(op: BinaryOp, a: &ScalarExpr, b: &ScalarExpr, ev: &Eval<'_>) -> V
             eval(a, ev).i128(),
             eval(b, ev).i128(),
             ev.dtype,
+        ));
+    }
+    if is_int(ev.dtype) && (op.is_cmp() || matches!(op, BinaryOp::Max | BinaryOp::Min)) {
+        return Val::Int(int_cmp_or_extreme(
+            op,
+            eval(a, ev).i128(),
+            eval(b, ev).i128(),
         ));
     }
     if matches!(op, BinaryOp::Nextafter) {
