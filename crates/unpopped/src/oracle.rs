@@ -1418,6 +1418,19 @@ fn binary_op_f64(op: BinaryOp, a: f64, b: f64) -> f64 {
     }
 }
 
+/// Integer `x / y` by the total rule (`docs/int-div-shift-semantics.md`, written independently of the
+/// kernel interpreter's `int_div`): a zero divisor gives `x`, a signed `MIN / -1` gives `MIN`, anything
+/// else truncates toward zero. Reached only for a backend that declares `total_integer_ops`, since the
+/// plan gate refuses integer `Div` otherwise.
+fn int_div_total(dt: ElementKind, x: i128, y: i128) -> i128 {
+    let signed_min = crate::types::int_range(dt).is_some_and(|(lo, _)| lo < 0 && x == lo);
+    if y == 0 || (signed_min && y == -1) {
+        x
+    } else {
+        x / y
+    }
+}
+
 /// Independent integer binary-op evaluator (bitwise/shift/logical), wrapping at
 /// the emitter's C promotion width. Matches the bespoke functor definitions.
 fn binary_op_int(op: BinaryOp, a: i128, b: i128, dt: ElementKind) -> i128 {
@@ -1618,7 +1631,7 @@ fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
             a,
             b,
             |x, y| x / y,
-            |_, _| unreachable!("integer Div is refused at the plan gate"),
+            |x, y| int_div_total(ev.dtype, x, y),
             // Smith's algorithm — scale by the larger denominator component so
             // no intermediate squares. The emitted C runs the same recurrence;
             // the textbook form would agree to rounding on well-conditioned
