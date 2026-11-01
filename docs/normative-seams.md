@@ -202,7 +202,24 @@ upstream `float8` crate 0.7.0 has `F8E5M2::INFINITY = 0x7B` (max-finite) and
 | | |
 |---|---|
 | **What we decide** | The exact strings our declines and panics carry |
-| **Status** | **REPORTED** (recorded in this workspace's memory; not re-measured for this document) |
+| **Status** | **MEASURED 2026-11-01** (below); the 34/18 figures in this workspace's memory were reported, not re-measured |
+
+**Measurement.** Predicate: a `#[should_panic(expected = "...")]` whose literal is a substring of the concatenated text of `crates/*/src/**/*.rs` at Unpopped `5e94914`
+(`git ls-files`, 68 source files). Per repo, at the checked-out HEAD (not `origin/main`; `fuel-ign1` is on branch `ignore-step1-gpu-runner`):
+
+| repo @ HEAD | `should_panic(expected)` | literal found in Unpopped source |
+|---|---|---|
+| baracuda `a576fc04` | 72 | 53 |
+| fuel `627c2bb7c` | 43 | 15 |
+| fuel-ign1 `95e67e08e` | 40 | 14 |
+| openclownfish `7a76156` | 1 | 1 |
+| vulkane `c759fb6` | 2 | 0 |
+| bonefish, rockfish, unpopped-harness | 0 | 0 |
+
+What this does and does not say: a *found* literal is a lower bound on tests that depend on our text (the test may panic from our code or from a copy of the same words);
+a *not found* literal is not proof of independence (an expected string that spans a `{}` format argument will not appear verbatim in source). `fuel` and `fuel-ign1` are
+two checkouts of one project, so their counts are not independent. The reported 34 is stale: Baracuda alone has 53 matching literals now. The guard stays on our side:
+`tests/plan_gate_declines_malformed_input.rs` pins the plan-gate text; the other 0.38.x-0.40.x panics (oracle window tap, shift counts) have their own pin tests.
 
 Adopter tests match our panic/decline strings. **JUDGED:** that makes message text
 a compatibility surface whether or not anyone intended it, and the guard has to
