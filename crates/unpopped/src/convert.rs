@@ -419,11 +419,15 @@ fn lift_scan_store(
     names: &Names,
 ) -> Result<Lifted, LiftError> {
     let out_name = names.out;
-    let acc = find_running_out_store(tree.root_node(), src, out_name).ok_or_else(|| {
-        LiftError::Unrecognized(format!("no running `{out_name}[i] = acc` scan store"))
-    })?;
+    let (acc, store) =
+        find_running_out_store(tree.root_node(), src, out_name).ok_or_else(|| {
+            LiftError::Unrecognized(format!("no running `{out_name}[i] = acc` scan store"))
+        })?;
     let (op, pre_node) = find_accumulation(tree.root_node(), src, &acc).ok_or_else(|| {
         LiftError::Unrecognized(format!("no recognizable scan update of `{acc}`"))
+    })?;
+    let (reverse, exclusive) = scan_direction(store, pre_node, src).ok_or_else(|| {
+        LiftError::Unrecognized("a descending scan loop that does not end at index 0".into())
     })?;
     let idx_var = first_input_index(pre_node, src, names)
         .ok_or_else(|| LiftError::Unrecognized("scan body reads no inK[idx]".into()))?;
@@ -443,9 +447,9 @@ fn lift_scan_store(
             n_inputs,
             dtypes,
             op,
-            0,     // axis — 1-D reading; caller sets higher rank via the key
-            false, // reverse
-            false, // exclusive — naive `acc op= in; out[i] = acc` is inclusive
+            0, // axis — 1-D reading; caller sets higher rank via the key
+            reverse,
+            exclusive,
             Expr(pre),
             crate::ir::reduced(0),
         ),
@@ -460,7 +464,11 @@ fn lift_scan_store(
 /// The identifier index (vs. a numeric literal) distinguishes a scan's running
 /// store from a reduction's scalar `out[0] = acc`; the bare-identifier RHS
 /// distinguishes it from an elementwise `out[i] = <expr>`.
-fn find_running_out_store(node: Node, src: &str, out_name: &str) -> Option<String> {
+fn find_running_out_store<'t>(
+    node: Node<'t>,
+    src: &str,
+    out_name: &str,
+) -> Option<(String, Node<'t>)> {
     if node.kind() == "assignment_expression"
         && let (Some(lhs), Some(rhs)) = (
             node.child_by_field_name("left"),
@@ -474,13 +482,50 @@ fn find_running_out_store(node: Node, src: &str, out_name: &str) -> Option<Strin
             == Some(out_name)
         && subscript_index(lhs, src).is_some()
     {
-        return Some(rhs.utf8_text(src.as_bytes()).ok()?.to_string());
+        return Some((rhs.utf8_text(src.as_bytes()).ok()?.to_string(), node));
     }
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         if let Some(hit) = find_running_out_store(child, src, out_name) {
             return Some(hit);
         }
+    }
+    None
+}
+
+/// `(reverse, exclusive)` of a scan whose running store is `store` and whose accumulator update
+/// reads `update` (ROADMAP E18). **Exclusive**: the store comes BEFORE the update in the loop
+/// body (`out[i] = acc; acc += in[i];`), so `out[i]` excludes element `i`. **Reverse**: the
+/// enclosing `for` counts down to zero (`i >= 0` with `--i`, `i--` or `i -= 1`), the only
+/// descending shape that visits every element. A descending loop that stops anywhere else
+/// skips elements, so it is `None` (declined), never read as the forward scan.
+fn scan_direction(store: Node, update: Node, src: &str) -> Option<(bool, bool)> {
+    let exclusive = store.start_byte() < update.start_byte();
+    let Some(f) = enclosing_for(store) else {
+        return Some((false, exclusive));
+    };
+    let text = |n: Option<Node>| {
+        n.and_then(|n| n.utf8_text(src.as_bytes()).ok())
+            .unwrap_or("")
+            .replace(' ', "")
+    };
+    let cond = text(f.child_by_field_name("condition"));
+    let step = text(f.child_by_field_name("update"));
+    if !(step.contains("--") || step.contains("-=")) {
+        return Some((false, exclusive));
+    }
+    (cond.ends_with(">=0") && (step.contains("--") || step.ends_with("-=1")))
+        .then_some((true, exclusive))
+}
+
+/// The nearest `for_statement` around `node`.
+fn enclosing_for(node: Node) -> Option<Node> {
+    let mut up = node.parent();
+    while let Some(n) = up {
+        if n.kind() == "for_statement" {
+            return Some(n);
+        }
+        up = n.parent();
     }
     None
 }
@@ -496,12 +541,24 @@ fn lift_reduce_store(
     names: &Names,
 ) -> Result<Lifted, LiftError> {
     let out_name = names.out;
-    let acc = find_scalar_out_store(tree.root_node(), src, out_name).ok_or_else(|| {
-        LiftError::Unrecognized(format!("no scalar `{out_name}[..] = acc` store"))
-    })?;
+    let (acc, divisor) =
+        find_scalar_out_store(tree.root_node(), src, out_name).ok_or_else(|| {
+            LiftError::Unrecognized(format!("no scalar `{out_name}[..] = acc` store"))
+        })?;
     let (op, body_node) = find_accumulation(tree.root_node(), src, &acc).ok_or_else(|| {
         LiftError::Unrecognized(format!("no recognizable reduce update of `{acc}`"))
     })?;
+    let op = match divisor {
+        None => op,
+        Some(d) if op == ReduceOp::Sum && divides_by_loop_bound(d, body_node, src) => {
+            ReduceOp::Mean
+        }
+        Some(_) => {
+            return Err(LiftError::Unrecognized(format!(
+                "`{out_name}[..] = {acc} / d` is a Mean only when `{acc}` is a Sum and `d` is the loop bound"
+            )));
+        }
+    };
     let idx_var = first_input_index(body_node, src, names)
         .ok_or_else(|| LiftError::Unrecognized("reduction body reads no inK[idx]".into()))?;
     let mut w = Walk {
@@ -522,27 +579,19 @@ fn lift_reduce_store(
     })
 }
 
-/// Find a `{out_name}[<number>] = <ident>` store and return the stored
-/// accumulator identifier. The numeric index (vs. an identifier) is what
-/// distinguishes a scalar reduction store from an elementwise `out[i] = ...`.
-fn find_scalar_out_store(node: Node, src: &str, out_name: &str) -> Option<String> {
-    if node.kind() == "assignment_expression"
-        && let (Some(lhs), Some(rhs)) = (
-            node.child_by_field_name("left"),
-            node.child_by_field_name("right"),
-        )
-        && lhs.kind() == "subscript_expression"
-        && rhs.kind() == "identifier"
-        && lhs
-            .child_by_field_name("argument")
-            .and_then(|a| a.utf8_text(src.as_bytes()).ok())
-            == Some(out_name)
-        && let Some(indices) = lhs.child_by_field_name("indices")
-    {
-        let mut c = indices.walk();
-        let kids: Vec<Node> = indices.named_children(&mut c).collect();
-        if kids.len() == 1 && kids[0].kind() == "number_literal" {
-            return Some(rhs.utf8_text(src.as_bytes()).ok()?.to_string());
+/// Find a `{out_name}[<number>] = <ident>` store and return the stored accumulator
+/// identifier. The numeric index (vs. an identifier) is what distinguishes a scalar
+/// reduction store from an elementwise `out[i] = ...`. The stored value may also be
+/// `<ident> / <d>` (a `Mean` post, ROADMAP E18): the divisor node comes back beside the
+/// identifier for the caller to check against the loop bound.
+fn find_scalar_out_store<'t>(
+    node: Node<'t>,
+    src: &str,
+    out_name: &str,
+) -> Option<(String, Option<Node<'t>>)> {
+    if node.kind() == "assignment_expression" {
+        if let Some(hit) = scalar_store_of(node, src, out_name) {
+            return Some(hit);
         }
     }
     let mut cursor = node.walk();
@@ -552,6 +601,76 @@ fn find_scalar_out_store(node: Node, src: &str, out_name: &str) -> Option<String
         }
     }
     None
+}
+
+/// `assign` as a scalar `{out_name}[<number>] = acc` or `= acc / d` store.
+fn scalar_store_of<'t>(
+    assign: Node<'t>,
+    src: &str,
+    out_name: &str,
+) -> Option<(String, Option<Node<'t>>)> {
+    let lhs = assign.child_by_field_name("left")?;
+    let rhs = assign.child_by_field_name("right")?;
+    let named_out = lhs
+        .child_by_field_name("argument")?
+        .utf8_text(src.as_bytes())
+        .ok()?
+        == out_name;
+    if lhs.kind() != "subscript_expression" || !named_out {
+        return None;
+    }
+    let indices = lhs.child_by_field_name("indices")?;
+    let mut c = indices.walk();
+    let kids: Vec<Node> = indices.named_children(&mut c).collect();
+    if kids.len() != 1 || kids[0].kind() != "number_literal" {
+        return None;
+    }
+    let ident = |n: Node| n.utf8_text(src.as_bytes()).ok().map(str::to_string);
+    if rhs.kind() == "identifier" {
+        return Some((ident(rhs)?, None));
+    }
+    let slash = rhs.kind() == "binary_expression"
+        && rhs
+            .child_by_field_name("operator")?
+            .utf8_text(src.as_bytes())
+            .ok()?
+            == "/";
+    let left = rhs.child_by_field_name("left")?;
+    if slash && left.kind() == "identifier" {
+        return Some((ident(left)?, rhs.child_by_field_name("right")));
+    }
+    None
+}
+
+/// Whether `divisor` (peeling parentheses and a cast, `(float)n`) is the very expression the
+/// accumulating loop runs to: the `for` around `update` has the condition `v < bound` and the
+/// divisor's text is `bound`. A divisor that is any other number is not a Mean.
+fn divides_by_loop_bound(divisor: Node, update: Node, src: &str) -> bool {
+    let Some(f) = enclosing_for(update) else {
+        return false;
+    };
+    let Some(cond) = f.child_by_field_name("condition") else {
+        return false;
+    };
+    let text = |n: Node| n.utf8_text(src.as_bytes()).unwrap_or("").replace(' ', "");
+    let bound = match cond.child_by_field_name("right") {
+        Some(r) if text(cond).contains('<') => text(r),
+        _ => return false,
+    };
+    peel_cast(divisor, src) == bound
+}
+
+/// `n` from `n`, `(n)`, `(float)n` or `(float)(n)`: the text of what is being divided by.
+fn peel_cast(n: Node, src: &str) -> String {
+    match n.kind() {
+        "parenthesized_expression" => n
+            .named_child(0)
+            .map_or_else(String::new, |c| peel_cast(c, src)),
+        "cast_expression" => n
+            .child_by_field_name("value")
+            .map_or_else(String::new, |c| peel_cast(c, src)),
+        _ => n.utf8_text(src.as_bytes()).unwrap_or("").replace(' ', ""),
+    }
 }
 
 /// Find the reduce-update assignment of `acc` — `acc += e`, `acc *= e`,
