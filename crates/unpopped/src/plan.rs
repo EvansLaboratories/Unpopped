@@ -7,6 +7,7 @@
 //! lowers the plan to a concrete language. Choosing the schedule here, not in
 //! the backend, keeps the decision shared across every backend.
 
+use crate::backend::Backend;
 use crate::ir::{
     Access, BaseOffset, DagNode, OpDef, QualOp, ReadIndex, ReduceOp, ReduceStage, RoundMode,
     ScalarExpr, SortLimit, SortOrder, SortOut, View, WriteCombine, WriteIndex,
@@ -553,14 +554,51 @@ pub fn try_build_plan<'a>(
     op: &'a OpDef,
     key: &'a StructureKey,
 ) -> Result<KernelPlan<'a>, PlanError> {
+    try_build_plan_with(op, key, false)
+}
+
+/// [`try_build_plan`] for a backend that declares [`Backend::total_integer_ops`]: integer `Div`
+/// and an integer-typed constant are admitted at an integer compute dtype, because that backend
+/// spells them by the total rule (`docs/int-div-shift-semantics.md`). A backend that does not
+/// override it gets exactly [`try_build_plan`]'s refusals. [`crate::try_generate`] calls this.
+///
+/// # Errors
+/// As [`try_build_plan`].
+pub fn try_build_plan_for<'a>(
+    op: &'a OpDef,
+    key: &'a StructureKey,
+    backend: &dyn Backend,
+) -> Result<KernelPlan<'a>, PlanError> {
+    try_build_plan_with(op, key, backend.total_integer_ops())
+}
+
+/// [`build_plan`] for a backend that declares [`Backend::total_integer_ops`]; see
+/// [`try_build_plan_for`].
+///
+/// # Panics
+/// Where [`build_plan`] does.
+#[must_use]
+pub fn build_plan_for<'a>(
+    op: &'a OpDef,
+    key: &'a StructureKey,
+    backend: &dyn Backend,
+) -> KernelPlan<'a> {
+    try_build_plan_for(op, key, backend).unwrap_or_else(|e| panic!("{e}"))
+}
+
+fn try_build_plan_with<'a>(
+    op: &'a OpDef,
+    key: &'a StructureKey,
+    total_ints: bool,
+) -> Result<KernelPlan<'a>, PlanError> {
     check_dtype_is_a_compute_dtype(key.dtype)?;
     check_no_half_nextafter(op, key.dtype)?;
-    check_int_op_admissibility(op, key.dtype)?;
+    check_int_op_admissibility_for(op, key.dtype, total_ints)?;
     check_complex_op_admissibility(op, key.dtype)?;
     check_bool_op_admissibility(op, key.dtype)?;
     check_coord_admissibility(op, key)?;
     check_fma_admissibility(op, key.dtype)?;
-    check_typed_admissibility(op, key.dtype)?;
+    check_typed_admissibility_for(op, key.dtype, total_ints)?;
     check_qualified_admissibility(op, key.dtype)?;
     if let Access::RowReduce {
         ref stages,
@@ -2128,6 +2166,18 @@ pub fn is_int_dtype(dt: ElementKind) -> bool {
 ///    that round-trip losslessly through `Const`'s dtype-oblivious f64
 ///    spelling — see `backend::const_lit`); anything else still declines.
 pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Result<(), PlanError> {
+    check_int_op_admissibility_for(op, dtype, false)
+}
+
+/// [`check_int_op_admissibility`] with `total_ints`: the backend spells integer `Div` and
+/// `ConstInt` by the total rule (`Backend::total_integer_ops`). It admits an Elementwise
+/// `Div` at `I32`/`I64`/`U32`/`U64` and a `ConstInt` leaf at an integer compute dtype, and
+/// nothing else.
+pub(crate) fn check_int_op_admissibility_for(
+    op: &OpDef,
+    dtype: ElementKind,
+    total_ints: bool,
+) -> Result<(), PlanError> {
     // Increment 5 — bincount exemption: a scatter with a bare `Const` body is the
     // integer-count histogram (`out[x[i]] += 1`). The `Const(1)` is NOT compute
     // (no int arithmetic, no double-math hazard) — it is a store literal the
@@ -2171,6 +2221,7 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
         elementwise: bool,
         in_reduction: bool,
         at_reduction_root: bool,
+        total: bool,
     ) -> Result<(), String> {
         match e {
             ScalarExpr::Input(_) | ScalarExpr::Reduced(_) => {}
@@ -2182,6 +2233,7 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
             // moot for rule 3: an int-only op's operands are pinned to leaf
             // Inputs at 8-bit before Coord could ever appear there.
             ScalarExpr::Coord(_) => {}
+            ScalarExpr::ConstInt(..) if total && elementwise => {}
             ScalarExpr::CoordInt(..) | ScalarExpr::ConstInt(..) => {
                 if int_dt {
                     return Err(format!(
@@ -2195,7 +2247,16 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
                         "op '{op_name}': Qualified at int compute dtype {dtype:?} is                          rejected, rounding/ftz/approx qualifiers are f32-compute only in v1"
                     ));
                 }
-                walk(x, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+                walk(
+                    x,
+                    op_name,
+                    dtype,
+                    int_dt,
+                    elementwise,
+                    in_reduction,
+                    false,
+                    total,
+                )?;
             }
             ScalarExpr::Pack(_)
             | ScalarExpr::Extract(..)
@@ -2212,7 +2273,16 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
                         "op '{op_name}': Cast/Bitcast at int compute dtype {dtype:?} is                          rejected — typed expressions are f32/f32s/f64-compute only in v1"
                     ));
                 }
-                walk(x, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+                walk(
+                    x,
+                    op_name,
+                    dtype,
+                    int_dt,
+                    elementwise,
+                    in_reduction,
+                    false,
+                    total,
+                )?;
             }
             ScalarExpr::Const(_) => {
                 if !(!int_dt) {
@@ -2239,10 +2309,25 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
                      must miss honestly"
                     ));
                 }
-                walk(x, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+                walk(
+                    x,
+                    op_name,
+                    dtype,
+                    int_dt,
+                    elementwise,
+                    in_reduction,
+                    false,
+                    total,
+                )?;
             }
             ScalarExpr::Div(a, b) => {
-                if !(!int_dt) {
+                let total_int_div = total
+                    && elementwise
+                    && matches!(
+                        dtype,
+                        ElementKind::I32 | ElementKind::I64 | ElementKind::U32 | ElementKind::U64
+                    );
+                if !(!int_dt) && !total_int_div {
                     return Err(format!(
                         "op '{op_name}': integer division is rejected at {dtype:?} — the \
                      bespoke elementwise surface has no int div (binary_div_fp.cu is \
@@ -2250,8 +2335,26 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
                      miss honestly"
                     ));
                 }
-                walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
-                walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+                walk(
+                    a,
+                    op_name,
+                    dtype,
+                    int_dt,
+                    elementwise,
+                    in_reduction,
+                    false,
+                    total,
+                )?;
+                walk(
+                    b,
+                    op_name,
+                    dtype,
+                    int_dt,
+                    elementwise,
+                    in_reduction,
+                    false,
+                    total,
+                )?;
             }
             ScalarExpr::Binary(bop, a, b) => {
                 if bop.is_int_only() {
@@ -2325,8 +2428,26 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
                             }
                         }
                     }
-                    walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
-                    walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+                    walk(
+                        a,
+                        op_name,
+                        dtype,
+                        int_dt,
+                        elementwise,
+                        in_reduction,
+                        false,
+                        total,
+                    )?;
+                    walk(
+                        b,
+                        op_name,
+                        dtype,
+                        int_dt,
+                        elementwise,
+                        in_reduction,
+                        false,
+                        total,
+                    )?;
                 } else if int_dt && in_reduction && at_reduction_root && bop.is_cmp() {
                     // Rule 4: an int-dtype Cmp* is admitted HERE ONLY — the
                     // reduction body/post predicate position of any/all/count
@@ -2409,8 +2530,26 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
                          out of scope for the any/all/count fused-predicate lift)"
                         ));
                     }
-                    walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
-                    walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+                    walk(
+                        a,
+                        op_name,
+                        dtype,
+                        int_dt,
+                        elementwise,
+                        in_reduction,
+                        false,
+                        total,
+                    )?;
+                    walk(
+                        b,
+                        op_name,
+                        dtype,
+                        int_dt,
+                        elementwise,
+                        in_reduction,
+                        false,
+                        total,
+                    )?;
                 }
             }
             ScalarExpr::Add(a, b) | ScalarExpr::Sub(a, b) | ScalarExpr::Mul(a, b) => {
@@ -2421,8 +2560,26 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
                 // composed-predicate leak: a Cmp* nested here (e.g. `Add(Cmp(..),
                 // Cmp(..))`) now falls to the fail-closed reject above instead of
                 // being admitted.
-                walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
-                walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+                walk(
+                    a,
+                    op_name,
+                    dtype,
+                    int_dt,
+                    elementwise,
+                    in_reduction,
+                    false,
+                    total,
+                )?;
+                walk(
+                    b,
+                    op_name,
+                    dtype,
+                    int_dt,
+                    elementwise,
+                    in_reduction,
+                    false,
+                    total,
+                )?;
             }
             ScalarExpr::Fma(a, b, c) => {
                 if int_dt {
@@ -2432,9 +2589,36 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
                          must miss honestly"
                     ));
                 }
-                walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
-                walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
-                walk(c, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+                walk(
+                    a,
+                    op_name,
+                    dtype,
+                    int_dt,
+                    elementwise,
+                    in_reduction,
+                    false,
+                    total,
+                )?;
+                walk(
+                    b,
+                    op_name,
+                    dtype,
+                    int_dt,
+                    elementwise,
+                    in_reduction,
+                    false,
+                    total,
+                )?;
+                walk(
+                    c,
+                    op_name,
+                    dtype,
+                    int_dt,
+                    elementwise,
+                    in_reduction,
+                    false,
+                    total,
+                )?;
             }
             ScalarExpr::Select(c, a, b) => {
                 // G1 (WHERE/SELECT): select is rejected OUTRIGHT at every int
@@ -2458,9 +2642,36 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
                      and bespoke where int coverage is a later increment)"
                     ));
                 }
-                walk(c, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
-                walk(a, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
-                walk(b, op_name, dtype, int_dt, elementwise, in_reduction, false)?;
+                walk(
+                    c,
+                    op_name,
+                    dtype,
+                    int_dt,
+                    elementwise,
+                    in_reduction,
+                    false,
+                    total,
+                )?;
+                walk(
+                    a,
+                    op_name,
+                    dtype,
+                    int_dt,
+                    elementwise,
+                    in_reduction,
+                    false,
+                    total,
+                )?;
+                walk(
+                    b,
+                    op_name,
+                    dtype,
+                    int_dt,
+                    elementwise,
+                    in_reduction,
+                    false,
+                    total,
+                )?;
             }
         }
         Ok(())
@@ -2523,6 +2734,7 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
             elementwise,
             in_reduction,
             in_reduction,
+            total_ints,
         )
         .map_err(|detail| PlanError::InadmissibleOpAtDtype { dtype, detail })?;
     }
@@ -3084,17 +3296,25 @@ pub(crate) fn check_coord_admissibility(op: &OpDef, key: &StructureKey) -> Resul
 /// 4. **typed values only at the root or directly under a `Cast`/`Bitcast`**:
 ///    arithmetic, `Select` and the math ops stay compute-typed, because their
 ///    lowering, hoisting and oracle semantics are per compute dtype today.
-pub(crate) fn check_typed_admissibility(op: &OpDef, dtype: ElementKind) -> Result<(), PlanError> {
-    let any_typed = op.output_bodies().iter().any(|e| crate::types::is_typed(e))
+/// The typed-expression gate, with `total_ints` (`Backend::total_integer_ops`): at an integer compute
+/// dtype a `ConstInt` of exactly that dtype is a compute-typed leaf, not a typed value, so it
+/// does not send the body down the Cast/Bitcast rules.
+pub(crate) fn check_typed_admissibility_for(
+    op: &OpDef,
+    dtype: ElementKind,
+    total_ints: bool,
+) -> Result<(), PlanError> {
+    let beyond = (total_ints && is_int_dtype(dtype)).then_some(dtype);
+    let typed = |e: &ScalarExpr| crate::types::is_typed_beyond(e, beyond);
+    let any_typed = op.output_bodies().iter().any(|e| typed(e))
         || match &op.access {
             Access::RowReduce { stages, epilogue } => {
-                stages.iter().any(|s| crate::types::is_typed(&s.pre))
-                    || crate::types::is_typed(epilogue)
+                stages.iter().any(|s| typed(&s.pre)) || typed(epilogue)
             }
-            Access::Contraction { epilogue, .. } => crate::types::is_typed(epilogue),
-            Access::Reduction { post, .. } => crate::types::is_typed(post),
+            Access::Contraction { epilogue, .. } => typed(epilogue),
+            Access::Reduction { post, .. } => typed(post),
             Access::Scan { pre, post, .. } | Access::Window { pre, post, .. } => {
-                crate::types::is_typed(pre) || crate::types::is_typed(post)
+                typed(pre) || typed(post)
             }
             _ => false,
         };

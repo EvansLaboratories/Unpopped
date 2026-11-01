@@ -661,6 +661,19 @@ pub trait Backend {
     /// backend returns `"baracuda"`; the generator's own in-tree reference backends
     /// (CpuC / Slang) return the generator's name.
     fn provider(&self) -> &str;
+    /// Whether this backend spells integer `Div`, `Shl` and `Shr`, and an integer-typed constant
+    /// ([`ScalarExpr::ConstInt`]) at an integer compute dtype, by the **total rule** of
+    /// `docs/int-div-shift-semantics.md` (the single source: a zero divisor, `MIN / -1` and an
+    /// out-of-range shift count have the defined results written there, and an integer remainder
+    /// is the `Select` over the total `Div` that document gives). The default is `false`: the
+    /// plan gate refuses integer `Div` and `ConstInt` at an integer compute dtype exactly as
+    /// before, because a backend that spelled bare `/` would be undefined on a zero divisor.
+    /// Override to `true` only after the backend's `arith`/`binary`/`const_int` seams spell the
+    /// total rule and its boundary vectors pass. [`crate::try_generate`] reads this; the plan
+    /// builders without a backend ([`crate::plan::try_build_plan`]) never assume it.
+    fn total_integer_ops(&self) -> bool {
+        false
+    }
     /// Lower a kernel plan to source, or say why it cannot.
     ///
     /// # Errors

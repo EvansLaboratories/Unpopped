@@ -228,7 +228,7 @@ pub fn try_generate(
     key: &StructureKey,
     backend: &dyn Backend,
 ) -> Result<GeneratedKernel, backend::LowerError> {
-    let mut k = backend.lower(&plan::try_build_plan(op, key)?)?;
+    let mut k = backend.lower(&plan::try_build_plan_for(op, key, backend)?)?;
     k.stamp(provenance_for(key, backend));
     Ok(k)
 }
@@ -240,7 +240,7 @@ pub fn try_generate(
 /// dispatch table records Baracuda's default — Fuel stays the runtime selector.
 #[must_use]
 pub fn generate_variants(op: &OpDef, key: &StructureKey, backend: &dyn Backend) -> Vec<Variant> {
-    let plan = build_plan(op, key);
+    let plan = plan::build_plan_for(op, key, backend);
     // BASE_OFFSET SLICE: an offsetted kernel's OOB guarantee is a CALLER
     // PRECONDITION (the k/n_out trust model, the gext/sext + RowSort-k<=1024
     // class) — no per-element bounds branch is emitted, so the base variant's
