@@ -202,11 +202,14 @@ fn check_atomic(
     value: &ScalarExpr,
     sc: &Scope,
 ) -> Result<(), KernelError> {
-    if let Place::Alloc { alloc, .. } = place
-        && k.allocs
+    let outside_shared = match place {
+        Place::Alloc { alloc, .. } => k
+            .allocs
             .get(*alloc as usize)
-            .is_some_and(|a| a.space != MemorySpace::Shared)
-    {
+            .is_some_and(|a| a.space != MemorySpace::Shared),
+        _ => false,
+    };
+    if outside_shared {
         return Err(KernelError::AtomicUnsupported {
             what: "an atomic on an allocation outside Shared memory",
         });
