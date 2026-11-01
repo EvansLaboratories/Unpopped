@@ -202,11 +202,15 @@ fn check_atomic(
     value: &ScalarExpr,
     sc: &Scope,
 ) -> Result<(), KernelError> {
-    let Place::Logical { buffer, .. } = place else {
+    if let Place::Alloc { alloc, .. } = place
+        && k.allocs
+            .get(*alloc as usize)
+            .is_some_and(|a| a.space != MemorySpace::Shared)
+    {
         return Err(KernelError::AtomicUnsupported {
-            what: "an atomic on an allocation (v1: global buffers only)",
+            what: "an atomic on an allocation outside Shared memory",
         });
-    };
+    }
     let (elem, role) = check_place(k, place, sc)?;
     if !(role.reads() && role.writes()) {
         return Err(KernelError::AtomicUnsupported {
@@ -218,7 +222,6 @@ fn check_atomic(
             what: "an atomic on a non-integer element (v1: integers only)",
         });
     }
-    let _ = buffer;
     if check_expr(k, value, sc)? != Ty::Scalar(elem) {
         return Err(KernelError::TypeMismatch { what: "AtomicRmw" });
     }
