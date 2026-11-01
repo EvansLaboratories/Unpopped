@@ -3613,6 +3613,80 @@ fn reduction_len(plan: &KernelPlan<'_>, operands: &[OperandDesc]) -> u32 {
     u32::try_from(n.max(1)).unwrap_or(u32::MAX)
 }
 
+/// [`compare`] under the band the cell is **entitled to**: [`required_fidelity`] derives it from `plan`
+/// and `operands`, so the caller does not choose one (ROADMAP C5). A band widened until a test passed
+/// cannot arise here, because there is no band argument.
+///
+/// # Errors
+/// The first mismatch, as [`compare`]; or `"no entitlement"` when [`required_fidelity`] declines (a
+/// target with no accuracy table, an unrateable body): there is then nothing to certify against, and
+/// the caller must pick a band and call [`compare`] knowingly.
+pub fn compare_for_plan(
+    expected: &TypedBuffer,
+    actual: &TypedBuffer,
+    plan: &KernelPlan<'_>,
+    operands: &[OperandDesc],
+) -> Result<(), String> {
+    compare_for_plan_with_exactness(expected, actual, plan, operands, None)
+}
+
+/// [`compare_for_plan`] with what a device measured, as [`required_fidelity_with_exactness`].
+///
+/// # Errors
+/// As [`compare_for_plan`].
+pub fn compare_for_plan_with_exactness(
+    expected: &TypedBuffer,
+    actual: &TypedBuffer,
+    plan: &KernelPlan<'_>,
+    operands: &[OperandDesc],
+    measured: Option<crate::exactness::Measured<'_>>,
+) -> Result<(), String> {
+    let entitled =
+        required_fidelity_with_exactness(plan, operands, measured).ok_or_else(no_entitlement)?;
+    compare(expected, actual, entitled)
+}
+
+/// [`compare`] at `band`, but only if `band` is **no looser** than the cell's entitlement: a band tighter
+/// than [`required_fidelity`] is harmless and is the one applied; a looser one is refused, because it is
+/// the defect (a tolerance wider than the kernel's real error). For a caller that has a tighter band of its
+/// own (a backend that is more accurate than the table says).
+///
+/// # Errors
+/// `"... looser than the entitled ..."` for a band looser than the entitlement; `"no entitlement"` as
+/// [`compare_for_plan`]; otherwise the first mismatch, as [`compare`].
+pub fn compare_for_plan_within(
+    expected: &TypedBuffer,
+    actual: &TypedBuffer,
+    plan: &KernelPlan<'_>,
+    operands: &[OperandDesc],
+    band: Fidelity,
+) -> Result<(), String> {
+    let entitled = required_fidelity(plan, operands).ok_or_else(no_entitlement)?;
+    if looser_than(band, entitled) {
+        return Err(format!(
+            "the band {band:?} is looser than the entitled {entitled:?}: a tolerance wider than the cell's              derived error hides a wrong answer; use a band no looser than the entitlement"
+        ));
+    }
+    compare(expected, actual, band)
+}
+
+fn no_entitlement() -> String {
+    "no entitlement: required_fidelity declines for this cell (no accuracy table for the target, or an      unrateable body), so there is nothing to certify a band against; choose one and call `compare`"
+        .to_string()
+}
+
+/// Whether `band` accepts more than `entitled` does. `BitExact` is never looser; a tolerant band is looser
+/// than `BitExact`, and than another tolerant band when either of its two tolerances is larger.
+fn looser_than(band: Fidelity, entitled: Fidelity) -> bool {
+    match (band, entitled) {
+        (Fidelity::BitExact, _) => false,
+        (Fidelity::Tolerant { .. }, Fidelity::BitExact) => true,
+        (Fidelity::Tolerant { rel, abs }, Fidelity::Tolerant { rel: er, abs: ea }) => {
+            rel > er || abs > ea
+        }
+    }
+}
+
 /// Compare `expected` against `actual` under `fidelity`. `Ok(())` if they match;
 /// `Err(msg)` naming the first mismatch otherwise.
 ///

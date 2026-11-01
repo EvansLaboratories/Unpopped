@@ -41,7 +41,10 @@ fn the_derived_band_accepts_a_result_inside_it_and_rejects_one_outside() {
     let inside = f32s(&[1.0 * (1.0 + rel as f32 / 2.0), 2.0, 4.0, 8.0]);
     let outside = f32s(&[1.0 * (1.0 + rel as f32 * 8.0), 2.0, 4.0, 8.0]);
     compare_for_plan(&want, &inside, &plan, &ops).expect("inside the entitled band");
-    assert!(compare_for_plan(&want, &outside, &plan, &ops).is_err(), "outside it");
+    assert!(
+        compare_for_plan(&want, &outside, &plan, &ops).is_err(),
+        "outside it"
+    );
 }
 
 #[test]
@@ -53,7 +56,10 @@ fn a_caller_band_looser_than_the_entitlement_is_refused() {
     // The buffers differ by far more than the entitlement but less than the caller's band: a plain
     // `compare` at `loose` passes, which is exactly the defect.
     let off = f32s(&[1.1, 2.0, 4.0, 8.0]);
-    assert!(unpopped::oracle::compare(&want, &off, loose).is_ok(), "CONTROL: compare accepts it");
+    assert!(
+        unpopped::oracle::compare(&want, &off, loose).is_ok(),
+        "CONTROL: compare accepts it"
+    );
     let r = compare_for_plan_within(&want, &off, &plan, &ops, loose);
     assert!(r.unwrap_err().contains("looser"), "named as a looser band");
 }
@@ -82,7 +88,10 @@ fn an_integer_cell_refuses_any_tolerant_band() {
     let a = i32s(&[1, 2, 3]);
     let tol = Fidelity::Tolerant { rel: 0.0, abs: 0.0 };
     let r = compare_for_plan_within(&a, &a, &plan, &ops, tol);
-    assert!(r.unwrap_err().contains("looser"), "BitExact is the entitlement for integers");
+    assert!(
+        r.unwrap_err().contains("looser"),
+        "BitExact is the entitlement for integers"
+    );
     compare_for_plan(&a, &a, &plan, &ops).expect("the derived band is bit-exact");
 }
 
@@ -98,5 +107,33 @@ fn a_target_with_no_entitlement_is_an_error_not_a_guess() {
     let r = compare_for_plan(&a, &a, &plan, &ops);
     assert!(r.unwrap_err().contains("no entitlement"));
     let r = compare_for_plan_within(&a, &a, &plan, &ops, Fidelity::BitExact);
-    assert!(r.unwrap_err().contains("no entitlement"), "even a tight band: nothing to certify against");
+    assert!(
+        r.unwrap_err().contains("no entitlement"),
+        "even a tight band: nothing to certify against"
+    );
+}
+
+#[test]
+fn a_band_looser_in_only_one_tolerance_is_refused() {
+    let (op, ops, key) = exp_cell();
+    let plan = build_plan(&op, &key);
+    let Some(Fidelity::Tolerant { rel, abs }) = required_fidelity(&plan, &ops) else {
+        panic!("CONTROL: an exp cell on CUDA is entitled to a tolerant band");
+    };
+    let want = f32s(&[1.0, 2.0, 4.0, 8.0]);
+    for band in [
+        Fidelity::Tolerant {
+            rel: rel * 4.0,
+            abs,
+        },
+        Fidelity::Tolerant {
+            rel,
+            abs: abs + 1e-3,
+        },
+    ] {
+        let r = compare_for_plan_within(&want, &want, &plan, &ops, band);
+        assert!(r.unwrap_err().contains("looser"), "{band:?}");
+    }
+    compare_for_plan_within(&want, &want, &plan, &ops, Fidelity::Tolerant { rel, abs })
+        .expect("the entitled band itself is not looser than itself");
 }
