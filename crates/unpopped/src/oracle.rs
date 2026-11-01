@@ -2597,7 +2597,7 @@ fn eval_reduction(
     // equals wrapping at every step, and `Max`/`Min` are exact. Integer Mean is out of scope (the
     // emitter asserts `!(int_acc && Mean)`); keep the oracle's out-of-scope-PANIC convention
     // (cf. eval_scan/eval_window/eval_row_reduce) rather than returning the un-divided sum for a
-    // buildable integer Mean plan. Any other integer dtype (`U32`, `U64`) is still out of scope.
+    // buildable integer Mean plan. Every integer dtype is now in scope for `Sum`/`Prod`/`Max`/`Min`.
     if int_acc {
         assert!(
             matches!(
@@ -2608,8 +2608,10 @@ fn eval_reduction(
                     | ElementKind::U8
                     | ElementKind::I16
                     | ElementKind::U16
+                    | ElementKind::U32
+                    | ElementKind::U64
             ),
-            "oracle: integer reduction dtype {:?} out of scope (I8/U8/I16/U16/I32/I64 only)",
+            "oracle: integer reduction dtype {:?} out of scope (I8/U8/I16/U16/I32/U32/I64/U64 only)",
             plan.dtype
         );
         assert!(
