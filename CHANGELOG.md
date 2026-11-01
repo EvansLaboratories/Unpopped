@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.40.18` — tests: the any/all/count reductions at narrow integer dtypes agree with the host (ROADMAP E19 tail)
+
+`tests/oracle_narrow_int_predicate_reductions.rs`: the heterogeneous-output shapes the plan gate's rule 4 admits (`count` = `Sum` of `in != 0` with an `I64` output; `any`/`all` = `Max`/`Min` of `in != 0` with a `Reduced(0) != 0` post and a `U8` output) at `I8`, `U8`, `I16`, `U16` through `oracle::evaluate`, against references computed on the host (rows of all zero, one nonzero, all nonzero, and values nonzero only above the low byte). It passed on its first run, so it was mutation-checked: integer `Max`/`Min` swapped, `CmpNe` compared at 8 bits, and an integer `Sum` that drops its elements are all caught. No code change; this closes the untested tail 0.40.16 named.
+
 ## `0.40.16` — the plan oracle evaluates integer reductions at `I8`, `U8`, `I16` and `U16` (additive, ROADMAP E19)
 
 `oracle::evaluate` panicked on any integer reduction narrower than `I32` ("integer reduction dtype I8 out of scope"), so openclownfish X2 PR1 (#33), which lifts narrow-integer elementwise ops and scans, could not check a narrow reduction against the reference. It now evaluates `Sum`, `Prod`, `Max` and `Min` at `I8`/`U8`/`I16`/`U16` by the IR's own rule: arithmetic at an integer dtype wraps at the dtype's width, so a `Sum` is the wrapping fold and a `Prod` the wrapping product (the accumulator is exact `i128` and the store wraps, which equals wrapping at every step for `Sum` and `Prod`), and `Max`/`Min` are exact. `tests/oracle_narrow_int_reduction.rs` compares the oracle with the host's own `wrapping_add`, `wrapping_mul`, `max` and `min` over the native types, with values chosen to overflow; it was committed failing first. Integer `Mean` and the dtypes `U32`/`U64` are still out of scope (the same panic). The plan gate is unchanged. Not covered by this test: a heterogeneous-output narrow reduction (the any/all/count shapes); those now reach the oracle instead of panicking at the dtype check and are unverified here.
