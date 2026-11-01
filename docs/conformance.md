@@ -265,7 +265,9 @@ and is no longer.
 
 #### What is still open, narrowed
 
-1. **Nothing COMPELS a caller to use it.** `compare` still takes whatever
+1. **Nothing COMPELS a caller to use it** (**narrowed in 0.40.15**: `compare_for_plan` derives the band,
+   `compare_for_plan_within` refuses a looser caller band, and a ratchet test stops new hand-written tolerant
+   bands; the existing sites still call `compare`). `compare` still takes whatever
    `Fidelity` it is handed, so the original consequence — *"did it pass at a
    tolerance whoever wrote the test chose?"* — survives for any caller that does
    not ask. The derivation exists; using it is not enforced.
