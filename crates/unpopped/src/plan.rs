@@ -7,7 +7,6 @@
 //! lowers the plan to a concrete language. Choosing the schedule here, not in
 //! the backend, keeps the decision shared across every backend.
 
-use crate::backend::Backend;
 use crate::ir::{
     Access, BaseOffset, DagNode, OpDef, QualOp, ReadIndex, ReduceOp, ReduceStage, RoundMode,
     ScalarExpr, SortLimit, SortOrder, SortOut, View, WriteCombine, WriteIndex,
@@ -557,7 +556,7 @@ pub fn try_build_plan<'a>(
     try_build_plan_with(op, key, false)
 }
 
-/// [`try_build_plan`] for a backend that declares [`Backend::total_integer_ops`]: integer `Div`
+/// [`try_build_plan`] for a backend that declares [`Backend::total_integer_ops`](crate::backend::Backend::total_integer_ops): integer `Div`
 /// and an integer-typed constant are admitted at an integer compute dtype, because that backend
 /// spells them by the total rule (`docs/int-div-shift-semantics.md`). A backend that does not
 /// override it gets exactly [`try_build_plan`]'s refusals. [`crate::try_generate`] calls this.
@@ -567,12 +566,12 @@ pub fn try_build_plan<'a>(
 pub fn try_build_plan_for<'a>(
     op: &'a OpDef,
     key: &'a StructureKey,
-    backend: &dyn Backend,
+    backend: &dyn crate::backend::Backend,
 ) -> Result<KernelPlan<'a>, PlanError> {
     try_build_plan_with(op, key, backend.total_integer_ops())
 }
 
-/// [`build_plan`] for a backend that declares [`Backend::total_integer_ops`]; see
+/// [`build_plan`] for a backend that declares [`Backend::total_integer_ops`](crate::backend::Backend::total_integer_ops); see
 /// [`try_build_plan_for`].
 ///
 /// # Panics
@@ -581,7 +580,7 @@ pub fn try_build_plan_for<'a>(
 pub fn build_plan_for<'a>(
     op: &'a OpDef,
     key: &'a StructureKey,
-    backend: &dyn Backend,
+    backend: &dyn crate::backend::Backend,
 ) -> KernelPlan<'a> {
     try_build_plan_for(op, key, backend).unwrap_or_else(|e| panic!("{e}"))
 }
@@ -3313,6 +3312,7 @@ pub(crate) fn check_coord_admissibility(op: &OpDef, key: &StructureKey) -> Resul
 /// 4. **typed values only at the root or directly under a `Cast`/`Bitcast`**:
 ///    arithmetic, `Select` and the math ops stay compute-typed, because their
 ///    lowering, hoisting and oracle semantics are per compute dtype today.
+///
 /// The typed-expression gate, with `total_ints` (`Backend::total_integer_ops`): at an integer compute
 /// dtype a `ConstInt` of exactly that dtype is a compute-typed leaf, not a typed value, so it
 /// does not send the body down the Cast/Bitcast rules.
