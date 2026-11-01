@@ -13,10 +13,11 @@ use std::collections::HashMap;
 
 use unpopped_vocab::ElementKind;
 
-use super::kernel_eval::{KernelTrap, Machine};
-use super::{Val, elem_bits, read_elem, store_val};
+use super::kernel_eval::{KernelTrap, Machine, atomic_combine};
+use super::{Val, elem_bits, int_val, raw_to_i128, read_elem, store_val};
 use crate::exec::{ExecId, LaunchShape, MemorySpace};
 use crate::ir::ScalarExpr;
+use crate::kernel::AtomicOp;
 use crate::types::{self, Ty};
 
 /// One access: the thread, and the barrier counts it saw.
@@ -273,6 +274,38 @@ impl Machine<'_> {
             return Err(trap);
         }
         Ok(Val::Raw(read_elem(&m.bytes, i, m.dtype), m.dtype))
+    }
+
+    /// An atomic read-modify-write of a `Shared` element: logged as an atomic access (it races only
+    /// with a plain access), and the element must already hold a value.
+    pub(super) fn alloc_atomic(
+        &mut self,
+        op: AtomicOp,
+        alloc: u32,
+        index: &ScalarExpr,
+        v: Val,
+    ) -> Result<(), KernelTrap> {
+        let i = self.alloc_index(alloc, index)?;
+        let space = self.k.allocs[alloc as usize].space;
+        if space != MemorySpace::Shared {
+            return Err(KernelTrap::Unsupported("an atomic outside Shared memory"));
+        }
+        let c = self
+            .ctx
+            .as_mut()
+            .expect("alloc_index found a launch context");
+        c.log_shared(alloc, i, space, AccessKind::Atomic)?;
+        let m = c.mem_mut(alloc, space).expect("Shared holds an instance");
+        if !m.init[i] {
+            return Err(KernelTrap::UninitializedShared { alloc });
+        }
+        let Val::Raw(bits, vdt) = v else {
+            return Err(KernelTrap::Unsupported("a non-integer atomic operand"));
+        };
+        let old = raw_to_i128(read_elem(&m.bytes, i, m.dtype), m.dtype);
+        let r = atomic_combine(op, m.dtype, old, raw_to_i128(bits, vdt));
+        store_val(int_val(r, m.dtype), m.dtype, &mut m.bytes, i);
+        Ok(())
     }
 
     pub(super) fn alloc_store(

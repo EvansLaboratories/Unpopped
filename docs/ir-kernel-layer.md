@@ -123,11 +123,12 @@ returned.
 
 - **Ordering: relaxed only.** An atomic orders nothing else; the only ordering a kernel has is a `Barrier`. A later `Acquire`/`Release`/`SeqCst` form, a
   returning form (`fetch_add`) and a compare-exchange are additions for when a consumer needs them; none exists yet.
-- **Scope: device-wide.** Two atomics on one element never race, whatever blocks or threads issue them.
+- **Scope: device-wide.** Two atomics on one element never race, whatever blocks or threads issue them (on `Shared`: any threads of the block). A `Shared` element must already hold a
+  value (`UninitializedShared`), and the usual barriers order its initialisation before the atomics and the atomics before a plain read.
 - **Race rule (the interpreter oracle).** An atomic conflicts with a *plain* access (`Load`/`Store`) to the same element unless a barrier orders them (same
   rule as two plain accesses); two atomics never conflict. `run_launch` reports `DataRace` for exactly the conflicts that involve a plain access.
-- **v1 form (`check_kernel`, `KernelError::AtomicUnsupported`).** A `ReadWrite` *global buffer* place (no `Alloc`/`Shared` atomics yet), an *integer*
-  element type, a value of that type. `Add` wraps at the element width. `Max`/`Min`/`Add` on integers are associative and commutative, so the result does not
+- **v1 form (`check_kernel`, `KernelError::AtomicUnsupported`).** A `ReadWrite` *global buffer* place or a `Shared` allocation element (since 0.40.2; not
+  `Private`, `Constant`), an *integer* element type, a value of that type. `Add` wraps at the element width. `Max`/`Min`/`Add` on integers are associative and commutative, so the result does not
   depend on the schedule. A float `Add` is order-dependent (see `WriteCombine::is_fp_atomic_add`) and is not admitted.
 - **Emitters.** `unpopped-cpu-c` refuses it (it emits no launches). A device emitter lowers it to its native atomic (`atomicAdd`/`atomicMax`/`atomicMin`,
   `InterlockedAdd`/`InterlockedMax`/`InterlockedMin`, `atomicrmw ... monotonic`) on the element's 32- or 64-bit integer type.

@@ -347,6 +347,9 @@ impl<'a> Machine<'a> {
     /// An atomic read-modify-write of a global integer element: logged as an atomic access (it
     /// races only with a plain access), the combine computed at the element type and wrapped.
     fn atomic_rmw(&mut self, op: AtomicOp, place: &Place, v: Val) -> Result<(), KernelTrap> {
+        if let Place::Alloc { alloc, index } = place {
+            return self.alloc_atomic(op, *alloc, index, v);
+        }
         let (b, off) = self.offset(place)?;
         self.note_global(b, off, AccessKind::Atomic)?;
         let KernelArg::Buffer(tb) = &mut self.args[b] else {
@@ -360,12 +363,12 @@ impl<'a> Machine<'a> {
             raw_to_i128(read_elem(&tb.bytes, off, dt), dt),
             raw_to_i128(bits, vdt),
         );
-        let r = match op {
-            AtomicOp::Add => wrap(dt, old + new),
-            AtomicOp::Max => old.max(new),
-            AtomicOp::Min => old.min(new),
-        };
-        store_val(int_val(r, dt), dt, &mut tb.bytes, off);
+        store_val(
+            int_val(atomic_combine(op, dt, old, new), dt),
+            dt,
+            &mut tb.bytes,
+            off,
+        );
         Ok(())
     }
 
@@ -594,6 +597,15 @@ impl<'a> Machine<'a> {
 
 /// `x / y` at integer type `t`, total (`docs/int-div-shift-semantics.md`, rules 1 and 2): `y == 0` gives
 /// `x`; so does `MIN / -1` (the wrapping result); otherwise the quotient truncated toward zero.
+/// `old (op) new` at the element type `t`: `Add` wraps, `Max`/`Min` select.
+pub(super) fn atomic_combine(op: AtomicOp, t: ElementKind, old: i128, new: i128) -> i128 {
+    match op {
+        AtomicOp::Add => wrap(t, old + new),
+        AtomicOp::Max => old.max(new),
+        AtomicOp::Min => old.min(new),
+    }
+}
+
 fn int_div(t: ElementKind, x: i128, y: i128) -> i128 {
     let (lo, _) = types::int_range(t).expect("int_div is called with an integer type");
     if y == 0 || (lo < 0 && x == lo && y == -1) {

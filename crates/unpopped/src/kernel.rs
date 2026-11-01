@@ -249,7 +249,8 @@ pub enum Stmt {
     /// only ordering a kernel has). The old value is not returned. Two atomics on one element never
     /// race, whatever threads or blocks issue them; an atomic and a plain access to one element do,
     /// unless a barrier orders them (`docs/ir-kernel-layer.md`, "Atomics"). v1: a global buffer
-    /// (`ReadWrite`) place and an integer element type; the result wraps at the element width.
+    /// (`ReadWrite`) place or a `Shared` allocation element, an integer element type; the result
+    /// wraps at the element width.
     AtomicRmw {
         /// The combine.
         op: AtomicOp,
@@ -377,7 +378,8 @@ pub enum KernelError {
         /// The buffer parameter index.
         buffer: u32,
     },
-    /// An `AtomicRmw` outside the v1 form: a `ReadWrite` global buffer element of an integer type.
+    /// An `AtomicRmw` outside the v1 form: a `ReadWrite` global buffer or `Shared` element of an
+    /// integer type.
     AtomicUnsupported {
         /// What is wrong.
         what: &'static str,
