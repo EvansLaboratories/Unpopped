@@ -49,6 +49,9 @@ tree-sitter = { version = "0.27", optional = true }
 # Only the tests and the corpus example: a Slang `Frontend` to drive the shared walkers.
 # The shipped crate names no grammar (`tests/neutral_core_names_no_cuda_grammar.rs`).
 tree-sitter-slang = "0.3"
+# The OpenCL C idiom tests (ROADMAP E18) parse with the C++ grammar openclownfish uses, because `in` and `out`
+# are keywords in the Slang one.
+tree-sitter-cpp = "0.23"
 # kiss-ref: the spec-exact KISS reference impl — the single source of truth this
 # crate's numerical tests assert against (the oracle.rs consolidation). DEV-only,
 # so it is NOT in the published lib's dependency graph and `cargo publish` stays
