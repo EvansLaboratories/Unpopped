@@ -310,8 +310,10 @@ pub fn lift_reduction_with(
     lift_reduce_store(&tree, src, name, dtypes, &names).map(|l| finished(l, resources))
 }
 
-/// Lift a naive inclusive-forward **scan** (prefix cumulative) into an
-/// [`OpDef`].
+/// Lift a **scan** (prefix cumulative) into an [`OpDef`]: the naive inclusive-forward loop, an
+/// **exclusive** one (the running store comes before the update, `out[i] = acc; acc += in[i];`)
+/// and a **reverse** one (the loop counts down to zero, `for (i = k - 1; i >= 0; --i)`); the two
+/// compose. A descending loop that stops short of index 0 is declined (ROADMAP E18).
 ///
 /// Recognizes `T acc = init; for(...) { acc <reduce> <pre>; out[i] = acc; }` —
 /// the running accumulator stored INSIDE the loop at `out[i]` (vs a reduction's
