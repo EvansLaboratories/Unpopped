@@ -23,7 +23,7 @@ repository (Baracuda CUDA, Vulkane Slang/SPIR-V, openclownfish OpenCL C, Rockfis
 
 **The gate opens per backend (0.40.7).** `Backend::total_integer_ops()` defaults to `false`; a backend that returns `true` is
 saying its `arith`/`binary`/`const_int` seams spell the rules above, and only then does `try_generate` admit an Elementwise
-integer `Div` at `I32`/`I64`/`U32`/`U64` and a `ConstInt` leaf at an integer compute dtype. A backend that does not override it is
+integer `Div` at `I32`/`I64`/`U32`/`U64`, a `ConstInt` leaf at an integer compute dtype and (0.40.10) an Elementwise `Select` and comparison at those dtypes, so the integer `Rem` composition below plans. A backend that does not override it is
 refused exactly as before (`tests/integer_div_gate_is_opt_in.rs`). This document stays the single source of the semantics; the
 method's docs and the CHANGELOG point here rather than restate them. `Shl`/`Shr` were already legal at `I32`/`I64` (8- and
 16-bit operands stay leaf-only) and are unchanged. Opted in so far: Rockfish (first); Baracuda, Vulkane and openclownfish are

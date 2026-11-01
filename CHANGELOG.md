@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.40.11` — integer `Select` and comparisons per backend, so an integer `Rem` composes (additive, ROADMAP E16)
+
+Under `Backend::total_integer_ops` the plan gate now also admits an Elementwise `Select` and a comparison (`CmpEq` .. `CmpGe`) at `I32`/`I64`/`U32`/`U64`, which is what `docs/int-div-shift-semantics.md`'s integer `Rem`, `Select(b == 0, 0, a - (a / b) * b)`, needs (Rockfish#31 could not spell it). A backend that does not opt in is refused exactly as before; Baracuda, Vulkane and openclownfish are unaffected and opt in separately. The kernel interpreter's integer evaluator gains `Select` (the one arm taken, the condition tested `!= 0`). The exactness of 64-bit integer comparisons in the plan oracle, which this relies on, is 0.40.10.
+
+`tests/kernel_int_div_shift_lift_agrees.rs` now also runs `Rem` and all six comparisons at the four dtypes, plan oracle against lifted kernel, over the full cross product of boundary values; `tests/integer_div_gate_is_opt_in.rs` and a gate-level unit test pin the unchanged refusal. Seeded mutants: the `Select` arm and the comparison arm ignoring the flag, and an inverted kernel `Select`, are caught.
+
 ## `0.40.10` — FIX: the plan oracle's integer `Max`, `Min` and comparisons are exact above 2^53
 
 `oracle::evaluate` took `Max`, `Min` and every comparison at an INTEGER compute dtype through `f64`, which holds an integer exactly only up to 2^53. At `I64`/`U64` that is a **silent wrong value**: `max(2^53 + 1, 2^53 + 1)` came out `2^53`, and `i64::MAX == i64::MAX - 1` came out true. They are now exact `i128`. The unit test `oracle::int64_exactness_tests` compares the oracle with the host's own integer operators over `Max`, `Min` and all six comparisons at both dtypes and fails before this change.

@@ -2990,7 +2990,7 @@ mod int_reduction_predicate_gate_validate {
         let cst = OpDef::elementwise("c", 1, &[ElementKind::I32], input(0) + c);
         let lt = ScalarExpr::Binary(BinaryOp::CmpLt, Box::new(input(0).0), Box::new(input(1).0));
         let sel = ScalarExpr::Select(
-            Box::new(lt.clone()),
+            Box::new(input(0).0),
             Box::new(input(0).0),
             Box::new(input(1).0),
         );
