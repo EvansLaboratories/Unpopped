@@ -279,15 +279,37 @@ pub fn windowed_extent(
     pad_lo: u8,
     pad_hi: u8,
 ) -> i64 {
-    let effective = i64::from(dilation) * (i64::from(size) - 1) + 1;
-    let padded = input
-        .saturating_add(i64::from(pad_lo))
-        .saturating_add(i64::from(pad_hi));
+    windowed_extent_wide(
+        input,
+        i64::from(size),
+        i64::from(stride),
+        i64::from(dilation),
+        i64::from(pad_lo),
+        i64::from(pad_hi),
+    )
+}
+
+/// [`windowed_extent`] with the window parameters as `i64`: the one place the output-extent rule
+/// is written (`crate::window_taps::window_out_extent` calls it too, so the two cannot drift).
+/// `size`, `stride` and `dilation` below 1 are read as 1; the arithmetic saturates.
+pub(crate) fn windowed_extent_wide(
+    input: i64,
+    size: i64,
+    stride: i64,
+    dilation: i64,
+    pad_lo: i64,
+    pad_hi: i64,
+) -> i64 {
+    let effective = dilation
+        .max(1)
+        .saturating_mul(size.max(1) - 1)
+        .saturating_add(1);
+    let padded = input.saturating_add(pad_lo).saturating_add(pad_hi);
     let span = padded.saturating_sub(effective);
     if span < 0 {
         return 0;
     }
-    (span / i64::from(stride)).saturating_add(1)
+    (span / stride.max(1)).saturating_add(1)
 }
 
 /// The rank-aligned broadcast frame: per-axis max extent across every input.

@@ -24,13 +24,14 @@ pub fn window_out_extent(
     pad_lo: u32,
     pad_hi: u32,
 ) -> i64 {
-    let span = i64::from(dilation) * (i64::from(size) - 1) + 1;
-    let padded = k_in + i64::from(pad_lo) + i64::from(pad_hi);
-    if padded < span {
-        0
-    } else {
-        (padded - span) / i64::from(stride.max(1)) + 1
-    }
+    crate::shape::windowed_extent_wide(
+        k_in,
+        i64::from(size),
+        i64::from(stride),
+        i64::from(dilation),
+        i64::from(pad_lo),
+        i64::from(pad_hi),
+    )
 }
 
 /// An output window with no real tap: the first one, and the geometry that produced it.

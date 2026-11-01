@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.40.1` — one author for the window output-extent rule (no behaviour change)
+
+`window_taps::window_out_extent` now calls the same function as `shape::windowed_extent` (a crate-private `windowed_extent_wide` over `i64`), instead of restating the rule: the reader-side tap check and plan shape inference cannot drift. The only difference is that the arithmetic now saturates on an adversarial extent instead of overflowing. Test: `tests/window_extent_has_one_author.rs`.
+
 ## `0.40.0` — Breaking: `Stmt::AtomicRmw`; E1d-6: `lift_scatter_opdef_launched`
 
 **Breaking.** `kernel::Stmt` is exhaustive on purpose and gains a variant, `AtomicRmw { op: AtomicOp, place, value }` (new `AtomicOp { Add, Max, Min }`, new `KernelError::AtomicUnsupported`). A consumer that matches `Stmt` exhaustively must handle it (in this repo: `check_kernel`, the uniformity analysis, the interpreter and its resumable stepper, and `unpopped-cpu-c`, which refuses it as it refuses a `Barrier`). Semantics: relaxed, device-wide, global integer buffer element, no return value; two atomics never race, an atomic and a plain access to one element do (`docs/ir-kernel-layer.md` section 5a). Consumers checked: the only code outside this repo that names `Stmt` is a Vulkane test that pushes a `Barrier`; it does not match exhaustively.
