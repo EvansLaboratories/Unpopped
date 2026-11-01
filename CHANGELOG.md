@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.40.12` — lift an N-D global-id elementwise store and a 2-D row loop from OpenCL C (additive, ROADMAP E18 part 2)
+
+`convert::lift_elementwise` accepts a row-major flat index built from identifiers, `*`, `+` and parentheses (`out[y * w + x] = a[y * w + x] + b[y * w + x]` with `x`, `y` from `get_global_id`): every read must carry exactly the store's index text, so a read flattened differently (`b[x * w + y]`, transposed) still declines. The op is the same pointwise `OpDef` the 1-D store gives; the rank lives in the structure key. `convert::lift_reduction` accepts a 2-D row loop, `out[r] = acc` after `for (c = 0; c < n; ++c) acc += in[r * n + c]`, as the last-axis reduction, only when `r` is declared as `get_global_id(0)` and the read index is exactly `r*n+c` for the loop variable and bound; a read that ignores the row, or a row taken from `get_global_id(1)`, declines. `tests/opencl_idioms_lift.rs` takes openclownfish's snippets (written failing first); three seeded mutants, two caught and one equivalent (accepting `-` in a flat index changes nothing, because equal texts are pointwise whatever the operator). This completes ROADMAP E18.
+
 ## `0.40.11` — integer `Select` and comparisons per backend, so an integer `Rem` composes (additive, ROADMAP E16)
 
 Under `Backend::total_integer_ops` the plan gate now also admits an Elementwise `Select` and a comparison (`CmpEq` .. `CmpGe`) at `I32`/`I64`/`U32`/`U64`, which is what `docs/int-div-shift-semantics.md`'s integer `Rem`, `Select(b == 0, 0, a - (a / b) * b)`, needs (Rockfish#31 could not spell it). A backend that does not opt in is refused exactly as before; Baracuda, Vulkane and openclownfish are unaffected and opt in separately. The kernel interpreter's integer evaluator gains `Select` (the one arm taken, the condition tested `!= 0`). The exactness of 64-bit integer comparisons in the plan oracle, which this relies on, is 0.40.10.
