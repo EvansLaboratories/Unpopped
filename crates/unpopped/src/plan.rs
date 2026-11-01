@@ -2957,9 +2957,26 @@ mod int_reduction_predicate_gate_validate {
     //! now has ONE implementation and one panicking caller — so these read the
     //! `Result` directly, which is both simpler and a stronger assertion:
     //! `catch_unwind` could not tell WHICH rule fired, only that something did.
-    use super::check_int_op_admissibility;
-    use crate::ir::{BinaryOp, OpDef, ReduceOp, input, konst, reduced};
+    use super::{check_int_op_admissibility, check_int_op_admissibility_for};
+    use crate::ir::{BinaryOp, Expr, OpDef, ReduceOp, ScalarExpr, input, konst, reduced};
     use unpopped_vocab::ElementKind;
+
+    // The opt-in flag (`Backend::total_integer_ops`) is the ONLY thing that admits an Elementwise
+    // integer `Div` or a `ConstInt` at an integer compute dtype: without it both stay refused by
+    // THIS gate (the typed-expression gate would also refuse the constant, so the public path
+    // cannot tell the two layers apart).
+    #[test]
+    fn total_ints_flag_alone_admits_int_div_and_const_int() {
+        let div = OpDef::elementwise("d", 2, &[ElementKind::I32], input(0) / input(1));
+        let c = Expr(ScalarExpr::ConstInt(3, ElementKind::I32));
+        let cst = OpDef::elementwise("c", 1, &[ElementKind::I32], input(0) + c);
+        for op in [&div, &cst] {
+            let off = check_int_op_admissibility_for(op, ElementKind::I32, false);
+            assert!(off.is_err(), "{}: refused without the flag", op.name);
+            check_int_op_admissibility_for(op, ElementKind::I32, true)
+                .unwrap_or_else(|e| panic!("{}: admitted with the flag: {e}", op.name));
+        }
+    }
 
     // Negative control: an elementwise int Cmp* op (the FKC "comparison → U8
     // mask" shape, `OpDef::elementwise_pred`) must still decline at U8 — the
