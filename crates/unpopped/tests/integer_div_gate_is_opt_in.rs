@@ -7,7 +7,7 @@
 //! is refused exactly as before, by `try_generate` and by `try_build_plan` alike.
 
 use unpopped::backend::{Backend, DtypeSupport, GeneratedKernel, LowerError};
-use unpopped::ir::{Expr, OpDef, ScalarExpr, input};
+use unpopped::ir::{BinaryOp, Expr, OpDef, ScalarExpr, input};
 use unpopped::plan::{KernelPlan, PlanError, try_build_plan, try_build_plan_for};
 use unpopped::try_generate;
 use unpopped_vocab::{

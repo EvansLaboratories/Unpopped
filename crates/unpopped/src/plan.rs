@@ -2168,10 +2168,19 @@ pub(crate) fn check_int_op_admissibility(op: &OpDef, dtype: ElementKind) -> Resu
     check_int_op_admissibility_for(op, dtype, false)
 }
 
+/// The 32/64-bit integer dtypes whose `Div`, `Select` and comparisons a backend declaring
+/// `Backend::total_integer_ops` is handed (`docs/int-div-shift-semantics.md`).
+fn is_total_int_dtype(dtype: ElementKind) -> bool {
+    matches!(
+        dtype,
+        ElementKind::I32 | ElementKind::I64 | ElementKind::U32 | ElementKind::U64
+    )
+}
+
 /// [`check_int_op_admissibility`] with `total_ints`: the backend spells integer `Div` and
 /// `ConstInt` by the total rule (`Backend::total_integer_ops`). It admits an Elementwise
-/// `Div` at `I32`/`I64`/`U32`/`U64` and a `ConstInt` leaf at an integer compute dtype, and
-/// nothing else.
+/// `Div`, `Select` and comparison at `I32`/`I64`/`U32`/`U64` and a `ConstInt` leaf at an integer
+/// compute dtype, and nothing else.
 pub(crate) fn check_int_op_admissibility_for(
     op: &OpDef,
     dtype: ElementKind,
@@ -2320,12 +2329,7 @@ pub(crate) fn check_int_op_admissibility_for(
                 )?;
             }
             ScalarExpr::Div(a, b) => {
-                let total_int_div = total
-                    && elementwise
-                    && matches!(
-                        dtype,
-                        ElementKind::I32 | ElementKind::I64 | ElementKind::U32 | ElementKind::U64
-                    );
+                let total_int_div = total && elementwise && is_total_int_dtype(dtype);
                 if !(!int_dt) && !total_int_div {
                     return Err(format!(
                         "op '{op_name}': integer division is rejected at {dtype:?} — the \
@@ -2447,6 +2451,21 @@ pub(crate) fn check_int_op_admissibility_for(
                         false,
                         total,
                     )?;
+                } else if bop.is_cmp() && total && elementwise && is_total_int_dtype(dtype) {
+                    // `Backend::total_integer_ops` (0.40.10): an Elementwise comparison at a 32/64-bit
+                    // integer dtype, which an integer `Rem` (`Select(b == 0, 0, ..)`) needs.
+                    for operand in [&**a, &**b] {
+                        walk(
+                            operand,
+                            op_name,
+                            dtype,
+                            int_dt,
+                            elementwise,
+                            in_reduction,
+                            false,
+                            total,
+                        )?;
+                    }
                 } else if int_dt && in_reduction && at_reduction_root && bop.is_cmp() {
                     // Rule 4: an int-dtype Cmp* is admitted HERE ONLY — the
                     // reduction body/post predicate position of any/all/count
@@ -2633,7 +2652,7 @@ pub(crate) fn check_int_op_admissibility_for(
                 // coverage is a later increment). Legal in EVERY Access arm at
                 // float dtypes (a select in a Reduction pre-expr is the
                 // masked-sum shape), so no elementwise-only assert here.
-                if !(!int_dt) {
+                if !(!int_dt) && !(total && elementwise && is_total_int_dtype(dtype)) {
                     return Err(format!(
                         "op '{op_name}': Select has no integer lowering — v1 select is \
                      float-only (f32/f32s/f64/f16/bf16), so int dtype {dtype:?} must \
@@ -2969,7 +2988,15 @@ mod int_reduction_predicate_gate_validate {
         let div = OpDef::elementwise("d", 2, &[ElementKind::I32], input(0) / input(1));
         let c = Expr(ScalarExpr::ConstInt(3, ElementKind::I32));
         let cst = OpDef::elementwise("c", 1, &[ElementKind::I32], input(0) + c);
-        for op in [&div, &cst] {
+        let lt = ScalarExpr::Binary(BinaryOp::CmpLt, Box::new(input(0).0), Box::new(input(1).0));
+        let sel = ScalarExpr::Select(
+            Box::new(lt.clone()),
+            Box::new(input(0).0),
+            Box::new(input(1).0),
+        );
+        let cmp = OpDef::elementwise("lt", 2, &[ElementKind::I32], Expr(lt));
+        let sel = OpDef::elementwise("sel", 2, &[ElementKind::I32], Expr(sel));
+        for op in [&div, &cst, &cmp, &sel] {
             let off = check_int_op_admissibility_for(op, ElementKind::I32, false);
             assert!(off.is_err(), "{}: refused without the flag", op.name);
             check_int_op_admissibility_for(op, ElementKind::I32, true)
