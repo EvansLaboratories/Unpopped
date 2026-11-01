@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.40.6` — docs: two stale line cites in `ondevice/README.md` (ROADMAP X7, part)
+
+`contract.rs:245` is now `contract.rs:345` (the `op.n_outputs() > 1` guard) and `pattern.rs:229` is now `pattern.rs:260-261` (the `Access::Elementwise` guard), each named by what it guards so the next drift is readable. No code change.
+
 ## `0.40.5` — docs: ROADMAP E18 (OpenCL C idioms for `convert.rs`) and the C5 caller count
 
 ROADMAP gains E18 (openclownfish X1: a `Mean` post, exclusive/reverse scan spellings and N-D `get_global_id`/2-D row loops, each a new recognizer; `Frontend` has no idiom hook). C5 now carries the count: zero non-test callers of `oracle::required_fidelity` at `496c192`. No code change.

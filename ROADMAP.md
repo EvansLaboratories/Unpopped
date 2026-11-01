@@ -164,7 +164,7 @@ RTX 4070 in 2026-07/08. The generators and emit examples live in baracuda.
 | X4 | `groupshared-sizing:4-6` says the scope question is "answered"; §4 holds it | **fixed in 0.22.19** (answered: yes, the IR models cooperation) |
 | X5 | `joint-gpu-plan:28` "plan.rs never reads the target" (false since #40); `slang-second-blocker:77-79` says Slang lowers `Select` for all dtypes (float-only); `normative-seams:292` `supports_dtype` returns bool (now `DtypeSupport`); Slang `lower()` error text says i16/u16 wait on vocabulary v5 | **fixed**: docs in 0.22.19, the Slang `lower()` message in 0.26.3 (error text adopters match; version note in CHANGELOG) |
 | X6 | `deferred.md:33-34` says moving `ArchSku` waits on baracuda's registry repoint; §4 said "PM says go" | §4 corrected in this PR |
-| X7 | Line cites drifted in slang-second-blocker, `ir.rs`, `structure_key.rs`, `convert.rs`, `contract.rs:245`, `pattern.rs:229` | open, cosmetic; owner: this lane; fold into the next docs PR that touches those files |
+| X7 | Line cites drifted. **Fixed in 0.40.6:** `contract.rs:245` and `pattern.rs:229` (both in `ondevice/README.md`). **Not yet enumerated:** slang-second-blocker, `ir.rs`, `structure_key.rs`, `convert.rs` (the original note named the files, not the cites) | open, cosmetic; owner: this lane; fold into the next docs PR that touches those files |
 
 ### 6.7 The IR as the full union of kernel languages (`docs/ir-union-design.md`, `docs/ir-union-capability-grid.md`)
 
