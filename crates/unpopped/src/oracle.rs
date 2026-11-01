@@ -8377,3 +8377,78 @@ mod walk_pins {
         );
     }
 }
+
+/// **FIX (0.40.10).** `Max`, `Min` and the comparisons at an INTEGER compute dtype went through `f64`,
+/// which holds an integer exactly only up to 2^53. At `I64`/`U64`, `max(2^53 + 1, 0)` came out `2^53`
+/// and `i64::MAX == i64::MAX - 1` came out true. The reference here is the host's own integer
+/// operators, which share no code with the oracle.
+#[cfg(test)]
+mod int64_exactness_tests {
+    use super::{Eval, Val, eval, panic_reduced};
+    use crate::ir::{BinaryOp, ScalarExpr};
+    use unpopped_vocab::ElementKind;
+
+    const P: i128 = (1 << 53) + 1;
+
+    /// The oracle's value of `a <op> b` at `dtype`, as an integer.
+    fn oracle(dtype: ElementKind, op: BinaryOp, a: i128, b: i128) -> i128 {
+        let leaf = move |k: u8| Val::Int(if k == 0 { a } else { b });
+        let coord = |_: u8| Val::Float(0.0);
+        let ev = Eval {
+            dtype,
+            params: &[],
+            leaf: &leaf,
+            reduced: &panic_reduced,
+            coord: &coord,
+        };
+        let e = ScalarExpr::Binary(
+            op,
+            Box::new(ScalarExpr::Input(0)),
+            Box::new(ScalarExpr::Input(1)),
+        );
+        match eval(&e, &ev) {
+            Val::Int(v) => v,
+            Val::Float(f) => f as i128,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    fn host(op: BinaryOp, a: i128, b: i128) -> i128 {
+        match op {
+            BinaryOp::Max => a.max(b),
+            BinaryOp::Min => a.min(b),
+            BinaryOp::CmpEq => i128::from(a == b),
+            BinaryOp::CmpNe => i128::from(a != b),
+            BinaryOp::CmpLt => i128::from(a < b),
+            BinaryOp::CmpLe => i128::from(a <= b),
+            BinaryOp::CmpGt => i128::from(a > b),
+            _ => i128::from(a >= b),
+        }
+    }
+
+    #[test]
+    fn integer_max_min_and_comparisons_are_exact_above_2_pow_53() {
+        let i64s = [P, i128::from(i64::MAX), i128::from(i64::MAX - 1), -P, 0];
+        let u64s = [P, i128::from(u64::MAX), i128::from(u64::MAX - 1), 0];
+        let ops = [
+            BinaryOp::Max,
+            BinaryOp::Min,
+            BinaryOp::CmpEq,
+            BinaryOp::CmpNe,
+            BinaryOp::CmpLt,
+            BinaryOp::CmpLe,
+            BinaryOp::CmpGt,
+            BinaryOp::CmpGe,
+        ];
+        for (dt, vals) in [(ElementKind::I64, &i64s[..]), (ElementKind::U64, &u64s[..])] {
+            for op in ops {
+                for &a in vals {
+                    for &b in vals {
+                        let (got, want) = (oracle(dt, op, a, b), host(op, a, b));
+                        assert_eq!(got, want, "{op:?} at {dt:?}: a = {a}, b = {b}");
+                    }
+                }
+            }
+        }
+    }
+}
