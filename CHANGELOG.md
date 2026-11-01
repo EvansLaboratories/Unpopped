@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.40.8` — the plan-level oracle evaluates integer `Div` by the total rule (fix, ROADMAP E16)
+
+`oracle::evaluate` carried `unreachable!("integer Div is refused at the plan gate")` for an integer `Div`. 0.40.7 let a backend that declares `Backend::total_integer_ops` past that gate, so a plan for such a backend panicked in the oracle. It now follows `docs/int-div-shift-semantics.md` (single source; not restated): the same rule the kernel interpreter has, written separately. `tests/kernel_int_div_shift_lift_agrees.rs` runs `Div`, `Shl` and `Shr` at `I32`/`I64`/`U32`/`U64` over the full cross product of boundary values through the plan oracle and the lifted kernel, byte for byte; two seeded mutants (a zero divisor giving 0, floor instead of truncating division) are caught. The gate is unchanged, and so are Baracuda, Vulkane and openclownfish (not opted in).
+
+**Found while testing, not fixed here:** an integer `Rem` has no IR form, and its `Select` composition is refused at the plan gate at an integer dtype ("v1 select is float-only"), so a backend cannot be handed a `Rem` through `try_generate` yet (ROADMAP E16).
+
 ## `0.40.7` — integer `Div` and `ConstInt` at an integer compute dtype, per backend (additive, ROADMAP E16)
 
 New defaulted `Backend::total_integer_ops(&self) -> bool` (`false`). A backend returning `true` declares that its `arith`/`binary`/`const_int` seams spell integer `Div`, `Shl`/`Shr` and integer constants by the total rule in `docs/int-div-shift-semantics.md` (the single source; not restated here). `try_generate` and `generate_variants` then admit an Elementwise integer `Div` at `I32`/`I64`/`U32`/`U64` and a `ConstInt` leaf at an integer compute dtype; new `plan::try_build_plan_for` and `plan::build_plan_for` take the backend. `try_build_plan` and `build_plan` are unchanged and still refuse both. A defaulted trait method breaks no implementor, so this is additive.
