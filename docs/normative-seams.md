@@ -96,7 +96,7 @@ from the same clause and reached three different coverages.**
 | | |
 |---|---|
 | **What we decide** | The `vec_width` field of the KISS-Classify `structure_key` token |
-| **Where** | `unpopped-vocab/src/structure_key.rs:1282`, `classify_vec_width` (**private**) |
+| **Where** | `unpopped-vocab/src/structure_key.rs`, `classify_vec_width` (**private**; line 2335 at `5c2c843`) |
 | **Status** | **MEASURED** |
 
 ```rust

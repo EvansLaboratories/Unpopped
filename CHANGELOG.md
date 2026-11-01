@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.40.20` — docs: stale line cites named or dated (ROADMAP X7)
+
+X7 audited: of 83 line cites with an identifier beside them, the survey docs and `idiom-lifting-design.md` pin their own ref by design and are left alone; the live cites that had drifted now name the symbol and date the line (`classify_vec_width` in ROADMAP C6, `normative-seams.md`, `deferred.md`; `Access` and `AccumSpec` in `groupshared-sizing.md` and `ir-union-design.md`; the removed `CUDA_RESIDUE` cite; a `recipe.rs` comment). ROADMAP X7 records the audit, the method's limit (a window test, then reading) and what remains. No code change.
+
 ## `0.40.17` — docs/tests: no in-repo tolerant-band migration is pending (ROADMAP C5)
 
 The 0.40.15 ratchet table and ROADMAP C5 said the remaining hand-written tolerant bands in `complex_domain` were "to migrate" to `compare_for_plan`. They are not: every remaining site is a test of `compare` on hand-built buffers (there is no plan, so `compare_for_plan` cannot apply) or a pattern in a test of the derivation's own output. The ratchet table's reasons and the ROADMAP row now say so; no behaviour change.

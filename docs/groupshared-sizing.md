@@ -16,7 +16,7 @@ close it," measured against `origin/main` at `b91e4d6` (post-#25, unpopped
 
 **This is not an unbuilt feature. It is a standing, already-documented
 policy decision hitting its intended target.** `convert.rs`'s `SLANG_RESIDUE`
-/ `CUDA_RESIDUE` lists (`crates/unpopped/src/convert.rs:61-88`) refuse
+/ `CUDA_RESIDUE` lists (the residue lists; `CUDA_RESIDUE` itself left this crate with the CUDA grammar in 0.30.0, and `SLANG_RESIDUE` with the Slang one in 0.37.0, so each frontend crate now carries its own) refuse
 `groupshared`/`__shared__`, barriers, and atomics by design:
 
 > "CUDA constructs that aren't IR-expressible — their presence means the
@@ -98,8 +98,7 @@ withdrawn.** The second half is true, and it doesn't matter. The IR represents
 the *semantics* of these kernels without representing their cooperation, and
 the emitters already supply the cooperation as a schedule:
 
-- `Access::Reduction` / `Access::RowReduce` (`crates/unpopped/src/ir.rs:1616`,
-  `:1656`) already express reduce, softmax and rmsnorm. The `RowReduce` doc
+- `Access::Reduction` / `Access::RowReduce` (`Access` in `crates/unpopped/src/ir.rs`, line 2041 at `5c2c843`) already express reduce, softmax and rmsnorm. The `RowReduce` doc
   names softmax and rmsnorm as instances.
 - `plan::Schedule::RowReduce` is documented as *"one block per output row
   (warp-shuffle + shared-memory tree reduce)"*.
