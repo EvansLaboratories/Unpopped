@@ -543,7 +543,7 @@ fn lift_reduce_store(
     names: &Names,
 ) -> Result<Lifted, LiftError> {
     let out_name = names.out;
-    let (acc, divisor) =
+    let (acc, divisor, row) =
         find_scalar_out_store(tree.root_node(), src, out_name).ok_or_else(|| {
             LiftError::Unrecognized(format!("no scalar `{out_name}[..] = acc` store"))
         })?;
@@ -563,6 +563,9 @@ fn lift_reduce_store(
     };
     let idx_var = first_input_index(body_node, src, names)
         .ok_or_else(|| LiftError::Unrecognized("reduction body reads no inK[idx]".into()))?;
+    if let Some(r) = row {
+        check_row_loop(tree.root_node(), src, &r, &idx_var, body_node)?;
+    }
     let mut w = Walk {
         src,
         idx_var,
@@ -590,7 +593,7 @@ fn find_scalar_out_store<'t>(
     node: Node<'t>,
     src: &str,
     out_name: &str,
-) -> Option<(String, Option<Node<'t>>)> {
+) -> Option<(String, Option<Node<'t>>, Option<String>)> {
     if node.kind() == "assignment_expression" {
         if let Some(hit) = scalar_store_of(node, src, out_name) {
             return Some(hit);
@@ -610,7 +613,7 @@ fn scalar_store_of<'t>(
     assign: Node<'t>,
     src: &str,
     out_name: &str,
-) -> Option<(String, Option<Node<'t>>)> {
+) -> Option<(String, Option<Node<'t>>, Option<String>)> {
     let lhs = assign.child_by_field_name("left")?;
     let rhs = assign.child_by_field_name("right")?;
     let named_out = lhs
@@ -624,12 +627,16 @@ fn scalar_store_of<'t>(
     let indices = lhs.child_by_field_name("indices")?;
     let mut c = indices.walk();
     let kids: Vec<Node> = indices.named_children(&mut c).collect();
-    if kids.len() != 1 || kids[0].kind() != "number_literal" {
-        return None;
-    }
     let ident = |n: Node| n.utf8_text(src.as_bytes()).ok().map(str::to_string);
+    // A literal index is a scalar store; a lone identifier is a row id (`out[r] = acc` after a row
+    // loop, checked by `check_row_loop`).
+    let row = match kids.as_slice() {
+        [k] if k.kind() == "number_literal" => None,
+        [k] if k.kind() == "identifier" => Some(ident(*k)?),
+        _ => return None,
+    };
     if rhs.kind() == "identifier" {
-        return Some((ident(rhs)?, None));
+        return Some((ident(rhs)?, None, row));
     }
     let slash = rhs.kind() == "binary_expression"
         && rhs
@@ -639,9 +646,58 @@ fn scalar_store_of<'t>(
             == "/";
     let left = rhs.child_by_field_name("left")?;
     if slash && left.kind() == "identifier" {
-        return Some((ident(left)?, rhs.child_by_field_name("right")));
+        return Some((ident(left)?, rhs.child_by_field_name("right"), row));
     }
     None
+}
+
+/// A 2-D row loop (ROADMAP E18): `out[r] = acc` after `for (c = 0; c < n; ++c) acc += in[r * n + c]`
+/// with `r = get_global_id(0)` is the last-axis reduction of a rank-2 input, one work-item per row.
+/// It is only that when `r` really is the work-item's first id and the read index is exactly
+/// `r*n+c` for the loop variable `c` and the loop bound `n`; anything else (a read that ignores the
+/// row, a different stride) is a different computation and is declined.
+fn check_row_loop(
+    root: Node,
+    src: &str,
+    row: &str,
+    read_index: &str,
+    update: Node,
+) -> Result<(), LiftError> {
+    let bad = |why: &str| Err(LiftError::Unrecognized(format!("row loop: {why}")));
+    let Some(f) = enclosing_for(update) else {
+        return bad("no enclosing loop");
+    };
+    let text = |n: Option<Node>| {
+        n.and_then(|n| n.utf8_text(src.as_bytes()).ok())
+            .unwrap_or("")
+            .replace(' ', "")
+    };
+    let cond = f.child_by_field_name("condition");
+    let bound = text(cond.and_then(|c| c.child_by_field_name("right")));
+    let var = text(cond.and_then(|c| c.child_by_field_name("left")));
+    if bound.is_empty() || read_index != format!("{row}*{bound}+{var}") {
+        return bad("the read index is not row*bound+column");
+    }
+    if !declared_as_global_id_zero(root, src, row) {
+        return bad("the row is not get_global_id(0)");
+    }
+    Ok(())
+}
+
+/// Whether some declaration initialises `name` with `get_global_id(0)`.
+fn declared_as_global_id_zero(node: Node, src: &str, name: &str) -> bool {
+    if node.kind() == "init_declarator" {
+        let text = |f: &str| {
+            node.child_by_field_name(f)
+                .and_then(|n| n.utf8_text(src.as_bytes()).ok())
+        };
+        if text("declarator") == Some(name) {
+            return text("value").map(|t| t.replace(' ', "")) == Some("get_global_id(0)".into());
+        }
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .any(|c| declared_as_global_id_zero(c, src, name))
 }
 
 /// Whether `divisor` (peeling parentheses and a cast, `(float)n`) is the very expression the
@@ -816,10 +872,36 @@ fn subscript_index(sub: Node, src: &str) -> Option<String> {
     let indices = sub.child_by_field_name("indices")?;
     let mut cursor = indices.walk();
     let kids: Vec<Node> = indices.named_children(&mut cursor).collect();
-    if kids.len() != 1 || kids[0].kind() != "identifier" {
+    if kids.len() != 1 {
         return None;
     }
-    Some(kids[0].utf8_text(src.as_bytes()).ok()?.to_string())
+    flat_index_text(kids[0], src)
+}
+
+/// The index expression as text without spaces: a lone identifier (`i`), or a row-major flattening
+/// built only from identifiers, `*`, `+` and parentheses (`y * w + x` is `y*w+x`; ROADMAP E18). Two
+/// reads agree on the index exactly when their texts do, which is all an elementwise or row-reduction
+/// lift needs from it.
+fn flat_index_text(n: Node, src: &str) -> Option<String> {
+    match n.kind() {
+        "identifier" => Some(n.utf8_text(src.as_bytes()).ok()?.to_string()),
+        "parenthesized_expression" => {
+            Some(format!("({})", flat_index_text(n.named_child(0)?, src)?))
+        }
+        "binary_expression" => {
+            let op = n
+                .child_by_field_name("operator")?
+                .utf8_text(src.as_bytes())
+                .ok()?;
+            if op != "*" && op != "+" {
+                return None;
+            }
+            let l = flat_index_text(n.child_by_field_name("left")?, src)?;
+            let r = flat_index_text(n.child_by_field_name("right")?, src)?;
+            Some(format!("{l}{op}{r}"))
+        }
+        _ => None,
+    }
 }
 
 /// Names assigned exactly once in the whole tree, mapped to the single

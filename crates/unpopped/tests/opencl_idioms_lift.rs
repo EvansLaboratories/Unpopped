@@ -183,3 +183,10 @@ fn a_row_loop_that_ignores_the_row_is_not_a_row_reduction() {
         "every row would sum the same row"
     );
 }
+
+#[test]
+fn a_row_id_that_is_not_the_first_global_id_is_not_a_row_reduction() {
+    // `r` is the SECOND work-item id, so the work-items do not enumerate the rows of a row-major input.
+    let src = "long r = get_global_id(1); float acc = 0.0f; for (long c = 0; c < n; ++c) { acc += in[r * n + c]; } out[r] = acc;";
+    assert!(lift_reduce(src).is_err());
+}
