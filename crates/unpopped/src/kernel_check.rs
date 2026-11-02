@@ -189,6 +189,11 @@ fn check_sync_stmt(
                 what: "Fence: the shape is reserved and its semantics has not landed",
             });
         }
+        Stmt::Collective { .. } => {
+            return Err(KernelError::CollectiveUnsupported {
+                what: "Collective: the shape is reserved and its semantics has not landed",
+            });
+        }
         Stmt::Call {
             callee,
             args,
@@ -334,6 +339,7 @@ fn check_stmt(
         Stmt::AtomicRmw { .. }
         | Stmt::AtomicCas { .. }
         | Stmt::Fence { .. }
+        | Stmt::Collective { .. }
         | Stmt::Call { .. }
         | Stmt::Barrier { .. } => check_sync_stmt(k, st, sc, declared_here)?,
         Stmt::If { cond, then, els } => {

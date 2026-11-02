@@ -1691,6 +1691,7 @@ fn node_children(n: &DagNode) -> Vec<NodeId> {
 /// (`Sum`/`Mean` → 0; `Prod` → 1; `Max`/`Min` peel the first element, so no ±∞
 /// literal — that keeps the emitted source header-light under nvrtc).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ReduceOp {
     /// Sum over the reduced axis (`SumDim`).
     Sum,
@@ -1712,6 +1713,19 @@ pub enum ReduceOp {
     /// so a Prod reduction — like every reduction — emits no contract (honest
     /// miss, and reductions are not in the elementwise pattern vocabulary).
     Prod,
+    /// Bitwise AND over the reduced axis (integers only). Identity: all bits set (`-1` as the signed
+    /// type, `MAX` as the unsigned). A float input is a typed refusal (`UnsupportedReduceOp`).
+    And,
+    /// Bitwise OR over the reduced axis (integers only). Identity `0`.
+    Or,
+    /// Bitwise XOR over the reduced axis (integers only; Triton's `xor_sum`). Identity `0`.
+    Xor,
+    /// Maximum that **ignores NaN** (IEEE `maxNum`, CUDA `fmaxf`); a run of only NaN gives NaN.
+    /// **Shape only (0.42.0):** refused with `UnsupportedReduceOp` until its semantics lands.
+    MaxNum,
+    /// Minimum that **ignores NaN** (IEEE `minNum`, CUDA `fminf`); a run of only NaN gives NaN.
+    /// **Shape only (0.42.0):** refused with `UnsupportedReduceOp` until its semantics lands.
+    MinNum,
 }
 
 /// Sort direction of an [`Access::RowSort`] (increment 8). Ascending places the

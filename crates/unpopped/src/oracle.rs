@@ -2853,7 +2853,25 @@ fn fold_step(
             }
             *have = true;
         }
+        _ => bit_fold(rop, e.i128(), (int_acc, acc_i), have),
     }
+}
+
+/// The arms of [`fold_step`] not above: `And`, `Or`, `Xor` (and the shape-only `MaxNum`/`MinNum`, a bug here).
+/// One step of an integer bit fold, seeded by the first element (no identity literal, as for `Max`/`Min`).
+/// `MaxNum`/`MinNum` are shapes only, and a float input is declined by the plan gate: both are bugs here.
+fn bit_fold(rop: ReduceOp, v: i128, (int_acc, acc): (bool, &mut i128), have: &mut bool) {
+    assert!(
+        int_acc && !matches!(rop, ReduceOp::MaxNum | ReduceOp::MinNum),
+        "oracle: {rop:?} here is declined by the plan gate (a float bit fold, or a shape-only op)"
+    );
+    *acc = match (*have, rop) {
+        (false, _) => v,
+        (true, ReduceOp::And) => *acc & v,
+        (true, ReduceOp::Or) => *acc | v,
+        (true, _) => *acc ^ v,
+    };
+    *have = true;
 }
 
 // ===========================================================================
@@ -2920,7 +2938,14 @@ fn eval_row_reduce(
                         }
                         have = true;
                     }
-                    ReduceOp::Prod => panic!("oracle: RowReduce Prod stage is unsupported"),
+                    ReduceOp::Prod
+                    | ReduceOp::And
+                    | ReduceOp::Or
+                    | ReduceOp::Xor
+                    | ReduceOp::MaxNum
+                    | ReduceOp::MinNum => {
+                        panic!("oracle: RowReduce {:?} stage is unsupported", st.op)
+                    }
                 }
             }
             let finalized = if matches!(st.op, ReduceOp::Mean) {
@@ -3123,6 +3148,13 @@ fn eval_scan(
                     }
                 }
                 ReduceOp::Mean => panic!("oracle: Scan rejects Mean"),
+                ReduceOp::And
+                | ReduceOp::Or
+                | ReduceOp::Xor
+                | ReduceOp::MaxNum
+                | ReduceOp::MinNum => {
+                    panic!("oracle: Scan rejects {sop:?}")
+                }
             }
         }
     }
@@ -3149,6 +3181,9 @@ fn scan_identity(sop: ReduceOp, dt: ElementKind) -> (f64, i128) {
         ReduceOp::Max => (f64::NEG_INFINITY, ext(true)),
         ReduceOp::Min => (f64::INFINITY, ext(false)),
         ReduceOp::Mean => panic!("oracle: Scan rejects Mean"),
+        ReduceOp::And | ReduceOp::Or | ReduceOp::Xor | ReduceOp::MaxNum | ReduceOp::MinNum => {
+            panic!("oracle: Scan rejects {sop:?}")
+        }
     }
 }
 
@@ -3295,7 +3330,12 @@ fn eval_window(
                         }
                         have = true;
                     }
-                    ReduceOp::Prod => panic!("oracle: Window rejects Prod"),
+                    ReduceOp::Prod
+                    | ReduceOp::And
+                    | ReduceOp::Or
+                    | ReduceOp::Xor
+                    | ReduceOp::MaxNum
+                    | ReduceOp::MinNum => panic!("oracle: Window rejects {wop:?}"),
                 }
             }
             // Finalize.
@@ -3328,7 +3368,12 @@ fn eval_window(
                         Val::Float(if have { best_f } else { ident_f })
                     }
                 }
-                ReduceOp::Prod => unreachable!(),
+                ReduceOp::Prod
+                | ReduceOp::And
+                | ReduceOp::Or
+                | ReduceOp::Xor
+                | ReduceOp::MaxNum
+                | ReduceOp::MinNum => unreachable!(),
             };
             // Epilogue.
             let leaf = |i: u8| {

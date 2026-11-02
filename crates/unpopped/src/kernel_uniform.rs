@@ -142,6 +142,8 @@ impl Walk<'_> {
             Stmt::If { .. } | Stmt::For { .. } | Stmt::While { .. } => {
                 self.control(st, div, poisoned)?;
             }
+            // Refused by the checker until its semantics lands; a collective's result differs per lane.
+            Stmt::Collective { result, .. } => self.mark(*result),
             Stmt::Store { .. } | Stmt::Fence { .. } | Stmt::Return => {}
             Stmt::Break | Stmt::Continue => *poisoned |= div,
             Stmt::Barrier { .. } => {

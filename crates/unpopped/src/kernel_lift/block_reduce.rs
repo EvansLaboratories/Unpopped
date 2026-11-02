@@ -95,12 +95,21 @@ pub fn lift_reduction_opdef_launched(
 /// The forms this lift takes: an order-independent fold, or a float `Sum`/`Mean` with a declared
 /// bound.
 fn check_order_independent(sh: &ReductionShape, rop: ReduceOp) -> Result<(), LiftDecline> {
+    if matches!(
+        rop,
+        ReduceOp::And | ReduceOp::Or | ReduceOp::Xor | ReduceOp::MaxNum | ReduceOp::MinNum
+    ) {
+        return Err(LiftDecline::UnsupportedForm(
+            "a bit or NaN-ignoring reduction in a launched reduction (the sequential lift only)",
+        ));
+    }
     let independent = match rop {
         ReduceOp::Max | ReduceOp::Min => true,
         // A float Sum or Mean has a declared bound instead (module docs); an integer Mean is not a fold.
         ReduceOp::Sum => true,
         ReduceOp::Prod => sh.is_int(),
         ReduceOp::Mean => !sh.is_int(),
+        ReduceOp::And | ReduceOp::Or | ReduceOp::Xor | ReduceOp::MaxNum | ReduceOp::MinNum => false,
     };
     if !independent {
         return Err(LiftDecline::UnsupportedForm(
