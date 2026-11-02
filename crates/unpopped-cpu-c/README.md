@@ -18,8 +18,8 @@ It is the normative reference emitter a new target is read against, and the one 
 Depend on the exact version of `unpopped` it was released with (pre-1.0; pin exact versions):
 
 ```toml
-unpopped = "=0.40.18"
-unpopped-cpu-c = "=0.40.18"
+unpopped = "=0.40.19"
+unpopped-cpu-c = "=0.40.19"
 ```
 
 See the `unpopped` crate documentation for the plan and kernel IR this crate consumes.
