@@ -13,8 +13,14 @@
 //!
 //! # What is refused (typed, [`LowerError::UnsupportedKernel`])
 //!
-//! A launched entry (the next slice: ids and the thread loop through a call), an allocation passed to a
-//! callee, and anything `check_module` refuses.
+//! A function other than the entry that holds a barrier under a launch (the serialized thread loop cannot be
+//! split inside a C function), an allocation passed to a callee, and anything `check_module` refuses.
+//!
+//! # Under a launch
+//!
+//! The entry is spelled by the serialized thread loop (`launch.rs`); a callee runs inside one thread's run, so
+//! it takes the thread's ids as six extra arguments `ti0..2`, `bi0..2` (before `res`) and reads
+//! `BlockDim`/`GridDim` as constants of the entry's launch.
 
 use unpopped::backend::{GeneratedKernel, LowerError};
 use unpopped::kernel::{Block, Module, Stmt, check_module};
@@ -26,15 +32,13 @@ use crate::kernel::{ModuleCtx, function_text, ident, refuse, with_prelude};
 ///
 /// # Errors
 ///
-/// [`LowerError::UnsupportedKernel`]: the module does not check, the entry is launched, or a function uses
-/// something this emitter has not been taught.
+/// [`LowerError::UnsupportedKernel`]: the module does not check, a callee holds a barrier under a launch, or a
+/// function uses something this emitter has not been taught.
 pub fn lower_module(m: &Module, entry: u32) -> Result<GeneratedKernel, LowerError> {
     check_module(m, entry).map_err(|e| refuse(format!("the module is ill-formed: {e:?}")))?;
     let k = &m.fns[entry as usize];
     if k.launch.is_some() {
-        return Err(refuse(
-            "a launched module (calls under a launch are the next slice)",
-        ));
+        refuse_callee_barriers(m, entry)?;
     }
     let names: Vec<String> = m
         .fns
@@ -48,7 +52,11 @@ pub fn lower_module(m: &Module, entry: u32) -> Result<GeneratedKernel, LowerErro
             }
         })
         .collect();
-    let ctx = ModuleCtx { fns: &m.fns, names };
+    let ctx = ModuleCtx {
+        fns: &m.fns,
+        names,
+        launch: crate::launch::LaunchInfo::of(k),
+    };
     let mut body = String::new();
     for i in postorder(m, entry) {
         let callee = i != entry as usize;
@@ -63,6 +71,29 @@ pub fn lower_module(m: &Module, entry: u32) -> Result<GeneratedKernel, LowerErro
         ctx.names[entry as usize].clone(),
         with_prelude(&k.name, &body),
     ))
+}
+
+/// A callee runs inside one thread's run of the thread loop, so it cannot hold a barrier (the loop would
+/// have to be split in the middle of a C function).
+fn refuse_callee_barriers(m: &Module, entry: u32) -> Result<(), LowerError> {
+    for (i, f) in m.fns.iter().enumerate() {
+        if i != entry as usize && holds_barrier(&f.body) {
+            return Err(refuse(format!(
+                "function `{}` holds a Barrier and is called under a launch (the serialized thread loop cannot split a callee)",
+                f.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn holds_barrier(b: &Block) -> bool {
+    b.0.iter().any(|st| match st {
+        Stmt::Barrier { .. } => true,
+        Stmt::If { then, els, .. } => holds_barrier(then) || holds_barrier(els),
+        Stmt::For { body, .. } | Stmt::While { body, .. } => holds_barrier(body),
+        _ => false,
+    })
 }
 
 /// The functions `entry` reaches, callees before callers, the entry last.

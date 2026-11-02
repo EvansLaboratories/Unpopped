@@ -121,6 +121,8 @@ pub(crate) struct Emitter<'a> {
 pub(crate) struct ModuleCtx<'a> {
     pub(crate) fns: &'a [KernelFn],
     pub(crate) names: Vec<String>,
+    /// The entry's launch: when present, a callee takes the thread's ids as six extra C arguments.
+    pub(crate) launch: Option<LaunchInfo>,
 }
 
 impl Emitter<'_> {
@@ -255,11 +257,9 @@ impl Emitter<'_> {
         let Some(m) = self.module else {
             return Err(refuse("a Call outside a module (use lower_module)"));
         };
-        if self.launch.is_some() {
-            return Err(refuse("a Call in a launched kernel (the next slice)"));
-        }
         let f = &m.fns[callee as usize];
         let mut actuals = self.call_actuals(f, args)?;
+        actuals.extend(self.id_actuals(m)?);
         let n = self.fresh;
         self.fresh += 1;
         let rtype = match f.result {
@@ -280,6 +280,26 @@ impl Emitter<'_> {
             self.bind_local(dst, &format!("r{n}"))?;
         }
         Ok(())
+    }
+
+    /// The thread's ids handed to a callee when the module is launched: `ThreadIdx` then `BlockIdx`, each of
+    /// the three axes. The launched entry spells them from its thread loop; a callee forwards its own.
+    fn id_actuals(&self, m: &ModuleCtx<'_>) -> Result<Vec<String>, LowerError> {
+        if m.launch.is_none() {
+            return Ok(Vec::new());
+        }
+        let Some(info) = self.launch else {
+            return Ok(["ti0", "ti1", "ti2", "bi0", "bi1", "bi2"]
+                .map(String::from)
+                .to_vec());
+        };
+        let ids = [0u8, 1, 2]
+            .map(unpopped::exec::ExecId::ThreadIdx)
+            .into_iter();
+        let blocks = [0u8, 1, 2].map(unpopped::exec::ExecId::BlockIdx);
+        ids.chain(blocks)
+            .map(|id| crate::launch::exec_c(info, id))
+            .collect()
     }
 
     /// The C arguments of a call, in the callee's parameter order.
@@ -382,7 +402,11 @@ impl Emitter<'_> {
 }
 
 /// The signature, with one line per C argument.
-fn signature(k: &KernelFn, name: &str, result: Option<&'static str>) -> Result<String, LowerError> {
+fn signature(
+    k: &KernelFn,
+    name: &str,
+    (ids, result): (bool, Option<&'static str>),
+) -> Result<String, LowerError> {
     let mut args = Vec::new();
     for (i, p) in k.params.iter().enumerate() {
         match &p.kind {
@@ -400,6 +424,11 @@ fn signature(k: &KernelFn, name: &str, result: Option<&'static str>) -> Result<S
             }
             ParamKind::Scalar { ty, .. } => args.push(format!("{} p{i}", ctype(*ty, "a scalar")?)),
             _ => return Err(refuse("a parameter kind this emitter has not been taught")),
+        }
+    }
+    if ids {
+        for n in ["ti0", "ti1", "ti2", "bi0", "bi1", "bi2"] {
+            args.push(format!("unsigned int {n}"));
         }
     }
     if let Some(t) = result {
@@ -488,7 +517,8 @@ pub(crate) fn function_text(
     let io = |op, t, operands: Vec<String>| typed::cpu_int_op(op, t, &operands, dtype);
     let launch = LaunchInfo::of(k);
     let local = |i: u32| crate::launch::local_c(launch, i);
-    let exec = |id| crate::launch::exec_spelling(launch, id);
+    let ids = module.and_then(|m| m.launch).filter(|_| callee);
+    let exec = |id| crate::launch::exec_spelling((launch, ids), id);
     let lowering = Lowering::builder(&no_input_leaf, &un, &bin)
         .exec(&exec)
         .arith(&ar)
@@ -540,7 +570,14 @@ fn emit(
     let store = result.map_or(String::new(), |r| format!("    *res = l{r};\n"));
     Ok(format!(
         "{} {{\n{}{store}    return 0;\n}}\n",
-        signature(k, name, res_type)?,
+        signature(
+            k,
+            name,
+            (
+                callee && module.is_some_and(|m| m.launch.is_some()),
+                res_type
+            )
+        )?,
         e.out
     ))
 }

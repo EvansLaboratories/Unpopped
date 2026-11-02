@@ -6,13 +6,15 @@
 //! buffers compared byte for byte with `oracle::run_module`.
 
 use unpopped::backend::LowerError;
-use unpopped::exec::LaunchShape;
+use unpopped::exec::{ExecId, LaunchShape, Scope};
 use unpopped::ir::{BinaryOp, ScalarExpr};
 use unpopped::kernel::{
-    Block, BufferRole, CallArg, KernelFn, LocalDecl, Module, Param, ParamKind, Place, Stmt,
+    BarrierKind, Block, BufferRole, CallArg, KernelFn, LocalDecl, Module, Param, ParamKind, Place,
+    Stmt,
 };
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
+use unpopped::oracle::kernel_launch::run_launch_module;
 use unpopped::oracle::run_module;
 use unpopped_cpu_c::lower_module;
 use unpopped_vocab::ElementKind;
@@ -104,7 +106,12 @@ fn agree_mutated(
         return;
     };
     let mut interp = args;
-    match run_module(m, 0, &mut interp) {
+    let ran = if entry.launch.is_some() {
+        run_launch_module(m, 0, &mut interp)
+    } else {
+        run_module(m, 0, &mut interp)
+    };
+    match ran {
         Ok(()) => {
             assert_eq!(
                 c.status, 0,
@@ -212,13 +219,104 @@ fn a_callee_out_of_bounds_returns_status_one_from_the_entry() {
     agree_module("m_oob", &far_reader(), vec![buf(&[1.0])]);
 }
 
+fn id(e: ExecId) -> ScalarExpr {
+    ScalarExpr::Exec(e)
+}
+
+fn u(v: i64) -> ScalarExpr {
+    ScalarExpr::ConstInt(v, U32)
+}
+
+fn f32_of(e: ScalarExpr) -> ScalarExpr {
+    let spec = unpopped::ir::CastSpec {
+        to: F32,
+        round: unpopped::ir::RoundMode::NearestEven,
+        sat: unpopped::ir::Saturation::Wrap,
+    };
+    ScalarExpr::Cast(Box::new(e), spec)
+}
+
+/// `BlockIdx.x * BlockDim.x + ThreadIdx.x`: the thread's slot in a one-dimensional launch.
+fn slot() -> ScalarExpr {
+    let base = ScalarExpr::Mul(
+        Box::new(id(ExecId::BlockIdx(0))),
+        Box::new(id(ExecId::BlockDim(0))),
+    );
+    ScalarExpr::Add(Box::new(base), Box::new(id(ExecId::ThreadIdx(0))))
+}
+
+/// `ids(x)`: `x[slot] = BlockIdx.x * 10 + ThreadIdx.x` (the callee reads ids).
+fn ids_callee() -> KernelFn {
+    let tens = ScalarExpr::Mul(Box::new(id(ExecId::BlockIdx(0))), Box::new(u(10)));
+    let value = ScalarExpr::Add(Box::new(tens), Box::new(id(ExecId::ThreadIdx(0))));
+    let body = vec![Stmt::Store {
+        place: Place::Logical {
+            buffer: 0,
+            coords: vec![slot()],
+        },
+        value: f32_of(value),
+    }];
+    kernel("ids", vec![rw("x")], 0, body)
+}
+
+fn launched_entry(grid: [u32; 3], block: [u32; 3], body: Vec<Stmt>) -> KernelFn {
+    kernel("main", vec![rw("a")], 1, body).with_launch(LaunchShape::new(block, grid))
+}
+
+fn ids_module() -> Module {
+    let body = vec![call(1, vec![CallArg::Buffer(0)], None)];
+    Module::new(vec![
+        launched_entry([2, 1, 1], [4, 1, 1], body),
+        ids_callee(),
+    ])
+}
+
 #[test]
-fn a_launched_entry_is_a_typed_refusal() {
-    let launched = kernel("main", vec![rw("a")], 0, vec![])
-        .with_launch(LaunchShape::new([1, 1, 1], [1, 1, 1]));
-    let r = lower_module(&Module::new(vec![launched]), 0);
+fn a_callee_under_a_launch_reads_the_calling_threads_ids() {
+    agree_module("m_launch_ids", &ids_module(), vec![buf(&[0.0; 8])]);
+}
+
+#[test]
+fn ids_are_forwarded_through_a_nested_call_and_a_result_per_thread() {
+    // mid(x) calls ids(x); the entry calls mid, then a per-thread result r[slot] = plus_one(ThreadIdx.x)
+    let mid = kernel(
+        "mid",
+        vec![rw("x")],
+        0,
+        vec![call(2, vec![CallArg::Buffer(0)], None)],
+    );
+    let arg = CallArg::Scalar(f32_of(id(ExecId::ThreadIdx(0))));
+    let store_r = Stmt::Store {
+        place: Place::Logical {
+            buffer: 1,
+            coords: vec![slot()],
+        },
+        value: ScalarExpr::Local(0),
+    };
+    let body = vec![
+        call(1, vec![CallArg::Buffer(0)], None),
+        call(3, vec![arg], Some(0)),
+        store_r,
+    ];
+    let mut main = launched_entry([2, 1, 1], [4, 1, 1], body);
+    main.params.push(rw("r"));
+    let m = Module::new(vec![main, mid, ids_callee(), plus_one()]);
+    agree_module("m_launch_nested", &m, vec![buf(&[0.0; 8]), buf(&[0.0; 8])]);
+}
+
+#[test]
+fn a_callee_that_holds_a_barrier_under_a_launch_is_a_typed_refusal() {
+    let barrier = Stmt::Barrier {
+        scope: Scope::Block,
+        kind: BarrierKind::Full,
+    };
+    let sync = kernel("sync", vec![rw("x")], 0, vec![barrier]);
+    let body = vec![call(1, vec![CallArg::Buffer(0)], None)];
+    let main = launched_entry([1, 1, 1], [4, 1, 1], body);
+    let r = lower_module(&Module::new(vec![main, sync]), 0);
+    // refused up front, by name, not by the callee emitter tripping over its barrier
     assert!(
-        matches!(r, Err(LowerError::UnsupportedKernel { .. })),
+        matches!(&r, Err(LowerError::UnsupportedKernel { detail }) if detail.contains("called under a launch")),
         "{r:?}"
     );
 }
@@ -287,4 +385,22 @@ fn seeded_mutants_of_the_generated_c_are_noticed() {
         caught("mut_status", &far_reader(), vec![buf(&[1.0])], m),
         "status"
     );
+}
+
+#[test]
+fn seeded_mutants_of_the_launched_c_are_noticed() {
+    let m = ids_module();
+    let buffers = || vec![buf(&[0.0; 8])];
+    // the thread id is passed where the block id belongs
+    let swap = |s: String| s.replace("((unsigned int)blk0)", "((unsigned int)(t % 4))");
+    assert!(caught("mut_ids_swap", &m, buffers(), swap), "ids swapped");
+    // the block id is not passed down
+    let drop_blk = |s: String| s.replace("((unsigned int)blk0)", "0u");
+    assert!(
+        caught("mut_blk0", &m, buffers(), drop_blk),
+        "block id dropped"
+    );
+    // the block size constant the callee reads is wrong
+    let dim = |s: String| s.replace("4u", "3u");
+    assert!(caught("mut_dim", &m, buffers(), dim), "block dim");
 }
