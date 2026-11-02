@@ -677,13 +677,7 @@ fn scan_identity(rop: ReduceOp, dtype: ElementKind) -> ScalarExpr {
             ReduceOp::Max => lo,
             ReduceOp::Min => hi,
             ReduceOp::Sum | ReduceOp::Mean => 0,
-            ReduceOp::And
-            | ReduceOp::Or
-            | ReduceOp::Xor
-            | ReduceOp::MaxNum
-            | ReduceOp::MinNum
-            | ReduceOp::ArgMax
-            | ReduceOp::ArgMin => {
+            _ => {
                 unreachable!("check_accumulated_dtype declines it before a scan is lifted")
             }
         };
@@ -712,13 +706,7 @@ fn scan_identity(rop: ReduceOp, dtype: ElementKind) -> ScalarExpr {
         ReduceOp::Max => infinity(true),
         ReduceOp::Min => infinity(false),
         ReduceOp::Sum | ReduceOp::Mean => ScalarExpr::Const(0.0),
-        ReduceOp::And
-        | ReduceOp::Or
-        | ReduceOp::Xor
-        | ReduceOp::MaxNum
-        | ReduceOp::MinNum
-        | ReduceOp::ArgMax
-        | ReduceOp::ArgMin => {
+        _ => {
             unreachable!("check_accumulated_dtype declines it before a scan is lifted")
         }
     }
