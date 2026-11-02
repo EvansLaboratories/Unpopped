@@ -28,6 +28,10 @@ use crate::kernel::{AtomicOp, Block, KernelError, KernelFn, ParamKind, Place, St
 use crate::types::{self, Ty, map_children};
 use unpopped_vocab::ElementKind;
 
+/// A buffer map entry at or above this is not a root argument but the entry's allocation `entry - ALLOC_BIND`:
+/// a callee's buffer parameter bound to a `Shared` or `Private` array passed as a `CallArg::Alloc`.
+pub(super) const ALLOC_BIND: usize = 1 << 40;
+
 /// Statements the interpreter will execute before declaring a run runaway. It bounds the
 /// *interpreter* (so a test of a bad program terminates); it is not part of the language.
 pub const STEP_LIMIT: u64 = 10_000_000;
@@ -105,6 +109,8 @@ pub(super) struct Machine<'a> {
     pub(super) bufmap: Vec<usize>,
     /// The index of the running function in `module` (the entry's, outside a call).
     pub(super) fn_idx: u32,
+    /// The function whose `allocs` an allocation index names: always the entry, since only it declares any.
+    pub(super) alloc_k: &'a KernelFn,
     pub(super) steps: u64,
     /// Present only under `run_launch`: which thread this is, and the memory it shares.
     pub(super) ctx: Option<ThreadCtx<'a>>,
@@ -142,6 +148,7 @@ impl<'a> Machine<'a> {
             module: None,
             bufmap: Vec::new(),
             fn_idx: 0,
+            alloc_k: k,
             steps: 0,
             ctx,
         }
@@ -154,7 +161,21 @@ impl<'a> Machine<'a> {
         self
     }
 
-    /// The root argument a buffer parameter of the running function names.
+    /// The entry's allocation a buffer parameter of the running function is bound to, with the index
+    /// expression of an access through it (`Place::Logical` of rank 1 on an allocation-bound parameter).
+    fn alloc_bound<'p>(&self, place: &'p Place) -> Option<(u32, &'p ScalarExpr)> {
+        let Place::Logical { buffer, coords } = place else {
+            return None;
+        };
+        let root = self.root(*buffer);
+        match (root.checked_sub(ALLOC_BIND), coords.as_slice()) {
+            (Some(a), [index]) => Some((u32::try_from(a).ok()?, index)),
+            _ => None,
+        }
+    }
+
+    /// The root argument a buffer parameter of the running function names (an allocation binding is
+    /// `ALLOC_BIND + index`).
     pub(super) fn root(&self, buffer: u32) -> usize {
         self.bufmap
             .get(buffer as usize)
@@ -391,6 +412,9 @@ impl<'a> Machine<'a> {
         if let Place::Alloc { alloc, index } = place {
             return self.alloc_load(*alloc, index);
         }
+        if let Some((alloc, index)) = self.alloc_bound(place) {
+            return self.alloc_load(alloc, index);
+        }
         let (b, off) = self.offset(place)?;
         self.note_global(b, off, AccessKind::Read)?;
         let KernelArg::Buffer(tb) = &self.args[b] else {
@@ -441,6 +465,9 @@ impl<'a> Machine<'a> {
         if let Place::Alloc { alloc, index } = place {
             return self.alloc_atomic(*alloc, index, step);
         }
+        if let Some((alloc, index)) = self.alloc_bound(place) {
+            return self.alloc_atomic(alloc, index, step);
+        }
         let (b, off) = self.offset(place)?;
         self.note_global(b, off, AccessKind::Atomic)?;
         let KernelArg::Buffer(tb) = &mut self.args[b] else {
@@ -456,6 +483,9 @@ impl<'a> Machine<'a> {
     fn store(&mut self, place: &Place, v: Val) -> Result<(), KernelTrap> {
         if let Place::Alloc { alloc, index } = place {
             return self.alloc_store(*alloc, index, v);
+        }
+        if let Some((alloc, index)) = self.alloc_bound(place) {
+            return self.alloc_store(alloc, index, v);
         }
         let (b, off) = self.offset(place)?;
         self.note_global(b, off, AccessKind::Write)?;

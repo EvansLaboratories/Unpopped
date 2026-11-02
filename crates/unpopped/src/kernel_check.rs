@@ -308,8 +308,8 @@ fn alloc_fits(
         Some("an allocation of a different element type than its parameter")
     } else if space == MemorySpace::Constant && cr.writes() {
         Some("a Constant allocation passed to a callee that writes it")
-    } else if matches!(cn, Some(r) if r != 1) {
-        Some("an allocation is one-dimensional, its parameter is not")
+    } else if cn != Some(1) {
+        Some("an allocation is one-dimensional, its parameter must declare rank 1")
     } else {
         None
     }
