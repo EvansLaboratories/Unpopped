@@ -156,129 +156,120 @@ fn two_parameters_may_alias_one_caller_buffer() {
     assert_eq!(read(&args[0]), vec![3.0, 3.0]);
 }
 
+/// `early(k) -> r`: `r = k`; if `k > 0` return at once, else `r = 0`. It reuses local ids 0 and 1.
+fn early() -> KernelFn {
+    let positive = ScalarExpr::Binary(
+        BinaryOp::CmpGt,
+        Box::new(ScalarExpr::Local(0)),
+        Box::new(f(0.0)),
+    );
+    let body = vec![
+        Stmt::Let {
+            local: 1,
+            init: ScalarExpr::Local(0),
+        },
+        Stmt::If {
+            cond: positive,
+            then: Block(vec![Stmt::Return]),
+            els: Block(vec![]),
+        },
+        Stmt::Assign {
+            local: 1,
+            value: f(0.0),
+        },
+    ];
+    kernel("early", vec![Param::scalar("k", F32, 0)], 2, body).with_result(1)
+}
+
+/// A caller that keeps a value in local 0 across two calls and stores everything it saw.
+fn keeps_local_zero() -> KernelFn {
+    let store = |i, local| Stmt::Store {
+        place: at(0, i),
+        value: ScalarExpr::Local(local),
+    };
+    let body = vec![
+        Stmt::Let {
+            local: 0,
+            init: f(5.0),
+        },
+        call(1, vec![CallArg::Scalar(f(4.0))], Some(1)),
+        call(1, vec![CallArg::Scalar(f(-4.0))], Some(2)),
+        store(0, 0),
+        store(1, 1),
+        store(2, 2),
+    ];
+    kernel("main", vec![rw("a")], 3, body)
+}
+
 #[test]
 fn the_callee_has_its_own_locals_and_a_return_ends_only_the_callee() {
     // The callee reuses local ids 0 and 1; the caller's local 0 survives, and the caller keeps running
     // after a callee that `Return`s early.
-    let early = kernel(
-        "early",
-        vec![Param::scalar("k", F32, 0)],
-        2,
-        vec![
-            Stmt::Let {
-                local: 1,
-                init: ScalarExpr::Local(0),
-            },
-            Stmt::If {
-                cond: ScalarExpr::Binary(
-                    BinaryOp::CmpGt,
-                    Box::new(ScalarExpr::Local(0)),
-                    Box::new(f(0.0)),
-                ),
-                then: Block(vec![Stmt::Return]),
-                els: Block(vec![]),
-            },
-            Stmt::Assign {
-                local: 1,
-                value: f(0.0),
-            },
-        ],
-    )
-    .with_result(1);
-    let main = kernel(
-        "main",
-        vec![rw("a")],
-        3,
-        vec![
-            Stmt::Let {
-                local: 0,
-                init: f(5.0),
-            },
-            call(1, vec![CallArg::Scalar(f(4.0))], Some(1)),
-            call(1, vec![CallArg::Scalar(f(-4.0))], Some(2)),
-            Stmt::Store {
-                place: at(0, 0),
-                value: ScalarExpr::Local(0),
-            },
-            Stmt::Store {
-                place: at(0, 1),
-                value: ScalarExpr::Local(1),
-            },
-            Stmt::Store {
-                place: at(0, 2),
-                value: ScalarExpr::Local(2),
-            },
-        ],
-    );
     let mut args = vec![buf(&[0.0; 3])];
-    run(&Module::new(vec![main, early]), &mut args).expect("runs");
+    run(&Module::new(vec![keeps_local_zero(), early()]), &mut args).expect("runs");
     assert_eq!(read(&args[0]), vec![5.0, 4.0, 0.0]);
 }
 
-#[test]
-fn a_call_in_a_loop_and_a_call_inside_a_call() {
-    // add(x, k): x[0] = x[0] + k.   twice(x, k): add(x, k); add(x, k).   main: for i in 0..4: twice(a, i)
-    let add = kernel(
-        "add",
-        vec![rw("x"), Param::scalar("k", F32, 0)],
-        2,
-        vec![
-            Stmt::Load {
-                local: 1,
-                place: at(0, 0),
-            },
-            Stmt::Store {
-                place: at(0, 0),
-                value: ScalarExpr::Add(
-                    Box::new(ScalarExpr::Local(1)),
-                    Box::new(ScalarExpr::Local(0)),
-                ),
-            },
-        ],
+/// `add(x, k)`: `x[0] = x[0] + k`.
+fn add() -> KernelFn {
+    let sum = ScalarExpr::Add(
+        Box::new(ScalarExpr::Local(1)),
+        Box::new(ScalarExpr::Local(0)),
     );
+    let body = vec![
+        Stmt::Load {
+            local: 1,
+            place: at(0, 0),
+        },
+        Stmt::Store {
+            place: at(0, 0),
+            value: sum,
+        },
+    ];
+    kernel("add", vec![rw("x"), Param::scalar("k", F32, 0)], 2, body)
+}
+
+/// `twice(x, k)`: `add(x, k)` two times (callee 1).
+fn twice() -> KernelFn {
     let once = call(
         1,
         vec![CallArg::Buffer(0), CallArg::Scalar(ScalarExpr::Local(0))],
         None,
     );
-    let twice = kernel(
-        "twice",
-        vec![rw("x"), Param::scalar("k", F32, 0)],
-        1,
-        vec![once.clone(), once],
-    );
-    let i32_to_f32 = |e| {
-        ScalarExpr::Cast(
-            Box::new(e),
-            unpopped::ir::CastSpec {
-                to: F32,
-                round: unpopped::ir::RoundMode::NearestEven,
-                sat: unpopped::ir::Saturation::Wrap,
-            },
-        )
+    let params = vec![rw("x"), Param::scalar("k", F32, 0)];
+    kernel("twice", params, 1, vec![once.clone(), once])
+}
+
+/// `for i in 0..4: twice(a, i as f32)` (callee 2).
+fn loops_over_twice() -> KernelFn {
+    let spec = unpopped::ir::CastSpec {
+        to: F32,
+        round: unpopped::ir::RoundMode::NearestEven,
+        sat: unpopped::ir::Saturation::Wrap,
     };
-    let main = KernelFn::new(
+    let k = ScalarExpr::Cast(Box::new(ScalarExpr::Local(0)), spec);
+    let step = call(2, vec![CallArg::Buffer(0), CallArg::Scalar(k)], None);
+    let lp = Stmt::For {
+        local: 0,
+        start: ScalarExpr::ConstInt(0, I32),
+        end: ScalarExpr::ConstInt(4, I32),
+        step: ScalarExpr::ConstInt(1, I32),
+        body: Block(vec![step]),
+    };
+    KernelFn::new(
         "main",
         F32,
         vec![rw("a")],
         vec![LocalDecl::scalar(I32)],
-        Block(vec![Stmt::For {
-            local: 0,
-            start: ScalarExpr::ConstInt(0, I32),
-            end: ScalarExpr::ConstInt(4, I32),
-            step: ScalarExpr::ConstInt(1, I32),
-            body: Block(vec![call(
-                2,
-                vec![
-                    CallArg::Buffer(0),
-                    CallArg::Scalar(i32_to_f32(ScalarExpr::Local(0))),
-                ],
-                None,
-            )]),
-        }]),
-    );
+        Block(vec![lp]),
+    )
+}
+
+#[test]
+fn a_call_in_a_loop_and_a_call_inside_a_call() {
     let mut args = vec![buf(&[0.0])];
-    run(&Module::new(vec![main, add, twice]), &mut args).expect("runs");
+    let m = Module::new(vec![loops_over_twice(), add(), twice()]);
+    run(&m, &mut args).expect("runs");
     assert_eq!(read(&args[0]), vec![12.0], "2 * (0 + 1 + 2 + 3)");
 }
 
