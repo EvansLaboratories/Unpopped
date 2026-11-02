@@ -7,11 +7,13 @@
 //! everywhere), a row of an even count of equal elements (a `Xor` that dropped an element is wrong on one parity)
 //! and negative values (sign extension).
 
+use unpopped::backend::Backend;
 use unpopped::ir::{Expr, OpDef, ReduceOp, input};
 use unpopped::kernel::{KernelFn, check_kernel};
 use unpopped::kernel_lift::lift_reduction_opdef;
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
+use unpopped_cpu_c::CpuC;
 use unpopped_vocab::{AxisMask, ElementKind};
 
 #[path = "support/cc.rs"]
@@ -85,6 +87,11 @@ fn bit_reductions_agree_over_each_axis_and_width() {
 fn the_c_operator_is_what_the_differential_is_sensitive_to() {
     // a seeded mutant of the generated C: each bit operator replaced by another must change an answer
     let k = reduction(ElementKind::I32, ReduceOp::Xor, false);
+    let g = CpuC.lower_kernel(&k).expect("the Xor reduction lowers");
+    assert!(
+        g.source.contains(" ^ "),
+        "the Xor reduction is spelled with a C `^`"
+    );
     let inputs = || args(ElementKind::I32, &[ROWS]);
     let honest = run_c_mutated("bit_honest", &k, &inputs(), |s| s).expect("a C compiler");
     let as_or = run_c_mutated("bit_xor_as_or", &k, &inputs(), |s| s.replace(" ^ ", " | "));
