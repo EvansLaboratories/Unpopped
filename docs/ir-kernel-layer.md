@@ -50,7 +50,7 @@ Stmt::If     { cond: ScalarExpr, then: Block, els: Block }
 Stmt::For    { local: u32, start, end, step: ScalarExpr, body: Block }   // integer counter, half-open
 Stmt::While  { cond: ScalarExpr, body: Block }
 Stmt::Break | Stmt::Continue | Stmt::Return
-// Stmt::Call { callee, args, result }  -- shape since 0.41.0, REFUSED by check_kernel until the module checker lands (unknown U-2, below)
+// Stmt::Call { callee, args: Vec<CallArg>, result }  -- shape since 0.41.4 (CallArg::{Scalar(expr)|Buffer(i)|Alloc(i)}; KernelFn.result is the callee's result local), REFUSED by check_kernel until the module checker lands (unknown U-2; docs/options-u3-calls.md)
 
 Place::Logical { buffer: u32, coords: Vec<ScalarExpr> }   // the element at LOGICAL coordinates
 ```
