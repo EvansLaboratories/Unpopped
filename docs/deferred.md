@@ -1100,7 +1100,7 @@ Forcing that fix created the pattern that later answered this question.)*
 
   **Also found while measuring, and not fixed here:** `classify_vec_width` caps
   vector accesses at a hardcoded `vbytes <= 16` in `unpopped-vocab`
-  (`structure_key.rs:1282`). That is CUDA's `float4` limit living in the neutral
+  (`classify_vec_width` in `structure_key.rs`, line 2335 at `5c2c843`). That is CUDA's `float4` limit living in the neutral
   vocabulary — the same shape as the `backend.rs:1199` declaration leak, one
   crate over, and it is what `TargetCapabilities::max_vector_bytes` should
   eventually feed.

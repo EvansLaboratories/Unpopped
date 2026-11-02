@@ -714,7 +714,7 @@ mod tests {
     #[test]
     fn nan_propagating_elementwise_minmax_map_to_max_prop_min_prop() {
         // `BinaryOp::Max`/`Min` are NaN-propagating (`torch.maximum`/`minimum` —
-        // ir.rs:264), deliberately distinct from the NaN-suppressing `FmaxIeee`/
+        // the `BinaryOp::Max` docs in `ir.rs`), deliberately distinct from the NaN-suppressing `FmaxIeee`/
         // `FminIeee`. Their KISS-Ops elementwise tokens are `max_prop`/`min_prop`
         // (kiss-ops-vocab `MaxProp`/`MinProp`), NOT bare `max`/`min` — those exist
         // ONLY as the reduce/scan MONOID enum (`reduce[max,…]`). Emitting bare

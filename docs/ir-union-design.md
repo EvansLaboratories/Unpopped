@@ -30,7 +30,7 @@ first increment (I0 below). `docs/groupshared-sizing.md` carries the same premis
   + one single-output `WriteIndex`. `ScalarExpr` has 12 variants: `Input, Const(f64), Param, Reduced,
   Coord, Add, Sub, Mul, Div, Unary, Binary, Select`. No `Cast`, no `Fma`, no local, no loop, no vector.
 - `Access` = `Elementwise, Reduction, RowReduce, Contraction, Scan, Window, RowSort, Im2Col`.
-- `AccumSpec` has exactly one variant, `WideFloat` (`ir.rs:1933`); the doc comment says tensor-core and TF32
+- `AccumSpec` has exactly one variant, `WideFloat` (`AccumSpec` in `ir.rs`, line 2364 at `5c2c843`); the doc comment says tensor-core and TF32
   "join as variants". `Schedule::Contraction` is a unit variant.
 - Data-dependent indexing **exists**: `ReadIndex::Indexed` (gather / index_select) and
   `WriteIndex::ScatterIndexed` with `WriteCombine::{Assign, AtomicAdd, AtomicMax, AtomicMin}`.

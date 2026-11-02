@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.40.20` — docs: stale line cites named or dated (ROADMAP X7)
+
+X7 audited: of 83 line cites with an identifier beside them, the survey docs and `idiom-lifting-design.md` pin their own ref by design and are left alone; the live cites that had drifted now name the symbol and date the line (`classify_vec_width` in ROADMAP C6, `normative-seams.md`, `deferred.md`; `Access` and `AccumSpec` in `groupshared-sizing.md` and `ir-union-design.md`; the removed `CUDA_RESIDUE` cite; a `recipe.rs` comment). ROADMAP X7 records the audit, the method's limit (a window test, then reading) and what remains. No code change.
+
 ## `0.40.19` — the plan oracle evaluates `U32` and `U64` reductions; an integer `Mean` reduction is a typed decline (ROADMAP E19)
 
 `oracle::evaluate` now folds `Sum`, `Prod`, `Max` and `Min` at `U32` and `U64` by the same rule as the other integer dtypes (wrap at the dtype's width, `Max`/`Min` exact), with values above `i32::MAX` and `i64::MAX` in `tests/oracle_narrow_int_reduction.rs`; with it every integer dtype is in scope for those four folds.
