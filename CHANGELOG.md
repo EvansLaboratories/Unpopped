@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.40.22` — docs: an options note for U4 (synchronization and atomics); the U3 and U4 ROADMAP rows corrected
+
+`docs/options-u4-sync-and-atomics.md`: what the kernel layer has for barriers and atomics, what the union surveys list as missing, which emitter lanes could use a slice (measured: none implements the kernel-layer path for these statements today; bonefish has named a future `sycl::atomic_ref` spelling), the seven IR shapes a slice adds with whether each breaks `Stmt` consumers, three slicing options and a recommendation (break `Stmt` once, stage the semantics behind typed refusals). Nothing is built; it needs a ruling. ROADMAP U3 said "open, after U2" although its spec, capability types, resource map and row 4 are done; the row now says what is done and what is open. No code change.
+
 ## `0.40.20` — docs: stale line cites named or dated (ROADMAP X7)
 
 X7 audited: of 83 line cites with an identifier beside them, the survey docs and `idiom-lifting-design.md` pin their own ref by design and are left alone; the live cites that had drifted now name the symbol and date the line (`classify_vec_width` in ROADMAP C6, `normative-seams.md`, `deferred.md`; `Access` and `AccumSpec` in `groupshared-sizing.md` and `ir-union-design.md`; the removed `CUDA_RESIDUE` cite; a `recipe.rs` comment). ROADMAP X7 records the audit, the method's limit (a window test, then reading) and what remains. No code change.
