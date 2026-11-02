@@ -2,12 +2,13 @@
 //! `run_launch_module` (ROADMAP U3 R1, slice M4a of `docs/options-u3-calls.md`): a launched entry may call
 //! plain functions. Each thread runs its calls on its own frames; a callee reads the calling thread's
 //! execution ids (it runs inside the entry's launch); its accesses are logged against the calling thread and
-//! the caller's buffer, so the race detector sees through a call. A barrier inside a callee is slice M4b.
+//! the caller's buffer, so the race detector sees through a call. A barrier inside a callee is
+//! `kernel_module_barrier.rs` (slice M4b).
 
-use unpopped::exec::{ExecId, LaunchShape, Scope};
+use unpopped::exec::{ExecId, LaunchShape};
 use unpopped::ir::ScalarExpr;
 use unpopped::kernel::{
-    Block, BufferRole, CallArg, KernelError, KernelFn, LocalDecl, Module, Param, Place, Stmt,
+    Block, BufferRole, CallArg, KernelFn, LocalDecl, Module, Param, Place, Stmt,
 };
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
@@ -235,27 +236,4 @@ fn a_result_comes_back_to_the_calling_thread() {
     let out = run(&Module::new(vec![main, twice])).expect("runs");
     let want: Vec<f32> = (0..N).map(|i| 2.0 * i as f32).collect();
     assert_eq!(out, want, "each thread got its own result");
-}
-
-#[test]
-fn a_barrier_inside_a_callee_is_still_a_typed_refusal() {
-    let with_barrier = KernelFn::new(
-        "b",
-        F32,
-        vec![rw()],
-        vec![],
-        Block(vec![Stmt::Barrier {
-            scope: Scope::Block,
-            kind: unpopped::kernel::BarrierKind::Full,
-        }]),
-    );
-    let main = launched(vec![call(1, vec![CallArg::Buffer(0)])]);
-    let r = run(&Module::new(vec![main, with_barrier]));
-    assert!(
-        matches!(
-            r,
-            Err(KernelTrap::Malformed(KernelError::CallUnsupported { .. }))
-        ),
-        "{r:?}"
-    );
 }
