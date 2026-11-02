@@ -7,8 +7,8 @@ use unpopped_vocab::ElementKind;
 use crate::exec::{Extent, MemorySpace, Scope as ExecScope};
 use crate::ir::ScalarExpr;
 use crate::kernel::{
-    AtomicOp, BarrierKind, Block, BufferRole, KernelError, KernelFn, MemoryOrder, Param, ParamKind,
-    Place, Stmt,
+    AtomicOp, BarrierKind, Block, BufferRole, CallArg, KernelError, KernelFn, MemoryOrder, Param,
+    ParamKind, Place, Stmt,
 };
 use crate::types::{self, Ty};
 
@@ -20,6 +20,15 @@ struct Scope {
     counter_local: Vec<bool>,
     tys: Vec<Ty>,
     loop_depth: u32,
+    /// The signatures of the module's functions; empty outside a module (a `Call` is then refused).
+    callees: Vec<CalleeSig>,
+}
+
+/// What a `Call` is checked against: a callee's parameters and the type of its result local.
+#[derive(Clone)]
+pub(crate) struct CalleeSig {
+    pub(crate) params: Vec<ParamKind>,
+    pub(crate) result: Option<Ty>,
 }
 
 /// Check that `k` is well formed (`docs/ir-kernel-layer.md` section 4).
@@ -29,6 +38,11 @@ struct Scope {
 /// The first [`KernelError`], walking statements in program order and each statement's
 /// expressions before its effects.
 pub fn check_kernel(k: &KernelFn) -> Result<(), KernelError> {
+    check_kernel_with(k, Vec::new())
+}
+
+/// [`check_kernel`] with the signatures of the module the function lives in, so a `Call` resolves.
+pub(crate) fn check_kernel_with(k: &KernelFn, callees: Vec<CalleeSig>) -> Result<(), KernelError> {
     check_launch(k)?;
     let n = k.locals.len();
     let mut sc = Scope {
@@ -38,6 +52,7 @@ pub fn check_kernel(k: &KernelFn) -> Result<(), KernelError> {
         counter_local: vec![false; n],
         tys: k.locals.iter().map(|d| d.ty()).collect(),
         loop_depth: 0,
+        callees,
     };
     for p in &k.params {
         if let ParamKind::Scalar { ty, local } = &p.kind {
@@ -171,11 +186,11 @@ fn check_sync_stmt(
                 what: "Fence: the shape is reserved and its semantics has not landed",
             });
         }
-        Stmt::Call { .. } => {
-            return Err(KernelError::CallUnsupported {
-                what: "Call: the shape is reserved; the module checker and the call semantics have not landed",
-            });
-        }
+        Stmt::Call {
+            callee,
+            args,
+            result,
+        } => check_call(k, (*callee, args, *result), sc, declared_here)?,
         Stmt::Barrier { scope, kind } => {
             let BarrierKind::Full = kind;
             if !matches!(scope, ExecScope::Subgroup | ExecScope::Block) {
@@ -188,6 +203,113 @@ fn check_sync_stmt(
         _ => unreachable!("check_sync_stmt is called for sync statements only"),
     }
     Ok(())
+}
+
+/// A `Call` against the signature of its callee: arity, each argument's kind and type, the buffer roles
+/// the caller really has, and the result local's type (`docs/options-u3-calls.md`, Q2 and Q5).
+fn check_call(
+    k: &KernelFn,
+    (callee, args, result): (u32, &[CallArg], Option<u32>),
+    sc: &mut Scope,
+    declared_here: &mut Vec<usize>,
+) -> Result<(), KernelError> {
+    if sc.callees.is_empty() {
+        return Err(KernelError::CallUnsupported {
+            what: "a Call outside a module: check it with check_module",
+        });
+    }
+    let Some(sig) = sc.callees.get(callee as usize).cloned() else {
+        return Err(KernelError::BadCallee { callee });
+    };
+    if args.len() != sig.params.len() {
+        return Err(KernelError::CallArity {
+            expected: sig.params.len(),
+            found: args.len(),
+        });
+    }
+    for (i, (a, p)) in args.iter().zip(&sig.params).enumerate() {
+        check_call_arg(k, i, (a, p), sc)?;
+    }
+    match (result, sig.result) {
+        (Some(local), Some(ty)) => declare(k, local, ty, sc, declared_here)?,
+        (Some(_), None) => {
+            return Err(KernelError::CallResult {
+                what: "a result is asked of a callee that has none",
+            });
+        }
+        (None, _) => {}
+    }
+    Ok(())
+}
+
+/// One argument against the parameter in its position.
+fn check_call_arg(
+    k: &KernelFn,
+    i: usize,
+    (arg, param): (&CallArg, &ParamKind),
+    sc: &Scope,
+) -> Result<(), KernelError> {
+    let bad = |what| Err(KernelError::CallArgMismatch { arg: i, what });
+    match (arg, param) {
+        (CallArg::Scalar(e), ParamKind::Scalar { ty, .. }) => {
+            if check_expr(k, e, sc)? == Ty::Scalar(*ty) {
+                Ok(())
+            } else {
+                bad("a scalar argument of a different type than its parameter")
+            }
+        }
+        (CallArg::Buffer(b), ParamKind::Buffer { elem, role, rank }) => {
+            match k.params.get(*b as usize).map(|p| &p.kind) {
+                Some(ParamKind::Buffer {
+                    elem: e,
+                    role: r,
+                    rank: n,
+                }) => buffer_fits((*elem, *role, *rank), (*e, *r, *n)).map_or(Ok(()), bad),
+                _ => bad("a buffer argument that is not a buffer parameter of the caller"),
+            }
+        }
+        (CallArg::Alloc(a), ParamKind::Buffer { elem, role, rank }) => {
+            let Some(d) = k.allocs.get(*a as usize) else {
+                return bad("an allocation the caller does not declare");
+            };
+            alloc_fits((*elem, *role, *rank), (d.elem, d.space)).map_or(Ok(()), bad)
+        }
+        _ => bad("an argument of a different kind than its parameter"),
+    }
+}
+
+/// Why the caller's buffer `(elem, role, rank)` cannot be passed to the callee's `(elem, role, rank)`.
+fn buffer_fits(
+    callee: (ElementKind, BufferRole, Option<u8>),
+    caller: (ElementKind, BufferRole, Option<u8>),
+) -> Option<&'static str> {
+    let ((ce, cr, cn), (e, r, n)) = (callee, caller);
+    if ce != e {
+        Some("a buffer of a different element type than its parameter")
+    } else if (cr.reads() && !r.reads()) || (cr.writes() && !r.writes()) {
+        Some("a buffer without the role the callee uses it with")
+    } else if matches!((cn, n), (Some(x), Some(y)) if x != y) {
+        Some("a buffer of a different rank than its parameter")
+    } else {
+        None
+    }
+}
+
+/// Why the caller's allocation `(elem, space)` cannot be passed to the callee's buffer parameter.
+fn alloc_fits(
+    callee: (ElementKind, BufferRole, Option<u8>),
+    alloc: (ElementKind, MemorySpace),
+) -> Option<&'static str> {
+    let ((ce, cr, cn), (e, space)) = (callee, alloc);
+    if ce != e {
+        Some("an allocation of a different element type than its parameter")
+    } else if space == MemorySpace::Constant && cr.writes() {
+        Some("a Constant allocation passed to a callee that writes it")
+    } else if matches!(cn, Some(r) if r != 1) {
+        Some("an allocation is one-dimensional, its parameter is not")
+    } else {
+        None
+    }
 }
 
 /// Check one statement; `Ok(true)` when it unconditionally leaves the block (`Break`,
