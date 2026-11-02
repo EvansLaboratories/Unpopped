@@ -86,7 +86,7 @@ callee's; stating that now costs nothing and nothing computes it yet.
 | M4a | resumable evaluator `Frame::Call`; a launched entry calls plain functions (`run_launch_module`) | **built, 0.41.8** |
 | M4b | barrier in a callee; transitive divergence (Q6) | **built, 0.41.9** |
 | M4c | allocations through a call (`CallArg::Alloc`, a callee's `Private` allocations) | additive |
-| M5 | `unpopped-cpu-c` spells a call as a C function (serial reference), the differential for M3/M4 | **built for unlaunched modules, 0.41.10** (`lower_module`); launched modules (ids and the thread loop through a call) are M5b |
+| M5 | `unpopped-cpu-c` spells a call as a C function (serial reference), the differential for M3/M4 | **built, 0.41.10** (`lower_module`, unlaunched) **and 0.41.11** (launched: a barrier-free callee reads the thread's ids as arguments) |
 
 Mutants to seed: arity unchecked; cycle undetected; callee locals not saved or not restored; result written to the
 wrong caller local; a buffer argument bound to the wrong parameter; a `Store` through a `Read` binding admitted; a
