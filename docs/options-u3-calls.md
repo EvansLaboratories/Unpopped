@@ -1,8 +1,10 @@
 # Options note: `Stmt::Call` and the module checker (ROADMAP U3 R1, ir-kernel-layer unknown U-2)
 
-Status: **proposal, nothing built.** Asked by the PM (2026-11-02, `[NOTICE] topic=Unpopped-next`): what a callee's
-check, evaluation and refusal rules are, as a note before the build, because real CUDA/HIP/SYCL/Slang kernels call
-device functions and the parsers cannot lift them without it. Read at `origin/main` `b5eb5d3` (0.41.1).
+Status: **Q2 ruled 2026-11-02 (option b); M1 built in 0.41.4 (#244); M2 follows.** Asked by the PM (2026-11-02,
+`[NOTICE] topic=Unpopped-next`): what a callee's check, evaluation and refusal rules are, as a note before the build,
+because real CUDA/HIP/SYCL/Slang kernels call device functions and the parsers cannot lift them without it. Read at
+`origin/main` `b5eb5d3` (0.41.1); the status line and the M1 row were updated at `0583d20` (0.41.4). Q1 and Q3-Q7 below
+are still **recommendations**, not rulings.
 
 ## What exists
 
@@ -11,9 +13,9 @@ device functions and the parsers cannot lift them without it. Read at `origin/ma
 `KernelFn` of the module (R1a), an acyclic call graph, and a callee holding a `Barrier` called from uniform control
 only. Nothing yet says how a callee returns a value, receives a buffer, or runs. Those are the questions below.
 
-⚠️ **Every shape here is unpublished.** 0.41.x has not been published (the PM publishes after #242), so changing the
-`Call` shape now costs a sibling nothing: no crate depends on it from crates.io. After the publish, the same change is
-a 0.N+1.0 break. That makes Q2 the one to settle first.
+**Q2 was settled before the publish.** 0.41.x had not been published, so the PM ruled to reshape the `Call` of 0.41.0
+before it reached crates.io (`args: Vec<CallArg>`, `KernelFn.result`; 0.41.4, #244) and to publish 0.41.x only after that
+merged: `args: Vec<ScalarExpr>` was never public and no consumer saw a break.
 
 ## Questions, options, recommendation
 
@@ -30,8 +32,8 @@ only. (a) scalar arguments only: simple, and covers pure math helpers, but a cal
 helpers stay unliftable. (b) `args: Vec<CallArg>` with `CallArg::Scalar(ScalarExpr) | Buffer(u32) | Alloc(u32)`: a
 buffer argument binds the callee's `ParamKind::Buffer` to the caller's buffer parameter (or `Shared`/`Private`
 allocation), by reference; role, element type and rank must agree. (c) pointer values (`Place::Ptr`, R2): the general
-answer, but it brings an aliasing story nobody has asked for. **Recommend (b), and do it before the publish:** it
-changes the `Call` shape, which is free now. A buffer argument is an *alias*, so the race detector keys on the
+answer, but it brings an aliasing story nobody has asked for. **Recommend (b); RULED and built in 0.41.4:** it
+changed the `Call` shape while that was still free. A buffer argument is an *alias*, so the race detector keys on the
 caller's buffer and `ReadOnly` roles must hold through the call (a callee `Store`s only to a `Write`/`ReadWrite`
 binding). Two buffer arguments naming the same caller buffer are allowed (no `restrict`); the race detector already
 handles that, it sees one buffer.
@@ -78,7 +80,7 @@ callee's; stating that now costs nothing and nothing computes it yet.
 
 | slice | content | breaks? |
 |---|---|---|
-| M1 | `CallArg`, `KernelFn.result` (Q1, Q2 shapes) | **the `Call` shape**; do it before the publish, bump with the next release |
+| M1 | `CallArg`, `KernelFn.result` (Q1, Q2 shapes) | **built, 0.41.4 (#244)**; changed the `Call` shape before the publish |
 | M2 | `check_module` + the new `KernelError`s; `check_kernel` still refuses a bare `Call` | additive |
 | M3 | recursive evaluator runs a module (`run_module`) | additive |
 | M4 | resumable evaluator `Frame::Call`; barrier in a callee; transitive divergence (Q6) | additive |
@@ -90,10 +92,10 @@ callee's `Barrier` not counted for the caller's divergence check.
 
 ## Decisions for the PM
 
-1. Q2(b): reshape `Call` to `CallArg` before the 0.41.x publish (recommended), or keep scalar-only and accept a second
-   break later.
-2. Q1(a) result local, Q3 (callee `Shared` allocations refused), Q4(b) native frames, Q6 (call results divergent):
-   accept as recommended, or say which to change.
+1. ~~Q2(b): reshape `Call` to `CallArg` before the publish~~ **ruled (b) and built, 0.41.4.**
+2. Q1(a) result local (the shape landed with M1), Q3 (callee `Shared` allocations refused), Q4(b) native frames, Q6
+   (call results divergent): accept as recommended, or say which to change. M2 (`check_module`) enforces Q3 and the
+   no-barrier-callee rule as typed refusals either way, so these two rulings gate M3/M4, not M2.
 
 Not measured: how many of Fuel's 147 kernels call a device function that takes a buffer. The U3 spec says
 device-function calls are "needed before most real Slang kernels lift"; no sibling has counted buffer-taking callees.

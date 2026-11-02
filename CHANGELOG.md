@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.41.5` — docs: an options note for `Stmt::Call` and the module checker (ROADMAP U3 R1)
+
+`docs/options-u3-calls.md`: what a callee is at check time and at run time, as recommendations the PM rules on (Q1 the result local, Q2 how a buffer reaches a callee, Q3 the callee's environment, Q4 how a call runs, Q5 what `check_module` checks, Q6 barriers and divergence through a call, Q7 effects) and the five slices M1-M5 with the mutants each must seed. **Q2 is ruled (option b) and built** in 0.41.4 (#244), before the 0.41.x publish. Docs only; no code changes.
+
 ## `0.41.4` — `Stmt::Call` takes `CallArg`s; `KernelFn.result` (shape only, ROADMAP U3 R1 / M1 of `docs/options-u3-calls.md`)
 
 PM ruling 2026-11-02 (Q2 of the calls options note, option b): reshape the `Call` of 0.41.0 **before 0.41.x is published**, so 0.41.0's `args: Vec<ScalarExpr>` is never on crates.io and no consumer sees a break. `Stmt::Call.args` is now `Vec<CallArg>`, `CallArg::{Scalar(ScalarExpr), Buffer(u32), Alloc(u32)}`: a scalar by value, a caller buffer parameter or allocation by alias, matched to the callee's parameter of the same position. `KernelFn` gains `result: Option<u32>` (the local a `Call` receives; `#[serde(default)]`, so an older serialized kernel reads back with `None`) and `with_result`. **Still shape only:** `check_kernel` refuses a `Call` with `CallUnsupported` (pinned by `tests/kernel_call_shape.rs`, which also round-trips a module with all three argument kinds and the `result` default). Nothing in a sibling builds a `Call` (the vulkane and bonefish tests build only `Barrier`/`AtomicRmw`). The module checker, the call semantics and the evaluators are slices M2-M5 of the note.
