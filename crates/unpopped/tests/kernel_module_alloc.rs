@@ -166,6 +166,23 @@ fn without_the_barrier_the_shared_array_is_caught() {
 }
 
 #[test]
+fn the_array_passed_is_the_one_named_not_the_first() {
+    // allocation 0 is a decoy of 2 elements; the call passes allocation 1, the real array
+    let decoy = AllocDecl::new("decoy", MemorySpace::Shared, F32, Extent::Static(2));
+    let body = vec![
+        call(1, vec![CallArg::Alloc(1)]),
+        barrier(),
+        call(2, vec![CallArg::Alloc(1), CallArg::Buffer(0)]),
+    ];
+    let main = entry(decoy, body).with_allocs(vec![
+        AllocDecl::new("decoy", MemorySpace::Shared, F32, Extent::Static(2)),
+        shared(N),
+    ]);
+    let m = Module::new(vec![main, fill(), mirror()]);
+    assert_eq!(run(&m).expect("runs"), mirrored());
+}
+
+#[test]
 fn a_barrier_inside_the_callee_orders_the_shared_array() {
     // exchange(t, out): fill; barrier; mirror, all in one callee that reaches a barrier
     let mut ex = mirror();
