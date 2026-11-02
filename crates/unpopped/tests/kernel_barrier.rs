@@ -59,6 +59,7 @@ fn tid_cond() -> ScalarExpr {
 fn barrier() -> Stmt {
     Stmt::Barrier {
         scope: Scope::Block,
+        kind: unpopped::kernel::BarrierKind::Full,
     }
 }
 

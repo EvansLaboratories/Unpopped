@@ -116,7 +116,14 @@ impl Walk<'_> {
                     self.mark(*local);
                 }
             }
-            Stmt::Store { .. } | Stmt::AtomicRmw { .. } | Stmt::Return => {}
+            Stmt::Store { .. } | Stmt::Fence { .. } | Stmt::Return => {}
+            // The old value depends on the order the threads reach the element, so it differs
+            // between threads whatever the operands are: a barrier under `if old == 0` is divergent.
+            Stmt::AtomicRmw { old, .. } | Stmt::AtomicCas { old, .. } => {
+                if let Some(local) = old {
+                    self.mark(*local);
+                }
+            }
             Stmt::If { cond, then, els } => {
                 let d = div || self.expr(cond);
                 self.block(then, d, poisoned)?;

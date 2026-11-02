@@ -198,6 +198,11 @@ impl<'a> Machine<'a> {
             | Stmt::AtomicRmw { .. } => {
                 self.exec_simple(st)?;
             }
+            Stmt::AtomicCas { .. } | Stmt::Fence { .. } => {
+                return Err(KernelTrap::Unsupported(
+                    "AtomicCas and Fence (check_kernel refuses them)",
+                ));
+            }
             Stmt::If { cond, then, els } => {
                 let taken = self.truthy(cond)?;
                 return self.exec_block(if taken { then } else { els });
@@ -248,9 +253,18 @@ impl<'a> Machine<'a> {
                 let v = self.eval_expr(value)?;
                 self.store(place, v)?;
             }
-            Stmt::AtomicRmw { op, place, value } => {
+            Stmt::AtomicRmw {
+                op,
+                place,
+                value,
+                old,
+                ..
+            } => {
                 let v = self.eval_expr(value)?;
-                self.atomic_rmw(*op, place, v)?;
+                let prev = self.atomic_rmw(*op, place, v)?;
+                if let Some(local) = old {
+                    self.locals[*local as usize] = Some(prev);
+                }
             }
             _ => unreachable!("exec_simple is called for straight-line statements only"),
         }
@@ -346,7 +360,8 @@ impl<'a> Machine<'a> {
 
     /// An atomic read-modify-write of a global integer element: logged as an atomic access (it
     /// races only with a plain access), the combine computed at the element type and wrapped.
-    fn atomic_rmw(&mut self, op: AtomicOp, place: &Place, v: Val) -> Result<(), KernelTrap> {
+    /// Returns the value the element held before.
+    fn atomic_rmw(&mut self, op: AtomicOp, place: &Place, v: Val) -> Result<Val, KernelTrap> {
         if let Place::Alloc { alloc, index } = place {
             return self.alloc_atomic(op, *alloc, index, v);
         }
@@ -359,9 +374,10 @@ impl<'a> Machine<'a> {
         let Val::Raw(bits, vdt) = v else {
             return Err(KernelTrap::Unsupported("a non-integer atomic operand"));
         };
-        let r = atomic_apply(op, dt, read_elem(&tb.bytes, off, dt), bits, vdt)?;
+        let before = read_elem(&tb.bytes, off, dt);
+        let r = atomic_apply(op, dt, before, bits, vdt)?;
         store_val(r, dt, &mut tb.bytes, off);
-        Ok(())
+        Ok(Val::Raw(before, dt))
     }
 
     fn store(&mut self, place: &Place, v: Val) -> Result<(), KernelTrap> {
@@ -599,8 +615,10 @@ impl<'a> Machine<'a> {
 /// `x / y` at integer type `t`, total (`docs/int-div-shift-semantics.md`, rules 1 and 2): `y == 0` gives
 /// `x`; so does `MIN / -1` (the wrapping result); otherwise the quotient truncated toward zero.
 /// `old (op) new` at the element type `t`, from the raw bits of both. Integers: `Add` wraps,
-/// `Max`/`Min` select. `F32`/`F64` `Add`: one correctly rounded add in the element type (an `f32`
-/// sum of two `f32` is exact in an `f64`, so adding there and rounding once is the same number).
+/// `Max`/`Min` select, `And`/`Or`/`Xor` are the bitwise operations, `Exchange` takes the new value.
+/// `F32`/`F64` `Add`: one correctly rounded add in the element type (an `f32` sum of two `f32` is
+/// exact in an `f64`, so adding there and rounding once is the same number); `F32`/`F64` `Exchange`
+/// moves the bits unchanged.
 pub(super) fn atomic_apply(
     op: AtomicOp,
     t: ElementKind,
@@ -609,6 +627,7 @@ pub(super) fn atomic_apply(
     new_ty: ElementKind,
 ) -> Result<Val, KernelTrap> {
     match (t, op) {
+        (ElementKind::F32 | ElementKind::F64, AtomicOp::Exchange) => Ok(Val::Raw(new, t)),
         (ElementKind::F32, AtomicOp::Add) => {
             let sum = f32::from_bits(old as u32) + f32::from_bits(new as u32);
             Ok(Val::Raw(u128::from(sum.to_bits()), t))
@@ -624,6 +643,10 @@ pub(super) fn atomic_apply(
                     AtomicOp::Add => wrap(t, a + b),
                     AtomicOp::Max => a.max(b),
                     AtomicOp::Min => a.min(b),
+                    AtomicOp::And => a & b,
+                    AtomicOp::Or => a | b,
+                    AtomicOp::Xor => a ^ b,
+                    AtomicOp::Exchange => b,
                 },
                 t,
             ))

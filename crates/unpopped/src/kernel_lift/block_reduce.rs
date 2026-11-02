@@ -111,9 +111,7 @@ fn check_order_independent(sh: &ReductionShape, rop: ReduceOp) -> Result<(), Lif
 }
 
 pub(super) fn barrier() -> Stmt {
-    Stmt::Barrier {
-        scope: Scope::Block,
-    }
+    Stmt::barrier(Scope::Block)
 }
 
 pub(super) fn thread() -> ScalarExpr {

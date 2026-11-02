@@ -82,7 +82,7 @@ fn let_g() -> Stmt {
 }
 
 fn barrier(scope: Scope) -> Stmt {
-    Stmt::Barrier { scope }
+    Stmt::barrier(scope)
 }
 
 fn kernel(body: Vec<Stmt>, launch: LaunchShape, tile_len: u32) -> KernelFn {

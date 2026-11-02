@@ -163,6 +163,8 @@ impl Emitter<'_> {
             Stmt::Return => self.line("return 0;"),
             Stmt::Barrier { .. } => return Err(refuse("a Barrier needs a launch (U3 row 4)")),
             Stmt::AtomicRmw { .. } => return Err(refuse("an AtomicRmw needs a launch (U3 row 4)")),
+            Stmt::AtomicCas { .. } => return Err(refuse("an AtomicCas needs a launch (U3 row 4)")),
+            Stmt::Fence { .. } => return Err(refuse("a Fence needs a launch (U3 row 4)")),
         }
         Ok(())
     }

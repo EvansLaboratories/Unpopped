@@ -243,15 +243,23 @@ pub enum Stmt {
     Barrier {
         /// The group that synchronizes.
         scope: Scope,
+        /// Which barrier. Only [`BarrierKind::Full`] exists; the field is here so a named or a
+        /// split arrive/wait barrier is an additive variant of the kind, not another break of `Stmt`
+        /// (`docs/options-u4-sync-and-atomics.md`, option B).
+        kind: BarrierKind,
     },
     /// An atomic read-modify-write of one element of a global buffer: `*place = *place (op) value`
     /// as one indivisible step (**relaxed**: it orders nothing else, and a [`Stmt::Barrier`] is the
-    /// only ordering a kernel has). The old value is not returned. Two atomics on one element never
-    /// race, whatever threads or blocks issue them; an atomic and a plain access to one element do,
-    /// unless a barrier orders them (`docs/ir-kernel-layer.md`, "Atomics"). v1: a global buffer
-    /// (`ReadWrite`) place or a `Shared` allocation element, an integer element type (the result
-    /// wraps at the element width) or an `F32`/`F64` `Add` (accumulation order unspecified, so a
-    /// float result is defined only inside a band: section 5a).
+    /// only ordering a kernel has). With `old` set, the value the element held just before this
+    /// thread's step is stored in that local (a fetch-op); which value that is depends on the order
+    /// the threads reach the element, which the IR does not specify (section 5a). Two atomics on one
+    /// element never race, whatever threads or blocks issue them; an atomic and a plain access to one
+    /// element do, unless a barrier orders them (`docs/ir-kernel-layer.md`, "Atomics"). v1: a global
+    /// buffer (`ReadWrite`) place or a `Shared` allocation element, an integer element type (the
+    /// result wraps at the element width) or an `F32`/`F64` `Add` or `Exchange` (accumulation order
+    /// unspecified, so a float sum is defined only inside a band: section 5a). `order` must be
+    /// [`MemoryOrder::Relaxed`] and `scope` [`Scope::Device`] for now (typed refusal, not a silent
+    /// weakening).
     AtomicRmw {
         /// The combine.
         op: AtomicOp,
@@ -259,11 +267,91 @@ pub enum Stmt {
         place: Place,
         /// The operand (the buffer's element type).
         value: ScalarExpr,
+        /// The local that receives the old value, if the kernel wants it.
+        old: Option<u32>,
+        /// The memory order. Only `Relaxed` is accepted today.
+        order: MemoryOrder,
+        /// The scope the atomicity holds at. Only `Device` is accepted today.
+        scope: Scope,
+    },
+    /// Compare-and-exchange: if the element equals `expected`, set it to `desired`; `old` receives the
+    /// value found either way. **Shape reserved: `check_kernel` refuses it** until its semantics land
+    /// (`docs/options-u4-sync-and-atomics.md`, S3).
+    AtomicCas {
+        /// The element.
+        place: Place,
+        /// The value it is compared with.
+        expected: ScalarExpr,
+        /// The value stored on a match.
+        desired: ScalarExpr,
+        /// The local that receives the value found.
+        old: Option<u32>,
+        /// The memory order.
+        order: MemoryOrder,
+        /// The scope the atomicity holds at.
+        scope: Scope,
+    },
+    /// A memory fence of `scope` with `order`. **Shape reserved: `check_kernel` refuses it** until its
+    /// semantics land (`docs/options-u4-sync-and-atomics.md`, S5).
+    Fence {
+        /// The group the fence orders.
+        scope: Scope,
+        /// The order.
+        order: MemoryOrder,
     },
 }
 
-/// The combine of a [`Stmt::AtomicRmw`]. Each is associative and commutative on integers, so the
-/// result does not depend on the order the threads issue them.
+/// Which barrier a [`Stmt::Barrier`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum BarrierKind {
+    /// Every thread of the scope arrives, then every thread leaves.
+    Full,
+}
+
+/// The memory order of an atomic or a fence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum MemoryOrder {
+    /// No ordering of other accesses.
+    Relaxed,
+    /// Later accesses cannot move before this one.
+    Acquire,
+    /// Earlier accesses cannot move after this one.
+    Release,
+    /// Both.
+    AcqRel,
+    /// A single total order of all such operations.
+    SeqCst,
+}
+
+impl Stmt {
+    /// A full barrier of `scope` (the only kind there is).
+    #[must_use]
+    pub fn barrier(scope: Scope) -> Self {
+        Stmt::Barrier {
+            scope,
+            kind: BarrierKind::Full,
+        }
+    }
+
+    /// A relaxed, device-scope atomic that does not return the old value: the form 0.40 had.
+    #[must_use]
+    pub fn atomic_rmw(op: AtomicOp, place: Place, value: ScalarExpr) -> Self {
+        Stmt::AtomicRmw {
+            op,
+            place,
+            value,
+            old: None,
+            order: MemoryOrder::Relaxed,
+            scope: Scope::Device,
+        }
+    }
+}
+
+/// The combine of a [`Stmt::AtomicRmw`]. `Add`, `Max`, `Min`, `And`, `Or` and `Xor` are associative and
+/// commutative on integers, so the final value does not depend on the order the threads issue them
+/// (the old value, if requested, still does); `Exchange` is not, so even its final value does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum AtomicOp {
@@ -273,6 +361,14 @@ pub enum AtomicOp {
     Max,
     /// The smaller of the two.
     Min,
+    /// `old & value` (integers).
+    And,
+    /// `old | value` (integers).
+    Or,
+    /// `old ^ value` (integers).
+    Xor,
+    /// Store `value`; the old value is what was there (integers, `F32`, `F64`: the bits move unchanged).
+    Exchange,
 }
 
 /// A kernel: the program of one logical thread.
@@ -379,9 +475,15 @@ pub enum KernelError {
         /// The buffer parameter index.
         buffer: u32,
     },
-    /// An `AtomicRmw` outside the v1 form: a `ReadWrite` global buffer or `Shared` element of an
-    /// integer type.
+    /// An `AtomicRmw` or `AtomicCas` outside the v1 form: a `ReadWrite` global buffer or `Shared`
+    /// element of an integer type, `Relaxed` order, `Device` scope, no compare-and-exchange yet.
     AtomicUnsupported {
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// A `Fence` (or a barrier kind) whose semantics has not landed: the shape is reserved, the checker
+    /// refuses it, so no producer builds a kernel an interpreter would then have to guess about.
+    SyncUnsupported {
         /// What is wrong.
         what: &'static str,
     },
