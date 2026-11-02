@@ -50,7 +50,7 @@ Stmt::If     { cond: ScalarExpr, then: Block, els: Block }
 Stmt::For    { local: u32, start, end, step: ScalarExpr, body: Block }   // integer counter, half-open
 Stmt::While  { cond: ScalarExpr, body: Block }
 Stmt::Break | Stmt::Continue | Stmt::Return
-// Stmt::Call { callee, args, result }  -- shape since 0.41.0, REFUSED by check_kernel until the module checker lands (unknown U-2, below)
+// Stmt::Call { callee, args: Vec<CallArg>, result }  -- shape since 0.41.4 (CallArg::{Scalar(expr)|Buffer(i)|Alloc(i)}; KernelFn.result is the callee's result local), REFUSED by check_kernel until the module checker lands (unknown U-2; docs/options-u3-calls.md)
 
 Place::Logical { buffer: u32, coords: Vec<ScalarExpr> }   // the element at LOGICAL coordinates
 ```
@@ -121,8 +121,13 @@ buffers and returns the written buffers. Rules:
 `AtomicRmw { op, place, value, old, order, scope }` performs `*place = *place (op) value` as one indivisible step, `op` one of `Add`, `Max`, `Min`, `And`,
 `Or`, `Xor`, `Exchange`. **Since 0.41.0** the statement has the shape the whole of ROADMAP U4 needs (`docs/options-u4-sync-and-atomics.md`, option B: break `Stmt`
 once, stage the semantics): `old: Option<local>` receives the value the element held just before this thread's step; `order` and `scope` are carried but only
-`Relaxed` and `Device` are accepted; `Stmt::AtomicCas` and `Stmt::Fence` exist as shapes and `check_kernel` refuses them (`AtomicUnsupported`, `SyncUnsupported`)
+`Relaxed` and `Device` are accepted; `Stmt::AtomicCas` runs since 0.41.3 (below); `Stmt::Fence` exists as a shape and `check_kernel` refuses it (`SyncUnsupported`)
 until their semantics land, and `Stmt::Barrier` carries a `kind` (only `Full`). A later slice lifts a refusal and is additive.
+
+- **Compare-and-exchange (since 0.41.3).** `AtomicCas { place, expected, desired, old, order, scope }` stores `desired` if the element equals `expected` and
+  always yields the value found, as one indivisible step (it joins the same per-element serialization as the `AtomicRmw`s). Integer elements only, `ReadWrite` global
+  or `Shared`, `expected`/`desired` of the element type, `Relaxed`/`Device`; a CAS and a plain access to one element race. Which thread wins a contended CAS is
+  unspecified, so conformance asserts properties (one winner, a CAS loop's fixed point), never the winner.
 
 - **The old value (since 0.41.0).** It is the element's value just before this thread's step in *some* serialization of all atomics on that element that is
   consistent with program order. **The IR does not specify which**, as it does not specify a float sum's order: the interpreter oracle uses the order its lockstep
@@ -148,7 +153,7 @@ until their semantics land, and `Stmt::Barrier` carries a `kind` (only `Full`). 
   lockstep schedule reaches the cell (ascending source index for a scatter), one valid order; a conformance test compares **inside the band** and never asserts the
   serial bytes. **This band deliberately differs from KISS-CONTRACT-6.8-0012 as clause-pinned in KISS#759** (ascending reference schedule, K1-calibrated `k`): ours is
   order-independent (`sum(abs)` over every order) because a device's order is not the reference's; it is the bound for *this* IR statement, not a contract tolerance.
-- **Emitters.** `unpopped-cpu-c` refuses it (it emits no launches). A device emitter lowers it to its native atomic (`atomicAdd`/`atomicMax`/`atomicMin`,
+- **Emitters.** `unpopped-cpu-c` spells a launched kernel as a **serialized thread loop** (0.41.2): blocks one after another, threads one after another inside a block, the thread loop split at each `Block` barrier, an atomic a plain C read-modify-write (serial, hence atomic; the old value and all seven combines). It is the reference the device emitters are held to (`crates/unpopped-cpu-c/tests/kernel_launch_emit_agrees.rs`), never a performance claim, and it refuses typed what it cannot split: a non-`Block` barrier, a `While` or a `Break`/`Continue`/`Return` crossing a barrier, `Private`/`Constant`/dynamic allocations, subgroup and cluster ids, a block over 1024 threads, `Fence`, `Call`. A device emitter lowers it to its native atomic (`atomicAdd`/`atomicMax`/`atomicMin`,
   `InterlockedAdd`/`InterlockedMax`/`InterlockedMin`, `atomicrmw ... monotonic`) on the element's 32- or 64-bit integer type.
 
 ## 6. The effects model (stated; the unknowns are marked)

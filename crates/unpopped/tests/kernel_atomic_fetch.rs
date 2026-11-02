@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! ROADMAP U4, first slice (`docs/options-u4-sync-and-atomics.md`, option B): `Stmt::AtomicRmw` can return
-//! the old value and has `And`/`Or`/`Xor`/`Exchange`; the reserved shapes (`order`, `scope`, `AtomicCas`,
-//! `Fence`) are refused by the checker with a typed error instead of being run.
+//! the old value and has `And`/`Or`/`Xor`/`Exchange`; the reserved shapes (`order`, `scope`, `Fence`; `AtomicCas` was reserved
+//! until `kernel_atomic_cas.rs`) are refused by the checker with a typed error instead of being run.
 //!
 //! The old value depends on the order the threads reach the element, which the IR does not specify, so
 //! these tests assert **properties** (a permutation, a multiset) and never the interpreter's own order.
@@ -239,18 +239,6 @@ fn the_reserved_shapes_are_refused_with_a_typed_error() {
             "{r:?}"
         );
     }
-    let cas = Stmt::AtomicCas {
-        place: cell(),
-        expected: c(0),
-        desired: c(1),
-        old: None,
-        order: MemoryOrder::Relaxed,
-        scope: Scope::Device,
-    };
-    assert!(matches!(
-        check_kernel(&kernel_with(I32, vec![cas])),
-        Err(KernelError::AtomicUnsupported { .. })
-    ));
     let fence = Stmt::Fence {
         scope: Scope::Device,
         order: MemoryOrder::SeqCst,

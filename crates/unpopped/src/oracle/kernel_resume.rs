@@ -100,12 +100,13 @@ impl Machine<'_> {
             | Stmt::Load { .. }
             | Stmt::Assign { .. }
             | Stmt::Store { .. }
-            | Stmt::AtomicRmw { .. } => {
+            | Stmt::AtomicRmw { .. }
+            | Stmt::AtomicCas { .. } => {
                 self.exec_simple(st)?;
             }
-            Stmt::AtomicCas { .. } | Stmt::Fence { .. } | Stmt::Call { .. } => {
+            Stmt::Fence { .. } | Stmt::Call { .. } => {
                 return Err(KernelTrap::Unsupported(
-                    "AtomicCas, Fence and Call (check_kernel refuses them)",
+                    "Fence and Call (check_kernel refuses them)",
                 ));
             }
             Stmt::If { cond, then, els } => {

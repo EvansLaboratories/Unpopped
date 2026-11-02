@@ -57,6 +57,7 @@ use unpopped::plan::{KernelPlan, Schedule};
 use unpopped_vocab::{ElementKind, TargetId};
 
 mod kernel;
+mod launch;
 mod qualified;
 mod typed;
 

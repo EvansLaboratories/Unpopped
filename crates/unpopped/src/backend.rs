@@ -919,6 +919,11 @@ pub struct Lowering<'a> {
     /// `Local` outside a kernel has no meaning), as it did before the kernel layer had an
     /// emitter.
     pub local: &'a dyn Fn(u32) -> Result<Spelling, LowerError>,
+    /// Spelling of a kernel-layer execution id ([`ScalarExpr::Exec`]), of type `U32`
+    /// ([`crate::exec::ExecId`]). Only a launched [`Backend::lower_kernel`] has a meaning for one. The
+    /// default declines (an `Exec` outside a launched kernel has none), as it did before an emitter
+    /// spelled launches.
+    pub exec: &'a dyn Fn(crate::exec::ExecId) -> Result<Spelling, LowerError>,
     /// The declared type of each kernel local, indexed by local id, so a typed node
     /// (`Cast`, `Bitcast`, an integer operation) over a `Local` can type its operand.
     /// Empty (the default) outside a kernel.
@@ -1008,6 +1013,14 @@ mod default_seam {
             op: DeclinedOp::Kernel,
             why: format!(
                 "a kernel-layer Local({i}) reached an emitter with no `local` seam; a Local has                  meaning only inside `Backend::lower_kernel`, which supplies `.local(..)`"
+            ),
+        }))
+    };
+    pub(super) static EXEC: fn(crate::exec::ExecId) -> Result<Spelling, LowerError> = |id| {
+        Ok(Spelling::Declined(Decline::UnsupportedOp {
+            op: DeclinedOp::Kernel,
+            why: format!(
+                "a kernel-layer Exec({id:?}) reached an emitter with no `exec` seam; an Exec id has meaning only inside a launched `Backend::lower_kernel`, which supplies `.exec(..)`"
             ),
         }))
     };
@@ -1147,6 +1160,7 @@ impl<'a> Lowering<'a> {
                 reduced: &default_seam::REDUCED,
                 coord: &default_seam::COORD,
                 local: &default_seam::LOCAL,
+                exec: &default_seam::EXEC,
                 locals: &[],
                 unary,
                 binary,
@@ -1252,6 +1266,15 @@ impl<'a> LoweringBuilder<'a> {
     #[must_use]
     pub fn local(mut self, f: &'a dyn Fn(u32) -> Result<Spelling, LowerError>) -> Self {
         self.inner.local = f;
+        self
+    }
+    /// Spelling of a kernel-layer execution id; see [`Lowering::exec`].
+    #[must_use]
+    pub fn exec(
+        mut self,
+        f: &'a dyn Fn(crate::exec::ExecId) -> Result<Spelling, LowerError>,
+    ) -> Self {
+        self.inner.exec = f;
         self
     }
     /// Declared types of the kernel locals; see [`Lowering::locals`].
@@ -1405,18 +1428,6 @@ fn packed_decline() -> Spelling {
         op: DeclinedOp::Packed,
         why: "a Pack/Extract reached an emitter; packed values have no lowering seam yet"
             .to_string(),
-    })
-}
-
-/// The decline for a kernel-layer `Local` or `Exec` leaf (`leaf` names it): it has meaning only inside a
-/// `kernel::KernelFn`, which no emitter receives yet, and the plan gate rejects an `OpDef`
-/// body containing one, so reaching it means a hand-built body skipped the gate.
-fn local_decline(leaf: &str) -> Spelling {
-    Spelling::Declined(Decline::UnsupportedOp {
-        op: DeclinedOp::Kernel,
-        why: format!(
-            "a kernel-layer {leaf} reached an emitter; the kernel layer has no lowering seam yet"
-        ),
     })
 }
 
@@ -1659,7 +1670,7 @@ pub fn lower_expr(e: &ScalarExpr, lo: &Lowering<'_>) -> Result<Spelling, LowerEr
             return Ok(packed_decline());
         }
         ScalarExpr::Local(i) => return (lo.local)(*i),
-        ScalarExpr::Exec(_) => return Ok(local_decline("Exec")),
+        ScalarExpr::Exec(id) => return (lo.exec)(*id),
         ScalarExpr::Qualified(x, n) => {
             let Some((op, kids)) = QualOp::of(x) else {
                 return Ok(qualified_child_decline(*n));
@@ -1927,7 +1938,7 @@ fn lower_node(
             return Ok(packed_decline());
         }
         DagNode::Local(i) => return (lo.local)(i),
-        DagNode::Exec(_) => return Ok(local_decline("Exec")),
+        DagNode::Exec(id) => return (lo.exec)(id),
         DagNode::Qualified(x, n) => {
             let Some((op, kids)) = QualOp::of_node(dag.node(x)) else {
                 return Ok(qualified_child_decline(n));

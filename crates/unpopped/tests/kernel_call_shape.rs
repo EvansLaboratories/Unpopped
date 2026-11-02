@@ -5,7 +5,7 @@
 //! would have to guess about, and the later slice that lands the semantics only lifts that refusal.
 
 use unpopped::ir::ScalarExpr;
-use unpopped::kernel::{Block, KernelError, KernelFn, Module, Param, Stmt, check_kernel};
+use unpopped::kernel::{Block, CallArg, KernelError, KernelFn, Module, Param, Stmt, check_kernel};
 use unpopped_vocab::ElementKind;
 
 const I32: ElementKind = ElementKind::I32;
@@ -13,7 +13,11 @@ const I32: ElementKind = ElementKind::I32;
 fn call() -> Stmt {
     Stmt::Call {
         callee: 1,
-        args: vec![ScalarExpr::ConstInt(7, I32)],
+        args: vec![
+            CallArg::Scalar(ScalarExpr::ConstInt(7, I32)),
+            CallArg::Buffer(0),
+            CallArg::Alloc(1),
+        ],
         result: None,
     }
 }
@@ -51,5 +55,21 @@ fn a_module_names_its_callees_by_index_and_round_trips() {
     else {
         panic!("the call survived the round trip");
     };
-    assert_eq!((*callee, args.len(), *result), (1, 1, None));
+    assert_eq!((*callee, args.len(), *result), (1, 3, None));
+    assert_eq!(args[1], CallArg::Buffer(0));
+    assert_eq!(args[2], CallArg::Alloc(1));
+}
+
+/// A callee's result is a local of the callee (`KernelFn::result`), the value it holds at `Return` or at the
+/// end; an older serialized kernel without the field reads back with no result.
+#[test]
+fn a_callee_names_its_result_local_and_the_field_defaults_to_none() {
+    let f = KernelFn::new("f", I32, Vec::<Param>::new(), vec![], Block(vec![])).with_result(0);
+    assert_eq!(f.result, Some(0));
+    let back: KernelFn = serde_json::from_str(&serde_json::to_string(&f).unwrap()).unwrap();
+    assert_eq!(back, f);
+    let mut v: serde_json::Value = serde_json::to_value(&f).unwrap();
+    v.as_object_mut().unwrap().remove("result");
+    let old: KernelFn = serde_json::from_value(v).expect("a kernel without `result` still reads");
+    assert_eq!(old.result, None);
 }
