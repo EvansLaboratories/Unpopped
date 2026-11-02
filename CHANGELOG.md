@@ -21,6 +21,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 PM ruling 2026-11-01 (option b): an integer `Mean` reduction has no defined semantics (no rounding rule for the quotient), so the plan gate now declines it with a typed `PlanError::InadmissibleOpAtDtype` at every integer dtype. **A tightening:** such an op used to plan and then panic in the oracle or the emitter's assert; a float `Mean` and the other integer folds are unchanged. No new semantics until an emitter lane needs them. `tests/integer_mean_is_declined.rs` (red first) pins both halves; three seeded mutants (the decline also hitting a float `Mean`, no decline at all, `U64` dropped from the oracle) are caught.
 
+## `0.40.18` — tests: the any/all/count reductions at narrow integer dtypes agree with the host (ROADMAP E19 tail)
+
+`tests/oracle_narrow_int_predicate_reductions.rs`: the heterogeneous-output shapes the plan gate's rule 4 admits (`count` = `Sum` of `in != 0` with an `I64` output; `any`/`all` = `Max`/`Min` of `in != 0` with a `Reduced(0) != 0` post and a `U8` output) at `I8`, `U8`, `I16`, `U16` through `oracle::evaluate`, against references computed on the host (rows of all zero, one nonzero, all nonzero, and values nonzero only above the low byte). It passed on its first run, so it was mutation-checked: integer `Max`/`Min` swapped, `CmpNe` compared at 8 bits, and an integer `Sum` that drops its elements are all caught. No code change; this closes the untested tail 0.40.16 named.
+
 ## `0.40.17` — docs/tests: no in-repo tolerant-band migration is pending (ROADMAP C5)
 
 The 0.40.15 ratchet table and ROADMAP C5 said the remaining hand-written tolerant bands in `complex_domain` were "to migrate" to `compare_for_plan`. They are not: every remaining site is a test of `compare` on hand-built buffers (there is no plan, so `compare_for_plan` cannot apply) or a pattern in a test of the derivation's own output. The ratchet table's reasons and the ROADMAP row now say so; no behaviour change.
