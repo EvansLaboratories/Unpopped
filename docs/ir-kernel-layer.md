@@ -50,7 +50,7 @@ Stmt::If     { cond: ScalarExpr, then: Block, els: Block }
 Stmt::For    { local: u32, start, end, step: ScalarExpr, body: Block }   // integer counter, half-open
 Stmt::While  { cond: ScalarExpr, body: Block }
 Stmt::Break | Stmt::Continue | Stmt::Return
-// Stmt::Call { func, args, result }  -- DEFERRED to the PR that introduces a module type (unknown U-2)
+// Stmt::Call { callee, args, result }  -- shape since 0.41.0, REFUSED by check_kernel until the module checker lands (unknown U-2, below)
 
 Place::Logical { buffer: u32, coords: Vec<ScalarExpr> }   // the element at LOGICAL coordinates
 ```
@@ -173,8 +173,10 @@ Effects { reads: set<buffer>, writes: set<buffer>, traps: bool, diverges: bool, 
 
 - **U-2. `Call`.** What a callee is: an intent-layer `OpDef` body, another `KernelFn`, or an opaque extern with a
   declared effect set (U11). v0 implements `Call` only to a `KernelFn` in the same module and rejects the rest;
-  recursion is rejected by the checker. Real device-function calls (CUDA `__device__`, Slang functions) need a
-  module type that does not exist yet.
+  recursion is rejected by the checker. **Since 0.41.0 the shape exists** (PM ruling 2026-11-02, `docs/options-u3-remainder.md` R1a):
+  `Stmt::Call { callee: u32, args, result: Option<u32> }` names a `KernelFn` by index in a `Module { fns }`, and it rode the one `Stmt`
+  break of ROADMAP U4. `check_kernel` refuses it (`KernelError::CallUnsupported`) until `check_module` and the call semantics land: an
+  acyclic call graph, and a callee that holds a `Barrier` called only from uniform control (the divergence check becomes transitive).
 - **U-3. Aliasing.** Two `Buffer` params may name the same storage. v0 states that they do **not** alias
   (the lifted ops never alias), and the interpreter checks it. Whether aliasing is a per-param attribute or a
   property of a launch is open.
