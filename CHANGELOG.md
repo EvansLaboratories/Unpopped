@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.41.15` — docs: an options note for U5, collectives and richer reductions (ROADMAP U5)
+
+`docs/options-u5-collectives-and-richer-reductions.md`: five pieces (P1 NaN-ignoring `MaxNum`/`MinNum`, P2 `And`/`Or`/`Xor` and `Any`/`All` reductions, P3 `Access::ArgReduce`, P4 tuple-state custom combines, P5 collectives as kernel-layer statements that rendezvous like a barrier), what exists today, which of them break an exhaustive enum (`ReduceOp` and `Stmt` do, `Access` does not), three options, a recommendation (A, staged like U4: one breaking release behind typed refusals, then additive slices; P4 stays at the kernel layer), and the five rulings it needs. Docs only; no code changes.
+
 ## `0.41.14` — docs: the U4 memory-model question for CireSnave (ROADMAP U4 S4, S5)
 
 `docs/question-u4-memory-model.md`: what the oracle should promise for atomic `order` and `scope` and for `Stmt::Fence`, which cannot be built without a decision. It states what the oracle checks today (a race rule over barrier epochs, not a simulation of a machine), then three options: **A**, race classification with release/acquire happens-before edges (recommended, the default if no answer), **B**, ignore order, **C**, explore litmus outcomes; and two sub-questions A forces (a wait on another block's write as a typed trap rather than a hang until the `Device` barrier model exists; `SeqCst` accepted and treated as `AcqRel`, said so in the CHANGELOG). Docs only; no code changes.
