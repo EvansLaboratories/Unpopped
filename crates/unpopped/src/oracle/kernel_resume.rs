@@ -11,7 +11,7 @@ use super::int_val;
 use super::kernel_eval::{KernelTrap, Machine};
 use crate::exec::Scope;
 use crate::ir::ScalarExpr;
-use crate::kernel::{Block, KernelFn, Module, Stmt};
+use crate::kernel::{Block, CallArg, KernelFn, Module, Stmt};
 use crate::types::{self, Ty};
 
 /// One level of the control stack.
@@ -41,6 +41,16 @@ pub(super) enum Frame<'a> {
         bufmap: Vec<usize>,
         result: Option<u32>,
     },
+}
+
+impl<'a> Frame<'a> {
+    /// The frame that runs `block` from its first statement.
+    fn seq(block: &'a Block) -> Self {
+        Frame::Seq {
+            stmts: &block.0,
+            pc: 0,
+        }
+    }
 }
 
 /// Why a thread stopped running.
@@ -117,28 +127,15 @@ impl<'a> Machine<'a> {
             | Stmt::AtomicCas { .. } => {
                 self.exec_simple(st)?;
             }
-            Stmt::Fence { .. } => {
-                return Err(KernelTrap::Unsupported("Fence (check_kernel refuses it)"));
-            }
+            Stmt::Fence { .. } => return Err(KernelTrap::Unsupported("Fence (refused)")),
             Stmt::Call {
                 callee,
                 args,
                 result,
-            } => {
-                let Some(m) = module else {
-                    return Err(KernelTrap::Unsupported(
-                        "a Call outside run_launch_module (check_kernel refuses it)",
-                    ));
-                };
-                let f = &m.fns[*callee as usize];
-                self.enter_call(stack, (*callee, f), (args, *result))?;
-            }
+            } => self.call_stmt(stack, module, (*callee, args, *result))?,
             Stmt::If { cond, then, els } => {
                 let block = if self.truthy(cond)? { then } else { els };
-                stack.push(Frame::Seq {
-                    stmts: &block.0,
-                    pc: 0,
-                });
+                stack.push(Frame::seq(block));
             }
             Stmt::For {
                 local,
@@ -151,17 +148,9 @@ impl<'a> Machine<'a> {
                 stack.push(frame);
             }
             Stmt::While { cond, body } => stack.push(Frame::While { cond, body }),
-            Stmt::Break => {
-                unwind_to_loop(stack);
-                stack.pop();
-            }
+            Stmt::Break => break_loop(stack),
             Stmt::Continue => unwind_to_loop(stack),
-            Stmt::Return => {
-                // a `Return` ends the running function: down to its call frame, or the whole thread
-                while !matches!(stack.last(), Some(Frame::Call { .. }) | None) {
-                    stack.pop();
-                }
-            }
+            Stmt::Return => unwind_to_call(stack),
             Stmt::Barrier { scope, .. } => {
                 return Ok(Some(Stop::Barrier {
                     scope: *scope,
@@ -170,6 +159,21 @@ impl<'a> Machine<'a> {
             }
         }
         Ok(None)
+    }
+
+    /// A `Call` against the module: push the callee's frame.
+    fn call_stmt<'k: 'a>(
+        &mut self,
+        stack: &mut Vec<Frame<'k>>,
+        module: Option<&'k Module>,
+        (callee, args, result): (u32, &[CallArg], Option<u32>),
+    ) -> Result<(), KernelTrap> {
+        let Some(m) = module else {
+            return Err(KernelTrap::Unsupported(
+                "a Call outside run_launch_module (check_kernel refuses it)",
+            ));
+        };
+        self.enter_call(stack, (callee, &m.fns[callee as usize]), (args, result))
     }
 
     /// Evaluate a `For`'s bounds once; the counter has not taken its first value yet.
@@ -237,6 +241,19 @@ impl<'a> Machine<'a> {
             pc: 0,
         });
         Ok(())
+    }
+}
+
+/// `Break`: leave the innermost loop.
+fn break_loop(stack: &mut Vec<Frame<'_>>) {
+    unwind_to_loop(stack);
+    stack.pop();
+}
+
+/// A `Return` ends the running function: pop down to its call frame, or empty the stack (the thread ends).
+fn unwind_to_call(stack: &mut Vec<Frame<'_>>) {
+    while !matches!(stack.last(), Some(Frame::Call { .. }) | None) {
+        stack.pop();
     }
 }
 

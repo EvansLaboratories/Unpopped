@@ -190,6 +190,54 @@ fn the_callers_frame_is_back_after_a_call() {
 }
 
 #[test]
+fn a_result_comes_back_to_the_calling_thread() {
+    // twice(k: F32) -> k + k.   main: r = twice(tid as F32 + 1); x[tid] = r
+    let twice = KernelFn::new(
+        "twice",
+        F32,
+        vec![Param::scalar("k", F32, 0)],
+        vec![LocalDecl::scalar(F32), LocalDecl::scalar(F32)],
+        Block(vec![Stmt::Let {
+            local: 1,
+            init: ScalarExpr::Add(
+                Box::new(ScalarExpr::Local(0)),
+                Box::new(ScalarExpr::Local(0)),
+            ),
+        }]),
+    )
+    .with_result(1);
+    let k = ScalarExpr::Cast(
+        Box::new(tid()),
+        unpopped::ir::CastSpec {
+            to: F32,
+            round: unpopped::ir::RoundMode::NearestEven,
+            sat: unpopped::ir::Saturation::Wrap,
+        },
+    );
+    let main = KernelFn::new(
+        "main",
+        F32,
+        vec![rw()],
+        vec![LocalDecl::scalar(F32)],
+        Block(vec![
+            Stmt::Call {
+                callee: 1,
+                args: vec![CallArg::Scalar(k)],
+                result: Some(0),
+            },
+            Stmt::Store {
+                place: at(0, tid()),
+                value: ScalarExpr::Local(0),
+            },
+        ]),
+    )
+    .with_launch(LaunchShape::new([N, 1, 1], [1, 1, 1]));
+    let out = run(&Module::new(vec![main, twice])).expect("runs");
+    let want: Vec<f32> = (0..N).map(|i| 2.0 * i as f32).collect();
+    assert_eq!(out, want, "each thread got its own result");
+}
+
+#[test]
 fn a_barrier_inside_a_callee_is_still_a_typed_refusal() {
     let with_barrier = KernelFn::new(
         "b",
