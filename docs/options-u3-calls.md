@@ -85,7 +85,8 @@ callee's; stating that now costs nothing and nothing computes it yet.
 | M3 | recursive evaluator runs a module (`run_module`) | **built, 0.41.7** (scalar and buffer arguments; allocations through a call are refused) |
 | M4a | resumable evaluator `Frame::Call`; a launched entry calls plain functions (`run_launch_module`) | **built, 0.41.8** |
 | M4b | barrier in a callee; transitive divergence (Q6) | **built, 0.41.9** |
-| M4c | allocations through a call (`CallArg::Alloc`) | **built, 0.41.12** (a callee's own allocations stay refused; the C pass-through is M5c) |
+| M4c | allocations through a call (`CallArg::Alloc`) | **built, 0.41.12** (a callee's own allocations stay refused) |
+| M5c | `unpopped-cpu-c` passes a `Shared` array to a callee (`sh<a>` with a declared shape and stride) | **built, 0.41.13** |
 | M5 | `unpopped-cpu-c` spells a call as a C function (serial reference), the differential for M3/M4 | **built, 0.41.10** (`lower_module`, unlaunched) **and 0.41.11** (launched: a barrier-free callee reads the thread's ids as arguments) |
 
 Mutants to seed: arity unchecked; cycle undetected; callee locals not saved or not restored; result written to the
