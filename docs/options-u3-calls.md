@@ -84,7 +84,8 @@ callee's; stating that now costs nothing and nothing computes it yet.
 | M2 | `check_module` + the new `KernelError`s; `check_kernel` still refuses a bare `Call` | additive |
 | M3 | recursive evaluator runs a module (`run_module`) | **built, 0.41.7** (scalar and buffer arguments; allocations through a call are refused) |
 | M4a | resumable evaluator `Frame::Call`; a launched entry calls plain functions (`run_launch_module`) | **built, 0.41.8** |
-| M4b | barrier in a callee; transitive divergence (Q6); allocations through a call | additive |
+| M4b | barrier in a callee; transitive divergence (Q6) | **built, 0.41.9** |
+| M4c | allocations through a call (`CallArg::Alloc`, a callee's `Private` allocations) | additive |
 | M5 | `unpopped-cpu-c` spells a call as a C function (serial reference), the differential for M3/M4 | additive |
 
 Mutants to seed: arity unchecked; cycle undetected; callee locals not saved or not restored; result written to the
