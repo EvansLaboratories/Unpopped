@@ -243,6 +243,12 @@ impl Emitter<'_> {
             };
             let t = ctype(a.elem, "an allocation")?;
             self.line(&format!("{t} sh{i}[{n}] = {{0}};"));
+            if self.module.is_some() {
+                // the shape and stride a callee's buffer parameter is bound to when the array is passed
+                self.line(&format!(
+                    "const long long ash{i}[1] = {{{n}}}; const long long ast{i}[1] = {{1}};"
+                ));
+            }
         }
         Ok(())
     }
