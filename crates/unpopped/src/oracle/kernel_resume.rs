@@ -103,9 +103,9 @@ impl Machine<'_> {
             | Stmt::AtomicRmw { .. } => {
                 self.exec_simple(st)?;
             }
-            Stmt::AtomicCas { .. } | Stmt::Fence { .. } => {
+            Stmt::AtomicCas { .. } | Stmt::Fence { .. } | Stmt::Call { .. } => {
                 return Err(KernelTrap::Unsupported(
-                    "AtomicCas and Fence (check_kernel refuses them)",
+                    "AtomicCas, Fence and Call (check_kernel refuses them)",
                 ));
             }
             Stmt::If { cond, then, els } => {

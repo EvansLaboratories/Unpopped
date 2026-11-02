@@ -151,6 +151,11 @@ fn check_stmt(
                 what: "Fence: the shape is reserved and its semantics has not landed",
             });
         }
+        Stmt::Call { .. } => {
+            return Err(KernelError::CallUnsupported {
+                what: "Call: the shape is reserved; the module checker and the call semantics have not landed",
+            });
+        }
         Stmt::If { cond, then, els } => {
             scalar_cond(k, cond, sc)?;
             check_block(k, then, sc)?;

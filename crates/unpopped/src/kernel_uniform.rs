@@ -117,6 +117,12 @@ impl Walk<'_> {
                 }
             }
             Stmt::Store { .. } | Stmt::Fence { .. } | Stmt::Return => {}
+            // A callee's result may differ between threads: the conservative mark, until calls run.
+            Stmt::Call { result, .. } => {
+                if let Some(local) = result {
+                    self.mark(*local);
+                }
+            }
             // The old value depends on the order the threads reach the element, so it differs
             // between threads whatever the operands are: a barrier under `if old == 0` is divergent.
             Stmt::AtomicRmw { old, .. } | Stmt::AtomicCas { old, .. } => {

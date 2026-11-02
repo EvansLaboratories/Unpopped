@@ -299,6 +299,36 @@ pub enum Stmt {
         /// The order.
         order: MemoryOrder,
     },
+    /// Call another kernel of the same [`Module`]: `result = callee(args...)`. The callee is a
+    /// [`KernelFn`] (PM ruling 2026-11-02 on `docs/options-u3-remainder.md`, R1a); `callee` indexes
+    /// [`Module::fns`]. **Shape reserved: `check_kernel` refuses it** until the module checker and the
+    /// call semantics land (acyclic call graph; a callee holding a `Barrier` called from uniform
+    /// control only). It is in the 0.41.0 break so that `Stmt` breaks downstream once.
+    Call {
+        /// Index of the callee in the module's functions.
+        callee: u32,
+        /// The argument values, in the callee's parameter order.
+        args: Vec<ScalarExpr>,
+        /// The local that receives the callee's result, if it has one.
+        result: Option<u32>,
+    },
+}
+
+/// A set of kernels, any of which may [`Stmt::Call`] another. **Shape only** (0.41.0): nothing checks or
+/// runs a module yet; the type exists so `Stmt::Call` has a callee to name.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Module {
+    /// The kernels; a call names one by index.
+    pub fns: Vec<KernelFn>,
+}
+
+impl Module {
+    /// A module of `fns`.
+    #[must_use]
+    pub fn new(fns: Vec<KernelFn>) -> Self {
+        Self { fns }
+    }
 }
 
 /// Which barrier a [`Stmt::Barrier`] is.
@@ -484,6 +514,11 @@ pub enum KernelError {
     /// A `Fence` (or a barrier kind) whose semantics has not landed: the shape is reserved, the checker
     /// refuses it, so no producer builds a kernel an interpreter would then have to guess about.
     SyncUnsupported {
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// A `Call` before the module checker and the call semantics have landed: the shape is reserved.
+    CallUnsupported {
         /// What is wrong.
         what: &'static str,
     },
