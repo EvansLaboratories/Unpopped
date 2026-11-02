@@ -102,7 +102,9 @@
 //! BEFORE all per-element address math), since the plan carries only the PRESENCE
 //! mask, not the runtime value.
 
+mod kernel_call;
 pub mod kernel_eval;
+pub use kernel_call::run_module;
 pub mod kernel_launch;
 mod kernel_mem;
 mod kernel_resume;
