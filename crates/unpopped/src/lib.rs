@@ -81,6 +81,7 @@ pub mod jit;
 pub mod kernel;
 mod kernel_check;
 pub mod kernel_lift;
+mod kernel_module;
 mod kernel_uniform;
 pub mod kisc;
 pub mod lift;

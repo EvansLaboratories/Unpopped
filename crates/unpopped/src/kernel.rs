@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use unpopped_vocab::ElementKind;
 
 pub use crate::kernel_check::check_kernel;
+pub use crate::kernel_module::check_module;
 
 use crate::exec::{AllocDecl, LaunchShape, Scope};
 use crate::ir::ScalarExpr;
@@ -542,7 +543,38 @@ pub enum KernelError {
         /// What is wrong.
         what: &'static str,
     },
-    /// A `Call` before the module checker and the call semantics have landed: the shape is reserved.
+    /// A `Call` names a function that is not in the module (or `check_module` names an entry that is not).
+    BadCallee {
+        /// The index.
+        callee: u32,
+    },
+    /// A `Call` passes a different number of arguments than the callee has parameters.
+    CallArity {
+        /// The callee's parameter count.
+        expected: usize,
+        /// The call's argument count.
+        found: usize,
+    },
+    /// A `Call` argument does not fit its parameter: the wrong kind, a different element type, a role the
+    /// caller's buffer does not have.
+    CallArgMismatch {
+        /// The argument position.
+        arg: usize,
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// The call graph has a cycle through this function.
+    CallCycle {
+        /// The index of a function on the cycle.
+        callee: u32,
+    },
+    /// A `Call` asks for a result the callee does not have.
+    CallResult {
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// A `Call` outside a module (`check_kernel` alone), or something a callee may not yet be: the shape is
+    /// accepted only where the module checker can resolve it.
     CallUnsupported {
         /// What is wrong.
         what: &'static str,
