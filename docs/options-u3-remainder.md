@@ -44,9 +44,11 @@ first step when a consumer asks, because (c) is a much larger commitment (D-R4-3
 ### R3, textures and resources
 
 The **manifest** already names texture and sampler bindings (`BindingKind`); what is missing is the *IR* side:
-a texture value, sampling operations and a `Texture` space. Only the Slang column lists it, and Fuel has not
-counted how many of its kernels sample. Recommend: ask Fuel for the count of kernels using `Texture*`/`Sampler*`
-before designing; build nothing until a kernel that samples is a lift target.
+a texture value, sampling operations and a `Texture` space. Only the Slang column lists it. **Measured (Fuel
+lane, `fuel@1bdd4c3e0`, relayed by the PM 2026-11-02): 0 of 192 kernel files sample a texture or a sampler**
+(149 Slang, 27 GLSL, 16 Metal, 0 CUDA; `git grep` with a positive control that hit; Baracuda's CUDA kernels were
+not scanned). So Fuel needs no texture or sampler resources, and nothing consumes them: build nothing until a
+kernel that samples is a lift target.
 
 ### R4, `ProgramModel`
 
@@ -59,10 +61,10 @@ the lowering waits for a Triton frontend lane.
 
 1. **R1 rides U4's break** (shape now, semantics staged). It is the only item a measured need points at.
 2. R4's declaration field, additive, whenever convenient.
-3. R2(b) and R3 only when a consumer asks, with the Fuel count for R3 requested now.
+3. R2(b) and R3 only when a consumer asks (the Fuel count for R3 is 0).
 
 ## Needs a ruling
 
 1. Callee = `KernelFn` in a `Module` (R1a), and the `Call` shape folded into the U4 break.
-2. Ask Fuel for the texture/sampler kernel count (R3).
+2. ~~Ask Fuel for the texture/sampler kernel count (R3)~~: answered, 0 of 192.
 3. Confirm "when a consumer needs it" stays the rule for R2, R3 and R4's lowering.
