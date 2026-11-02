@@ -19,6 +19,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 `docs/options-u4-sync-and-atomics.md`: what the kernel layer has for barriers and atomics, what the union surveys list as missing, which emitter lanes could use a slice (measured: none implements the kernel-layer path for these statements today; bonefish has named a future `sycl::atomic_ref` spelling), the seven IR shapes a slice adds with whether each breaks `Stmt` consumers, three slicing options and a recommendation (break `Stmt` once, stage the semantics behind typed refusals). Nothing is built; it needs a ruling. ROADMAP U3 said "open, after U2" although its spec, capability types, resource map and row 4 are done; the row now says what is done and what is open. No code change.
 
+## `0.40.21` — docs: ROADMAP X7 retraction (0.40.20 said two survey docs state no ref)
+
+The X7 row merged in 0.40.20 said `thunderkittens.md` and `slang.md` do not state the ref their line cites are into, that a header line was the fix, and that `u3-row3-resource-map-and-frontend.md` had a stale `Frontend` description left over. All three were wrong: `thunderkittens.md` gives the commit it read (`a575e66`), `slang.md` gives its fetch date (2026-10-24, no SHA), and `u3-row3` section 1 is headed "read from `origin/main` (4b5bedc, 0.32.24)", so each is a dated reading. My search had looked for the wrong wording ("read at"). The row now says so and that nothing remains for X7. The 0.40.20 line-cite fixes themselves stand. No code change.
+
 ## `0.40.20` — docs: stale line cites named or dated (ROADMAP X7)
 
 X7 audited: of 83 line cites with an identifier beside them, the survey docs and `idiom-lifting-design.md` pin their own ref by design and are left alone; the live cites that had drifted now name the symbol and date the line (`classify_vec_width` in ROADMAP C6, `normative-seams.md`, `deferred.md`; `Access` and `AccumSpec` in `groupshared-sizing.md` and `ir-union-design.md`; the removed `CUDA_RESIDUE` cite; a `recipe.rs` comment). ROADMAP X7 records the audit, the method's limit (a window test, then reading) and what remains. No code change.
