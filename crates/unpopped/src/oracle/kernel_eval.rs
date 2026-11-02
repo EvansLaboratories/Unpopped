@@ -87,7 +87,7 @@ pub enum KernelTrap {
     DataRace,
 }
 
-enum Flow {
+pub(super) enum Flow {
     Next,
     Break,
     Continue,
@@ -99,6 +99,10 @@ pub(super) struct Machine<'a> {
     pub(super) local_tys: Vec<Ty>,
     pub(super) locals: Vec<Option<Val>>,
     args: &'a mut [KernelArg],
+    /// The module a `Call` resolves in (`run_module` only).
+    pub(super) module: Option<&'a crate::kernel::Module>,
+    /// Inside a callee: the root argument each buffer parameter is bound to. Empty in the entry frame.
+    pub(super) bufmap: Vec<usize>,
     pub(super) steps: u64,
     /// Present only under `run_launch`: which thread this is, and the memory it shares.
     pub(super) ctx: Option<ThreadCtx<'a>>,
@@ -133,9 +137,25 @@ impl<'a> Machine<'a> {
             local_tys: k.locals.iter().map(|d| d.ty()).collect(),
             locals: vec![None; k.locals.len()],
             args,
+            module: None,
+            bufmap: Vec::new(),
             steps: 0,
             ctx,
         }
+    }
+
+    /// The same machine, resolving calls in `m`.
+    pub(super) fn with_module(mut self, m: &'a crate::kernel::Module) -> Self {
+        self.module = Some(m);
+        self
+    }
+
+    /// The root argument a buffer parameter of the running function names.
+    pub(super) fn root(&self, buffer: u32) -> usize {
+        self.bufmap
+            .get(buffer as usize)
+            .copied()
+            .unwrap_or(buffer as usize)
     }
 
     /// Bind the arguments and run the body to completion (one logical thread).
@@ -178,7 +198,7 @@ impl<'a> Machine<'a> {
         }
     }
 
-    fn exec_block(&mut self, b: &Block) -> Result<Flow, KernelTrap> {
+    pub(super) fn exec_block(&mut self, b: &Block) -> Result<Flow, KernelTrap> {
         for st in &b.0 {
             self.tick()?;
             match self.exec_stmt(st)? {
@@ -199,11 +219,14 @@ impl<'a> Machine<'a> {
             | Stmt::AtomicCas { .. } => {
                 self.exec_simple(st)?;
             }
-            Stmt::Fence { .. } | Stmt::Call { .. } => {
-                return Err(KernelTrap::Unsupported(
-                    "Fence and Call (check_kernel refuses them)",
-                ));
+            Stmt::Fence { .. } => {
+                return Err(KernelTrap::Unsupported("Fence (check_kernel refuses it)"));
             }
+            Stmt::Call {
+                callee,
+                args,
+                result,
+            } => self.exec_call(*callee, args, *result)?,
             Stmt::If { cond, then, els } => {
                 let taken = self.truthy(cond)?;
                 return self.exec_block(if taken { then } else { els });
@@ -344,7 +367,7 @@ impl<'a> Machine<'a> {
             };
             cs.push(self.eval_int(c, t)?);
         }
-        let KernelArg::Buffer(tb) = &self.args[*buffer as usize] else {
+        let KernelArg::Buffer(tb) = &self.args[self.root(*buffer)] else {
             return Err(KernelTrap::ArgMismatch(
                 "a Place names a non-buffer argument",
             ));
@@ -357,7 +380,7 @@ impl<'a> Machine<'a> {
             off += c * i128::from(tb.strides[d]);
         }
         let off = usize::try_from(off).map_err(|_| KernelTrap::OutOfBounds { buffer: *buffer })?;
-        Ok((*buffer as usize, off))
+        Ok((self.root(*buffer), off))
     }
 
     fn load(&mut self, place: &Place) -> Result<Val, KernelTrap> {
@@ -446,7 +469,7 @@ impl<'a> Machine<'a> {
         self.locals[i as usize].expect("check_kernel guarantees a local is set before it is read")
     }
 
-    fn eval_expr(&self, e: &ScalarExpr) -> Result<Val, KernelTrap> {
+    pub(super) fn eval_expr(&self, e: &ScalarExpr) -> Result<Val, KernelTrap> {
         match types::infer_ty_in(e, self.k.compute, &self.local_tys)
             .map_err(|_| KernelTrap::Unsupported("ill-typed expression"))?
         {
