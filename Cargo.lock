@@ -295,7 +295,7 @@ checksum = "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954"
 
 [[package]]
 name = "unpopped"
-version = "0.40.21"
+version = "0.40.22"
 dependencies = [
  "half",
  "kiss-classify-vocab",
@@ -312,7 +312,7 @@ dependencies = [
 
 [[package]]
 name = "unpopped-conformance"
-version = "0.40.21"
+version = "0.40.22"
 dependencies = [
  "unpopped",
  "unpopped-cpu-c",
@@ -321,7 +321,7 @@ dependencies = [
 
 [[package]]
 name = "unpopped-cpu-c"
-version = "0.40.21"
+version = "0.40.22"
 dependencies = [
  "kiss-ref-core",
  "unpopped",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "unpopped-vocab"
-version = "0.40.21"
+version = "0.40.22"
 dependencies = [
  "float8",
  "half",
