@@ -42,11 +42,12 @@ fn empty() -> KernelFn {
     KernelFn::new("k", ElementKind::F32, vec![], vec![], Block(vec![]))
 }
 
-/// A kernel `CpuC` must refuse: it has a launch and a barrier.
+/// A kernel `CpuC` must refuse: its launch holds a barrier wider than a block (0.41.2 spells `Block`
+/// barriers; a `Device` barrier needs every block resident at once, which a serial reference cannot give).
 fn barrier() -> KernelFn {
     let mut k = empty().with_launch(LaunchShape::new([1, 1, 1], [1, 1, 1]));
     k.body.0.push(Stmt::Barrier {
-        scope: Scope::Block,
+        scope: Scope::Device,
         kind: unpopped::kernel::BarrierKind::Full,
     });
     k
