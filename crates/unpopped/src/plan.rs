@@ -2178,9 +2178,8 @@ fn is_total_int_dtype(dtype: ElementKind) -> bool {
 }
 
 /// The reduce ops added in 0.42.0 (PM ruling 2026-11-02, `docs/options-u5-collectives-and-richer-reductions.md`):
-/// `And`/`Or`/`Xor` fold integers in an [`Access::Reduction`] only, and `MaxNum`/`MinNum` are shapes whose
-/// semantics has not landed. Anything else declines here, typed, before a plan the oracle and the emitters
-/// would refuse is built.
+/// `And`/`Or`/`Xor` fold integers, and `MaxNum`/`MinNum` fold ignoring NaN (0.42.1), in an [`Access::Reduction`]
+/// only. Anything else declines here, typed, before a plan the oracle and the emitters would refuse is built.
 fn check_reduce_op_admissibility(op: &OpDef, dtype: ElementKind) -> Result<(), PlanError> {
     let ops: Vec<ReduceOp> = match &op.access {
         Access::Reduction { op, .. } | Access::Scan { op, .. } | Access::Window { op, .. } => {
@@ -2192,15 +2191,10 @@ fn check_reduce_op_admissibility(op: &OpDef, dtype: ElementKind) -> Result<(), P
     let in_reduction = matches!(op.access, Access::Reduction { .. });
     for rop in ops {
         let detail = match rop {
-            ReduceOp::MaxNum | ReduceOp::MinNum => {
-                format!(
-                    "{rop:?} (a NaN-ignoring extremum) is a shape only; its semantics has not landed"
-                )
-            }
-            ReduceOp::And | ReduceOp::Or | ReduceOp::Xor if !in_reduction => {
-                format!(
-                    "{rop:?} folds integers in a Reduction only, not in a scan, window or row reduction"
-                )
+            ReduceOp::And | ReduceOp::Or | ReduceOp::Xor | ReduceOp::MaxNum | ReduceOp::MinNum
+                if !in_reduction =>
+            {
+                format!("{rop:?} folds in a Reduction only, not in a scan, window or row reduction")
             }
             ReduceOp::And | ReduceOp::Or | ReduceOp::Xor if !is_int_dtype(dtype) => {
                 format!("{rop:?} is a bitwise fold and needs an integer dtype")

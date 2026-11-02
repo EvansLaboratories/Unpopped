@@ -2829,41 +2829,51 @@ fn fold_step(
                 *acc_f *= e.f64();
             }
         }
-        ReduceOp::Max | ReduceOp::Min => {
-            if int_acc {
-                let v = e.i128();
-                let better = if matches!(rop, ReduceOp::Max) {
-                    v > *acc_i
-                } else {
-                    v < *acc_i
-                };
-                if !*have || better {
-                    *acc_i = v;
-                }
-            } else {
-                let v = e.f64();
-                let better = if matches!(rop, ReduceOp::Max) {
-                    v > *acc_f
-                } else {
-                    v < *acc_f
-                };
-                if !*have || v.is_nan() || better {
-                    *acc_f = v;
-                }
-            }
-            *have = true;
+        ReduceOp::Max | ReduceOp::Min | ReduceOp::MaxNum | ReduceOp::MinNum => {
+            extremum_fold(rop, e, (int_acc, acc_f, acc_i), have);
         }
         _ => bit_fold(rop, e.i128(), (int_acc, acc_i), have),
     }
 }
 
-/// The arms of [`fold_step`] not above: `And`, `Or`, `Xor` (and the shape-only `MaxNum`/`MinNum`, a bug here).
+/// One step of `Max` / `Min` / `MaxNum` / `MinNum`: the first element seeds, a strictly better one replaces. The
+/// float rules differ in NaN: `Max` / `Min` keep a NaN once seen; `MaxNum` / `MinNum` skip a NaN element and
+/// replace a NaN accumulator, so a run of only NaN stays NaN. An integer has no NaN, so the four coincide in pairs.
+fn extremum_fold(
+    rop: ReduceOp,
+    e: Val,
+    (int_acc, acc_f, acc_i): (bool, &mut f64, &mut i128),
+    have: &mut bool,
+) {
+    let max = matches!(rop, ReduceOp::Max | ReduceOp::MaxNum);
+    let ignore_nan = matches!(rop, ReduceOp::MaxNum | ReduceOp::MinNum);
+    if int_acc {
+        let v = e.i128();
+        if !*have || (if max { v > *acc_i } else { v < *acc_i }) {
+            *acc_i = v;
+        }
+    } else {
+        let v = e.f64();
+        let better = if max { v > *acc_f } else { v < *acc_f };
+        let take = if ignore_nan {
+            !*have || acc_f.is_nan() || (!v.is_nan() && better)
+        } else {
+            !*have || v.is_nan() || better
+        };
+        if take {
+            *acc_f = v;
+        }
+    }
+    *have = true;
+}
+
+/// The arms of [`fold_step`] not above: `And`, `Or`, `Xor`.
 /// One step of an integer bit fold, seeded by the first element (no identity literal, as for `Max`/`Min`).
-/// `MaxNum`/`MinNum` are shapes only, and a float input is declined by the plan gate: both are bugs here.
+/// A float input is declined by the plan gate, and no other op reaches here: both are bugs.
 fn bit_fold(rop: ReduceOp, v: i128, (int_acc, acc): (bool, &mut i128), have: &mut bool) {
     assert!(
-        int_acc && !matches!(rop, ReduceOp::MaxNum | ReduceOp::MinNum),
-        "oracle: {rop:?} here is declined by the plan gate (a float bit fold, or a shape-only op)"
+        int_acc && matches!(rop, ReduceOp::And | ReduceOp::Or | ReduceOp::Xor),
+        "oracle: {rop:?} here is declined by the plan gate (a float bit fold, or a non-bit op)"
     );
     *acc = match (*have, rop) {
         (false, _) => v,
