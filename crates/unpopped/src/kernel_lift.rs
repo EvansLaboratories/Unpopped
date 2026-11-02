@@ -1063,28 +1063,7 @@ fn extremum_step(rop: ReduceOp, acc: u32, have: u32, val: u32, int: bool) -> Vec
         then: Block(vec![set(val)]),
         els: Block(vec![]),
     };
-    let ignore_nan = matches!(rop, ReduceOp::MaxNum | ReduceOp::MinNum);
-    let cmp = |op| ScalarExpr::Binary(op, bx(l(val)), bx(l(val)));
-    // An integer is never NaN, so its step has no NaN arm.
-    let nan_check = if int {
-        keep_going
-    } else if ignore_nan {
-        Stmt::If {
-            cond: ScalarExpr::Binary(BinaryOp::CmpNe, bx(l(acc)), bx(l(acc))),
-            then: Block(vec![set(val)]),
-            els: Block(vec![Stmt::If {
-                cond: cmp(BinaryOp::CmpEq),
-                then: Block(vec![keep_going]),
-                els: Block(vec![]),
-            }]),
-        }
-    } else {
-        Stmt::If {
-            cond: ScalarExpr::Binary(BinaryOp::CmpNe, bx(l(val)), bx(l(val))),
-            then: Block(vec![set(val)]),
-            els: Block(vec![keep_going]),
-        }
-    };
+    let nan_check = nan_arm(rop, int, (acc, val), keep_going);
     vec![
         Stmt::If {
             cond: l(have),
@@ -1096,6 +1075,38 @@ fn extremum_step(rop: ReduceOp, acc: u32, have: u32, val: u32, int: bool) -> Vec
             value: ScalarExpr::ConstInt(1, ElementKind::I32),
         },
     ]
+}
+
+/// What a `Max` / `Min` / `MaxNum` / `MinNum` step does once the accumulator holds a value: an integer has no NaN, so it
+/// just compares (`keep_going`); `Max` / `Min` take a NaN element (`v != v`); `MaxNum` / `MinNum` replace a NaN
+/// accumulator (`acc != acc`) and skip a NaN element (`v == v` guards the comparison).
+fn nan_arm(rop: ReduceOp, int: bool, (acc, val): (u32, u32), keep_going: Stmt) -> Stmt {
+    let l = ScalarExpr::Local;
+    let bx = Box::new;
+    let set = |v: u32| Stmt::Assign {
+        local: acc,
+        value: l(v),
+    };
+    let probe = |op, x: u32| ScalarExpr::Binary(op, bx(l(x)), bx(l(x)));
+    if int {
+        keep_going
+    } else if matches!(rop, ReduceOp::MaxNum | ReduceOp::MinNum) {
+        Stmt::If {
+            cond: probe(BinaryOp::CmpNe, acc),
+            then: Block(vec![set(val)]),
+            els: Block(vec![Stmt::If {
+                cond: probe(BinaryOp::CmpEq, val),
+                then: Block(vec![keep_going]),
+                els: Block(vec![]),
+            }]),
+        }
+    } else {
+        Stmt::If {
+            cond: probe(BinaryOp::CmpNe, val),
+            then: Block(vec![set(val)]),
+            els: Block(vec![keep_going]),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
