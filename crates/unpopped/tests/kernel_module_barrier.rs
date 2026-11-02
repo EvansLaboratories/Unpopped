@@ -142,6 +142,28 @@ fn without_the_callees_barrier_the_exchange_is_a_data_race() {
 }
 
 #[test]
+fn a_buffer_binding_survives_the_callee_barrier() {
+    // the call passes the buffers swapped: the callee's `x` is the caller's `out`. After the barrier the
+    // thread must still read through that binding, not through the identity map.
+    let swapped = vec![CallArg::Buffer(1), CallArg::Buffer(0)];
+    let m = Module::new(vec![entry(vec![call(1, swapped)]), exchange(true)]);
+    let mut args = vec![buf(&[0.0; N as usize]), buf(&[0.0; N as usize])];
+    run_launch_module(&m, 0, &mut args).expect("runs");
+    let mirror: Vec<f32> = (0..N).map(|i| (N - i) as f32).collect();
+    let own: Vec<f32> = (0..N).map(|i| (i + 1) as f32).collect();
+    assert_eq!(
+        read(&args[0]),
+        mirror,
+        "the callee's `out` is the caller's buffer 0"
+    );
+    assert_eq!(
+        read(&args[1]),
+        own,
+        "the callee's `x` is the caller's buffer 1"
+    );
+}
+
+#[test]
 fn the_caller_resumes_inside_its_own_frame_after_the_callee_barrier() {
     // a local, and a store through the caller's own buffer map, after the call must survive the callee's
     // barrier phase change (`out` is the thread's own slot: the callee also wrote it before the barrier)
