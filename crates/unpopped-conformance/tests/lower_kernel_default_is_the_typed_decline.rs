@@ -47,6 +47,7 @@ fn barrier() -> KernelFn {
     let mut k = empty().with_launch(LaunchShape::new([1, 1, 1], [1, 1, 1]));
     k.body.0.push(Stmt::Barrier {
         scope: Scope::Block,
+        kind: unpopped::kernel::BarrierKind::Full,
     });
     k
 }

@@ -1,6 +1,6 @@
 # Options note: what remains of U3 (ROADMAP U3, gaps 3.1, 3.2, 3.3, 3.18)
 
-Status: **options, nothing built.** Asked by the PM (2026-11-02): the U3 remainder as a note, after the U4 note
+Status: **ruled 2026-11-02; R1's shape is built (0.41.0, #241), the rest waits for a consumer.** Written as an options note, with nothing built, before the rulings below. Asked by the PM (2026-11-02): the U3 remainder as a note, after the U4 note
 (`docs/options-u4-sync-and-atomics.md`, ruled the same day: break `Stmt` once, stage the semantics). Read at
 `origin/main` `59d25bd` (0.40.20) plus the unmerged U4 note branch; sibling counts are `git grep` over each repo's
 `origin/main`.
@@ -68,3 +68,12 @@ the lowering waits for a Triton frontend lane.
 1. Callee = `KernelFn` in a `Module` (R1a), and the `Call` shape folded into the U4 break.
 2. ~~Ask Fuel for the texture/sampler kernel count (R3)~~: answered, 0 of 192.
 3. Confirm "when a consumer needs it" stays the rule for R2, R3 and R4's lowering.
+
+## Rulings (PM, 2026-11-02), recorded after the note merged
+
+1. **Callee = a `KernelFn` in a `Module`; the `Stmt::Call` shape rides the 0.41.0 break: YES, and built.** `Stmt::Call { callee, args, result }` and
+   `Module { fns }` landed in 0.41.0 (#241); `check_kernel` refuses a `Call` with `KernelError::CallUnsupported` until `check_module` (acyclic call graph,
+   a callee holding a `Barrier` called only from uniform control) and the call semantics land as an additive slice.
+2. **Texture count:** the Fuel lane measured 0 of 192 kernel files (section R3), so nothing consumes texture resources.
+3. **"When a consumer needs it" stays the rule** for pointer values, textures and the `BlockSpmd` lowering. The `program_model` declaration field (R4) is
+   additive and not yet built.

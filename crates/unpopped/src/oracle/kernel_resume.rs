@@ -103,6 +103,11 @@ impl Machine<'_> {
             | Stmt::AtomicRmw { .. } => {
                 self.exec_simple(st)?;
             }
+            Stmt::AtomicCas { .. } | Stmt::Fence { .. } | Stmt::Call { .. } => {
+                return Err(KernelTrap::Unsupported(
+                    "AtomicCas, Fence and Call (check_kernel refuses them)",
+                ));
+            }
             Stmt::If { cond, then, els } => {
                 let block = if self.truthy(cond)? { then } else { els };
                 stack.push(Frame::Seq {
@@ -127,7 +132,7 @@ impl Machine<'_> {
             }
             Stmt::Continue => unwind_to_loop(stack),
             Stmt::Return => stack.clear(),
-            Stmt::Barrier { scope } => {
+            Stmt::Barrier { scope, .. } => {
                 return Ok(Some(Stop::Barrier {
                     scope: *scope,
                     at: std::ptr::from_ref(st) as usize,

@@ -27,6 +27,9 @@ fn atomic(op: AtomicOp, v: i64) -> Stmt {
         op,
         place: cell(),
         value: ScalarExpr::ConstInt(v, I32),
+        old: None,
+        order: unpopped::kernel::MemoryOrder::Relaxed,
+        scope: unpopped::exec::Scope::Device,
     }
 }
 
@@ -163,6 +166,9 @@ fn the_checker_admits_only_the_v1_form() {
             op: AtomicOp::Add,
             place: cell(),
             value: ScalarExpr::ConstInt(1, ElementKind::I64),
+            old: None,
+            order: unpopped::kernel::MemoryOrder::Relaxed,
+            scope: unpopped::exec::Scope::Device,
         }],
     );
     assert!(check_kernel(&wrong_value).is_err());
@@ -176,6 +182,9 @@ fn a_float_add_is_admitted_for_f32_and_f64_only_and_max_min_are_not() {
                 op,
                 place: cell(),
                 value: ScalarExpr::Const(1.0),
+                old: None,
+                order: unpopped::kernel::MemoryOrder::Relaxed,
+                scope: unpopped::exec::Scope::Device,
             }];
             let params = vec![Param::buffer("c", elem, BufferRole::ReadWrite, Some(1))];
             let mut k = KernelFn::new("f", elem, params, vec![], unpopped::kernel::Block(body));
