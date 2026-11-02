@@ -27,7 +27,8 @@
 //! A `Barrier` of any scope but `Block`; a `While` that holds a barrier; a `Break` or `Continue` that
 //! leaves a loop holding a barrier; a `Return` in a kernel that has a barrier (ending one thread would
 //! have to skip the barriers after it); execution ids other than `ThreadIdx`, `BlockIdx`, `BlockDim` and
-//! `GridDim`; a `Private` or `Constant` allocation or a dynamic extent; a block over 1024 threads.
+//! `GridDim`; a `Private` or `Constant` allocation or a dynamic extent; a block over 1024 threads;
+//! `Fence` and `Call`.
 //!
 //! # Order
 //!
@@ -386,13 +387,55 @@ impl Emitter<'_> {
         self.line(&format!("{t} a{n} = ({t})({v}); {t} o{n}v = {at};"));
         let new = atomic_new(*op, elem, &format!("o{n}v"), &format!("a{n}"))?;
         self.line(&format!("{at} = ({t})({new});"));
-        if let Some(local) = old {
-            let r = self.local_ref(*local);
-            let lt = self.local_ctype(*local)?;
-            self.line(&format!("{r} = ({lt})o{n}v;"));
-        }
+        self.bind_old(*old, n)?;
         self.depth -= 1;
         self.line("}");
+        Ok(())
+    }
+
+    /// An `AtomicCas` as a plain compare and store: serial, hence atomic. `old` receives the value found.
+    pub(crate) fn atomic_cas(&mut self, s: &Stmt) -> Result<(), LowerError> {
+        let Stmt::AtomicCas {
+            place,
+            expected,
+            desired,
+            old,
+            ..
+        } = s
+        else {
+            unreachable!("atomic_cas is called for an AtomicCas");
+        };
+        if self.launch.is_none() {
+            return Err(refuse("an AtomicCas without a launch shape"));
+        }
+        let elem = self.place_elem(place)?;
+        let t = ctype(elem, "an atomic element")?;
+        let (at, e, d) = (
+            self.address(place)?,
+            self.expr(expected)?,
+            self.expr(desired)?,
+        );
+        let n = self.fresh;
+        self.fresh += 1;
+        self.line("{");
+        self.depth += 1;
+        self.line(&format!(
+            "{t} e{n} = ({t})({e}); {t} d{n} = ({t})({d}); {t} o{n}v = {at};"
+        ));
+        self.line(&format!("if (o{n}v == e{n}) {at} = d{n};"));
+        self.bind_old(*old, n)?;
+        self.depth -= 1;
+        self.line("}");
+        Ok(())
+    }
+
+    /// `local = o{n}v;` when the statement asked for the value it found.
+    fn bind_old(&mut self, old: Option<u32>, n: u32) -> Result<(), LowerError> {
+        if let Some(local) = old {
+            let r = self.local_ref(local);
+            let lt = self.local_ctype(local)?;
+            self.line(&format!("{r} = ({lt})o{n}v;"));
+        }
         Ok(())
     }
 

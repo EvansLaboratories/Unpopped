@@ -554,3 +554,142 @@ fn an_unlaunched_kernel_still_agrees() {
     ];
     kernel_run::agree("unlaunched_add", &k, args);
 }
+
+fn cast_i32() -> unpopped::ir::CastSpec {
+    unpopped::ir::CastSpec {
+        to: I32,
+        round: unpopped::ir::RoundMode::NearestEven,
+        sat: unpopped::ir::Saturation::Wrap,
+    }
+}
+
+fn cas_stmt(expected: ScalarExpr, desired: ScalarExpr, old: Option<u32>) -> Stmt {
+    Stmt::AtomicCas {
+        place: Place::Logical {
+            buffer: 0,
+            coords: vec![u(0)],
+        },
+        expected,
+        desired,
+        old,
+        order: MemoryOrder::Relaxed,
+        scope: Scope::Device,
+    }
+}
+
+/// Every thread CASes `0 -> tid + 1`: exactly one wins in the C reference as in the interpreter, and the
+/// threads that lose all saw the winner's value.
+#[test]
+fn a_cas_from_zero_has_exactly_one_winner_in_the_c_reference() {
+    let want = ScalarExpr::Add(
+        Box::new(ScalarExpr::Cast(Box::new(tid()), cast_i32())),
+        Box::new(ci(1)),
+    );
+    let slot = Place::Logical {
+        buffer: 1,
+        coords: vec![tid()],
+    };
+    let body = vec![
+        cas_stmt(ci(0), want, Some(0)),
+        Stmt::Store {
+            place: slot,
+            value: ScalarExpr::Local(0),
+        },
+    ];
+    let mut k = KernelFn::new(
+        "cas1",
+        I32,
+        vec![
+            Param::buffer("c", I32, BufferRole::ReadWrite, Some(1)),
+            Param::buffer("o", I32, BufferRole::ReadWrite, Some(1)),
+        ],
+        vec![LocalDecl::scalar(I32)],
+        Block(body),
+    );
+    k.launch = Some(LaunchShape::new([12, 1, 1], [1, 1, 1]));
+    let args = vec![
+        KernelArg::Buffer(ibuf(&[0])),
+        KernelArg::Buffer(ibuf(&[-1; 12])),
+    ];
+    let Some(c) = kernel_run::run_c("cas_one_winner", &k, &args) else {
+        return;
+    };
+    let word = |b: &[u8], i: usize| i32::from_le_bytes(b[4 * i..4 * i + 4].try_into().unwrap());
+    let (fin, olds): (i32, Vec<i32>) = (
+        word(&c.outs[0], 0),
+        (0..12).map(|i| word(&c.outs[1], i)).collect(),
+    );
+    let winners: Vec<usize> = (0..12).filter(|i| olds[*i] == 0).collect();
+    assert_eq!(winners.len(), 1, "{olds:?}");
+    assert_eq!(fin, winners[0] as i32 + 1);
+    assert!(
+        olds.iter()
+            .enumerate()
+            .all(|(i, o)| i == winners[0] || *o == fin)
+    );
+}
+
+/// The CAS loop (read with an atomic add of 0, compute, CAS, retry) over two blocks reaches the largest
+/// value; the final cell is order independent, so the C reference and the interpreter agree byte for byte.
+/// Every thread: `repeat { cur = fetch_add(cell, 0); old = CAS(cell, cur, max(cur, max(tid, 3))) } while old != cur`.
+fn cas_loop_kernel() -> KernelFn {
+    let mut k = KernelFn::new(
+        "casloop",
+        I32,
+        vec![Param::buffer("c", I32, BufferRole::ReadWrite, Some(1))],
+        vec![
+            LocalDecl::scalar(I32),
+            LocalDecl::scalar(I32),
+            LocalDecl::scalar(I32),
+        ],
+        Block(vec![
+            Stmt::Let {
+                local: 2,
+                init: ci(1),
+            },
+            Stmt::While {
+                cond: ScalarExpr::Local(2),
+                body: Block(cas_loop_attempt()),
+            },
+        ]),
+    );
+    k.launch = Some(LaunchShape::new([6, 1, 1], [2, 1, 1]));
+    k
+}
+
+/// One pass: read the cell, CAS in the larger value, and keep looping while the CAS found something else.
+fn cas_loop_attempt() -> Vec<Stmt> {
+    let read = Stmt::AtomicRmw {
+        op: AtomicOp::Add,
+        place: Place::Logical {
+            buffer: 0,
+            coords: vec![u(0)],
+        },
+        value: ci(0),
+        old: Some(0),
+        order: MemoryOrder::Relaxed,
+        scope: Scope::Device,
+    };
+    let local = ScalarExpr::Local;
+    let mine = ScalarExpr::Binary(
+        BinaryOp::Max,
+        Box::new(ScalarExpr::Cast(Box::new(tid()), cast_i32())),
+        Box::new(ci(3)),
+    );
+    let want = ScalarExpr::Binary(BinaryOp::Max, Box::new(local(0)), Box::new(mine));
+    let again = ScalarExpr::Binary(BinaryOp::CmpNe, Box::new(local(1)), Box::new(local(0)));
+    vec![
+        read,
+        cas_stmt(local(0), want, Some(1)),
+        Stmt::Assign {
+            local: 2,
+            value: again,
+        },
+    ]
+}
+
+#[test]
+fn a_cas_loop_reaches_the_same_maximum_as_the_interpreter() {
+    let k = cas_loop_kernel();
+    agree_launch("cas_loop_max", &k, vec![KernelArg::Buffer(ibuf(&[0]))]);
+}
