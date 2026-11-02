@@ -28,7 +28,8 @@
 //! leaves a loop holding a barrier; a `Return` in a kernel that has a barrier (ending one thread would
 //! have to skip the barriers after it); execution ids other than `ThreadIdx`, `BlockIdx`, `BlockDim` and
 //! `GridDim`; a `Private` or `Constant` allocation or a dynamic extent; a block over 1024 threads;
-//! `Fence` and `Call`.
+//! `Fence`; and a `Call` of a function that reaches a barrier (a callee runs inside one thread's run, so the
+//! thread loop cannot be split in it: `lower_module` refuses it).
 //!
 //! # Order
 //!
@@ -157,15 +158,30 @@ pub(crate) fn local_c(launch: Option<LaunchInfo>, i: u32) -> Result<Spelling, Lo
     }))
 }
 
-/// The `exec` seam: an execution id has a meaning only in a launch.
+/// The `exec` seam: an execution id has a meaning only in a launch. `launch` is the kernel's own, the
+/// thread loop's variables; `ids` is set in a callee under a launch, whose ids are its arguments.
 pub(crate) fn exec_spelling(
-    launch: Option<LaunchInfo>,
+    (launch, ids): (Option<LaunchInfo>, Option<LaunchInfo>),
     id: ExecId,
 ) -> Result<Spelling, LowerError> {
-    match launch {
-        Some(info) => exec_c(info, id).map(Spelling::Spelled),
-        None => Err(refuse("an execution id without a launch shape")),
+    match (ids, launch) {
+        (Some(info), _) => exec_param(info, id),
+        (None, Some(info)) => exec_c(info, id).map(Spelling::Spelled),
+        (None, None) => Err(refuse("an execution id without a launch shape")),
     }
+}
+
+/// The C spelling of an execution id inside a callee, whose thread and block ids are its arguments
+/// `ti0..2` and `bi0..2` (the sizes are the entry's launch, constants).
+pub(crate) fn exec_param(info: LaunchInfo, id: ExecId) -> Result<Spelling, LowerError> {
+    let s = match id {
+        ExecId::ThreadIdx(a @ 0..=2) => format!("ti{a}"),
+        ExecId::BlockIdx(a @ 0..=2) => format!("bi{a}"),
+        ExecId::BlockDim(a @ 0..=2) => format!("{}u", info.block[a as usize]),
+        ExecId::GridDim(a @ 0..=2) => format!("{}u", info.grid[a as usize]),
+        other => return Err(refuse(format!("the execution id {other:?}"))),
+    };
+    Ok(Spelling::Spelled(s))
 }
 
 /// The C spelling of an execution id inside a thread run (`t` is the thread's linear index in its block).
