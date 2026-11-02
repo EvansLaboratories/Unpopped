@@ -313,6 +313,10 @@ impl Emitter<'_> {
                 (CallArg::Buffer(b), ParamKind::Buffer { .. }) => {
                     out.push(format!("b{b}, b{b}_shape, b{b}_stride, b{b}_base"));
                 }
+                (CallArg::Alloc(a), ParamKind::Buffer { .. }) if self.launch.is_some() => {
+                    // the block's `Shared` array, with the one-dimensional shape and stride it declares
+                    out.push(format!("sh{a}, ash{a}, ast{a}, 0LL"));
+                }
                 (CallArg::Alloc(_), _) => return Err(refuse("an allocation passed to a callee")),
                 _ => return Err(refuse("a call argument and its parameter differ in kind")),
             }

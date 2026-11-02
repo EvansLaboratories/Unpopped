@@ -6,7 +6,7 @@
 //! buffers compared byte for byte with `oracle::run_module`.
 
 use unpopped::backend::LowerError;
-use unpopped::exec::{ExecId, LaunchShape, Scope};
+use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
 use unpopped::ir::{BinaryOp, ScalarExpr};
 use unpopped::kernel::{
     BarrierKind, Block, BufferRole, CallArg, KernelFn, LocalDecl, Module, Param, ParamKind, Place,
@@ -319,6 +319,119 @@ fn a_callee_that_holds_a_barrier_under_a_launch_is_a_typed_refusal() {
         matches!(&r, Err(LowerError::UnsupportedKernel { detail }) if detail.contains("called under a launch")),
         "{r:?}"
     );
+}
+
+/// `fill(t)`: `t[ThreadIdx.x] = ThreadIdx.x + 1`.
+fn fill_array() -> KernelFn {
+    let v = ScalarExpr::Add(Box::new(f32_of(id(ExecId::ThreadIdx(0)))), Box::new(f(1.0)));
+    let body = vec![Stmt::Store {
+        place: Place::Logical {
+            buffer: 0,
+            coords: vec![id(ExecId::ThreadIdx(0))],
+        },
+        value: v,
+    }];
+    kernel("fill_array", vec![rw("t")], 0, body)
+}
+
+/// `mirror(t, out)`: `out[ThreadIdx.x] = t[7 - ThreadIdx.x]`.
+fn mirror_array() -> KernelFn {
+    let rev = ScalarExpr::Sub(Box::new(u(7)), Box::new(id(ExecId::ThreadIdx(0))));
+    let body = vec![
+        Stmt::Load {
+            local: 0,
+            place: Place::Logical {
+                buffer: 0,
+                coords: vec![rev],
+            },
+        },
+        Stmt::Store {
+            place: Place::Logical {
+                buffer: 1,
+                coords: vec![id(ExecId::ThreadIdx(0))],
+            },
+            value: ScalarExpr::Local(0),
+        },
+    ];
+    kernel("mirror_array", vec![rw("t"), rw("out")], 1, body)
+}
+
+/// The entry: allocations `allocs`, then fill allocation `which`, a barrier, and mirror it into `out`.
+fn array_module(allocs: Vec<AllocDecl>, which: u32, forward: bool) -> Module {
+    let to_mirror = if forward { 3 } else { 2 };
+    let body = vec![
+        call(1, vec![CallArg::Alloc(which)], None),
+        Stmt::Barrier {
+            scope: Scope::Block,
+            kind: BarrierKind::Full,
+        },
+        call(
+            to_mirror,
+            vec![CallArg::Alloc(which), CallArg::Buffer(0)],
+            None,
+        ),
+    ];
+    let main = kernel("main", vec![rw("out")], 0, body)
+        .with_launch(LaunchShape::new([8, 1, 1], [1, 1, 1]))
+        .with_allocs(allocs);
+    // callee 3 forwards its two parameters to mirror (callee 2)
+    let fwd = kernel(
+        "fwd",
+        vec![rw("t"), rw("out")],
+        0,
+        vec![call(2, vec![CallArg::Buffer(0), CallArg::Buffer(1)], None)],
+    );
+    Module::new(vec![main, fill_array(), mirror_array(), fwd])
+}
+
+fn shared8() -> AllocDecl {
+    AllocDecl::new("sh", MemorySpace::Shared, F32, Extent::Static(8))
+}
+
+#[test]
+fn a_shared_array_is_passed_to_callees_across_an_entry_barrier() {
+    let m = array_module(vec![shared8()], 0, false);
+    agree_module("m_shared_array", &m, vec![buf(&[0.0; 8])]);
+}
+
+#[test]
+fn a_callee_forwards_the_array_parameter_and_the_array_named_is_the_one_passed() {
+    let decoy = AllocDecl::new("decoy", MemorySpace::Shared, F32, Extent::Static(2));
+    let m = array_module(vec![decoy, shared8()], 1, true);
+    agree_module("m_shared_forward", &m, vec![buf(&[0.0; 8])]);
+}
+
+#[test]
+fn seeded_mutants_of_the_array_pass_through_are_noticed() {
+    let m = array_module(vec![shared8()], 0, false);
+    let buffers = || vec![buf(&[0.0; 8])];
+    // the array's extent handed to the callee is one too short: the last slot is out of bounds
+    let short = |s: String| s.replace("ash0[1] = {8}", "ash0[1] = {7}");
+    assert!(caught("mut_ext", &m, buffers(), short), "extent");
+    // the stride is zero: every thread writes slot 0
+    let stride = |s: String| s.replace("ast0[1] = {1}", "ast0[1] = {0}");
+    assert!(caught("mut_stride", &m, buffers(), stride), "stride");
+    // the call passes the output buffer instead of the array
+    let wrong = |s: String| {
+        s.replacen(
+            "sh0, ash0, ast0, 0LL",
+            "b0, b0_shape, b0_stride, b0_base",
+            1,
+        )
+    };
+    assert!(caught("mut_which", &m, buffers(), wrong), "which array");
+}
+
+#[test]
+fn a_lone_launched_kernel_gets_no_array_shape_declarations() {
+    // the shape and stride arrays exist for passing an array to a callee; a kernel without a module has none
+    use unpopped::backend::Backend;
+    let lone = kernel("lone", vec![rw("out")], 0, vec![])
+        .with_launch(LaunchShape::new([8, 1, 1], [1, 1, 1]))
+        .with_allocs(vec![shared8()]);
+    let g = unpopped_cpu_c::CpuC.lower_kernel(&lone).expect("lowers");
+    assert!(g.source.contains("sh0[8]"), "the array is declared");
+    assert!(!g.source.contains("ash0"), "and nothing more");
 }
 
 /// Whether the differential notices `mutate` applied to the generated C.

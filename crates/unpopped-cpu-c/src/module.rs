@@ -14,13 +14,16 @@
 //! # What is refused (typed, [`LowerError::UnsupportedKernel`])
 //!
 //! A function other than the entry that holds a barrier under a launch (the serialized thread loop cannot be
-//! split inside a C function), an allocation passed to a callee, and anything `check_module` refuses.
+//! split inside a C function), a `Private` array (a launched entry's allocations are `Shared` only), and anything
+//! `check_module` refuses.
 //!
 //! # Under a launch
 //!
 //! The entry is spelled by the serialized thread loop (`launch.rs`); a callee runs inside one thread's run, so
 //! it takes the thread's ids as six extra arguments `ti0..2`, `bi0..2` (before `res`) and reads
-//! `BlockDim`/`GridDim` as constants of the entry's launch.
+//! `BlockDim`/`GridDim` as constants of the entry's launch. A `Shared` array passed to a callee
+//! (`CallArg::Alloc`) is the block's C array `shN` with a declared shape `{N}` and stride `{1}` (`ashN`,
+//! `astN`), so the callee's buffer parameter indexes it exactly as it indexes a buffer.
 
 use unpopped::backend::{GeneratedKernel, LowerError};
 use unpopped::kernel::{Block, Module, Stmt, check_module};
