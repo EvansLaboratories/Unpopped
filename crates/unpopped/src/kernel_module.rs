@@ -30,7 +30,7 @@ pub fn check_module(m: &Module, entry: u32) -> Result<(), KernelError> {
     for f in called {
         plain_function(&m.fns[f as usize])?;
     }
-    let sigs = signatures(m)?;
+    let sigs = signatures(m, &edges)?;
     let reach = reachable(&edges, entry);
     let launch = m.fns[entry as usize].launch;
     for (i, f) in m.fns.iter().enumerate() {
@@ -115,7 +115,8 @@ fn visit(f: usize, edges: &[Vec<u32>], state: &mut [u8]) -> Result<(), KernelErr
     Ok(())
 }
 
-/// A callee runs on the calling thread: no launch of its own, only private allocations, no barrier.
+/// A callee runs on the calling thread: no launch of its own and only private allocations (a barrier is
+/// allowed: a call that reaches one is a barrier site, checked by the uniformity rule).
 fn plain_function(f: &KernelFn) -> Result<(), KernelError> {
     let refuse = |what| Err(KernelError::CallUnsupported { what });
     if f.launch.is_some() {
@@ -124,11 +125,6 @@ fn plain_function(f: &KernelFn) -> Result<(), KernelError> {
     if f.allocs.iter().any(|a| a.space != MemorySpace::Private) {
         return refuse(
             "a callee that declares a Shared or Constant allocation (the kernel owns those)",
-        );
-    }
-    if holds_barrier(&f.body) {
-        return refuse(
-            "a callee holding a Barrier (the transitive divergence check has not landed)",
         );
     }
     Ok(())
@@ -143,10 +139,31 @@ fn holds_barrier(b: &Block) -> bool {
     })
 }
 
-fn signatures(m: &Module) -> Result<Vec<CalleeSig>, KernelError> {
+/// Whether each function reaches a barrier, directly or through its calls (the graph is acyclic here).
+fn reaches_barrier(m: &Module, edges: &[Vec<u32>]) -> Vec<bool> {
+    fn go(f: usize, m: &Module, edges: &[Vec<u32>], memo: &mut [Option<bool>]) -> bool {
+        if let Some(v) = memo[f] {
+            return v;
+        }
+        let mut v = holds_barrier(&m.fns[f].body);
+        for c in &edges[f] {
+            v |= go(*c as usize, m, edges, memo);
+        }
+        memo[f] = Some(v);
+        v
+    }
+    let mut memo = vec![None; m.fns.len()];
+    (0..m.fns.len())
+        .map(|f| go(f, m, edges, &mut memo))
+        .collect()
+}
+
+fn signatures(m: &Module, edges: &[Vec<u32>]) -> Result<Vec<CalleeSig>, KernelError> {
+    let barrier = reaches_barrier(m, edges);
     m.fns
         .iter()
-        .map(|f| {
+        .zip(barrier)
+        .map(|(f, barrier)| {
             let result = match f.result {
                 None => None,
                 Some(l) => match f.locals.get(l as usize) {
@@ -157,6 +174,7 @@ fn signatures(m: &Module) -> Result<Vec<CalleeSig>, KernelError> {
             Ok(CalleeSig {
                 params: f.params.iter().map(|p| p.kind.clone()).collect(),
                 result,
+                barrier,
             })
         })
         .collect()

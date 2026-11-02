@@ -15,13 +15,18 @@
 
 use crate::exec::{ExecId, MemorySpace};
 use crate::ir::ScalarExpr;
-use crate::kernel::{Block, KernelError, KernelFn, Place, Stmt};
+use crate::kernel::{Block, CallArg, KernelError, KernelFn, Place, Stmt};
 use crate::types::operands;
 
 /// Reject a `Barrier` that may not be reached by every thread of its scope.
-pub(crate) fn check_barriers(k: &KernelFn) -> Result<(), KernelError> {
+///
+/// `barrier_callees[i]` is whether function `i` of the module reaches a barrier: a `Call` of it is a barrier
+/// site (it must sit in uniform control and pass uniform scalar arguments, since the callee was checked
+/// with its scalar parameters uniform).
+pub(crate) fn check_barriers(k: &KernelFn, barrier_callees: &[bool]) -> Result<(), KernelError> {
     let mut w = Walk {
         k,
+        barrier_callees,
         divergent: vec![false; k.locals.len()],
         changed: false,
         check: false,
@@ -39,6 +44,7 @@ pub(crate) fn check_barriers(k: &KernelFn) -> Result<(), KernelError> {
 
 struct Walk<'a> {
     k: &'a KernelFn,
+    barrier_callees: &'a [bool],
     divergent: Vec<bool>,
     changed: bool,
     check: bool,
@@ -99,6 +105,32 @@ impl Walk<'_> {
         Ok(())
     }
 
+    /// A `Call`. Its result may differ between threads (the conservative mark). A call that reaches a barrier
+    /// is a barrier site: `div` is whether control reaching it may differ between threads.
+    fn call(
+        &mut self,
+        callee: u32,
+        args: &[CallArg],
+        result: Option<u32>,
+        div: bool,
+    ) -> Result<(), KernelError> {
+        if let Some(local) = result {
+            self.mark(local);
+        }
+        let reaches = self
+            .barrier_callees
+            .get(callee as usize)
+            .copied()
+            .unwrap_or(false);
+        let divergent_arg = args
+            .iter()
+            .any(|a| matches!(a, CallArg::Scalar(e) if self.expr(e)));
+        if reaches && self.check && (div || divergent_arg) {
+            return Err(KernelError::BarrierDivergent);
+        }
+        Ok(())
+    }
+
     fn stmt(&mut self, st: &Stmt, div: bool, poisoned: &mut bool) -> Result<(), KernelError> {
         match st {
             Stmt::Let { local, init } => {
@@ -117,12 +149,11 @@ impl Walk<'_> {
                 }
             }
             Stmt::Store { .. } | Stmt::Fence { .. } | Stmt::Return => {}
-            // A callee's result may differ between threads: the conservative mark, until calls run.
-            Stmt::Call { result, .. } => {
-                if let Some(local) = result {
-                    self.mark(*local);
-                }
-            }
+            Stmt::Call {
+                callee,
+                args,
+                result,
+            } => self.call(*callee, args, *result, div || *poisoned)?,
             // The old value depends on the order the threads reach the element, so it differs
             // between threads whatever the operands are: a barrier under `if old == 0` is divergent.
             Stmt::AtomicRmw { old, .. } | Stmt::AtomicCas { old, .. } => {
