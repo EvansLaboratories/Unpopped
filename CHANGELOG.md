@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.40.23` — docs: an options note for what remains of U3 (ROADMAP U3)
+
+`docs/options-u3-remainder.md`: the four open items (`Stmt::Call` with a module type, pointer values, texture and tensor spaces with texture/sampler resources, `ProgramModel`/`BlockSpmd` lowering), each with the gap rows that list it, the measured need, and whether it breaks. Recommendation: `Stmt::Call` rides U4's one `Stmt` break (shape now, semantics staged); a `program_model` declaration field is additive; pointer values (byte-offset load and store first), textures (ask Fuel for the sampling-kernel count) and the `BlockSpmd` lowering wait for a consumer. Nothing is built. No code change.
+
 ## `0.40.22` — docs: an options note for U4 (synchronization and atomics); the U3 and U4 ROADMAP rows corrected
 
 `docs/options-u4-sync-and-atomics.md`: what the kernel layer has for barriers and atomics, what the union surveys list as missing, which emitter lanes could use a slice (measured: none implements the kernel-layer path for these statements today; bonefish has named a future `sycl::atomic_ref` spelling), the seven IR shapes a slice adds with whether each breaks `Stmt` consumers, three slicing options and a recommendation (break `Stmt` once, stage the semantics behind typed refusals). Nothing is built; it needs a ruling. ROADMAP U3 said "open, after U2" although its spec, capability types, resource map and row 4 are done; the row now says what is done and what is open. No code change.
