@@ -103,6 +103,8 @@ pub(super) struct Machine<'a> {
     pub(super) module: Option<&'a crate::kernel::Module>,
     /// Inside a callee: the root argument each buffer parameter is bound to. Empty in the entry frame.
     pub(super) bufmap: Vec<usize>,
+    /// The index of the running function in `module` (the entry's, outside a call).
+    pub(super) fn_idx: u32,
     pub(super) steps: u64,
     /// Present only under `run_launch`: which thread this is, and the memory it shares.
     pub(super) ctx: Option<ThreadCtx<'a>>,
@@ -139,14 +141,16 @@ impl<'a> Machine<'a> {
             args,
             module: None,
             bufmap: Vec::new(),
+            fn_idx: 0,
             steps: 0,
             ctx,
         }
     }
 
-    /// The same machine, resolving calls in `m`.
-    pub(super) fn with_module(mut self, m: &'a crate::kernel::Module) -> Self {
+    /// The same machine, resolving calls in `m`, running function `entry` of it.
+    pub(super) fn with_module(mut self, m: &'a crate::kernel::Module, entry: u32) -> Self {
         self.module = Some(m);
+        self.fn_idx = entry;
         self
     }
 

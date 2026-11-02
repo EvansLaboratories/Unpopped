@@ -11,7 +11,7 @@ use super::int_val;
 use super::kernel_eval::{KernelTrap, Machine};
 use crate::exec::Scope;
 use crate::ir::ScalarExpr;
-use crate::kernel::{Block, KernelFn, Stmt};
+use crate::kernel::{Block, KernelFn, Module, Stmt};
 use crate::types::{self, Ty};
 
 /// One level of the control stack.
@@ -34,6 +34,13 @@ pub(super) enum Frame<'a> {
         cond: &'a ScalarExpr,
         body: &'a Block,
     },
+    /// A call in progress: the caller's frame, put back when the callee's body ends (or it `Return`s).
+    Call {
+        caller: u32,
+        locals: Vec<Option<super::Val>>,
+        bufmap: Vec<usize>,
+        result: Option<u32>,
+    },
 }
 
 /// Why a thread stopped running.
@@ -53,10 +60,14 @@ pub(super) fn initial_stack(k: &KernelFn) -> Vec<Frame<'_>> {
 }
 
 /// The frames borrow only the kernel (`'k`), not the machine, so a stack outlives one phase.
-impl Machine<'_> {
+impl<'a> Machine<'a> {
     /// Run until the thread finishes or reaches a barrier. On a barrier the stack is positioned
-    /// just past it, so the next call continues there.
-    pub(super) fn resume<'k>(&mut self, stack: &mut Vec<Frame<'k>>) -> Result<Stop, KernelTrap> {
+    /// just past it, so the next call continues there. `module` resolves a `Call` (a launched module).
+    pub(super) fn resume<'k: 'a>(
+        &mut self,
+        stack: &mut Vec<Frame<'k>>,
+        module: Option<&'k Module>,
+    ) -> Result<Stop, KernelTrap> {
         while let Some(top) = stack.last_mut() {
             match top {
                 Frame::Seq { stmts, pc } => {
@@ -67,10 +78,11 @@ impl Machine<'_> {
                     };
                     *pc += 1;
                     self.tick()?;
-                    if let Some(stop) = self.step(st, stack)? {
+                    if let Some(stop) = self.step(st, stack, module)? {
                         return Ok(stop);
                     }
                 }
+                Frame::Call { .. } => self.leave_call(stack, module)?,
                 Frame::For { .. } => self.advance_for(stack)?,
                 Frame::While { cond, body } => {
                     let (cond, body) = (*cond, *body);
@@ -90,10 +102,11 @@ impl Machine<'_> {
     }
 
     /// Execute one statement against the stack. `Some` when the thread must stop.
-    fn step<'k>(
+    fn step<'k: 'a>(
         &mut self,
         st: &'k Stmt,
         stack: &mut Vec<Frame<'k>>,
+        module: Option<&'k Module>,
     ) -> Result<Option<Stop>, KernelTrap> {
         match st {
             Stmt::Let { .. }
@@ -104,10 +117,21 @@ impl Machine<'_> {
             | Stmt::AtomicCas { .. } => {
                 self.exec_simple(st)?;
             }
-            Stmt::Fence { .. } | Stmt::Call { .. } => {
-                return Err(KernelTrap::Unsupported(
-                    "Fence and Call (check_kernel refuses them)",
-                ));
+            Stmt::Fence { .. } => {
+                return Err(KernelTrap::Unsupported("Fence (check_kernel refuses it)"));
+            }
+            Stmt::Call {
+                callee,
+                args,
+                result,
+            } => {
+                let Some(m) = module else {
+                    return Err(KernelTrap::Unsupported(
+                        "a Call outside run_launch_module (check_kernel refuses it)",
+                    ));
+                };
+                let f = &m.fns[*callee as usize];
+                self.enter_call(stack, (*callee, f), (args, *result))?;
             }
             Stmt::If { cond, then, els } => {
                 let block = if self.truthy(cond)? { then } else { els };
@@ -132,7 +156,12 @@ impl Machine<'_> {
                 stack.pop();
             }
             Stmt::Continue => unwind_to_loop(stack),
-            Stmt::Return => stack.clear(),
+            Stmt::Return => {
+                // a `Return` ends the running function: down to its call frame, or the whole thread
+                while !matches!(stack.last(), Some(Frame::Call { .. }) | None) {
+                    stack.pop();
+                }
+            }
             Stmt::Barrier { scope, .. } => {
                 return Ok(Some(Stop::Barrier {
                     scope: *scope,
