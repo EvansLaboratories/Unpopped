@@ -133,6 +133,30 @@ impl Walk<'_> {
 
     fn stmt(&mut self, st: &Stmt, div: bool, poisoned: &mut bool) -> Result<(), KernelError> {
         match st {
+            Stmt::Let { .. }
+            | Stmt::Load { .. }
+            | Stmt::Assign { .. }
+            | Stmt::AtomicRmw { .. }
+            | Stmt::AtomicCas { .. }
+            | Stmt::Call { .. } => self.defines(st, div || *poisoned)?,
+            Stmt::If { .. } | Stmt::For { .. } | Stmt::While { .. } => {
+                self.control(st, div, poisoned)?;
+            }
+            Stmt::Store { .. } | Stmt::Fence { .. } | Stmt::Return => {}
+            Stmt::Break | Stmt::Continue => *poisoned |= div,
+            Stmt::Barrier { .. } => {
+                if self.check && (div || *poisoned) {
+                    return Err(KernelError::BarrierDivergent);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The statements that define a local. `skipped`: control reaching it, or what precedes it, may
+    /// differ between threads.
+    fn defines(&mut self, st: &Stmt, skipped: bool) -> Result<(), KernelError> {
+        match st {
             Stmt::Let { local, init } => {
                 if self.expr(init) {
                     self.mark(*local);
@@ -144,16 +168,15 @@ impl Walk<'_> {
                 }
             }
             Stmt::Assign { local, value } => {
-                if div || *poisoned || self.expr(value) {
+                if skipped || self.expr(value) {
                     self.mark(*local);
                 }
             }
-            Stmt::Store { .. } | Stmt::Fence { .. } | Stmt::Return => {}
             Stmt::Call {
                 callee,
                 args,
                 result,
-            } => self.call(*callee, args, *result, div || *poisoned)?,
+            } => self.call(*callee, args, *result, skipped)?,
             // The old value depends on the order the threads reach the element, so it differs
             // between threads whatever the operands are: a barrier under `if old == 0` is divergent.
             Stmt::AtomicRmw { old, .. } | Stmt::AtomicCas { old, .. } => {
@@ -161,6 +184,15 @@ impl Walk<'_> {
                     self.mark(*local);
                 }
             }
+            _ => unreachable!("defines is called for local-defining statements only"),
+        }
+        Ok(())
+    }
+
+    /// `If`, `For` and `While`: the body runs under control that may differ between threads when the
+    /// condition or a bound does.
+    fn control(&mut self, st: &Stmt, div: bool, poisoned: &mut bool) -> Result<(), KernelError> {
+        match st {
             Stmt::If { cond, then, els } => {
                 let d = div || self.expr(cond);
                 self.block(then, d, poisoned)?;
@@ -183,12 +215,7 @@ impl Walk<'_> {
                 let d = div || self.expr(cond);
                 self.loop_body(body, d, poisoned)?;
             }
-            Stmt::Break | Stmt::Continue => *poisoned |= div,
-            Stmt::Barrier { .. } => {
-                if self.check && (div || *poisoned) {
-                    return Err(KernelError::BarrierDivergent);
-                }
-            }
+            _ => unreachable!("control is called for If, For and While only"),
         }
         Ok(())
     }
