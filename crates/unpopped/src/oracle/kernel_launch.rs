@@ -30,7 +30,7 @@ use super::kernel_eval::{KernelArg, KernelTrap, Machine};
 use super::kernel_mem::{AllocMem, BlockMem, Log, ThreadCtx};
 use super::kernel_resume::{Frame, Stop, initial_stack};
 use crate::exec::{AllocDecl, Extent, LaunchShape, MemorySpace, Scope};
-use crate::kernel::{KernelFn, ParamKind, check_kernel};
+use crate::kernel::{KernelFn, Module, ParamKind, check_kernel, check_module};
 
 /// Run every thread of `k`'s launch on `args` (one per parameter), choosing the smallest subgroup
 /// size the launch allows.
@@ -53,6 +53,27 @@ pub fn run_launch_with_subgroup(
     subgroup: Option<u32>,
 ) -> Result<(), KernelTrap> {
     check_kernel(k).map_err(KernelTrap::Malformed)?;
+    launch_checked(k, None, args, subgroup)
+}
+
+/// [`run_launch`] for function `entry` of a [`Module`]: a thread may `Call` the module's plain functions
+/// (`docs/options-u3-calls.md`, slice M4a). The module is checked by `check_module` first.
+///
+/// # Errors
+///
+/// A [`KernelTrap`]; `Malformed` if the module does not check.
+pub fn run_launch_module(m: &Module, entry: u32, args: &mut [KernelArg]) -> Result<(), KernelTrap> {
+    check_module(m, entry).map_err(KernelTrap::Malformed)?;
+    launch_checked(&m.fns[entry as usize], Some((m, entry)), args, None)
+}
+
+/// Run a checked launched kernel; `module` is the module its calls resolve in and the entry's index.
+fn launch_checked(
+    k: &KernelFn,
+    module: Option<(&Module, u32)>,
+    args: &mut [KernelArg],
+    subgroup: Option<u32>,
+) -> Result<(), KernelTrap> {
     let Some(launch) = k.launch else {
         return Err(KernelTrap::ArgMismatch(
             "run_launch needs a kernel with a launch shape",
@@ -73,6 +94,7 @@ pub fn run_launch_with_subgroup(
             for gx in 0..launch.grid[0] {
                 let b = BlockRun {
                     k,
+                    module,
                     launch,
                     lens: &lens,
                     sg,
@@ -130,6 +152,8 @@ fn instances(k: &KernelFn, lens: &[usize], space: MemorySpace) -> Vec<Option<All
 /// What one block run needs besides memory.
 struct BlockRun<'a> {
     k: &'a KernelFn,
+    /// The module a `Call` resolves in, and the entry's index in it.
+    module: Option<(&'a Module, u32)>,
     launch: LaunchShape,
     lens: &'a [usize],
     sg: u32,
@@ -155,6 +179,9 @@ struct ThreadRun<'a> {
     steps: u64,
     started: bool,
     status: Status,
+    /// The function the thread is in (the entry unless it is inside a call) and its buffer map.
+    fn_idx: u32,
+    bufmap: Vec<usize>,
 }
 
 fn run_block(b: &BlockRun<'_>, args: &mut [KernelArg], global: &mut Log) -> Result<(), KernelTrap> {
@@ -176,6 +203,8 @@ fn run_block(b: &BlockRun<'_>, args: &mut [KernelArg], global: &mut Log) -> Resu
             steps: 0,
             started: false,
             status: Status::Runnable,
+            fn_idx: b.module.map_or(0, |(_, e)| e),
+            bufmap: Vec::new(),
         })
         .collect();
     loop {
@@ -209,17 +238,27 @@ fn run_phase<'a>(
         global,
     };
     let mut m = Machine::new(b.k, args, Some(ctx));
+    let module = b.module.map(|(m, _)| m);
+    if let Some((module, _)) = b.module {
+        // the thread may be inside a callee: put its function, locals' types and buffer map back
+        m = m.with_module(module, t.fn_idx);
+        m.k = &module.fns[t.fn_idx as usize];
+        m.local_tys = m.k.locals.iter().map(|d| d.ty()).collect();
+        m.bufmap = std::mem::take(&mut t.bufmap);
+    }
     m.locals = std::mem::take(&mut t.locals);
     m.steps = t.steps;
     let stop = if t.started {
-        m.resume(&mut t.stack)
+        m.resume(&mut t.stack, module)
     } else {
         t.started = true;
         t.stack = initial_stack(b.k);
-        m.bind_args().and_then(|()| m.resume(&mut t.stack))
+        m.bind_args().and_then(|()| m.resume(&mut t.stack, module))
     };
     t.locals = std::mem::take(&mut m.locals);
     t.steps = m.steps;
+    t.fn_idx = m.fn_idx;
+    t.bufmap = std::mem::take(&mut m.bufmap);
     if let Some(c) = m.ctx.take() {
         t.private = c.private;
     }
@@ -313,6 +352,7 @@ mod tests {
         let k = KernelFn::new("t", ElementKind::F32, vec![], vec![], Body::default());
         let b = BlockRun {
             k: &k,
+            module: None,
             launch: LaunchShape::new([n, 1, 1], [1, 1, 1]),
             lens: &[],
             sg,
@@ -331,6 +371,8 @@ mod tests {
                 steps: 0,
                 started: true,
                 status: *s,
+                fn_idx: 0,
+                bufmap: Vec::new(),
             })
             .collect();
         let mut mem = BlockMem {

@@ -31,10 +31,32 @@ pub fn check_module(m: &Module, entry: u32) -> Result<(), KernelError> {
         plain_function(&m.fns[f as usize])?;
     }
     let sigs = signatures(m)?;
-    for f in &m.fns {
-        check_kernel_with(f, sigs.clone())?;
+    let reach = reachable(&edges, entry);
+    let launch = m.fns[entry as usize].launch;
+    for (i, f) in m.fns.iter().enumerate() {
+        let inside = u32::try_from(i).is_ok_and(|i| i != entry && reach.contains(&i));
+        if inside && launch.is_some() {
+            // a callee runs inside the entry's launch: its ids and barriers are the entry's
+            let mut g = f.clone();
+            g.launch = launch;
+            check_kernel_with(&g, sigs.clone())?;
+        } else {
+            check_kernel_with(f, sigs.clone())?;
+        }
     }
     Ok(())
+}
+
+/// The functions `entry` can reach through calls.
+fn reachable(edges: &[Vec<u32>], entry: u32) -> BTreeSet<u32> {
+    let mut seen = BTreeSet::new();
+    let mut todo = vec![entry];
+    while let Some(f) = todo.pop() {
+        if seen.insert(f) {
+            todo.extend(edges[f as usize].iter().copied());
+        }
+    }
+    seen
 }
 
 /// The callees of each function, by index; a callee outside the module is `BadCallee`.

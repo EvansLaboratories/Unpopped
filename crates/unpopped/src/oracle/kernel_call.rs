@@ -6,6 +6,7 @@
 //! caller's buffer). Unlaunched entries only; a launched module is the resumable evaluator's (slice M4).
 
 use super::kernel_eval::{KernelArg, KernelTrap, Machine};
+use super::kernel_resume::Frame;
 use crate::kernel::{CallArg, KernelFn, Module, ParamKind, check_module};
 use crate::types::Ty;
 
@@ -25,7 +26,7 @@ pub fn run_module(m: &Module, entry: u32, args: &mut [KernelArg]) -> Result<(), 
     if args.len() != k.params.len() {
         return Err(KernelTrap::ArgMismatch("one argument per parameter"));
     }
-    Machine::new(k, args, None).with_module(m).run_body()
+    Machine::new(k, args, None).with_module(m, entry).run_body()
 }
 
 /// The caller's frame while a callee runs.
@@ -34,13 +35,14 @@ struct Saved<'a> {
     local_tys: Vec<Ty>,
     locals: Vec<Option<super::Val>>,
     bufmap: Vec<usize>,
+    fn_idx: u32,
 }
 
 /// The caller's side of a call, evaluated before the frame swap: the scalar values by callee local, and
 /// the root buffer each callee parameter names.
-struct Bound {
-    scalars: Vec<(u32, super::Val)>,
-    bufmap: Vec<usize>,
+pub(super) struct Bound {
+    pub(super) scalars: Vec<(u32, super::Val)>,
+    pub(super) bufmap: Vec<usize>,
 }
 
 impl<'a> Machine<'a> {
@@ -61,7 +63,7 @@ impl<'a> Machine<'a> {
             return Err(KernelTrap::Unsupported("a callee with allocations"));
         }
         let bound = self.bind_call(f, args)?;
-        let value = self.run_frame(f, bound)?;
+        let value = self.run_frame((callee, f), bound)?;
         if let (Some(dst), Some(v)) = (result, value) {
             self.locals[dst as usize] = Some(v);
         }
@@ -69,7 +71,11 @@ impl<'a> Machine<'a> {
     }
 
     /// Evaluate the arguments in the caller's frame.
-    fn bind_call(&mut self, f: &KernelFn, args: &[CallArg]) -> Result<Bound, KernelTrap> {
+    pub(super) fn bind_call(
+        &mut self,
+        f: &KernelFn,
+        args: &[CallArg],
+    ) -> Result<Bound, KernelTrap> {
         let mut bound = Bound {
             scalars: Vec::new(),
             bufmap: Vec::with_capacity(f.params.len()),
@@ -92,8 +98,77 @@ impl<'a> Machine<'a> {
         Ok(bound)
     }
 
+    /// The resumable evaluator's call: push the caller's frame and the callee's body, so a thread can stop
+    /// inside the callee (at a barrier) and be resumed there.
+    pub(super) fn enter_call<'k: 'a>(
+        &mut self,
+        stack: &mut Vec<Frame<'k>>,
+        (callee, f): (u32, &'k KernelFn),
+        (args, result): (&[CallArg], Option<u32>),
+    ) -> Result<(), KernelTrap> {
+        if !f.allocs.is_empty() {
+            return Err(KernelTrap::Unsupported("a callee with allocations"));
+        }
+        let bound = self.bind_call(f, args)?;
+        let locals = std::mem::replace(&mut self.locals, vec![None; f.locals.len()]);
+        stack.push(Frame::Call {
+            caller: self.fn_idx,
+            locals,
+            bufmap: std::mem::replace(&mut self.bufmap, bound.bufmap),
+            result,
+        });
+        self.k = f;
+        self.fn_idx = callee;
+        self.local_tys = f.locals.iter().map(|d| d.ty()).collect();
+        for (local, v) in bound.scalars {
+            self.locals[local as usize] = Some(v);
+        }
+        stack.push(Frame::Seq {
+            stmts: &f.body.0,
+            pc: 0,
+        });
+        Ok(())
+    }
+
+    /// The callee's body has ended: put the caller's frame back and hand over the result.
+    pub(super) fn leave_call<'k: 'a>(
+        &mut self,
+        stack: &mut Vec<Frame<'k>>,
+        module: Option<&'k Module>,
+    ) -> Result<(), KernelTrap> {
+        let (
+            Some(Frame::Call {
+                caller,
+                locals,
+                bufmap,
+                result,
+            }),
+            Some(module),
+        ) = (stack.pop(), module)
+        else {
+            unreachable!("leave_call is called with a Call frame on top and a module");
+        };
+        let value = self.k.result.map(|l| self.locals[l as usize]);
+        let k = &module.fns[caller as usize];
+        self.k = k;
+        self.local_tys = k.locals.iter().map(|d| d.ty()).collect();
+        self.locals = locals;
+        self.bufmap = bufmap;
+        self.fn_idx = caller;
+        match (result, value) {
+            (_, Some(None)) => Err(KernelTrap::Unsupported(
+                "a callee returned without setting its result local",
+            )),
+            (Some(dst), Some(Some(v))) => {
+                self.locals[dst as usize] = Some(v);
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Install `f`'s frame (fresh locals, `bufmap` for its buffer parameters); return the caller's.
-    fn swap_frame(&mut self, f: &'a KernelFn, bufmap: Vec<usize>) -> Saved<'a> {
+    fn swap_frame(&mut self, (callee, f): (u32, &'a KernelFn), bufmap: Vec<usize>) -> Saved<'a> {
         Saved {
             k: std::mem::replace(&mut self.k, f),
             local_tys: std::mem::replace(
@@ -102,6 +177,7 @@ impl<'a> Machine<'a> {
             ),
             locals: std::mem::replace(&mut self.locals, vec![None; f.locals.len()]),
             bufmap: std::mem::replace(&mut self.bufmap, bufmap),
+            fn_idx: std::mem::replace(&mut self.fn_idx, callee),
         }
     }
 
@@ -110,16 +186,17 @@ impl<'a> Machine<'a> {
         self.local_tys = s.local_tys;
         self.locals = s.locals;
         self.bufmap = s.bufmap;
+        self.fn_idx = s.fn_idx;
     }
 
     /// Run `f`'s body in a fresh frame and return the value of its result local. The caller's frame is
     /// restored whatever happens.
     fn run_frame(
         &mut self,
-        f: &'a KernelFn,
+        (callee, f): (u32, &'a KernelFn),
         bound: Bound,
     ) -> Result<Option<super::Val>, KernelTrap> {
-        let saved = self.swap_frame(f, bound.bufmap);
+        let saved = self.swap_frame((callee, f), bound.bufmap);
         for (local, v) in bound.scalars {
             self.locals[local as usize] = Some(v);
         }
