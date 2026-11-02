@@ -726,13 +726,13 @@ fn check_accumulated_dtype(
     post: &ScalarExpr,
     what: &'static str,
 ) -> Result<(), LiftDecline> {
-    // A bit reduction lifts only as an integer reduction (no scan, no window); `MaxNum`/`MinNum` are shapes only.
+    // A bit reduction lifts only as an integer reduction, and `MaxNum`/`MinNum` only as a reduction (no scan,
+    // no window).
     let bit = matches!(rop, ReduceOp::And | ReduceOp::Or | ReduceOp::Xor);
-    if matches!(rop, ReduceOp::MaxNum | ReduceOp::MinNum)
-        || (bit && (what != "a reduction" || !is_int_kernel_dtype(dtype)))
-    {
+    let num = matches!(rop, ReduceOp::MaxNum | ReduceOp::MinNum);
+    if ((bit || num) && what != "a reduction") || (bit && !is_int_kernel_dtype(dtype)) {
         return Err(LiftDecline::UnsupportedForm(
-            "a bit reduction outside an integer reduction, or MaxNum/MinNum (a shape only)",
+            "a bit or NaN-ignoring reduction outside a plain reduction, or a bit reduction at a float dtype",
         ));
     }
     if matches!(dtype, ElementKind::F32 | ElementKind::F64) {
@@ -1011,11 +1011,10 @@ fn fold_step(rop: ReduceOp, acc: u32, have: u32, val: u32, int: bool) -> Vec<Stm
             local: acc,
             value: ScalarExpr::Mul(bx(l(acc)), bx(l(val))),
         }],
-        ReduceOp::Max | ReduceOp::Min => extremum_step(rop, acc, have, val, int),
-        ReduceOp::And | ReduceOp::Or | ReduceOp::Xor => bit_step(rop, acc, have, val),
-        ReduceOp::MaxNum | ReduceOp::MinNum => {
-            unreachable!("check_accumulated_dtype declines it before a reduction is lifted")
+        ReduceOp::Max | ReduceOp::Min | ReduceOp::MaxNum | ReduceOp::MinNum => {
+            extremum_step(rop, acc, have, val, int)
         }
+        ReduceOp::And | ReduceOp::Or | ReduceOp::Xor => bit_step(rop, acc, have, val),
     }
 }
 
@@ -1052,20 +1051,33 @@ fn extremum_step(rop: ReduceOp, acc: u32, have: u32, val: u32, int: bool) -> Vec
         local: acc,
         value: l(v),
     };
-    let better = if matches!(rop, ReduceOp::Max) {
+    let better = if matches!(rop, ReduceOp::Max | ReduceOp::MaxNum) {
         BinaryOp::CmpGt
     } else {
         BinaryOp::CmpLt
     };
-    // if !have { acc = v } else if v != v { acc = v } else if better(v, acc) { acc = v }
+    // Max / Min: if !have { acc = v } else if v != v { acc = v } else if better(v, acc) { acc = v }
+    // MaxNum / MinNum: if !have { acc = v } else if acc != acc { acc = v } else if v == v && better(v, acc) { acc = v }
     let keep_going = Stmt::If {
         cond: ScalarExpr::Binary(better, bx(l(val)), bx(l(acc))),
         then: Block(vec![set(val)]),
         els: Block(vec![]),
     };
+    let ignore_nan = matches!(rop, ReduceOp::MaxNum | ReduceOp::MinNum);
+    let cmp = |op| ScalarExpr::Binary(op, bx(l(val)), bx(l(val)));
     // An integer is never NaN, so its step has no NaN arm.
     let nan_check = if int {
         keep_going
+    } else if ignore_nan {
+        Stmt::If {
+            cond: ScalarExpr::Binary(BinaryOp::CmpNe, bx(l(acc)), bx(l(acc))),
+            then: Block(vec![set(val)]),
+            els: Block(vec![Stmt::If {
+                cond: cmp(BinaryOp::CmpEq),
+                then: Block(vec![keep_going]),
+                els: Block(vec![]),
+            }]),
+        }
     } else {
         Stmt::If {
             cond: ScalarExpr::Binary(BinaryOp::CmpNe, bx(l(val)), bx(l(val))),

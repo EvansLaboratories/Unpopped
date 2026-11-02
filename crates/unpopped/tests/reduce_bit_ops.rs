@@ -172,16 +172,10 @@ fn declined(result: Result<Vec<u8>, PlanError>) -> String {
 }
 
 #[test]
-fn a_float_input_and_the_shape_only_ops_decline_at_the_plan_gate() {
+fn a_float_input_declines_at_the_plan_gate() {
     for rop in BITS {
         let d = declined(plan_and_run(ElementKind::F32, rop, false));
         assert!(d.contains("integer dtype"), "{d}");
-    }
-    for rop in [ReduceOp::MaxNum, ReduceOp::MinNum] {
-        for dtype in [ElementKind::F32, ElementKind::I32] {
-            let d = declined(plan_and_run(dtype, rop, false));
-            assert!(d.contains("shape only"), "{rop:?} {dtype:?}: {d}");
-        }
     }
 }
 
@@ -203,11 +197,10 @@ fn a_bit_op_in_a_scan_or_a_window_declines() {
 
 #[test]
 fn the_kernel_lift_declines_what_it_does_not_fold() {
-    // a float bit reduction and the shape-only ops never reach a kernel
+    // a float bit reduction never reaches a kernel
     for (dtype, rop) in [
         (ElementKind::F32, ReduceOp::And),
-        (ElementKind::I32, ReduceOp::MaxNum),
-        (ElementKind::F32, ReduceOp::MinNum),
+        (ElementKind::F32, ReduceOp::Xor),
     ] {
         let op = reduction(dtype, rop, false);
         assert!(
