@@ -5,7 +5,7 @@
 //! the callee goes through the same argument storage as the caller's (a buffer passed by alias *is* the
 //! caller's buffer). Unlaunched entries only; a launched module is the resumable evaluator's (slice M4).
 
-use super::kernel_eval::{KernelArg, KernelTrap, Machine};
+use super::kernel_eval::{ALLOC_BIND, KernelArg, KernelTrap, Machine};
 use super::kernel_resume::Frame;
 use crate::kernel::{CallArg, KernelFn, Module, ParamKind, check_module};
 use crate::types::Ty;
@@ -89,8 +89,8 @@ impl<'a> Machine<'a> {
                 (CallArg::Buffer(b), ParamKind::Buffer { .. }) => {
                     bound.bufmap.push(self.root(*b));
                 }
-                (CallArg::Alloc(_), _) => {
-                    return Err(KernelTrap::Unsupported("an allocation passed to a callee"));
+                (CallArg::Alloc(a), ParamKind::Buffer { .. }) => {
+                    bound.bufmap.push(ALLOC_BIND + *a as usize);
                 }
                 _ => return Err(KernelTrap::ArgMismatch("a call argument and its parameter")),
             }

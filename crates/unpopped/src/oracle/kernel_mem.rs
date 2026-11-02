@@ -232,7 +232,7 @@ impl Machine<'_> {
 
     /// The checked element index of `index` into allocation `alloc`.
     fn alloc_index(&self, alloc: u32, index: &ScalarExpr) -> Result<usize, KernelTrap> {
-        let space = self.k.allocs[alloc as usize].space;
+        let space = self.alloc_k.allocs[alloc as usize].space;
         if space == MemorySpace::Constant {
             return Err(KernelTrap::Unsupported(
                 "a Constant allocation (AllocDecl has no initializer, so none can be read here)",
@@ -257,7 +257,7 @@ impl Machine<'_> {
 
     pub(super) fn alloc_load(&mut self, alloc: u32, index: &ScalarExpr) -> Result<Val, KernelTrap> {
         let i = self.alloc_index(alloc, index)?;
-        let space = self.k.allocs[alloc as usize].space;
+        let space = self.alloc_k.allocs[alloc as usize].space;
         let c = self
             .ctx
             .as_mut()
@@ -285,7 +285,7 @@ impl Machine<'_> {
         step: &dyn Fn(u128, ElementKind) -> Result<Val, KernelTrap>,
     ) -> Result<Val, KernelTrap> {
         let i = self.alloc_index(alloc, index)?;
-        let space = self.k.allocs[alloc as usize].space;
+        let space = self.alloc_k.allocs[alloc as usize].space;
         if space != MemorySpace::Shared {
             return Err(KernelTrap::Unsupported("an atomic outside Shared memory"));
         }
@@ -311,7 +311,7 @@ impl Machine<'_> {
         v: Val,
     ) -> Result<(), KernelTrap> {
         let i = self.alloc_index(alloc, index)?;
-        let space = self.k.allocs[alloc as usize].space;
+        let space = self.alloc_k.allocs[alloc as usize].space;
         let c = self
             .ctx
             .as_mut()
