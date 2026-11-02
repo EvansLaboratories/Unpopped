@@ -109,6 +109,87 @@ fn check_block(k: &KernelFn, b: &Block, sc: &mut Scope) -> Result<(), KernelErro
     Ok(())
 }
 
+/// An `AtomicRmw` or an `AtomicCas`.
+fn check_atomic_stmt(
+    k: &KernelFn,
+    st: &Stmt,
+    sc: &mut Scope,
+    declared_here: &mut Vec<usize>,
+) -> Result<(), KernelError> {
+    match st {
+        Stmt::AtomicRmw {
+            op,
+            place,
+            value,
+            old,
+            order,
+            scope,
+        } => {
+            let form = AtomicForm {
+                op: *op,
+                site: AtomicSite {
+                    old: *old,
+                    order: *order,
+                    scope: *scope,
+                },
+            };
+            check_atomic(k, place, value, form, sc, declared_here)?;
+        }
+        Stmt::AtomicCas {
+            place,
+            expected,
+            desired,
+            old,
+            order,
+            scope,
+        } => {
+            let site = AtomicSite {
+                old: *old,
+                order: *order,
+                scope: *scope,
+            };
+            check_cas(k, place, [expected, desired], site, sc, declared_here)?;
+        }
+        _ => unreachable!("check_atomic_stmt is called for atomic statements only"),
+    }
+    Ok(())
+}
+
+/// The statements that synchronize or call: atomics, fences, calls and barriers.
+fn check_sync_stmt(
+    k: &KernelFn,
+    st: &Stmt,
+    sc: &mut Scope,
+    declared_here: &mut Vec<usize>,
+) -> Result<(), KernelError> {
+    match st {
+        Stmt::AtomicRmw { .. } | Stmt::AtomicCas { .. } => {
+            check_atomic_stmt(k, st, sc, declared_here)?;
+        }
+        Stmt::Fence { .. } => {
+            return Err(KernelError::SyncUnsupported {
+                what: "Fence: the shape is reserved and its semantics has not landed",
+            });
+        }
+        Stmt::Call { .. } => {
+            return Err(KernelError::CallUnsupported {
+                what: "Call: the shape is reserved; the module checker and the call semantics have not landed",
+            });
+        }
+        Stmt::Barrier { scope, kind } => {
+            let BarrierKind::Full = kind;
+            if !matches!(scope, ExecScope::Subgroup | ExecScope::Block) {
+                return Err(KernelError::BadBarrierScope);
+            }
+            if k.launch.is_none() {
+                return Err(KernelError::ExecWithoutLaunch);
+            }
+        }
+        _ => unreachable!("check_sync_stmt is called for sync statements only"),
+    }
+    Ok(())
+}
+
 /// Check one statement; `Ok(true)` when it unconditionally leaves the block (`Break`,
 /// `Continue`, `Return`).
 fn check_stmt(
@@ -125,37 +206,11 @@ fn check_stmt(
         Stmt::Load { local, place } => check_load(k, *local, place, sc, declared_here)?,
         Stmt::Assign { local, value } => check_assign(k, *local, value, sc)?,
         Stmt::Store { place, value } => check_store(k, place, value, sc)?,
-        Stmt::AtomicRmw {
-            op,
-            place,
-            value,
-            old,
-            order,
-            scope,
-        } => {
-            let form = AtomicForm {
-                op: *op,
-                old: *old,
-                order: *order,
-                scope: *scope,
-            };
-            check_atomic(k, place, value, form, sc, declared_here)?;
-        }
-        Stmt::AtomicCas { .. } => {
-            return Err(KernelError::AtomicUnsupported {
-                what: "AtomicCas: the shape is reserved and its semantics has not landed",
-            });
-        }
-        Stmt::Fence { .. } => {
-            return Err(KernelError::SyncUnsupported {
-                what: "Fence: the shape is reserved and its semantics has not landed",
-            });
-        }
-        Stmt::Call { .. } => {
-            return Err(KernelError::CallUnsupported {
-                what: "Call: the shape is reserved; the module checker and the call semantics have not landed",
-            });
-        }
+        Stmt::AtomicRmw { .. }
+        | Stmt::AtomicCas { .. }
+        | Stmt::Fence { .. }
+        | Stmt::Call { .. }
+        | Stmt::Barrier { .. } => check_sync_stmt(k, st, sc, declared_here)?,
         Stmt::If { cond, then, els } => {
             scalar_cond(k, cond, sc)?;
             check_block(k, then, sc)?;
@@ -179,15 +234,6 @@ fn check_stmt(
             return Ok(true);
         }
         Stmt::Return => return Ok(true),
-        Stmt::Barrier { scope, kind } => {
-            let BarrierKind::Full = kind;
-            if !matches!(scope, ExecScope::Subgroup | ExecScope::Block) {
-                return Err(KernelError::BadBarrierScope);
-            }
-            if k.launch.is_none() {
-                return Err(KernelError::ExecWithoutLaunch);
-            }
-        }
     }
     Ok(false)
 }
@@ -232,9 +278,7 @@ fn check_store(
 #[derive(Clone, Copy)]
 struct AtomicForm {
     op: AtomicOp,
-    old: Option<u32>,
-    order: MemoryOrder,
-    scope: ExecScope,
+    site: AtomicSite,
 }
 
 /// An `AtomicRmw` (v1): a `ReadWrite` global buffer or `Shared` element, a value of the element's type,
@@ -248,18 +292,74 @@ fn check_atomic(
     sc: &mut Scope,
     declared_here: &mut Vec<usize>,
 ) -> Result<(), KernelError> {
-    let AtomicForm {
-        op,
-        old,
-        order,
-        scope,
-    } = form;
-    if !matches!(order, MemoryOrder::Relaxed) {
+    let AtomicForm { op, site } = form;
+    let elem = check_atomic_site(k, place, site, sc)?;
+    let float_ok = matches!(op, AtomicOp::Add | AtomicOp::Exchange)
+        && matches!(elem, ElementKind::F32 | ElementKind::F64);
+    if crate::types::int_range(elem).is_none() && !float_ok {
+        return Err(KernelError::AtomicUnsupported {
+            what: "an atomic on a non-integer element (only an F32/F64 Add or Exchange is admitted)",
+        });
+    }
+    if check_expr(k, value, sc)? != Ty::Scalar(elem) {
+        return Err(KernelError::TypeMismatch { what: "AtomicRmw" });
+    }
+    if let Some(local) = site.old {
+        declare(k, local, Ty::Scalar(elem), sc, declared_here)?;
+    }
+    Ok(())
+}
+
+/// An `AtomicCas`: an integer element at an atomic site, `expected` and `desired` of that type, and an
+/// `old` local (if any) of that type.
+fn check_cas(
+    k: &KernelFn,
+    place: &Place,
+    [expected, desired]: [&ScalarExpr; 2],
+    site: AtomicSite,
+    sc: &mut Scope,
+    declared_here: &mut Vec<usize>,
+) -> Result<(), KernelError> {
+    let elem = check_atomic_site(k, place, site, sc)?;
+    if crate::types::int_range(elem).is_none() {
+        return Err(KernelError::AtomicUnsupported {
+            what: "an AtomicCas on a non-integer element (compare-and-exchange is integer only)",
+        });
+    }
+    for e in [expected, desired] {
+        if check_expr(k, e, sc)? != Ty::Scalar(elem) {
+            return Err(KernelError::TypeMismatch { what: "AtomicCas" });
+        }
+    }
+    if let Some(local) = site.old {
+        declare(k, local, Ty::Scalar(elem), sc, declared_here)?;
+    }
+    Ok(())
+}
+
+/// What every atomic statement states about where and how it runs: the old-value local, the memory
+/// order and the scope.
+#[derive(Clone, Copy)]
+struct AtomicSite {
+    old: Option<u32>,
+    order: MemoryOrder,
+    scope: ExecScope,
+}
+
+/// The checks every atomic shares: `Relaxed` order, `Device` scope, a `ReadWrite` global buffer or a
+/// `Shared` allocation element. Returns the element type.
+fn check_atomic_site(
+    k: &KernelFn,
+    place: &Place,
+    site: AtomicSite,
+    sc: &Scope,
+) -> Result<ElementKind, KernelError> {
+    if !matches!(site.order, MemoryOrder::Relaxed) {
         return Err(KernelError::AtomicUnsupported {
             what: "a memory order other than Relaxed: the shape is reserved, its semantics has not landed",
         });
     }
-    if !matches!(scope, ExecScope::Device) {
+    if !matches!(site.scope, ExecScope::Device) {
         return Err(KernelError::AtomicUnsupported {
             what: "an atomic scope other than Device: the shape is reserved, its semantics has not landed",
         });
@@ -282,20 +382,7 @@ fn check_atomic(
             what: "an atomic on a buffer that is not ReadWrite",
         });
     }
-    let float_ok = matches!(op, AtomicOp::Add | AtomicOp::Exchange)
-        && matches!(elem, ElementKind::F32 | ElementKind::F64);
-    if crate::types::int_range(elem).is_none() && !float_ok {
-        return Err(KernelError::AtomicUnsupported {
-            what: "an atomic on a non-integer element (only an F32/F64 Add or Exchange is admitted)",
-        });
-    }
-    if check_expr(k, value, sc)? != Ty::Scalar(elem) {
-        return Err(KernelError::TypeMismatch { what: "AtomicRmw" });
-    }
-    if let Some(local) = old {
-        declare(k, local, Ty::Scalar(elem), sc, declared_here)?;
-    }
-    Ok(())
+    Ok(elem)
 }
 
 fn check_assign(

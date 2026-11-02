@@ -195,12 +195,13 @@ impl<'a> Machine<'a> {
             | Stmt::Load { .. }
             | Stmt::Assign { .. }
             | Stmt::Store { .. }
-            | Stmt::AtomicRmw { .. } => {
+            | Stmt::AtomicRmw { .. }
+            | Stmt::AtomicCas { .. } => {
                 self.exec_simple(st)?;
             }
-            Stmt::AtomicCas { .. } | Stmt::Fence { .. } | Stmt::Call { .. } => {
+            Stmt::Fence { .. } | Stmt::Call { .. } => {
                 return Err(KernelTrap::Unsupported(
-                    "AtomicCas, Fence and Call (check_kernel refuses them)",
+                    "Fence and Call (check_kernel refuses them)",
                 ));
             }
             Stmt::If { cond, then, els } => {
@@ -264,6 +265,19 @@ impl<'a> Machine<'a> {
                 let prev = self.atomic_rmw(*op, place, v)?;
                 if let Some(local) = old {
                     self.locals[*local as usize] = Some(prev);
+                }
+            }
+            Stmt::AtomicCas {
+                place,
+                expected,
+                desired,
+                old,
+                ..
+            } => {
+                let (e, d) = (self.eval_expr(expected)?, self.eval_expr(desired)?);
+                let found = self.atomic_cas(place, e, d)?;
+                if let Some(local) = old {
+                    self.locals[*local as usize] = Some(found);
                 }
             }
             _ => unreachable!("exec_simple is called for straight-line statements only"),
@@ -362,8 +376,43 @@ impl<'a> Machine<'a> {
     /// races only with a plain access), the combine computed at the element type and wrapped.
     /// Returns the value the element held before.
     fn atomic_rmw(&mut self, op: AtomicOp, place: &Place, v: Val) -> Result<Val, KernelTrap> {
+        let Val::Raw(bits, vdt) = v else {
+            return Err(KernelTrap::Unsupported("a non-integer atomic operand"));
+        };
+        self.atomic_step(place, &|before, dt| atomic_apply(op, dt, before, bits, vdt))
+    }
+
+    /// Compare-and-exchange: the element becomes `desired` if it equals `expected` (both read at the
+    /// element's integer type), and the value found comes back either way.
+    fn atomic_cas(
+        &mut self,
+        place: &Place,
+        expected: Val,
+        desired: Val,
+    ) -> Result<Val, KernelTrap> {
+        let (Val::Raw(e, edt), Val::Raw(d, ddt)) = (expected, desired) else {
+            return Err(KernelTrap::Unsupported("a non-integer AtomicCas operand"));
+        };
+        self.atomic_step(place, &|before, dt| {
+            let same = raw_to_i128(before, dt) == raw_to_i128(e, edt);
+            Ok(if same {
+                Val::Raw(d, ddt)
+            } else {
+                Val::Raw(before, dt)
+            })
+        })
+    }
+
+    /// One indivisible step on an element of a global buffer or a `Shared` allocation: logged as an
+    /// atomic access, `step` maps the raw value before (and the element type) to the value after.
+    /// Returns the value before.
+    fn atomic_step(
+        &mut self,
+        place: &Place,
+        step: &dyn Fn(u128, ElementKind) -> Result<Val, KernelTrap>,
+    ) -> Result<Val, KernelTrap> {
         if let Place::Alloc { alloc, index } = place {
-            return self.alloc_atomic(op, *alloc, index, v);
+            return self.alloc_atomic(*alloc, index, step);
         }
         let (b, off) = self.offset(place)?;
         self.note_global(b, off, AccessKind::Atomic)?;
@@ -371,11 +420,8 @@ impl<'a> Machine<'a> {
             unreachable!("offset() returned a buffer");
         };
         let dt = tb.dtype;
-        let Val::Raw(bits, vdt) = v else {
-            return Err(KernelTrap::Unsupported("a non-integer atomic operand"));
-        };
         let before = read_elem(&tb.bytes, off, dt);
-        let r = atomic_apply(op, dt, before, bits, vdt)?;
+        let r = step(before, dt)?;
         store_val(r, dt, &mut tb.bytes, off);
         Ok(Val::Raw(before, dt))
     }
@@ -410,23 +456,18 @@ impl<'a> Machine<'a> {
         }
     }
 
+    /// An integer expression at type `t`. `Div` is the total definition of
+    /// `docs/int-div-shift-semantics.md` (PM ruling 2026-10-31): a zero divisor gives the dividend, and
+    /// so does `MIN / -1`; shifts read the count as unsigned bits, modulo the promoted width; a
+    /// comparison yields the compute type's 1 or 0; a cast is an integer-to-integer wrap.
     pub(super) fn eval_int(&self, e: &ScalarExpr, t: ElementKind) -> Result<i128, KernelTrap> {
         let two = |a: &ScalarExpr, b: &ScalarExpr| -> Result<(i128, i128), KernelTrap> {
             Ok((self.eval_int(a, t)?, self.eval_int(b, t)?))
         };
         Ok(match e {
             ScalarExpr::ConstInt(v, _) => wrap(t, i128::from(*v)),
-            ScalarExpr::Local(i) => match self.local_val(*i) {
-                Val::Raw(b, dt) => raw_to_i128(b, dt),
-                _ => {
-                    return Err(KernelTrap::Unsupported(
-                        "non-integer local in an integer expression",
-                    ));
-                }
-            },
+            ScalarExpr::Local(i) => self.int_local(*i)?,
             ScalarExpr::Exec(id) => wrap(t, self.exec_val(*id)?),
-            // An integer-to-integer cast that wraps: the operand at its own type, then into `t`.
-            // Saturating casts stay outside the subset.
             ScalarExpr::Cast(x, spec) if spec.to == t && spec.sat == Saturation::Wrap => {
                 wrap(t, self.eval_operand_int(x)?)
             }
@@ -442,43 +483,51 @@ impl<'a> Machine<'a> {
                 let (x, y) = two(a, b)?;
                 wrap(t, x * y)
             }
-            // Integer division, remainder-free: the total definition of `docs/int-div-shift-semantics.md`
-            // (PM ruling 2026-10-31): a zero divisor gives the dividend, and so does `MIN / -1`.
             ScalarExpr::Div(a, b) => {
                 let (x, y) = two(a, b)?;
                 int_div(t, x, y)
             }
-            // Shifts read the count as unsigned bits, modulo the promoted width.
-            ScalarExpr::Binary(op @ (BinaryOp::Shl | BinaryOp::Shr), a, b) => {
+            ScalarExpr::Binary(
+                op @ (BinaryOp::Shl | BinaryOp::Shr | BinaryOp::Min | BinaryOp::Max),
+                a,
+                b,
+            ) => {
                 let (x, y) = two(a, b)?;
-                int_shift(t, matches!(op, BinaryOp::Shl), x, y)
-            }
-            ScalarExpr::Binary(op @ (BinaryOp::Min | BinaryOp::Max), a, b) => {
-                let (x, y) = two(a, b)?;
-                if matches!(op, BinaryOp::Min) {
-                    x.min(y)
-                } else {
-                    x.max(y)
+                match op {
+                    BinaryOp::Min => x.min(y),
+                    BinaryOp::Max => x.max(y),
+                    _ => int_shift(t, matches!(op, BinaryOp::Shl), x, y),
                 }
             }
-            // A comparison yields the compute type's 1 or 0, as the oracle does; its operands are
-            // integers of their own type, not necessarily `t`.
             ScalarExpr::Binary(op, a, b) if op.is_cmp() => self.eval_cmp(*op, a, b)?,
-            // An integer `Select`: the integer condition tested `!= 0`, then ONE arm evaluated at `t`
-            // (the other is not, as in the float path). This is what an integer `Rem` composes from.
-            ScalarExpr::Select(c, a, b) => {
-                if self.eval_operand_int(c)? != 0 {
-                    self.eval_int(a, t)?
-                } else {
-                    self.eval_int(b, t)?
-                }
-            }
-            _ => {
-                return Err(KernelTrap::Unsupported(
-                    "integer expression outside the v0 subset",
-                ));
-            }
+            ScalarExpr::Select(c, a, b) => self.eval_int_select(c, a, b, t)?,
+            _ => Err(KernelTrap::Unsupported(
+                "integer expression outside the v0 subset",
+            ))?,
         })
+    }
+
+    /// An integer `Select`: the integer condition tested `!= 0`, then ONE arm evaluated at `t` (the
+    /// other is not, as in the float path). This is what an integer `Rem` composes from.
+    fn eval_int_select(
+        &self,
+        c: &ScalarExpr,
+        a: &ScalarExpr,
+        b: &ScalarExpr,
+        t: ElementKind,
+    ) -> Result<i128, KernelTrap> {
+        let arm = if self.eval_operand_int(c)? != 0 { a } else { b };
+        self.eval_int(arm, t)
+    }
+
+    /// An integer local read inside an integer expression.
+    fn int_local(&self, i: u32) -> Result<i128, KernelTrap> {
+        match self.local_val(i) {
+            Val::Raw(b, dt) => Ok(raw_to_i128(b, dt)),
+            _ => Err(KernelTrap::Unsupported(
+                "non-integer local in an integer expression",
+            )),
+        }
     }
 
     /// A comparison of two integer operands: `1` or `0`.

@@ -13,11 +13,10 @@ use std::collections::HashMap;
 
 use unpopped_vocab::ElementKind;
 
-use super::kernel_eval::{KernelTrap, Machine, atomic_apply};
+use super::kernel_eval::{KernelTrap, Machine};
 use super::{Val, elem_bits, read_elem, store_val};
 use crate::exec::{ExecId, LaunchShape, MemorySpace};
 use crate::ir::ScalarExpr;
-use crate::kernel::AtomicOp;
 use crate::types::{self, Ty};
 
 /// One access: the thread, and the barrier counts it saw.
@@ -276,14 +275,14 @@ impl Machine<'_> {
         Ok(Val::Raw(read_elem(&m.bytes, i, m.dtype), m.dtype))
     }
 
-    /// An atomic read-modify-write of a `Shared` element: logged as an atomic access (it races only
-    /// with a plain access), and the element must already hold a value.
+    /// An atomic step on a `Shared` element: logged as an atomic access (it races only with a plain
+    /// access), the element must already hold a value, and `step` maps the value before to the value
+    /// after. Returns the value before.
     pub(super) fn alloc_atomic(
         &mut self,
-        op: AtomicOp,
         alloc: u32,
         index: &ScalarExpr,
-        v: Val,
+        step: &dyn Fn(u128, ElementKind) -> Result<Val, KernelTrap>,
     ) -> Result<Val, KernelTrap> {
         let i = self.alloc_index(alloc, index)?;
         let space = self.k.allocs[alloc as usize].space;
@@ -299,11 +298,8 @@ impl Machine<'_> {
         if !m.init[i] {
             return Err(KernelTrap::UninitializedShared { alloc });
         }
-        let Val::Raw(bits, vdt) = v else {
-            return Err(KernelTrap::Unsupported("a non-integer atomic operand"));
-        };
         let before = read_elem(&m.bytes, i, m.dtype);
-        let r = atomic_apply(op, m.dtype, before, bits, vdt)?;
+        let r = step(before, m.dtype)?;
         store_val(r, m.dtype, &mut m.bytes, i);
         Ok(Val::Raw(before, m.dtype))
     }

@@ -193,7 +193,7 @@ impl Emitter<'_> {
             Stmt::Return => self.ret()?,
             Stmt::Barrier { .. } => return Err(refuse("a Barrier needs a launch (U3 row 4)")),
             Stmt::AtomicRmw { .. } => self.atomic_rmw(s)?,
-            Stmt::AtomicCas { .. } => return Err(refuse("an AtomicCas is not emitted yet")),
+            Stmt::AtomicCas { .. } => self.atomic_cas(s)?,
             Stmt::Fence { .. } => return Err(refuse("a Fence is not emitted yet")),
             Stmt::Call { .. } => return Err(refuse("a Call needs the module checker (U3 R1)")),
         }
