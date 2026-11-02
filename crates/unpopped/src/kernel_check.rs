@@ -29,6 +29,8 @@ struct Scope {
 pub(crate) struct CalleeSig {
     pub(crate) params: Vec<ParamKind>,
     pub(crate) result: Option<Ty>,
+    /// The function reaches a `Barrier`, directly or through its own calls: a call of it is a barrier site.
+    pub(crate) barrier: bool,
 }
 
 /// Check that `k` is well formed (`docs/ir-kernel-layer.md` section 4).
@@ -75,7 +77,8 @@ pub(crate) fn check_kernel_with(k: &KernelFn, callees: Vec<CalleeSig>) -> Result
     }
     check_allocs(k)?;
     check_block(k, &k.body, &mut sc)?;
-    crate::kernel_uniform::check_barriers(k)
+    let barrier_callees: Vec<bool> = sc.callees.iter().map(|c| c.barrier).collect();
+    crate::kernel_uniform::check_barriers(k, &barrier_callees)
 }
 
 /// A launch has no zero extent, and a subgroup range is non-empty and starts at 1 or more.
