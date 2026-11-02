@@ -50,7 +50,7 @@ Stmt::If     { cond: ScalarExpr, then: Block, els: Block }
 Stmt::For    { local: u32, start, end, step: ScalarExpr, body: Block }   // integer counter, half-open
 Stmt::While  { cond: ScalarExpr, body: Block }
 Stmt::Break | Stmt::Continue | Stmt::Return
-// Stmt::Call { callee, args: Vec<CallArg>, result }  -- shape since 0.41.4 (CallArg::{Scalar(expr)|Buffer(i)|Alloc(i)}; KernelFn.result is the callee's result local), checked by check_module since 0.41.6 and run by oracle::run_module since 0.41.7 (unlaunched entries); REFUSED by check_kernel alone, by run_kernel and by run_launch (unknown U-2; docs/options-u3-calls.md)
+// Stmt::Call { callee, args: Vec<CallArg>, result }  -- shape since 0.41.4 (CallArg::{Scalar(expr)|Buffer(i)|Alloc(i)}; KernelFn.result is the callee's result local), checked by check_module since 0.41.6 run by oracle::run_module since 0.41.7 (unlaunched entries) and by run_launch_module since 0.41.8 (launched entries; a callee holding a barrier is still refused); REFUSED by check_kernel alone, by run_kernel and by run_launch (unknown U-2; docs/options-u3-calls.md)
 
 Place::Logical { buffer: u32, coords: Vec<ScalarExpr> }   // the element at LOGICAL coordinates
 ```
