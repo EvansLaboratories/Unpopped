@@ -148,7 +148,7 @@ until their semantics land, and `Stmt::Barrier` carries a `kind` (only `Full`). 
   lockstep schedule reaches the cell (ascending source index for a scatter), one valid order; a conformance test compares **inside the band** and never asserts the
   serial bytes. **This band deliberately differs from KISS-CONTRACT-6.8-0012 as clause-pinned in KISS#759** (ascending reference schedule, K1-calibrated `k`): ours is
   order-independent (`sum(abs)` over every order) because a device's order is not the reference's; it is the bound for *this* IR statement, not a contract tolerance.
-- **Emitters.** `unpopped-cpu-c` refuses it (it emits no launches). A device emitter lowers it to its native atomic (`atomicAdd`/`atomicMax`/`atomicMin`,
+- **Emitters.** `unpopped-cpu-c` spells a launched kernel as a **serialized thread loop** (0.41.2): blocks one after another, threads one after another inside a block, the thread loop split at each `Block` barrier, an atomic a plain C read-modify-write (serial, hence atomic; the old value and all seven combines). It is the reference the device emitters are held to (`crates/unpopped-cpu-c/tests/kernel_launch_emit_agrees.rs`), never a performance claim, and it refuses typed what it cannot split: a non-`Block` barrier, a `While` or a `Break`/`Continue`/`Return` crossing a barrier, `Private`/`Constant`/dynamic allocations, subgroup and cluster ids, a block over 1024 threads, `AtomicCas`, `Fence`, `Call`. A device emitter lowers it to its native atomic (`atomicAdd`/`atomicMax`/`atomicMin`,
   `InterlockedAdd`/`InterlockedMax`/`InterlockedMin`, `atomicrmw ... monotonic`) on the element's 32- or 64-bit integer type.
 
 ## 6. The effects model (stated; the unknowns are marked)

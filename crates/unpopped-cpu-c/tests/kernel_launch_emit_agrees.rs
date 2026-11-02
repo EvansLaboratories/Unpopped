@@ -321,8 +321,8 @@ fn the_associative_atomic_combines_agree() {
 
 /// `Exchange` is order dependent, so the C reference is held to the property the IR promises: the
 /// values read back plus the final cell are the start value and every value written, once each.
-#[test]
-fn exchange_conserves_every_value_in_the_c_reference() {
+/// `old = exchange(cell, tid + 1); out[tid] = old` over one block of 12 threads.
+fn exchange_kernel() -> KernelFn {
     let cell = Place::Logical {
         buffer: 0,
         coords: vec![u(0)],
@@ -364,6 +364,12 @@ fn exchange_conserves_every_value_in_the_c_reference() {
         Block(body),
     );
     k.launch = Some(LaunchShape::new([12, 1, 1], [1, 1, 1]));
+    k
+}
+
+#[test]
+fn exchange_conserves_every_value_in_the_c_reference() {
+    let k = exchange_kernel();
     let args = vec![
         KernelArg::Buffer(ibuf(&[1000])),
         KernelArg::Buffer(ibuf(&[0; 12])),
@@ -527,4 +533,24 @@ fn an_early_return_ends_one_thread_not_the_kernel() {
     );
     k.launch = Some(LaunchShape::new([8, 1, 1], [1, 1, 1]));
     agree_launch("early_return", &k, vec![KernelArg::Buffer(ibuf(&[0; 8]))]);
+}
+
+/// A kernel with no launch shape is spelled exactly as before: the serial C still agrees with the plain
+/// interpreter (`kernel_emit_agrees.rs` holds the full corpus; this keeps the launch path honest about it).
+#[test]
+fn an_unlaunched_kernel_still_agrees() {
+    let op = OpDef::elementwise(
+        "add",
+        2,
+        &[I32],
+        Expr(ScalarExpr::Add(Box::new(input(0).0), Box::new(input(1).0))),
+    );
+    let k = unpopped::kernel_lift::lift_elementwise_opdef(&op, I32, 1).expect("lifts");
+    let args = vec![
+        KernelArg::Buffer(ibuf(&[1, 2, 3, 4, 5])),
+        KernelArg::Buffer(ibuf(&[10, 20, 30, 40, 50])),
+        KernelArg::Buffer(ibuf(&[0; 5])),
+        KernelArg::Int(5),
+    ];
+    kernel_run::agree("unlaunched_add", &k, args);
 }

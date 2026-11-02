@@ -383,17 +383,8 @@ pub(crate) fn lower_kernel(k: &KernelFn) -> Result<GeneratedKernel, LowerError> 
     let ci = |v, t| typed::cpu_const_int(v, t);
     let io = |op, t, operands: Vec<String>| typed::cpu_int_op(op, t, &operands, dtype);
     let launch = LaunchInfo::of(k);
-    let local = |i: u32| {
-        Ok(Spelling::Spelled(if launch.is_some() {
-            format!("l{i}[t]")
-        } else {
-            format!("l{i}")
-        }))
-    };
-    let exec = |id| match launch {
-        Some(info) => crate::launch::exec_c(info, id).map(Spelling::Spelled),
-        None => Err(refuse("an execution id without a launch shape")),
-    };
+    let local = |i: u32| crate::launch::local_c(launch, i);
+    let exec = |id| crate::launch::exec_spelling(launch, id);
     let lowering = Lowering::builder(&no_input_leaf, &un, &bin)
         .exec(&exec)
         .arith(&ar)

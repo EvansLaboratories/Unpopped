@@ -35,7 +35,7 @@
 //! barrier before the next thread starts. That is one valid order for atomics; the IR does not promise
 //! it (`docs/ir-kernel-layer.md` 5a), so a test of an old value asserts properties, not this order.
 
-use unpopped::backend::LowerError;
+use unpopped::backend::{LowerError, Spelling};
 use unpopped::exec::{AllocDecl, ExecId, Extent, MemorySpace, Scope};
 use unpopped::ir::ScalarExpr;
 use unpopped::kernel::{AtomicOp, KernelFn, ParamKind, Place, Stmt};
@@ -145,6 +145,26 @@ fn admit_stmts(b: &[Stmt], barriers: bool) -> Result<(), LowerError> {
         }
     }
     Ok(())
+}
+
+/// The `local` seam: a plain variable in a serial kernel, this thread's array element in a launch.
+pub(crate) fn local_c(launch: Option<LaunchInfo>, i: u32) -> Result<Spelling, LowerError> {
+    Ok(Spelling::Spelled(if launch.is_some() {
+        format!("l{i}[t]")
+    } else {
+        format!("l{i}")
+    }))
+}
+
+/// The `exec` seam: an execution id has a meaning only in a launch.
+pub(crate) fn exec_spelling(
+    launch: Option<LaunchInfo>,
+    id: ExecId,
+) -> Result<Spelling, LowerError> {
+    match launch {
+        Some(info) => exec_c(info, id).map(Spelling::Spelled),
+        None => Err(refuse("an execution id without a launch shape")),
+    }
 }
 
 /// The C spelling of an execution id inside a thread run (`t` is the thread's linear index in its block).
