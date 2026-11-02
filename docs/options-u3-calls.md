@@ -82,7 +82,7 @@ callee's; stating that now costs nothing and nothing computes it yet.
 |---|---|---|
 | M1 | `CallArg`, `KernelFn.result` (Q1, Q2 shapes) | **built, 0.41.4 (#244)**; changed the `Call` shape before the publish |
 | M2 | `check_module` + the new `KernelError`s; `check_kernel` still refuses a bare `Call` | additive |
-| M3 | recursive evaluator runs a module (`run_module`) | additive |
+| M3 | recursive evaluator runs a module (`run_module`) | **built, 0.41.7** (scalar and buffer arguments; allocations through a call are refused) |
 | M4 | resumable evaluator `Frame::Call`; barrier in a callee; transitive divergence (Q6) | additive |
 | M5 | `unpopped-cpu-c` spells a call as a C function (serial reference), the differential for M3/M4 | additive |
 
