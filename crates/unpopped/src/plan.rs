@@ -2177,6 +2177,44 @@ fn is_total_int_dtype(dtype: ElementKind) -> bool {
     )
 }
 
+/// The reduce ops added in 0.42.0 (PM ruling 2026-11-02, `docs/options-u5-collectives-and-richer-reductions.md`):
+/// `And`/`Or`/`Xor` fold integers in an [`Access::Reduction`] only, and `MaxNum`/`MinNum` are shapes whose
+/// semantics has not landed. Anything else declines here, typed, before a plan the oracle and the emitters
+/// would refuse is built.
+fn check_reduce_op_admissibility(op: &OpDef, dtype: ElementKind) -> Result<(), PlanError> {
+    let ops: Vec<ReduceOp> = match &op.access {
+        Access::Reduction { op, .. } | Access::Scan { op, .. } | Access::Window { op, .. } => {
+            vec![*op]
+        }
+        Access::RowReduce { stages, .. } => stages.iter().map(|s| s.op).collect(),
+        _ => Vec::new(),
+    };
+    let in_reduction = matches!(op.access, Access::Reduction { .. });
+    for rop in ops {
+        let detail = match rop {
+            ReduceOp::MaxNum | ReduceOp::MinNum => {
+                format!(
+                    "{rop:?} (a NaN-ignoring extremum) is a shape only; its semantics has not landed"
+                )
+            }
+            ReduceOp::And | ReduceOp::Or | ReduceOp::Xor if !in_reduction => {
+                format!(
+                    "{rop:?} folds integers in a Reduction only, not in a scan, window or row reduction"
+                )
+            }
+            ReduceOp::And | ReduceOp::Or | ReduceOp::Xor if !is_int_dtype(dtype) => {
+                format!("{rop:?} is a bitwise fold and needs an integer dtype")
+            }
+            _ => continue,
+        };
+        return Err(PlanError::InadmissibleOpAtDtype {
+            dtype,
+            detail: format!("op '{}': {detail}", op.name),
+        });
+    }
+    Ok(())
+}
+
 /// [`check_int_op_admissibility`] with `total_ints`: the backend spells integer `Div` and
 /// `ConstInt` by the total rule (`Backend::total_integer_ops`). It admits an Elementwise
 /// `Div`, `Select` and comparison at `I32`/`I64`/`U32`/`U64` and a `ConstInt` leaf at an integer
@@ -2197,6 +2235,7 @@ pub(crate) fn check_int_op_admissibility_for(
         return Ok(());
     }
     let int_dt = is_int_dtype(dtype);
+    check_reduce_op_admissibility(op, dtype)?;
     // PM ruling 2026-11-01: an integer `Mean` reduction has no defined semantics (the oracle and the
     // emitters assert it out), so decline it here, typed, rather than build a plan only they refuse.
     if int_dt

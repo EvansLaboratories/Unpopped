@@ -244,8 +244,10 @@ impl<'a> Machine<'a> {
             | Stmt::AtomicCas { .. } => {
                 self.exec_simple(st)?;
             }
-            Stmt::Fence { .. } => {
-                return Err(KernelTrap::Unsupported("Fence (check_kernel refuses it)"));
+            Stmt::Fence { .. } | Stmt::Collective { .. } => {
+                return Err(KernelTrap::Unsupported(
+                    "Fence or Collective (check_kernel refuses it)",
+                ));
             }
             Stmt::Call {
                 callee,
@@ -544,17 +546,9 @@ impl<'a> Machine<'a> {
                 let (x, y) = two(a, b)?;
                 int_div(t, x, y)
             }
-            ScalarExpr::Binary(
-                op @ (BinaryOp::Shl | BinaryOp::Shr | BinaryOp::Min | BinaryOp::Max),
-                a,
-                b,
-            ) => {
+            ScalarExpr::Binary(op, a, b) if is_int_binary(*op) => {
                 let (x, y) = two(a, b)?;
-                match op {
-                    BinaryOp::Min => x.min(y),
-                    BinaryOp::Max => x.max(y),
-                    _ => int_shift(t, matches!(op, BinaryOp::Shl), x, y),
-                }
+                int_binary(t, *op, x, y)
             }
             ScalarExpr::Binary(op, a, b) if op.is_cmp() => self.eval_cmp(*op, a, b)?,
             ScalarExpr::Select(c, a, b) => self.eval_int_select(c, a, b, t)?,
@@ -767,6 +761,33 @@ fn int_div(t: ElementKind, x: i128, y: i128) -> i128 {
         return x;
     }
     x / y
+}
+
+/// The integer binary ops `eval_int` folds with both operands already at the type `t`.
+fn is_int_binary(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Shl
+            | BinaryOp::Shr
+            | BinaryOp::Min
+            | BinaryOp::Max
+            | BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+    )
+}
+
+/// One of [`is_int_binary`]'s ops on `x` and `y`. The bitwise ops act on the type's values (sign- or
+/// zero-extended), so their results are values of the type too.
+fn int_binary(t: ElementKind, op: BinaryOp, x: i128, y: i128) -> i128 {
+    match op {
+        BinaryOp::Min => x.min(y),
+        BinaryOp::Max => x.max(y),
+        BinaryOp::BitAnd => x & y,
+        BinaryOp::BitOr => x | y,
+        BinaryOp::BitXor => x ^ y,
+        _ => int_shift(t, matches!(op, BinaryOp::Shl), x, y),
+    }
 }
 
 /// `x << y` or `x >> y` at integer type `t` (rule 3): the count's bits read as unsigned, taken modulo

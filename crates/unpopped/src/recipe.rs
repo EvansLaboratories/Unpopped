@@ -203,7 +203,13 @@ fn reduce_monoid(op: ReduceOp) -> Option<&'static str> {
         ReduceOp::Prod => Some("prod"),
         ReduceOp::Max => Some("max"),
         ReduceOp::Min => Some("min"),
-        ReduceOp::Mean => None,
+        // Not monoid tokens the KISS-Ops surface names yet: an honest miss, like `Mean`.
+        ReduceOp::Mean
+        | ReduceOp::And
+        | ReduceOp::Or
+        | ReduceOp::Xor
+        | ReduceOp::MaxNum
+        | ReduceOp::MinNum => None,
     }
 }
 

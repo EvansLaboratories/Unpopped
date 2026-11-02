@@ -26,7 +26,7 @@ pub use crate::kernel_check::check_kernel;
 pub use crate::kernel_module::check_module;
 
 use crate::exec::{AllocDecl, LaunchShape, Scope};
-use crate::ir::ScalarExpr;
+use crate::ir::{ReduceOp, ScalarExpr};
 use crate::types::{Ty, TypeError};
 
 /// What a buffer parameter may do. Checked by [`check_kernel`] against every `Load` and `Store`.
@@ -300,6 +300,22 @@ pub enum Stmt {
         /// The order.
         order: MemoryOrder,
     },
+    /// A collective over the threads of `scope`: every thread of the scope contributes `value`, and each
+    /// receives its result in the local `result` (PM ruling 2026-11-02 on
+    /// `docs/options-u5-collectives-and-richer-reductions.md`, P5). A statement and not an expression because it
+    /// rendezvouses like a [`Stmt::Barrier`]. **Shape reserved: `check_kernel` refuses it** until its
+    /// semantics land (v1: full participation of the scope, `Subgroup` then `Block`); it is in the 0.42.0
+    /// break so that `Stmt` breaks downstream once for it.
+    Collective {
+        /// Which collective.
+        kind: CollectiveKind,
+        /// The value this thread contributes.
+        value: ScalarExpr,
+        /// The local that receives this thread's result.
+        result: u32,
+        /// The group that takes part.
+        scope: Scope,
+    },
     /// Call another kernel of the same [`Module`]: `result = callee(args...)`. The callee is a
     /// [`KernelFn`] (PM ruling 2026-11-02 on `docs/options-u3-remainder.md`, R1a); `callee` indexes
     /// [`Module::fns`]. **Shape reserved: `check_kernel` refuses it** until the module checker and the
@@ -351,6 +367,62 @@ impl Module {
 pub enum BarrierKind {
     /// Every thread of the scope arrives, then every thread leaves.
     Full,
+}
+
+/// Which [`Stmt::Collective`] (ROADMAP U5 P5). **Shapes only** until the semantics lands.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum CollectiveKind {
+    /// Each lane receives the value of another lane of the scope, named by `operand` under `mode`
+    /// (`Idx`: the lane index, `Up`/`Down`: the distance, `Xor`: the lane mask).
+    Shuffle {
+        /// How `operand` names the source lane.
+        mode: ShuffleMode,
+        /// The lane index, distance or mask.
+        operand: ScalarExpr,
+    },
+    /// A predicate over the scope's contributed values.
+    Vote(VoteKind),
+    /// Every lane receives the fold of the scope's values under `op`.
+    Reduce(ReduceOp),
+    /// Every lane receives the prefix fold up to itself (before itself when `exclusive`).
+    Scan {
+        /// The fold.
+        op: ReduceOp,
+        /// Whether the lane's own value is left out.
+        exclusive: bool,
+    },
+    /// Every lane receives the value of lane `lane`.
+    Broadcast {
+        /// The source lane.
+        lane: ScalarExpr,
+    },
+}
+
+/// How a shuffle names its source lane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum ShuffleMode {
+    /// The lane with this index.
+    Idx,
+    /// The lane this far below.
+    Up,
+    /// The lane this far above.
+    Down,
+    /// The lane whose index is this lane's index xor the mask.
+    Xor,
+}
+
+/// The predicate of a vote.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum VoteKind {
+    /// Every lane's value is non-zero.
+    All,
+    /// Some lane's value is non-zero.
+    Any,
+    /// A mask with bit `i` set when lane `i`'s value is non-zero.
+    Ballot,
 }
 
 /// The memory order of an atomic or a fence.
@@ -570,6 +642,11 @@ pub enum KernelError {
     },
     /// A `Call` asks for a result the callee does not have.
     CallResult {
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// A `Stmt::Collective` before its semantics has landed: the shape is reserved.
+    CollectiveUnsupported {
         /// What is wrong.
         what: &'static str,
     },

@@ -127,7 +127,9 @@ impl<'a> Machine<'a> {
             | Stmt::AtomicCas { .. } => {
                 self.exec_simple(st)?;
             }
-            Stmt::Fence { .. } => return Err(KernelTrap::Unsupported("Fence (refused)")),
+            Stmt::Fence { .. } | Stmt::Collective { .. } => {
+                return Err(KernelTrap::Unsupported("Fence or Collective (refused)"));
+            }
             Stmt::Call {
                 callee,
                 args,

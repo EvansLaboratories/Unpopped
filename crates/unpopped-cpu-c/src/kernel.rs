@@ -212,6 +212,7 @@ impl Emitter<'_> {
             Stmt::AtomicRmw { .. } => self.atomic_rmw(s)?,
             Stmt::AtomicCas { .. } => self.atomic_cas(s)?,
             Stmt::Fence { .. } => return Err(refuse("a Fence is not emitted yet")),
+            Stmt::Collective { .. } => return Err(refuse("a Collective is not emitted yet")),
             Stmt::Call {
                 callee,
                 args,

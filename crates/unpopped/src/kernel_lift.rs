@@ -677,6 +677,9 @@ fn scan_identity(rop: ReduceOp, dtype: ElementKind) -> ScalarExpr {
             ReduceOp::Max => lo,
             ReduceOp::Min => hi,
             ReduceOp::Sum | ReduceOp::Mean => 0,
+            ReduceOp::And | ReduceOp::Or | ReduceOp::Xor | ReduceOp::MaxNum | ReduceOp::MinNum => {
+                unreachable!("check_accumulated_dtype declines it before a scan is lifted")
+            }
         };
         return ScalarExpr::ConstInt(i64::try_from(v).expect("an I32 or I64 extreme"), dtype);
     }
@@ -703,6 +706,9 @@ fn scan_identity(rop: ReduceOp, dtype: ElementKind) -> ScalarExpr {
         ReduceOp::Max => infinity(true),
         ReduceOp::Min => infinity(false),
         ReduceOp::Sum | ReduceOp::Mean => ScalarExpr::Const(0.0),
+        ReduceOp::And | ReduceOp::Or | ReduceOp::Xor | ReduceOp::MaxNum | ReduceOp::MinNum => {
+            unreachable!("check_accumulated_dtype declines it before a scan is lifted")
+        }
     }
 }
 
@@ -720,6 +726,15 @@ fn check_accumulated_dtype(
     post: &ScalarExpr,
     what: &'static str,
 ) -> Result<(), LiftDecline> {
+    // A bit reduction lifts only as an integer reduction (no scan, no window); `MaxNum`/`MinNum` are shapes only.
+    let bit = matches!(rop, ReduceOp::And | ReduceOp::Or | ReduceOp::Xor);
+    if matches!(rop, ReduceOp::MaxNum | ReduceOp::MinNum)
+        || (bit && (what != "a reduction" || !is_int_kernel_dtype(dtype)))
+    {
+        return Err(LiftDecline::UnsupportedForm(
+            "a bit reduction outside an integer reduction, or MaxNum/MinNum (a shape only)",
+        ));
+    }
     if matches!(dtype, ElementKind::F32 | ElementKind::F64) {
         return Ok(());
     }
@@ -997,7 +1012,35 @@ fn fold_step(rop: ReduceOp, acc: u32, have: u32, val: u32, int: bool) -> Vec<Stm
             value: ScalarExpr::Mul(bx(l(acc)), bx(l(val))),
         }],
         ReduceOp::Max | ReduceOp::Min => extremum_step(rop, acc, have, val, int),
+        ReduceOp::And | ReduceOp::Or | ReduceOp::Xor => bit_step(rop, acc, have, val),
+        ReduceOp::MaxNum | ReduceOp::MinNum => {
+            unreachable!("check_accumulated_dtype declines it before a reduction is lifted")
+        }
     }
+}
+
+/// `And` / `Or` / `Xor` step of an integer fold, seeded by the first element: `if have { acc = acc OP v }
+/// else { acc = v }`, then `have = 1` (the oracle's bit fold).
+fn bit_step(rop: ReduceOp, acc: u32, have: u32, val: u32) -> Vec<Stmt> {
+    let l = ScalarExpr::Local;
+    let bx = Box::new;
+    let op = match rop {
+        ReduceOp::And => BinaryOp::BitAnd,
+        ReduceOp::Or => BinaryOp::BitOr,
+        _ => BinaryOp::BitXor,
+    };
+    let set = |value: ScalarExpr| Stmt::Assign { local: acc, value };
+    vec![
+        Stmt::If {
+            cond: l(have),
+            then: Block(vec![set(ScalarExpr::Binary(op, bx(l(acc)), bx(l(val))))]),
+            els: Block(vec![set(l(val))]),
+        },
+        Stmt::Assign {
+            local: have,
+            value: ScalarExpr::ConstInt(1, ElementKind::I32),
+        },
+    ]
 }
 
 /// `Max` / `Min` step: `if !have { acc = v } else if v != v { acc = v } else if better(v, acc)
