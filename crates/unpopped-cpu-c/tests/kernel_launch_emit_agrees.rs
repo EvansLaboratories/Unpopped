@@ -11,10 +11,11 @@
 
 use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
 use unpopped::ir::{BinaryOp, Expr, OpDef, ReduceOp, ScalarExpr, input};
+use unpopped::ir::{OobPolicy, WriteCombine, WriteIndex};
 use unpopped::kernel::{
     AtomicOp, Block, BufferRole, KernelFn, LocalDecl, MemoryOrder, Param, Place, Stmt,
 };
-use unpopped::kernel_lift::lift_reduction_opdef_launched;
+use unpopped::kernel_lift::{lift_reduction_opdef_launched, lift_scatter_opdef_launched};
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
 use unpopped_vocab::{AxisMask, ElementKind};
@@ -225,4 +226,305 @@ fn a_fetch_add_hands_out_distinct_slots_in_the_c_reference() {
     let mut olds: Vec<i32> = (0..12).map(|i| word(&c.outs[1], i)).collect();
     olds.sort_unstable();
     assert_eq!(olds, (100..112).collect::<Vec<_>>());
+}
+
+/// Every thread of a 3-D block in a 2-D grid stores a code of all its ids at its global linear
+/// position, computed from `BlockDim`, `GridDim`, `ThreadIdx` and `BlockIdx`: each id is spelled
+/// right only if the whole output matches.
+#[test]
+fn three_dimensional_ids_agree() {
+    let id = |e: ExecId| ScalarExpr::Exec(e);
+    let add = |a, b| ScalarExpr::Add(Box::new(a), Box::new(b));
+    let mul = |a, b| ScalarExpr::Mul(Box::new(a), Box::new(b));
+    let block_lin = add(
+        id(ExecId::ThreadIdx(0)),
+        mul(
+            id(ExecId::BlockDim(0)),
+            add(
+                id(ExecId::ThreadIdx(1)),
+                mul(id(ExecId::BlockDim(1)), id(ExecId::ThreadIdx(2))),
+            ),
+        ),
+    );
+    let grid_lin = add(
+        id(ExecId::BlockIdx(0)),
+        mul(id(ExecId::GridDim(0)), id(ExecId::BlockIdx(1))),
+    );
+    let nt = mul(
+        id(ExecId::BlockDim(0)),
+        mul(id(ExecId::BlockDim(1)), id(ExecId::BlockDim(2))),
+    );
+    let at = add(mul(grid_lin, nt), block_lin);
+    // 1 + tx + 10 ty + 100 tz + 1000 bx + 10000 by, so a swapped axis changes the bytes.
+    let code = [
+        (ExecId::ThreadIdx(0), 1),
+        (ExecId::ThreadIdx(1), 10),
+        (ExecId::ThreadIdx(2), 100),
+        (ExecId::BlockIdx(0), 1000),
+        (ExecId::BlockIdx(1), 10000),
+    ]
+    .into_iter()
+    .fold(u(1), |acc, (e, w)| add(acc, mul(id(e), u(w))));
+    let place = Place::Logical {
+        buffer: 0,
+        coords: vec![at],
+    };
+    let mut k = KernelFn::new(
+        "ids",
+        U32,
+        vec![Param::buffer("o", U32, BufferRole::Write, Some(1))],
+        vec![],
+        Block(vec![Stmt::Store { place, value: code }]),
+    );
+    k.launch = Some(LaunchShape::new([4, 3, 2], [2, 3, 1]));
+    let n = 4 * 3 * 2 * 2 * 3;
+    let out = TypedBuffer::new(U32, vec![n], vec![1], vec![0; 4 * n as usize]);
+    agree_launch("ids_3d", &k, vec![KernelArg::Buffer(out)]);
+}
+
+fn cell_kernel(op: AtomicOp, value: i64) -> KernelFn {
+    let cell = Place::Logical {
+        buffer: 0,
+        coords: vec![u(0)],
+    };
+    let mut k = KernelFn::new(
+        "c",
+        I32,
+        vec![Param::buffer("c", I32, BufferRole::ReadWrite, Some(1))],
+        vec![],
+        Block(vec![Stmt::atomic_rmw(op, cell, ci(value))]),
+    );
+    k.launch = Some(LaunchShape::new([6, 1, 1], [2, 1, 1]));
+    k
+}
+
+/// The associative combines reach their final value whatever the order, so the C reference and the
+/// interpreter agree byte for byte (the old value is not read here).
+#[test]
+fn the_associative_atomic_combines_agree() {
+    for (op, v, start) in [
+        (AtomicOp::Add, 7, 5),
+        (AtomicOp::Max, 9, 3),
+        (AtomicOp::Min, -4, 3),
+        (AtomicOp::And, 0b1010, 0b0110),
+        (AtomicOp::Or, 0b0101, 0b0010),
+        (AtomicOp::Xor, 0b0110, 0b0011),
+    ] {
+        let k = cell_kernel(op, v);
+        agree_launch(
+            &format!("combine_{op:?}"),
+            &k,
+            vec![KernelArg::Buffer(ibuf(&[start]))],
+        );
+    }
+}
+
+/// `Exchange` is order dependent, so the C reference is held to the property the IR promises: the
+/// values read back plus the final cell are the start value and every value written, once each.
+#[test]
+fn exchange_conserves_every_value_in_the_c_reference() {
+    let cell = Place::Logical {
+        buffer: 0,
+        coords: vec![u(0)],
+    };
+    let slot = Place::Logical {
+        buffer: 1,
+        coords: vec![tid()],
+    };
+    let value = ScalarExpr::Cast(
+        Box::new(ScalarExpr::Add(Box::new(tid()), Box::new(u(1)))),
+        unpopped::ir::CastSpec {
+            to: I32,
+            round: unpopped::ir::RoundMode::NearestEven,
+            sat: unpopped::ir::Saturation::Wrap,
+        },
+    );
+    let body = vec![
+        Stmt::AtomicRmw {
+            op: AtomicOp::Exchange,
+            place: cell,
+            value,
+            old: Some(0),
+            order: MemoryOrder::Relaxed,
+            scope: Scope::Device,
+        },
+        Stmt::Store {
+            place: slot,
+            value: ScalarExpr::Local(0),
+        },
+    ];
+    let mut k = KernelFn::new(
+        "x",
+        I32,
+        vec![
+            Param::buffer("c", I32, BufferRole::ReadWrite, Some(1)),
+            Param::buffer("o", I32, BufferRole::ReadWrite, Some(1)),
+        ],
+        vec![LocalDecl::scalar(I32)],
+        Block(body),
+    );
+    k.launch = Some(LaunchShape::new([12, 1, 1], [1, 1, 1]));
+    let args = vec![
+        KernelArg::Buffer(ibuf(&[1000])),
+        KernelArg::Buffer(ibuf(&[0; 12])),
+    ];
+    let Some(c) = kernel_run::run_c("exchange_conserved", &k, &args) else {
+        return;
+    };
+    let word =
+        |bytes: &[u8], i: usize| i32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().unwrap());
+    let mut seen: Vec<i32> = (0..12).map(|i| word(&c.outs[1], i)).collect();
+    seen.push(word(&c.outs[0], 0));
+    seen.sort_unstable();
+    let mut want: Vec<i32> = (1..=12).collect();
+    want.push(1000);
+    want.sort_unstable();
+    assert_eq!(seen, want);
+}
+
+/// The launched integer scatter (atomic combines, duplicate targets, out-of-range targets skipped)
+/// agrees with the interpreter on two geometries.
+#[test]
+fn the_launched_integer_scatters_agree() {
+    const SRC: [i64; 2] = [9, 4];
+    const DST: [i64; 2] = [5, 4];
+    let i32s = |shape: &[i64], v: &dyn Fn(usize) -> i32| {
+        let n: i64 = shape.iter().product();
+        let bytes = (0..n as usize).flat_map(|i| v(i).to_le_bytes()).collect();
+        TypedBuffer::new(I32, shape.to_vec(), vec![shape[1], 1], bytes)
+    };
+    let targets = [0, 4, 4, 1, 7, -2, 0, 2, 4, 3, 0, 1, 9, 2, 2, 4, 0, 1];
+    for combine in [
+        WriteCombine::AtomicAdd,
+        WriteCombine::AtomicMax,
+        WriteCombine::AtomicMin,
+    ] {
+        let op = match combine {
+            WriteCombine::AtomicAdd => OpDef::scatter_add("s", &[I32], 0, I32),
+            c => OpDef::scatter("s", &[I32], 0, I32).with_scatter(WriteIndex::ScatterIndexed {
+                index_operand: 1,
+                axis: 0,
+                combine: c,
+                oob: OobPolicy::Skip,
+                index_dtype: I32,
+            }),
+        };
+        for (grid, block) in [(2, 3), (4, 8)] {
+            let k = lift_scatter_opdef_launched(&op, I32, 2, block, grid).expect("lifts");
+            let args = vec![
+                KernelArg::Buffer(i32s(&SRC, &|i| (i as i32 * 7 % 11) - 5)),
+                KernelArg::Buffer(i32s(&SRC, &|i| targets[(i * 5 + i / 4) % targets.len()])),
+                KernelArg::Buffer(i32s(&DST, &|i| i as i32 - 3)),
+                KernelArg::Int(i128::from(SRC[0])),
+                KernelArg::Int(i128::from(SRC[1])),
+                KernelArg::Int(i128::from(DST[0])),
+            ];
+            agree_launch(&format!("scatter_{combine:?}_{grid}x{block}"), &k, args);
+        }
+    }
+}
+
+fn refused(k: &KernelFn) -> String {
+    use unpopped::backend::{Backend, LowerError};
+    match unpopped_cpu_c::CpuC.lower_kernel(k) {
+        Err(LowerError::UnsupportedKernel { detail }) => detail,
+        other => panic!("expected a typed refusal, got {other:?}"),
+    }
+}
+
+fn with_body(body: Vec<Stmt>, threads: u32) -> KernelFn {
+    let mut k = KernelFn::new(
+        "r",
+        I32,
+        vec![Param::buffer("o", I32, BufferRole::ReadWrite, Some(1))],
+        vec![LocalDecl::scalar(I32)],
+        Block(body),
+    )
+    .with_allocs(vec![AllocDecl::new(
+        "sh",
+        MemorySpace::Shared,
+        I32,
+        Extent::Static(4),
+    )]);
+    k.launch = Some(LaunchShape::new([threads, 1, 1], [1, 1, 1]));
+    k
+}
+
+/// A launch that requires a subgroup, reading `LaneId`.
+fn lane_id_kernel() -> KernelFn {
+    let lane = ScalarExpr::Cast(
+        Box::new(ScalarExpr::Exec(ExecId::LaneId)),
+        unpopped::ir::CastSpec {
+            to: I32,
+            round: unpopped::ir::RoundMode::NearestEven,
+            sat: unpopped::ir::Saturation::Wrap,
+        },
+    );
+    let mut k = with_body(
+        vec![Stmt::Let {
+            local: 0,
+            init: lane,
+        }],
+        4,
+    );
+    k.launch = Some(LaunchShape::new([4, 1, 1], [1, 1, 1]).with_subgroup(4, 4));
+    k
+}
+
+/// What the thread loop cannot spell is refused with a typed error naming it, not mis-spelled.
+#[test]
+fn what_the_thread_loop_cannot_spell_is_a_typed_refusal() {
+    let barrier = |scope| Stmt::barrier(scope);
+    let ret = Stmt::Return;
+    let while_with_barrier = Stmt::While {
+        cond: ci(0),
+        body: Block(vec![barrier(Scope::Block)]),
+    };
+    let cases: Vec<(&str, KernelFn, &str)> = vec![
+        (
+            "subgroup barrier",
+            with_body(vec![barrier(Scope::Subgroup)], 4),
+            "Subgroup Barrier",
+        ),
+        (
+            "while holding a barrier",
+            with_body(vec![while_with_barrier], 4),
+            "While loop that holds a Barrier",
+        ),
+        (
+            "return with a barrier",
+            with_body(vec![barrier(Scope::Block), ret.clone()], 4),
+            "Return in a kernel that has a Barrier",
+        ),
+        ("over 1024 threads", with_body(vec![], 2048), "2048 threads"),
+        ("lane id", lane_id_kernel(), "execution id"),
+    ];
+    for (name, k, want) in cases {
+        let d = refused(&k);
+        assert!(d.contains(want), "{name}: {d}");
+    }
+}
+
+/// A `Return` in a kernel with no barrier ends only that thread: threads below 3 stop, the rest store.
+/// (A `Return` spelled as leaving the whole kernel would stop everything at thread 0.)
+#[test]
+fn an_early_return_ends_one_thread_not_the_kernel() {
+    let guard = Stmt::If {
+        cond: ScalarExpr::Binary(BinaryOp::CmpLt, Box::new(tid()), Box::new(u(3))),
+        then: Block(vec![Stmt::Return]),
+        els: Block(vec![]),
+    };
+    let store = Stmt::Store {
+        place: out_at(tid()),
+        value: ci(7),
+    };
+    let mut k = KernelFn::new(
+        "early",
+        I32,
+        vec![Param::buffer("o", I32, BufferRole::ReadWrite, Some(1))],
+        vec![],
+        Block(vec![guard, store]),
+    );
+    k.launch = Some(LaunchShape::new([8, 1, 1], [1, 1, 1]));
+    agree_launch("early_return", &k, vec![KernelArg::Buffer(ibuf(&[0; 8]))]);
 }
