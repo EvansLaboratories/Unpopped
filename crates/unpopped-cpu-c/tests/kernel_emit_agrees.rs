@@ -387,7 +387,7 @@ fn a_kernel_outside_the_emitters_coverage_is_the_typed_kernel_decline() {
         k.body.0.insert(
             0,
             Stmt::Barrier {
-                scope: Scope::Block,
+                scope: Scope::Device,
                 kind: unpopped::kernel::BarrierKind::Full,
             },
         );
@@ -396,8 +396,7 @@ fn a_kernel_outside_the_emitters_coverage_is_the_typed_kernel_decline() {
     let f16 = KernelFn::new("h", ElementKind::F16, vec![], vec![], Block(vec![]));
     let ill_formed = KernelFn::new("bad", F32, vec![], vec![], Block(vec![Stmt::Break]));
     for (what, k) in [
-        ("launch", launched),
-        ("barrier", barrier),
+        ("device barrier", barrier),
         ("f16", f16),
         ("ill-formed", ill_formed),
     ] {
