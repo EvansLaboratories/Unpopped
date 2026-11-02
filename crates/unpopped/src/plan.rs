@@ -2189,12 +2189,28 @@ fn check_reduce_op_admissibility(op: &OpDef, dtype: ElementKind) -> Result<(), P
         _ => Vec::new(),
     };
     let in_reduction = matches!(op.access, Access::Reduction { .. });
+    let identity_post = matches!(
+        &op.access,
+        Access::Reduction { post, .. } if matches!(post, ScalarExpr::Reduced(0))
+    );
     for rop in ops {
         let detail = match rop {
-            ReduceOp::And | ReduceOp::Or | ReduceOp::Xor | ReduceOp::MaxNum | ReduceOp::MinNum
+            ReduceOp::And
+            | ReduceOp::Or
+            | ReduceOp::Xor
+            | ReduceOp::MaxNum
+            | ReduceOp::MinNum
+            | ReduceOp::ArgMax
+            | ReduceOp::ArgMin
                 if !in_reduction =>
             {
                 format!("{rop:?} folds in a Reduction only, not in a scan, window or row reduction")
+            }
+            ReduceOp::ArgMax | ReduceOp::ArgMin if op.out_dtype != Some(ElementKind::I64) => {
+                format!("{rop:?} gives an index: the op needs out_dtype Some(I64)")
+            }
+            ReduceOp::ArgMax | ReduceOp::ArgMin if !identity_post => {
+                format!("{rop:?} gives an index: its post must be the identity Reduced(0)")
             }
             ReduceOp::And | ReduceOp::Or | ReduceOp::Xor if !is_int_dtype(dtype) => {
                 format!("{rop:?} is a bitwise fold and needs an integer dtype")
@@ -3775,9 +3791,10 @@ fn assert_valid_out_dtype(op: &OpDef) {
                 op.name
             ),
             ElementKind::I64 => assert!(
-                matches!(rop, ReduceOp::Sum) && matches!(post, ScalarExpr::Reduced(0)),
+                matches!(rop, ReduceOp::Sum | ReduceOp::ArgMax | ReduceOp::ArgMin)
+                    && matches!(post, ScalarExpr::Reduced(0)),
                 "OpDef '{}': an I64-output reduction is the count/sum-widening shape \
-                 — it requires op = Sum and the identity post (Reduced(0)); \
+                 — it requires op = Sum, ArgMax or ArgMin and the identity post (Reduced(0)); \
                  Mean/Max/Min → I64 or a non-identity post is out of scope (would \
                  not be an exact integer store)",
                 op.name

@@ -2632,6 +2632,7 @@ fn eval_reduction(
         };
         let mut acc_i: i128 = if matches!(rop, ReduceOp::Prod) { 1 } else { 0 };
         let mut have = false;
+        let mut best_idx = 0i64;
         for rlin in 0..n_red {
             let rc = unravel(rlin, &red_ext);
             let mut coords = vec![0i64; rank];
@@ -2658,10 +2659,17 @@ fn eval_reduction(
                 coord: &panic_coord,
             };
             let e = eval(plan.body, &ev);
-            fold_step(rop, e, int_acc, &mut acc_f, &mut acc_i, &mut have);
+            if matches!(rop, ReduceOp::ArgMax | ReduceOp::ArgMin) {
+                let state = (int_acc, &mut acc_f, &mut acc_i, &mut best_idx);
+                arg_fold(rop, e, rlin, state, &mut have);
+            } else {
+                fold_step(rop, e, int_acc, &mut acc_f, &mut acc_i, &mut have);
+            }
         }
         // Finalize (Mean divides by the reduced-extent product; k==0 ⇒ 0/0 = NaN).
-        let finalized: Val = if int_acc {
+        let finalized: Val = if matches!(rop, ReduceOp::ArgMax | ReduceOp::ArgMin) {
+            Val::Int(i128::from(best_idx))
+        } else if int_acc {
             Val::Int(acc_i)
         } else if matches!(rop, ReduceOp::Mean) {
             Val::Float(acc_f / divisor)
@@ -2868,6 +2876,37 @@ fn extremum_fold(
 }
 
 /// The arms of [`fold_step`] not above: `And`, `Or`, `Xor`.
+/// One step of an arg-reduction: `idx` is the element's position in the row-major order of the reduced axes. The
+/// first element seeds; PyTorch's rule after that: a NaN accumulator is final (the first NaN wins), a NaN element
+/// takes over, and otherwise only a strictly better element replaces (so the first of equal values is kept).
+fn arg_fold(
+    rop: ReduceOp,
+    e: Val,
+    idx: i64,
+    (int_acc, acc_f, acc_i, best): (bool, &mut f64, &mut i128, &mut i64),
+    have: &mut bool,
+) {
+    let max = matches!(rop, ReduceOp::ArgMax);
+    let take = if !*have {
+        true
+    } else if int_acc {
+        let v = e.i128();
+        if max { v > *acc_i } else { v < *acc_i }
+    } else {
+        let v = e.f64();
+        !acc_f.is_nan() && (v.is_nan() || if max { v > *acc_f } else { v < *acc_f })
+    };
+    if take {
+        if int_acc {
+            *acc_i = e.i128();
+        } else {
+            *acc_f = e.f64();
+        }
+        *best = idx;
+    }
+    *have = true;
+}
+
 /// One step of an integer bit fold, seeded by the first element (no identity literal, as for `Max`/`Min`).
 /// A float input is declined by the plan gate, and no other op reaches here: both are bugs.
 fn bit_fold(rop: ReduceOp, v: i128, (int_acc, acc): (bool, &mut i128), have: &mut bool) {
@@ -2953,7 +2992,9 @@ fn eval_row_reduce(
                     | ReduceOp::Or
                     | ReduceOp::Xor
                     | ReduceOp::MaxNum
-                    | ReduceOp::MinNum => {
+                    | ReduceOp::MinNum
+                    | ReduceOp::ArgMax
+                    | ReduceOp::ArgMin => {
                         panic!("oracle: RowReduce {:?} stage is unsupported", st.op)
                     }
                 }
@@ -3162,7 +3203,9 @@ fn eval_scan(
                 | ReduceOp::Or
                 | ReduceOp::Xor
                 | ReduceOp::MaxNum
-                | ReduceOp::MinNum => {
+                | ReduceOp::MinNum
+                | ReduceOp::ArgMax
+                | ReduceOp::ArgMin => {
                     panic!("oracle: Scan rejects {sop:?}")
                 }
             }
@@ -3191,7 +3234,13 @@ fn scan_identity(sop: ReduceOp, dt: ElementKind) -> (f64, i128) {
         ReduceOp::Max => (f64::NEG_INFINITY, ext(true)),
         ReduceOp::Min => (f64::INFINITY, ext(false)),
         ReduceOp::Mean => panic!("oracle: Scan rejects Mean"),
-        ReduceOp::And | ReduceOp::Or | ReduceOp::Xor | ReduceOp::MaxNum | ReduceOp::MinNum => {
+        ReduceOp::And
+        | ReduceOp::Or
+        | ReduceOp::Xor
+        | ReduceOp::MaxNum
+        | ReduceOp::MinNum
+        | ReduceOp::ArgMax
+        | ReduceOp::ArgMin => {
             panic!("oracle: Scan rejects {sop:?}")
         }
     }
@@ -3345,7 +3394,9 @@ fn eval_window(
                     | ReduceOp::Or
                     | ReduceOp::Xor
                     | ReduceOp::MaxNum
-                    | ReduceOp::MinNum => panic!("oracle: Window rejects {wop:?}"),
+                    | ReduceOp::MinNum
+                    | ReduceOp::ArgMax
+                    | ReduceOp::ArgMin => panic!("oracle: Window rejects {wop:?}"),
                 }
             }
             // Finalize.
@@ -3383,7 +3434,9 @@ fn eval_window(
                 | ReduceOp::Or
                 | ReduceOp::Xor
                 | ReduceOp::MaxNum
-                | ReduceOp::MinNum => unreachable!(),
+                | ReduceOp::MinNum
+                | ReduceOp::ArgMax
+                | ReduceOp::ArgMin => unreachable!(),
             };
             // Epilogue.
             let leaf = |i: u8| {

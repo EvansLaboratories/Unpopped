@@ -1726,6 +1726,12 @@ pub enum ReduceOp {
     /// Minimum that **ignores NaN** (IEEE `minNum`, CUDA `fminf`); a run of only NaN gives NaN.
     /// **Shape only (0.42.0):** refused with `UnsupportedReduceOp` until its semantics lands.
     MinNum,
+    /// The **index** of the maximum (`torch.argmax`): the first index of the extreme, and **NaN wins** (the first NaN's
+    /// index when there is one). The index is the position in the row-major order of the reduced axes (one axis: that
+    /// axis's coordinate; all axes: the flat index). The output is an `I64` (`out_dtype = Some(I64)`). Reduction only.
+    ArgMax,
+    /// The **index** of the minimum (`torch.argmin`), by the same rule: the first index of the extreme, NaN wins.
+    ArgMin,
 }
 
 /// Sort direction of an [`Access::RowSort`] (increment 8). Ascending places the

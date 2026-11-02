@@ -209,7 +209,9 @@ fn reduce_monoid(op: ReduceOp) -> Option<&'static str> {
         | ReduceOp::Or
         | ReduceOp::Xor
         | ReduceOp::MaxNum
-        | ReduceOp::MinNum => None,
+        | ReduceOp::MinNum
+        | ReduceOp::ArgMax
+        | ReduceOp::ArgMin => None,
     }
 }
 
