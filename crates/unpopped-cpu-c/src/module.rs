@@ -1,0 +1,98 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//! A [`Module`] of kernels as serial C (`docs/options-u3-calls.md`, slice M5): [`lower_module`].
+//!
+//! # Shape of the C
+//!
+//! One translation unit. Each function the entry reaches through calls is a `static int
+//! unpopped_cpu_fn_<index>_<name>(...)` in dependency order (callees first), taking the same arguments as
+//! a lone kernel (a buffer is four, a scalar one) plus `T* res` when it has a result; the entry is
+//! `int unpopped_cpu_kernel_<name>(...)` exactly as [`crate::CpuC`] spells a lone kernel. Every function
+//! returns the same status (`0`, `1` out of bounds, `2` zero step) and a caller returns a callee's
+//! nonzero status at once. A buffer passed by alias is the caller's four arguments, forwarded; a scalar is
+//! passed by value; the result local is declared up front and stored through `res` on every exit.
+//!
+//! # What is refused (typed, [`LowerError::UnsupportedKernel`])
+//!
+//! A launched entry (the next slice: ids and the thread loop through a call), an allocation passed to a
+//! callee, and anything `check_module` refuses.
+
+use unpopped::backend::{GeneratedKernel, LowerError};
+use unpopped::kernel::{Block, Module, Stmt, check_module};
+
+use crate::kernel::{ModuleCtx, function_text, ident, refuse, with_prelude};
+
+/// Lower function `entry` of `m`, and every function it calls, to one C source whose entry point is
+/// [`GeneratedKernel::name`].
+///
+/// # Errors
+///
+/// [`LowerError::UnsupportedKernel`]: the module does not check, the entry is launched, or a function uses
+/// something this emitter has not been taught.
+pub fn lower_module(m: &Module, entry: u32) -> Result<GeneratedKernel, LowerError> {
+    check_module(m, entry).map_err(|e| refuse(format!("the module is ill-formed: {e:?}")))?;
+    let k = &m.fns[entry as usize];
+    if k.launch.is_some() {
+        return Err(refuse(
+            "a launched module (calls under a launch are the next slice)",
+        ));
+    }
+    let names: Vec<String> = m
+        .fns
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            if i == entry as usize {
+                format!("unpopped_cpu_kernel_{}", ident(&f.name))
+            } else {
+                format!("unpopped_cpu_fn_{i}_{}", ident(&f.name))
+            }
+        })
+        .collect();
+    let ctx = ModuleCtx { fns: &m.fns, names };
+    let mut body = String::new();
+    for i in postorder(m, entry) {
+        let callee = i != entry as usize;
+        let text = function_text(&m.fns[i], (Some(&ctx), &ctx.names[i], callee))?;
+        if callee {
+            body.push_str("static ");
+        }
+        body.push_str(&text);
+        body.push('\n');
+    }
+    Ok(GeneratedKernel::new(
+        ctx.names[entry as usize].clone(),
+        with_prelude(&k.name, &body),
+    ))
+}
+
+/// The functions `entry` reaches, callees before callers, the entry last.
+fn postorder(m: &Module, entry: u32) -> Vec<usize> {
+    fn go(f: usize, m: &Module, seen: &mut [bool], out: &mut Vec<usize>) {
+        if std::mem::replace(&mut seen[f], true) {
+            return;
+        }
+        let mut calls = Vec::new();
+        collect_calls(&m.fns[f].body, &mut calls);
+        for c in calls {
+            go(c, m, seen, out);
+        }
+        out.push(f);
+    }
+    let mut out = Vec::new();
+    go(entry as usize, m, &mut vec![false; m.fns.len()], &mut out);
+    out
+}
+
+fn collect_calls(b: &Block, out: &mut Vec<usize>) {
+    for st in &b.0 {
+        match st {
+            Stmt::Call { callee, .. } => out.push(*callee as usize),
+            Stmt::If { then, els, .. } => {
+                collect_calls(then, out);
+                collect_calls(els, out);
+            }
+            Stmt::For { body, .. } | Stmt::While { body, .. } => collect_calls(body, out),
+            _ => {}
+        }
+    }
+}

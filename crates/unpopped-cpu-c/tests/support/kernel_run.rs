@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::Command;
 
-use unpopped::backend::Backend;
+use unpopped::backend::{Backend, GeneratedKernel};
 use unpopped::kernel::{BufferRole, KernelFn};
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap, run_kernel};
@@ -120,13 +120,24 @@ pub(crate) fn run_c_mutated(
     args: &[KernelArg],
     mutate: impl FnOnce(String) -> String,
 ) -> Option<Ran> {
+    let g = CpuC
+        .lower_kernel(k)
+        .unwrap_or_else(|e| panic!("{tag}: lowering refused: {e}"));
+    run_generated(tag, k, &g, args, mutate)
+}
+
+/// Compile and run an already generated `g` (entry `k`) on `args`, after `mutate` is applied to its source.
+pub(crate) fn run_generated(
+    tag: &str,
+    k: &KernelFn,
+    g: &GeneratedKernel,
+    args: &[KernelArg],
+    mutate: impl FnOnce(String) -> String,
+) -> Option<Ran> {
     let Some(compiler) = cc::find_compiler() else {
         eprintln!("SKIP {tag}: no host C compiler");
         return None;
     };
-    let g = CpuC
-        .lower_kernel(k)
-        .unwrap_or_else(|e| panic!("{tag}: lowering refused: {e}"));
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("kernel_emit");
     std::fs::create_dir_all(&dir).unwrap();
     let (c, exe) = (dir.join(format!("{tag}.c")), dir.join(format!("{tag}.exe")));

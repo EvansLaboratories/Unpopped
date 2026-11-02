@@ -29,7 +29,9 @@ use std::fmt::Write as _;
 use unpopped::backend::{Decline, DeclinedOp, GeneratedKernel, LowerError};
 use unpopped::backend::{Lowering, Spelling, const_lit, lower_expr};
 use unpopped::ir::ScalarExpr;
-use unpopped::kernel::{Block, BufferRole, KernelFn, ParamKind, Place, Stmt, check_kernel};
+use unpopped::kernel::{
+    Block, BufferRole, CallArg, KernelFn, ParamKind, Place, Stmt, check_kernel,
+};
 use unpopped::types::Ty;
 use unpopped_vocab::ElementKind;
 
@@ -52,8 +54,10 @@ pub(crate) fn ctype(t: ElementKind, what: &str) -> Result<&'static str, LowerErr
 }
 
 /// Everything about `k` the emitter cannot do, refused before any text is written.
-fn admit(k: &KernelFn) -> Result<(), LowerError> {
-    check_kernel(k).map_err(|e| refuse(format!("kernel `{}` is ill-formed: {e:?}", k.name)))?;
+fn admit(k: &KernelFn, in_module: bool) -> Result<(), LowerError> {
+    if !in_module {
+        check_kernel(k).map_err(|e| refuse(format!("kernel `{}` is ill-formed: {e:?}", k.name)))?;
+    }
     if k.launch.is_some() {
         crate::launch::admit_launch(k)?;
     } else if !k.allocs.is_empty() {
@@ -90,7 +94,7 @@ fn admit(k: &KernelFn) -> Result<(), LowerError> {
 }
 
 /// `x` as a C identifier fragment.
-fn ident(x: &str) -> String {
+pub(crate) fn ident(x: &str) -> String {
     x.chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect()
@@ -107,6 +111,16 @@ pub(crate) struct Emitter<'a> {
     pub(crate) launch: Option<LaunchInfo>,
     /// Thread-level C loops open inside the current thread run (a `Break` needs one).
     pub(crate) thread_loops: u32,
+    /// The module a `Call` resolves in (`module.rs`); `None` for a lone kernel.
+    pub(crate) module: Option<&'a ModuleCtx<'a>>,
+    /// In a callee: the result local, declared up front and stored through `res` on every exit.
+    pub(crate) result: Option<u32>,
+}
+
+/// The functions of the module being lowered and the C name of each.
+pub(crate) struct ModuleCtx<'a> {
+    pub(crate) fns: &'a [KernelFn],
+    pub(crate) names: Vec<String>,
 }
 
 impl Emitter<'_> {
@@ -146,8 +160,9 @@ impl Emitter<'_> {
     /// when it is launched (the array is declared once, up front).
     fn bind_local(&mut self, local: u32, value: &str) -> Result<(), LowerError> {
         let t = self.local_ctype(local)?;
-        if self.launch.is_some() {
-            self.line(&format!("l{local}[t] = ({t})({value});"));
+        if self.launch.is_some() || self.result == Some(local) {
+            let r = self.local_ref(local);
+            self.line(&format!("{r} = ({t})({value});"));
         } else {
             self.line(&format!("{t} l{local} = ({t})({value});"));
         }
@@ -195,7 +210,11 @@ impl Emitter<'_> {
             Stmt::AtomicRmw { .. } => self.atomic_rmw(s)?,
             Stmt::AtomicCas { .. } => self.atomic_cas(s)?,
             Stmt::Fence { .. } => return Err(refuse("a Fence is not emitted yet")),
-            Stmt::Call { .. } => return Err(refuse("a Call needs the module checker (U3 R1)")),
+            Stmt::Call {
+                callee,
+                args,
+                result,
+            } => self.call_stmt(*callee, args, *result)?,
         }
         Ok(())
     }
@@ -217,10 +236,68 @@ impl Emitter<'_> {
     fn ret(&mut self) -> Result<(), LowerError> {
         if self.launch.is_some() {
             self.line("goto thread_end;");
+        } else if let Some(r) = self.result {
+            self.line(&format!("{{ *res = l{r}; return 0; }}"));
         } else {
             self.line("return 0;");
         }
         Ok(())
+    }
+
+    /// `result = callee(args...)` as a C call: the arguments forwarded or cast, a nonzero status returned at
+    /// once, the callee's result bound to the caller's local.
+    fn call_stmt(
+        &mut self,
+        callee: u32,
+        args: &[CallArg],
+        result: Option<u32>,
+    ) -> Result<(), LowerError> {
+        let Some(m) = self.module else {
+            return Err(refuse("a Call outside a module (use lower_module)"));
+        };
+        if self.launch.is_some() {
+            return Err(refuse("a Call in a launched kernel (the next slice)"));
+        }
+        let f = &m.fns[callee as usize];
+        let mut actuals = self.call_actuals(f, args)?;
+        let n = self.fresh;
+        self.fresh += 1;
+        let rtype = match f.result {
+            Some(r) => Some(ctype(f.locals[r as usize].elem, "a callee result")?),
+            None => None,
+        };
+        if let Some(t) = rtype {
+            self.line(&format!("{t} r{n} = 0;"));
+            actuals.push(format!("&r{n}"));
+        }
+        self.line(&format!(
+            "int st{n} = {}({});",
+            m.names[callee as usize],
+            actuals.join(", ")
+        ));
+        self.line(&format!("if (st{n}) return st{n};"));
+        if let (Some(dst), Some(_)) = (result, rtype) {
+            self.bind_local(dst, &format!("r{n}"))?;
+        }
+        Ok(())
+    }
+
+    /// The C arguments of a call, in the callee's parameter order.
+    fn call_actuals(&self, f: &KernelFn, args: &[CallArg]) -> Result<Vec<String>, LowerError> {
+        let mut out = Vec::new();
+        for (a, p) in args.iter().zip(&f.params) {
+            match (a, &p.kind) {
+                (CallArg::Scalar(e), ParamKind::Scalar { ty, .. }) => {
+                    out.push(format!("({})({})", ctype(*ty, "a scalar")?, self.expr(e)?));
+                }
+                (CallArg::Buffer(b), ParamKind::Buffer { .. }) => {
+                    out.push(format!("b{b}, b{b}_shape, b{b}_stride, b{b}_base"));
+                }
+                (CallArg::Alloc(_), _) => return Err(refuse("an allocation passed to a callee")),
+                _ => return Err(refuse("a call argument and its parameter differ in kind")),
+            }
+        }
+        Ok(out)
     }
 
     fn nested(&mut self, b: &Block) -> Result<(), LowerError> {
@@ -305,7 +382,7 @@ impl Emitter<'_> {
 }
 
 /// The signature, with one line per C argument.
-fn signature(k: &KernelFn, name: &str) -> Result<String, LowerError> {
+fn signature(k: &KernelFn, name: &str, result: Option<&'static str>) -> Result<String, LowerError> {
     let mut args = Vec::new();
     for (i, p) in k.params.iter().enumerate() {
         match &p.kind {
@@ -324,6 +401,9 @@ fn signature(k: &KernelFn, name: &str) -> Result<String, LowerError> {
             ParamKind::Scalar { ty, .. } => args.push(format!("{} p{i}", ctype(*ty, "a scalar")?)),
             _ => return Err(refuse("a parameter kind this emitter has not been taught")),
         }
+    }
+    if let Some(t) = result {
+        args.push(format!("{t}* res"));
     }
     Ok(format!("int {name}(\n    {})", args.join(",\n    ")))
 }
@@ -361,7 +441,31 @@ fn infix(
 
 /// Lower `k` to a C function. See the module docs for the contract.
 pub(crate) fn lower_kernel(k: &KernelFn) -> Result<GeneratedKernel, LowerError> {
-    admit(k)?;
+    let name = format!("unpopped_cpu_kernel_{}", ident(&k.name));
+    let text = function_text(k, (None, &name, false))?;
+    Ok(GeneratedKernel::new(name, with_prelude(&k.name, &text)))
+}
+
+/// The file header and the shared helpers, then `body` (one or more C functions).
+pub(crate) fn with_prelude(kernel_name: &str, body: &str) -> String {
+    let mut src =
+        String::from("// Generated by unpopped (cpu_c kernel emitter), serial C: do not edit.\n");
+    let _ = writeln!(src, "// kernel: {kernel_name}\n#include <math.h>\n");
+    src.push_str(typed::TYPED_HELPERS);
+    src.push('\n');
+    src.push_str(qualified::FTZ_HELPER);
+    src.push('\n');
+    src.push_str(body);
+    src
+}
+
+/// The C function for `k` alone (signature and body), with the seams of its compute dtype. `module` is
+/// the module its `Call`s resolve in; `callee` makes the function return its result through `res`.
+pub(crate) fn function_text(
+    k: &KernelFn,
+    (module, name, callee): (Option<&ModuleCtx<'_>>, &str, bool),
+) -> Result<String, LowerError> {
+    admit(k, module.is_some())?;
     let dtype = k.compute;
     let tys: Vec<Ty> = k.locals.iter().map(|d| d.ty()).collect();
     let un = |op, x: String| cpu_unary(op, x, dtype);
@@ -401,12 +505,16 @@ pub(crate) fn lower_kernel(k: &KernelFn) -> Result<GeneratedKernel, LowerError> 
         .local(&local)
         .local_types(&tys)
         .build();
-    emit(k, &lowering)
+    emit(k, &lowering, (module, name, callee))
 }
 
 /// Spell the whole function with the seams `lo` carries.
-fn emit(k: &KernelFn, lo: &Lowering<'_>) -> Result<GeneratedKernel, LowerError> {
-    let name = format!("unpopped_cpu_kernel_{}", ident(&k.name));
+fn emit(
+    k: &KernelFn,
+    lo: &Lowering<'_>,
+    (module, name, callee): (Option<&ModuleCtx<'_>>, &str, bool),
+) -> Result<String, LowerError> {
+    let result = if callee { k.result } else { None };
     let mut e = Emitter {
         k,
         lo,
@@ -415,25 +523,26 @@ fn emit(k: &KernelFn, lo: &Lowering<'_>) -> Result<GeneratedKernel, LowerError> 
         fresh: 0,
         launch: LaunchInfo::of(k),
         thread_loops: 0,
+        module,
+        result,
     };
+    let res_type = match result {
+        Some(r) => Some(e.local_ctype(r)?),
+        None => None,
+    };
+    if let (Some(r), Some(t)) = (result, res_type) {
+        e.line(&format!("{t} l{r} = 0;"));
+    }
     match e.launch {
         Some(info) => e.launched_body(info)?,
         None => e.body()?,
     }
-    let mut src =
-        String::from("// Generated by unpopped (cpu_c kernel emitter), serial C: do not edit.\n");
-    let _ = writeln!(src, "// kernel: {}\n#include <math.h>\n", k.name);
-    src.push_str(typed::TYPED_HELPERS);
-    src.push('\n');
-    src.push_str(qualified::FTZ_HELPER);
-    src.push('\n');
-    let _ = write!(
-        src,
-        "{} {{\n{}    return 0;\n}}\n",
-        signature(k, &name)?,
+    let store = result.map_or(String::new(), |r| format!("    *res = l{r};\n"));
+    Ok(format!(
+        "{} {{\n{}{store}    return 0;\n}}\n",
+        signature(k, name, res_type)?,
         e.out
-    );
-    Ok(GeneratedKernel::new(name, src))
+    ))
 }
 
 impl Emitter<'_> {
