@@ -307,11 +307,24 @@ pub enum Stmt {
     Call {
         /// Index of the callee in the module's functions.
         callee: u32,
-        /// The argument values, in the callee's parameter order.
-        args: Vec<ScalarExpr>,
+        /// The arguments, in the callee's parameter order (`docs/options-u3-calls.md`, Q2).
+        args: Vec<CallArg>,
         /// The local that receives the callee's result, if it has one.
         result: Option<u32>,
     },
+}
+
+/// One argument of a [`Stmt::Call`], matched to the callee's parameter of the same position
+/// (`docs/options-u3-calls.md`, Q2; PM ruling 2026-11-02). **Shape only**: nothing checks or runs it yet.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum CallArg {
+    /// A scalar passed by value to a [`ParamKind::Scalar`] parameter.
+    Scalar(ScalarExpr),
+    /// The caller's buffer parameter (by index), passed by alias to a [`ParamKind::Buffer`] parameter.
+    Buffer(u32),
+    /// The caller's allocation (by index into [`KernelFn::allocs`]), passed by alias.
+    Alloc(u32),
 }
 
 /// A set of kernels, any of which may [`Stmt::Call`] another. **Shape only** (0.41.0): nothing checks or
@@ -422,6 +435,10 @@ pub struct KernelFn {
     /// Arrays in memory spaces, indexed by [`Place::Alloc::alloc`].
     #[serde(default)]
     pub allocs: Vec<AllocDecl>,
+    /// The local whose value a [`Stmt::Call`] of this function receives: its value at `Return` or at the
+    /// end of the body. `None` for a kernel and for a callee with no result. Shape only (0.41.4).
+    #[serde(default)]
+    pub result: Option<u32>,
 }
 
 impl KernelFn {
@@ -442,6 +459,7 @@ impl KernelFn {
             body,
             launch: None,
             allocs: Vec::new(),
+            result: None,
         }
     }
 
@@ -449,6 +467,13 @@ impl KernelFn {
     #[must_use]
     pub fn with_launch(mut self, launch: LaunchShape) -> Self {
         self.launch = Some(launch);
+        self
+    }
+
+    /// The same function with `local` as its result (what a [`Stmt::Call`] of it receives).
+    #[must_use]
+    pub fn with_result(mut self, local: u32) -> Self {
+        self.result = Some(local);
         self
     }
 
