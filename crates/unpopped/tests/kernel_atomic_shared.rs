@@ -48,6 +48,7 @@ fn thread_zero(then: Vec<Stmt>) -> Stmt {
 fn barrier() -> Stmt {
     Stmt::Barrier {
         scope: Scope::Block,
+        kind: unpopped::kernel::BarrierKind::Full,
     }
 }
 
@@ -56,6 +57,9 @@ fn count_into_bin() -> Stmt {
         op: AtomicOp::Add,
         place: hist(u(0)),
         value: ScalarExpr::ConstInt(1, I32),
+        old: None,
+        order: unpopped::kernel::MemoryOrder::Relaxed,
+        scope: unpopped::exec::Scope::Device,
     }
 }
 
@@ -76,6 +80,9 @@ fn publish() -> Stmt {
             op: AtomicOp::Add,
             place: out(u(0)),
             value: ScalarExpr::Local(0),
+            old: None,
+            order: unpopped::kernel::MemoryOrder::Relaxed,
+            scope: unpopped::exec::Scope::Device,
         },
     ])
 }

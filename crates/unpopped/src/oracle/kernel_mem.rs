@@ -284,7 +284,7 @@ impl Machine<'_> {
         alloc: u32,
         index: &ScalarExpr,
         v: Val,
-    ) -> Result<(), KernelTrap> {
+    ) -> Result<Val, KernelTrap> {
         let i = self.alloc_index(alloc, index)?;
         let space = self.k.allocs[alloc as usize].space;
         if space != MemorySpace::Shared {
@@ -302,9 +302,10 @@ impl Machine<'_> {
         let Val::Raw(bits, vdt) = v else {
             return Err(KernelTrap::Unsupported("a non-integer atomic operand"));
         };
-        let r = atomic_apply(op, m.dtype, read_elem(&m.bytes, i, m.dtype), bits, vdt)?;
+        let before = read_elem(&m.bytes, i, m.dtype);
+        let r = atomic_apply(op, m.dtype, before, bits, vdt)?;
         store_val(r, m.dtype, &mut m.bytes, i);
-        Ok(())
+        Ok(Val::Raw(before, m.dtype))
     }
 
     pub(super) fn alloc_store(

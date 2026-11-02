@@ -388,6 +388,7 @@ fn a_kernel_outside_the_emitters_coverage_is_the_typed_kernel_decline() {
             0,
             Stmt::Barrier {
                 scope: Scope::Block,
+                kind: unpopped::kernel::BarrierKind::Full,
             },
         );
         k

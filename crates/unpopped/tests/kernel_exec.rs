@@ -71,6 +71,7 @@ fn baseline_body() -> Vec<Stmt> {
         },
         Stmt::Barrier {
             scope: Scope::Block,
+            kind: unpopped::kernel::BarrierKind::Full,
         },
         Stmt::Load {
             local: Y,
@@ -389,12 +390,18 @@ fn a_load_from_an_allocation_declares_its_element_type() {
 fn a_barrier_scope_must_be_subgroup_or_block() {
     for s in [Scope::Subgroup, Scope::Block] {
         let mut body = baseline_body();
-        body[3] = Stmt::Barrier { scope: s };
+        body[3] = Stmt::Barrier {
+            scope: s,
+            kind: unpopped::kernel::BarrierKind::Full,
+        };
         assert_eq!(check_kernel(&kernel(body)), Ok(()), "{s:?}");
     }
     for s in [Scope::Thread, Scope::Cluster, Scope::Device] {
         let mut body = baseline_body();
-        body[3] = Stmt::Barrier { scope: s };
+        body[3] = Stmt::Barrier {
+            scope: s,
+            kind: unpopped::kernel::BarrierKind::Full,
+        };
         assert_eq!(
             check_kernel(&kernel(body)),
             Err(KernelError::BadBarrierScope),
@@ -412,6 +419,7 @@ fn a_barrier_needs_a_launch() {
         vec![],
         Block(vec![Stmt::Barrier {
             scope: Scope::Block,
+            kind: unpopped::kernel::BarrierKind::Full,
         }]),
     );
     assert_eq!(check_kernel(&k), Err(KernelError::ExecWithoutLaunch));

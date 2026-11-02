@@ -50,7 +50,7 @@ Stmt::If     { cond: ScalarExpr, then: Block, els: Block }
 Stmt::For    { local: u32, start, end, step: ScalarExpr, body: Block }   // integer counter, half-open
 Stmt::While  { cond: ScalarExpr, body: Block }
 Stmt::Break | Stmt::Continue | Stmt::Return
-// Stmt::Call { func, args, result }  -- DEFERRED to the PR that introduces a module type (unknown U-2)
+// Stmt::Call { callee, args, result }  -- shape since 0.41.0, REFUSED by check_kernel until the module checker lands (unknown U-2, below)
 
 Place::Logical { buffer: u32, coords: Vec<ScalarExpr> }   // the element at LOGICAL coordinates
 ```
@@ -116,20 +116,30 @@ buffers and returns the written buffers. Rules:
 - `Store` writes through the operand's view, as the oracle's writeback does. Two stores to one element: the later
   wins. (Concurrent stores do not exist in v0.)
 
-## 5a. Atomics (`Stmt::AtomicRmw`, since 0.40.0)
+## 5a. Atomics (`Stmt::AtomicRmw`, since 0.40.0; its shape changed in 0.41.0)
 
-`AtomicRmw { op, place, value }` performs `*place = *place (op) value` as one indivisible step, `op` one of `Add`, `Max`, `Min`. The old value is not
-returned.
+`AtomicRmw { op, place, value, old, order, scope }` performs `*place = *place (op) value` as one indivisible step, `op` one of `Add`, `Max`, `Min`, `And`,
+`Or`, `Xor`, `Exchange`. **Since 0.41.0** the statement has the shape the whole of ROADMAP U4 needs (`docs/options-u4-sync-and-atomics.md`, option B: break `Stmt`
+once, stage the semantics): `old: Option<local>` receives the value the element held just before this thread's step; `order` and `scope` are carried but only
+`Relaxed` and `Device` are accepted; `Stmt::AtomicCas` and `Stmt::Fence` exist as shapes and `check_kernel` refuses them (`AtomicUnsupported`, `SyncUnsupported`)
+until their semantics land, and `Stmt::Barrier` carries a `kind` (only `Full`). A later slice lifts a refusal and is additive.
 
-- **Ordering: relaxed only.** An atomic orders nothing else; the only ordering a kernel has is a `Barrier`. A later `Acquire`/`Release`/`SeqCst` form, a
-  returning form (`fetch_add`) and a compare-exchange are additions for when a consumer needs them; none exists yet.
+- **The old value (since 0.41.0).** It is the element's value just before this thread's step in *some* serialization of all atomics on that element that is
+  consistent with program order. **The IR does not specify which**, as it does not specify a float sum's order: the interpreter oracle uses the order its lockstep
+  schedule reaches the element (ascending thread order), one valid order, and a conformance test asserts **properties**, never that order: a fetch-add of 1 over `n`
+  threads returns a permutation of `start..start+n`; the values an `Exchange` returns, with the final cell, are the start value and every value written, once
+  each. The `old` local is thread-divergent for the barrier uniformity check (a barrier under `if old == 0` is `BarrierDivergent`).
+- **The combines.** `Add` wraps at the element width; `Max`/`Min`/`And`/`Or`/`Xor` on integers are associative and commutative, so the *final* value does not
+  depend on the schedule; `Exchange` is not (even its final value does) and also moves the bits of an `F32`/`F64` unchanged. A float `And`/`Or`/`Xor`/`Max`/`Min` is refused.
+- **Ordering: relaxed only.** An atomic orders nothing else; the only ordering a kernel has is a `Barrier`. The `Acquire`/`Release`/`AcqRel`/`SeqCst` orders
+  and a non-`Device` scope are shapes only, refused (`AtomicUnsupported`) until a ruling on the happens-before model (S4/S5 of the options note).
 - **Scope: device-wide.** Two atomics on one element never race, whatever blocks or threads issue them (on `Shared`: any threads of the block). A `Shared` element must already hold a
   value (`UninitializedShared`), and the usual barriers order its initialisation before the atomics and the atomics before a plain read.
 - **Race rule (the interpreter oracle).** An atomic conflicts with a *plain* access (`Load`/`Store`) to the same element unless a barrier orders them (same
   rule as two plain accesses); two atomics never conflict. `run_launch` reports `DataRace` for exactly the conflicts that involve a plain access.
 - **v1 form (`check_kernel`, `KernelError::AtomicUnsupported`).** A `ReadWrite` *global buffer* place or a `Shared` allocation element (since 0.40.2; not
-  `Private`, `Constant`), an *integer* element type, a value of that type. `Add` wraps at the element width. `Max`/`Min`/`Add` on integers are associative and commutative, so the result does not
-  depend on the schedule. A float `Add` is order-dependent (see `WriteCombine::is_fp_atomic_add`) and is not admitted.
+  `Private`, `Constant`), an *integer* element type, a value of that type. `Add` wraps at the element width. A float `Add` is order-dependent (see
+  `WriteCombine::is_fp_atomic_add`); its admission and band are below.
 - **Float add (since 0.40.4; PM ruling 2026-11-01, option A of `docs/options-float-scatter-add.md`).** `Add` on an `F32`/`F64` element is admitted (`Max`/`Min` on floats are
   not: NaN and signed-zero selection is unruled). **The IR leaves the accumulation order unspecified**: threads may reach a cell in any order, so a float result is
   defined only inside a band, never as bytes. For a cell with `h` updates the summands are the cell's initial value and the `h` updates, `n = h + 1`, and
@@ -163,8 +173,10 @@ Effects { reads: set<buffer>, writes: set<buffer>, traps: bool, diverges: bool, 
 
 - **U-2. `Call`.** What a callee is: an intent-layer `OpDef` body, another `KernelFn`, or an opaque extern with a
   declared effect set (U11). v0 implements `Call` only to a `KernelFn` in the same module and rejects the rest;
-  recursion is rejected by the checker. Real device-function calls (CUDA `__device__`, Slang functions) need a
-  module type that does not exist yet.
+  recursion is rejected by the checker. **Since 0.41.0 the shape exists** (PM ruling 2026-11-02, `docs/options-u3-remainder.md` R1a):
+  `Stmt::Call { callee: u32, args, result: Option<u32> }` names a `KernelFn` by index in a `Module { fns }`, and it rode the one `Stmt`
+  break of ROADMAP U4. `check_kernel` refuses it (`KernelError::CallUnsupported`) until `check_module` and the call semantics land: an
+  acyclic call graph, and a callee that holds a `Barrier` called only from uniform control (the divergence check becomes transitive).
 - **U-3. Aliasing.** Two `Buffer` params may name the same storage. v0 states that they do **not** alias
   (the lifted ops never alias), and the interpreter checks it. Whether aliasing is a per-param attribute or a
   property of a launch is open.

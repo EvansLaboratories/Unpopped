@@ -231,13 +231,7 @@ impl Scatter {
             ]
         };
         if self.atomic {
-            let atomic = |op| {
-                vec![Stmt::AtomicRmw {
-                    op,
-                    place: self.dest(),
-                    value: value.clone(),
-                }]
-            };
+            let atomic = |op| vec![Stmt::atomic_rmw(op, self.dest(), value.clone())];
             return match self.combine {
                 WriteCombine::AtomicMax => atomic(AtomicOp::Max),
                 WriteCombine::AtomicMin => atomic(AtomicOp::Min),
