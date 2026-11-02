@@ -17,8 +17,12 @@
 //!   fields of the oracle's `TypedBuffer`;
 //! - a scalar `i` is `T pI`, bound to its local.
 //!
-//! A kernel the emitter has not been taught (a barrier, a launch, an allocation, a packed local,
-//! an unsupported dtype) is [`LowerError::UnsupportedKernel`]; nothing is spelled by default.
+//! A kernel the emitter has not been taught (a packed local, an unsupported dtype, a form of launch
+//! `launch.rs` does not spell) is [`LowerError::UnsupportedKernel`]; nothing is spelled by default.
+//!
+//! A kernel with a [`unpopped::exec::LaunchShape`] is spelled by `launch.rs` as a **serialized thread
+//! loop**: the blocks one after another and, in a block, the threads one after another, the loop split at
+//! each barrier. Everything here that is not about launches is shared with it.
 
 use std::fmt::Write as _;
 
@@ -29,16 +33,17 @@ use unpopped::kernel::{Block, BufferRole, KernelFn, ParamKind, Place, Stmt, chec
 use unpopped::types::Ty;
 use unpopped_vocab::ElementKind;
 
+use crate::launch::LaunchInfo;
 use crate::{cpu_binary, cpu_fma, cpu_select, cpu_unary, qualified, typed};
 
-fn refuse(detail: impl Into<String>) -> LowerError {
+pub(crate) fn refuse(detail: impl Into<String>) -> LowerError {
     LowerError::UnsupportedKernel {
         detail: format!("cpu_c: {}", detail.into()),
     }
 }
 
 /// The C type of a scalar the emitter handles, or the refusal.
-fn ctype(t: ElementKind, what: &str) -> Result<&'static str, LowerError> {
+pub(crate) fn ctype(t: ElementKind, what: &str) -> Result<&'static str, LowerError> {
     typed::c_type(t).ok_or_else(|| {
         refuse(format!(
             "{what} has dtype {t:?}, which this emitter does not spell"
@@ -49,10 +54,10 @@ fn ctype(t: ElementKind, what: &str) -> Result<&'static str, LowerError> {
 /// Everything about `k` the emitter cannot do, refused before any text is written.
 fn admit(k: &KernelFn) -> Result<(), LowerError> {
     check_kernel(k).map_err(|e| refuse(format!("kernel `{}` is ill-formed: {e:?}", k.name)))?;
-    if k.launch.is_some() || !k.allocs.is_empty() {
-        return Err(refuse(
-            "a launch shape or an allocation (U3 row 4) is not emitted yet",
-        ));
+    if k.launch.is_some() {
+        crate::launch::admit_launch(k)?;
+    } else if !k.allocs.is_empty() {
+        return Err(refuse("an allocation without a launch shape"));
     }
     if !matches!(
         k.compute,
@@ -91,17 +96,21 @@ fn ident(x: &str) -> String {
         .collect()
 }
 
-struct Emitter<'a> {
-    k: &'a KernelFn,
-    lo: &'a Lowering<'a>,
-    out: String,
-    depth: usize,
+pub(crate) struct Emitter<'a> {
+    pub(crate) k: &'a KernelFn,
+    pub(crate) lo: &'a Lowering<'a>,
+    pub(crate) out: String,
+    pub(crate) depth: usize,
     /// Fresh-name counter for the offset and loop temporaries.
-    fresh: u32,
+    pub(crate) fresh: u32,
+    /// The launch, when the kernel has one: locals become per-thread arrays (`launch.rs`).
+    pub(crate) launch: Option<LaunchInfo>,
+    /// Thread-level C loops open inside the current thread run (a `Break` needs one).
+    pub(crate) thread_loops: u32,
 }
 
 impl Emitter<'_> {
-    fn line(&mut self, text: &str) {
+    pub(crate) fn line(&mut self, text: &str) {
         for _ in 0..self.depth {
             self.out.push_str("    ");
         }
@@ -109,34 +118,56 @@ impl Emitter<'_> {
         self.out.push('\n');
     }
 
-    fn expr(&self, e: &ScalarExpr) -> Result<String, LowerError> {
+    pub(crate) fn expr(&self, e: &ScalarExpr) -> Result<String, LowerError> {
         lower_expr(e, self.lo)?.spelled().map_err(LowerError::from)
     }
 
-    fn local_ctype(&self, id: u32) -> Result<&'static str, LowerError> {
+    pub(crate) fn local_ctype(&self, id: u32) -> Result<&'static str, LowerError> {
         ctype(self.k.locals[id as usize].elem, "a local")
     }
 
-    fn block(&mut self, b: &Block) -> Result<(), LowerError> {
+    pub(crate) fn block(&mut self, b: &Block) -> Result<(), LowerError> {
         for s in &b.0 {
             self.stmt(s)?;
         }
         Ok(())
     }
 
-    fn stmt(&mut self, s: &Stmt) -> Result<(), LowerError> {
+    /// `local` as C reads and writes it: a plain variable, or this thread's element of a per-thread array.
+    pub(crate) fn local_ref(&self, local: u32) -> String {
+        if self.launch.is_some() {
+            format!("l{local}[t]")
+        } else {
+            format!("l{local}")
+        }
+    }
+
+    /// `local = (T)(value);`, declaring it when the kernel is serial and assigning its array element
+    /// when it is launched (the array is declared once, up front).
+    fn bind_local(&mut self, local: u32, value: &str) -> Result<(), LowerError> {
+        let t = self.local_ctype(local)?;
+        if self.launch.is_some() {
+            self.line(&format!("l{local}[t] = ({t})({value});"));
+        } else {
+            self.line(&format!("{t} l{local} = ({t})({value});"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn stmt(&mut self, s: &Stmt) -> Result<(), LowerError> {
         match s {
             Stmt::Let { local, init } => {
-                let (t, v) = (self.local_ctype(*local)?, self.expr(init)?);
-                self.line(&format!("{t} l{local} = ({t})({v});"));
+                let v = self.expr(init)?;
+                self.bind_local(*local, &v)?;
             }
             Stmt::Assign { local, value } => {
                 let (t, v) = (self.local_ctype(*local)?, self.expr(value)?);
-                self.line(&format!("l{local} = ({t})({v});"));
+                let r = self.local_ref(*local);
+                self.line(&format!("{r} = ({t})({v});"));
             }
             Stmt::Load { local, place } => {
-                let (t, at) = (self.local_ctype(*local)?, self.address(place)?);
-                self.line(&format!("{t} l{local} = {at};"));
+                let at = self.address(place)?;
+                self.bind_local(*local, &at)?;
             }
             Stmt::Store { place, value } => {
                 let (at, v) = (self.address(place)?, self.expr(value)?);
@@ -155,17 +186,39 @@ impl Emitter<'_> {
             Stmt::While { cond, body } => {
                 let c = self.expr(cond)?;
                 self.line(&format!("while (({c}) != 0) {{"));
-                self.nested(body)?;
+                self.nested_loop(body)?;
                 self.line("}");
             }
-            Stmt::Break => self.line("break;"),
-            Stmt::Continue => self.line("continue;"),
-            Stmt::Return => self.line("return 0;"),
+            Stmt::Break | Stmt::Continue => self.escape(matches!(s, Stmt::Break))?,
+            Stmt::Return => self.ret()?,
             Stmt::Barrier { .. } => return Err(refuse("a Barrier needs a launch (U3 row 4)")),
-            Stmt::AtomicRmw { .. } => return Err(refuse("an AtomicRmw needs a launch (U3 row 4)")),
-            Stmt::AtomicCas { .. } => return Err(refuse("an AtomicCas needs a launch (U3 row 4)")),
-            Stmt::Fence { .. } => return Err(refuse("a Fence needs a launch (U3 row 4)")),
+            Stmt::AtomicRmw { .. } => self.atomic_rmw(s)?,
+            Stmt::AtomicCas { .. } => return Err(refuse("an AtomicCas is not emitted yet")),
+            Stmt::Fence { .. } => return Err(refuse("a Fence is not emitted yet")),
             Stmt::Call { .. } => return Err(refuse("a Call needs the module checker (U3 R1)")),
+        }
+        Ok(())
+    }
+
+    /// `Break` or `Continue`. In a launch it must target a loop inside the current thread run: one that
+    /// targets a block-level loop (a loop holding a barrier) cannot be spelled as a thread loop.
+    fn escape(&mut self, is_break: bool) -> Result<(), LowerError> {
+        if self.launch.is_some() && self.thread_loops == 0 {
+            return Err(refuse(
+                "a Break or Continue that leaves a loop holding a Barrier (the thread loop cannot spell it)",
+            ));
+        }
+        self.line(if is_break { "break;" } else { "continue;" });
+        Ok(())
+    }
+
+    /// `Return`: leave the kernel, or in a launch end this thread's run (a kernel with a barrier
+    /// refuses it before this is reached).
+    fn ret(&mut self) -> Result<(), LowerError> {
+        if self.launch.is_some() {
+            self.line("goto thread_end;");
+        } else {
+            self.line("return 0;");
         }
         Ok(())
     }
@@ -174,6 +227,14 @@ impl Emitter<'_> {
         self.depth += 1;
         let r = self.block(b);
         self.depth -= 1;
+        r
+    }
+
+    /// [`Self::nested`] for the body of a C loop inside a thread run, where `Break`/`Continue` are legal.
+    fn nested_loop(&mut self, b: &Block) -> Result<(), LowerError> {
+        self.thread_loops += 1;
+        let r = self.nested(b);
+        self.thread_loops -= 1;
         r
     }
 
@@ -199,7 +260,7 @@ impl Emitter<'_> {
         [start, end, step]: [&ScalarExpr; 3],
         body: &Block,
     ) -> Result<(), LowerError> {
-        let t = self.local_ctype(local)?;
+        self.local_ctype(local)?;
         let n = self.fresh;
         self.fresh += 1;
         let (s, e, st) = (self.expr(start)?, self.expr(end)?, self.expr(step)?);
@@ -213,8 +274,11 @@ impl Emitter<'_> {
             "for (long long k{n} = s{n}; t{n} > 0 ? k{n} < e{n} : k{n} > e{n}; k{n} += t{n}) {{"
         ));
         self.depth += 1;
-        self.line(&format!("{t} l{local} = ({t})k{n};"));
-        self.block(body)?;
+        self.bind_local(local, &format!("k{n}"))?;
+        self.thread_loops += 1;
+        let r = self.block(body);
+        self.thread_loops -= 1;
+        r?;
         self.depth -= 1;
         self.line("}");
         self.depth -= 1;
@@ -223,9 +287,9 @@ impl Emitter<'_> {
     }
 
     /// An lvalue for `place`, after the statements that bounds-check its coordinates.
-    fn address(&mut self, place: &Place) -> Result<String, LowerError> {
+    pub(crate) fn address(&mut self, place: &Place) -> Result<String, LowerError> {
         let Place::Logical { buffer, coords } = place else {
-            return Err(refuse("a Place::Alloc needs a launch (U3 row 4)"));
+            return self.alloc_address(place);
         };
         let n = self.fresh;
         self.fresh += 1;
@@ -318,8 +382,20 @@ pub(crate) fn lower_kernel(k: &KernelFn) -> Result<GeneratedKernel, LowerError> 
     let cst = |v| literal(dtype, v);
     let ci = |v, t| typed::cpu_const_int(v, t);
     let io = |op, t, operands: Vec<String>| typed::cpu_int_op(op, t, &operands, dtype);
-    let local = |i: u32| Ok(Spelling::Spelled(format!("l{i}")));
+    let launch = LaunchInfo::of(k);
+    let local = |i: u32| {
+        Ok(Spelling::Spelled(if launch.is_some() {
+            format!("l{i}[t]")
+        } else {
+            format!("l{i}")
+        }))
+    };
+    let exec = |id| match launch {
+        Some(info) => crate::launch::exec_c(info, id).map(Spelling::Spelled),
+        None => Err(refuse("an execution id without a launch shape")),
+    };
     let lowering = Lowering::builder(&no_input_leaf, &un, &bin)
+        .exec(&exec)
         .arith(&ar)
         .select(&sel)
         .fma(&fm)
@@ -346,8 +422,13 @@ fn emit(k: &KernelFn, lo: &Lowering<'_>) -> Result<GeneratedKernel, LowerError> 
         out: String::new(),
         depth: 1,
         fresh: 0,
+        launch: LaunchInfo::of(k),
+        thread_loops: 0,
     };
-    e.body()?;
+    match e.launch {
+        Some(info) => e.launched_body(info)?,
+        None => e.body()?,
+    }
     let mut src =
         String::from("// Generated by unpopped (cpu_c kernel emitter), serial C: do not edit.\n");
     let _ = writeln!(src, "// kernel: {}\n#include <math.h>\n", k.name);

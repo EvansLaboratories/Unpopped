@@ -21,8 +21,6 @@ use unpopped_vocab::{AxisMask, ElementKind};
 
 #[path = "support/cc.rs"]
 mod cc;
-#[path = "support/kernel_data.rs"]
-mod kernel_data;
 #[path = "support/kernel_run.rs"]
 mod kernel_run;
 #[path = "support/launch_run.rs"]
@@ -90,7 +88,7 @@ fn histogram_kernel(threads: u32, blocks: u32, bins: usize, body: Vec<Stmt>) -> 
     k
 }
 
-/// Each thread counts itself into bin `tid % 4` of a Shared histogram; thread `t < 4` then adds the
+/// Each thread counts itself into bin `min(tid, 3)` of a Shared histogram; thread `t < 4` then adds the
 /// bin to `out[t]`. Two barriers: after the zeroing, and before the read.
 #[test]
 fn a_shared_histogram_with_two_barriers_agrees() {
@@ -102,7 +100,7 @@ fn a_shared_histogram_with_two_barriers_agrees() {
             })
             .collect(),
     );
-    let bin = ScalarExpr::Binary(BinaryOp::Rem, Box::new(tid()), Box::new(u(4)));
+    let bin = ScalarExpr::Binary(BinaryOp::Min, Box::new(tid()), Box::new(u(3)));
     let count = Stmt::atomic_rmw(AtomicOp::Add, shared_cell(bin), ci(1));
     let publish = Stmt::If {
         cond: ScalarExpr::Binary(BinaryOp::CmpLt, Box::new(tid()), Box::new(u(4))),
