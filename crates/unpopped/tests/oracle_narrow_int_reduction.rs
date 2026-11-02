@@ -92,3 +92,23 @@ fn unsigned_narrow_reductions_wrap_at_the_dtype_width() {
     check!(ElementKind::U8, u8, vec![200, 100, 255, 0, 17, 3]);
     check!(ElementKind::U16, u16, vec![60000, 60000, 65535, 0, 9, 3]);
 }
+
+// U32 and U64 (ROADMAP E19 follow-up): the same wrap-at-width rule, with values above `i32::MAX` and
+// above `i64::MAX` so a signed reading of the accumulator or the elements would show.
+#[test]
+fn u32_reductions_wrap_at_32_bits() {
+    check!(
+        ElementKind::U32,
+        u32,
+        vec![4_000_000_000, 4_000_000_000, 1, u32::MAX, 0, 3]
+    );
+}
+
+#[test]
+fn u64_reductions_wrap_at_64_bits_and_compare_unsigned() {
+    check!(
+        ElementKind::U64,
+        u64,
+        vec![u64::MAX, 1, u64::MAX - 1, 1 << 63, 3, 0xdead_beef_cafe]
+    );
+}

@@ -2197,6 +2197,25 @@ pub(crate) fn check_int_op_admissibility_for(
         return Ok(());
     }
     let int_dt = is_int_dtype(dtype);
+    // PM ruling 2026-11-01: an integer `Mean` reduction has no defined semantics (the oracle and the
+    // emitters assert it out), so decline it here, typed, rather than build a plan only they refuse.
+    if int_dt
+        && matches!(
+            op.access,
+            Access::Reduction {
+                op: ReduceOp::Mean,
+                ..
+            }
+        )
+    {
+        return Err(PlanError::InadmissibleOpAtDtype {
+            dtype,
+            detail: format!(
+                "op '{}': an integer Mean reduction has no defined semantics (no rounding rule for the quotient), so {dtype:?} must miss honestly; use Sum and divide, or a float dtype",
+                op.name
+            ),
+        });
+    }
     let elementwise = matches!(op.access, Access::Elementwise);
     // Rule 4: true while walking an `Access::Reduction`'s `body`/`post` — the
     // any/all/count fused-predicate lift is scoped to exactly this Access arm

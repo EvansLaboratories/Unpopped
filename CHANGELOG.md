@@ -19,6 +19,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 X7 audited: of 83 line cites with an identifier beside them, the survey docs and `idiom-lifting-design.md` pin their own ref by design and are left alone; the live cites that had drifted now name the symbol and date the line (`classify_vec_width` in ROADMAP C6, `normative-seams.md`, `deferred.md`; `Access` and `AccumSpec` in `groupshared-sizing.md` and `ir-union-design.md`; the removed `CUDA_RESIDUE` cite; a `recipe.rs` comment). ROADMAP X7 records the audit, the method's limit (a window test, then reading) and what remains. No code change.
 
+## `0.40.19` — the plan oracle evaluates `U32` and `U64` reductions; an integer `Mean` reduction is a typed decline (ROADMAP E19)
+
+`oracle::evaluate` now folds `Sum`, `Prod`, `Max` and `Min` at `U32` and `U64` by the same rule as the other integer dtypes (wrap at the dtype's width, `Max`/`Min` exact), with values above `i32::MAX` and `i64::MAX` in `tests/oracle_narrow_int_reduction.rs`; with it every integer dtype is in scope for those four folds.
+
+PM ruling 2026-11-01 (option b): an integer `Mean` reduction has no defined semantics (no rounding rule for the quotient), so the plan gate now declines it with a typed `PlanError::InadmissibleOpAtDtype` at every integer dtype. **A tightening:** such an op used to plan and then panic in the oracle or the emitter's assert; a float `Mean` and the other integer folds are unchanged. No new semantics until an emitter lane needs them. `tests/integer_mean_is_declined.rs` (red first) pins both halves; three seeded mutants (the decline also hitting a float `Mean`, no decline at all, `U64` dropped from the oracle) are caught.
+
 ## `0.40.18` — tests: the any/all/count reductions at narrow integer dtypes agree with the host (ROADMAP E19 tail)
 
 `tests/oracle_narrow_int_predicate_reductions.rs`: the heterogeneous-output shapes the plan gate's rule 4 admits (`count` = `Sum` of `in != 0` with an `I64` output; `any`/`all` = `Max`/`Min` of `in != 0` with a `Reduced(0) != 0` post and a `U8` output) at `I8`, `U8`, `I16`, `U16` through `oracle::evaluate`, against references computed on the host (rows of all zero, one nonzero, all nonzero, and values nonzero only above the low byte). It passed on its first run, so it was mutation-checked: integer `Max`/`Min` swapped, `CmpNe` compared at 8 bits, and an integer `Sum` that drops its elements are all caught. No code change; this closes the untested tail 0.40.16 named.
