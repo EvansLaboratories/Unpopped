@@ -314,8 +314,9 @@ fn a_callee_that_holds_a_barrier_under_a_launch_is_a_typed_refusal() {
     let body = vec![call(1, vec![CallArg::Buffer(0)], None)];
     let main = launched_entry([1, 1, 1], [4, 1, 1], body);
     let r = lower_module(&Module::new(vec![main, sync]), 0);
+    // refused up front, by name, not by the callee emitter tripping over its barrier
     assert!(
-        matches!(r, Err(LowerError::UnsupportedKernel { .. })),
+        matches!(&r, Err(LowerError::UnsupportedKernel { detail }) if detail.contains("called under a launch")),
         "{r:?}"
     );
 }
