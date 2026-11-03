@@ -244,7 +244,8 @@ pub enum Stmt {
     Barrier {
         /// The group that synchronizes.
         scope: Scope,
-        /// Which barrier. Only [`BarrierKind::Full`] exists; the field is here so a named or a
+        /// Which barrier (`Subgroup`, `Block` and, since 0.42.13, `Device`, which synchronizes the whole grid with every block
+        /// resident). Only [`BarrierKind::Full`] exists; the field is here so a named or a
         /// split arrive/wait barrier is an additive variant of the kind, not another break of `Stmt`
         /// (`docs/options-u4-sync-and-atomics.md`, option B).
         kind: BarrierKind,
