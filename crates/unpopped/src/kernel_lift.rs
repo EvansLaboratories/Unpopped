@@ -677,7 +677,7 @@ fn scan_identity(rop: ReduceOp, dtype: ElementKind) -> ScalarExpr {
             ReduceOp::Max => lo,
             ReduceOp::Min => hi,
             ReduceOp::Sum | ReduceOp::Mean => 0,
-            ReduceOp::And | ReduceOp::Or | ReduceOp::Xor | ReduceOp::MaxNum | ReduceOp::MinNum => {
+            _ => {
                 unreachable!("check_accumulated_dtype declines it before a scan is lifted")
             }
         };
@@ -706,7 +706,7 @@ fn scan_identity(rop: ReduceOp, dtype: ElementKind) -> ScalarExpr {
         ReduceOp::Max => infinity(true),
         ReduceOp::Min => infinity(false),
         ReduceOp::Sum | ReduceOp::Mean => ScalarExpr::Const(0.0),
-        ReduceOp::And | ReduceOp::Or | ReduceOp::Xor | ReduceOp::MaxNum | ReduceOp::MinNum => {
+        _ => {
             unreachable!("check_accumulated_dtype declines it before a scan is lifted")
         }
     }
@@ -730,6 +730,12 @@ fn check_accumulated_dtype(
     // no window).
     let bit = matches!(rop, ReduceOp::And | ReduceOp::Or | ReduceOp::Xor);
     let num = matches!(rop, ReduceOp::MaxNum | ReduceOp::MinNum);
+    // An arg-reduction is a loop over locals in a kernel; there is no lift of it.
+    if matches!(rop, ReduceOp::ArgMax | ReduceOp::ArgMin) {
+        return Err(LiftDecline::UnsupportedForm(
+            "an arg-reduction (state it as a loop over locals in a kernel)",
+        ));
+    }
     if ((bit || num) && what != "a reduction") || (bit && !is_int_kernel_dtype(dtype)) {
         return Err(LiftDecline::UnsupportedForm(
             "a bit or NaN-ignoring reduction outside a plain reduction, or a bit reduction at a float dtype",
@@ -1015,6 +1021,9 @@ fn fold_step(rop: ReduceOp, acc: u32, have: u32, val: u32, int: bool) -> Vec<Stm
             extremum_step(rop, acc, have, val, int)
         }
         ReduceOp::And | ReduceOp::Or | ReduceOp::Xor => bit_step(rop, acc, have, val),
+        ReduceOp::ArgMax | ReduceOp::ArgMin => {
+            unreachable!("check_accumulated_dtype declines an arg-reduction")
+        }
     }
 }
 
