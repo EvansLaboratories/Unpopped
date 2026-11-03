@@ -9,8 +9,8 @@ use unpopped_vocab::ElementKind;
 use crate::exec::{Extent, MemorySpace, Scope as ExecScope};
 use crate::ir::ScalarExpr;
 use crate::kernel::{
-    AtomicOp, BarrierKind, Block, BufferRole, CallArg, KernelError, KernelFn, Param, ParamKind,
-    Place, Stmt,
+    AtomicOp, BarrierKind, Block, BufferRole, CallArg, KernelError, KernelFn, MemoryOrder, Param,
+    ParamKind, Place, Stmt,
 };
 use crate::types::{self, Ty};
 
@@ -184,10 +184,20 @@ fn check_sync_stmt(
         Stmt::AtomicRmw { .. } | Stmt::AtomicCas { .. } => {
             check_atomic_stmt(k, st, sc, declared_here)?;
         }
-        Stmt::Fence { .. } => {
-            return Err(KernelError::SyncUnsupported {
-                what: "Fence: the shape is reserved and its semantics has not landed",
-            });
+        Stmt::Fence { scope, order } => {
+            if matches!(order, MemoryOrder::Relaxed) {
+                return Err(KernelError::SyncUnsupported {
+                    what: "a Relaxed Fence (it would order nothing; use Acquire, Release, AcqRel or SeqCst)",
+                });
+            }
+            if !matches!(
+                scope,
+                ExecScope::Subgroup | ExecScope::Block | ExecScope::Device
+            ) {
+                return Err(KernelError::SyncUnsupported {
+                    what: "a Fence scope other than Subgroup, Block or Device",
+                });
+            }
         }
         Stmt::Collective { .. } => collective::check_collective(k, st, sc, declared_here)?,
         Stmt::Call {
