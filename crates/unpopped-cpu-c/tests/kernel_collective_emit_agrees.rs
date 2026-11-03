@@ -100,6 +100,17 @@ fn float_args() -> Vec<KernelArg> {
     ]
 }
 
+/// A vote's input: zeros in an asymmetric pattern, so a mask with its bits reversed or a vote that miscounts lanes
+/// differs (subgroup 0 is `1 0 2 0`, mask `0b0101`; subgroup 1 is `0 0 7 3`, mask `0b1100`).
+fn vote_args() -> Vec<KernelArg> {
+    let vals: [i32; 8] = [1, 0, 2, 0, 0, 0, 7, 3];
+    let bytes = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
+    vec![
+        KernelArg::Buffer(TypedBuffer::new(I32, vec![N], vec![1], bytes)),
+        KernelArg::Buffer(zeroed(U32, &[N])),
+    ]
+}
+
 fn lane(v: i64) -> ScalarExpr {
     ScalarExpr::ConstInt(v, I32)
 }
@@ -208,7 +219,7 @@ fn votes_and_the_ballot_mask_agree() {
         (VoteKind::Ballot, Scope::Subgroup),
     ] {
         let k = kernel(CollectiveKind::Vote(v), scope, I32, U32);
-        check(&format!("vote_{v:?}_{scope:?}"), &k, int_args(U32));
+        check(&format!("vote_{v:?}_{scope:?}"), &k, vote_args());
     }
     // a float predicate: a NaN is non-zero
     let k = kernel(
