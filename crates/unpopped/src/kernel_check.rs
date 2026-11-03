@@ -83,11 +83,15 @@ pub(crate) fn check_kernel_with(k: &KernelFn, callees: Vec<CalleeSig>) -> Result
     crate::kernel_uniform::check_barriers(k, &barrier_callees)
 }
 
-/// A launch has no zero extent, and a subgroup range is non-empty and starts at 1 or more.
+/// A launch has no zero extent, a subgroup range is non-empty and starts at 1 or more, and clusters (if any) tile the grid.
 fn check_launch(k: &KernelFn) -> Result<(), KernelError> {
     let Some(l) = &k.launch else { return Ok(()) };
     let sg_ok = l.subgroup.is_none_or(|s| s.min >= 1 && s.min <= s.max);
-    if l.block.contains(&0) || l.grid.contains(&0) || !sg_ok {
+    // clusters tile the grid: every cluster extent is positive and divides the grid's
+    let cluster_ok = l
+        .cluster
+        .is_none_or(|c| (0..3).all(|a| c[a] >= 1 && l.grid[a] % c[a] == 0));
+    if l.block.contains(&0) || l.grid.contains(&0) || !sg_ok || !cluster_ok {
         return Err(KernelError::BadLaunch);
     }
     Ok(())
@@ -190,12 +194,9 @@ fn check_sync_stmt(
                     what: "a Relaxed Fence (it would order nothing; use Acquire, Release, AcqRel or SeqCst)",
                 });
             }
-            if !matches!(
-                scope,
-                ExecScope::Subgroup | ExecScope::Block | ExecScope::Device
-            ) {
+            if !scope_ok(k, *scope) {
                 return Err(KernelError::SyncUnsupported {
-                    what: "a Fence scope other than Subgroup, Block or Device",
+                    what: "a Fence scope other than Subgroup, Block, Device or (with launch cluster dims) Cluster",
                 });
             }
         }
@@ -207,10 +208,7 @@ fn check_sync_stmt(
         } => check_call(k, (*callee, args, *result), sc, declared_here)?,
         Stmt::Barrier { scope, kind } => {
             let BarrierKind::Full = kind;
-            if !matches!(
-                scope,
-                ExecScope::Subgroup | ExecScope::Block | ExecScope::Device
-            ) {
+            if !scope_ok(k, *scope) {
                 return Err(KernelError::BadBarrierScope);
             }
             if k.launch.is_none() {
@@ -220,6 +218,16 @@ fn check_sync_stmt(
         _ => unreachable!("check_sync_stmt is called for sync statements only"),
     }
     Ok(())
+}
+
+/// Whether a barrier, fence or atomic may name `scope`: `Subgroup`, `Block` and `Device` always, `Cluster` only in a
+/// launch that has cluster dimensions; `Thread` has no semantics.
+fn scope_ok(k: &KernelFn, scope: ExecScope) -> bool {
+    match scope {
+        ExecScope::Subgroup | ExecScope::Block | ExecScope::Device => true,
+        ExecScope::Cluster => k.launch.is_some_and(|l| l.cluster.is_some()),
+        _ => false,
+    }
 }
 
 /// A `Call` against the signature of its callee: arity, each argument's kind and type, the buffer roles
@@ -494,12 +502,9 @@ fn check_atomic_site(
     sc: &Scope,
 ) -> Result<ElementKind, KernelError> {
     // every memory order is meaningful on a read-modify-write (`SeqCst` is treated as `AcqRel`)
-    if !matches!(
-        site.scope,
-        ExecScope::Subgroup | ExecScope::Block | ExecScope::Device
-    ) {
+    if !scope_ok(k, site.scope) {
         return Err(KernelError::AtomicUnsupported {
-            what: "an atomic scope other than Subgroup, Block or Device (Thread and Cluster have no semantics yet)",
+            what: "an atomic scope other than Subgroup, Block, Device or (with launch cluster dims) Cluster",
         });
     }
     let outside_shared = match place {

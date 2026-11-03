@@ -108,6 +108,10 @@ pub struct LaunchShape {
     pub grid: [u32; 3],
     /// `None`: the target decides. `Some`: the kernel requires a size in this range.
     pub subgroup: Option<SubgroupSize>,
+    /// Blocks per cluster, per axis (`None`: the launch has no clusters). The grid must be a multiple of it on every
+    /// axis. A `Cluster` barrier, atomic scope or fence needs it (since 0.42.15).
+    #[serde(default)]
+    pub cluster: Option<[u32; 3]>,
 }
 
 impl LaunchShape {
@@ -118,7 +122,15 @@ impl LaunchShape {
             block,
             grid,
             subgroup: None,
+            cluster: None,
         }
+    }
+
+    /// The same launch with clusters of `dims` blocks (the grid must be a multiple of it on every axis).
+    #[must_use]
+    pub const fn with_cluster(mut self, dims: [u32; 3]) -> Self {
+        self.cluster = Some(dims);
+        self
     }
 
     /// The same launch requiring a subgroup size in `min..=max`.

@@ -43,11 +43,11 @@ pub(crate) fn check_barriers(k: &KernelFn, barrier_callees: &[bool]) -> Result<(
     w.block(&k.body, false, &mut false)
 }
 
-/// Whether `b` holds a `Barrier` of `Device` scope: its threads are the whole grid, so a value read from `BlockIdx`
-/// differs between them.
+/// Whether `b` holds a `Barrier` of `Device` or `Cluster` scope: its threads span blocks, so a value read from `BlockIdx`
+/// differs between them (the conservative rule for a `Cluster` barrier, whose blocks differ within the cluster).
 fn holds_device_barrier(b: &Block) -> bool {
     b.0.iter().any(|st| match st {
-        Stmt::Barrier { scope, .. } => *scope == Scope::Device,
+        Stmt::Barrier { scope, .. } => matches!(scope, Scope::Device | Scope::Cluster),
         Stmt::If { then, els, .. } => holds_device_barrier(then) || holds_device_barrier(els),
         Stmt::For { body, .. } | Stmt::While { body, .. } => holds_device_barrier(body),
         _ => false,

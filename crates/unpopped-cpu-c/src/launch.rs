@@ -108,7 +108,8 @@ pub(crate) fn admit_launch(k: &KernelFn) -> Result<(), LowerError> {
     segments.iter().try_for_each(|s| admit_stmts(s, barriers))
 }
 
-/// The kernel body cut at its top-level `Device` barriers: the runs of statements between them, each a
+/// The kernel body cut at its top-level `Device` and `Cluster` barriers (a `Cluster` barrier is spelled as a barrier of the
+/// whole grid, a valid and stronger schedule since clusters are independent): the runs of statements between them, each a
 /// phase of the whole grid. A `Device` barrier anywhere else stays in its run, where `admit_stmts` refuses it.
 fn device_segments(body: &[Stmt]) -> Vec<&[Stmt]> {
     let mut out = Vec::new();
@@ -117,7 +118,7 @@ fn device_segments(body: &[Stmt]) -> Vec<&[Stmt]> {
         if matches!(
             s,
             Stmt::Barrier {
-                scope: Scope::Device,
+                scope: Scope::Device | Scope::Cluster,
                 ..
             }
         ) {
