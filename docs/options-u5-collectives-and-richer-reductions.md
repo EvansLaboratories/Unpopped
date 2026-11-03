@@ -36,10 +36,12 @@ are `docs/ir-union-surveys/{cuda,cute,mojo,triton}.md`; their cell contents are 
 
 ### P3's rule, stated
 
-PyTorch's: the arg of a row is the **first** index of the maximum; **NaN is greater than everything**, so a row with
-a NaN returns the first NaN's index. `ArgMin` mirrors it (NaN is the minimum for the purposes of `argmin`, the
-first NaN's index). A zero-length axis is a typed refusal, as it is for `Max`/`Min` today. I recommend adopting it
-unchanged because Fuel's `ArgMaxDim`/`ArgMinDim` are PyTorch's.
+**KISS wins (PM, 2026-11-02, after KISS-OPS-6.11-0007 was read; the first ruling, PyTorch's, was made without it).** NaN is
+the **greatest** value and ties go to the lower index: `ArgMax` of a row with a NaN is the first NaN's index, and
+`ArgMin` **never selects a NaN while a non-NaN exists** (index 0 if every element is NaN). That differs from PyTorch and
+NumPy, whose `argmin` returns the NaN's index; 0.42.2 shipped the PyTorch `ArgMin`, a defect against KISS fixed in
+0.42.5. A zero-length axis is a typed refusal, as it is for `Max`/`Min` today. Fuel's `ArgMinDim` is PyTorch's and
+must be told. `ArgMax`/`ArgMin` are KISS-Ops's `argmax`/`argmin` (§6.13 table; KISS-OPS-6.11-0007 is their authority).
 
 ### How the oracle runs a collective (P5)
 
@@ -94,7 +96,7 @@ instead of three; P3 and the semantics of P1 and P5 then land additively.
 
 1. A (recommended) versus B or C.
 2. P4: kernel layer only, as recommended, or an intent-layer `ReduceOp::Custom` now.
-3. P3's rule: PyTorch's (first index, NaN wins), as recommended.
+3. P3's rule: KISS-OPS-6.11-0007's order (ruled 2026-11-02 first as PyTorch's, then corrected to KISS).
 4. P5 v1: full participation of the scope, with the mask form deferred, as recommended.
 5. P1's name and rule: `MaxNum`/`MinNum` with "all-NaN gives NaN", as recommended (the alternative, returning the
    identity for an all-NaN row, needs an infinity literal the current ops avoid on purpose).
