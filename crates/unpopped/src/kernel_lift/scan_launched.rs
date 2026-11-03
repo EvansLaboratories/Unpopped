@@ -23,7 +23,7 @@
 //! at most `gamma_(n-1) * sum|x_i|` over that prefix, plus the half ulp of the single final rounding;
 //! the order is fixed by `block` alone, so the result is reproducible and independent of `grid`. At
 //! `block = 1` the kernel's bytes equal the serial scan's. A float `Prod` declines, as in E1d-1, and
-//! `Mean` is not a monoid. `docs/e1d-parallel-mapping.md` ("E1d-5 as built") states the order.
+//! a `Mean` scan declines too. `docs/e1d-parallel-mapping.md` ("E1d-5 as built") states the order.
 //!
 //! The geometry is the caller's and never derived from an extent; only the in-kernel chunk size
 //! `ceil(n / B)` depends on the row length (E1d rules, `docs/PATENT-SWEEP.md`).
