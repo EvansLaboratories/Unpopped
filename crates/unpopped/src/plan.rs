@@ -4159,9 +4159,8 @@ pub(crate) fn check_row_reduce(
 ///   admitted dtype (integer Sum/Prod wraps exactly; Max/Min is exactly associative).
 /// - **NO float-only gate** — integer `Sum`/`Prod`/`Max`/`Min` on the serial base
 ///   are legal and bit-exact, so (unlike RowReduce) no `float dtype` assert.
-/// - **`axis == rank - 1`** — v1 scans the innermost (contiguous) axis only; a
-///   non-inner axis needs a strided scan skeleton (deferred), rejected here so the
-///   miss is honest, not silently wrong.
+/// - **`axis < rank`** — any axis; a non-innermost axis (since 0.42.11) needs every
+///   input full-width dense, the oracle walking it with the axis stride.
 ///
 /// Admits `Mean` at a float dtype only (since 0.42.10, an Unpopped extension; see below). `exclusive` and `reverse` are independently legal
 /// and composable — there is no illegal combination, so nothing extra is asserted
@@ -4214,15 +4213,23 @@ fn validate_scan(op: &OpDef, key: &StructureKey, axis: u8, reverse: bool, exclus
     assert!(rank >= 1, "Scan needs a scanned axis (rank >= 1)");
     let last = (rank - 1) as u8;
 
-    // v1: the innermost (contiguous, trailing) axis only. The row-iteration
-    // skeleton scans the dense inner dimension; a non-inner axis needs a strided
-    // scan skeleton (deferred). `axis < rank` is subsumed (axis == rank-1 implies it).
+    // The scanned axis is any axis of the rank (since 0.42.11). The innermost axis keeps the row-iteration skeleton
+    // (rows of a dense inner dimension, with column-broadcast and per-row operands); another axis is strided: the
+    // oracle walks `(outer, axis, inner)` with the axis stride `inner`, and every input must then be full-width
+    // dense (no broadcast), so there is no per-column or per-row operand to index differently.
     assert!(
-        axis == last,
-        "Scan v1 scans the innermost (contiguous) axis only: axis {axis} != rank-1 \
-         ({last}) — a non-inner scan axis is a deferred follow-up (reject so the \
-         miss is honest, not silently wrong)"
+        axis <= last,
+        "Scan axis {axis} is outside the rank {rank} (axes 0..={last})"
     );
+    if axis != last {
+        for i in 0..n {
+            let o = key.operands[i];
+            assert!(
+                o.bcast.is_empty() && o.contig == Contiguity::Contig && !o.flipped,
+                "Scan over a non-innermost axis needs input {i} full-width dense (no broadcast, contiguous, not reversed)"
+            );
+        }
+    }
 
     // Operand roles + layout legality (mirrors check_row_reduce). Input 0 is the
     // row-streamed scanned tensor: `base = row*k` + the forward `idx = base+j` walk
@@ -6084,11 +6091,18 @@ mod scan_gate_validate {
     }
 
     #[test]
-    #[should_panic(expected = "innermost")]
-    fn non_inner_axis_rejected() {
-        // v1 scans axis == rank-1 only; axis 0 on a rank-2 cell is a deferred
-        // follow-up, rejected so the miss is honest.
+    fn a_non_inner_axis_plans_for_dense_inputs() {
+        // 0.42.11: axis 0 on a rank-2 cell (a strided scan over dense operands)
         let sc = OpDef::scan_simple("cum0", &[ElementKind::F32], ReduceOp::Sum, 0, false, false);
+        let key = scan_key(ElementKind::F32);
+        let plan = build_plan(&sc, &key);
+        assert!(matches!(plan.schedule, Schedule::Scan { axis: 0, .. }));
+    }
+
+    #[test]
+    #[should_panic(expected = "outside the rank")]
+    fn an_axis_outside_the_rank_is_rejected() {
+        let sc = OpDef::scan_simple("cum9", &[ElementKind::F32], ReduceOp::Sum, 2, false, false);
         let _ = build_plan(&sc, &scan_key(ElementKind::F32));
     }
 

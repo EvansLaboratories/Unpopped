@@ -61,7 +61,7 @@ pub fn lift_scan_opdef_launched(
     if grid == 0 || !block.is_power_of_two() {
         return Err(LiftDecline::BadLaunch);
     }
-    let (sop, reverse, exclusive, pre, post) = check_scan(op, dtype, rank)?;
+    let (sop, reverse, exclusive, pre, post) = check_scan(op, dtype, rank, false)?;
     let sh = ReductionShape::new(op.n_inputs, dtype, rank, AxisMask::EMPTY);
     if matches!(sop, ReduceOp::Mean) {
         return Err(LiftDecline::UnsupportedForm(
