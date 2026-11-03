@@ -67,7 +67,7 @@ carries an emitter's claim.
 
 ## A finding recorded here
 
-`half::f16::from_f64` (half 2.7.1) mis-rounds some values that sit just above a tie: `0.04518128032270489` is 1480.5002 quanta of
+`half::f16::from_f64` (half 2.7.1; measured with rustc 1.98.0 on `x86_64-pc-windows-msvc`, no F16C) mis-rounds some values near a tie, about 60 per million random `f64` with default features and about 495 per million with `default-features = false` (the workspace setting). The example `0.04518128032270489`, which sits just above a tie, is wrong only with `default-features = false`: it is 1480.5002 quanta of
 `2^-15` from zero, so it rounds up to `0.045196533203125`, and `half` returns `0.045166015625`. The oracle's `f64` to `f16` rounding is
 tested against exact integer arithmetic over a 200 000-value sweep and the boundaries, and against `half`'s `from_f32` path (trustworthy
 for a value an `f32` holds exactly) over 200 000 `f32` bit patterns. Any emitter or consumer that converts `f64` to `f16` through `half::f16::from_f64` should know.
