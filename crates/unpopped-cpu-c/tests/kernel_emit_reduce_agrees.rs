@@ -172,6 +172,19 @@ fn scan_args(dtype: ElementKind) -> Vec<KernelArg> {
 }
 
 #[test]
+fn a_running_mean_agrees_including_the_nan_of_an_empty_exclusive_prefix() {
+    // ROADMAP U2 D1, an Unpopped extension (0.42.10): the exclusive lane 0 is 0 / 0
+    for (reverse, exclusive) in [(false, false), (false, true), (true, true)] {
+        let op = OpDef::scan_simple("s", &[F32], ReduceOp::Mean, 1, reverse, exclusive);
+        agree(
+            &format!("scan_mean_{reverse}_{exclusive}"),
+            &scan_kernel(&op, F32),
+            scan_args(F32),
+        );
+    }
+}
+
+#[test]
 fn every_scan_monoid_agrees() {
     // Forward-inclusive and reverse-exclusive bracket the two directions and both write orders.
     for rop in [ReduceOp::Sum, ReduceOp::Prod, ReduceOp::Max, ReduceOp::Min] {
