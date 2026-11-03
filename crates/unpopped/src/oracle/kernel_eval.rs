@@ -311,6 +311,15 @@ impl<'a> Machine<'a> {
                 let v = self.eval_expr(value)?;
                 self.store(place, v)?;
             }
+            Stmt::AtomicRmw { .. } | Stmt::AtomicCas { .. } => self.exec_atomic(st)?,
+            _ => unreachable!("exec_simple is called for straight-line statements only"),
+        }
+        Ok(())
+    }
+
+    /// An atomic statement: its operands, then the step at the statement's order and scope; the old value, if wanted.
+    fn exec_atomic(&mut self, st: &Stmt) -> Result<(), KernelTrap> {
+        let (prev, old) = match st {
             Stmt::AtomicRmw {
                 op,
                 place,
@@ -321,10 +330,7 @@ impl<'a> Machine<'a> {
             } => {
                 let v = self.eval_expr(value)?;
                 self.set_site(*order, *scope);
-                let prev = self.atomic_rmw(*op, place, v)?;
-                if let Some(local) = old {
-                    self.locals[*local as usize] = Some(prev);
-                }
+                (self.atomic_rmw(*op, place, v)?, old)
             }
             Stmt::AtomicCas {
                 place,
@@ -336,12 +342,12 @@ impl<'a> Machine<'a> {
             } => {
                 let (e, d) = (self.eval_expr(expected)?, self.eval_expr(desired)?);
                 self.set_site(*order, *scope);
-                let found = self.atomic_cas(place, e, d)?;
-                if let Some(local) = old {
-                    self.locals[*local as usize] = Some(found);
-                }
+                (self.atomic_cas(place, e, d)?, old)
             }
-            _ => unreachable!("exec_simple is called for straight-line statements only"),
+            _ => unreachable!("exec_atomic is called for atomic statements only"),
+        };
+        if let Some(local) = old {
+            self.locals[*local as usize] = Some(prev);
         }
         Ok(())
     }
