@@ -2389,6 +2389,31 @@ pub enum AccumSpec {
     /// as [`Access::Reduction`]. Tensor-core/TF32 policies join as variants
     /// with honest contract flips (see the item-10 spike §5.3).
     WideFloat,
+    /// A TF32 tensor-core model (an Unpopped extension, not KISS; `docs/accum-policies.md`): each input is rounded to
+    /// TF32 (10 explicit mantissa bits, ties away from zero, as `cvt.rna.tf32.f32`), products are exact, and the
+    /// accumulator is an `f32` that is rounded after every `k_step` contracted elements. `F32` operands only.
+    Tf32 {
+        /// Contracted elements per accumulator rounding (the atom's K; at least 1).
+        k_step: u32,
+    },
+    /// 3xTF32: each input is split into a TF32 head and a TF32 remainder and the product is
+    /// `hi*hi + hi*lo + lo*hi` (the `lo*lo` term is dropped), accumulated as for [`Self::Tf32`]. `F32` operands only.
+    Tf32x3 {
+        /// Contracted elements per accumulator rounding (at least 1).
+        k_step: u32,
+    },
+    /// bf16x3: as [`Self::Tf32x3`] with the split taken to bf16 (8 significand bits, round to nearest even). `F32`
+    /// operands only.
+    Bf16x3 {
+        /// Contracted elements per accumulator rounding (at least 1).
+        k_step: u32,
+    },
+    /// An `f16` accumulator: products are exact and the accumulator is rounded to `f16` (nearest even) after every
+    /// `k_step` contracted elements. `F16` operands only.
+    F16Accum {
+        /// Contracted elements per accumulator rounding (at least 1).
+        k_step: u32,
+    },
 }
 
 /// Accumulator policy for a **non-contraction reduction** ([`Access::Reduction`])
@@ -3282,6 +3307,16 @@ impl OpDef {
             extra_out_bodies: Vec::new(),
             extra_out_dtypes: Vec::new(),
         }
+    }
+
+    /// The same contraction under the accumulation policy `accum` (a no-op for any other access). A precision policy
+    /// only: the operator stays a sum over `K` (`docs/accum-policies.md`).
+    #[must_use]
+    pub fn with_accum(mut self, accum: AccumSpec) -> Self {
+        if let Access::Contraction { accum: a, .. } = &mut self.access {
+            *a = accum;
+        }
+        self
     }
 
     /// Build a **fused contraction + bias/activation** op — like
@@ -4488,7 +4523,11 @@ mod reduction_axes_tests {
         fn is_precision_policy(a: &AccumSpec) -> bool {
             // No `_` arm. The exhaustiveness IS the detector.
             match a {
-                AccumSpec::WideFloat => true,
+                AccumSpec::WideFloat
+                | AccumSpec::Tf32 { .. }
+                | AccumSpec::Tf32x3 { .. }
+                | AccumSpec::Bf16x3 { .. }
+                | AccumSpec::F16Accum { .. } => true,
             }
         }
 
