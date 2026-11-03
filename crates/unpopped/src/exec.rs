@@ -109,7 +109,7 @@ pub struct LaunchShape {
     /// `None`: the target decides. `Some`: the kernel requires a size in this range.
     pub subgroup: Option<SubgroupSize>,
     /// Blocks per cluster, per axis (`None`: the launch has no clusters). The grid must be a multiple of it on every
-    /// axis. A `Cluster` barrier, atomic scope or fence needs it (since 0.42.15).
+    /// axis. A `Cluster` barrier, atomic scope or fence needs it (since 0.42.18).
     #[serde(default)]
     pub cluster: Option<[u32; 3]>,
 }

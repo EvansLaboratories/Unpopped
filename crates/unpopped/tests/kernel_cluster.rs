@@ -73,15 +73,24 @@ fn clustered(body: Vec<Stmt>) -> KernelFn {
 }
 
 fn launch(cluster: Option<[u32; 3]>, body: Vec<Stmt>) -> KernelFn {
-    let params = (0..2)
-        .map(|i| Param::buffer(format!("b{i}"), I32, BufferRole::ReadWrite, Some(1)))
-        .collect();
-    let locals = (0..4).map(|_| LocalDecl::scalar(I32)).collect();
     let mut shape = LaunchShape::new([2, 1, 1], [BLOCKS, 1, 1]);
     if let Some(d) = cluster {
         shape = shape.with_cluster(d);
     }
+    with_shape(shape, body)
+}
+
+fn with_shape(shape: LaunchShape, body: Vec<Stmt>) -> KernelFn {
+    let params = (0..2)
+        .map(|i| Param::buffer(format!("b{i}"), I32, BufferRole::ReadWrite, Some(1)))
+        .collect();
+    let locals = (0..4).map(|_| LocalDecl::scalar(I32)).collect();
     KernelFn::new("cl", I32, params, locals, Block(body)).with_launch(shape)
+}
+
+/// `blockIdx == n`.
+fn block_is(n: i64) -> ScalarExpr {
+    ScalarExpr::Binary(BinaryOp::CmpEq, Box::new(block_idx()), Box::new(u(n)))
 }
 
 fn run(k: &KernelFn) -> Result<Vec<Vec<i32>>, KernelTrap> {
@@ -195,12 +204,10 @@ fn clusters_tile_the_grid_on_every_axis() {
                 value: local(1),
             },
         ]));
-        let params = (0..2)
-            .map(|i| Param::buffer(format!("b{i}"), I32, BufferRole::ReadWrite, Some(1)))
-            .collect();
-        let locals = (0..4).map(|_| LocalDecl::scalar(I32)).collect();
-        KernelFn::new("cl2", I32, params, locals, Block(body))
-            .with_launch(LaunchShape::new([2, 1, 1], [2, 4, 1]).with_cluster([1, 2, 1]))
+        with_shape(
+            LaunchShape::new([2, 1, 1], [2, 4, 1]).with_cluster([1, 2, 1]),
+            body,
+        )
     };
     // out[2 * by + bx] = mate's partial = 2 * (by ^ 1) + bx + 1
     let out = run(&k(true, 1)).expect("mates are ordered")[1].clone();
@@ -281,7 +288,7 @@ fn two_cluster_barriers_are_two_phases_of_each_cluster() {
 fn a_cluster_barrier_under_control_that_differs_between_blocks_is_divergent() {
     let under = |scope| {
         clustered(vec![Stmt::If {
-            cond: ScalarExpr::Binary(BinaryOp::CmpEq, Box::new(block_idx()), Box::new(u(0))),
+            cond: block_is(0),
             then: Block(vec![Stmt::barrier(scope)]),
             els: Block(vec![]),
         }])
@@ -331,53 +338,44 @@ fn a_cluster_atomic_reaches_its_clusters_blocks_and_no_further() {
 #[test]
 fn release_acquire_at_cluster_scope_orders_blocks_of_one_cluster() {
     // block 0 publishes data and a flag; block 1 (same cluster) acquires the flag and reads the data
+    let atomic = |op, value, old, order| Stmt::AtomicRmw {
+        op,
+        place: at(1, u(0)),
+        value: c(value),
+        old,
+        order,
+        scope: Scope::Cluster,
+    };
+    let when = |cond, then| Stmt::If {
+        cond,
+        then: Block(then),
+        els: Block(vec![]),
+    };
+    let copy = vec![
+        Stmt::Load {
+            local: 1,
+            place: at(0, u(0)),
+        },
+        Stmt::Store {
+            place: at(0, u(1)),
+            value: local(1),
+        },
+    ];
+    let seen = ScalarExpr::Binary(BinaryOp::CmpEq, Box::new(local(0)), Box::new(c(1)));
+    let publish = vec![
+        Stmt::Store {
+            place: at(0, u(0)),
+            value: c(42),
+        },
+        atomic(AtomicOp::Exchange, 1, None, MemoryOrder::Release),
+    ];
+    let consume = vec![
+        atomic(AtomicOp::Or, 0, Some(0), MemoryOrder::Acquire),
+        when(seen, copy),
+    ];
     let k = clustered(vec![
-        Stmt::If {
-            cond: ScalarExpr::Binary(BinaryOp::CmpEq, Box::new(block_idx()), Box::new(u(0))),
-            then: Block(vec![thread0(vec![
-                Stmt::Store {
-                    place: at(0, u(0)),
-                    value: c(42),
-                },
-                Stmt::AtomicRmw {
-                    op: AtomicOp::Exchange,
-                    place: at(1, u(0)),
-                    value: c(1),
-                    old: None,
-                    order: MemoryOrder::Release,
-                    scope: Scope::Cluster,
-                },
-            ])]),
-            els: Block(vec![]),
-        },
-        Stmt::If {
-            cond: ScalarExpr::Binary(BinaryOp::CmpEq, Box::new(block_idx()), Box::new(u(1))),
-            then: Block(vec![thread0(vec![
-                Stmt::AtomicRmw {
-                    op: AtomicOp::Or,
-                    place: at(1, u(0)),
-                    value: c(0),
-                    old: Some(0),
-                    order: MemoryOrder::Acquire,
-                    scope: Scope::Cluster,
-                },
-                Stmt::If {
-                    cond: ScalarExpr::Binary(BinaryOp::CmpEq, Box::new(local(0)), Box::new(c(1))),
-                    then: Block(vec![
-                        Stmt::Load {
-                            local: 1,
-                            place: at(0, u(0)),
-                        },
-                        Stmt::Store {
-                            place: at(0, u(1)),
-                            value: local(1),
-                        },
-                    ]),
-                    els: Block(vec![]),
-                },
-            ])]),
-            els: Block(vec![]),
-        },
+        when(block_is(0), vec![thread0(publish)]),
+        when(block_is(1), vec![thread0(consume)]),
     ]);
     assert_eq!(run(&k).expect("ordered inside the cluster")[0][1], 42);
 }
