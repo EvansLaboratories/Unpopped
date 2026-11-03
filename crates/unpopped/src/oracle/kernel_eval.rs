@@ -252,11 +252,7 @@ impl<'a> Machine<'a> {
             | Stmt::Fence { .. } => {
                 self.exec_simple(st)?;
             }
-            Stmt::Collective { .. } => {
-                return Err(KernelTrap::Unsupported(
-                    "Collective (needs run_launch: it rendezvouses)",
-                ));
-            }
+            Stmt::Collective { .. } => return Err(KernelTrap::Unsupported("Collective")),
             Stmt::Call {
                 callee,
                 args,
