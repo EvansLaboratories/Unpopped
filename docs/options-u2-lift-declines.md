@@ -27,11 +27,11 @@ slices did.
 identity), pass-through finalize, no divisor. `RowReduce` is float-only in v1, so this is `F32`/`F64` (`f32` rounds once at the store,
 as the other stages do). No ruling needed.
 
-**D2, a `Prod` window.** KISS has `avg_pool` and `max_pool` only (`reduce(max)` skips out-of-bounds taps); a product pool and its all-out-of-bounds value are
-KISS#767. The recommended reading matches KISS-OPS-6.11-0002 (an empty reduce is the monoid identity). `prod_pool`: the product of the `size` taps. A tap outside the input is skipped, which for a product is the
-multiplicative identity `1` (the same rule as `Sum`, where a skipped tap contributes `0`, and `Max`/`Min`, where padding never wins);
-a window whose every tap is outside gives `1`. Integers wrap at their width (as `Prod` reductions do); `Mean`-style divisors do not
-apply. Ruling wanted: the padding rule (recommended: skip, identity `1`).
+**D2, a `Prod` window.** KISS has `avg_pool` and `max_pool` only, so a product pool is an **Unpopped extension, not KISS** (proposed as
+ThinkersJournal/KISS#767; that issue first claimed the all-out-of-bounds value was unstated, which was wrong and is retracted: KISS-OPS-6.13-0011
+makes a window with no in-bounds tap inexpressible, and Unpopped already declines it in `window_taps`). So no ruling is needed: `prod_pool` is the
+product of the in-bounds taps, starting from the multiplicative identity `1` (a skipped tap contributes `1`, as in KISS-OPS-6.11-0002); integers
+wrap at their width (as `Prod` reductions do); `Mean`-style divisors do not apply.
 
 **D1, a `Mean` scan.** KISS is closed here: `prefix_scan` takes the monoids `{sum, prod, max, min}` (KISS-OPS-6.11-0003), and a running mean is not one,
 so the question of accept, decline or decompose is KISS#766; until it is answered the reading below is Unpopped's. The running mean: inclusive lane `j` is `(pre(x_0) + ... + pre(x_j)) / (j + 1)`; exclusive lane `j` is the sum
@@ -58,8 +58,7 @@ D3, D2, D1 (small, each ~ the size of the `MaxNum` slice: gate, oracle, lift, a 
 
 ## Needs a ruling
 
-1. D2's padding rule: skip, identity `1` (recommended).
-2. D1's exclusive lane 0: `NaN` (recommended) or `0`.
-3. D6: wait for a consumer (recommended).
+1. D1's exclusive lane 0: `NaN` (recommended) or `0`.
+2. D6: wait for a consumer (recommended).
 
-D3 is built; D2 and D1 are built on the recommended readings once KISS#766 and #767 are answered or the PM rules; D5 needs none.
+D3 is built. D2 needs no ruling and is built next. D1 is built on the recommended reading unless the PM rules or KISS#766 answers differently. D5 needs none.
