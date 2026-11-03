@@ -225,6 +225,22 @@ fn every_pool_agrees_with_both_mean_divisors() {
 }
 
 #[test]
+fn a_window_over_the_outer_axis_agrees() {
+    // ROADMAP U2 D5 (0.42.12): pool down the columns of a [9, 4] tensor; k_out = (9 + 2 - 3) / 2 + 1 = 5
+    for wop in [ReduceOp::Sum, ReduceOp::Max] {
+        let op = OpDef::window_simple("win", &[F32], wop, 0, 3, 2, 1, 1, 1, false);
+        let k = lift_window_opdef(&op, F32, 2).expect("the window lifts");
+        assert_eq!(check_kernel(&k), Ok(()));
+        let mut args = vec![
+            KernelArg::Buffer(buffer(F32, &[9, 4], &[4, 1], value)),
+            KernelArg::Buffer(zeroed(F32, &[5, 4])),
+        ];
+        args.extend(ints(&[9, 4, 5]));
+        agree(&format!("win_axis0_{wop:?}"), &k, args);
+    }
+}
+
+#[test]
 fn dilation_and_f64_agree() {
     // size 3, stride 3, dilation 2, pad 2: k_out = (12 + 4 - 5) / 3 + 1 = 4.
     for dtype in [F32, F64] {
