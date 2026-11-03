@@ -199,6 +199,10 @@ fn a_broadcast_gives_every_lane_one_lanes_value() {
     let b = CollectiveKind::Broadcast { lane: c(2) };
     assert_eq!(ints(&on(b.clone(), Scope::Block)), vec![3; 8]);
     assert_eq!(ints(&on(b, Scope::Subgroup)), vec![3, 3, 3, 3, 7, 7, 7, 7]);
+    // a lane past the scope wraps, as a shuffle's index does: 10 mod 8 and 6 mod 4 are both lane 2
+    let past = |lane, scope| ints(&on(CollectiveKind::Broadcast { lane: c(lane) }, scope));
+    assert_eq!(past(10, Scope::Block), vec![3; 8]);
+    assert_eq!(past(6, Scope::Subgroup), vec![3, 3, 3, 3, 7, 7, 7, 7]);
 }
 
 #[test]
