@@ -1,7 +1,7 @@
 # Options note: the lift declines that wait for the plan and the oracle (ROADMAP U2 remainder)
 
 Status: **D3 built in 0.42.6; D4 dropped (PM, 2026-11-03: KISS wins, `RowSort` stays stable-only); D1 and D2 are KISS questions (filed as
-ThinkersJournal/KISS#766 and #767) built on the recommended reading; D5 open; D6 waits for a consumer.** Asked by the PM (`[TASK]` 2026-11-02:
+ThinkersJournal/KISS#766 and #767) built on the recommended reading; D5: the scan is built in 0.42.11 (any axis; every input full-width dense; the launched lift stays innermost), the window is open; D6 waits for a consumer.** Asked by the PM (`[TASK]` 2026-11-02:
 "(b) U2 remainder and (c) U1 remainder follow" U5). Read at `origin/main` `72b8e37` (0.42.3), updated at `04b0bce` (0.42.7). The ROADMAP U2 row lists five forms the kernel-layer lift of an `OpDef` declines because the plan
 or the oracle does not define them yet ("the lift has nothing to agree with until the plan and the oracle define them"), and an
 effects model that is "computed when a consumer asks". This note says what each should mean, in the order I would build them.

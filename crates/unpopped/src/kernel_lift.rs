@@ -482,7 +482,7 @@ pub fn lift_reduction_opdef(
     Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body))
 }
 
-/// Lift a float `Access::Scan` over `rank` axes (the scanned axis is the innermost), computed at
+/// Lift a float `Access::Scan` over `rank` axes (the scanned axis is any axis since 0.42.11; the launched lift keeps to the innermost), computed at
 /// `dtype` (`F32` or `F64`), reading dense row-major inputs as the oracle's flat addressing does.
 ///
 /// Per row, the oracle keeps an `f64` prefix that starts at the monoid identity (`0`, `1`, `-inf`,
@@ -501,8 +501,10 @@ pub fn lift_reduction_opdef(
 ///
 /// A [`LiftDecline`].
 pub fn lift_scan_opdef(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<KernelFn, LiftDecline> {
-    let (sop, reverse, exclusive, pre, post) = check_scan(op, dtype, rank)?;
-    let sh = ReductionShape::new(op.n_inputs, dtype, rank, AxisMask::EMPTY);
+    let (sop, reverse, exclusive, pre, post) = check_scan(op, dtype, rank, true)?;
+    let mut scanned = AxisMask::EMPTY;
+    scanned.set(scan_axis(op));
+    let sh = ReductionShape::new(op.n_inputs, dtype, rank, scanned);
     let pass = scan_pass(&sh, sop, exclusive, pre, post);
     let mut row = scan_row(&sh, sop, reverse, pass);
     for &d in sh.kept.iter().rev() {
@@ -662,6 +664,7 @@ fn check_scan(
     op: &OpDef,
     dtype: ElementKind,
     rank: u8,
+    any_axis: bool,
 ) -> Result<(ReduceOp, bool, bool, &ScalarExpr, Option<&ScalarExpr>), LiftDecline> {
     let Access::Scan {
         op: sop,
@@ -681,14 +684,24 @@ fn check_scan(
         post::check_post(post, 1)?;
         Some(post)
     };
-    if u32::from(*axis) + 1 != u32::from(rank) {
-        return Err(LiftDecline::UnsupportedForm(
-            "a scan over a non-innermost axis",
-        ));
+    if *axis >= rank || (!any_axis && u32::from(*axis) + 1 != u32::from(rank)) {
+        return Err(LiftDecline::UnsupportedForm(if *axis >= rank {
+            "a scan axis outside the rank"
+        } else {
+            "a scan over a non-innermost axis in a launched scan"
+        }));
     }
     check_plain(op, dtype, rank)?;
     leaves_ok(pre)?;
     Ok((*sop, *reverse, *exclusive, pre, post))
+}
+
+/// The axis an `Access::Scan` scans (`check_scan` has already accepted the op as a scan).
+fn scan_axis(op: &OpDef) -> u8 {
+    match &op.access {
+        Access::Scan { axis, .. } => *axis,
+        _ => unreachable!("scan_axis is called for a scan after check_scan"),
+    }
 }
 
 /// The scan monoid identity (the oracle's `scan_identity`, float domain) as an expression of the

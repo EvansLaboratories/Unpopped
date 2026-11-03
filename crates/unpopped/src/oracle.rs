@@ -3058,7 +3058,7 @@ fn eval_scan(
         Access::Scan { pre, post, .. } => (pre, post),
         _ => unreachable!(),
     };
-    let (sop, _axis, reverse, exclusive) = match plan.schedule {
+    let (sop, axis, reverse, exclusive) = match plan.schedule {
         Schedule::Scan {
             op,
             axis,
@@ -3072,9 +3072,13 @@ fn eval_scan(
     let rank = plan.key.rank as usize;
     let last = (rank - 1) as u8;
     let out = &operands[n_in];
-    let k = out.shape[rank - 1];
-    let total = prod(&out.shape[..rank]).max(0);
-    let n_rows = if k > 0 { total / k } else { 0 };
+    // The scanned axis `axis` splits the tensor as (outer, k, inner): a "row" is one (outer, inner) pair, its element
+    // `j` sits `inner` apart. Along the innermost axis `inner` is 1 and this is the dense row walk.
+    let ax = usize::from(axis);
+    let k = out.shape[ax];
+    let inner = prod(&out.shape[ax + 1..rank]).max(1);
+    let outer = prod(&out.shape[..ax]).max(0);
+    let n_rows = if k > 0 { outer * inner } else { 0 };
     let int_acc = is_int(plan.dtype);
 
     let mut result = alloc_output(plan, operands, n_in, 0);
@@ -3084,19 +3088,19 @@ fn eval_scan(
     let (ident_f, ident_i) = scan_identity(sop, plan.dtype);
 
     for row in 0..n_rows {
-        let base = row * k;
+        let base = (row / inner) * k * inner + row % inner;
         let mut acc_f = ident_f;
         let mut acc_i = ident_i;
         let mut have = false;
         for jj in 0..k {
             let j = if reverse { k - 1 - jj } else { jj };
             let leaf = |i: u8| {
-                read_flat(
-                    inputs,
-                    operands,
-                    i as usize,
-                    role_index(plan, i as usize, last, base, j, row),
-                )
+                let at = if inner == 1 {
+                    role_index(plan, i as usize, last, base, j, row)
+                } else {
+                    base + j * inner // a strided scan: every input is full-width dense
+                };
+                read_flat(inputs, operands, i as usize, at)
             };
             // pre has no running prefix.
             let ev_pre = Eval {
@@ -3122,7 +3126,12 @@ fn eval_scan(
                     coord: &panic_coord,
                 };
                 let out_val = eval(post, &ev);
-                store_val(out_val, out_dt, &mut result.bytes, (base + j) as usize);
+                store_val(
+                    out_val,
+                    out_dt,
+                    &mut result.bytes,
+                    (base + j * inner) as usize,
+                );
             };
 
             match sop {
