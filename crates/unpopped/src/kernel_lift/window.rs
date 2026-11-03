@@ -38,7 +38,7 @@ pub fn lift_window_opdef(
     rank: u8,
 ) -> Result<KernelFn, LiftDecline> {
     let g = check_window(op, dtype, rank)?;
-    let w = Win::new(op.n_inputs, dtype, rank);
+    let w = Win::new(op.n_inputs, dtype, rank, g.axis);
     let mut body = Block(vec![
         Stmt::Let {
             local: w.acc,
@@ -76,6 +76,8 @@ pub fn lift_window_opdef(
 /// The window as the op declares it.
 struct Geometry {
     op: ReduceOp,
+    /// The pooled axis.
+    axis: u8,
     size: u8,
     stride: u8,
     dilation: u8,
@@ -139,15 +141,16 @@ fn check_window(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Geometry, Li
         }
         Some(post.clone())
     };
-    if usize::from(*axis) + 1 != usize::from(rank) {
+    if *axis >= rank {
         return Err(LiftDecline::UnsupportedForm(
-            "a window that is not a pool over the last axis",
+            "a window axis outside the rank",
         ));
     }
     check_plain(op, dtype, rank)?;
     leaves_ok(pre)?;
     Ok(Geometry {
         op: *wop,
+        axis: *axis,
         size: *size,
         stride: *stride,
         dilation: *dilation,
@@ -164,6 +167,8 @@ fn check_window(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Geometry, Li
 struct Win {
     dtype: ElementKind,
     r: u32,
+    /// The pooled axis (any axis since 0.42.12).
+    axis: u32,
     n: u32,
     k_out: u32,
     tap: u32,
@@ -178,7 +183,7 @@ struct Win {
 }
 
 impl Win {
-    fn new(n_inputs: u8, dtype: ElementKind, rank: u8) -> Self {
+    fn new(n_inputs: u8, dtype: ElementKind, rank: u8, axis: u8) -> Self {
         let (r, n) = (u32::from(rank), u32::from(n_inputs));
         let counters = r + 1;
         let pos = counters + r + 1;
@@ -186,6 +191,7 @@ impl Win {
         Self {
             dtype,
             r,
+            axis: u32::from(axis),
             n,
             k_out: r,
             tap: counters + r,
@@ -199,7 +205,7 @@ impl Win {
         }
     }
 
-    /// The counter of cell axis `d` (the leading axes, then the output position at `r - 1`).
+    /// The counter of cell axis `d` (the pooled axis's counter is the output position).
     fn cell(&self, d: u32) -> u32 {
         self.r + 1 + d
     }
@@ -241,7 +247,7 @@ impl Win {
 
     /// `for cell(d) in 0..extent { inner }`; the pooled axis runs to `k_out`.
     fn for_cell(&self, d: u32, inner: Block) -> Block {
-        let end = if d + 1 == self.r { self.k_out } else { d };
+        let end = if d == self.axis { self.k_out } else { d };
         Block(vec![Stmt::For {
             local: self.cell(d),
             start: int(0),
@@ -257,7 +263,7 @@ impl Win {
 
     /// The loop over taps: each valid tap is loaded, mapped by `pre` and folded.
     fn taps(&self, g: &Geometry) -> Stmt {
-        let o = local(self.cell(self.r - 1));
+        let o = local(self.cell(self.axis));
         let position = add(
             sub(mul(o, int(i64::from(g.stride))), int(i64::from(g.pad_lo))),
             mul(local(self.tap), int(i64::from(g.dilation))),
@@ -267,9 +273,14 @@ impl Win {
                 local: self.loaded(k),
                 place: Place::Logical {
                     buffer: k,
-                    coords: (0..self.r - 1)
-                        .map(|d| local(self.cell(d)))
-                        .chain([local(self.pos)])
+                    coords: (0..self.r)
+                        .map(|d| {
+                            local(if d == self.axis {
+                                self.pos
+                            } else {
+                                self.cell(d)
+                            })
+                        })
                         .collect(),
                 },
             })
@@ -300,7 +311,7 @@ impl Win {
                     init: position,
                 },
                 Stmt::If {
-                    cond: outside(self.pos, self.r - 1),
+                    cond: outside(self.pos, self.axis),
                     then: Block(vec![]),
                     els: Block(valid),
                 },

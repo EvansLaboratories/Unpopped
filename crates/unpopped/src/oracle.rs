@@ -3297,7 +3297,7 @@ fn eval_window(
         Access::Window { pre, post, .. } => (pre, post),
         _ => unreachable!(),
     };
-    let (wop, _axis, size, stride, dilation, pad_lo, _pad_hi, count_include_pad) =
+    let (wop, axis, size, stride, dilation, pad_lo, _pad_hi, count_include_pad) =
         match plan.schedule {
             Schedule::Window {
                 op,
@@ -3325,8 +3325,13 @@ fn eval_window(
     let last = (rank - 1) as u8;
     let in0 = &operands[0];
     let out = &operands[n_in];
-    let k_in = in0.shape[rank - 1];
-    let k_out = out.shape[rank - 1];
+    // The pooled axis `axis` splits the tensor as (outer, k, inner): a "row" is one (outer, inner) pair and its
+    // elements sit `inner` apart. Along the innermost axis `inner` is 1 and this is the dense row walk.
+    let ax = usize::from(axis);
+    let k_in = in0.shape[ax];
+    let k_out = out.shape[ax];
+    let inner = prod(&out.shape[ax + 1..rank]).max(1);
+    let outer = prod(&out.shape[..ax]).max(0);
     // KISS-OPS-6.13-0011: a reader declines a window with no in-bounds tap (the oracle used to
     // answer with the monoid identity). The oracle has no error channel, so it panics, as its
     // other precondition failures do, with the typed error's text.
@@ -3340,8 +3345,7 @@ fn eval_window(
     ) {
         panic!("oracle: {e}");
     }
-    let total_out = prod(&out.shape[..rank]).max(0);
-    let n_rows = if k_out > 0 { total_out / k_out } else { 0 };
+    let n_rows = if k_out > 0 { outer * inner } else { 0 };
     let int_acc = is_int(plan.dtype);
 
     let (size, stride, dil, plo) = (
@@ -3355,7 +3359,9 @@ fn eval_window(
     let out_dt = plan.out_dtype_of(0);
 
     for row in 0..n_rows {
-        let base = row * k_in;
+        let (ob, ib) = (row / inner, row % inner);
+        let base = ob * k_in * inner + ib;
+        let out_base = ob * k_out * inner + ib;
         for o in 0..k_out {
             // Fold the valid taps.
             // a product starts at the multiplicative identity
@@ -3372,12 +3378,12 @@ fn eval_window(
                     continue;
                 }
                 let leaf = |i: u8| {
-                    read_flat(
-                        inputs,
-                        operands,
-                        i as usize,
-                        role_index(plan, i as usize, last, base, p, row),
-                    )
+                    let at = if inner == 1 {
+                        role_index(plan, i as usize, last, base, p, row)
+                    } else {
+                        base + p * inner // a strided window: every input is full-width dense
+                    };
+                    read_flat(inputs, operands, i as usize, at)
                 };
                 let ev = Eval {
                     dtype: plan.dtype,
@@ -3481,12 +3487,12 @@ fn eval_window(
             };
             // Epilogue.
             let leaf = |i: u8| {
-                read_flat(
-                    inputs,
-                    operands,
-                    i as usize,
-                    role_index(plan, i as usize, last, base, o, row),
-                )
+                let at = if inner == 1 {
+                    role_index(plan, i as usize, last, base, o, row)
+                } else {
+                    base + o * inner
+                };
+                read_flat(inputs, operands, i as usize, at)
             };
             let reduced_leaf = |s: u8| {
                 assert_eq!(s, 0, "window post reads only Reduced(0)");
@@ -3500,7 +3506,12 @@ fn eval_window(
                 coord: &panic_coord,
             };
             let v = eval(post, &ev);
-            store_val(v, out_dt, &mut result.bytes, (row * k_out + o) as usize);
+            store_val(
+                v,
+                out_dt,
+                &mut result.bytes,
+                (out_base + o * inner) as usize,
+            );
         }
     }
     result
