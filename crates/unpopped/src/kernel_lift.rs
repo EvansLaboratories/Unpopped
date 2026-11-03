@@ -482,7 +482,7 @@ pub fn lift_reduction_opdef(
     Ok(KernelFn::new(op.name.clone(), dtype, params, locals, body))
 }
 
-/// Lift a float `Access::Scan` over `rank` axes (the scanned axis is the innermost), computed at
+/// Lift a float `Access::Scan` over `rank` axes (the scanned axis is any axis since 0.42.11; the launched lift keeps to the innermost), computed at
 /// `dtype` (`F32` or `F64`), reading dense row-major inputs as the oracle's flat addressing does.
 ///
 /// Per row, the oracle keeps an `f64` prefix that starts at the monoid identity (`0`, `1`, `-inf`,
