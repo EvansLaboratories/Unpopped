@@ -65,6 +65,7 @@ fn a_full_c_that_is_strided_transposed_broadcast_or_the_wrong_shape_declines() {
     assert!(decl(desc(2, &[8, 4096], &[0, 1])), "row-broadcast");
     assert!(decl(desc(2, &[4096, 8], &[8, 1])), "transposed shape");
     assert!(decl(desc(2, &[7, 4096], &[4096, 1])), "wrong M");
+    assert!(decl(desc(3, &[1, 8, 4096], &[32768, 4096, 1])), "rank 3");
 }
 
 #[test]
