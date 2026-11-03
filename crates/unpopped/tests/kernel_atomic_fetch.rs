@@ -228,10 +228,8 @@ fn the_reserved_shapes_are_refused_with_a_typed_error() {
         scope,
     };
     for st in [
-        with(MemoryOrder::Acquire, Scope::Device),
-        with(MemoryOrder::SeqCst, Scope::Device),
-        with(MemoryOrder::Relaxed, Scope::Block),
-        with(MemoryOrder::Relaxed, Scope::Cluster),
+        with(MemoryOrder::Relaxed, Scope::Thread),
+        with(MemoryOrder::Acquire, Scope::Cluster),
     ] {
         let r = check_kernel(&kernel_with(I32, vec![st]));
         assert!(

@@ -72,6 +72,10 @@ pub enum KernelTrap {
         /// The allocation index.
         alloc: u32,
     },
+    /// A block ran past the step limit after an acquire-class atomic while later blocks had not yet run. The
+    /// oracle runs blocks in order, so a wait on a later block's write can never be satisfied: this is that wait, named,
+    /// not a hang (`docs/question-u4-memory-model.md`, sub-question 1; the `Device` barrier model of S6 would run it).
+    CrossBlockWait,
     /// A read of a `Shared` element no thread has stored. Shared memory is not zero-filled: a
     /// zero would hide the missing-barrier bug the memory space exists to catch.
     UninitializedShared {
@@ -112,6 +116,8 @@ pub(super) struct Machine<'a> {
     /// The function whose `allocs` an allocation index names: always the entry, since only it declares any.
     pub(super) alloc_k: &'a KernelFn,
     pub(super) steps: u64,
+    /// The statements a thread may execute before [`KernelTrap::StepLimit`] ([`STEP_LIMIT`] unless a launch lowers it).
+    pub(super) limit: u64,
     /// Present only under `run_launch`: which thread this is, and the memory it shares.
     pub(super) ctx: Option<ThreadCtx<'a>>,
 }
@@ -150,6 +156,7 @@ impl<'a> Machine<'a> {
             fn_idx: 0,
             alloc_k: k,
             steps: 0,
+            limit: STEP_LIMIT,
             ctx,
         }
     }
@@ -216,7 +223,7 @@ impl<'a> Machine<'a> {
 
     pub(super) fn tick(&mut self) -> Result<(), KernelTrap> {
         self.steps += 1;
-        if self.steps > STEP_LIMIT {
+        if self.steps > self.limit {
             Err(KernelTrap::StepLimit)
         } else {
             Ok(())
@@ -309,9 +316,11 @@ impl<'a> Machine<'a> {
                 place,
                 value,
                 old,
-                ..
+                order,
+                scope,
             } => {
                 let v = self.eval_expr(value)?;
+                self.set_site(*order, *scope);
                 let prev = self.atomic_rmw(*op, place, v)?;
                 if let Some(local) = old {
                     self.locals[*local as usize] = Some(prev);
@@ -322,9 +331,11 @@ impl<'a> Machine<'a> {
                 expected,
                 desired,
                 old,
-                ..
+                order,
+                scope,
             } => {
                 let (e, d) = (self.eval_expr(expected)?, self.eval_expr(desired)?);
+                self.set_site(*order, *scope);
                 let found = self.atomic_cas(place, e, d)?;
                 if let Some(local) = old {
                     self.locals[*local as usize] = Some(found);

@@ -27,11 +27,12 @@ use std::ops::Range;
 
 use super::Val;
 use super::kernel_collective::{Contribution, results};
-use super::kernel_eval::{KernelArg, KernelTrap, Machine};
+use super::kernel_eval::{KernelArg, KernelTrap, Machine, STEP_LIMIT};
 use super::kernel_mem::{AllocMem, BlockMem, Log, ThreadCtx};
 use super::kernel_resume::{Frame, Stop, initial_stack};
+use super::kernel_sync::Edges;
 use crate::exec::{AllocDecl, Extent, LaunchShape, MemorySpace, Scope};
-use crate::kernel::{KernelFn, Module, ParamKind, check_kernel, check_module};
+use crate::kernel::{KernelFn, MemoryOrder, Module, ParamKind, check_kernel, check_module};
 
 /// Run every thread of `k`'s launch on `args` (one per parameter), choosing the smallest subgroup
 /// size the launch allows.
@@ -54,7 +55,23 @@ pub fn run_launch_with_subgroup(
     subgroup: Option<u32>,
 ) -> Result<(), KernelTrap> {
     check_kernel(k).map_err(KernelTrap::Malformed)?;
-    launch_checked(k, None, args, subgroup)
+    launch_checked(k, None, args, (subgroup, STEP_LIMIT))
+}
+
+/// [`run_launch`] with a lower statement limit per thread than [`STEP_LIMIT`]: a kernel that waits on a block that has
+/// not run yet reaches [`KernelTrap::StepLimit`] (or [`KernelTrap::CrossBlockWait`]) after `max_steps` statements
+/// instead of ten million. The limit bounds the interpreter, not the language.
+///
+/// # Errors
+///
+/// A [`KernelTrap`].
+pub fn run_launch_with_limit(
+    k: &KernelFn,
+    args: &mut [KernelArg],
+    max_steps: u64,
+) -> Result<(), KernelTrap> {
+    check_kernel(k).map_err(KernelTrap::Malformed)?;
+    launch_checked(k, None, args, (None, max_steps))
 }
 
 /// [`run_launch`] for function `entry` of a [`Module`]: a thread may `Call` the module's plain functions
@@ -65,7 +82,12 @@ pub fn run_launch_with_subgroup(
 /// A [`KernelTrap`]; `Malformed` if the module does not check.
 pub fn run_launch_module(m: &Module, entry: u32, args: &mut [KernelArg]) -> Result<(), KernelTrap> {
     check_module(m, entry).map_err(KernelTrap::Malformed)?;
-    launch_checked(&m.fns[entry as usize], Some((m, entry)), args, None)
+    launch_checked(
+        &m.fns[entry as usize],
+        Some((m, entry)),
+        args,
+        (None, STEP_LIMIT),
+    )
 }
 
 /// Run a checked launched kernel; `module` is the module its calls resolve in and the entry's index.
@@ -73,7 +95,7 @@ fn launch_checked(
     k: &KernelFn,
     module: Option<(&Module, u32)>,
     args: &mut [KernelArg],
-    subgroup: Option<u32>,
+    (subgroup, limit): (Option<u32>, u64),
 ) -> Result<(), KernelTrap> {
     let Some(launch) = k.launch else {
         return Err(KernelTrap::ArgMismatch(
@@ -90,6 +112,8 @@ fn launch_checked(
         .map(|a| alloc_len(k, args, a))
         .collect::<Result<Vec<_>, _>>()?;
     let mut global = Log::new();
+    let mut edges = Edges::default();
+    let blocks = launch.grid[0] * launch.grid[1] * launch.grid[2];
     for gz in 0..launch.grid[2] {
         for gy in 0..launch.grid[1] {
             for gx in 0..launch.grid[0] {
@@ -101,8 +125,15 @@ fn launch_checked(
                     sg,
                     idx: [gx, gy, gz],
                     lin: gx + launch.grid[0] * (gy + launch.grid[1] * gz),
+                    limit,
                 };
-                run_block(&b, args, &mut global)?;
+                match run_block(&b, args, &mut global, &mut edges) {
+                    // blocks run in order: a runaway after an acquire, with blocks still to run, is a wait on one of them
+                    Err(KernelTrap::StepLimit) if edges.acquired && b.lin + 1 < blocks => {
+                        return Err(KernelTrap::CrossBlockWait);
+                    }
+                    r => r?,
+                }
             }
         }
     }
@@ -160,6 +191,7 @@ struct BlockRun<'a> {
     sg: u32,
     idx: [u32; 3],
     lin: u32,
+    limit: u64,
 }
 
 /// Where a thread is.
@@ -187,7 +219,12 @@ struct ThreadRun<'a> {
     contrib: Option<Contribution>,
 }
 
-fn run_block(b: &BlockRun<'_>, args: &mut [KernelArg], global: &mut Log) -> Result<(), KernelTrap> {
+fn run_block(
+    b: &BlockRun<'_>,
+    args: &mut [KernelArg],
+    global: &mut Log,
+    edges: &mut Edges,
+) -> Result<(), KernelTrap> {
     let [bx, by, bz] = b.launch.block;
     let n = bx * by * bz;
     let mut mem = BlockMem {
@@ -213,7 +250,7 @@ fn run_block(b: &BlockRun<'_>, args: &mut [KernelArg], global: &mut Log) -> Resu
         .collect();
     loop {
         for t in threads.iter_mut().filter(|t| t.status == Status::Runnable) {
-            run_phase(b, t, &mut mem, global, args)?;
+            run_phase(b, t, (&mut mem, global, &mut *edges), args)?;
         }
         if threads.iter().all(|t| t.status == Status::Done) {
             return Ok(());
@@ -226,8 +263,7 @@ fn run_block(b: &BlockRun<'_>, args: &mut [KernelArg], global: &mut Log) -> Resu
 fn run_phase<'a>(
     b: &BlockRun<'a>,
     t: &mut ThreadRun<'a>,
-    mem: &mut BlockMem,
-    global: &mut Log,
+    (mem, global, edges): (&mut BlockMem, &mut Log, &mut Edges),
     args: &mut [KernelArg],
 ) -> Result<(), KernelTrap> {
     let ctx = ThreadCtx {
@@ -240,6 +276,8 @@ fn run_phase<'a>(
         private: std::mem::take(&mut t.private),
         block: mem,
         global,
+        sync: edges,
+        site: (MemoryOrder::Relaxed, Scope::Device),
     };
     let mut m = Machine::new(b.k, args, Some(ctx));
     let module = b.module.map(|(m, _)| m);
@@ -252,6 +290,7 @@ fn run_phase<'a>(
     }
     m.locals = std::mem::take(&mut t.locals);
     m.steps = t.steps;
+    m.limit = b.limit;
     let stop = if t.started {
         m.resume(&mut t.stack, module)
     } else {
@@ -389,6 +428,7 @@ mod tests {
             sg,
             idx: [0; 3],
             lin: 0,
+            limit: STEP_LIMIT,
         };
         let mut threads: Vec<ThreadRun<'_>> = statuses
             .iter()
