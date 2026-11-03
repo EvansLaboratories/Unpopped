@@ -1726,11 +1726,13 @@ pub enum ReduceOp {
     /// Minimum that **ignores NaN** (IEEE `minNum`, CUDA `fminf`); a run of only NaN gives NaN.
     /// **Shape only (0.42.0):** refused with `UnsupportedReduceOp` until its semantics lands.
     MinNum,
-    /// The **index** of the maximum (`torch.argmax`): the first index of the extreme, and **NaN wins** (the first NaN's
-    /// index when there is one). The index is the position in the row-major order of the reduced axes (one axis: that
+    /// The **index** of the maximum (KISS-OPS-6.11-0007's order: NaN is the greatest value, ties go to the lower
+    /// index): the first index of the extreme, so the first NaN's index when there is one. The index is the position in the row-major order of the reduced axes (one axis: that
     /// axis's coordinate; all axes: the flat index). The output is an `I64` (`out_dtype = Some(I64)`). Reduction only.
     ArgMax,
-    /// The **index** of the minimum (`torch.argmin`), by the same rule: the first index of the extreme, NaN wins.
+    /// The **index** of the minimum, by KISS-OPS-6.11-0007's order (NaN is the greatest value, ties go to the lower
+    /// index): never a NaN while a non-NaN exists, and index `0` when every element is NaN. This differs from
+    /// `torch.argmin`, which returns the NaN's index; it was that until 0.42.5, which was a defect against KISS.
     ArgMin,
 }
 

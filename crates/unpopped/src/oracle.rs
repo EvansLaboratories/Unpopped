@@ -2878,8 +2878,10 @@ fn extremum_fold(
 
 /// The arms of [`fold_step`] not above: `And`, `Or`, `Xor`.
 /// One step of an arg-reduction: `idx` is the element's position in the row-major order of the reduced axes. The
-/// first element seeds; PyTorch's rule after that: a NaN accumulator is final (the first NaN wins), a NaN element
-/// takes over, and otherwise only a strictly better element replaces (so the first of equal values is kept).
+/// first element seeds; the rule is KISS-OPS-6.11-0007's: NaN orders as the **greatest** value and ties go to the
+/// lower index. So `ArgMax` takes the first NaN and then stays (a NaN accumulator is final), and `ArgMin` never takes a
+/// NaN while a non-NaN exists (a NaN accumulator is replaced by the first number; a NaN element is skipped). Only a
+/// strictly better element replaces, so the first of equal values is kept.
 fn arg_fold(
     rop: ReduceOp,
     e: Val,
@@ -2895,7 +2897,11 @@ fn arg_fold(
         if max { v > *acc_i } else { v < *acc_i }
     } else {
         let v = e.f64();
-        !acc_f.is_nan() && (v.is_nan() || if max { v > *acc_f } else { v < *acc_f })
+        if max {
+            !acc_f.is_nan() && (v.is_nan() || v > *acc_f)
+        } else {
+            !v.is_nan() && (acc_f.is_nan() || v < *acc_f)
+        }
     };
     if take {
         if int_acc {

@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! **Arg-reductions** (ROADMAP U5 P3, PM ruling 2026-11-02 (3); `docs/options-u5-collectives-and-richer-reductions.md`):
-//! `ReduceOp::ArgMax` / `ArgMin` in an `Access::Reduction` give the **index** of the extreme, as an `I64`
-//! (`out_dtype = Some(I64)`), with PyTorch's rule: the **first** index of the extreme, and **NaN wins** (it is the
-//! maximum and the minimum for this purpose), so a run with a NaN gives the first NaN's index. The index is the
-//! position in the row-major order of the reduced axes: one axis gives that axis's coordinate, all axes give the
-//! flat index (`torch.argmax(x)` with no `dim`).
+//! **Arg-reductions** (ROADMAP U5 P3; `docs/options-u5-collectives-and-richer-reductions.md`): `ReduceOp::ArgMax` /
+//! `ArgMin` in an `Access::Reduction` give the **index** of the extreme, as an `I64` (`out_dtype = Some(I64)`), by
+//! KISS-OPS-6.11-0007's order: NaN is the **greatest** value and ties go to the lower index. So `ArgMax` of a run with a
+//! NaN is the first NaN's index, and `ArgMin` never selects a NaN while a non-NaN exists (index 0 when every element is
+//! NaN). That differs from NumPy and PyTorch, whose `argmin` returns the NaN's index; 0.42.2 had the PyTorch rule, a
+//! defect against KISS fixed in 0.42.5. The index is the position in the row-major order of the reduced axes: one axis
+//! gives that axis's coordinate, all axes give the flat index.
 //!
-//! The oracle is held to a fold written here in Rust. The corpus has ties (the first index must win, not the last),
-//! a NaN first, a NaN in the middle with a larger number after it (a NaN-ignoring fold would skip it), an all-NaN row
-//! (index 0), an all-negative row (a seed of `0` is wrong) and signed zeros (equal, so the first).
+//! The oracle is held to a fold written here in Rust from the total order (not from the oracle's own steps). The
+//! corpus has ties (the first index must win, not the last), a NaN first (it decides `ArgMax`, and `ArgMin` must skip
+//! it), a NaN in the middle with a larger number after it, an all-NaN row (index 0 for both), an all-negative row (a
+//! seed of `0` is wrong) and signed zeros (equal, so the first).
 
 use unpopped::ir::{Expr, OpDef, ReduceOp, input};
 use unpopped::kernel::check_kernel;
@@ -22,7 +24,7 @@ use unpopped_vocab::{ArchSku, AxisMask, ElementKind, OpCategory, OperandDesc, st
 mod arg_loop;
 use arg_loop::loop_kernel;
 
-const ROWS: i64 = 5;
+const ROWS: i64 = 6;
 const COLS: i64 = 6;
 const ARGS: [ReduceOp; 2] = [ReduceOp::ArgMax, ReduceOp::ArgMin];
 
@@ -34,6 +36,7 @@ fn corpus() -> Vec<f64> {
         1.0, 4.0, n, 7.0, n, 2.0, //  a NaN in the middle, larger numbers after it
         -1.0, -2.0, -3.0, -4.0, -5.0, -6.0, //  all negative
         0.0, -0.0, 0.0, -0.0, 0.0, -0.0, //  equal zeros
+        n, n, n, n, n, n, //  all NaN
     ]
 }
 
@@ -69,15 +72,22 @@ fn values(dtype: ElementKind) -> Vec<f64> {
         .collect()
 }
 
-/// PyTorch's rule: the first NaN wins outright; otherwise the first strictly better element.
+/// `x` is greater than `y` in KISS-OPS-6.11-0007's total order: NaN is the greatest value (and equal to NaN).
+fn greater(x: f64, y: f64) -> bool {
+    (x.is_nan() && !y.is_nan()) || (!x.is_nan() && !y.is_nan() && x > y)
+}
+
+/// The first index of the extreme in that order: only a strictly greater (or, for the minimum, strictly smaller)
+/// element replaces, so ties keep the lower index.
 fn arg_of(xs: &[f64], max: bool) -> i64 {
     let mut best = 0usize;
     for (i, &x) in xs.iter().enumerate().skip(1) {
-        if xs[best].is_nan() {
-            break;
-        }
-        let better = if max { x > xs[best] } else { x < xs[best] };
-        if x.is_nan() || better {
+        let better = if max {
+            greater(x, xs[best])
+        } else {
+            greater(xs[best], x)
+        };
+        if better {
             best = i;
         }
     }
@@ -139,7 +149,7 @@ fn oracle(
 }
 
 #[test]
-fn the_oracle_matches_an_independent_pytorch_rule_fold() {
+fn the_oracle_matches_an_independent_kiss_order_fold() {
     for dtype in [ElementKind::F32, ElementKind::F64, ElementKind::I32] {
         for rop in ARGS {
             for axes in [&[][..], &[0][..], &[0, 1][..]] {
@@ -156,12 +166,13 @@ fn the_oracle_matches_an_independent_pytorch_rule_fold() {
 
 #[test]
 fn the_corpus_pins_the_rule() {
-    // ties: the FIRST 9 (index 1) and the first 1 (index 3); a NaN first wins both; a NaN in the middle wins over a
-    // larger number after it; an all-negative row; equal zeros give index 0
+    // ties: the FIRST 9 (index 1) and the first 1 (index 3); a NaN first wins ArgMax and is skipped by ArgMin (which
+    // finds the smallest number, index 4); a NaN in the middle wins ArgMax; an all-negative row; equal zeros and an
+    // all-NaN row give index 0
     let max = oracle(ElementKind::F32, ReduceOp::ArgMax, &[], true).unwrap();
     let min = oracle(ElementKind::F32, ReduceOp::ArgMin, &[], true).unwrap();
-    assert_eq!(max, vec![1, 0, 2, 0, 0]);
-    assert_eq!(min, vec![3, 0, 2, 5, 0]);
+    assert_eq!(max, vec![1, 0, 2, 0, 0, 0]);
+    assert_eq!(min, vec![3, 4, 0, 5, 0, 0]);
 }
 
 #[test]
