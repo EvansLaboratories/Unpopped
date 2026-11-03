@@ -2,6 +2,8 @@
 //! The scope and type checker for [`crate::kernel::KernelFn`] ([`check_kernel`]), split from
 //! `kernel.rs` so neither file outgrows the size the analysers accept.
 
+mod collective;
+
 use unpopped_vocab::ElementKind;
 
 use crate::exec::{Extent, MemorySpace, Scope as ExecScope};
@@ -189,11 +191,7 @@ fn check_sync_stmt(
                 what: "Fence: the shape is reserved and its semantics has not landed",
             });
         }
-        Stmt::Collective { .. } => {
-            return Err(KernelError::CollectiveUnsupported {
-                what: "Collective: the shape is reserved and its semantics has not landed",
-            });
-        }
+        Stmt::Collective { .. } => collective::check_collective(k, st, sc, declared_here)?,
         Stmt::Call {
             callee,
             args,

@@ -8,6 +8,7 @@
 //! through both (`the_two_evaluators_agree`) so a drift in loop semantics shows.
 
 use super::int_val;
+use super::kernel_collective::Contribution;
 use super::kernel_eval::{KernelTrap, Machine};
 use crate::exec::Scope;
 use crate::ir::ScalarExpr;
@@ -59,6 +60,12 @@ pub(super) enum Stop {
     Done,
     /// At a barrier statement (`at` identifies it) waiting for the rest of `scope`.
     Barrier { scope: Scope, at: usize },
+    /// At a collective statement, having contributed `c`, waiting for the rest of `scope`.
+    Collective {
+        scope: Scope,
+        at: usize,
+        c: Contribution,
+    },
 }
 
 /// The frame stack of a thread that has not started.
@@ -127,9 +134,8 @@ impl<'a> Machine<'a> {
             | Stmt::AtomicCas { .. } => {
                 self.exec_simple(st)?;
             }
-            Stmt::Fence { .. } | Stmt::Collective { .. } => {
-                return Err(KernelTrap::Unsupported("Fence or Collective (refused)"));
-            }
+            Stmt::Fence { .. } => return Err(KernelTrap::Unsupported("Fence (refused)")),
+            Stmt::Collective { .. } => return self.collective_stop(st).map(Some),
             Stmt::Call {
                 callee,
                 args,
@@ -161,6 +167,24 @@ impl<'a> Machine<'a> {
             }
         }
         Ok(None)
+    }
+
+    /// The thread reached a collective: evaluate its contribution and stop to wait for the rest of the scope.
+    fn collective_stop(&mut self, st: &Stmt) -> Result<Stop, KernelTrap> {
+        let Stmt::Collective {
+            kind,
+            value,
+            result,
+            scope,
+        } = st
+        else {
+            unreachable!("collective_stop is called for a Collective");
+        };
+        Ok(Stop::Collective {
+            scope: *scope,
+            at: std::ptr::from_ref(st) as usize,
+            c: self.contribution(kind, value, *result)?,
+        })
     }
 
     /// A `Call` against the module: push the callee's frame.

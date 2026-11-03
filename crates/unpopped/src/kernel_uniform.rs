@@ -138,12 +138,11 @@ impl Walk<'_> {
             | Stmt::Assign { .. }
             | Stmt::AtomicRmw { .. }
             | Stmt::AtomicCas { .. }
+            | Stmt::Collective { .. }
             | Stmt::Call { .. } => self.defines(st, div || *poisoned)?,
             Stmt::If { .. } | Stmt::For { .. } | Stmt::While { .. } => {
                 self.control(st, div, poisoned)?;
             }
-            // Refused by the checker until its semantics lands; a collective's result differs per lane.
-            Stmt::Collective { result, .. } => self.mark(*result),
             Stmt::Store { .. } | Stmt::Fence { .. } | Stmt::Return => {}
             Stmt::Break | Stmt::Continue => *poisoned |= div,
             Stmt::Barrier { .. } => {
@@ -179,6 +178,14 @@ impl Walk<'_> {
                 args,
                 result,
             } => self.call(*callee, args, *result, skipped)?,
+            // A collective is a rendezvous like a barrier: every lane of its scope must reach it, and a lane's
+            // result differs from another's.
+            Stmt::Collective { result, .. } => {
+                self.mark(*result);
+                if self.check && skipped {
+                    return Err(KernelError::BarrierDivergent);
+                }
+            }
             // The old value depends on the order the threads reach the element, so it differs
             // between threads whatever the operands are: a barrier under `if old == 0` is divergent.
             Stmt::AtomicRmw { old, .. } | Stmt::AtomicCas { old, .. } => {

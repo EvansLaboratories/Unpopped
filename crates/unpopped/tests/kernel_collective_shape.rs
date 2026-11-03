@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! `Stmt::Collective` (0.42.0; PM ruling 2026-11-02 on `docs/options-u5-collectives-and-richer-reductions.md`,
-//! P5): the shape rides the one `Stmt` break. Nothing runs a collective yet: `check_kernel` refuses it with a typed
-//! error, so no producer builds a kernel an interpreter would have to guess about, and the later slice that lands
-//! the semantics only lifts that refusal. The shape survives serialization, every kind of it.
+//! P5): the shape rode the one `Stmt` break (0.42.0) and was refused until its semantics landed (0.42.3,
+//! `kernel_collective.rs`). What stays here: the shape survives serialization, every kind of it, and a collective needs
+//! a launch.
 
 use unpopped::exec::Scope;
 use unpopped::ir::{ReduceOp, ScalarExpr};
@@ -51,13 +51,11 @@ fn every_kind() -> Vec<CollectiveKind> {
 }
 
 #[test]
-fn a_collective_is_refused_with_a_typed_error_until_its_semantics_land() {
+fn an_unlaunched_kernel_has_no_scope_to_rendezvous_in() {
+    // semantics landed in 0.42.3 (`kernel_collective.rs`); without a launch there are no lanes to exchange between
     for kind in every_kind() {
         let r = check_kernel(&kernel(vec![collective(kind.clone())]));
-        assert!(
-            matches!(r, Err(KernelError::CollectiveUnsupported { .. })),
-            "{kind:?}: {r:?}"
-        );
+        assert_eq!(r, Err(KernelError::ExecWithoutLaunch), "{kind:?}");
     }
 }
 

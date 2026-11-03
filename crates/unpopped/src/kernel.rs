@@ -303,9 +303,10 @@ pub enum Stmt {
     /// A collective over the threads of `scope`: every thread of the scope contributes `value`, and each
     /// receives its result in the local `result` (PM ruling 2026-11-02 on
     /// `docs/options-u5-collectives-and-richer-reductions.md`, P5). A statement and not an expression because it
-    /// rendezvouses like a [`Stmt::Barrier`]. **Shape reserved: `check_kernel` refuses it** until its
-    /// semantics land (v1: full participation of the scope, `Subgroup` then `Block`); it is in the 0.42.0
-    /// break so that `Stmt` breaks downstream once for it.
+    /// rendezvouses like a [`Stmt::Barrier`]. Since 0.42.3 the oracle runs it (full participation of a `Subgroup`
+    /// or a `Block`; `unpopped::oracle::kernel_launch`), and `check_kernel` admits the v1 forms
+    /// (`unpopped::kernel_check`'s collective checker); the shape came in the 0.42.0 break. `unpopped-cpu-c` does
+    /// not emit it yet.
     Collective {
         /// Which collective.
         kind: CollectiveKind,
