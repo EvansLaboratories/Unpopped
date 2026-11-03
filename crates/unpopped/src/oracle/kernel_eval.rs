@@ -806,7 +806,7 @@ fn int_shift(t: ElementKind, left: bool, x: i128, y: i128) -> i128 {
 }
 
 /// `v` wrapped to `t`'s width (two's complement for signed, modulo for unsigned).
-fn wrap(t: ElementKind, v: i128) -> i128 {
+pub(super) fn wrap(t: ElementKind, v: i128) -> i128 {
     let (lo, hi) = types::int_range(t).expect("wrap is called with an integer type");
     if (lo..=hi).contains(&v) {
         return v;

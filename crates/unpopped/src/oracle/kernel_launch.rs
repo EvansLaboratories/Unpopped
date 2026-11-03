@@ -26,6 +26,7 @@
 use std::ops::Range;
 
 use super::Val;
+use super::kernel_collective::{Contribution, results};
 use super::kernel_eval::{KernelArg, KernelTrap, Machine};
 use super::kernel_mem::{AllocMem, BlockMem, Log, ThreadCtx};
 use super::kernel_resume::{Frame, Stop, initial_stack};
@@ -182,6 +183,8 @@ struct ThreadRun<'a> {
     /// The function the thread is in (the entry unless it is inside a call) and its buffer map.
     fn_idx: u32,
     bufmap: Vec<usize>,
+    /// What the thread contributed to the collective it waits at, until the rendezvous completes.
+    contrib: Option<Contribution>,
 }
 
 fn run_block(b: &BlockRun<'_>, args: &mut [KernelArg], global: &mut Log) -> Result<(), KernelTrap> {
@@ -205,6 +208,7 @@ fn run_block(b: &BlockRun<'_>, args: &mut [KernelArg], global: &mut Log) -> Resu
             status: Status::Runnable,
             fn_idx: b.module.map_or(0, |(_, e)| e),
             bufmap: Vec::new(),
+            contrib: None,
         })
         .collect();
     loop {
@@ -262,10 +266,34 @@ fn run_phase<'a>(
     if let Some(c) = m.ctx.take() {
         t.private = c.private;
     }
-    t.status = match stop? {
+    t.status = status_after(stop?, t);
+    Ok(())
+}
+
+/// Where a thread is once it stopped: done, or waiting at a barrier or a collective (holding its contribution).
+fn status_after(stop: Stop, t: &mut ThreadRun<'_>) -> Status {
+    match stop {
         Stop::Done => Status::Done,
         Stop::Barrier { scope, at } => Status::Waiting { scope, at },
-    };
+        Stop::Collective { scope, at, c } => {
+            t.contrib = Some(c);
+            Status::Waiting { scope, at }
+        }
+    }
+}
+
+/// A collective whose every lane has arrived: compute the results and put each in its lane's local. It exchanges
+/// registers and orders no memory, so no epoch is counted.
+fn deliver(members: &mut [ThreadRun<'_>]) -> Result<(), KernelTrap> {
+    let lanes: Vec<Contribution> = members
+        .iter()
+        .map(|t| t.contrib.expect("every lane contributed"))
+        .collect();
+    let out = results(&lanes)?;
+    for ((t, c), v) in members.iter_mut().zip(&lanes).zip(out) {
+        t.locals[c.result as usize] = Some(v);
+        t.contrib = None;
+    }
     Ok(())
 }
 
@@ -314,12 +342,15 @@ fn release(
         return Err(KernelTrap::BarrierMismatch);
     }
     for (scope, group) in groups {
-        if scope == Scope::Subgroup {
+        let members = &mut threads[group.start as usize..group.end as usize];
+        if members.iter().all(|t| t.contrib.is_some()) {
+            deliver(members)?;
+        } else if scope == Scope::Subgroup {
             mem.sub_epoch[(group.start / b.sg) as usize] += 1;
         } else {
             mem.block_epoch += 1;
         }
-        for t in &mut threads[group.start as usize..group.end as usize] {
+        for t in members {
             t.status = Status::Runnable;
         }
     }
@@ -373,6 +404,7 @@ mod tests {
                 status: *s,
                 fn_idx: 0,
                 bufmap: Vec::new(),
+                contrib: None,
             })
             .collect();
         let mut mem = BlockMem {
