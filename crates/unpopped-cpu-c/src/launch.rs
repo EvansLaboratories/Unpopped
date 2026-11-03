@@ -292,6 +292,23 @@ impl Emitter<'_> {
     /// at its own slice, so the thread code is the one a single block uses. Blocks ascend within a phase, as in the
     /// oracle, which runs each block to the barrier before the next starts.
     fn device_body(&mut self, info: LaunchInfo, segments: &[&[Stmt]]) -> Result<(), LowerError> {
+        self.declare_grid_storage(info)?;
+        for (si, segment) in segments.iter().enumerate() {
+            self.line(&format!(
+                "// phase {si}: every block, up to the next Device barrier"
+            ));
+            self.open_block_view(info, si == 0)?;
+            self.phases(segment)?;
+            for _ in 0..3 {
+                self.depth -= 1;
+                self.line("}");
+            }
+        }
+        Ok(())
+    }
+
+    /// The arrays of the whole grid: every block's locals and `Shared` memory.
+    fn declare_grid_storage(&mut self, info: LaunchInfo) -> Result<(), LowerError> {
         let nt = info.threads();
         let nb: u32 = info.grid.iter().product();
         for (i, d) in self.k.locals.iter().enumerate() {
@@ -308,40 +325,37 @@ impl Emitter<'_> {
                 u64::from(nb) * u64::from(n)
             ));
         }
-        for (si, segment) in segments.iter().enumerate() {
+        Ok(())
+    }
+
+    /// Open the three block loops of a phase and point `l<i>` and `sh<i>` at the block's slices; the first phase also
+    /// copies the scalar parameters into the locals.
+    fn open_block_view(&mut self, info: LaunchInfo, first: bool) -> Result<(), LowerError> {
+        let nt = info.threads();
+        for a in [2usize, 1, 0] {
             self.line(&format!(
-                "// phase {si}: every block, up to the next Device barrier"
+                "for (long long blk{a} = 0; blk{a} < {}; ++blk{a}) {{",
+                info.grid[a]
             ));
-            for a in [2usize, 1, 0] {
-                self.line(&format!(
-                    "for (long long blk{a} = 0; blk{a} < {}; ++blk{a}) {{",
-                    info.grid[a]
-                ));
-                self.depth += 1;
-            }
-            let [gx, gy, _] = info.grid;
-            self.line(&format!(
-                "const long long bl = (blk2 * {gy} + blk1) * {gx} + blk0; (void)bl;"
-            ));
-            for (i, d) in self.k.locals.iter().enumerate() {
-                let t = ctype(d.elem, &format!("local {i}"))?;
-                self.line(&format!("{t} *l{i} = &l{i}_all[bl * {nt}];"));
-            }
-            self.view_shared_of_block()?;
-            if si == 0 {
-                for (i, p) in self.k.params.iter().enumerate() {
-                    if let ParamKind::Scalar { ty, local } = &p.kind {
-                        let t = ctype(*ty, "a scalar")?;
-                        self.line(&format!(
-                            "for (int t = 0; t < {nt}; ++t) l{local}[t] = ({t})p{i};"
-                        ));
-                    }
+            self.depth += 1;
+        }
+        let [gx, gy, _] = info.grid;
+        self.line(&format!(
+            "const long long bl = (blk2 * {gy} + blk1) * {gx} + blk0; (void)bl;"
+        ));
+        for (i, d) in self.k.locals.iter().enumerate() {
+            let t = ctype(d.elem, &format!("local {i}"))?;
+            self.line(&format!("{t} *l{i} = &l{i}_all[bl * {nt}];"));
+        }
+        self.view_shared_of_block()?;
+        if first {
+            for (i, p) in self.k.params.iter().enumerate() {
+                if let ParamKind::Scalar { ty, local } = &p.kind {
+                    let t = ctype(*ty, "a scalar")?;
+                    self.line(&format!(
+                        "for (int t = 0; t < {nt}; ++t) l{local}[t] = ({t})p{i};"
+                    ));
                 }
-            }
-            self.phases(segment)?;
-            for _ in 0..3 {
-                self.depth -= 1;
-                self.line("}");
             }
         }
         Ok(())
