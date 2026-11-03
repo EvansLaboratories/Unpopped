@@ -176,6 +176,11 @@ fn a_shuffle_reads_another_lane_or_keeps_its_own() {
     };
     assert_eq!(shuffle(ShuffleMode::Idx, 1), vec![2, 2, 2, 2, 6, 6, 6, 6]);
     assert_eq!(
+        shuffle(ShuffleMode::Idx, 6),
+        vec![3, 3, 3, 3, 7, 7, 7, 7],
+        "an index past the subgroup wraps: 6 mod 4 is lane 2"
+    );
+    assert_eq!(
         shuffle(ShuffleMode::Up, 1),
         vec![1, 1, 2, 3, 5, 5, 6, 7],
         "lane 0 has no lane below"
@@ -262,33 +267,52 @@ fn a_collective_in_divergent_control_is_refused() {
     assert_eq!(check_kernel(&k), Err(KernelError::BarrierDivergent));
 }
 
+/// `x[tid] = 1; <collective>; [barrier]; read x[7 - tid]` on a second buffer `x` (so `out` is not what races).
+fn memory_kernel(barrier_between: bool) -> KernelFn {
+    let mut k = on(CollectiveKind::Reduce(ReduceOp::Sum), Scope::Block);
+    k.params
+        .push(Param::buffer("x", I32, BufferRole::ReadWrite, Some(1)));
+    let x = |i: ScalarExpr| Place::Logical {
+        buffer: 1,
+        coords: vec![i],
+    };
+    let rev = ScalarExpr::Sub(Box::new(ScalarExpr::ConstInt(7, U32)), Box::new(tid()));
+    let store = Stmt::Store {
+        place: x(tid()),
+        value: ScalarExpr::ConstInt(1, I32),
+    };
+    let load = Stmt::Load {
+        local: 2,
+        place: x(rev),
+    };
+    k.body.0.insert(0, store);
+    if barrier_between {
+        k.body.0.insert(3, Stmt::barrier(Scope::Block));
+    }
+    k.body.0.push(load);
+    k.locals.push(LocalDecl::scalar(I32));
+    k
+}
+
+fn run_with_x(k: &KernelFn) -> Result<(), KernelTrap> {
+    let buf = |n| TypedBuffer::new(I32, vec![i64::from(N)], vec![1], vec![0u8; n]);
+    let mut args = vec![
+        KernelArg::Buffer(buf(4 * N as usize)),
+        KernelArg::Buffer(buf(4 * N as usize)),
+    ];
+    run_launch_with_subgroup(k, &mut args, Some(4))
+}
+
 #[test]
 fn a_collective_does_not_order_memory() {
-    // x[tid] = 1; collective; read x[7 - tid]: still a data race, because only a barrier orders memory
-    let k = {
-        let mut k = on(CollectiveKind::Reduce(ReduceOp::Sum), Scope::Block);
-        let store = Stmt::Store {
-            place: Place::Logical {
-                buffer: 0,
-                coords: vec![tid()],
-            },
-            value: ScalarExpr::ConstInt(1, I32),
-        };
-        let rev = ScalarExpr::Sub(Box::new(ScalarExpr::ConstInt(7, U32)), Box::new(tid()));
-        let load = Stmt::Load {
-            local: 2,
-            place: Place::Logical {
-                buffer: 0,
-                coords: vec![rev],
-            },
-        };
-        k.body.0.insert(0, store);
-        k.body.0.insert(3, load);
-        k.locals.push(LocalDecl::scalar(I32));
-        k
-    };
-    assert_eq!(check_kernel(&k), Ok(()));
-    assert_eq!(run(&k, I32), Err(KernelTrap::DataRace));
+    // only a barrier orders memory: the same kernel races with the collective alone and not with a barrier after it
+    assert_eq!(check_kernel(&memory_kernel(false)), Ok(()));
+    assert_eq!(run_with_x(&memory_kernel(false)), Err(KernelTrap::DataRace));
+    assert_eq!(
+        run_with_x(&memory_kernel(true)),
+        Ok(()),
+        "the control: a barrier orders it"
+    );
 }
 
 #[test]
