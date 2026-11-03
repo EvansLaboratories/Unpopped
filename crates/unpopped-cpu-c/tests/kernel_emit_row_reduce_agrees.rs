@@ -111,6 +111,22 @@ fn identity_epilogues_agree_exactly() {
 }
 
 #[test]
+fn a_product_stage_agrees_including_zero_and_sign() {
+    // ROADMAP U2 D3: a product starts at 1 (a sum's 0 would make every answer 0); a zero and a negative are in
+    let vals = [
+        2.0, -3.0, 0.5, 4.0, 1.5, 2.0, 0.0, 3.0, -4.0, 5.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+    ];
+    for dtype in [F32, F64] {
+        let src = buffer(dtype, 3, 5, |i| vals[i]);
+        agree(
+            &format!("rr_prod_{dtype:?}"),
+            &identity(dtype, ReduceOp::Prod),
+            args(src),
+        );
+    }
+}
+
+#[test]
 fn extremum_rows_that_never_cross_zero_agree() {
     // A Max over an all-negative row and a Min over an all-positive row: an accumulator that
     // starts at the sum identity (0) returns 0 for both.

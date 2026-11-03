@@ -4143,14 +4143,6 @@ pub(crate) fn check_row_reduce(
         }
     }
     for (i, st) in stages.iter().enumerate() {
-        // Prod stages (0e added the combiner to Access::Reduction, not to the
-        // fused RowReduce cooperative reducer) are an honest miss here — the
-        // emitter has no block_prod in the row path. Gate + emitter backstop.
-        assert!(
-            !matches!(st.op, ReduceOp::Prod),
-            "RowReduce stage {i}: the Prod combiner is not supported in the fused \
-             row-reduce path (0e adds Prod to Access::Reduction only); miss honestly"
-        );
         check(&st.pre, n_inputs, i as u8, true, &is_col)?;
     }
     check(epilogue, n_inputs, stages.len() as u8, false, &is_col)
@@ -4161,9 +4153,8 @@ pub(crate) fn check_row_reduce(
 /// [`check_row_reduce`]'s operand-role + layout checks, with three DELIBERATE
 /// differences:
 ///
-/// - **ADMITS `Prod`** — unlike RowReduce (which forbids `Prod` because the fused
-///   row path has no `block_prod`), a scan explicitly wants cumprod, and the
-///   serial base folds it directly. Only the block-scan VARIANT emitter (§4)
+/// - **ADMITS `Prod`** — a scan explicitly wants cumprod, and the
+///   serial base folds it directly (RowReduce admits a `Prod` stage too since 0.42.6; only its launched lift declines). Only the block-scan VARIANT emitter (§4)
 ///   declines integer Sum/Prod; the serial base is `BitIdentical` for every
 ///   admitted dtype (integer Sum/Prod wraps exactly; Max/Min is exactly associative).
 /// - **NO float-only gate** — integer `Sum`/`Prod`/`Max`/`Min` on the serial base
@@ -4192,7 +4183,7 @@ fn validate_scan(op: &OpDef, key: &StructureKey, axis: u8, reverse: bool, exclus
 
     // Mean is not a monoid (no identity a running prefix can carry) — reject before
     // anything else so the message is unambiguous. Prod is DELIBERATELY admitted
-    // (the row-reduce Prod ban does NOT carry over — a scan folds cumprod serially).
+    // (a scan folds cumprod serially).
     assert!(
         !matches!(scan_op, ReduceOp::Mean),
         "OpDef '{name}': Scan combine Mean is not a monoid (no identity/associative \
@@ -6041,7 +6032,7 @@ mod scan_gate_validate {
 
     #[test]
     fn prod_is_admitted_unlike_rowreduce() {
-        // DELIBERATE difference from check_row_reduce: Prod IS admitted (cumprod).
+        // Prod is admitted (cumprod).
         let sc = OpDef::scan_simple(
             "cumprod",
             &[ElementKind::F32],

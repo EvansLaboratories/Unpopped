@@ -437,7 +437,9 @@ fn forms_the_lift_does_not_cover_decline_with_a_reason() {
     );
     assert_eq!(
         lift_row_reduce_opdef_launched(&identity(F32, ReduceOp::Prod), F32, 2, 8, 2),
-        Err(LiftDecline::UnsupportedForm("a Prod or empty stage list"))
+        Err(LiftDecline::UnsupportedForm(
+            "a Prod stage in a launched row reduction (a float product is not order-independent, and no bound is declared)"
+        ))
     );
 }
 
