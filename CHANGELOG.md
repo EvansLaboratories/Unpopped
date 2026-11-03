@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.42.21` — ROADMAP row U2b for the effects model (docs only)
+
+D6 of `docs/options-u2-lift-declines.md` gets its own row so #113 can close: D1-D5 are built, and the effects model waits for a consumer. No code changed; the version is a placeholder for the PM to allocate.
+
 ## `0.42.20` — a concept map of the IR for the KISS kernel-body layer (docs only)
 
 `docs/kiss-kernel-body-concept-map.md`, written for the KISS lane (`jkkstudy`) at the PM's request after CireSnave agreed (2026-11-03) that this IR is source material for a new KISS normative sub-standard with Unpopped as one implementation. Per construct (function and launch, types and expressions, statements, memory spaces, barriers, atomics/fences/the race rule, collectives, MMA atoms, source leaves): the observable behaviour, what is language-common versus target-dependent, and the evidence (oracle, independent references, compiled-C differential, seeded mutants). It says plainly that nothing has run on a device, that the MMA kernel-body construct is a proposal, and lists eleven places where Unpopped decided something KISS might decide differently. Read at `origin/main` `aae2739`. No code changed; the version is a placeholder for the PM to allocate (0.42.19 is S1a, in review).
