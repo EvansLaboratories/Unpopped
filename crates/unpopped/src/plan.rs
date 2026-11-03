@@ -4354,8 +4354,8 @@ fn validate_scan(op: &OpDef, key: &StructureKey, axis: u8, reverse: bool, exclus
 ///   semantics (i32 `sum/count` truncates); avg_pool is float-only. `Max`/`Min`/
 ///   `Sum` are legal on the integer base too (max/min-pool select; sum-pool
 ///   wraps, matching the reduction Sum contract).
-/// - **`axis == rank - 1`** — v1 pools the innermost (contiguous) axis only; a
-///   non-inner axis needs a strided window skeleton (deferred).
+/// - **`axis < rank`** — any axis; a non-innermost axis (since 0.42.12) needs every
+///   input full-width dense, the oracle walking it with the axis stride.
 /// - **`size`/`stride`/`dilation >= 1`** — a zero window / stride / dilation is a
 ///   degenerate (empty-window) config.
 /// - **`2*pad_lo <= span` and `2*pad_hi <= span`** where the tap footprint is
@@ -4428,13 +4428,21 @@ fn validate_window(
     assert!(rank >= 1, "Window needs a pooled axis (rank >= 1)");
     let last = (rank - 1) as u8;
 
-    // v1: the innermost (contiguous, trailing) axis only.
+    // Any axis of the rank (since 0.42.12). The innermost axis keeps the row-iteration skeleton (with column-broadcast
+    // and per-row operands); another axis is strided, and every input must then be full-width dense.
     assert!(
-        axis == last,
-        "Window v1 pools the innermost (contiguous) axis only: axis {axis} != \
-         rank-1 ({last}) — a non-inner window axis is a deferred follow-up (reject \
-         so the miss is honest, not silently wrong)"
+        axis <= last,
+        "Window axis {axis} is outside the rank {rank} (axes 0..={last})"
     );
+    if axis != last {
+        for i in 0..n {
+            let o = key.operands[i];
+            assert!(
+                o.bcast.is_empty() && o.contig == Contiguity::Contig && !o.flipped,
+                "Window over a non-innermost axis needs input {i} full-width dense (no broadcast, contiguous, not reversed)"
+            );
+        }
+    }
 
     // Window-parameter legality — a degenerate (empty-window) config is a reject.
     assert!(
@@ -6408,9 +6416,18 @@ mod window_gate_validate {
     }
 
     #[test]
-    #[should_panic(expected = "innermost")]
-    fn non_inner_axis_rejected() {
+    fn a_non_inner_axis_plans_for_dense_inputs() {
+        // 0.42.12: axis 0 on a rank-2 cell (a strided window over dense operands)
         let p = pool(ReduceOp::Max, ElementKind::F32, 0, 2, 2, 1, 0, 0, false);
+        let key = window_key(ElementKind::F32);
+        let plan = build_plan(&p, &key);
+        assert!(matches!(plan.schedule, Schedule::Window { axis: 0, .. }));
+    }
+
+    #[test]
+    #[should_panic(expected = "outside the rank")]
+    fn a_window_axis_outside_the_rank_is_rejected() {
+        let p = pool(ReduceOp::Max, ElementKind::F32, 2, 2, 2, 1, 0, 0, false);
         let _ = build_plan(&p, &window_key(ElementKind::F32));
     }
 
