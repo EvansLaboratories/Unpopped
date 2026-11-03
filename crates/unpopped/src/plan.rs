@@ -4331,8 +4331,9 @@ fn validate_scan(op: &OpDef, key: &StructureKey, axis: u8, reverse: bool, exclus
 /// backstop). Mirrors [`validate_scan`]'s operand-role + layout checks, with the
 /// pooling-specific window-parameter gate:
 ///
-/// - **`op != Prod`** — `Prod` is not a pool (a windowed product is niche and not
-///   in the pool family); rejected. `Max`/`Min`/`Sum`/`Mean` are admitted.
+/// - **`Prod`** — a windowed product is not in the pool family (KISS has `avg_pool` and
+///   `max_pool` only); since 0.42.9 it is admitted as an Unpopped extension, the product of the
+///   in-bounds taps from the identity `1`. `Max`/`Min`/`Sum`/`Mean` are admitted.
 /// - **`Mean` requires a float dtype** — an integer average has rounding
 ///   semantics (i32 `sum/count` truncates); avg_pool is float-only. `Max`/`Min`/
 ///   `Sum` are legal on the integer base too (max/min-pool select; sum-pool
@@ -4377,13 +4378,6 @@ fn validate_window(
     };
     let name = &op.name;
 
-    // Prod is not a pool; reject before anything else so the message is
-    // unambiguous. Max/Min/Sum/Mean are the admitted window combines.
-    assert!(
-        !matches!(wop, ReduceOp::Prod),
-        "OpDef '{name}': Window combine Prod is not a pool (a windowed product is \
-         out of the pooling family) — v1 pools Max/Min/Sum/Mean only"
-    );
     // Mean (avg_pool) is float-only: an integer average rounds (i32 sum/count
     // truncates). Max/Min/Sum ride the integer base too.
     if matches!(wop, ReduceOp::Mean) {
@@ -6363,8 +6357,8 @@ mod window_gate_validate {
     // ---- window-specific gates (each mutation-checked both directions) ----
 
     #[test]
-    #[should_panic(expected = "not a pool")]
-    fn prod_combine_rejected() {
+    fn prod_combine_is_admitted_as_an_extension() {
+        // 0.42.9: a windowed product plans (it is an Unpopped extension, not a KISS op)
         let p = pool(ReduceOp::Prod, ElementKind::F32, 1, 2, 2, 1, 0, 0, false);
         let _ = build_plan(&p, &window_key(ElementKind::F32));
     }

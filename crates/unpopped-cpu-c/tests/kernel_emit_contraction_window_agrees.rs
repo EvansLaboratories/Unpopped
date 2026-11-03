@@ -207,6 +207,7 @@ fn every_pool_agrees_with_both_mean_divisors() {
     let mut means = Vec::new();
     for (wop, include) in [
         (ReduceOp::Sum, false),
+        (ReduceOp::Prod, false), // ROADMAP U2 D2, an Unpopped extension (0.42.9)
         (ReduceOp::Max, false),
         (ReduceOp::Min, false),
         (ReduceOp::Mean, false),

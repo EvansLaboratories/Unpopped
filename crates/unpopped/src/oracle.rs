@@ -3338,8 +3338,10 @@ fn eval_window(
         let base = row * k_in;
         for o in 0..k_out {
             // Fold the valid taps.
-            let mut acc_f = 0.0f64;
-            let mut acc_i: i128 = 0;
+            // a product starts at the multiplicative identity
+            let one = matches!(wop, ReduceOp::Prod);
+            let mut acc_f = if one { 1.0f64 } else { 0.0f64 };
+            let mut acc_i: i128 = i128::from(one);
             let mut best_f = 0.0f64;
             let mut best_i: i128 = 0;
             let mut cnt = 0i64;
@@ -3374,6 +3376,14 @@ fn eval_window(
                         }
                         cnt += 1;
                     }
+                    ReduceOp::Prod => {
+                        if int_acc {
+                            acc_i = wrap_bits(acc_i.wrapping_mul(v.i128()), op_width(plan.dtype));
+                        } else {
+                            acc_f *= v.f64();
+                        }
+                        cnt += 1;
+                    }
                     ReduceOp::Max => {
                         if int_acc {
                             let x = v.i128();
@@ -3402,8 +3412,7 @@ fn eval_window(
                         }
                         have = true;
                     }
-                    ReduceOp::Prod
-                    | ReduceOp::And
+                    ReduceOp::And
                     | ReduceOp::Or
                     | ReduceOp::Xor
                     | ReduceOp::MaxNum
@@ -3414,7 +3423,7 @@ fn eval_window(
             }
             // Finalize.
             let prefix: Val = match wop {
-                ReduceOp::Sum => {
+                ReduceOp::Sum | ReduceOp::Prod => {
                     if int_acc {
                         Val::Int(acc_i)
                     } else {
@@ -3442,8 +3451,7 @@ fn eval_window(
                         Val::Float(if have { best_f } else { ident_f })
                     }
                 }
-                ReduceOp::Prod
-                | ReduceOp::And
+                ReduceOp::And
                 | ReduceOp::Or
                 | ReduceOp::Xor
                 | ReduceOp::MaxNum

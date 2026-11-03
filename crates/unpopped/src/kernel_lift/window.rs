@@ -42,7 +42,7 @@ pub fn lift_window_opdef(
     let mut body = Block(vec![
         Stmt::Let {
             local: w.acc,
-            init: w.zero(),
+            init: w.seed(g.op),
         },
         Stmt::Let {
             local: w.have,
@@ -139,7 +139,7 @@ fn check_window(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Geometry, Li
         }
         Some(post.clone())
     };
-    if matches!(wop, ReduceOp::Prod) || usize::from(*axis) + 1 != usize::from(rank) {
+    if usize::from(*axis) + 1 != usize::from(rank) {
         return Err(LiftDecline::UnsupportedForm(
             "a window that is not a pool over the last axis",
         ));
@@ -221,12 +221,13 @@ impl Win {
         }
     }
 
-    /// The accumulator's starting value (a `Max`/`Min` is guarded by `have`).
-    fn zero(&self) -> ScalarExpr {
+    /// The accumulator's starting value: `0`, or `1` for a product (a `Max`/`Min` is guarded by `have`).
+    fn seed(&self, op: ReduceOp) -> ScalarExpr {
+        let one = matches!(op, ReduceOp::Prod);
         if self.is_int() {
-            ScalarExpr::ConstInt(0, self.dtype)
+            ScalarExpr::ConstInt(i64::from(one), self.dtype)
         } else {
-            self.up(ScalarExpr::Const(0.0))
+            self.up(ScalarExpr::Const(if one { 1.0 } else { 0.0 }))
         }
     }
 
