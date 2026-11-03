@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! The `Access::Window` lift (1-D pooling over the innermost axis).
+//! The `Access::Window` lift (1-D pooling over one axis: the innermost, or since 0.42.12 any axis).
 //!
 //! Per output cell the oracle folds the valid taps `p = o*stride - pad_lo + kk*dilation` (those
 //! inside `[0, k_in)`) in `f64`, in ascending `kk`, then finalises: `Sum` as is, `Mean` divided by
@@ -21,7 +21,7 @@ use super::{
 use crate::ir::{Access, OpDef, ReduceOp, ScalarExpr};
 use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 
-/// Lift a 1-D `Access::Window` over `rank` axes (the pooled axis is the innermost), computed at
+/// Lift a 1-D `Access::Window` over `rank` axes (the pooled axis is any axis since 0.42.12), computed at
 /// `dtype` (`F32` or `F64`; `I32` or `I64` for `Sum`/`Max`/`Min` with the identity post, where the
 /// accumulator is the dtype itself and the oracle's exact wrapping fold is matched).
 ///
