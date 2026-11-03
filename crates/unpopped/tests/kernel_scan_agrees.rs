@@ -186,13 +186,13 @@ fn forms_the_lift_does_not_cover_decline_with_a_reason() {
         lift_scan_opdef(&ew, ElementKind::F32, 2),
         Err(LiftDecline::NotScan)
     );
-    // A scan over an outer axis.
+    // A scan over an outer axis lifts since 0.42.11 (`tests/scan_axis.rs`); an axis outside the rank does not.
     let outer = OpDef::scan_simple("o", &f32k, ReduceOp::Sum, 0, false, false);
+    assert!(lift_scan_opdef(&outer, ElementKind::F32, 2).is_ok());
+    let beyond = OpDef::scan_simple("b", &f32k, ReduceOp::Sum, 2, false, false);
     assert_eq!(
-        lift_scan_opdef(&outer, ElementKind::F32, 2),
-        Err(LiftDecline::UnsupportedForm(
-            "a scan over a non-innermost axis"
-        ))
+        lift_scan_opdef(&beyond, ElementKind::F32, 2),
+        Err(LiftDecline::UnsupportedForm("a scan axis outside the rank"))
     );
     // A fused post-expression lifts in tolerance mode (`kernel_scan_post_agrees.rs`).
     let post = OpDef::scan(

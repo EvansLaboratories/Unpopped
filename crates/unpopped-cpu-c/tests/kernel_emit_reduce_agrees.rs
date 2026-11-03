@@ -185,6 +185,19 @@ fn a_running_mean_agrees_including_the_nan_of_an_empty_exclusive_prefix() {
 }
 
 #[test]
+fn a_scan_over_the_outer_axis_agrees() {
+    // ROADMAP U2 D5 (0.42.11): the same rank-2 tensor scanned down its columns (axis 0)
+    for (rop, reverse, exclusive) in [(ReduceOp::Sum, false, false), (ReduceOp::Max, true, true)] {
+        let op = OpDef::scan_simple("s", &[F32], rop, 0, reverse, exclusive);
+        agree(
+            &format!("scan_axis0_{rop:?}_{reverse}_{exclusive}"),
+            &scan_kernel(&op, F32),
+            scan_args(F32),
+        );
+    }
+}
+
+#[test]
 fn every_scan_monoid_agrees() {
     // Forward-inclusive and reverse-exclusive bracket the two directions and both write orders.
     for rop in [ReduceOp::Sum, ReduceOp::Prod, ReduceOp::Max, ReduceOp::Min] {
