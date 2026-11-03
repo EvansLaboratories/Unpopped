@@ -224,20 +224,21 @@ fn a_local_and_a_shared_array_survive_the_barrier() {
 
 #[test]
 fn a_two_dimensional_grid_and_a_scalar_parameter_across_the_barrier() {
-    // grid [2, 2]: block (bx, by) writes part[2 * by + bx]; after the barrier every block sums the four and adds the
+    // grid [3, 2] (unequal extents, so a swapped x and y shows): block (bx, by) writes part[3 * by + bx]; after the
+    // barrier every block sums the six and adds the
     // scalar parameter `k` (local 0, set once before phase 0 and read in phase 1)
     let id = ScalarExpr::Add(
         Box::new(ScalarExpr::Mul(
             Box::new(as_i32(ScalarExpr::Exec(ExecId::BlockIdx(1)))),
-            Box::new(c(2)),
+            Box::new(c(3)),
         )),
         Box::new(as_i32(block_idx())),
     );
-    let loads = (0..4).map(|i| Stmt::Load {
+    let loads = (0..6).map(|i| Stmt::Load {
         local: 1 + i,
         place: at(0, ScalarExpr::ConstInt(i64::from(i), U32)),
     });
-    let total = (1..=4).map(local).fold(local(0), |acc, l| {
+    let total = (1..=6).map(local).fold(local(0), |acc, l| {
         ScalarExpr::Add(Box::new(acc), Box::new(l))
     });
     let mut after: Vec<Stmt> = loads.collect();
@@ -257,9 +258,9 @@ fn a_two_dimensional_grid_and_a_scalar_parameter_across_the_barrier() {
         .map(|i| Param::buffer(format!("b{i}"), I32, BufferRole::ReadWrite, Some(1)))
         .collect();
     params.push(Param::scalar("k", I32, 0));
-    let locals = (0..5).map(|_| LocalDecl::scalar(I32)).collect();
+    let locals = (0..7).map(|_| LocalDecl::scalar(I32)).collect();
     let k = KernelFn::new("grid2", I32, params, locals, Block(body))
-        .with_launch(LaunchShape::new([T, 1, 1], [2, 2, 1]));
+        .with_launch(LaunchShape::new([T, 1, 1], [3, 2, 1]));
     assert_eq!(check_kernel(&k), Ok(()));
     let mut a = args(2);
     a.push(KernelArg::Int(7));
