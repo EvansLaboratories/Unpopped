@@ -168,7 +168,8 @@ fn grid_released(stops: &[Option<BlockStop>]) -> Result<bool, KernelTrap> {
         return Ok(true);
     }
     let first = stop(&stops[0]);
-    if first == BlockStop::Done || stops.iter().any(|s| stop(s) != first) {
+    // a finished block among waiting ones differs from them, so one comparison covers both strandings
+    if stops.iter().any(|s| stop(s) != first) {
         return Err(KernelTrap::BarrierMismatch);
     }
     Ok(false)
