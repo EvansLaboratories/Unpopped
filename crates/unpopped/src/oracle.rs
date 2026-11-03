@@ -2785,7 +2785,8 @@ fn eval_contraction(
                 });
                 // Epilogue over Reduced(0) = the accumulator, plus the optional
                 // fused bias: Input(i>=2) is the per-column `[N]` bias, read at
-                // column `ni` (broadcast over rows; batched v1 carries no bias). No
+                // column `ni` (broadcast over rows) or a full `[M,N]` C at `[mi,ni]`; batched v1 carries
+                // neither. No
                 // Coord leaves. lhs/rhs (0/1) never appear.
                 let reduced_leaf = |s: u8| {
                     assert_eq!(s, 0, "contraction epilogue reads only Reduced(0)");
@@ -2796,11 +2797,24 @@ fn eval_contraction(
                         i as usize >= 2 && (i as usize) < n_in,
                         "contraction epilogue Input({i}) must be a fused bias (2..n_inputs)"
                     );
+                    // A rank-1 operand is the per-column `[N]` bias; a rank-2 one is a full
+                    // `[M,N]` C read at `[m,n]` (ROADMAP U7 S1a-2). The key separates them.
+                    let extra = &operands[i as usize];
+                    let at: &[i64] = match extra.rank {
+                        1 => &[ni],
+                        2 => &[mi, ni],
+                        r => panic!("contraction epilogue Input({i}) has rank {r}, not 1 or 2"),
+                    };
+                    assert!(
+                        extra.rank == 1 || (extra.shape[0] == m && extra.shape[1] == n),
+                        "oracle: a full C is [M,N] = [{m},{n}], got {:?}",
+                        extra.shape
+                    );
                     read_strided(
                         inputs,
                         operands,
                         i as usize,
-                        &[ni],
+                        at,
                         input_read(plan, i as usize),
                     )
                 };

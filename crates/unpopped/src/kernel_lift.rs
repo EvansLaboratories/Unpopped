@@ -1179,8 +1179,37 @@ fn nan_arm(rop: ReduceOp, int: bool, (acc, val): (u32, u32), keep_going: Stmt) -
 ///
 /// A [`LiftDecline`].
 pub fn lift_contraction_opdef(op: &OpDef, dtype: ElementKind) -> Result<KernelFn, LiftDecline> {
+    lift_contraction_opdef_with(op, dtype, ContractionExtra::Bias)
+}
+
+/// What every extra input `Input(2..n_inputs)` of a lifted contraction is. The op does not say
+/// (the operand's rank does, through its `StructureKey` `bcast`), so the caller names it.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ContractionExtra {
+    /// A dense `[N]` per-column bias read at the output column (the default).
+    Bias,
+    /// A dense row-major `[M,N]` C read at the output element `[m,n]`, plain matmul only
+    /// (ROADMAP U7 S1a-2; an Unpopped extension, KISS pins no C operand).
+    FullC,
+}
+
+/// [`lift_contraction_opdef`] with the form of the extra inputs named. See [`ContractionExtra`].
+///
+/// # Errors
+///
+/// A [`LiftDecline`].
+pub fn lift_contraction_opdef_with(
+    op: &OpDef,
+    dtype: ElementKind,
+    extra: ContractionExtra,
+) -> Result<KernelFn, LiftDecline> {
     let (batched, epilogue) = check_contraction(op, dtype)?;
-    let sh = ContractionShape::new(dtype, batched, op.n_inputs.saturating_sub(2));
+    let sh = ContractionShape::new(
+        dtype,
+        batched,
+        op.n_inputs.saturating_sub(2),
+        extra == ContractionExtra::FullC,
+    );
     let k_loop = for_axis(
         sh.k,
         sh.axes,
@@ -1292,10 +1321,12 @@ struct ContractionShape {
     red: u32,
     /// Fused bias inputs: bias `j` is buffer `3 + j` and, with an epilogue, local `red + 1 + j`.
     biases: u32,
+    /// The extra inputs are full `[M,N]` C buffers rather than `[N]` biases.
+    full_c: bool,
 }
 
 impl ContractionShape {
-    fn new(dtype: ElementKind, batched: bool, biases: u8) -> Self {
+    fn new(dtype: ElementKind, batched: bool, biases: u8, full_c: bool) -> Self {
         let axes = if batched { 4 } else { 3 };
         let off = u32::from(batched);
         Self {
@@ -1310,6 +1341,7 @@ impl ContractionShape {
             acc: 2 * axes + 2,
             red: 2 * axes + 3,
             biases: u32::from(biases),
+            full_c,
         }
     }
 
@@ -1355,6 +1387,15 @@ impl ContractionShape {
         c
     }
 
+    /// Where a fused extra input is read: the output column, or the output element for a full C.
+    fn extra_coords(&self) -> Vec<ScalarExpr> {
+        if self.full_c {
+            self.out_coords()
+        } else {
+            vec![self.counter(self.n)]
+        }
+    }
+
     fn load(&self, buffer: u32, coords: &[ScalarExpr], local: u32) -> Stmt {
         Stmt::Load {
             local,
@@ -1395,7 +1436,7 @@ impl ContractionShape {
         });
         for j in 0..self.biases {
             body.0
-                .push(self.load(3 + j, &[self.counter(self.n)], self.red + 1 + j));
+                .push(self.load(3 + j, &self.extra_coords(), self.red + 1 + j));
         }
         post::bind(epilogue, &|leaf| match leaf {
             ScalarExpr::Reduced(_) => Some(ScalarExpr::Local(self.red)),
@@ -1412,10 +1453,14 @@ impl ContractionShape {
             buf("rhs", BufferRole::Read),
             buf("out", BufferRole::Write),
         ];
-        params.extend(
-            (0..self.biases)
-                .map(|j| Param::buffer(format!("bias{j}"), self.dtype, BufferRole::Read, Some(1))),
-        );
+        params.extend((0..self.biases).map(|j| {
+            Param::buffer(
+                format!("bias{j}"),
+                self.dtype,
+                BufferRole::Read,
+                Some(if self.full_c { 2 } else { 1 }),
+            )
+        }));
         let names = if self.batched {
             vec!["b", "m", "n", "k"]
         } else {

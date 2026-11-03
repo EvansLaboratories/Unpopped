@@ -5,9 +5,11 @@
 //! are compared with `run_kernel`. The serial C is a correctness reference; nothing is timed.
 
 use unpopped::backend::Backend;
-use unpopped::ir::{ContractionAxes, OpDef, ReduceOp, reduced};
+use unpopped::ir::{ContractionAxes, OpDef, ReduceOp, input, konst, reduced};
 use unpopped::kernel::{KernelFn, check_kernel};
-use unpopped::kernel_lift::{lift_contraction_opdef, lift_window_opdef};
+use unpopped::kernel_lift::{
+    ContractionExtra, lift_contraction_opdef, lift_contraction_opdef_with, lift_window_opdef,
+};
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
 use unpopped_cpu_c::CpuC;
@@ -143,6 +145,32 @@ fn matmul_agrees_dense_and_transposed() {
     // Column-major operands: a lift assuming dense row-major would pass the case above only.
     let k = matmul_kernel(false, F32);
     agree("mm_t", &k, matmul_args(F32, [1, 3], [1, 5]));
+}
+
+/// `2 * (A.B) + 0.5 * C` with C a full `[3,4]` buffer (ROADMAP U7 S1a-2), `C` stored with `c_strides`.
+fn full_c_args(dtype: ElementKind, c_strides: [i64; 2]) -> Vec<KernelArg> {
+    let mut a = matmul_args(dtype, [5, 1], [4, 1]);
+    a.insert(
+        3,
+        KernelArg::Buffer(buffer(dtype, &[3, 4], &c_strides, |i| value(i + 7))),
+    );
+    a
+}
+
+#[test]
+fn a_full_c_epilogue_agrees_dense_and_column_major() {
+    for dtype in [F32, F64] {
+        let op = OpDef::contraction_bias(
+            "dc",
+            &[dtype],
+            reduced(0) * konst(2.0) + input(2) * konst(0.5),
+        );
+        let k = lift_contraction_opdef_with(&op, dtype, ContractionExtra::FullC).expect("lifts");
+        assert_eq!(check_kernel(&k), Ok(()));
+        agree(&format!("fc_{dtype:?}"), &k, full_c_args(dtype, [4, 1]));
+        // Column-major C: a C read at `row * N + col` instead of its own strides would differ.
+        agree(&format!("fc_t_{dtype:?}"), &k, full_c_args(dtype, [1, 3]));
+    }
 }
 
 #[test]

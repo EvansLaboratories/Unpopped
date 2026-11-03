@@ -1713,6 +1713,17 @@ fn classify_mat_layout(od: &OperandDesc) -> Option<LayoutOrder> {
     })
 }
 
+/// `true` when a contraction's extra operand is a dense `[N]` per-column bias or a dense
+/// row-major `[M,N]` C. A strided or broadcast one would be mis-read by the emitter's
+/// hardcoded `in2[col]` / `in2[row*N+col]`, so it declines (an honest miss).
+fn extra_operand_ok(op: &OperandDesc, m: i64, n: i64) -> bool {
+    match op.rank {
+        1 => op.shape[0] == n && op.strides[0] == 1,
+        2 => op.shape[0] == m && op.shape[1] == n && op.strides[0] == n && op.strides[1] == 1,
+        _ => false,
+    }
+}
+
 /// [item 10] Derive contraction structure facts for the canonical rank-2
 /// row-major dense GEMM cell: `operands = [lhs [M,K], rhs [K,N], out [M,N]]`.
 /// `out` stays required-canonical (row-major) in v1 — output views are
@@ -1769,11 +1780,12 @@ fn derive_contraction(
             // broadcast over M). The emitter reads a hardcoded `in2[col]`, so a
             // strided or broadcast (stride-0) bias would silently mis-read / read
             // out of bounds — decline (honest miss) rather than emit a wrong load.
-            if has_bias {
-                let bias = &operands[2];
-                if bias.rank != 1 || bias.shape[0] != n || bias.strides[0] != 1 {
-                    return None;
-                }
+            // The extra operand is either that bias or a full dense row-major `[M,N]`
+            // C the epilogue reads at `[m,n]` (ROADMAP U7 S1a-2). The two key differently
+            // through `OperandKey::bcast` (the bias is broadcast over M); any other shape,
+            // stride or order declines.
+            if has_bias && !extra_operand_ok(&operands[2], m, n) {
+                return None;
             }
             Some(ContractionKey {
                 m: SizeClass::of(m),
