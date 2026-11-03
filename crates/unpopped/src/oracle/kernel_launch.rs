@@ -113,11 +113,11 @@ fn launch_checked(
         .collect::<Result<Vec<_>, _>>()?;
     let mut global = Log::new();
     let mut edges = Edges::default();
-    let blocks = launch.grid[0] * launch.grid[1] * launch.grid[2];
+    let mut runs = Vec::new();
     for gz in 0..launch.grid[2] {
         for gy in 0..launch.grid[1] {
             for gx in 0..launch.grid[0] {
-                let b = BlockRun {
+                runs.push(BlockRun {
                     k,
                     module,
                     launch,
@@ -126,18 +126,52 @@ fn launch_checked(
                     idx: [gx, gy, gz],
                     lin: gx + launch.grid[0] * (gy + launch.grid[1] * gz),
                     limit,
-                };
-                match run_block(&b, args, &mut global, &mut edges) {
-                    // blocks run in order: a runaway after an acquire, with blocks still to run, is a wait on one of them
-                    Err(KernelTrap::StepLimit) if edges.acquired && b.lin + 1 < blocks => {
-                        return Err(KernelTrap::CrossBlockWait);
-                    }
-                    r => r?,
-                }
+                });
             }
         }
     }
-    Ok(())
+    let mut states: Vec<BlockState<'_>> = runs.iter().map(start_block).collect();
+    let mut stops: Vec<Option<BlockStop>> = vec![None; runs.len()];
+    loop {
+        // Blocks run in order, each to its end or to a `Device` barrier. With no device barrier this is one block
+        // after another; with one, every block is resident and the barrier is a rendezvous of the whole grid.
+        for (i, (b, st)) in runs.iter().zip(states.iter_mut()).enumerate() {
+            if stops[i].is_some() {
+                continue;
+            }
+            stops[i] = Some(match advance(b, st, args, &mut global, &mut edges) {
+                // a runaway after an acquire, with blocks still to run, is a wait on one of them
+                Err(KernelTrap::StepLimit) if edges.acquired && i + 1 < runs.len() => {
+                    return Err(KernelTrap::CrossBlockWait);
+                }
+                r => r?,
+            });
+        }
+        if grid_released(&stops)? {
+            return Ok(());
+        }
+        edges.dev_epoch += 1;
+        for (st, stop) in states.iter_mut().zip(stops.iter_mut()) {
+            *stop = None;
+            for t in &mut st.threads {
+                t.status = Status::Runnable;
+            }
+        }
+    }
+}
+
+/// Whether the launch is over (`true`), or every block waits at one `Device` barrier and may go on (`false`).
+/// A block that finished while others wait, or blocks waiting at different barriers, can never be released.
+fn grid_released(stops: &[Option<BlockStop>]) -> Result<bool, KernelTrap> {
+    let stop = |s: &Option<BlockStop>| s.expect("every block has stopped");
+    if stops.iter().all(|s| stop(s) == BlockStop::Done) {
+        return Ok(true);
+    }
+    let first = stop(&stops[0]);
+    if first == BlockStop::Done || stops.iter().any(|s| stop(s) != first) {
+        return Err(KernelTrap::BarrierMismatch);
+    }
+    Ok(false)
 }
 
 fn pick_subgroup(launch: &LaunchShape, want: Option<u32>) -> Result<u32, KernelTrap> {
@@ -219,21 +253,29 @@ struct ThreadRun<'a> {
     contrib: Option<Contribution>,
 }
 
-fn run_block(
-    b: &BlockRun<'_>,
-    args: &mut [KernelArg],
-    global: &mut Log,
-    edges: &mut Edges,
-) -> Result<(), KernelTrap> {
+/// One block between `Device` barriers: its threads and its memory.
+struct BlockState<'a> {
+    threads: Vec<ThreadRun<'a>>,
+    mem: BlockMem,
+}
+
+/// Where a block stopped: it finished, or all its threads wait at the `Device` barrier `at`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BlockStop {
+    Done,
+    Device { at: usize },
+}
+
+fn start_block<'a>(b: &BlockRun<'a>) -> BlockState<'a> {
     let [bx, by, bz] = b.launch.block;
     let n = bx * by * bz;
-    let mut mem = BlockMem {
+    let mem = BlockMem {
         shared: instances(b.k, b.lens, MemorySpace::Shared),
         log: Log::new(),
         block_epoch: 0,
         sub_epoch: vec![0; n.div_ceil(b.sg) as usize],
     };
-    let mut threads: Vec<ThreadRun<'_>> = (0..n)
+    let threads: Vec<ThreadRun<'_>> = (0..n)
         .map(|lin| ThreadRun {
             idx: [lin % bx, (lin / bx) % by, lin / (bx * by)],
             lin,
@@ -248,15 +290,54 @@ fn run_block(
             contrib: None,
         })
         .collect();
+    BlockState { threads, mem }
+}
+
+/// Run a block until it finishes or all its threads wait at one `Device` barrier.
+fn advance<'a>(
+    b: &BlockRun<'a>,
+    st: &mut BlockState<'a>,
+    args: &mut [KernelArg],
+    global: &mut Log,
+    edges: &mut Edges,
+) -> Result<BlockStop, KernelTrap> {
     loop {
-        for t in threads.iter_mut().filter(|t| t.status == Status::Runnable) {
-            run_phase(b, t, (&mut mem, global, &mut *edges), args)?;
+        for t in st
+            .threads
+            .iter_mut()
+            .filter(|t| t.status == Status::Runnable)
+        {
+            run_phase(b, t, (&mut st.mem, global, &mut *edges), args)?;
         }
-        if threads.iter().all(|t| t.status == Status::Done) {
-            return Ok(());
+        if st.threads.iter().all(|t| t.status == Status::Done) {
+            return Ok(BlockStop::Done);
         }
-        release(b, &mut threads, &mut mem)?;
+        if let Some(at) = at_device_barrier(&st.threads) {
+            return Ok(BlockStop::Device { at });
+        }
+        release(b, &mut st.threads, &mut st.mem)?;
     }
+}
+
+/// The `Device` barrier every thread of the block waits at, if they all wait at the same one.
+fn at_device_barrier(threads: &[ThreadRun<'_>]) -> Option<usize> {
+    let Status::Waiting {
+        scope: Scope::Device,
+        at,
+    } = threads.first()?.status
+    else {
+        return None;
+    };
+    threads
+        .iter()
+        .all(|t| {
+            t.status
+                == Status::Waiting {
+                    scope: Scope::Device,
+                    at,
+                }
+        })
+        .then_some(at)
 }
 
 /// Run one thread until it finishes or reaches a barrier.
@@ -503,5 +584,29 @@ mod tests {
         let s = [wait(SUB, 1), Status::Done, wait(SUB, 2), wait(SUB, 2)];
         let (r, ..) = released(&s, 2);
         assert_eq!(r, Err(KernelTrap::BarrierMismatch));
+    }
+    fn dev(at: usize) -> Option<BlockStop> {
+        Some(BlockStop::Device { at })
+    }
+
+    #[test]
+    fn the_grid_is_released_only_when_every_block_waits_at_one_device_barrier() {
+        let done = Some(BlockStop::Done);
+        assert_eq!(grid_released(&[done, done]), Ok(true));
+        assert_eq!(grid_released(&[dev(3), dev(3), dev(3)]), Ok(false));
+        // a finished block strands the others, wherever it sits in the order
+        assert_eq!(
+            grid_released(&[done, dev(3)]),
+            Err(KernelTrap::BarrierMismatch)
+        );
+        assert_eq!(
+            grid_released(&[dev(3), done]),
+            Err(KernelTrap::BarrierMismatch)
+        );
+        // blocks waiting at different barriers can never be released
+        assert_eq!(
+            grid_released(&[dev(3), dev(4)]),
+            Err(KernelTrap::BarrierMismatch)
+        );
     }
 }

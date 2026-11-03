@@ -48,6 +48,9 @@ pub(super) struct Edges {
     pending: HashMap<Tid, Vec<Record>>,
     /// A thread's latest release fence: its scope and what it knew then.
     fence_rel: HashMap<Tid, (Scope, Clock)>,
+    /// `Device` barriers released so far: every access before one is ordered before every access after it, whatever
+    /// the blocks.
+    pub(super) dev_epoch: u32,
     /// Whether any acquire-class atomic has run: a block that then runs away may be waiting on a later block.
     pub(super) acquired: bool,
 }

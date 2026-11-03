@@ -387,8 +387,9 @@ fn a_load_from_an_allocation_declares_its_element_type() {
 // ---- Barrier shape ----------------------------------------------------------------------------
 
 #[test]
-fn a_barrier_scope_must_be_subgroup_or_block() {
-    for s in [Scope::Subgroup, Scope::Block] {
+fn a_barrier_scope_must_be_subgroup_block_or_device() {
+    // Device since 0.42.13 (`tests/kernel_device_barrier.rs`)
+    for s in [Scope::Subgroup, Scope::Block, Scope::Device] {
         let mut body = baseline_body();
         body[3] = Stmt::Barrier {
             scope: s,
@@ -396,7 +397,7 @@ fn a_barrier_scope_must_be_subgroup_or_block() {
         };
         assert_eq!(check_kernel(&kernel(body)), Ok(()), "{s:?}");
     }
-    for s in [Scope::Thread, Scope::Cluster, Scope::Device] {
+    for s in [Scope::Thread, Scope::Cluster] {
         let mut body = baseline_body();
         body[3] = Stmt::Barrier {
             scope: s,
