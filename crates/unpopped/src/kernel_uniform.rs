@@ -13,7 +13,7 @@
 //! or `Continue` that sat under such control. It rejects some correct programs and never accepts
 //! a divergent barrier; the four known over-rejections are pinned in `tests/kernel_barrier.rs`.
 
-use crate::exec::{ExecId, MemorySpace};
+use crate::exec::{ExecId, MemorySpace, Scope};
 use crate::ir::ScalarExpr;
 use crate::kernel::{Block, CallArg, KernelError, KernelFn, Place, Stmt};
 use crate::types::operands;
@@ -27,6 +27,7 @@ pub(crate) fn check_barriers(k: &KernelFn, barrier_callees: &[bool]) -> Result<(
     let mut w = Walk {
         k,
         barrier_callees,
+        device: holds_device_barrier(&k.body),
         divergent: vec![false; k.locals.len()],
         changed: false,
         check: false,
@@ -42,9 +43,22 @@ pub(crate) fn check_barriers(k: &KernelFn, barrier_callees: &[bool]) -> Result<(
     w.block(&k.body, false, &mut false)
 }
 
+/// Whether `b` holds a `Barrier` of `Device` scope: its threads are the whole grid, so a value read from `BlockIdx`
+/// differs between them.
+fn holds_device_barrier(b: &Block) -> bool {
+    b.0.iter().any(|st| match st {
+        Stmt::Barrier { scope, .. } => *scope == Scope::Device,
+        Stmt::If { then, els, .. } => holds_device_barrier(then) || holds_device_barrier(els),
+        Stmt::For { body, .. } | Stmt::While { body, .. } => holds_device_barrier(body),
+        _ => false,
+    })
+}
+
 struct Walk<'a> {
     k: &'a KernelFn,
     barrier_callees: &'a [bool],
+    /// The kernel holds a `Device` barrier, so `BlockIdx` is divergent.
+    device: bool,
     divergent: Vec<bool>,
     changed: bool,
     check: bool,
@@ -61,10 +75,8 @@ impl Walk<'_> {
 
     fn expr(&self, e: &ScalarExpr) -> bool {
         match e {
-            ScalarExpr::Exec(id) => !matches!(
-                id,
-                ExecId::BlockIdx(_) | ExecId::BlockDim(_) | ExecId::GridDim(_)
-            ),
+            ScalarExpr::Exec(ExecId::BlockIdx(_)) => self.device,
+            ScalarExpr::Exec(id) => !matches!(id, ExecId::BlockDim(_) | ExecId::GridDim(_)),
             ScalarExpr::Local(i) => self.divergent[*i as usize],
             _ => operands(e).into_iter().any(|x| self.expr(x)),
         }

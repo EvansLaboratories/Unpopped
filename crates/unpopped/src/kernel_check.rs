@@ -207,7 +207,10 @@ fn check_sync_stmt(
         } => check_call(k, (*callee, args, *result), sc, declared_here)?,
         Stmt::Barrier { scope, kind } => {
             let BarrierKind::Full = kind;
-            if !matches!(scope, ExecScope::Subgroup | ExecScope::Block) {
+            if !matches!(
+                scope,
+                ExecScope::Subgroup | ExecScope::Block | ExecScope::Device
+            ) {
                 return Err(KernelError::BadBarrierScope);
             }
             if k.launch.is_none() {

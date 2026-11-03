@@ -32,11 +32,16 @@ pub(super) struct Stamp {
     /// The access's place in the launch's sequence (`kernel_sync`), and the scope an atomic was issued at.
     pub(super) seq: u64,
     pub(super) scope: Scope,
+    /// The `Device` barriers released before this access.
+    pub(super) dev_epoch: u32,
 }
 
 /// Whether `prev` and `now` are unordered, so a conflict between them is a race: no barrier orders them and `now`
 /// has not acquired from `prev` through a release/acquire atomic.
 fn unordered(prev: Stamp, now: Stamp, sync: &Edges) -> bool {
+    if prev.dev_epoch < now.dev_epoch {
+        return false;
+    }
     if prev.block == now.block && prev.thread == now.thread {
         return false;
     }
@@ -190,6 +195,7 @@ impl ThreadCtx<'_> {
             block_epoch: self.block.block_epoch,
             sub_epoch: self.block.sub_epoch[sub as usize],
             seq: self.sync.next(),
+            dev_epoch: self.sync.dev_epoch,
             scope: if kind == AccessKind::Atomic {
                 self.site.1
             } else {
