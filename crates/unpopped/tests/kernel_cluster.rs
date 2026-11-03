@@ -175,8 +175,9 @@ fn clusters_tile_the_grid_on_every_axis() {
             Box::new(bx.clone()),
         )
     };
-    let mate = ScalarExpr::Binary(BinaryOp::BitXor, Box::new(by.clone()), Box::new(c(1)));
-    let k = |barrier: bool| {
+    let other =
+        |flip: i64| ScalarExpr::Binary(BinaryOp::BitXor, Box::new(by.clone()), Box::new(c(flip)));
+    let k = |barrier: bool, flip: i64| {
         let mut body = vec![thread0(vec![Stmt::Store {
             place: at(0, lin(by.clone())),
             value: ScalarExpr::Add(Box::new(lin(by.clone())), Box::new(c(1))),
@@ -187,7 +188,7 @@ fn clusters_tile_the_grid_on_every_axis() {
         body.push(thread0(vec![
             Stmt::Load {
                 local: 1,
-                place: at(0, lin(mate.clone())),
+                place: at(0, lin(other(flip))),
             },
             Stmt::Store {
                 place: at(1, lin(by.clone())),
@@ -202,10 +203,12 @@ fn clusters_tile_the_grid_on_every_axis() {
             .with_launch(LaunchShape::new([2, 1, 1], [2, 4, 1]).with_cluster([1, 2, 1]))
     };
     // out[2 * by + bx] = mate's partial = 2 * (by ^ 1) + bx + 1
-    let out = run(&k(true)).expect("mates are ordered")[1].clone();
+    let out = run(&k(true, 1)).expect("mates are ordered")[1].clone();
     assert_eq!(out, [3, 4, 1, 2, 7, 8, 5, 6]);
     // without the barrier the mate's partial is unordered
-    assert_eq!(run(&k(false)), Err(KernelTrap::DataRace));
+    assert_eq!(run(&k(false, 1)), Err(KernelTrap::DataRace));
+    // the block two rows away (by ^ 2) is in the next cluster along y: the barrier does not order it
+    assert_eq!(run(&k(true, 2)), Err(KernelTrap::DataRace));
 }
 
 #[test]
