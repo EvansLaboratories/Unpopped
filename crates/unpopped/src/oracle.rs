@@ -102,6 +102,7 @@
 //! BEFORE all per-element address math), since the plan carries only the PRESENCE
 //! mask, not the runtime value.
 
+mod accum_policy;
 mod kernel_call;
 mod kernel_collective;
 pub mod kernel_eval;
@@ -2736,8 +2737,10 @@ fn eval_contraction(
     inputs: &[TypedBuffer],
     params: &[f64],
 ) -> TypedBuffer {
-    let epilogue = match plan.access {
-        Access::Contraction { epilogue, .. } => epilogue,
+    let (epilogue, accum) = match plan.access {
+        Access::Contraction {
+            epilogue, accum, ..
+        } => (epilogue, accum),
         _ => unreachable!("eval_contraction requires Access::Contraction"),
     };
     let n_in = plan.n_inputs as usize;
@@ -2763,8 +2766,7 @@ fn eval_contraction(
         for mi in 0..m {
             for ni in 0..n {
                 // K-sum, `kk` ascending — the emitter's inner loop order.
-                let mut acc = 0.0f64;
-                for kk in 0..k {
+                let pair = |kk: i64| {
                     let (lc, rc): (Vec<i64>, Vec<i64>) = if batched {
                         (vec![bi, mi, kk], vec![bi, kk, ni])
                     } else {
@@ -2772,8 +2774,15 @@ fn eval_contraction(
                     };
                     let a = read_strided(inputs, operands, 0, &lc, ViewRead::Direct).f64();
                     let b = read_strided(inputs, operands, 1, &rc, ViewRead::Direct).f64();
-                    acc += a * b;
-                }
+                    (a, b)
+                };
+                // a reduced-precision policy states its own conversion and rounding; the default accumulates in f64
+                let acc = accum_policy::contract(accum, k, pair).unwrap_or_else(|| {
+                    (0..k).fold(0.0f64, |acc, kk| {
+                        let (a, b) = pair(kk);
+                        acc + a * b
+                    })
+                });
                 // Epilogue over Reduced(0) = the accumulator, plus the optional
                 // fused bias: Input(i>=2) is the per-column `[N]` bias, read at
                 // column `ni` (broadcast over rows; batched v1 carries no bias). No

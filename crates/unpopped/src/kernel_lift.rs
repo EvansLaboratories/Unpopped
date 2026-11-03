@@ -16,7 +16,7 @@ use unpopped_vocab::{AxisMask, ElementKind};
 
 use crate::exec::{ExecId, LaunchShape};
 use crate::ir::{
-    Access, BinaryOp, CastSpec, ContractionAxes, OpDef, ReduceOp, RoundMode, Saturation,
+    Access, AccumSpec, BinaryOp, CastSpec, ContractionAxes, OpDef, ReduceOp, RoundMode, Saturation,
     ScalarExpr, View, WriteIndex,
 };
 use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
@@ -1229,9 +1229,19 @@ fn check_contraction(
     op: &OpDef,
     dtype: ElementKind,
 ) -> Result<(bool, Option<&ScalarExpr>), LiftDecline> {
-    let Access::Contraction { axes, epilogue, .. } = &op.access else {
+    let Access::Contraction {
+        axes,
+        epilogue,
+        accum,
+    } = &op.access
+    else {
         return Err(LiftDecline::NotContraction);
     };
+    if !matches!(accum, AccumSpec::WideFloat) {
+        return Err(LiftDecline::UnsupportedForm(
+            "a reduced-precision accumulation policy (the kernel lift models the f64 sum only)",
+        ));
+    }
     if !matches!(dtype, ElementKind::F32 | ElementKind::F64) {
         return Err(LiftDecline::UnsupportedForm("a non-float contraction"));
     }

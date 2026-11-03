@@ -8,8 +8,8 @@
 //! the backend, keeps the decision shared across every backend.
 
 use crate::ir::{
-    Access, BaseOffset, DagNode, OpDef, QualOp, ReadIndex, ReduceOp, ReduceStage, RoundMode,
-    ScalarExpr, SortLimit, SortOrder, SortOut, View, WriteCombine, WriteIndex,
+    Access, AccumSpec, BaseOffset, DagNode, OpDef, QualOp, ReadIndex, ReduceOp, ReduceStage,
+    RoundMode, ScalarExpr, SortLimit, SortOrder, SortOut, View, WriteCombine, WriteIndex,
     is_admissible_int_reduction_operand,
 };
 use unpopped_vocab::{
@@ -448,6 +448,14 @@ pub enum ContractionDecline {
     /// The epilogue reads something other than the K-sum, constants and the fused
     /// bias inputs.
     EpilogueInadmissible,
+    /// The op's accumulation policy does not fit the key: a TF32 or bf16x3 policy needs `F32` operands, an `f16`
+    /// accumulator needs `F16`, and `k_step` must be at least 1 (`docs/accum-policies.md`).
+    AccumPolicyMismatch {
+        /// The key's operand dtype.
+        dtype: ElementKind,
+        /// The policy's `k_step` (zero is refused).
+        k_step: u32,
+    },
     /// The op has a `Batch` axis and the key declares no batch (or the reverse): the
     /// key and the op describe different cells. A rank-3 key whose caller declared
     /// no batch axis is the usual way to reach this.
@@ -478,6 +486,10 @@ impl std::fmt::Display for ContractionDecline {
                 f,
                 "contraction: epilogue may read only Reduced(0), constants, and the \
                  fused bias Input(2..n_inputs); got a disallowed leaf"
+            ),
+            Self::AccumPolicyMismatch { dtype, k_step } => write!(
+                f,
+                "contraction: the accumulation policy needs F32 operands (TF32, 3xTF32, bf16x3) or F16 (an f16                  accumulator) and a k_step of at least 1; got operands {dtype:?}, k_step {k_step}"
             ),
             Self::BatchDisagrees {
                 op_batched,
@@ -1045,12 +1057,20 @@ fn check_contraction(op: &OpDef, key: &StructureKey) -> Result<(), PlanError> {
     let Access::Contraction {
         ref axes,
         ref epilogue,
-        ..
+        ref accum,
     } = op.access
     else {
         return Ok(());
     };
     let decline = |d| Err(PlanError::UnservableContraction(d));
+    if let Some((want, k_step)) = accum_policy_fit(accum) {
+        if key.dtype != want || k_step == 0 {
+            return decline(ContractionDecline::AccumPolicyMismatch {
+                dtype: key.dtype,
+                k_step,
+            });
+        }
+    }
     let rank = key.rank as usize;
     if let Err(detail) = validate_contraction_roles(axes, rank, rank) {
         return decline(ContractionDecline::RolesInvalid { detail });
@@ -1078,6 +1098,17 @@ fn check_contraction(op: &OpDef, key: &StructureKey) -> Result<(), PlanError> {
         }
     }
     Ok(())
+}
+
+/// The operand dtype a reduced-precision accumulation policy needs and its `k_step`; `None` for [`AccumSpec::WideFloat`].
+fn accum_policy_fit(accum: &AccumSpec) -> Option<(ElementKind, u32)> {
+    match *accum {
+        AccumSpec::Tf32 { k_step }
+        | AccumSpec::Tf32x3 { k_step }
+        | AccumSpec::Bf16x3 { k_step } => Some((ElementKind::F32, k_step)),
+        AccumSpec::F16Accum { k_step } => Some((ElementKind::F16, k_step)),
+        _ => None,
+    }
 }
 
 /// The access role of a [`Access::RowReduce`] input operand, from its layout.
