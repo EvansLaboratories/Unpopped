@@ -410,3 +410,66 @@ fn thread_and_cluster_scopes_are_still_refused() {
         );
     }
 }
+
+#[test]
+fn the_release_itself_is_ordered_for_the_acquirer() {
+    // after acquiring, the consumer plain-reads the flag the producer's atomic wrote
+    let k = |acq| {
+        kernel(
+            2,
+            1,
+            vec![
+                when(is(false, 0), vec![publish(0, 1, (Release, DEV))]),
+                when(
+                    is(false, 1),
+                    vec![
+                        observe(0, (acq, DEV)),
+                        Stmt::Load {
+                            local: 1,
+                            place: at(1, 0),
+                        },
+                        Stmt::Store {
+                            place: at(2, 0),
+                            value: local(1),
+                        },
+                    ],
+                ),
+            ],
+        )
+    };
+    assert_eq!(run(&k(Acquire)), Ok(1));
+    assert_eq!(run(&k(Relaxed)), Err(KernelTrap::DataRace));
+}
+
+#[test]
+fn two_releasers_on_one_flag_are_both_acquired() {
+    // t0 and t1 each publish their own data with a release add; t2 acquires the flag after both
+    let add = Stmt::AtomicRmw {
+        op: AtomicOp::Add,
+        place: at(1, 0),
+        value: c(1),
+        old: None,
+        order: Release,
+        scope: DEV,
+    };
+    let k = kernel(
+        3,
+        1,
+        vec![
+            when(is(false, 0), vec![store(0, 0, 10), add.clone()]),
+            when(is(false, 1), vec![store(0, 1, 20), add]),
+            when(
+                is(false, 2),
+                vec![observe(0, (Acquire, DEV)), when(seen(2), copy_data())],
+            ),
+        ],
+    );
+    assert_eq!(run(&k), Ok(10));
+}
+
+#[test]
+fn a_runaway_in_the_last_block_is_not_a_cross_block_wait() {
+    // nothing is left to run that could satisfy it
+    let k = kernel(1, 1, spin_and_read(Acquire));
+    assert_eq!(run(&k), Err(KernelTrap::StepLimit));
+}
