@@ -92,7 +92,7 @@ fn refuse_callee_barriers(m: &Module, entry: u32) -> Result<(), LowerError> {
 
 fn holds_barrier(b: &Block) -> bool {
     b.0.iter().any(|st| match st {
-        Stmt::Barrier { .. } => true,
+        Stmt::Barrier { .. } | Stmt::Collective { .. } => true,
         Stmt::If { then, els, .. } => holds_barrier(then) || holds_barrier(els),
         Stmt::For { body, .. } | Stmt::While { body, .. } => holds_barrier(body),
         _ => false,

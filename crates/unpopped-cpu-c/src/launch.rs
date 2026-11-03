@@ -53,6 +53,9 @@ const MAX_THREADS: u32 = 1024;
 pub(crate) struct LaunchInfo {
     pub(crate) block: [u32; 3],
     pub(crate) grid: [u32; 3],
+    /// The subgroup size a `Subgroup` collective groups by: the launch's required minimum (the oracle's default),
+    /// or `1` when the launch states none.
+    pub(crate) subgroup: u32,
 }
 
 impl LaunchInfo {
@@ -60,10 +63,11 @@ impl LaunchInfo {
         k.launch.as_ref().map(|l| Self {
             block: l.block,
             grid: l.grid,
+            subgroup: l.subgroup.map_or(1, |s| s.min.max(1)),
         })
     }
 
-    fn threads(self) -> u32 {
+    pub(crate) fn threads(self) -> u32 {
         self.block.iter().product()
     }
 }
@@ -116,7 +120,8 @@ fn has_return(b: &[Stmt]) -> bool {
 /// Whether `s` is a barrier or holds one.
 fn contains_barrier(s: &Stmt) -> bool {
     match s {
-        Stmt::Barrier { .. } => true,
+        // a collective is a rendezvous like a barrier: the thread loop ends before it and a new one starts after
+        Stmt::Barrier { .. } | Stmt::Collective { .. } => true,
         Stmt::If { then, els, .. } => has_barrier_block(&then.0) || has_barrier_block(&els.0),
         Stmt::For { body, .. } | Stmt::While { body, .. } => has_barrier_block(&body.0),
         _ => false,
@@ -265,6 +270,7 @@ impl Emitter<'_> {
             self.flush_run(&mut run)?;
             match s {
                 Stmt::Barrier { .. } => self.line("// barrier: the thread loop ends here"),
+                Stmt::Collective { .. } => self.collective(s)?,
                 Stmt::If { cond, then, els } => self.block_if(cond, then, els)?,
                 Stmt::For {
                     local,

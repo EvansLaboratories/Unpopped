@@ -305,8 +305,9 @@ pub enum Stmt {
     /// `docs/options-u5-collectives-and-richer-reductions.md`, P5). A statement and not an expression because it
     /// rendezvouses like a [`Stmt::Barrier`]. Since 0.42.3 the oracle runs it (full participation of a `Subgroup`
     /// or a `Block`; `unpopped::oracle::kernel_launch`), and `check_kernel` admits the v1 forms
-    /// (`unpopped::kernel_check`'s collective checker); the shape came in the 0.42.0 break. `unpopped-cpu-c` does
-    /// not emit it yet.
+    /// (`unpopped::kernel_check`'s collective checker); the shape came in the 0.42.0 break. Since 0.42.4
+    /// `unpopped-cpu-c` emits it as a block-level construct between two thread loops. A call that reaches a
+    /// collective is a barrier site, as one that reaches a `Barrier` is.
     Collective {
         /// Which collective.
         kind: CollectiveKind,

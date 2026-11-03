@@ -1,6 +1,6 @@
 # Options note: collectives, arg-reductions, bit reductions, NaN-ignoring reductions, custom combines (ROADMAP U5)
 
-Status: **ruled 2026-11-02 (A staged; P4 at the kernel layer; P3 PyTorch; P5 full participation; P1 `MaxNum`/`MinNum`, all-NaN gives NaN); slice 1 built in 0.42.0, P1 (`MaxNum`/`MinNum`) in 0.42.1, P3 (arg-reductions, as `ReduceOp::{ArgMax, ArgMin}` rather than a new `Access` variant) in 0.42.2, P5 (collectives, in the oracle) in 0.42.3.** Written as a proposal, nothing built, before the rulings. Asked by the PM (`[TASK]`, 2026-11-02: "U5 options note then build", ROADMAP
+Status: **ruled 2026-11-02 (A staged; P4 at the kernel layer; P3 PyTorch; P5 full participation; P1 `MaxNum`/`MinNum`, all-NaN gives NaN); slice 1 built in 0.42.0, P1 (`MaxNum`/`MinNum`) in 0.42.1, P3 (arg-reductions, as `ReduceOp::{ArgMax, ArgMin}` rather than a new `Access` variant) in 0.42.2, P5 (collectives, in the oracle) in 0.42.3 and the cpu-c reference in 0.42.4.** Written as a proposal, nothing built, before the rulings. Asked by the PM (`[TASK]`, 2026-11-02: "U5 options note then build", ROADMAP
 demand order U2, U3, U6, U4, U5). Gap rows 3.6 (collectives) and 3.16 (reductions, scans and sort with richer
 state) of `docs/ir-union-design.md`; increment I5. Read at `origin/main` `265e642` (0.41.13). The surveys it leans on
 are `docs/ir-union-surveys/{cuda,cute,mojo,triton}.md`; their cell contents are quoted, not re-measured.
