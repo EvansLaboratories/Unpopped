@@ -2146,8 +2146,8 @@ pub enum Access {
     /// (contiguous) axis; the index-carrying cummax/cummin backward pair and
     /// `LogCumsumExp` (non-monoid) are DEFERRED.
     Scan {
-        /// The associative monoid combine (reuses [`ReduceOp`]; `Mean` is rejected
-        /// at `plan::validate_scan` — it is not a monoid).
+        /// The associative monoid combine (reuses [`ReduceOp`]; `Mean` is a running
+        /// mean, float only, admitted since 0.42.10 as an Unpopped extension, not KISS: ThinkersJournal/KISS#766).
         op: ReduceOp,
         /// The scanned axis. v1 asserts `axis == rank - 1` (innermost, contiguous).
         axis: u8,
@@ -3324,8 +3324,8 @@ impl OpDef {
     /// over the running prefix, which it references as `reduced(0)` (identity:
     /// `reduced(0)`). `body == post`, mirroring [`OpDef::row_reduce`]/
     /// [`OpDef::contraction`], so every body-walker (params/flops/ulp/DAG/
-    /// `derive_pattern`) operates on the primary output expr unchanged. v1 rejects
-    /// `Mean` (not a monoid) and asserts `axis == rank - 1` at `plan::validate_scan`.
+    /// `derive_pattern`) operates on the primary output expr unchanged. v1 admits
+    /// `Mean` at a float dtype only and asserts `axis == rank - 1` at `plan::validate_scan`.
     #[must_use]
     #[allow(
         clippy::too_many_arguments,

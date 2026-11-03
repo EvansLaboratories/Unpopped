@@ -4163,7 +4163,7 @@ pub(crate) fn check_row_reduce(
 ///   non-inner axis needs a strided scan skeleton (deferred), rejected here so the
 ///   miss is honest, not silently wrong.
 ///
-/// Rejects `Mean` (not a monoid). `exclusive` and `reverse` are independently legal
+/// Admits `Mean` at a float dtype only (since 0.42.10, an Unpopped extension; see below). `exclusive` and `reverse` are independently legal
 /// and composable — there is no illegal combination, so nothing extra is asserted
 /// for them (the on-device validator covers all four cells).
 fn validate_scan(op: &OpDef, key: &StructureKey, axis: u8, reverse: bool, exclusive: bool) {
@@ -4181,14 +4181,23 @@ fn validate_scan(op: &OpDef, key: &StructureKey, axis: u8, reverse: bool, exclus
     // future reader sees they were considered (no illegal (exclusive, reverse) cell).
     let _ = (reverse, exclusive);
 
-    // Mean is not a monoid (no identity a running prefix can carry) — reject before
-    // anything else so the message is unambiguous. Prod is DELIBERATELY admitted
-    // (a scan folds cumprod serially).
-    assert!(
-        !matches!(scan_op, ReduceOp::Mean),
-        "OpDef '{name}': Scan combine Mean is not a monoid (no identity/associative \
-         running prefix) — v1 scans Sum/Prod/Max/Min only"
-    );
+    // Mean (a running mean) is not a monoid and not a KISS scan (KISS-OPS-6.11-0003 takes sum/prod/max/min; the question
+    // is ThinkersJournal/KISS#766). Unpopped admits it as an extension, float only: an integer running mean rounds.
+    // Prod is admitted too (a scan folds cumprod serially).
+    if matches!(scan_op, ReduceOp::Mean) {
+        assert!(
+            matches!(
+                key.dtype,
+                ElementKind::F16
+                    | ElementKind::Bf16
+                    | ElementKind::F32
+                    | ElementKind::F32Strict
+                    | ElementKind::F64
+            ),
+            "OpDef '{name}': Scan Mean (a running mean) requires a float dtype, got {:?} - an integer mean has              rounding semantics (miss honestly)",
+            key.dtype
+        );
+    }
 
     let n = op.n_inputs as usize;
     assert!(
@@ -6047,9 +6056,8 @@ mod scan_gate_validate {
     }
 
     #[test]
-    #[should_panic(expected = "not a monoid")]
-    fn mean_combine_rejected() {
-        // Mean is not a monoid — rejected (unlike Sum/Prod/Max/Min).
+    fn mean_combine_is_admitted_at_a_float_dtype() {
+        // 0.42.10: a running mean plans (an Unpopped extension; KISS#766)
         let sc = OpDef::scan_simple(
             "cummean",
             &[ElementKind::F32],
@@ -6059,6 +6067,20 @@ mod scan_gate_validate {
             false,
         );
         let _ = build_plan(&sc, &scan_key(ElementKind::F32));
+    }
+
+    #[test]
+    #[should_panic(expected = "requires a float dtype")]
+    fn mean_scan_at_an_integer_dtype_is_rejected() {
+        let sc = OpDef::scan_simple(
+            "cummean",
+            &[ElementKind::I32],
+            ReduceOp::Mean,
+            1,
+            false,
+            false,
+        );
+        let _ = build_plan(&sc, &scan_key(ElementKind::I32));
     }
 
     #[test]

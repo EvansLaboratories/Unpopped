@@ -3211,7 +3211,18 @@ fn eval_scan(
                         write(acc2, &mut result);
                     }
                 }
-                ReduceOp::Mean => panic!("oracle: Scan rejects Mean"),
+                ReduceOp::Mean => {
+                    // a running mean (an Unpopped extension, KISS#766): the running sum over the count folded so
+                    // far, so an exclusive lane 0 is 0 / 0 = NaN
+                    let count = (if exclusive { jj } else { jj + 1 }) as f64;
+                    if exclusive {
+                        write(Val::Float(acc_f / count), &mut result);
+                        acc_f += v.f64();
+                    } else {
+                        acc_f += v.f64();
+                        write(Val::Float(acc_f / count), &mut result);
+                    }
+                }
                 ReduceOp::And
                 | ReduceOp::Or
                 | ReduceOp::Xor
@@ -3246,7 +3257,7 @@ fn scan_identity(sop: ReduceOp, dt: ElementKind) -> (f64, i128) {
         ReduceOp::Prod => (1.0, 1),
         ReduceOp::Max => (f64::NEG_INFINITY, ext(true)),
         ReduceOp::Min => (f64::INFINITY, ext(false)),
-        ReduceOp::Mean => panic!("oracle: Scan rejects Mean"),
+        ReduceOp::Mean => (0.0, 0),
         ReduceOp::And
         | ReduceOp::Or
         | ReduceOp::Xor
