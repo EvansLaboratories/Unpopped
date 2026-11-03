@@ -1,7 +1,8 @@
 # Options note: the lift declines that wait for the plan and the oracle (ROADMAP U2 remainder)
 
-Status: **proposal, nothing built.** Asked by the PM (`[TASK]` 2026-11-02: "(b) U2 remainder and (c) U1 remainder follow" U5). Read at
-`origin/main` `72b8e37` (0.42.3). The ROADMAP U2 row lists five forms the kernel-layer lift of an `OpDef` declines because the plan
+Status: **D3 built in 0.42.6; D4 dropped (PM, 2026-11-03: KISS wins, `RowSort` stays stable-only); D1 and D2 are KISS questions (filed as
+ThinkersJournal/KISS#766 and #767) built on the recommended reading; D5 open; D6 waits for a consumer.** Asked by the PM (`[TASK]` 2026-11-02:
+"(b) U2 remainder and (c) U1 remainder follow" U5). Read at `origin/main` `72b8e37` (0.42.3), updated at `04b0bce` (0.42.7). The ROADMAP U2 row lists five forms the kernel-layer lift of an `OpDef` declines because the plan
 or the oracle does not define them yet ("the lift has nothing to agree with until the plan and the oracle define them"), and an
 effects model that is "computed when a consumer asks". This note says what each should mean, in the order I would build them.
 
@@ -11,8 +12,8 @@ effects model that is "computed when a consumer asks". This note says what each 
 |---|---|---|---|
 | D1 | `Mean` in an `Access::Scan` | `plan::validate_scan` asserts "Scan combine Mean is not a monoid"; `oracle` panics in `eval_scan` and `scan_identity` | a meaning for a running mean |
 | D2 | `Prod` in an `Access::Window` | `plan::validate_window` rejects it ("not a pool"); `oracle` panics in `eval_window` | a padding rule for a product |
-| D3 | a `Prod` stage in `Access::RowReduce` | `oracle::eval_row_reduce` panics ("RowReduce Prod stage is unsupported") | the stage fold |
-| D4 | an unstable `Access::RowSort` | `plan::validate_row_sort` requires `stable == true` | a contract for ties |
+| D3 | a `Prod` stage in `Access::RowReduce` | **built in 0.42.6** (the launched lift still declines it) | - |
+| D4 | an unstable `Access::RowSort` | `plan::validate_row_sort` requires `stable == true` | **dropped**: KISS-OPS-6.11-0007 makes `sort_network` stable (ties to the lower original index), so an unstable sort is not a KISS op |
 | D5 | a `Scan` or a `Window` over an axis that is not the innermost | `validate_scan`/`validate_window` reject `axis != rank - 1` ("a deferred follow-up") | strided iteration |
 | D6 | the effects model | `kernel.rs` header: "computed when a consumer asks" | a consumer |
 
@@ -26,22 +27,21 @@ slices did.
 identity), pass-through finalize, no divisor. `RowReduce` is float-only in v1, so this is `F32`/`F64` (`f32` rounds once at the store,
 as the other stages do). No ruling needed.
 
-**D2, a `Prod` window.** `prod_pool`: the product of the `size` taps. A tap outside the input is skipped, which for a product is the
+**D2, a `Prod` window.** KISS has `avg_pool` and `max_pool` only (`reduce(max)` skips out-of-bounds taps); a product pool and its all-out-of-bounds value are
+KISS#767. The recommended reading matches KISS-OPS-6.11-0002 (an empty reduce is the monoid identity). `prod_pool`: the product of the `size` taps. A tap outside the input is skipped, which for a product is the
 multiplicative identity `1` (the same rule as `Sum`, where a skipped tap contributes `0`, and `Max`/`Min`, where padding never wins);
 a window whose every tap is outside gives `1`. Integers wrap at their width (as `Prod` reductions do); `Mean`-style divisors do not
 apply. Ruling wanted: the padding rule (recommended: skip, identity `1`).
 
-**D1, a `Mean` scan.** The running mean: inclusive lane `j` is `(pre(x_0) + ... + pre(x_j)) / (j + 1)`; exclusive lane `j` is the sum
+**D1, a `Mean` scan.** KISS is closed here: `prefix_scan` takes the monoids `{sum, prod, max, min}` (KISS-OPS-6.11-0003), and a running mean is not one,
+so the question of accept, decline or decompose is KISS#766; until it is answered the reading below is Unpopped's. The running mean: inclusive lane `j` is `(pre(x_0) + ... + pre(x_j)) / (j + 1)`; exclusive lane `j` is the sum
 of the lanes before it divided by `j`, so lane 0 is `0/0 = NaN` (the same as a mean over an empty run). Float only; an integer `Mean`
 stays refused, as an integer `Mean` reduction is (PM ruling 2026-11-01: no rounding rule for the quotient). The scan's `post` applies
 after the division. Ruling wanted: the exclusive lane 0 (recommended: `NaN`, consistent with the empty mean; the alternative `0` hides
 that there is no mean).
 
-**D4, an unstable `RowSort`.** `stable == false` states that the order among equal keys is **not part of the result**. The oracle
-keeps producing its stable answer, which is one valid unstable answer, so no oracle change is needed; what changes is the contract the
-conformance tests and the emitters are held to: keys equal byte for byte, and the index output a permutation in which every index
-points at the key at its position (ties in any order). The lift keeps the stable loop, which is also valid. Ruling wanted: that
-contract (recommended), versus keeping `stable == true` only.
+**D4, an unstable `RowSort`: dropped.** KISS-OPS-6.11-0007 requires a stable permutation under the total order (NaN greatest, ties by the lower
+original index), so the stable-only gate is KISS's own rule and there is nothing to relax.
 
 **D5, a non-innermost axis.** Generalize the scanned or pooled axis to any `axis < rank`: the oracle iterates the outer extents,
 the axis, and the inner extents with the operand's strides; the lift emits the corresponding loop nest; `shape` and the key already
@@ -54,14 +54,12 @@ race-free proof) asks, as the ROADMAP row says, and recording that the walk is m
 
 ## Order and cost
 
-D3, D2, D1 (small, each ~ the size of the `MaxNum` slice: gate, oracle, lift, a C differential), then D4 (tests and docs, no oracle
-change), then D5 scan, then D5 window. Versions are 0.42.x, one per slice.
+D3, D2, D1 (small, each ~ the size of the `MaxNum` slice: gate, oracle, lift, a C differential), then D5 scan, then D5 window. Versions are 0.42.x, one per slice.
 
 ## Needs a ruling
 
 1. D2's padding rule: skip, identity `1` (recommended).
 2. D1's exclusive lane 0: `NaN` (recommended) or `0`.
-3. D4: admit `stable == false` with the property contract (recommended).
-4. D6: wait for a consumer (recommended).
+3. D6: wait for a consumer (recommended).
 
-D3 and D5 need none. Until a ruling arrives I would start D3.
+D3 is built; D2 and D1 are built on the recommended readings once KISS#766 and #767 are answered or the PM rules; D5 needs none.
