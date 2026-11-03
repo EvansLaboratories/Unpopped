@@ -1,6 +1,6 @@
 # Options note: `Cluster` scope and named barriers (ROADMAP U4 S6b)
 
-Status: **proposal, nothing built.** S6a (the `Device` barrier) is built in the oracle (0.42.13) and the cpu-c reference
+Status: **S6b-1 (the `Cluster` scope) approved by the PM 2026-11-03 and built in 0.42.18; S6b-2 (named barriers) waits for a consumer or S7.** Written as a proposal before that. S6a (the `Device` barrier) is built in the oracle (0.42.13) and the cpu-c reference
 (0.42.14). What is left of the S6 row of `docs/options-u4-sync-and-atomics.md` is two things the IR already has the shape for and
 `check_kernel` still refuses (`BadBarrierScope`): the `Cluster` scope, and a barrier that a **subset** of a block's threads
 reach, with a participant count (a named barrier: `bar.sync id, count` in PTX, `barrier_arrive`/`barrier_wait` pairs in SYCL

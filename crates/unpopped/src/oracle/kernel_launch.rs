@@ -28,7 +28,7 @@ use std::ops::Range;
 use super::Val;
 use super::kernel_collective::{Contribution, results};
 use super::kernel_eval::{KernelArg, KernelTrap, Machine, STEP_LIMIT};
-use super::kernel_mem::{AllocMem, BlockMem, Log, ThreadCtx};
+use super::kernel_mem::{AllocMem, BlockMem, Log, ThreadCtx, cluster_of};
 use super::kernel_resume::{Frame, Stop, initial_stack};
 use super::kernel_sync::Edges;
 use crate::exec::{AllocDecl, Extent, LaunchShape, MemorySpace, Scope};
@@ -132,6 +132,8 @@ fn launch_checked(
     }
     let mut states: Vec<BlockState<'_>> = runs.iter().map(start_block).collect();
     let mut stops: Vec<Option<BlockStop>> = vec![None; runs.len()];
+    let clusters: Vec<u32> = runs.iter().map(|b| cluster_of(&launch, b.idx)).collect();
+    edges.cluster_epoch = vec![0; clusters.iter().max().map_or(1, |m| *m as usize + 1)];
     loop {
         // Blocks run in order, each to its end or to a `Device` barrier. With no device barrier this is one block
         // after another; with one, every block is resident and the barrier is a rendezvous of the whole grid.
@@ -147,11 +149,23 @@ fn launch_checked(
                 r => r?,
             });
         }
-        if grid_released(&stops)? {
-            return Ok(());
-        }
-        edges.dev_epoch += 1;
-        for (st, stop) in states.iter_mut().zip(stops.iter_mut()) {
+        let go = match grid_release(&stops, &clusters)? {
+            Released::Finished => return Ok(()),
+            Released::Grid => {
+                edges.dev_epoch += 1;
+                None
+            }
+            Released::Clusters(ids) => {
+                for id in &ids {
+                    edges.cluster_epoch[*id as usize] += 1;
+                }
+                Some(ids)
+            }
+        };
+        for ((st, stop), cluster) in states.iter_mut().zip(stops.iter_mut()).zip(&clusters) {
+            if go.as_ref().is_some_and(|ids| !ids.contains(cluster)) {
+                continue;
+            }
             *stop = None;
             for t in &mut st.threads {
                 t.status = Status::Runnable;
@@ -160,19 +174,58 @@ fn launch_checked(
     }
 }
 
-/// Whether the launch is over (`true`), or every block waits at one `Device` barrier and may go on (`false`).
-/// A block that finished while others wait, or blocks waiting at different barriers, can never be released.
-fn grid_released(stops: &[Option<BlockStop>]) -> Result<bool, KernelTrap> {
-    let stop = |s: &Option<BlockStop>| s.expect("every block has stopped");
-    if stops.iter().all(|s| stop(s) == BlockStop::Done) {
-        return Ok(true);
+/// What the blocks that have all stopped may do next.
+#[derive(Debug, PartialEq, Eq)]
+enum Released {
+    /// Every block finished.
+    Finished,
+    /// Every block waits at one `Device` barrier.
+    Grid,
+    /// These clusters (by id) have every block at one `Cluster` barrier; the others are finished.
+    Clusters(Vec<u32>),
+}
+
+/// What may go on once every block has stopped (`clusters[i]` is the cluster of block `i`). A `Device` barrier needs
+/// every block of the grid at it; a `Cluster` barrier needs every block of its cluster at it, and clusters are
+/// independent, so a finished cluster does not strand another. A block that finished while others of its group wait, or
+/// blocks of a group waiting at different barriers, can never be released.
+fn grid_release(stops: &[Option<BlockStop>], clusters: &[u32]) -> Result<Released, KernelTrap> {
+    let stop = |i: usize| stops[i].expect("every block has stopped");
+    if (0..stops.len()).all(|i| stop(i) == BlockStop::Done) {
+        return Ok(Released::Finished);
     }
-    let first = stop(&stops[0]);
-    // a finished block among waiting ones differs from them, so one comparison covers both strandings
-    if stops.iter().any(|s| stop(s) != first) {
-        return Err(KernelTrap::BarrierMismatch);
+    let on_device = |i: usize| {
+        matches!(
+            stop(i),
+            BlockStop::Wait {
+                scope: Scope::Device,
+                ..
+            }
+        )
+    };
+    if (0..stops.len()).any(on_device) {
+        // a finished block among the waiting ones differs from them, so one comparison covers both strandings
+        return if (0..stops.len()).all(|i| stop(i) == stop(0)) {
+            Ok(Released::Grid)
+        } else {
+            Err(KernelTrap::BarrierMismatch)
+        };
     }
-    Ok(false)
+    let mut ids: Vec<u32> = clusters.to_vec();
+    ids.sort_unstable();
+    ids.dedup();
+    let mut go = Vec::new();
+    for c in ids {
+        let members: Vec<usize> = (0..stops.len()).filter(|&i| clusters[i] == c).collect();
+        let first = stop(members[0]);
+        if members.iter().any(|&i| stop(i) != first) {
+            return Err(KernelTrap::BarrierMismatch);
+        }
+        if first != BlockStop::Done {
+            go.push(c);
+        }
+    }
+    Ok(Released::Clusters(go))
 }
 
 fn pick_subgroup(launch: &LaunchShape, want: Option<u32>) -> Result<u32, KernelTrap> {
@@ -260,11 +313,11 @@ struct BlockState<'a> {
     mem: BlockMem,
 }
 
-/// Where a block stopped: it finished, or all its threads wait at the `Device` barrier `at`.
+/// Where a block stopped: it finished, or all its threads wait at the `Device` or `Cluster` barrier `at`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum BlockStop {
     Done,
-    Device { at: usize },
+    Wait { scope: Scope, at: usize },
 }
 
 fn start_block<'a>(b: &BlockRun<'a>) -> BlockState<'a> {
@@ -313,32 +366,25 @@ fn advance<'a>(
         if st.threads.iter().all(|t| t.status == Status::Done) {
             return Ok(BlockStop::Done);
         }
-        if let Some(at) = at_device_barrier(&st.threads) {
-            return Ok(BlockStop::Device { at });
+        if let Some((scope, at)) = at_grid_barrier(&st.threads) {
+            return Ok(BlockStop::Wait { scope, at });
         }
         release(b, &mut st.threads, &mut st.mem)?;
     }
 }
 
-/// The `Device` barrier every thread of the block waits at, if they all wait at the same one.
-fn at_device_barrier(threads: &[ThreadRun<'_>]) -> Option<usize> {
-    let Status::Waiting {
-        scope: Scope::Device,
-        at,
-    } = threads.first()?.status
-    else {
+/// The `Device` or `Cluster` barrier every thread of the block waits at, if they all wait at the same one.
+fn at_grid_barrier(threads: &[ThreadRun<'_>]) -> Option<(Scope, usize)> {
+    let Status::Waiting { scope, at } = threads.first()?.status else {
         return None;
     };
+    if !matches!(scope, Scope::Device | Scope::Cluster) {
+        return None;
+    }
     threads
         .iter()
-        .all(|t| {
-            t.status
-                == Status::Waiting {
-                    scope: Scope::Device,
-                    at,
-                }
-        })
-        .then_some(at)
+        .all(|t| t.status == Status::Waiting { scope, at })
+        .then_some((scope, at))
 }
 
 /// Run one thread until it finishes or reaches a barrier.
@@ -586,27 +632,67 @@ mod tests {
         let (r, ..) = released(&s, 2);
         assert_eq!(r, Err(KernelTrap::BarrierMismatch));
     }
-    fn dev(at: usize) -> Option<BlockStop> {
-        Some(BlockStop::Device { at })
+    fn at(scope: Scope, at: usize) -> Option<BlockStop> {
+        Some(BlockStop::Wait { scope, at })
+    }
+
+    fn dev(n: usize) -> Option<BlockStop> {
+        at(Scope::Device, n)
+    }
+
+    fn clu(n: usize) -> Option<BlockStop> {
+        at(Scope::Cluster, n)
     }
 
     #[test]
     fn the_grid_is_released_only_when_every_block_waits_at_one_device_barrier() {
         let done = Some(BlockStop::Done);
-        assert_eq!(grid_released(&[done, done]), Ok(true));
-        assert_eq!(grid_released(&[dev(3), dev(3), dev(3)]), Ok(false));
+        let one = [0, 0, 0];
+        assert_eq!(grid_release(&[done, done], &[0, 0]), Ok(Released::Finished));
+        assert_eq!(
+            grid_release(&[dev(3), dev(3), dev(3)], &one),
+            Ok(Released::Grid)
+        );
         // a finished block strands the others, wherever it sits in the order
-        assert_eq!(
-            grid_released(&[done, dev(3)]),
-            Err(KernelTrap::BarrierMismatch)
-        );
-        assert_eq!(
-            grid_released(&[dev(3), done]),
-            Err(KernelTrap::BarrierMismatch)
-        );
+        for stops in [[done, dev(3)], [dev(3), done]] {
+            assert_eq!(
+                grid_release(&stops, &[0, 0]),
+                Err(KernelTrap::BarrierMismatch)
+            );
+        }
         // blocks waiting at different barriers can never be released
         assert_eq!(
-            grid_released(&[dev(3), dev(4)]),
+            grid_release(&[dev(3), dev(4)], &[0, 0]),
+            Err(KernelTrap::BarrierMismatch)
+        );
+        // a Device wait beside a Cluster wait cannot be released either
+        assert_eq!(
+            grid_release(&[dev(3), clu(3)], &[0, 1]),
+            Err(KernelTrap::BarrierMismatch)
+        );
+    }
+
+    #[test]
+    fn a_cluster_is_released_on_its_own_and_a_finished_cluster_strands_nobody() {
+        let done = Some(BlockStop::Done);
+        // clusters 0 = blocks 0,1 and 1 = blocks 2,3
+        let c = [0, 0, 1, 1];
+        assert_eq!(
+            grid_release(&[clu(1), clu(1), clu(2), clu(2)], &c),
+            Ok(Released::Clusters(vec![0, 1]))
+        );
+        // cluster 1 finished: cluster 0 still goes on
+        assert_eq!(
+            grid_release(&[clu(1), clu(1), done, done], &c),
+            Ok(Released::Clusters(vec![0]))
+        );
+        // a block finished inside a waiting cluster strands it, and so do different barriers
+        assert_eq!(
+            grid_release(&[clu(1), done, done, done], &c),
+            Err(KernelTrap::BarrierMismatch)
+        );
+        assert_eq!(
+            grid_release(&[clu(1), clu(2), done, done], &c),
             Err(KernelTrap::BarrierMismatch)
         );
     }

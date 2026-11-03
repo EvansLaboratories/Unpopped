@@ -292,6 +292,47 @@ fn a_two_dimensional_grid_and_a_scalar_parameter_across_the_barrier() {
 }
 
 #[test]
+fn a_cluster_barrier_is_a_phase_boundary_and_agrees_with_the_cluster_oracle() {
+    // ROADMAP U4 S6b-1: 4 blocks in clusters of 2; each block writes a partial, a Cluster barrier, then sums its
+    // cluster's two partials. The serial C spells the Cluster barrier as a barrier of the whole grid (a valid, stronger
+    // schedule), so it must give the bytes the cluster-scoped oracle gives.
+    let base = ScalarExpr::Mul(
+        Box::new(ScalarExpr::Div(
+            Box::new(as_i32(block_idx())),
+            Box::new(c(2)),
+        )),
+        Box::new(c(2)),
+    );
+    let pair = |off: i64| ScalarExpr::Add(Box::new(base.clone()), Box::new(c(off)));
+    let body = vec![
+        write_partial(),
+        Stmt::barrier(Scope::Cluster),
+        thread0(vec![
+            Stmt::Load {
+                local: 1,
+                place: at(0, pair(0)),
+            },
+            Stmt::Load {
+                local: 2,
+                place: at(0, pair(1)),
+            },
+            Stmt::Store {
+                place: at(1, block_idx()),
+                value: ScalarExpr::Add(Box::new(local(1)), Box::new(local(2))),
+            },
+        ]),
+    ];
+    let k = kernel(2, 4, vec![], body)
+        .with_launch(LaunchShape::new([T, 1, 1], [4, 1, 1]).with_cluster([2, 1, 1]));
+    check("cluster_sum", &k, 2);
+    let g = CpuC.lower_kernel(&k).expect("a Cluster barrier lowers");
+    assert!(
+        g.source.contains("phase 1"),
+        "the barrier is a phase boundary"
+    );
+}
+
+#[test]
 fn the_phases_are_visible_in_the_c() {
     let k = kernel(
         2,

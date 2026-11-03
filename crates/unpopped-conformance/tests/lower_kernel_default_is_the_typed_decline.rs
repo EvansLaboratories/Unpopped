@@ -42,12 +42,12 @@ fn empty() -> KernelFn {
     KernelFn::new("k", ElementKind::F32, vec![], vec![], Block(vec![]))
 }
 
-/// A kernel `CpuC` must refuse: its launch holds a barrier it does not spell (it spells `Block` barriers and, since
-/// 0.42.14, a top-level `Device` one; a `Cluster` barrier needs launch cluster dimensions that do not exist yet).
+/// A kernel `CpuC` must refuse: its launch holds a barrier it does not spell (it spells `Block` barriers and, at the top
+/// level, `Device` and `Cluster` ones; a `Thread` barrier has no semantics).
 fn barrier() -> KernelFn {
     let mut k = empty().with_launch(LaunchShape::new([1, 1, 1], [1, 1, 1]));
     k.body.0.push(Stmt::Barrier {
-        scope: Scope::Cluster,
+        scope: Scope::Thread,
         kind: unpopped::kernel::BarrierKind::Full,
     });
     k

@@ -21,8 +21,8 @@ use super::kernel_mem::Stamp;
 use crate::exec::Scope;
 use crate::kernel::MemoryOrder;
 
-/// One thread's identity: block, thread in block, subgroup in block.
-type Tid = (u32, u32, u32);
+/// One thread's identity: block, thread in block, subgroup in block, cluster of the block.
+type Tid = (u32, u32, u32, u32);
 
 /// For each thread, the latest access (by sequence number) of it that the owner has acquired from.
 type Clock = HashMap<Tid, u64>;
@@ -51,12 +51,14 @@ pub(super) struct Edges {
     /// `Device` barriers released so far: every access before one is ordered before every access after it, whatever
     /// the blocks.
     pub(super) dev_epoch: u32,
+    /// `Cluster` barriers released so far, per cluster: they order the accesses of that cluster's blocks only.
+    pub(super) cluster_epoch: Vec<u32>,
     /// Whether any acquire-class atomic has run: a block that then runs away may be waiting on a later block.
     pub(super) acquired: bool,
 }
 
 pub(super) fn tid(s: Stamp) -> Tid {
-    (s.block, s.thread, s.sub)
+    (s.block, s.thread, s.sub, s.cluster)
 }
 
 /// How wide a scope is: a thread, a subgroup, a block, a cluster, the device.
@@ -80,6 +82,7 @@ pub(super) fn contains(scope: Scope, a: Tid, b: Tid) -> bool {
         Scope::Thread => a == b,
         Scope::Subgroup => a.0 == b.0 && a.2 == b.2,
         Scope::Block => a.0 == b.0,
+        Scope::Cluster => a.3 == b.3,
         _ => true,
     }
 }

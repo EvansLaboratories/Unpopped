@@ -32,14 +32,20 @@ pub(super) struct Stamp {
     /// The access's place in the launch's sequence (`kernel_sync`), and the scope an atomic was issued at.
     pub(super) seq: u64,
     pub(super) scope: Scope,
-    /// The `Device` barriers released before this access.
+    /// The `Device` barriers released before this access, the cluster the block is in, and the `Cluster` barriers of
+    /// that cluster released before it.
     pub(super) dev_epoch: u32,
+    pub(super) cluster: u32,
+    pub(super) cluster_epoch: u32,
 }
 
 /// Whether `prev` and `now` are unordered, so a conflict between them is a race: no barrier orders them and `now`
 /// has not acquired from `prev` through a release/acquire atomic.
 fn unordered(prev: Stamp, now: Stamp, sync: &Edges) -> bool {
     if prev.dev_epoch < now.dev_epoch {
+        return false;
+    }
+    if prev.cluster == now.cluster && prev.cluster_epoch < now.cluster_epoch {
         return false;
     }
     if prev.block == now.block && prev.thread == now.thread {
@@ -167,6 +173,13 @@ pub(super) struct BlockMem {
     pub(super) sub_epoch: Vec<u32>,
 }
 
+/// The linear id of the cluster the block at `idx` belongs to (`0` when the launch has no clusters).
+pub(super) fn cluster_of(launch: &LaunchShape, idx: [u32; 3]) -> u32 {
+    let Some(c) = launch.cluster else { return 0 };
+    let across = |a: usize| launch.grid[a] / c[a];
+    ((idx[2] / c[2]) * across(1) + idx[1] / c[1]) * across(0) + idx[0] / c[0]
+}
+
 /// Everything a running thread needs to know about the launch.
 pub(super) struct ThreadCtx<'a> {
     pub(super) launch: LaunchShape,
@@ -188,6 +201,7 @@ impl ThreadCtx<'_> {
     /// atomic) the scope it is issued at.
     fn stamp(&mut self, kind: AccessKind) -> Stamp {
         let sub = self.thread_lin / self.subgroup;
+        let cluster = cluster_of(&self.launch, self.block_idx);
         Stamp {
             block: self.block_lin,
             thread: self.thread_lin,
@@ -196,6 +210,13 @@ impl ThreadCtx<'_> {
             sub_epoch: self.block.sub_epoch[sub as usize],
             seq: self.sync.next(),
             dev_epoch: self.sync.dev_epoch,
+            cluster,
+            cluster_epoch: self
+                .sync
+                .cluster_epoch
+                .get(cluster as usize)
+                .copied()
+                .unwrap_or(0),
             scope: if kind == AccessKind::Atomic {
                 self.site.1
             } else {
