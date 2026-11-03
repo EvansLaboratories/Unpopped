@@ -61,17 +61,30 @@ fn thread_idx() -> ScalarExpr {
     ScalarExpr::Exec(ExecId::ThreadIdx(0))
 }
 
-/// `blockIdx * 10 + threadIdx + 1`, an `I32` distinct per thread of the grid.
+/// `blockIdx.y * 100 + blockIdx.x * 10 + threadIdx + 1`, an `I32` distinct per thread of any grid up to 10 wide.
 fn tag() -> ScalarExpr {
+    let y = ScalarExpr::Mul(
+        Box::new(as_i32(ScalarExpr::Exec(ExecId::BlockIdx(1)))),
+        Box::new(c(100)),
+    );
+    let x = ScalarExpr::Mul(Box::new(as_i32(block_idx())), Box::new(c(10)));
     ScalarExpr::Add(
         Box::new(ScalarExpr::Add(
-            Box::new(ScalarExpr::Mul(
-                Box::new(as_i32(block_idx())),
-                Box::new(c(10)),
-            )),
+            Box::new(ScalarExpr::Add(Box::new(y), Box::new(x))),
             Box::new(as_i32(thread_idx())),
         )),
         Box::new(c(1)),
+    )
+}
+
+/// The block's linear id on a 3-wide grid: `blockIdx.y * 3 + blockIdx.x`.
+fn linear_block() -> ScalarExpr {
+    ScalarExpr::Add(
+        Box::new(ScalarExpr::Mul(
+            Box::new(ScalarExpr::Exec(ExecId::BlockIdx(1))),
+            Box::new(ScalarExpr::ConstInt(3, U32)),
+        )),
+        Box::new(block_idx()),
     )
 }
 
@@ -95,18 +108,28 @@ fn thread0(then: Vec<Stmt>) -> Stmt {
 }
 
 fn kernel(buffers: u32, locals: u32, allocs: Vec<AllocDecl>, body: Vec<Stmt>) -> KernelFn {
+    kernel_on([GRID, 1, 1], buffers, locals, allocs, body)
+}
+
+fn kernel_on(
+    grid: [u32; 3],
+    buffers: u32,
+    locals: u32,
+    allocs: Vec<AllocDecl>,
+    body: Vec<Stmt>,
+) -> KernelFn {
     let params = (0..buffers)
         .map(|i| Param::buffer(format!("b{i}"), I32, BufferRole::ReadWrite, Some(1)))
         .collect();
     let decls = (0..locals).map(|_| LocalDecl::scalar(I32)).collect();
     KernelFn::new("grid", I32, params, decls, Block(body))
         .with_allocs(allocs)
-        .with_launch(LaunchShape::new([T, 1, 1], [GRID, 1, 1]))
+        .with_launch(LaunchShape::new([T, 1, 1], grid))
 }
 
 fn args(buffers: u32) -> Vec<KernelArg> {
     (0..buffers)
-        .map(|_| KernelArg::Buffer(zeroed(I32, &[i64::from(GRID * T)])))
+        .map(|_| KernelArg::Buffer(zeroed(I32, &[i64::from(6 * T)])))
         .collect()
 }
 
@@ -186,7 +209,8 @@ fn a_local_and_a_shared_array_survive_the_barrier() {
         alloc: 0,
         index: thread_idx(),
     };
-    let k = kernel(
+    let k = kernel_on(
+        [3, 2, 1],
         1,
         2,
         vec![sh],
@@ -209,7 +233,7 @@ fn a_local_and_a_shared_array_survive_the_barrier() {
                     0,
                     ScalarExpr::Add(
                         Box::new(ScalarExpr::Mul(
-                            Box::new(block_idx()),
+                            Box::new(linear_block()),
                             Box::new(ScalarExpr::ConstInt(i64::from(T), U32)),
                         )),
                         Box::new(thread_idx()),
