@@ -24,12 +24,19 @@
 //!
 //! # What is refused (typed, [`LowerError::UnsupportedKernel`])
 //!
-//! A `Barrier` of any scope but `Block`; a `While` that holds a barrier; a `Break` or `Continue` that
+//! A `Barrier` of a scope other than `Block`, except a `Device` barrier at the top level of the body (below); a `While` that holds a barrier; a `Break` or `Continue` that
 //! leaves a loop holding a barrier; a `Return` in a kernel that has a barrier (ending one thread would
 //! have to skip the barriers after it); execution ids other than `ThreadIdx`, `BlockIdx`, `BlockDim` and
 //! `GridDim`; a `Private` or `Constant` allocation or a dynamic extent; a block over 1024 threads;
 //! `Fence`; and a `Call` of a function that reaches a barrier (a callee runs inside one thread's run, so the
 //! thread loop cannot be split in it: `lower_module` refuses it).
+//!
+//! # `Device` barriers (0.42.14)
+//!
+//! A top-level `Device` barrier cuts the body into phases of the whole grid. Every block is resident, so each local
+//! and each `Shared` array becomes an array of the grid (`l0_all`, `sh0_all`), and each phase is one pass over the
+//! blocks (`for blk2 { for blk1 { for blk0 { l0 = &l0_all[bl*NT]; ... } } }`) running that phase's block-level code.
+//! Blocks ascend within a phase, as in the oracle. A grid of more than 65536 resident threads is refused.
 //!
 //! # Order
 //!
@@ -47,6 +54,9 @@ use crate::kernel::{Emitter, ctype, refuse};
 
 /// A block with more threads than this is refused: its per-thread local arrays live on the C stack.
 const MAX_THREADS: u32 = 1024;
+
+/// Blocks times threads that may be resident at once across a `Device` barrier.
+const MAX_RESIDENT: u64 = 1 << 16;
 
 /// The launch geometry an [`Emitter`] spells ids from.
 #[derive(Clone, Copy)]
@@ -85,7 +95,38 @@ pub(crate) fn admit_launch(k: &KernelFn) -> Result<(), LowerError> {
         admit_alloc(a)?;
     }
     let barriers = has_barrier_block(&k.body.0);
-    admit_stmts(&k.body.0, barriers)
+    let segments = device_segments(&k.body.0);
+    if segments.len() > 1 {
+        // blocks stay resident across a Device barrier: their locals and Shared memory are per block
+        let resident = u64::from(info.grid.iter().product::<u32>()) * u64::from(info.threads());
+        if resident > MAX_RESIDENT {
+            return Err(refuse(format!(
+                "{resident} resident threads across a Device barrier (at most {MAX_RESIDENT} are spelled)"
+            )));
+        }
+    }
+    segments.iter().try_for_each(|s| admit_stmts(s, barriers))
+}
+
+/// The kernel body cut at its top-level `Device` barriers: the runs of statements between them, each a
+/// phase of the whole grid. A `Device` barrier anywhere else stays in its run, where `admit_stmts` refuses it.
+fn device_segments(body: &[Stmt]) -> Vec<&[Stmt]> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    for (i, s) in body.iter().enumerate() {
+        if matches!(
+            s,
+            Stmt::Barrier {
+                scope: Scope::Device,
+                ..
+            }
+        ) {
+            out.push(&body[start..i]);
+            start = i + 1;
+        }
+    }
+    out.push(&body[start..]);
+    out
 }
 
 fn admit_alloc(a: &AllocDecl) -> Result<(), LowerError> {
@@ -206,6 +247,11 @@ pub(crate) fn exec_c(info: LaunchInfo, id: ExecId) -> Result<String, LowerError>
 impl Emitter<'_> {
     /// The launched function body: the local arrays, the scalar parameters, then the blocks.
     pub(crate) fn launched_body(&mut self, info: LaunchInfo) -> Result<(), LowerError> {
+        let body = &self.k.body;
+        let segments = device_segments(&body.0);
+        if segments.len() > 1 {
+            return self.device_body(info, &segments);
+        }
         let nt = info.threads();
         for (i, d) in self.k.locals.iter().enumerate() {
             let t = ctype(d.elem, &format!("local {i}"))?;
@@ -237,6 +283,97 @@ impl Emitter<'_> {
         for _ in 0..3 {
             self.depth -= 1;
             self.line("}");
+        }
+        Ok(())
+    }
+
+    /// A kernel with `Device` barriers: one pass over all the blocks per phase. Every block's locals and `Shared`
+    /// memory live in arrays of the whole grid (`l<i>_all`, `sh<i>_all`) and each block loop points `l<i>` and `sh<i>`
+    /// at its own slice, so the thread code is the one a single block uses. Blocks ascend within a phase, as in the
+    /// oracle, which runs each block to the barrier before the next starts.
+    fn device_body(&mut self, info: LaunchInfo, segments: &[&[Stmt]]) -> Result<(), LowerError> {
+        self.declare_grid_storage(info)?;
+        for (si, segment) in segments.iter().enumerate() {
+            self.line(&format!(
+                "// phase {si}: every block, up to the next Device barrier"
+            ));
+            self.open_block_view(info, si == 0)?;
+            self.phases(segment)?;
+            for _ in 0..3 {
+                self.depth -= 1;
+                self.line("}");
+            }
+        }
+        Ok(())
+    }
+
+    /// The arrays of the whole grid: every block's locals and `Shared` memory.
+    fn declare_grid_storage(&mut self, info: LaunchInfo) -> Result<(), LowerError> {
+        let nt = info.threads();
+        let nb: u32 = info.grid.iter().product();
+        for (i, d) in self.k.locals.iter().enumerate() {
+            let t = ctype(d.elem, &format!("local {i}"))?;
+            self.line(&format!("{t} l{i}_all[{}];", nb * nt));
+        }
+        for (i, a) in self.k.allocs.iter().enumerate() {
+            let Extent::Static(n) = a.extent else {
+                return Err(refuse("a dynamic extent"));
+            };
+            let t = ctype(a.elem, "an allocation")?;
+            self.line(&format!(
+                "{t} sh{i}_all[{}] = {{0}};",
+                u64::from(nb) * u64::from(n)
+            ));
+        }
+        Ok(())
+    }
+
+    /// Open the three block loops of a phase and point `l<i>` and `sh<i>` at the block's slices; the first phase also
+    /// copies the scalar parameters into the locals.
+    fn open_block_view(&mut self, info: LaunchInfo, first: bool) -> Result<(), LowerError> {
+        let nt = info.threads();
+        for a in [2usize, 1, 0] {
+            self.line(&format!(
+                "for (long long blk{a} = 0; blk{a} < {}; ++blk{a}) {{",
+                info.grid[a]
+            ));
+            self.depth += 1;
+        }
+        let [gx, gy, _] = info.grid;
+        self.line(&format!(
+            "const long long bl = (blk2 * {gy} + blk1) * {gx} + blk0; (void)bl;"
+        ));
+        for (i, d) in self.k.locals.iter().enumerate() {
+            let t = ctype(d.elem, &format!("local {i}"))?;
+            self.line(&format!("{t} *l{i} = &l{i}_all[bl * {nt}];"));
+        }
+        self.view_shared_of_block()?;
+        if first {
+            for (i, p) in self.k.params.iter().enumerate() {
+                if let ParamKind::Scalar { ty, local } = &p.kind {
+                    let t = ctype(*ty, "a scalar")?;
+                    self.line(&format!(
+                        "for (int t = 0; t < {nt}; ++t) l{local}[t] = ({t})p{i};"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Point `sh<i>` at this block's slice of `sh<i>_all`.
+    fn view_shared_of_block(&mut self) -> Result<(), LowerError> {
+        for (i, a) in self.k.allocs.iter().enumerate() {
+            let Extent::Static(n) = a.extent else {
+                return Err(refuse("a dynamic extent"));
+            };
+            let t = ctype(a.elem, "an allocation")?;
+            self.line(&format!("{t} *sh{i} = &sh{i}_all[bl * {n}];"));
+            if self.module.is_some() {
+                self.line(&format!(
+                    "const long long ash{i}[1] = {{{n}}}; const long long ast{i}[1] = {{1}};"
+                ));
+            }
         }
         Ok(())
     }
