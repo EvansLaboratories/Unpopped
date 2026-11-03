@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.42.22` — options note for U7, MMA atoms and accumulation policy (docs only)
+
+`docs/options-u7-mma-atoms.md`: what U7 would build now that U3 and U6 are done, and the six rulings it needs. Read at `origin/main` `7c05d3c`. KISS has no clause for any of it (matmul is an order-invariant contraction compared under a tolerance; `MathFidelity` is two-valued), so it is an Unpopped extension to propose upstream when it lands. The note proposes two layers: a plan-level `AccumSpec` growth (TF32, 3xTF32, bf16x3, f16, int32, fp8 fast-accumulate) with accumulate-into-C and a deterministic oracle model held to a declared bound, then a kernel-level `Stmt::Mma` over data-driven `MmaAtom` values whose lane layouts are U6 `Layout`s; WGMMA and `tcgen05` are staged behind U8 and U4 S7. It also records that mixed A/B dtypes need a `StructureKey` version bump (a change other repos see) and recommends deferring that slice. ROADMAP U7 links the note. No code changed; nothing is built.
+
 ## `0.42.21` — ROADMAP row U2b for the effects model (docs only)
 
 D6 of `docs/options-u2-lift-declines.md` gets its own row so #113 can close: D1-D5 are built, and the effects model waits for a consumer. No code changed; the version is a placeholder for the PM to allocate.
