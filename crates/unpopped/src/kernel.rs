@@ -259,8 +259,9 @@ pub enum Stmt {
     /// buffer (`ReadWrite`) place or a `Shared` allocation element, an integer element type (the
     /// result wraps at the element width) or an `F32`/`F64` `Add` or `Exchange` (accumulation order
     /// unspecified, so a float sum is defined only inside a band: section 5a). `order` must be
-    /// [`MemoryOrder::Relaxed`] and `scope` [`Scope::Device`] for now (typed refusal, not a silent
-    /// weakening).
+    /// any [`MemoryOrder`] (since 0.42.7 a release-class atomic and an acquire-class one on one element order the
+    /// plain accesses around them in the oracle; `SeqCst` is treated as `AcqRel`) and `scope` `Subgroup`, `Block` or
+    /// `Device` (`Thread` and `Cluster` are a typed refusal).
     AtomicRmw {
         /// The combine.
         op: AtomicOp,
@@ -270,9 +271,9 @@ pub enum Stmt {
         value: ScalarExpr,
         /// The local that receives the old value, if the kernel wants it.
         old: Option<u32>,
-        /// The memory order. Only `Relaxed` is accepted today.
+        /// The memory order.
         order: MemoryOrder,
-        /// The scope the atomicity holds at. Only `Device` is accepted today.
+        /// The scope the atomicity holds at: `Subgroup`, `Block` or `Device`.
         scope: Scope,
     },
     /// Compare-and-exchange: if the element equals `expected`, set it to `desired`; `old` receives the
