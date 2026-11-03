@@ -274,15 +274,13 @@ fn forms_the_lift_does_not_cover_decline_with_a_reason() {
         lift_row_reduce_opdef(&softmax(ElementKind::I32), ElementKind::I32, 2),
         Err(LiftDecline::UnsupportedForm("a non-float row reduction"))
     );
+    // a Prod stage lifts since 0.42.6 (`tests/row_reduce_prod.rs`)
     let prod = rr(
         ElementKind::F32,
         vec![stage(input(0), ReduceOp::Prod)],
         reduced(0),
     );
-    assert_eq!(
-        lift_row_reduce_opdef(&prod, ElementKind::F32, 2),
-        Err(LiftDecline::UnsupportedForm("a Prod or empty stage list"))
-    );
+    assert!(lift_row_reduce_opdef(&prod, ElementKind::F32, 2).is_ok());
 }
 
 #[test]

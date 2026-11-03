@@ -59,8 +59,8 @@ pub(super) fn check_row_reduce(
     if !matches!(dtype, ElementKind::F32 | ElementKind::F64) {
         return Err(LiftDecline::UnsupportedForm("a non-float row reduction"));
     }
-    if stages.is_empty() || stages.iter().any(|s| matches!(s.op, ReduceOp::Prod)) {
-        return Err(LiftDecline::UnsupportedForm("a Prod or empty stage list"));
+    if stages.is_empty() {
+        return Err(LiftDecline::UnsupportedForm("an empty stage list"));
     }
     check_plain(op, dtype, rank)?;
     for (s, stage) in stages.iter().enumerate() {
@@ -173,7 +173,12 @@ impl Row {
         vec![
             Stmt::Let {
                 local: acc,
-                init: self.up(ScalarExpr::Const(0.0)),
+                // a product starts at the multiplicative identity, as the oracle's does
+                init: self.up(ScalarExpr::Const(if matches!(stage.op, ReduceOp::Prod) {
+                    1.0
+                } else {
+                    0.0
+                })),
             },
             Stmt::Let {
                 local: have,

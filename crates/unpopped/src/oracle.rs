@@ -2960,7 +2960,12 @@ fn eval_row_reduce(
         // Run each stage in order → Reduced(0..n_stages).
         let mut reduced_vals: Vec<Val> = Vec::with_capacity(stages.len());
         for st in stages {
-            let mut acc = 0.0f64;
+            // a product starts at the multiplicative identity (KISS-OPS-6.11-0002)
+            let mut acc = if matches!(st.op, ReduceOp::Prod) {
+                1.0f64
+            } else {
+                0.0f64
+            };
             let mut have = false;
             for j in 0..k {
                 let leaf = |i: u8| {
@@ -2982,6 +2987,7 @@ fn eval_row_reduce(
                 let e = eval(&st.pre, &ev).f64();
                 match st.op {
                     ReduceOp::Sum | ReduceOp::Mean => acc += e,
+                    ReduceOp::Prod => acc *= e,
                     ReduceOp::Max => {
                         if !have || e.is_nan() || e > acc {
                             acc = e;
@@ -2994,8 +3000,7 @@ fn eval_row_reduce(
                         }
                         have = true;
                     }
-                    ReduceOp::Prod
-                    | ReduceOp::And
+                    ReduceOp::And
                     | ReduceOp::Or
                     | ReduceOp::Xor
                     | ReduceOp::MaxNum

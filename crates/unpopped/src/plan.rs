@@ -4143,14 +4143,6 @@ pub(crate) fn check_row_reduce(
         }
     }
     for (i, st) in stages.iter().enumerate() {
-        // Prod stages (0e added the combiner to Access::Reduction, not to the
-        // fused RowReduce cooperative reducer) are an honest miss here — the
-        // emitter has no block_prod in the row path. Gate + emitter backstop.
-        assert!(
-            !matches!(st.op, ReduceOp::Prod),
-            "RowReduce stage {i}: the Prod combiner is not supported in the fused \
-             row-reduce path (0e adds Prod to Access::Reduction only); miss honestly"
-        );
         check(&st.pre, n_inputs, i as u8, true, &is_col)?;
     }
     check(epilogue, n_inputs, stages.len() as u8, false, &is_col)

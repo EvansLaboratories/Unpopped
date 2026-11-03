@@ -30,7 +30,7 @@ use super::block_reduce::{Fold, as_i32, barrier, shared, thread, uconst};
 use super::im2col::int;
 use super::row_reduce::{Row, check_row_reduce};
 use crate::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace};
-use crate::ir::{BinaryOp, OpDef, ReduceStage, ScalarExpr};
+use crate::ir::{BinaryOp, OpDef, ReduceOp, ReduceStage, ScalarExpr};
 use crate::kernel::{Block, KernelFn, LocalDecl, Stmt};
 
 /// Lift a float `Access::RowReduce` over `rank` axes (`rank >= 2`: blocks stride over the leading
@@ -55,6 +55,11 @@ pub fn lift_row_reduce_opdef_launched(
         return Err(LiftDecline::BadLaunch);
     }
     let (stages, epilogue) = check_row_reduce(op, dtype, rank)?;
+    if stages.iter().any(|s| matches!(s.op, ReduceOp::Prod)) {
+        return Err(LiftDecline::UnsupportedForm(
+            "a Prod stage in a launched row reduction (a float product is not order-independent, and no bound is declared)",
+        ));
+    }
     if rank < 2 {
         return Err(LiftDecline::UnsupportedForm(
             "a launched row reduction needs a leading axis to stride blocks over",
