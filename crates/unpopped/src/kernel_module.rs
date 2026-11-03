@@ -130,9 +130,10 @@ fn plain_function(f: &KernelFn) -> Result<(), KernelError> {
     Ok(())
 }
 
+/// Whether `b` holds a rendezvous: a `Barrier` or a `Collective` (a call that reaches one is a barrier site).
 fn holds_barrier(b: &Block) -> bool {
     b.0.iter().any(|st| match st {
-        Stmt::Barrier { .. } => true,
+        Stmt::Barrier { .. } | Stmt::Collective { .. } => true,
         Stmt::If { then, els, .. } => holds_barrier(then) || holds_barrier(els),
         Stmt::For { body, .. } | Stmt::While { body, .. } => holds_barrier(body),
         _ => false,

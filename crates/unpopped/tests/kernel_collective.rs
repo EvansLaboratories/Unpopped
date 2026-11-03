@@ -11,8 +11,8 @@
 use unpopped::exec::{ExecId, LaunchShape, Scope};
 use unpopped::ir::{BinaryOp, CastSpec, ReduceOp, RoundMode, Saturation, ScalarExpr};
 use unpopped::kernel::{
-    Block, BufferRole, CollectiveKind, KernelError, KernelFn, LocalDecl, Param, Place, ShuffleMode,
-    Stmt, VoteKind, check_kernel,
+    Block, BufferRole, CallArg, CollectiveKind, KernelError, KernelFn, LocalDecl, Module, Param,
+    Place, ShuffleMode, Stmt, VoteKind, check_kernel,
 };
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
@@ -380,4 +380,83 @@ fn the_checker_wants_a_launch_a_group_scope_and_an_integer_lane() {
         check_kernel(&bad_lane),
         Err(KernelError::TypeMismatch { .. })
     ));
+}
+
+/// A callee that holds a collective: every thread calls `sumall(out)`, which sums `ThreadIdx.x + 1` over the block.
+fn sumall_module(call: Stmt) -> Module {
+    let callee = KernelFn::new(
+        "sumall",
+        I32,
+        vec![Param::buffer("out", I32, BufferRole::ReadWrite, Some(1))],
+        vec![LocalDecl::scalar(I32), LocalDecl::scalar(I32)],
+        Block(vec![
+            Stmt::Let {
+                local: 0,
+                init: lane_value(),
+            },
+            Stmt::Collective {
+                kind: CollectiveKind::Reduce(ReduceOp::Sum),
+                value: ScalarExpr::Local(0),
+                result: 1,
+                scope: Scope::Block,
+            },
+            Stmt::Store {
+                place: Place::Logical {
+                    buffer: 0,
+                    coords: vec![tid()],
+                },
+                value: ScalarExpr::Local(1),
+            },
+        ]),
+    );
+    let main = KernelFn::new(
+        "main",
+        I32,
+        vec![Param::buffer("out", I32, BufferRole::ReadWrite, Some(1))],
+        vec![],
+        Block(vec![call]),
+    )
+    .with_launch(LaunchShape::new([N, 1, 1], [1, 1, 1]).with_subgroup(1, 32));
+    Module::new(vec![main, callee])
+}
+
+fn call_sumall() -> Stmt {
+    Stmt::Call {
+        callee: 1,
+        args: vec![CallArg::Buffer(0)],
+        result: None,
+    }
+}
+
+#[test]
+fn a_callee_may_hold_a_collective_and_its_call_is_a_barrier_site() {
+    use unpopped::oracle::kernel_launch::run_launch_module;
+    let buf = TypedBuffer::new(I32, vec![i64::from(N)], vec![1], vec![0u8; 4 * N as usize]);
+    let mut args = vec![KernelArg::Buffer(buf)];
+    run_launch_module(&sumall_module(call_sumall()), 0, &mut args).expect("runs");
+    let KernelArg::Buffer(out) = &args[0] else {
+        unreachable!()
+    };
+    let got: Vec<i32> = out
+        .bytes
+        .chunks(4)
+        .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
+        .collect();
+    assert_eq!(got, vec![36; 8]);
+    // under divergent control the call is refused, as a call that reaches a barrier is
+    let guard = ScalarExpr::Binary(
+        BinaryOp::CmpLt,
+        Box::new(tid()),
+        Box::new(ScalarExpr::ConstInt(4, U32)),
+    );
+    let divergent = Stmt::If {
+        cond: guard,
+        then: Block(vec![call_sumall()]),
+        els: Block(vec![]),
+    };
+    let r = run_launch_module(&sumall_module(divergent), 0, &mut args);
+    assert!(
+        matches!(r, Err(KernelTrap::Malformed(KernelError::BarrierDivergent))),
+        "{r:?}"
+    );
 }
