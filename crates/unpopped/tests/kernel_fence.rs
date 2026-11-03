@@ -266,35 +266,44 @@ fn a_fence_reaches_only_as_far_as_its_scope() {
 
 #[test]
 fn an_acquire_fence_takes_in_every_read_before_it_not_just_the_last() {
-    // the consumer reads the published flag, then an unrelated one, and only then fences
-    let read_other = Stmt::AtomicRmw {
+    // two producers publish two flags; the consumer reads both with relaxed reads and fences once, afterwards, then
+    // reads the FIRST producer's data
+    let producer = |data: u32, flag: u32| {
+        vec![
+            Stmt::Store {
+                place: at(0, data),
+                value: c(42),
+            },
+            fence(Release, DEV),
+            Stmt::AtomicRmw {
+                op: AtomicOp::Exchange,
+                place: at(1, flag),
+                value: c(1),
+                old: None,
+                order: Relaxed,
+                scope: DEV,
+            },
+        ]
+    };
+    let read = |flag: u32, old: Option<u32>| Stmt::AtomicRmw {
         op: AtomicOp::Or,
-        place: at(1, 1),
+        place: at(1, flag),
         value: c(0),
-        old: None,
+        old,
         order: Relaxed,
         scope: DEV,
     };
     let k = kernel(
-        2,
+        3,
         1,
         vec![
+            when(is(false, 0), producer(0, 0)),
+            when(is(false, 1), producer(1, 1)),
             when(
-                is(false, 0),
+                is(false, 2),
                 vec![
-                    Stmt::Store {
-                        place: at(0, 0),
-                        value: c(42),
-                    },
-                    fence(Release, DEV),
-                    set_flag(),
-                ],
-            ),
-            when(
-                is(false, 1),
-                vec![
-                    read_flag(),
-                    read_other,
+                    read(0, Some(0)),
+                    read(1, None),
                     fence(Acquire, DEV),
                     when(seen(), copy_data()),
                 ],
