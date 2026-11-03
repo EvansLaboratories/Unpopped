@@ -30,6 +30,8 @@ Edge cases, all consequences of the arithmetic and tested: a NaN input gives NaN
 becomes NaN under the `x3` forms (the remainder `x - head` is `inf - inf`, as the published 3xTF32 and bf16x3 algorithms compute it); an
 accumulator that overflows its type is infinite; a value that rounds up past the largest finite `f32` while converting to TF32 is infinite.
 
+**Accumulate-into-C (S1a-2, 0.42.24):** a contraction's extra input may be a full `[M,N]` C, read at `[m,n]` in the epilogue, after the K-sum, in the wide type; under a policy that is *not* the hardware's `D = A.B + C` with C as the initial accumulator (that form, with its `u*|C|` bound, is `Stmt::Mma`'s, S2).
+
 **Not here yet (S1b, with the mixed-dtype `StructureKey` change the PM deferred):** `Int32`/`Int32Sat` accumulation (an `s8` input with an `s32`
 output has two dtypes) and `Fp8FastAccum`. **Not modelled by the kernel lift**: `lift_contraction_opdef` declines every policy but `WideFloat`
 (typed), so `unpopped-cpu-c` has no policy reference yet.
