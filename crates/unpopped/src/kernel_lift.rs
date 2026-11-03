@@ -1210,24 +1210,7 @@ pub fn lift_contraction_opdef_with(
         op.n_inputs.saturating_sub(2),
         extra == ContractionExtra::FullC,
     );
-    let k_loop = for_axis(
-        sh.k,
-        sh.axes,
-        Block(vec![
-            sh.load(0, &sh.lhs_coords(), sh.a),
-            sh.load(1, &sh.rhs_coords(), sh.b),
-            Stmt::Assign {
-                local: sh.acc,
-                value: ScalarExpr::Add(
-                    Box::new(ScalarExpr::Local(sh.acc)),
-                    Box::new(ScalarExpr::Mul(
-                        Box::new(sh.up(ScalarExpr::Local(sh.a))),
-                        Box::new(sh.up(ScalarExpr::Local(sh.b))),
-                    )),
-                ),
-            },
-        ]),
-    );
+    let k_loop = sh.k_loop();
     let mut body = Block(vec![Stmt::Let {
         local: sh.acc,
         init: sh.up(ScalarExpr::Const(0.0)),
@@ -1343,6 +1326,29 @@ impl ContractionShape {
             biases: u32::from(biases),
             full_c,
         }
+    }
+
+    /// The innermost `k` loop: load both factors, add their product to the accumulator.
+    fn k_loop(&self) -> Block {
+        let sh = self;
+        for_axis(
+            sh.k,
+            sh.axes,
+            Block(vec![
+                sh.load(0, &sh.lhs_coords(), sh.a),
+                sh.load(1, &sh.rhs_coords(), sh.b),
+                Stmt::Assign {
+                    local: sh.acc,
+                    value: ScalarExpr::Add(
+                        Box::new(ScalarExpr::Local(sh.acc)),
+                        Box::new(ScalarExpr::Mul(
+                            Box::new(sh.up(ScalarExpr::Local(sh.a))),
+                            Box::new(sh.up(ScalarExpr::Local(sh.b))),
+                        )),
+                    ),
+                },
+            ]),
+        )
     }
 
     fn counter(&self, d: u32) -> ScalarExpr {
