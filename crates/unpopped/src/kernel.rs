@@ -293,8 +293,10 @@ pub enum Stmt {
         /// The scope the atomicity holds at.
         scope: Scope,
     },
-    /// A memory fence of `scope` with `order`. **Shape reserved: `check_kernel` refuses it** until its
-    /// semantics land (`docs/options-u4-sync-and-atomics.md`, S5).
+    /// A memory fence of `scope` with `order`. Since 0.42.8 the oracle runs it as the C++ fence rules do: a release
+    /// fence (`Release`, `AcqRel`, `SeqCst`) before a relaxed atomic publishes what the thread knew; an acquire fence
+    /// (`Acquire`, `AcqRel`, `SeqCst`) after a relaxed atomic read takes in what that read saw. `check_kernel` refuses a
+    /// `Relaxed` fence and the scopes `Thread` and `Cluster`.
     Fence {
         /// The group the fence orders.
         scope: Scope,
@@ -612,8 +614,8 @@ pub enum KernelError {
         /// What is wrong.
         what: &'static str,
     },
-    /// A `Fence` (or a barrier kind) whose semantics has not landed: the shape is reserved, the checker
-    /// refuses it, so no producer builds a kernel an interpreter would then have to guess about.
+    /// A sync form whose semantics has not landed (a `Relaxed` or `Thread`/`Cluster` `Fence`, a barrier kind): the
+    /// shape is reserved, the checker refuses it, so no producer builds a kernel an interpreter would then have to guess about.
     SyncUnsupported {
         /// What is wrong.
         what: &'static str,

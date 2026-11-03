@@ -264,6 +264,14 @@ impl Machine<'_> {
         }
     }
 
+    /// A fence by this thread (a no-op outside `run_launch`): it orders through `kernel_sync`, touching no memory.
+    pub(super) fn fence(&mut self, order: MemoryOrder, scope: Scope) {
+        if let Some(c) = &mut self.ctx {
+            let now = c.stamp(AccessKind::Read);
+            c.sync.fence(now, (order, scope));
+        }
+    }
+
     /// Log a global access by this thread (a no-op outside `run_launch`).
     pub(super) fn note_global(
         &mut self,

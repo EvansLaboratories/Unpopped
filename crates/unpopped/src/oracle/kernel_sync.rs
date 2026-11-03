@@ -44,6 +44,10 @@ pub(super) struct Edges {
     seq: u64,
     know: HashMap<Tid, Clock>,
     records: HashMap<ElemKey, Vec<Record>>,
+    /// What each thread's atomic reads have seen but no acquire has taken in yet (for a later acquire fence).
+    pending: HashMap<Tid, Vec<Record>>,
+    /// A thread's latest release fence: its scope and what it knew then.
+    fence_rel: HashMap<Tid, (Scope, Clock)>,
     /// Whether any acquire-class atomic has run: a block that then runs away may be waiting on a later block.
     pub(super) acquired: bool,
 }
@@ -113,7 +117,25 @@ impl Edges {
             .is_some_and(|s| *s >= prev.seq)
     }
 
-    /// An atomic read-modify-write by `now` on `key`: acquire from the records first, then (if it releases) leave one.
+    /// Join the records whose (narrower) scope contains the releaser and `me` into `me`'s knowledge.
+    fn absorb(&mut self, me: Tid, records: &[Record], scope: Scope) {
+        let mine = self.know.entry(me).or_default();
+        for r in records {
+            if contains(narrower(r.scope, scope), r.from, me) {
+                join(mine, &r.clock);
+            }
+        }
+    }
+
+    /// What `me` has acquired plus its own access `seq`: the clock a release by `me` publishes.
+    fn snapshot(&self, me: Tid, seq: u64) -> Clock {
+        let mut clock = self.know.get(&me).cloned().unwrap_or_default();
+        clock.insert(me, seq);
+        clock
+    }
+
+    /// An atomic read-modify-write by `now` on `key`: acquire from the records first, then (if it releases, or a
+    /// release fence of the thread precedes it) leave one. Every record it read is also held for a later acquire fence.
     pub(super) fn atomic(
         &mut self,
         now: Stamp,
@@ -121,18 +143,24 @@ impl Edges {
         (order, scope): (MemoryOrder, Scope),
     ) {
         let me = tid(now);
+        let seen = self.records.get(&key).cloned().unwrap_or_default();
         if acquires(order) {
             self.acquired = true;
-            let mine = self.know.entry(me).or_default();
-            for r in self.records.get(&key).into_iter().flatten() {
-                if contains(narrower(r.scope, scope), r.from, me) {
-                    join(mine, &r.clock);
-                }
-            }
+            self.absorb(me, &seen, scope);
         }
-        if releases(order) {
-            let mut clock = self.know.get(&me).cloned().unwrap_or_default();
-            clock.insert(me, now.seq);
+        let held = self.pending.entry(me).or_default();
+        for r in seen {
+            held.retain(|h| h.from != r.from);
+            held.push(r);
+        }
+        let leave = if releases(order) {
+            Some((scope, self.snapshot(me, now.seq)))
+        } else {
+            self.fence_rel
+                .get(&me)
+                .map(|(fs, fc)| (narrower(*fs, scope), fc.clone()))
+        };
+        if let Some((scope, clock)) = leave {
             // a later release by one thread knows at least what its earlier one did, so it replaces it
             let recs = self.records.entry(key).or_default();
             recs.retain(|r| r.from != me);
@@ -141,6 +169,21 @@ impl Edges {
                 scope,
                 clock,
             });
+        }
+    }
+
+    /// A fence by `now`. An acquire fence takes in everything its earlier atomic reads saw; a release fence is what
+    /// its later atomics (of any order) publish. Neither touches memory.
+    pub(super) fn fence(&mut self, now: Stamp, (order, scope): (MemoryOrder, Scope)) {
+        let me = tid(now);
+        if acquires(order) {
+            self.acquired = true;
+            let held = self.pending.remove(&me).unwrap_or_default();
+            self.absorb(me, &held, scope);
+        }
+        if releases(order) {
+            let clock = self.snapshot(me, now.seq);
+            self.fence_rel.insert(me, (scope, clock));
         }
     }
 }

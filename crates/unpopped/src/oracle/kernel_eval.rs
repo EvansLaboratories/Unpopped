@@ -248,14 +248,11 @@ impl<'a> Machine<'a> {
             | Stmt::Assign { .. }
             | Stmt::Store { .. }
             | Stmt::AtomicRmw { .. }
-            | Stmt::AtomicCas { .. } => {
+            | Stmt::AtomicCas { .. }
+            | Stmt::Fence { .. } => {
                 self.exec_simple(st)?;
             }
-            Stmt::Fence { .. } | Stmt::Collective { .. } => {
-                return Err(KernelTrap::Unsupported(
-                    "Fence or Collective (check_kernel refuses it)",
-                ));
-            }
+            Stmt::Collective { .. } => return Err(KernelTrap::Unsupported("Collective")),
             Stmt::Call {
                 callee,
                 args,
@@ -312,6 +309,7 @@ impl<'a> Machine<'a> {
                 self.store(place, v)?;
             }
             Stmt::AtomicRmw { .. } | Stmt::AtomicCas { .. } => self.exec_atomic(st)?,
+            Stmt::Fence { scope, order } => self.fence(*order, *scope),
             _ => unreachable!("exec_simple is called for straight-line statements only"),
         }
         Ok(())

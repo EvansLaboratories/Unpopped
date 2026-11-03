@@ -131,10 +131,10 @@ impl<'a> Machine<'a> {
             | Stmt::Assign { .. }
             | Stmt::Store { .. }
             | Stmt::AtomicRmw { .. }
-            | Stmt::AtomicCas { .. } => {
+            | Stmt::AtomicCas { .. }
+            | Stmt::Fence { .. } => {
                 self.exec_simple(st)?;
             }
-            Stmt::Fence { .. } => return Err(KernelTrap::Unsupported("Fence (refused)")),
             Stmt::Collective { .. } => return self.collective_stop(st).map(Some),
             Stmt::Call {
                 callee,

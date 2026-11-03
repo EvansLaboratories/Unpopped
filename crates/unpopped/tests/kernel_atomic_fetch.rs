@@ -237,9 +237,10 @@ fn the_reserved_shapes_are_refused_with_a_typed_error() {
             "{r:?}"
         );
     }
+    // a Fence runs since 0.42.8 (`tests/kernel_fence.rs`); a Relaxed one orders nothing and is still refused
     let fence = Stmt::Fence {
         scope: Scope::Device,
-        order: MemoryOrder::SeqCst,
+        order: MemoryOrder::Relaxed,
     };
     assert!(matches!(
         check_kernel(&kernel_with(I32, vec![fence])),

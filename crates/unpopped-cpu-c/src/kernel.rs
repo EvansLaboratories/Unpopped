@@ -211,7 +211,7 @@ impl Emitter<'_> {
             Stmt::Barrier { .. } => return Err(refuse("a Barrier needs a launch (U3 row 4)")),
             Stmt::AtomicRmw { .. } => self.atomic_rmw(s)?,
             Stmt::AtomicCas { .. } => self.atomic_cas(s)?,
-            Stmt::Fence { .. } => return Err(refuse("a Fence is not emitted yet")),
+            Stmt::Fence { .. } => {}
             Stmt::Collective { .. } => return Err(refuse("a Collective is block-level only")),
             Stmt::Call {
                 callee,
