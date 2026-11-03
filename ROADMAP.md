@@ -171,6 +171,8 @@ RTX 4070 in 2026-07/08. The generators and emit examples live in baracuda.
 
 CireSnave, 2026-10-24: *"I want the IR to cover the full union of the capabilities of every kernel language in common use today including, but not limited to, CUDA, CUTLASS, Slang, CuTe, Mojo, Triton, and ThunderKittens."* One tracking issue per increment; the lane that lands an increment closes its issue. Decisions D1-D4, D6-D8 are ruled (design doc section 7); **D5 (fp4/fp6 in `ElementKind`) is CireSnave's, board 290: nothing touching D5 starts.**
 
+**Where the union stands (re-scored 2026-11-03 at `a634b09`, `docs/ir-union-rescore.md`):** of the 519 capability rows in the seven surveys, Yes 29 -> 93, Partial 108 -> 168, No 370 -> 246 (n/a 12); the rough coverage index (Yes + half Partial over applicable rows) went from 16% to 35%. The largest remaining groups are asynchronous data movement and pipelines (U4 S7, U8), matrix units (U7) and resources/scheduling. Unchanged rows were not re-verified.
+
 | ID | Work | Issue | Status |
 |---|---|---|---|
 | U0 | Replace idiom-lifting 1a, its "not transferable" table, and `groupshared-sizing`'s premise with the cooperation ruling; fix the stale claims in 3.22 docs; record the ownership split. Docs only | #111 | **done**, 0.22.19 |
