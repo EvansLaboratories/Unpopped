@@ -63,6 +63,11 @@ pub fn lift_scan_opdef_launched(
     }
     let (sop, reverse, exclusive, pre, post) = check_scan(op, dtype, rank)?;
     let sh = ReductionShape::new(op.n_inputs, dtype, rank, AxisMask::EMPTY);
+    if matches!(sop, ReduceOp::Mean) {
+        return Err(LiftDecline::UnsupportedForm(
+            "a Mean scan in a launched scan (a running mean has no declared bound)",
+        ));
+    }
     if matches!(sop, ReduceOp::Prod) && !sh.is_int() {
         return Err(LiftDecline::UnsupportedForm(
             "a float Prod scan in a launched scan (not order-independent, and no declared bound)",

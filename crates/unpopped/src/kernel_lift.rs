@@ -551,7 +551,17 @@ fn scan_pass(
 ) -> Vec<Stmt> {
     let mut pass = scan_loads(sh, pre);
     let write = scan_write(sh, sop, post, scan_counters(sh));
-    let fold = fold_step(sop, sh.acc, sh.have, sh.val, sh.is_int());
+    let mut fold = fold_step(sop, sh.acc, sh.have, sh.val, sh.is_int());
+    if matches!(sop, ReduceOp::Mean) {
+        // a running mean counts the elements folded so far in `have`
+        fold.push(Stmt::Assign {
+            local: sh.have,
+            value: ScalarExpr::Add(
+                Box::new(ScalarExpr::Local(sh.have)),
+                Box::new(ScalarExpr::ConstInt(1, ElementKind::I32)),
+            ),
+        });
+    }
     if exclusive {
         pass.extend(write);
         pass.extend(fold);
@@ -578,7 +588,7 @@ fn scan_write(
     let Some(post) = post else {
         return vec![Stmt::Store {
             place,
-            value: sh.stored(sop),
+            value: scan_stored(sh, sop),
         }];
     };
     let value = post::bind(post, &|leaf| match leaf {
@@ -589,10 +599,28 @@ fn scan_write(
     vec![
         Stmt::Let {
             local: sh.red,
-            init: sh.stored(sop),
+            init: scan_stored(sh, sop),
         },
         Stmt::Store { place, value },
     ]
+}
+
+/// The prefix to store: the accumulator cast down once, or for a running `Mean` the `F64` accumulator divided by the
+/// count of elements folded so far (`have`; zero before the first, so an exclusive lane 0 is `0 / 0`, NaN).
+fn scan_stored(sh: &ReductionShape, sop: ReduceOp) -> ScalarExpr {
+    if !matches!(sop, ReduceOp::Mean) {
+        return sh.stored(sop);
+    }
+    let count = ScalarExpr::Cast(
+        Box::new(ScalarExpr::Local(sh.have)),
+        widen(ElementKind::F64),
+    );
+    let mean = ScalarExpr::Div(Box::new(ScalarExpr::Local(sh.acc)), Box::new(count));
+    if sh.dtype == ElementKind::F64 {
+        mean
+    } else {
+        ScalarExpr::Cast(Box::new(mean), widen(sh.dtype))
+    }
 }
 
 /// The scan of one row: the prefix starts at the monoid identity and the scanned axis is walked
@@ -646,9 +674,6 @@ fn check_scan(
     else {
         return Err(LiftDecline::NotScan);
     };
-    if matches!(sop, ReduceOp::Mean) {
-        return Err(LiftDecline::UnsupportedForm("a Mean scan (not a monoid)"));
-    }
     check_accumulated_dtype(dtype, *sop, post, "a scan")?;
     let post = if matches!(post, ScalarExpr::Reduced(0)) {
         None
