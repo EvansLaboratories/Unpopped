@@ -13,8 +13,10 @@ A contraction's epilogue may read `Reduced(0)` (the K-sum) and `Input(i)` for `2
 | Option | Cost | Note |
 |---|---|---|
 | **A. By operand rank (recommended).** An `Input(i>=2)` of rank 2 (rank 3 batched) is a full C read at `[m,n]`; rank 1 stays the `[N]` bias | oracle, plan gate, lift and cpu-c read the operand's rank; no key change | the plan gate must check C's shape equals the output's; one more decline: `CShapeMismatch` |
-| B. A key fact (`c_form: None / Bias / Full`) | a `StructureKey` change and a version of the codec | the cache then separates the two shapes, which A cannot; heavier than the evidence asks |
+| B. A key fact (`c_form: None / Bias / Full`) | a `StructureKey` change and a version of the codec | unneeded: the key already separates the two (below), so this is a byte change to a KISS-owned key for nothing |
 | C. A new `Access` field `c: Option<..>` on `Contraction` | an IR change visible to every `match` | clearest, widest blast radius (the whole-workspace exhaustive-match hazard) |
+
+**Measured (PM question 2026-11-03): does the key already separate a `[N]` bias from a full `[M,N]` C? Yes.** The per-operand sub-key has no rank but has `bcast`: the bias is broadcast over M (mask `1`), a full C is not (mask `0`), so the sub-keys, and the tokens that carry them, differ (`crates/unpopped-vocab/tests/a_full_c_and_a_bias_have_different_keys.rs`). At `M == 1` they key alike, correctly, since `C[0,n] == bias[n]`. My first draft of that test predicted the opposite and failed on its first assertion; the failure is where `bcast` was read, and the draft of this note that said A "cannot separate" them was wrong. Decision 1 is A, no key change.
 
 ## Decision 2: where C enters a precision policy (S1a)
 
