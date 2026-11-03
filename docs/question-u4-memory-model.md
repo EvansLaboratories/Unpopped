@@ -1,6 +1,6 @@
 # Question for CireSnave: what should the oracle promise for atomic order and scope, and for fences? (ROADMAP U4 S4, S5)
 
-Status: **ruled A by CireSnave 2026-11-03** ("370: A. We may switch to C later or at least expand this more but A is fine for now."), with both sub-answers yes; **S4 (order and scope) built in 0.42.7**, S5 (`Fence`) next. Originally: a question, nothing built. Asked by the PM (2026-11-02): write this when U4 reaches S4/S5. The U4 slices
+Status: **ruled A by CireSnave 2026-11-03** ("370: A. We may switch to C later or at least expand this more but A is fine for now."), with both sub-answers yes; **S4 (order and scope) built in 0.42.7**, S5 (`Fence`) in 0.42.8. Originally: a question, nothing built. Asked by the PM (2026-11-02): write this when U4 reaches S4/S5. The U4 slices
 that did not need an answer are built (`docs/options-u4-sync-and-atomics.md`: S1 old value, S2 more combines, S3
 `AtomicCas`; the shapes of S4 and S5 are already in `Stmt` and refused with a typed error). These two cannot be
 built without a decision on what "correct" means, and it is yours.
