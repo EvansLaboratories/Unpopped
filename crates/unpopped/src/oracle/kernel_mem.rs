@@ -14,9 +14,11 @@ use std::collections::HashMap;
 use unpopped_vocab::ElementKind;
 
 use super::kernel_eval::{KernelTrap, Machine};
+use super::kernel_sync::{Edges, ElemKey, contains, tid};
 use super::{Val, elem_bits, read_elem, store_val};
-use crate::exec::{ExecId, LaunchShape, MemorySpace};
+use crate::exec::{ExecId, LaunchShape, MemorySpace, Scope};
 use crate::ir::ScalarExpr;
+use crate::kernel::MemoryOrder;
 use crate::types::{self, Ty};
 
 /// One access: the thread, and the barrier counts it saw.
@@ -27,19 +29,36 @@ pub(super) struct Stamp {
     pub(super) sub: u32,
     pub(super) block_epoch: u32,
     pub(super) sub_epoch: u32,
+    /// The access's place in the launch's sequence (`kernel_sync`), and the scope an atomic was issued at.
+    pub(super) seq: u64,
+    pub(super) scope: Scope,
 }
 
-/// Whether `prev` and `now` are unordered, so a conflict between them is a race.
-fn unordered(prev: Stamp, now: Stamp) -> bool {
-    if prev.block != now.block {
-        return true;
-    }
-    if prev.thread == now.thread {
+/// Whether `prev` and `now` are unordered, so a conflict between them is a race: no barrier orders them and `now`
+/// has not acquired from `prev` through a release/acquire atomic.
+fn unordered(prev: Stamp, now: Stamp, sync: &Edges) -> bool {
+    if prev.block == now.block && prev.thread == now.thread {
         return false;
     }
-    let by_block = prev.block_epoch < now.block_epoch;
-    let by_subgroup = prev.sub == now.sub && prev.sub_epoch < now.sub_epoch;
-    !(by_block || by_subgroup)
+    if prev.block == now.block {
+        let by_block = prev.block_epoch < now.block_epoch;
+        let by_subgroup = prev.sub == now.sub && prev.sub_epoch < now.sub_epoch;
+        if by_block || by_subgroup {
+            return false;
+        }
+    }
+    !sync.knows(tid(now), prev)
+}
+
+/// Two atomics on one element conflict when the narrower of their scopes does not contain both threads.
+fn out_of_scope(prev: Stamp, now: Stamp) -> bool {
+    let (a, b) = (prev.scope, now.scope);
+    let narrow = if super::kernel_sync::width(a) <= super::kernel_sync::width(b) {
+        a
+    } else {
+        b
+    };
+    !contains(narrow, tid(prev), tid(now))
 }
 
 /// How an access touches an element.
@@ -69,15 +88,19 @@ pub(super) fn touch(
     key: (u32, usize),
     now: Stamp,
     kind: AccessKind,
+    sync: &Edges,
 ) -> Result<(), KernelTrap> {
     let a = log.entry(key).or_default();
-    if a.writer.is_some_and(|w| unordered(w, now)) {
+    if a.writer.is_some_and(|w| unordered(w, now, sync)) {
         return Err(KernelTrap::DataRace);
     }
-    if kind != AccessKind::Atomic && a.atomics.iter().any(|t| unordered(*t, now)) {
+    if kind != AccessKind::Atomic && a.atomics.iter().any(|t| unordered(*t, now, sync)) {
         return Err(KernelTrap::DataRace);
     }
-    if kind != AccessKind::Read && a.readers.iter().any(|r| unordered(*r, now)) {
+    if kind == AccessKind::Atomic && a.atomics.iter().any(|t| out_of_scope(*t, now)) {
+        return Err(KernelTrap::DataRace);
+    }
+    if kind != AccessKind::Read && a.readers.iter().any(|r| unordered(*r, now, sync)) {
         return Err(KernelTrap::DataRace);
     }
     match kind {
@@ -150,10 +173,15 @@ pub(super) struct ThreadCtx<'a> {
     pub(super) private: Vec<Option<AllocMem>>,
     pub(super) block: &'a mut BlockMem,
     pub(super) global: &'a mut Log,
+    /// The launch-wide release/acquire state, and the order and scope of the atomic statement now running.
+    pub(super) sync: &'a mut Edges,
+    pub(super) site: (MemoryOrder, Scope),
 }
 
 impl ThreadCtx<'_> {
-    fn stamp(&self) -> Stamp {
+    /// This thread's stamp for an access of `kind`: its barrier counts, the next sequence number, and (for an
+    /// atomic) the scope it is issued at.
+    fn stamp(&mut self, kind: AccessKind) -> Stamp {
         let sub = self.thread_lin / self.subgroup;
         Stamp {
             block: self.block_lin,
@@ -161,6 +189,20 @@ impl ThreadCtx<'_> {
             sub,
             block_epoch: self.block.block_epoch,
             sub_epoch: self.block.sub_epoch[sub as usize],
+            seq: self.sync.next(),
+            scope: if kind == AccessKind::Atomic {
+                self.site.1
+            } else {
+                Scope::Device
+            },
+        }
+    }
+
+    /// What an access does to the release/acquire state once it is logged: only an atomic does anything, acquiring
+    /// and releasing by its order.
+    fn after(&mut self, now: Stamp, kind: AccessKind, key: ElemKey) {
+        if kind == AccessKind::Atomic {
+            self.sync.atomic(now, key, self.site);
         }
     }
 
@@ -189,8 +231,9 @@ impl ThreadCtx<'_> {
         kind: AccessKind,
     ) -> Result<(), KernelTrap> {
         if space == MemorySpace::Shared {
-            let now = self.stamp();
-            touch(&mut self.block.log, (alloc, i), now, kind)?;
+            let now = self.stamp(kind);
+            touch(&mut self.block.log, (alloc, i), now, kind, self.sync)?;
+            self.after(now, kind, (1, self.block_lin, alloc, i));
         }
         Ok(())
     }
@@ -214,6 +257,13 @@ impl Machine<'_> {
         }))
     }
 
+    /// State the order and scope of the atomic statement about to run (a no-op outside `run_launch`).
+    pub(super) fn set_site(&mut self, order: MemoryOrder, scope: Scope) {
+        if let Some(c) = &mut self.ctx {
+            c.site = (order, scope);
+        }
+    }
+
     /// Log a global access by this thread (a no-op outside `run_launch`).
     pub(super) fn note_global(
         &mut self,
@@ -223,8 +273,10 @@ impl Machine<'_> {
     ) -> Result<(), KernelTrap> {
         match &mut self.ctx {
             Some(c) => {
-                let now = c.stamp();
-                touch(c.global, (buffer as u32, off), now, kind)
+                let now = c.stamp(kind);
+                touch(c.global, (buffer as u32, off), now, kind, c.sync)?;
+                c.after(now, kind, (0, 0, buffer as u32, off));
+                Ok(())
             }
             None => Ok(()),
         }

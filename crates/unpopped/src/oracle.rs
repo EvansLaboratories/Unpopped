@@ -109,6 +109,7 @@ pub use kernel_call::run_module;
 pub mod kernel_launch;
 mod kernel_mem;
 mod kernel_resume;
+mod kernel_sync;
 
 use crate::ir::{Access, BinaryOp, ReduceOp, ScalarExpr, SortOrder, SortOut, UnaryOp, View};
 use crate::plan::{KernelPlan, RrRole, Schedule, rr_role};

@@ -9,8 +9,8 @@ use unpopped_vocab::ElementKind;
 use crate::exec::{Extent, MemorySpace, Scope as ExecScope};
 use crate::ir::ScalarExpr;
 use crate::kernel::{
-    AtomicOp, BarrierKind, Block, BufferRole, CallArg, KernelError, KernelFn, MemoryOrder, Param,
-    ParamKind, Place, Stmt,
+    AtomicOp, BarrierKind, Block, BufferRole, CallArg, KernelError, KernelFn, Param, ParamKind,
+    Place, Stmt,
 };
 use crate::types::{self, Ty};
 
@@ -142,14 +142,13 @@ fn check_atomic_stmt(
             place,
             value,
             old,
-            order,
             scope,
+            ..
         } => {
             let form = AtomicForm {
                 op: *op,
                 site: AtomicSite {
                     old: *old,
-                    order: *order,
                     scope: *scope,
                 },
             };
@@ -160,12 +159,11 @@ fn check_atomic_stmt(
             expected,
             desired,
             old,
-            order,
             scope,
+            ..
         } => {
             let site = AtomicSite {
                 old: *old,
-                order: *order,
                 scope: *scope,
             };
             check_cas(k, place, [expected, desired], site, sc, declared_here)?;
@@ -411,7 +409,7 @@ struct AtomicForm {
 }
 
 /// An `AtomicRmw` (v1): a `ReadWrite` global buffer or `Shared` element, a value of the element's type,
-/// `Relaxed` order and `Device` scope, and an `old` local (if any) of the element's type that this
+/// a `Subgroup`, `Block` or `Device` scope, any memory order, and an `old` local (if any) of the element's type that this
 /// statement declares.
 fn check_atomic(
     k: &KernelFn,
@@ -466,16 +464,15 @@ fn check_cas(
     Ok(())
 }
 
-/// What every atomic statement states about where and how it runs: the old-value local, the memory
-/// order and the scope.
+/// What every atomic statement states about where it runs: the old-value local and the scope (the memory
+/// order needs no check: every order is meaningful on a read-modify-write).
 #[derive(Clone, Copy)]
 struct AtomicSite {
     old: Option<u32>,
-    order: MemoryOrder,
     scope: ExecScope,
 }
 
-/// The checks every atomic shares: `Relaxed` order, `Device` scope, a `ReadWrite` global buffer or a
+/// The checks every atomic shares: a `Subgroup`, `Block` or `Device` scope, a `ReadWrite` global buffer or a
 /// `Shared` allocation element. Returns the element type.
 fn check_atomic_site(
     k: &KernelFn,
@@ -483,14 +480,13 @@ fn check_atomic_site(
     site: AtomicSite,
     sc: &Scope,
 ) -> Result<ElementKind, KernelError> {
-    if !matches!(site.order, MemoryOrder::Relaxed) {
+    // every memory order is meaningful on a read-modify-write (`SeqCst` is treated as `AcqRel`)
+    if !matches!(
+        site.scope,
+        ExecScope::Subgroup | ExecScope::Block | ExecScope::Device
+    ) {
         return Err(KernelError::AtomicUnsupported {
-            what: "a memory order other than Relaxed: the shape is reserved, its semantics has not landed",
-        });
-    }
-    if !matches!(site.scope, ExecScope::Device) {
-        return Err(KernelError::AtomicUnsupported {
-            what: "an atomic scope other than Device: the shape is reserved, its semantics has not landed",
+            what: "an atomic scope other than Subgroup, Block or Device (Thread and Cluster have no semantics yet)",
         });
     }
     let outside_shared = match place {

@@ -251,8 +251,8 @@ fn the_checker_admits_only_the_integer_relaxed_device_form() {
         assert!(matches!(ok(bad), Err(KernelError::TypeMismatch { .. })));
     }
     for (order, scope) in [
-        (MemoryOrder::SeqCst, Scope::Device),
-        (MemoryOrder::Relaxed, Scope::Block),
+        (MemoryOrder::Relaxed, Scope::Thread),
+        (MemoryOrder::SeqCst, Scope::Cluster),
     ] {
         let s = Stmt::AtomicCas {
             place: cell(),
