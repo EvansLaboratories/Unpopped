@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! The sequential form a kernel states for an arg-reduction (ROADMAP U5 P3): PyTorch's rule written as a loop over
-//! locals, since the kernel layer has no lift of an arg-reduction. Shared by the oracle test
-//! (`reduce_argmax.rs`) and the C test (`unpopped-cpu-c/tests/kernel_emit_argmax_agrees.rs`).
+//! The sequential form a kernel states for an arg-reduction (ROADMAP U5 P3): KISS-OPS-6.11-0007's order (NaN is the
+//! greatest value, ties go to the lower index) written as a loop over locals, since the kernel layer has no lift of an
+//! arg-reduction. Shared by the oracle test (`reduce_argmax.rs`) and the C test
+//! (`unpopped-cpu-c/tests/kernel_emit_argmax_agrees.rs`).
 //!
 //! ```text
 //! for r in 0..rows { best = in[r][0]; bi = 0;
-//!   for j in 1..cols { x = in[r][j]; if best == best { if x != x { take } else if x BETTER best { take } } }
+//!   for j in 1..cols { x = in[r][j];
+//!     max: if best == best { if x != x || x > best { take } }
+//!     min: if x == x { if best != best || x < best { take } } }
 //!   out[r] = bi }                     where take is `best = x; bi = j`
 //! ```
 //!
@@ -53,21 +56,46 @@ fn take() -> Block {
     ])
 }
 
-/// The NaN-first rule: a NaN element takes over, otherwise only a strictly better one does.
-fn consider(better: BinaryOp) -> Stmt {
-    Stmt::If {
-        cond: cmp(BinaryOp::CmpNe, l(6), l(6)),
+/// KISS-OPS-6.11-0007's order, maximum: NaN is the greatest value, so a NaN `best` is final and a NaN element takes
+/// over; otherwise only a strictly greater element does (ties keep the lower index).
+fn consider_max() -> Stmt {
+    let strictly = Stmt::If {
+        cond: cmp(BinaryOp::CmpGt, l(6), l(4)),
         then: take(),
-        els: Block(vec![Stmt::If {
-            cond: cmp(better, l(6), l(4)),
+        els: Block(vec![]),
+    };
+    Stmt::If {
+        cond: cmp(BinaryOp::CmpEq, l(4), l(4)),
+        then: Block(vec![Stmt::If {
+            cond: cmp(BinaryOp::CmpNe, l(6), l(6)),
             then: take(),
-            els: Block(vec![]),
+            els: Block(vec![strictly]),
         }]),
+        els: Block(vec![]),
     }
 }
 
-/// `for j in 1..cols { x = in[r][j]; if best == best { consider } }`: a NaN `best` is final.
-fn scan_row(better: BinaryOp) -> Stmt {
+/// The same order, minimum: a NaN element never takes over, a NaN `best` is replaced by any number, and otherwise
+/// only a strictly smaller element takes over.
+fn consider_min() -> Stmt {
+    let against_best = Stmt::If {
+        cond: cmp(BinaryOp::CmpNe, l(4), l(4)),
+        then: take(),
+        els: Block(vec![Stmt::If {
+            cond: cmp(BinaryOp::CmpLt, l(6), l(4)),
+            then: take(),
+            els: Block(vec![]),
+        }]),
+    };
+    Stmt::If {
+        cond: cmp(BinaryOp::CmpEq, l(6), l(6)),
+        then: Block(vec![against_best]),
+        els: Block(vec![]),
+    }
+}
+
+/// `for j in 1..cols { x = in[r][j]; <consider> }`.
+fn scan_row(consider: Stmt) -> Stmt {
     Stmt::For {
         local: 3,
         start: ScalarExpr::ConstInt(1, I32),
@@ -78,11 +106,7 @@ fn scan_row(better: BinaryOp) -> Stmt {
                 local: 6,
                 place: input_at(2, l(3)),
             },
-            Stmt::If {
-                cond: cmp(BinaryOp::CmpEq, l(4), l(4)),
-                then: Block(vec![consider(better)]),
-                els: Block(vec![]),
-            },
+            consider,
         ]),
     }
 }
@@ -117,11 +141,7 @@ fn rows(scan: Stmt) -> Stmt {
 
 /// The kernel: `x` (`F32`, rank 2, read), `out` (`I64`, rank 1, write), then `rows` and `cols`.
 pub(crate) fn loop_kernel(max: bool) -> KernelFn {
-    let better = if max {
-        BinaryOp::CmpGt
-    } else {
-        BinaryOp::CmpLt
-    };
+    let consider = if max { consider_max() } else { consider_min() };
     let locals = [I32, I32, I32, I32, F32, I64, F32]
         .into_iter()
         .map(LocalDecl::scalar)
@@ -132,6 +152,6 @@ pub(crate) fn loop_kernel(max: bool) -> KernelFn {
         Param::scalar("rows", I32, 0),
         Param::scalar("cols", I32, 1),
     ];
-    let body = Block(vec![rows(scan_row(better))]);
+    let body = Block(vec![rows(scan_row(consider))]);
     KernelFn::new("argloop", F32, params, locals, body)
 }

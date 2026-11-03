@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! **The emitted C agrees with the kernel interpreter on an arg-reduction written as a loop** (ROADMAP U5 P3; PM
 //! ruling 2026-11-02 (3)): the kernel layer has no lift of `ArgMax`/`ArgMin`, so the sequential form is the loop of
-//! `unpopped/tests/support/arg_loop.rs` (PyTorch's rule: the first index of the extreme, NaN wins). It is lowered by
+//! `unpopped/tests/support/arg_loop.rs` (KISS-OPS-6.11-0007's order: NaN greatest, the lower
+//! index wins a tie). It is lowered by
 //! `CpuC::lower_kernel`, compiled with a host C compiler, run, and its `I64` index bytes compared with `run_kernel`;
 //! the interpreter side is held to the oracle in `unpopped/tests/reduce_argmax.rs`, so the three agree.
 //!
 //! The corpus has ties (the first index must win), a NaN first, a NaN in the middle with a larger number after it,
-//! an all-negative row and equal signed zeros.
+//! an all-negative row, equal signed zeros and an all-NaN row.
 
 use unpopped::backend::Backend;
 use unpopped::kernel::check_kernel;
@@ -27,17 +28,18 @@ use arg_loop::loop_kernel;
 use kernel_data::zeroed;
 use kernel_run::{agree, run_c_mutated};
 
-const ROWS: i64 = 5;
+const ROWS: i64 = 6;
 const COLS: i64 = 6;
 
 fn args() -> Vec<KernelArg> {
     let n = f32::NAN;
-    let vals: [f32; 30] = [
+    let vals: [f32; 36] = [
         3.0, 9.0, 9.0, 1.0, 1.0, 2.0, //
         n, 1.0, 2.0, 3.0, -4.0, 5.0, //
         1.0, 4.0, n, 7.0, n, 2.0, //
         -1.0, -2.0, -3.0, -4.0, -5.0, -6.0, //
         0.0, -0.0, 0.0, -0.0, 0.0, -0.0, //
+        n, n, n, n, n, n, //
     ];
     let bytes: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
     vec![
