@@ -155,7 +155,7 @@ mod tests {
         // the boundaries: ties around the largest finite, the subnormal limit, exact halves
         for x in [
             65504.0,
-            65519.999_999,
+            65_519.999_999,
             65520.0,
             6.1e-5,
             5.96e-8,
