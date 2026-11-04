@@ -99,6 +99,7 @@ fn mma_kernel(atom: &MmaAtom, skip_c_slot: Option<u32>) -> KernelFn {
         b: 1,
         c: 2,
         d: 3,
+        extra: vec![],
     });
     body.extend(copy_out(tacc, vals[2], &mut locals));
     KernelFn::new(

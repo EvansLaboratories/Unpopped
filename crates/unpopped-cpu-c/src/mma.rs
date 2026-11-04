@@ -44,9 +44,22 @@ fn is_float(t: ElementKind) -> bool {
 impl Emitter<'_> {
     /// Spell a `Stmt::Mma` at block level (the caller is between two thread loops).
     pub(crate) fn mma(&mut self, st: &Stmt) -> Result<(), LowerError> {
-        let Stmt::Mma { atom, a, b, c, d } = st else {
+        let Stmt::Mma {
+            atom,
+            a,
+            b,
+            c,
+            d,
+            extra,
+        } = st
+        else {
             unreachable!("mma is called for an Mma");
         };
+        if !extra.is_empty() {
+            return Err(refuse(
+                "an MMA atom with 2:4 sparsity or block scaling (not spelled yet)",
+            ));
+        }
         let info = self.launch.expect("a launched emitter");
         let nt = info.threads();
         let lanes = atom.lanes();
