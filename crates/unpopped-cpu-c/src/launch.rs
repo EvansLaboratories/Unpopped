@@ -27,7 +27,7 @@
 //! A `Barrier` of a scope other than `Block`, except a `Device` barrier at the top level of the body (below); a `While` that holds a barrier; a `Break` or `Continue` that
 //! leaves a loop holding a barrier; a `Return` in a kernel that has a barrier (ending one thread would
 //! have to skip the barriers after it); execution ids other than `ThreadIdx`, `BlockIdx`, `BlockDim` and
-//! `GridDim`; a `Private` or `Constant` allocation or a dynamic extent; a block over 1024 threads;
+//! `GridDim`; a `Constant` allocation or a dynamic extent; a block over 1024 threads;
 //! `Fence`; and a `Call` of a function that reaches a barrier (a callee runs inside one thread's run, so the
 //! thread loop cannot be split in it: `lower_module` refuses it).
 //!
@@ -131,9 +131,9 @@ fn device_segments(body: &[Stmt]) -> Vec<&[Stmt]> {
 }
 
 fn admit_alloc(a: &AllocDecl) -> Result<(), LowerError> {
-    if a.space != MemorySpace::Shared {
+    if !matches!(a.space, MemorySpace::Shared | MemorySpace::Private) {
         return Err(refuse(format!(
-            "allocation `{}` is {:?}; only Shared is spelled",
+            "allocation `{}` is {:?}; only Shared and Private are spelled",
             a.name, a.space
         )));
     }
@@ -245,7 +245,19 @@ pub(crate) fn exec_c(info: LaunchInfo, id: ExecId) -> Result<String, LowerError>
     })
 }
 
+/// Elements of storage for an allocation of `n`: a `Private` array has its own copy per thread of the block.
+fn alloc_len(space: MemorySpace, n: u32, threads: u32) -> u64 {
+    match space {
+        MemorySpace::Private => u64::from(n) * u64::from(threads),
+        _ => u64::from(n),
+    }
+}
+
 impl Emitter<'_> {
+    fn info_threads(&self) -> u32 {
+        LaunchInfo::of(self.k).map_or(1, LaunchInfo::threads)
+    }
+
     /// The launched function body: the local arrays, the scalar parameters, then the blocks.
     pub(crate) fn launched_body(&mut self, info: LaunchInfo) -> Result<(), LowerError> {
         let body = &self.k.body;
@@ -321,10 +333,8 @@ impl Emitter<'_> {
                 return Err(refuse("a dynamic extent"));
             };
             let t = ctype(a.elem, "an allocation")?;
-            self.line(&format!(
-                "{t} sh{i}_all[{}] = {{0}};",
-                u64::from(nb) * u64::from(n)
-            ));
+            let len = alloc_len(a.space, n, nt);
+            self.line(&format!("{t} sh{i}_all[{}] = {{0}};", u64::from(nb) * len));
         }
         Ok(())
     }
@@ -369,7 +379,8 @@ impl Emitter<'_> {
                 return Err(refuse("a dynamic extent"));
             };
             let t = ctype(a.elem, "an allocation")?;
-            self.line(&format!("{t} *sh{i} = &sh{i}_all[bl * {n}];"));
+            let len = alloc_len(a.space, n, self.info_threads());
+            self.line(&format!("{t} *sh{i} = &sh{i}_all[bl * {len}];"));
             if self.module.is_some() {
                 self.line(&format!(
                     "const long long ash{i}[1] = {{{n}}}; const long long ast{i}[1] = {{1}};"
@@ -385,7 +396,8 @@ impl Emitter<'_> {
                 return Err(refuse("a dynamic extent"));
             };
             let t = ctype(a.elem, "an allocation")?;
-            self.line(&format!("{t} sh{i}[{n}] = {{0}};"));
+            let len = alloc_len(a.space, n, self.info_threads());
+            self.line(&format!("{t} sh{i}[{len}] = {{0}};"));
             if self.module.is_some() {
                 // the shape and stride a callee's buffer parameter is bound to when the array is passed
                 self.line(&format!(
@@ -516,17 +528,24 @@ impl Emitter<'_> {
         if self.launch.is_none() {
             return Err(refuse("a Place::Alloc without a launch shape"));
         }
-        let extent = match self.k.allocs[*alloc as usize].extent {
+        let decl = &self.k.allocs[*alloc as usize];
+        let extent = match decl.extent {
             Extent::Static(n) => n,
             _ => return Err(refuse("a dynamic extent")),
         };
+        let private = decl.space == MemorySpace::Private;
         let n = self.fresh;
         self.fresh += 1;
         let v = self.expr(index)?;
         self.line(&format!(
             "long long o{n} = (long long)({v}); if (o{n} < 0 || o{n} >= {extent}) return 1;"
         ));
-        Ok(format!("sh{alloc}[o{n}]"))
+        // a Private array is one slice of `extent` elements per thread of the block
+        Ok(if private {
+            format!("sh{alloc}[(long long)t * {extent} + o{n}]")
+        } else {
+            format!("sh{alloc}[o{n}]")
+        })
     }
 
     /// An `AtomicRmw` as a plain read-modify-write: serial, hence atomic. `old` receives the value read.
