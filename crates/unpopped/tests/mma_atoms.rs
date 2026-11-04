@@ -6,7 +6,7 @@
 //! maps two fragment elements to one logical id.
 
 use unpopped::exec::Scope;
-use unpopped::mma::{MmaAtom, MmaAtomError};
+use unpopped::mma::{AtomSpec, MmaAtom, MmaAtomError};
 use unpopped_vocab::ElementKind;
 use unpopped_vocab::layout_algebra::Layout;
 
@@ -102,13 +102,17 @@ fn leaves(modes: &[(i64, i64)]) -> Layout {
 
 /// A 4-lane, 2x2x2 toy atom to test the construction checks on.
 fn toy(a: &Layout, b: &Layout, c: &Layout, scope: Scope) -> Result<MmaAtom, MmaAtomError> {
-    MmaAtom::new(
-        "toy",
-        (2, 2, 2),
-        (ElementKind::F32, ElementKind::F32, ElementKind::F32),
-        (scope, 4),
-        [a, b, c],
-    )
+    MmaAtom::new(spec("toy", (2, 2, 2), scope), [a, b, c])
+}
+
+fn spec(name: &str, mnk: (u32, u32, u32), scope: Scope) -> AtomSpec<'_> {
+    AtomSpec {
+        name,
+        mnk,
+        dtypes: (ElementKind::F32, ElementKind::F32, ElementKind::F32),
+        scope,
+        lanes: 4,
+    }
 }
 
 #[test]
@@ -146,12 +150,6 @@ fn a_wrong_size_a_wrong_scope_and_a_zero_dimension_are_refused() {
         toy(&ok, &ok, &ok, Scope::Block),
         Err(MmaAtomError::BadScope)
     );
-    let zero = MmaAtom::new(
-        "z",
-        (0, 2, 2),
-        (ElementKind::F32, ElementKind::F32, ElementKind::F32),
-        (Scope::Subgroup, 4),
-        [&ok, &ok, &ok],
-    );
+    let zero = MmaAtom::new(spec("z", (0, 2, 2), Scope::Subgroup), [&ok, &ok, &ok]);
     assert_eq!(zero, Err(MmaAtomError::ZeroDimension));
 }
