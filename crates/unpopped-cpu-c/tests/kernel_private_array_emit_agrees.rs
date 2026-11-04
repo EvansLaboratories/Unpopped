@@ -44,6 +44,25 @@ fn scratch(j: i64) -> Place {
     }
 }
 
+/// local 0 = running sum of the scratch, locals 1..=n = the elements read.
+fn sum_scratch(n: i64) -> Vec<Stmt> {
+    let mut out = vec![Stmt::Let {
+        local: 0,
+        init: u(0),
+    }];
+    for j in 0..n {
+        out.push(Stmt::Load {
+            local: 1 + j as u32,
+            place: scratch(j),
+        });
+        out.push(Stmt::Assign {
+            local: 0,
+            value: add(ScalarExpr::Local(0), ScalarExpr::Local(1 + j as u32)),
+        });
+    }
+    out
+}
+
 /// Thread `g` (global index) fills `scratch[j] = g * 10 + j`, optionally a Device barrier, then sums its own
 /// scratch into `out[g]`. `N` is the scratch length.
 fn kernel(threads: u32, blocks: u32, n: i64, device_barrier: bool) -> KernelFn {
@@ -61,21 +80,7 @@ fn kernel(threads: u32, blocks: u32, n: i64, device_barrier: bool) -> KernelFn {
     if device_barrier {
         body.push(Stmt::barrier(Scope::Device));
     }
-    // local 0 = running sum, locals 1..=n = the elements read
-    body.push(Stmt::Let {
-        local: 0,
-        init: u(0),
-    });
-    for j in 0..n {
-        body.push(Stmt::Load {
-            local: 1 + j as u32,
-            place: scratch(j),
-        });
-        body.push(Stmt::Assign {
-            local: 0,
-            value: add(ScalarExpr::Local(0), ScalarExpr::Local(1 + j as u32)),
-        });
-    }
+    body.extend(sum_scratch(n));
     body.push(Stmt::Store {
         place: Place::Logical {
             buffer: 0,
