@@ -59,8 +59,7 @@ impl Emitter<'_> {
         for (t, what) in [(ta, "an MMA A fragment"), (tb, "an MMA B fragment")] {
             ctype(t, what)?;
         }
-        ctype(tacc, "an MMA accumulator fragment")?;
-        let (m, n, k) = atom.mnk();
+        let td = ctype(tacc, "an MMA accumulator fragment")?;
         let wide = if is_float(tacc) {
             "double"
         } else {
@@ -79,6 +78,23 @@ impl Emitter<'_> {
             atom.name()
         ));
         self.depth += 1;
+        self.mma_gather(atom, [*a, *b, *c], id, wide);
+        self.mma_product(atom.mnk(), wide);
+        let vd = atom.values(2);
+        self.line(&format!(
+            "for (int l = 0; l < {lanes}; ++l) for (int v = 0; v < {vd}; ++v) sh{d}[(long long)(g + l) * {vd} + v] = ({td})md[mi{id}c[l * {vd} + v]];"
+        ));
+        self.depth -= 1;
+        self.line("}");
+        self.depth -= 1;
+        self.line("}");
+        Ok(())
+    }
+
+    /// Declare the logical matrices of one subgroup and fill A, B and C from the lanes' fragments.
+    fn mma_gather(&mut self, atom: &MmaAtom, allocs: [u32; 3], id: u32, wide: &str) {
+        let (m, n, k) = atom.mnk();
+        let lanes = atom.lanes();
         self.line(&format!(
             "{wide} ma[{}], mb[{}], mc[{}], md[{}];",
             m * k,
@@ -86,12 +102,16 @@ impl Emitter<'_> {
             m * n,
             m * n
         ));
-        for (w, (nm, alloc)) in [("a", *a), ("b", *b), ("c", *c)].into_iter().enumerate() {
+        for (w, (nm, alloc)) in ["a", "b", "c"].into_iter().zip(allocs).enumerate() {
             let vals = atom.values(w);
             self.line(&format!(
                 "for (int l = 0; l < {lanes}; ++l) for (int v = 0; v < {vals}; ++v) m{nm}[mi{id}{nm}[l * {vals} + v]] = ({wide})sh{alloc}[(long long)(g + l) * {vals} + v];"
             ));
         }
+    }
+
+    /// `D = A.B + C` over the logical matrices: from `C`, ascending `k`.
+    fn mma_product(&mut self, (m, n, k): (u32, u32, u32), wide: &str) {
         self.line(&format!(
             "for (int col = 0; col < {n}; ++col) for (int row = 0; row < {m}; ++row) {{"
         ));
@@ -103,15 +123,5 @@ impl Emitter<'_> {
         self.line(&format!("md[row + {m} * col] = s;"));
         self.depth -= 1;
         self.line("}");
-        let vd = atom.values(2);
-        let td = ctype(tacc, "an MMA accumulator fragment")?;
-        self.line(&format!(
-            "for (int l = 0; l < {lanes}; ++l) for (int v = 0; v < {vd}; ++v) sh{d}[(long long)(g + l) * {vd} + v] = ({td})md[mi{id}c[l * {vd} + v]];"
-        ));
-        self.depth -= 1;
-        self.line("}");
-        self.depth -= 1;
-        self.line("}");
-        Ok(())
     }
 }

@@ -76,12 +76,17 @@ fn copy_in(which: u32, ty: ElementKind, vals: u32, locals: &mut Vec<LocalDecl>) 
     out
 }
 
-fn kernel(atom: &MmaAtom) -> KernelFn {
+/// The four `Private` fragment arrays: A, B, C and D.
+fn fragment_allocs(atom: &MmaAtom) -> Vec<AllocDecl> {
     let (ta, tb, tacc) = atom.dtypes();
-    let vals = [atom.values(0), atom.values(1), atom.values(2)];
     let tys = [ta, tb, tacc, tacc];
-    let lens = [vals[0], vals[1], vals[2], vals[2]];
-    let allocs = (0..4)
+    let lens = [
+        atom.values(0),
+        atom.values(1),
+        atom.values(2),
+        atom.values(2),
+    ];
+    (0..4)
         .map(|i| {
             AllocDecl::new(
                 ["a", "b", "c", "d"][i],
@@ -90,7 +95,32 @@ fn kernel(atom: &MmaAtom) -> KernelFn {
                 Extent::Static(lens[i]),
             )
         })
-        .collect();
+        .collect()
+}
+
+/// Write the D fragment (`Private` array 3) to buffer 3.
+fn copy_out(ty: ElementKind, vals: u32, locals: &mut Vec<LocalDecl>) -> Vec<Stmt> {
+    let mut out = Vec::new();
+    for v in 0..vals {
+        let l = locals.len() as u32;
+        locals.push(LocalDecl::scalar(ty));
+        out.push(Stmt::Load {
+            local: l,
+            place: frag(3, v),
+        });
+        out.push(Stmt::Store {
+            place: buf(3, at(&ScalarExpr::Local(0), vals, v)),
+            value: ScalarExpr::Local(l),
+        });
+    }
+    out
+}
+
+fn kernel(atom: &MmaAtom) -> KernelFn {
+    let (ta, tb, tacc) = atom.dtypes();
+    let vals = [atom.values(0), atom.values(1), atom.values(2)];
+    let tys = [ta, tb, tacc];
+    let allocs = fragment_allocs(atom);
     let mut locals = vec![LocalDecl::scalar(U32)];
     let mut body = vec![Stmt::Let {
         local: 0,
@@ -106,18 +136,7 @@ fn kernel(atom: &MmaAtom) -> KernelFn {
         c: 2,
         d: 3,
     });
-    for v in 0..vals[2] {
-        let l = locals.len() as u32;
-        locals.push(LocalDecl::scalar(tacc));
-        body.push(Stmt::Load {
-            local: l,
-            place: frag(3, v),
-        });
-        body.push(Stmt::Store {
-            place: buf(3, at(&ScalarExpr::Local(0), vals[2], v)),
-            value: ScalarExpr::Local(l),
-        });
-    }
+    body.extend(copy_out(tacc, vals[2], &mut locals));
     let mut k = KernelFn::new(
         "mma",
         tacc,
