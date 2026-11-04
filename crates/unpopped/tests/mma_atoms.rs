@@ -53,7 +53,11 @@ fn check(atom: &MmaAtom, table: Table) {
             }
         }
         // the table itself covers the matrix once: the control that the formulas are a bijection
-        assert!(seen.iter().all(|&c| c == 1), "{} table {which}", atom.name());
+        assert!(
+            seen.iter().all(|&c| c == 1),
+            "{} table {which}",
+            atom.name()
+        );
     }
 }
 
@@ -78,7 +82,10 @@ fn the_atoms_state_their_types_and_shape() {
     );
     assert_eq!((a.values(0), a.values(1), a.values(2)), (8, 4, 4));
     let s = MmaAtom::nvidia_m16n8k32_s8_s32();
-    assert_eq!(s.dtypes(), (ElementKind::I8, ElementKind::I8, ElementKind::I32));
+    assert_eq!(
+        s.dtypes(),
+        (ElementKind::I8, ElementKind::I8, ElementKind::I32)
+    );
     assert_eq!((s.values(0), s.values(1), s.values(2)), (16, 8, 4));
     assert_eq!(a.id(0, 32, 0), None);
     assert_eq!(a.id(0, 0, 8), None);
