@@ -3,6 +3,7 @@
 //! `kernel.rs` so neither file outgrows the size the analysers accept.
 
 mod collective;
+mod extern_call;
 mod mma;
 
 use unpopped_vocab::ElementKind;
@@ -25,6 +26,20 @@ struct Scope {
     loop_depth: u32,
     /// The signatures of the module's functions; empty outside a module (a `Call` is then refused).
     callees: Vec<CalleeSig>,
+    /// The signatures of the module's extern declarations.
+    externs: Vec<ExternSig>,
+}
+
+/// What an `ExternCall` is checked against: a declaration's parameter and result types and the effects the checker
+/// and the uniformity rule read.
+#[derive(Clone)]
+pub(crate) struct ExternSig {
+    pub(crate) params: Vec<ElementKind>,
+    pub(crate) results: Vec<ElementKind>,
+    /// No effect: the results are as uniform as the arguments. Otherwise they may differ between threads.
+    pub(crate) pure: bool,
+    /// The scope of a rendezvous, making a call a barrier site.
+    pub(crate) sync: Option<ExecScope>,
 }
 
 /// What a `Call` is checked against: a callee's parameters and the type of its result local.
@@ -43,11 +58,15 @@ pub(crate) struct CalleeSig {
 /// The first [`KernelError`], walking statements in program order and each statement's
 /// expressions before its effects.
 pub fn check_kernel(k: &KernelFn) -> Result<(), KernelError> {
-    check_kernel_with(k, Vec::new())
+    check_kernel_with(k, Vec::new(), Vec::new())
 }
 
 /// [`check_kernel`] with the signatures of the module the function lives in, so a `Call` resolves.
-pub(crate) fn check_kernel_with(k: &KernelFn, callees: Vec<CalleeSig>) -> Result<(), KernelError> {
+pub(crate) fn check_kernel_with(
+    k: &KernelFn,
+    callees: Vec<CalleeSig>,
+    externs: Vec<ExternSig>,
+) -> Result<(), KernelError> {
     check_launch(k)?;
     let n = k.locals.len();
     let mut sc = Scope {
@@ -58,6 +77,7 @@ pub(crate) fn check_kernel_with(k: &KernelFn, callees: Vec<CalleeSig>) -> Result
         tys: k.locals.iter().map(|d| d.ty()).collect(),
         loop_depth: 0,
         callees,
+        externs,
     };
     for p in &k.params {
         if let ParamKind::Scalar { ty, local } = &p.kind {
@@ -81,7 +101,7 @@ pub(crate) fn check_kernel_with(k: &KernelFn, callees: Vec<CalleeSig>) -> Result
     check_allocs(k)?;
     check_block(k, &k.body, &mut sc)?;
     let barrier_callees: Vec<bool> = sc.callees.iter().map(|c| c.barrier).collect();
-    crate::kernel_uniform::check_barriers(k, &barrier_callees)
+    crate::kernel_uniform::check_barriers(k, &barrier_callees, &sc.externs)
 }
 
 /// A launch has no zero extent, a subgroup range is non-empty and starts at 1 or more, and clusters (if any) tile the grid.
@@ -203,6 +223,11 @@ fn check_sync_stmt(
         }
         Stmt::Collective { .. } => collective::check_collective(k, st, sc, declared_here)?,
         Stmt::Mma { .. } => mma::check_mma(k, st)?,
+        Stmt::ExternCall {
+            decl,
+            args,
+            results,
+        } => extern_call::check_extern_call(k, (*decl, args, results), sc, declared_here)?,
         Stmt::Call {
             callee,
             args,
@@ -361,6 +386,7 @@ fn check_stmt(
         | Stmt::Collective { .. }
         | Stmt::Mma { .. }
         | Stmt::Call { .. }
+        | Stmt::ExternCall { .. }
         | Stmt::Barrier { .. } => check_sync_stmt(k, st, sc, declared_here)?,
         Stmt::If { cond, then, els } => {
             scalar_cond(k, cond, sc)?;

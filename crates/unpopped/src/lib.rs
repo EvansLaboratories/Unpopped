@@ -80,6 +80,7 @@ pub mod ir;
 pub mod jit;
 pub mod kernel;
 mod kernel_check;
+mod kernel_extern;
 pub mod kernel_lift;
 mod kernel_module;
 mod kernel_uniform;

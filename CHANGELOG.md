@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.43.0` — typed `Extern` declarations and `Stmt::ExternCall`, checked (**breaking**: `Stmt` gains a variant; ROADMAP U11 step 1; version proposed, the PM allocates)
+
+`Module` gains `externs: Vec<ExternDecl>` (`#[serde(default)]`, so older modules load) and `Stmt::ExternCall { decl, args, results }`. An `ExternDecl` has scalar `params` and `results`, declared `Effects` (`pure`, `sync`, `volatile`; `reads`/`writes` reserved and empty in v1 because there are no pointer operands), a `TargetBody` per target (`BodyText::Asm` with `{N}` operand placeholders, or `BodyText::Symbol`) and an optional `reference` kernel. `check_module` holds a declaration to its own words (`pure` excludes volatile, sync and memory effects, and needs a result; no `Thread` sync; one body per target; placeholders within the operands; a reference is a plain scalar kernel with exactly the declared signature and no extern call) and a call to its declaration (arity, argument and result types, result locals declared by the call, a sync scope the launch has). The uniformity rule treats a `sync` call as a barrier site (also through `Call`) and marks the results of a call that is not pure, or has a divergent argument, as divergent. `check_kernel` alone refuses an `ExternCall`. **The oracle and cpu-c do not run it yet** (typed `Unsupported` / refusal): running the `reference` is step 2. Tests: `kernel_extern_check` (10 tests); nineteen seeded mutants (one per check) all red.
+
 ## `0.42.31` — options note for U11, typed `Extern` and inline asm (docs only)
 
 `docs/options-u11-extern-and-inline-asm.md`: the shape of a typed `ExternDecl` (declared effects, per-target bodies, an optional reference kernel) and `Stmt::ExternCall`, approved by the PM as written (Q1-Q6). Nothing is built; no behaviour changes.
