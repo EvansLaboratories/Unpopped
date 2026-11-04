@@ -26,7 +26,7 @@
 //! `astN`), so the callee's buffer parameter indexes it exactly as it indexes a buffer.
 
 use unpopped::backend::{GeneratedKernel, LowerError};
-use unpopped::kernel::{Block, Module, Stmt, check_module};
+use unpopped::kernel::{Block, ExternDecl, Module, Stmt, check_module};
 
 use crate::kernel::{ModuleCtx, function_text, ident, refuse, with_prelude};
 
@@ -57,6 +57,7 @@ pub fn lower_module(m: &Module, entry: u32) -> Result<GeneratedKernel, LowerErro
         .collect();
     let ctx = ModuleCtx {
         fns: &m.fns,
+        externs: &m.externs,
         names,
         launch: crate::launch::LaunchInfo::of(k),
     };
@@ -106,7 +107,7 @@ fn postorder(m: &Module, entry: u32) -> Vec<usize> {
             return;
         }
         let mut calls = Vec::new();
-        collect_calls(&m.fns[f].body, &mut calls);
+        collect_calls(&m.fns[f].body, &m.externs, &mut calls);
         for c in calls {
             go(c, m, seen, out);
         }
@@ -117,15 +118,23 @@ fn postorder(m: &Module, entry: u32) -> Vec<usize> {
     out
 }
 
-fn collect_calls(b: &Block, out: &mut Vec<usize>) {
+/// The functions `b` calls: its `Call`s, and the reference of each extern it calls (spelled as a call).
+fn collect_calls(b: &Block, externs: &[ExternDecl], out: &mut Vec<usize>) {
     for st in &b.0 {
         match st {
             Stmt::Call { callee, .. } => out.push(*callee as usize),
-            Stmt::If { then, els, .. } => {
-                collect_calls(then, out);
-                collect_calls(els, out);
+            Stmt::ExternCall { decl, .. } => {
+                if let Some(r) = externs.get(*decl as usize).and_then(|d| d.reference) {
+                    out.push(r as usize);
+                }
             }
-            Stmt::For { body, .. } | Stmt::While { body, .. } => collect_calls(body, out),
+            Stmt::If { then, els, .. } => {
+                collect_calls(then, externs, out);
+                collect_calls(els, externs, out);
+            }
+            Stmt::For { body, .. } | Stmt::While { body, .. } => {
+                collect_calls(body, externs, out);
+            }
             _ => {}
         }
     }

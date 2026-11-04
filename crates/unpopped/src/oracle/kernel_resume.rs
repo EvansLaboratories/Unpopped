@@ -139,11 +139,11 @@ impl<'a> Machine<'a> {
                 self.exec_simple(st)?;
             }
             Stmt::Collective { .. } => return self.collective_stop(st).map(Some),
-            Stmt::ExternCall { .. } => {
-                return Err(KernelTrap::Unsupported(
-                    "ExternCall (the oracle does not run it yet)",
-                ));
-            }
+            Stmt::ExternCall {
+                decl,
+                args,
+                results,
+            } => self.extern_stmt(stack, module, (*decl, args, results))?,
             Stmt::Mma { .. } => {
                 return Ok(Some(Stop::Mma {
                     at: std::ptr::from_ref(st) as usize,
@@ -214,6 +214,26 @@ impl<'a> Machine<'a> {
             ));
         };
         self.enter_call(stack, (callee, &m.fns[callee as usize]), (args, result))
+    }
+
+    /// An `ExternCall` against the module: push the declaration's reference as a call frame.
+    fn extern_stmt<'k: 'a>(
+        &mut self,
+        stack: &mut Vec<Frame<'k>>,
+        module: Option<&'k Module>,
+        (decl, args, results): (u32, &[ScalarExpr], &[u32]),
+    ) -> Result<(), KernelTrap> {
+        let (reference, call_args) = super::kernel_call::extern_reference(module, decl, args)?;
+        let Some(m) = module else {
+            return Err(KernelTrap::Unsupported(
+                "an ExternCall outside a module run",
+            ));
+        };
+        self.enter_call(
+            stack,
+            (reference, &m.fns[reference as usize]),
+            (&call_args, results.first().copied()),
+        )
     }
 
     /// Evaluate a `For`'s bounds once; the counter has not taken its first value yet.

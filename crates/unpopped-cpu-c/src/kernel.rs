@@ -121,6 +121,8 @@ pub(crate) struct Emitter<'a> {
 /// The functions of the module being lowered and the C name of each.
 pub(crate) struct ModuleCtx<'a> {
     pub(crate) fns: &'a [KernelFn],
+    /// The module's extern declarations: an `ExternCall` is spelled as a call of its reference.
+    pub(crate) externs: &'a [unpopped::kernel::ExternDecl],
     pub(crate) names: Vec<String>,
     /// The entry's launch: when present, a callee takes the thread's ids as six extra C arguments.
     pub(crate) launch: Option<LaunchInfo>,
@@ -214,9 +216,11 @@ impl Emitter<'_> {
             Stmt::AtomicCas { .. } => self.atomic_cas(s)?,
             Stmt::Fence { .. } => {}
             Stmt::Collective { .. } => return Err(refuse("a Collective is block-level only")),
-            Stmt::ExternCall { .. } => {
-                return Err(refuse("an ExternCall (cpu-c does not spell it yet)"));
-            }
+            Stmt::ExternCall {
+                decl,
+                args,
+                results,
+            } => self.extern_stmt(*decl, args, results)?,
             Stmt::Mma { .. } => return Err(refuse("a Stmt::Mma is block-level only")),
             Stmt::Call {
                 callee,
@@ -225,6 +229,35 @@ impl Emitter<'_> {
             } => self.call_stmt(*callee, args, *result)?,
         }
         Ok(())
+    }
+
+    /// `results = decl(args...)` as a C call of the declaration's **reference** kernel (ROADMAP U11 step 2): cpu-c cannot
+    /// spell asm, so a declaration without a reference, or with a body of its own target (`"cpu-c"`) that it would
+    /// have to honour, is refused with a typed error rather than silently replaced.
+    fn extern_stmt(
+        &mut self,
+        decl: u32,
+        args: &[unpopped::ir::ScalarExpr],
+        results: &[u32],
+    ) -> Result<(), LowerError> {
+        let Some(m) = self.module else {
+            return Err(refuse("an ExternCall outside a module (use lower_module)"));
+        };
+        let d = &m.externs[decl as usize];
+        if d.bodies.iter().any(|b| b.target == "cpu-c") {
+            return Err(refuse(format!(
+                "extern `{}` has a body for target cpu-c, which this emitter does not spell (it spells the reference)",
+                d.name
+            )));
+        }
+        let Some(reference) = d.reference else {
+            return Err(refuse(format!(
+                "extern `{}` has no reference body (cpu-c cannot spell asm)",
+                d.name
+            )));
+        };
+        let call_args: Vec<CallArg> = args.iter().cloned().map(CallArg::Scalar).collect();
+        self.call_stmt(reference, &call_args, results.first().copied())
     }
 
     /// `Break` or `Continue`. In a launch it must target a loop inside the current thread run: one that

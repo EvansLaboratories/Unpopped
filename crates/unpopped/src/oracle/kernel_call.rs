@@ -7,6 +7,7 @@
 
 use super::kernel_eval::{ALLOC_BIND, KernelArg, KernelTrap, Machine};
 use super::kernel_resume::Frame;
+use crate::ir::ScalarExpr;
 use crate::kernel::{CallArg, KernelFn, Module, ParamKind, check_module};
 use crate::types::Ty;
 
@@ -27,6 +28,30 @@ pub fn run_module(m: &Module, entry: u32, args: &mut [KernelArg]) -> Result<(), 
         return Err(KernelTrap::ArgMismatch("one argument per parameter"));
     }
     Machine::new(k, args, None).with_module(m, entry).run_body()
+}
+
+/// The reference kernel of the extern declaration `decl` and the call arguments that pass `args` to it (the reference
+/// is a plain function with the declared scalar parameters, so an `ExternCall` is a `Call` of it). Traps when the
+/// call is outside a module or the declaration has no reference.
+pub(super) fn extern_reference(
+    module: Option<&Module>,
+    decl: u32,
+    args: &[ScalarExpr],
+) -> Result<(u32, Vec<CallArg>), KernelTrap> {
+    let Some(m) = module else {
+        return Err(KernelTrap::Unsupported(
+            "an ExternCall outside a module run (check_kernel refuses it)",
+        ));
+    };
+    let Some(reference) = m.externs.get(decl as usize).and_then(|d| d.reference) else {
+        return Err(KernelTrap::Unsupported(
+            "an Extern with no reference body (the oracle cannot run asm)",
+        ));
+    };
+    Ok((
+        reference,
+        args.iter().cloned().map(CallArg::Scalar).collect(),
+    ))
 }
 
 /// The caller's frame while a callee runs.
@@ -68,6 +93,17 @@ impl<'a> Machine<'a> {
             self.locals[dst as usize] = Some(v);
         }
         Ok(())
+    }
+
+    /// `results = decl(args...)`: run the declaration's reference kernel as a call on the calling thread.
+    pub(super) fn exec_extern(
+        &mut self,
+        decl: u32,
+        args: &[ScalarExpr],
+        results: &[u32],
+    ) -> Result<(), KernelTrap> {
+        let (reference, call_args) = extern_reference(self.module, decl, args)?;
+        self.exec_call(reference, &call_args, results.first().copied())
     }
 
     /// Evaluate the arguments in the caller's frame.

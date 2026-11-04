@@ -365,7 +365,7 @@ pub enum Stmt {
     /// declaration states the effects (`pure`, `sync`, `volatile`), which the checker holds it to and which every
     /// pass honours: a call is opaque, never fused across, and a `sync` call is a barrier site like a `Barrier`.
     /// `check_kernel` alone refuses it (the declaration lives in the module); `check_module` resolves it. The
-    /// oracle will run the declaration's `reference` kernel and trap when it has none (next slice).
+    /// oracle and `unpopped-cpu-c` run the declaration's `reference` kernel in its place and refuse when it has none.
     ExternCall {
         /// Index of the declaration in [`Module::externs`].
         decl: u32,
