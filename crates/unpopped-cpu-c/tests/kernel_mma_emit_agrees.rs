@@ -135,6 +135,7 @@ fn kernel(atom: &MmaAtom) -> KernelFn {
         b: 1,
         c: 2,
         d: 3,
+        extra: vec![],
     });
     body.extend(copy_out(tacc, vals[2], &mut locals));
     let mut k = KernelFn::new(

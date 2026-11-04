@@ -18,6 +18,22 @@
 //! - The layouts are stored as flat `(shape, stride)` mode lists so the atom serializes with the kernel; the
 //!   nesting of a [`Layout`] does not change what [`Layout::call`] returns.
 //!
+//! # Flags: 2:4 sparsity and block scaling (S3)
+//!
+//! An atom may carry **extra operands**, numbered after C (`which` = 3, 4, ...), each with its own thread-value
+//! layout and a `Private` fragment in the statement (`Stmt::Mma::extra`):
+//!
+//! - [`MmaAtom::with_sparse_24`]: `A` is stored **compressed** as `M x K/2` (two kept values per group of four `k`),
+//!   and a **metadata** operand, an `M x K/4` matrix, names them: the low four bits of each entry are
+//!   `i0 | i1 << 2`, the positions (`0..4`, `i0 < i1`) of the two kept values inside the group.
+//! - [`MmaAtom::with_block_scale`]: two **scale** operands, `SFA` (`M x K/block`) and `SFB` (`K/block x N`), multiply
+//!   every `A` and `B` element of their `k` block before the product. Float accumulators only.
+//!
+//! An extra operand's layout need only **cover** its matrix (a scale is broadcast to several lanes on hardware): lanes
+//! that hold the same element must hand over the same value. The PTX `mma.sp` and block-scaled constructors are not
+//! shipped: their metadata and scale-factor lane tables have not been checked against a source other than the atom's
+//! own author, so the flags are exercised by atoms built in the tests.
+//!
 //! Shipped: the PTX `mma.sync.aligned` atoms `m16n8k16` (f16 and bf16 into f32) and `m16n8k32` (s8 into s32). The
 //! `m16n8k8` tf32 atom waits for a tf32 operand notion: there is no tf32 `ElementKind`, and "the operands are
 //! rounded to tf32 first" belongs to the compute rule, not to the layout.
@@ -40,6 +56,35 @@ pub enum MmaAtomError {
     BadLayout(&'static str),
     /// A layout maps two fragment elements to one logical id, or past the matrix.
     NotABijection(&'static str),
+    /// An extra operand's layout leaves a logical element held by no lane, or points past the matrix.
+    NotACover(&'static str),
+    /// A flag the atom's shape or types cannot carry (`K` not a multiple of the group, an integer accumulator, ...).
+    BadFlag(&'static str),
+    /// The atom already carries this flag.
+    FlagTwice,
+}
+
+/// What an extra operand of an atom is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum ExtraRole {
+    /// The 2:4 sparsity metadata: `M x K/4` nibbles `i0 | i1 << 2`.
+    Metadata,
+    /// The scale of `A`: `M x K/block`.
+    ScaleA,
+    /// The scale of `B`: `K/block x N`.
+    ScaleB,
+}
+
+/// One extra operand: its role, element type, logical shape and layout (see the [module docs](self)).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Extra {
+    role: ExtraRole,
+    #[serde(with = "crate::text::ek")]
+    dtype: ElementKind,
+    rows: u32,
+    cols: u32,
+    values: u32,
 }
 
 /// One flat `(shape, stride)` mode list: a [`Layout`] in a serializable form.
@@ -76,7 +121,13 @@ pub struct MmaAtom {
     acc: ElementKind,
     scope: Scope,
     lanes: u32,
-    layouts: [Modes; 3],
+    /// The layouts of A, B, C/D, then the extra operands.
+    layouts: Vec<Modes>,
+    #[serde(default)]
+    extras: Vec<Extra>,
+    /// The `k` block of the scale operands (0 when the atom is not block-scaled).
+    #[serde(default)]
+    block: u32,
 }
 
 impl MmaAtom {
@@ -110,7 +161,9 @@ impl MmaAtom {
             acc,
             scope,
             lanes,
-            layouts: layouts.map(Layout::flat_modes),
+            layouts: layouts.map(Layout::flat_modes).to_vec(),
+            extras: Vec::new(),
+            block: 0,
         };
         for (i, what) in ["A", "B", "C"].into_iter().enumerate() {
             atom.check_bijection(i, what)?;
@@ -148,27 +201,172 @@ impl MmaAtom {
         self.lanes
     }
 
-    /// The rows and columns of operand `which` (0 = A, 1 = B, 2 = C/D) as its column-major logical matrix.
-    const fn dims(&self, which: usize) -> (u32, u32) {
+    /// The rows and columns of operand `which` (0 = A, 1 = B, 2 = C/D, then the extras) as its column-major
+    /// logical matrix; `A` is `M x K/2` when the atom is sparse.
+    #[must_use]
+    pub fn dims(&self, which: usize) -> (u32, u32) {
         match which {
+            0 if self.is_sparse() => (self.m, self.k / 2),
             0 => (self.m, self.k),
             1 => (self.k, self.n),
-            _ => (self.m, self.n),
+            2 => (self.m, self.n),
+            _ => self
+                .extras
+                .get(which - 3)
+                .map_or((0, 0), |e| (e.rows, e.cols)),
         }
     }
 
-    /// Fragment elements per lane for operand `which` (0 = A, 1 = B, 2 = C/D).
+    /// Fragment elements per lane for operand `which` (0 = A, 1 = B, 2 = C/D, then the extras).
     #[must_use]
-    pub const fn values(&self, which: usize) -> u32 {
+    pub fn values(&self, which: usize) -> u32 {
+        if which >= 3 {
+            return self.extras.get(which - 3).map_or(0, |e| e.values);
+        }
         let (r, c) = self.dims(which);
         (r * c) / self.lanes
     }
 
+    /// Whether `A` is stored 2:4 compressed with a metadata operand.
+    #[must_use]
+    pub fn is_sparse(&self) -> bool {
+        self.extras.iter().any(|e| e.role == ExtraRole::Metadata)
+    }
+
+    /// The `k` block of the scale operands, or `None` when the atom is not block-scaled.
+    #[must_use]
+    pub const fn block(&self) -> Option<u32> {
+        if self.block == 0 {
+            None
+        } else {
+            Some(self.block)
+        }
+    }
+
+    /// The extra operands in statement order: role and element type.
+    pub fn extras(&self) -> impl Iterator<Item = (ExtraRole, ElementKind)> + '_ {
+        self.extras.iter().map(|e| (e.role, e.dtype))
+    }
+
+    /// The `which` index of the extra operand with this role.
+    #[must_use]
+    pub fn extra_which(&self, role: ExtraRole) -> Option<usize> {
+        self.extras
+            .iter()
+            .position(|e| e.role == role)
+            .map(|i| i + 3)
+    }
+
+    /// Make `A` 2:4 sparse. `a` is the thread-value layout of the **compressed** `M x K/2` `A`; `meta` that of the
+    /// `M x K/4` metadata operand (element type first, an integer).
+    ///
+    /// # Errors
+    /// [`MmaAtomError`] if the atom is already sparse, `K` is not a multiple of four, the metadata type is not an
+    /// integer type, or a layout is invalid.
+    pub fn with_sparse_24(
+        mut self,
+        a: &Layout,
+        meta: (ElementKind, &Layout),
+    ) -> Result<Self, MmaAtomError> {
+        if self.is_sparse() {
+            return Err(MmaAtomError::FlagTwice);
+        }
+        if self.k % 4 != 0 || crate::types::int_range(meta.0).is_none() {
+            return Err(MmaAtomError::BadFlag(
+                "2:4 sparsity needs K % 4 == 0 and an integer metadata type",
+            ));
+        }
+        let dense_a = std::mem::replace(&mut self.layouts[0], a.flat_modes());
+        let pushed = self.push_extra(ExtraRole::Metadata, meta.0, (self.m, self.k / 4), meta.1);
+        let result = pushed.and_then(|()| self.check_bijection(0, "A"));
+        if result.is_err() {
+            self.layouts[0] = dense_a;
+        }
+        result.map(|()| self)
+    }
+
+    /// Scale `A` and `B` per `k` block: `sfa` is the layout of the `M x K/block` scale of `A`, `sfb` that of the
+    /// `K/block x N` scale of `B`, both of element type `dtype`.
+    ///
+    /// # Errors
+    /// [`MmaAtomError`] if the atom is already block-scaled, `block` does not divide `K`, the accumulator is an
+    /// integer type, or a layout does not cover its matrix.
+    pub fn with_block_scale(
+        mut self,
+        block: u32,
+        dtype: ElementKind,
+        (sfa, sfb): (&Layout, &Layout),
+    ) -> Result<Self, MmaAtomError> {
+        if self.block != 0 {
+            return Err(MmaAtomError::FlagTwice);
+        }
+        if block == 0 || self.k % block != 0 || crate::types::int_range(self.acc).is_some() {
+            return Err(MmaAtomError::BadFlag(
+                "block scaling needs a block that divides K and a float accumulator",
+            ));
+        }
+        self.push_extra(ExtraRole::ScaleA, dtype, (self.m, self.k / block), sfa)?;
+        self.push_extra(ExtraRole::ScaleB, dtype, (self.k / block, self.n), sfb)?;
+        self.block = block;
+        Ok(self)
+    }
+
+    fn push_extra(
+        &mut self,
+        role: ExtraRole,
+        dtype: ElementKind,
+        (rows, cols): (u32, u32),
+        layout: &Layout,
+    ) -> Result<(), MmaAtomError> {
+        let size = u64::try_from(layout.size())
+            .map_err(|_| MmaAtomError::BadLayout("a layout with a negative size"))?;
+        if size == 0 || size % u64::from(self.lanes) != 0 {
+            return Err(MmaAtomError::BadLayout(
+                "an extra operand whose layout size is not a multiple of the lane count",
+            ));
+        }
+        self.extras.push(Extra {
+            role,
+            dtype,
+            rows,
+            cols,
+            values: (size / u64::from(self.lanes)) as u32,
+        });
+        self.layouts.push(layout.flat_modes());
+        let covered = self.check_cover(self.extras.len() + 2);
+        if covered.is_err() {
+            self.extras.pop();
+            self.layouts.pop();
+        }
+        covered
+    }
+
+    fn check_cover(&self, which: usize) -> Result<(), MmaAtomError> {
+        let (r, c) = self.dims(which);
+        let total = (u64::from(r) * u64::from(c)) as usize;
+        let layout = self.layout(which)?;
+        let mut seen = vec![false; total];
+        for idx in 0..layout.size() {
+            let id = layout
+                .call(idx)
+                .ok()
+                .and_then(|v| usize::try_from(v).ok())
+                .filter(|v| *v < total)
+                .ok_or(MmaAtomError::NotACover("past the matrix"))?;
+            seen[id] = true;
+        }
+        if seen.iter().all(|s| *s) {
+            Ok(())
+        } else {
+            Err(MmaAtomError::NotACover("a matrix element no lane holds"))
+        }
+    }
+
     /// The logical column-major id of fragment element `value` of `lane` in operand `which` (0 = A, 1 = B,
-    /// 2 = C/D), or `None` when `which`, `lane` or `value` is out of range.
+    /// 2 = C/D, then the extras), or `None` when `which`, `lane` or `value` is out of range.
     #[must_use]
     pub fn id(&self, which: usize, lane: u32, value: u32) -> Option<u32> {
-        if which > 2 || lane >= self.lanes || value >= self.values(which) {
+        if which >= 3 + self.extras.len() || lane >= self.lanes || value >= self.values(which) {
             return None;
         }
         let layout = self.layout(which).ok()?;

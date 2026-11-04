@@ -342,6 +342,10 @@ pub enum Stmt {
         c: u32,
         /// The `Private` allocation that receives the D fragment.
         d: u32,
+        /// The `Private` allocations of the atom's extra operands (2:4 metadata, block scales), in the order of
+        /// [`MmaAtom::extras`]; empty for a dense, unscaled atom.
+        #[serde(default)]
+        extra: Vec<u32>,
     },
     /// Call another kernel of the same [`Module`]: `result = callee(args...)`. The callee is a
     /// [`KernelFn`] (PM ruling 2026-11-02 on `docs/options-u3-remainder.md`, R1a); `callee` indexes

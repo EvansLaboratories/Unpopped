@@ -15,7 +15,15 @@ fn refuse(what: &'static str) -> KernelError {
 
 /// Check a `Stmt::Mma`.
 pub(super) fn check_mma(k: &KernelFn, st: &Stmt) -> Result<(), KernelError> {
-    let Stmt::Mma { atom, a, b, c, d } = st else {
+    let Stmt::Mma {
+        atom,
+        a,
+        b,
+        c,
+        d,
+        extra,
+    } = st
+    else {
         unreachable!("check_mma is called for an Mma");
     };
     let Some(launch) = k.launch.as_ref() else {
@@ -29,6 +37,14 @@ pub(super) fn check_mma(k: &KernelFn, st: &Stmt) -> Result<(), KernelError> {
     let (ta, tb, tacc) = atom.dtypes();
     for (which, alloc, ty) in [(0, *a, ta), (1, *b, tb), (2, *c, tacc), (2, *d, tacc)] {
         fragment(k, atom, which, alloc, ty)?;
+    }
+    if extra.len() != atom.extras().count() {
+        return Err(refuse(
+            "a statement whose extra operands are not the atom's (2:4 metadata, scales)",
+        ));
+    }
+    for (i, ((_, ty), alloc)) in atom.extras().zip(extra).enumerate() {
+        fragment(k, atom, 3 + i, *alloc, ty)?;
     }
     Ok(())
 }
