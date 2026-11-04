@@ -72,43 +72,27 @@ type Table = fn(usize, u32, u32) -> (u32, u32);
 fn mma_kernel(atom: &MmaAtom, skip_c_slot: Option<u32>) -> KernelFn {
     let (ta, tb, tacc) = atom.dtypes();
     let vals = [atom.values(0), atom.values(1), atom.values(2)];
-    let ext = |n: u32| Extent::Static(n);
-    let allocs = vec![
-        AllocDecl::new("a", MemorySpace::Private, ta, ext(vals[0])),
-        AllocDecl::new("b", MemorySpace::Private, tb, ext(vals[1])),
-        AllocDecl::new("c", MemorySpace::Private, tacc, ext(vals[2])),
-        AllocDecl::new("d", MemorySpace::Private, tacc, ext(vals[2])),
-    ];
-    let lane = ScalarExpr::Exec(ExecId::ThreadIdx(0));
+    let tys = [ta, tb, tacc, tacc];
+    let lens = [vals[0], vals[1], vals[2], vals[2]];
+    let allocs = (0..4)
+        .map(|i| {
+            AllocDecl::new(
+                ["a", "b", "c", "d"][i],
+                MemorySpace::Private,
+                tys[i],
+                Extent::Static(lens[i]),
+            )
+        })
+        .collect();
     let mut locals = vec![LocalDecl::scalar(U32)];
     let mut body = vec![Stmt::Let {
         local: 0,
-        init: lane.clone(),
+        init: ScalarExpr::Exec(ExecId::ThreadIdx(0)),
     }];
-    let mut copy = |which: usize, ty: ElementKind, body: &mut Vec<Stmt>| {
-        for v in 0..vals[which] {
-            if which == 2 && skip_c_slot == Some(v) {
-                continue;
-            }
-            let l = locals.len() as u32;
-            locals.push(LocalDecl::scalar(ty));
-            let at = add(
-                mul(ScalarExpr::Local(0), u(i64::from(vals[which]))),
-                u(i64::from(v)),
-            );
-            body.push(Stmt::Load {
-                local: l,
-                place: buf(which as u32, at),
-            });
-            body.push(Stmt::Store {
-                place: frag(which as u32, v),
-                value: ScalarExpr::Local(l),
-            });
-        }
-    };
-    copy(0, ta, &mut body);
-    copy(1, tb, &mut body);
-    copy(2, tacc, &mut body);
+    for which in 0..3 {
+        let skip = if which == 2 { skip_c_slot } else { None };
+        body.extend(copy_in(which, tys[which], vals[which], skip, &mut locals));
+    }
     body.push(Stmt::Mma {
         atom: atom.clone(),
         a: 0,
@@ -116,22 +100,7 @@ fn mma_kernel(atom: &MmaAtom, skip_c_slot: Option<u32>) -> KernelFn {
         c: 2,
         d: 3,
     });
-    for v in 0..vals[2] {
-        let l = locals.len() as u32;
-        locals.push(LocalDecl::scalar(tacc));
-        body.push(Stmt::Load {
-            local: l,
-            place: frag(3, v),
-        });
-        let at = add(
-            mul(ScalarExpr::Local(0), u(i64::from(vals[2]))),
-            u(i64::from(v)),
-        );
-        body.push(Stmt::Store {
-            place: buf(3, at),
-            value: ScalarExpr::Local(l),
-        });
-    }
+    body.extend(copy_out(tacc, vals[2], &mut locals));
     KernelFn::new(
         "mma",
         tacc,
@@ -146,6 +115,56 @@ fn mma_kernel(atom: &MmaAtom, skip_c_slot: Option<u32>) -> KernelFn {
     )
     .with_launch(LaunchShape::new([32, 1, 1], [1, 1, 1]).with_subgroup(32, 32))
     .with_allocs(allocs)
+}
+
+/// `buf[lane * vals + v]` for the lane held in local 0.
+fn lane_slot(vals: u32, v: u32) -> ScalarExpr {
+    add(
+        mul(ScalarExpr::Local(0), u(i64::from(vals))),
+        u(i64::from(v)),
+    )
+}
+
+/// Copy the slots of buffer `which` into `Private` array `which` (`skip` leaves one slot unstored).
+fn copy_in(
+    which: usize,
+    ty: ElementKind,
+    vals: u32,
+    skip: Option<u32>,
+    locals: &mut Vec<LocalDecl>,
+) -> Vec<Stmt> {
+    let mut out = Vec::new();
+    for v in (0..vals).filter(|v| Some(*v) != skip) {
+        let l = locals.len() as u32;
+        locals.push(LocalDecl::scalar(ty));
+        out.push(Stmt::Load {
+            local: l,
+            place: buf(which as u32, lane_slot(vals, v)),
+        });
+        out.push(Stmt::Store {
+            place: frag(which as u32, v),
+            value: ScalarExpr::Local(l),
+        });
+    }
+    out
+}
+
+/// Write the D fragment (`Private` array 3) to buffer 3.
+fn copy_out(ty: ElementKind, vals: u32, locals: &mut Vec<LocalDecl>) -> Vec<Stmt> {
+    let mut out = Vec::new();
+    for v in 0..vals {
+        let l = locals.len() as u32;
+        locals.push(LocalDecl::scalar(ty));
+        out.push(Stmt::Load {
+            local: l,
+            place: frag(3, v),
+        });
+        out.push(Stmt::Store {
+            place: buf(3, lane_slot(vals, v)),
+            value: ScalarExpr::Local(l),
+        });
+    }
+    out
 }
 
 /// Deterministic small values: exactly representable in f16 and bf16, so every product and sum is exact.
