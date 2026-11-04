@@ -6,13 +6,17 @@
 //! (`MmaAtom::id`, so the C and the oracle read the same layout data), forms `D = A.B + C`, and scatters each lane's D
 //! fragment back. The arithmetic is the oracle's (`oracle/kernel_mma.rs`): floats are summed from `C` in ascending `k`
 //! order in `double` and rounded once when stored to the accumulator element; integers are exact in `long long` and
-//! wrap when stored. Only element types this emitter spells (`float`, `double`, the integers) can be fragments, so
+//! wrap when stored. An atom with **extra operands** is spelled too: a 2:4 sparse `A` is expanded into a dense `mx`
+//! through the metadata (the other two positions of a group are zero), and block scales multiply the factors of
+//! each `k` block; the extras' id tables come from the atom like the rest, and lanes that hold one element of a
+//! broadcast scale must agree (the oracle traps on a disagreement; the C takes the last, so that is a precondition
+//! of the program, as is a metadata nibble that is not `i0 < i1`). Only element types this emitter spells (`float`, `double`, the integers) can be fragments, so
 //! the f16 and bf16 atoms are refused with a typed error naming the dtype; an atom with `F32` operands (atoms are
 //! data) is spelled.
 
 use unpopped::backend::LowerError;
 use unpopped::kernel::Stmt;
-use unpopped::mma::MmaAtom;
+use unpopped::mma::{ExtraRole, MmaAtom};
 use unpopped_vocab::ElementKind;
 
 use crate::kernel::{Emitter, ctype, refuse};
@@ -55,10 +59,9 @@ impl Emitter<'_> {
         else {
             unreachable!("mma is called for an Mma");
         };
-        if !extra.is_empty() {
-            return Err(refuse(
-                "an MMA atom with 2:4 sparsity or block scaling (not spelled yet)",
-            ));
+        let roles: Vec<(ExtraRole, ElementKind)> = atom.extras().collect();
+        if extra.len() != roles.len() {
+            return Err(refuse("an MMA whose extra operands are not the atom's"));
         }
         let info = self.launch.expect("a launched emitter");
         let nt = info.threads();
@@ -72,6 +75,9 @@ impl Emitter<'_> {
         for (t, what) in [(ta, "an MMA A fragment"), (tb, "an MMA B fragment")] {
             ctype(t, what)?;
         }
+        for (_, t) in &roles {
+            ctype(*t, "an MMA extra fragment")?;
+        }
         let td = ctype(tacc, "an MMA accumulator fragment")?;
         let wide = if is_float(tacc) {
             "double"
@@ -82,8 +88,8 @@ impl Emitter<'_> {
         self.fresh += 1;
         self.line("{");
         self.depth += 1;
-        for (w, nm) in ["a", "b", "c"].into_iter().enumerate() {
-            let table = id_table(atom, w, &format!("mi{id}{nm}"))?;
+        for w in 0..3 + roles.len() {
+            let table = id_table(atom, w, &format!("mi{id}o{w}"))?;
             self.line(&table);
         }
         self.line(&format!(
@@ -91,11 +97,26 @@ impl Emitter<'_> {
             atom.name()
         ));
         self.depth += 1;
-        self.mma_gather(atom, [*a, *b, *c], id, wide);
-        self.mma_product(atom.mnk(), wide);
+        let mut allocs = vec![*a, *b, *c];
+        allocs.extend(extra.iter().copied());
+        self.mma_gather(atom, &allocs, id, wide);
+        let mut a_name = "ma";
+        if let Some(w) = atom.extra_which(ExtraRole::Metadata) {
+            self.mma_expand_sparse(atom, w, wide);
+            a_name = "mx";
+        }
+        let block = match (
+            atom.block(),
+            atom.extra_which(ExtraRole::ScaleA),
+            atom.extra_which(ExtraRole::ScaleB),
+        ) {
+            (Some(bk), Some(wa), Some(wb)) => Some((bk as usize, wa, wb)),
+            _ => None,
+        };
+        self.mma_product(atom, wide, a_name, block);
         let vd = atom.values(2);
         self.line(&format!(
-            "for (int l = 0; l < {lanes}; ++l) for (int v = 0; v < {vd}; ++v) sh{d}[(long long)(g + l) * {vd} + v] = ({td})md[mi{id}c[l * {vd} + v]];"
+            "for (int l = 0; l < {lanes}; ++l) for (int v = 0; v < {vd}; ++v) sh{d}[(long long)(g + l) * {vd} + v] = ({td})md[mi{id}o2[l * {vd} + v]];"
         ));
         self.depth -= 1;
         self.line("}");
@@ -104,35 +125,73 @@ impl Emitter<'_> {
         Ok(())
     }
 
-    /// Declare the logical matrices of one subgroup and fill A, B and C from the lanes' fragments.
-    fn mma_gather(&mut self, atom: &MmaAtom, allocs: [u32; 3], id: u32, wide: &str) {
-        let (m, n, k) = atom.mnk();
+    /// Declare the logical matrices of one subgroup and fill every operand from the lanes' fragments.
+    fn mma_gather(&mut self, atom: &MmaAtom, allocs: &[u32], id: u32, wide: &str) {
+        let (m, n, _) = atom.mnk();
         let lanes = atom.lanes();
-        self.line(&format!(
-            "{wide} ma[{}], mb[{}], mc[{}], md[{}];",
-            m * k,
-            k * n,
-            m * n,
-            m * n
-        ));
-        for (w, (nm, alloc)) in ["a", "b", "c"].into_iter().zip(allocs).enumerate() {
+        self.line(&format!("{wide} md[{}];", m * n));
+        for (w, alloc) in allocs.iter().enumerate() {
+            let (rows, cols) = atom.dims(w);
             let vals = atom.values(w);
+            // the metadata is integer whatever the accumulator is
+            let ty = if w >= 3 && atom.extra_which(ExtraRole::Metadata) == Some(w) {
+                "long long"
+            } else {
+                wide
+            };
+            let nm = ["ma", "mb", "mc"]
+                .get(w)
+                .map_or_else(|| format!("me{w}"), |s| (*s).to_string());
+            self.line(&format!("{ty} {nm}[{}];", rows * cols));
             self.line(&format!(
-                "for (int l = 0; l < {lanes}; ++l) for (int v = 0; v < {vals}; ++v) m{nm}[mi{id}{nm}[l * {vals} + v]] = ({wide})sh{alloc}[(long long)(g + l) * {vals} + v];"
+                "for (int l = 0; l < {lanes}; ++l) for (int v = 0; v < {vals}; ++v) {nm}[mi{id}o{w}[l * {vals} + v]] = ({ty})sh{alloc}[(long long)(g + l) * {vals} + v];"
             ));
         }
     }
 
-    /// `D = A.B + C` over the logical matrices: from `C`, ascending `k`.
-    fn mma_product(&mut self, (m, n, k): (u32, u32, u32), wide: &str) {
+    /// `mx` = the dense `m x k` `A`: group `g` of row `r` keeps its two compressed values where the metadata says.
+    fn mma_expand_sparse(&mut self, atom: &MmaAtom, meta: usize, wide: &str) {
+        let (m, _, k) = atom.mnk();
+        self.line(&format!("{wide} mx[{}];", m * k));
+        self.line(&format!("for (int i = 0; i < {}; ++i) mx[i] = 0;", m * k));
+        self.line(&format!(
+            "for (int q = 0; q < {}; ++q) for (int r = 0; r < {m}; ++r) {{",
+            k / 4
+        ));
+        self.depth += 1;
+        self.line(&format!("int nib = (int)(me{meta}[r + {m} * q] & 15);"));
+        self.line(&format!(
+            "mx[r + {m} * (4 * q + (nib & 3))] = ma[r + {m} * (2 * q)];"
+        ));
+        self.line(&format!(
+            "mx[r + {m} * (4 * q + (nib >> 2))] = ma[r + {m} * (2 * q + 1)];"
+        ));
+        self.depth -= 1;
+        self.line("}");
+    }
+
+    /// `D = A.B + C` over the logical matrices: from `C`, ascending `k`; `(block, sfa, sfb)` scales each factor.
+    fn mma_product(
+        &mut self,
+        atom: &MmaAtom,
+        wide: &str,
+        a: &str,
+        scales: Option<(usize, usize, usize)>,
+    ) {
+        let (m, n, k) = atom.mnk();
         self.line(&format!(
             "for (int col = 0; col < {n}; ++col) for (int row = 0; row < {m}; ++row) {{"
         ));
         self.depth += 1;
         self.line(&format!("{wide} s = mc[row + {m} * col];"));
-        self.line(&format!(
-            "for (int i = 0; i < {k}; ++i) s += ma[row + {m} * i] * mb[i + {k} * col];"
-        ));
+        let term = match scales {
+            Some((bk, wa, wb)) => format!(
+                "({a}[row + {m} * i] * me{wa}[row + {m} * (i / {bk})]) * (mb[i + {k} * col] * me{wb}[i / {bk} + {} * col])",
+                k as usize / bk
+            ),
+            None => format!("{a}[row + {m} * i] * mb[i + {k} * col]"),
+        };
+        self.line(&format!("for (int i = 0; i < {k}; ++i) s += {term};"));
         self.line(&format!("md[row + {m} * col] = s;"));
         self.depth -= 1;
         self.line("}");
