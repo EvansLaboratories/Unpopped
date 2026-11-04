@@ -1,6 +1,6 @@
 # Options note: copy atoms, pipelines and roles (ROADMAP U8, issue #119)
 
-Status: **proposal, written for the PM gate; nothing built.** Closes gap rows 3.8 (async data movement) and 3.9 (pipelines and
+Status: **Q1-Q6 approved as recommended by the PM 2026-11-04 (S2 and S3 scheduled as ROADMAP rows U8b and U8c, not declined); nothing built yet.** Closes gap rows 3.8 (async data movement) and 3.9 (pipelines and
 roles) of `docs/ir-union-design.md`. U4, U6 and U7 are far enough along (barriers, atomics, the layout algebra, MMA atoms
 with their lane tables) that the first slice is unblocked; the rest waits on named things below.
 
