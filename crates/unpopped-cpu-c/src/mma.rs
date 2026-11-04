@@ -113,7 +113,7 @@ impl Emitter<'_> {
             (Some(bk), Some(wa), Some(wb)) => Some((bk as usize, wa, wb)),
             _ => None,
         };
-        self.mma_product(atom.mnk(), wide, a_name, block);
+        self.mma_product(atom, wide, a_name, block);
         let vd = atom.values(2);
         self.line(&format!(
             "for (int l = 0; l < {lanes}; ++l) for (int v = 0; v < {vd}; ++v) sh{d}[(long long)(g + l) * {vd} + v] = ({td})md[mi{id}o2[l * {vd} + v]];"
@@ -173,11 +173,12 @@ impl Emitter<'_> {
     /// `D = A.B + C` over the logical matrices: from `C`, ascending `k`; `(block, sfa, sfb)` scales each factor.
     fn mma_product(
         &mut self,
-        (m, n, k): (u32, u32, u32),
+        atom: &MmaAtom,
         wide: &str,
         a: &str,
         scales: Option<(usize, usize, usize)>,
     ) {
+        let (m, n, k) = atom.mnk();
         self.line(&format!(
             "for (int col = 0; col < {n}; ++col) for (int row = 0; row < {m}; ++row) {{"
         ));

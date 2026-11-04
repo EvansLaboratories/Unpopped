@@ -17,10 +17,9 @@ use unpopped_vocab::layout_algebra::Layout;
 
 #[path = "support/cc.rs"]
 mod cc;
-#[allow(dead_code)]
+#[expect(dead_code, reason = "the shared drivers; this file uses a subset")]
 #[path = "support/kernel_run.rs"]
 mod kernel_run;
-#[allow(dead_code)]
 #[path = "support/launch_run.rs"]
 mod launch_run;
 use launch_run::agree_launch;
@@ -95,11 +94,9 @@ fn operands(atom: &MmaAtom) -> Vec<(E, u32)> {
     ops
 }
 
-fn kernel(atom: &MmaAtom) -> KernelFn {
-    let ops = operands(atom);
-    let nin = ops.len() as u32;
-    let (_, _, acc) = atom.dtypes();
-    let mut allocs: Vec<AllocDecl> = ops
+/// The `Private` fragment arrays: one per input operand, then D.
+fn allocs(atom: &MmaAtom, ops: &[(E, u32)]) -> Vec<AllocDecl> {
+    let mut out: Vec<AllocDecl> = ops
         .iter()
         .enumerate()
         .map(|(i, (ty, n))| {
@@ -111,30 +108,51 @@ fn kernel(atom: &MmaAtom) -> KernelFn {
             )
         })
         .collect();
-    allocs.push(AllocDecl::new(
+    out.push(AllocDecl::new(
         "d",
         MemorySpace::Private,
-        acc,
+        atom.dtypes().2,
         Extent::Static(atom.values(2)),
     ));
+    out
+}
+
+/// Each lane copies its slot of every input buffer into the fragment, and D back out to the last buffer.
+fn copy(
+    from_buffer: bool,
+    ty: E,
+    (which, n): (u32, u32),
+    locals: &mut Vec<LocalDecl>,
+) -> Vec<Stmt> {
+    let mut out = Vec::new();
+    for v in 0..n {
+        let l = locals.len() as u32;
+        locals.push(LocalDecl::scalar(ty));
+        let (src, dst) = (slot(which, n, v), frag(which, v));
+        let (src, dst) = if from_buffer { (src, dst) } else { (dst, src) };
+        out.push(Stmt::Load {
+            local: l,
+            place: src,
+        });
+        out.push(Stmt::Store {
+            place: dst,
+            value: ScalarExpr::Local(l),
+        });
+    }
+    out
+}
+
+fn kernel(atom: &MmaAtom) -> KernelFn {
+    let ops = operands(atom);
+    let nin = ops.len() as u32;
+    let (_, _, acc) = atom.dtypes();
     let mut locals = vec![LocalDecl::scalar(E::U32)];
     let mut body = vec![Stmt::Let {
         local: 0,
         init: ScalarExpr::Exec(ExecId::ThreadIdx(0)),
     }];
     for (i, (ty, n)) in ops.iter().enumerate() {
-        for v in 0..*n {
-            let l = locals.len() as u32;
-            locals.push(LocalDecl::scalar(*ty));
-            body.push(Stmt::Load {
-                local: l,
-                place: slot(i as u32, *n, v),
-            });
-            body.push(Stmt::Store {
-                place: frag(i as u32, v),
-                value: ScalarExpr::Local(l),
-            });
-        }
+        body.extend(copy(true, *ty, (i as u32, *n), &mut locals));
     }
     body.push(Stmt::Mma {
         atom: atom.clone(),
@@ -144,18 +162,7 @@ fn kernel(atom: &MmaAtom) -> KernelFn {
         d: nin,
         extra: (3..nin).collect(),
     });
-    for v in 0..atom.values(2) {
-        let l = locals.len() as u32;
-        locals.push(LocalDecl::scalar(acc));
-        body.push(Stmt::Load {
-            local: l,
-            place: frag(nin, v),
-        });
-        body.push(Stmt::Store {
-            place: slot(nin, atom.values(2), v),
-            value: ScalarExpr::Local(l),
-        });
-    }
+    body.extend(copy(false, acc, (nin, atom.values(2)), &mut locals));
     let mut params: Vec<Param> = ops
         .iter()
         .enumerate()
@@ -164,7 +171,7 @@ fn kernel(atom: &MmaAtom) -> KernelFn {
     params.push(Param::buffer("out", acc, BufferRole::ReadWrite, Some(1)));
     KernelFn::new("mma_extras", acc, params, locals, Block(body))
         .with_launch(LaunchShape::new([LANES, 1, 1], [1, 1, 1]).with_subgroup(LANES, LANES))
-        .with_allocs(allocs)
+        .with_allocs(allocs(atom, &ops))
 }
 
 /// Small deterministic values in `-3..=3`.
