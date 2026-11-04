@@ -156,6 +156,12 @@ impl Walk<'_> {
                 self.control(st, div, poisoned)?;
             }
             Stmt::Store { .. } | Stmt::Fence { .. } | Stmt::Return => {}
+            // an MMA is a rendezvous of its subgroup, like a barrier; it defines no local
+            Stmt::Mma { .. } => {
+                if self.check && (div || *poisoned) {
+                    return Err(KernelError::BarrierDivergent);
+                }
+            }
             Stmt::Break | Stmt::Continue => *poisoned |= div,
             Stmt::Barrier { .. } => {
                 if self.check && (div || *poisoned) {

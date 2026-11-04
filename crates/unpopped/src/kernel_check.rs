@@ -3,6 +3,7 @@
 //! `kernel.rs` so neither file outgrows the size the analysers accept.
 
 mod collective;
+mod mma;
 
 use unpopped_vocab::ElementKind;
 
@@ -201,6 +202,7 @@ fn check_sync_stmt(
             }
         }
         Stmt::Collective { .. } => collective::check_collective(k, st, sc, declared_here)?,
+        Stmt::Mma { .. } => mma::check_mma(k, st)?,
         Stmt::Call {
             callee,
             args,
@@ -357,6 +359,7 @@ fn check_stmt(
         | Stmt::AtomicCas { .. }
         | Stmt::Fence { .. }
         | Stmt::Collective { .. }
+        | Stmt::Mma { .. }
         | Stmt::Call { .. }
         | Stmt::Barrier { .. } => check_sync_stmt(k, st, sc, declared_here)?,
         Stmt::If { cond, then, els } => {

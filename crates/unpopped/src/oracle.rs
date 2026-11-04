@@ -106,6 +106,7 @@ mod accum_policy;
 mod kernel_call;
 mod kernel_collective;
 pub mod kernel_eval;
+mod kernel_mma;
 pub use kernel_call::run_module;
 pub mod kernel_launch;
 mod kernel_mem;

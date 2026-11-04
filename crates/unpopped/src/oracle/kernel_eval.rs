@@ -253,6 +253,7 @@ impl<'a> Machine<'a> {
                 self.exec_simple(st)?;
             }
             Stmt::Collective { .. } => return Err(KernelTrap::Unsupported("Collective")),
+            Stmt::Mma { .. } => return Err(KernelTrap::Unsupported("Mma")),
             Stmt::Call {
                 callee,
                 args,

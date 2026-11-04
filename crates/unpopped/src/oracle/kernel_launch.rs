@@ -29,6 +29,7 @@ use super::Val;
 use super::kernel_collective::{Contribution, results};
 use super::kernel_eval::{KernelArg, KernelTrap, Machine, STEP_LIMIT};
 use super::kernel_mem::{AllocMem, BlockMem, Log, ThreadCtx, cluster_of};
+use super::kernel_mma::{MmaContribution, compute};
 use super::kernel_resume::{Frame, Stop, initial_stack};
 use super::kernel_sync::Edges;
 use crate::exec::{AllocDecl, Extent, LaunchShape, MemorySpace, Scope};
@@ -305,6 +306,8 @@ struct ThreadRun<'a> {
     bufmap: Vec<usize>,
     /// What the thread contributed to the collective it waits at, until the rendezvous completes.
     contrib: Option<Contribution>,
+    /// What the thread handed over to the `Stmt::Mma` it waits at.
+    mma: Option<Box<MmaContribution>>,
 }
 
 /// One block between `Device` barriers: its threads and its memory.
@@ -342,6 +345,7 @@ fn start_block<'a>(b: &BlockRun<'a>) -> BlockState<'a> {
             fn_idx: b.module.map_or(0, |(_, e)| e),
             bufmap: Vec::new(),
             contrib: None,
+            mma: None,
         })
         .collect();
     BlockState { threads, mem }
@@ -446,6 +450,13 @@ fn status_after(stop: Stop, t: &mut ThreadRun<'_>) -> Status {
             t.contrib = Some(c);
             Status::Waiting { scope, at }
         }
+        Stop::Mma { at, c } => {
+            t.mma = Some(c);
+            Status::Waiting {
+                scope: Scope::Subgroup,
+                at,
+            }
+        }
     }
 }
 
@@ -460,6 +471,27 @@ fn deliver(members: &mut [ThreadRun<'_>]) -> Result<(), KernelTrap> {
     for ((t, c), v) in members.iter_mut().zip(&lanes).zip(out) {
         t.locals[c.result as usize] = Some(v);
         t.contrib = None;
+    }
+    Ok(())
+}
+
+/// An MMA whose every lane has arrived: compute `D` and store each lane's fragment in its `Private` array. Like a
+/// collective it exchanges registers and orders no memory.
+fn deliver_mma(members: &mut [ThreadRun<'_>]) -> Result<(), KernelTrap> {
+    let lanes: Vec<MmaContribution> = members
+        .iter_mut()
+        .map(|t| *t.mma.take().expect("every lane handed over"))
+        .collect();
+    let out = compute(&lanes)?;
+    for ((t, c), frag) in members.iter_mut().zip(&lanes).zip(out) {
+        let mem = t.private[c.d as usize]
+            .as_mut()
+            .ok_or(KernelTrap::Unsupported(
+                "an MMA fragment that is not Private",
+            ))?;
+        for (i, v) in frag.into_iter().enumerate() {
+            mem.set(i, v);
+        }
     }
     Ok(())
 }
@@ -510,7 +542,9 @@ fn release(
     }
     for (scope, group) in groups {
         let members = &mut threads[group.start as usize..group.end as usize];
-        if members.iter().all(|t| t.contrib.is_some()) {
+        if members.iter().all(|t| t.mma.is_some()) {
+            deliver_mma(members)?;
+        } else if members.iter().all(|t| t.contrib.is_some()) {
             deliver(members)?;
         } else if scope == Scope::Subgroup {
             mem.sub_epoch[(group.start / b.sg) as usize] += 1;
@@ -573,6 +607,7 @@ mod tests {
                 fn_idx: 0,
                 bufmap: Vec::new(),
                 contrib: None,
+                mma: None,
             })
             .collect();
         let mut mem = BlockMem {
