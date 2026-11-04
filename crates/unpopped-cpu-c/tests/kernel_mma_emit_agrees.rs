@@ -10,7 +10,7 @@
 use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
 use unpopped::ir::ScalarExpr;
 use unpopped::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
-use unpopped::mma::MmaAtom;
+use unpopped::mma::{AtomSpec, MmaAtom};
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
 use unpopped_vocab::ElementKind;
@@ -185,10 +185,13 @@ fn toy_f32_atom() -> MmaAtom {
     let b = leaves(&[(4, 2), (8, 16), (2, 1), (2, 8)]);
     let c = leaves(&[(4, 32), (8, 1), (2, 16), (2, 8)]);
     MmaAtom::new(
-        "toy.m16n8k16.f32.f32",
-        (16, 8, 16),
-        (ElementKind::F32, ElementKind::F32, ElementKind::F32),
-        (Scope::Subgroup, 32),
+        AtomSpec {
+            name: "toy.m16n8k16.f32.f32",
+            mnk: (16, 8, 16),
+            dtypes: (ElementKind::F32, ElementKind::F32, ElementKind::F32),
+            scope: Scope::Subgroup,
+            lanes: 32,
+        },
         [&a, &b, &c],
     )
     .unwrap()
