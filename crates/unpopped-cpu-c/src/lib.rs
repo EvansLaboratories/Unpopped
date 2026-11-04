@@ -59,6 +59,7 @@ use unpopped_vocab::{ElementKind, TargetId};
 mod collective;
 mod kernel;
 mod launch;
+mod mma;
 mod module;
 pub use module::lower_module;
 mod qualified;

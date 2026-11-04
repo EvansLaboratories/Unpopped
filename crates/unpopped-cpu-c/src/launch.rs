@@ -409,7 +409,7 @@ impl Emitter<'_> {
             match s {
                 Stmt::Barrier { .. } => self.line("// barrier: the thread loop ends here"),
                 Stmt::Collective { .. } => self.collective(s)?,
-                Stmt::Mma { .. } => return Err(refuse("a Stmt::Mma (not spelled yet)")),
+                Stmt::Mma { .. } => self.mma(s)?,
                 Stmt::If { cond, then, els } => self.block_if(cond, then, els)?,
                 Stmt::For {
                     local,
