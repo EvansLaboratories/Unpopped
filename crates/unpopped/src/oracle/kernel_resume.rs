@@ -139,6 +139,11 @@ impl<'a> Machine<'a> {
                 self.exec_simple(st)?;
             }
             Stmt::Collective { .. } => return self.collective_stop(st).map(Some),
+            Stmt::ExternCall { .. } => {
+                return Err(KernelTrap::Unsupported(
+                    "ExternCall (the oracle does not run it yet)",
+                ));
+            }
             Stmt::Mma { .. } => {
                 return Ok(Some(Stop::Mma {
                     at: std::ptr::from_ref(st) as usize,

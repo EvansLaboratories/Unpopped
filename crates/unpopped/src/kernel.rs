@@ -25,7 +25,7 @@ use unpopped_vocab::ElementKind;
 pub use crate::kernel_check::check_kernel;
 pub use crate::kernel_module::check_module;
 
-use crate::exec::{AllocDecl, LaunchShape, Scope};
+use crate::exec::{AllocDecl, LaunchShape, MemorySpace, Scope};
 use crate::ir::{ReduceOp, ScalarExpr};
 use crate::mma::MmaAtom;
 use crate::types::{Ty, TypeError};
@@ -360,6 +360,20 @@ pub enum Stmt {
         /// The local that receives the callee's result, if it has one.
         result: Option<u32>,
     },
+    /// Call the opaque [`ExternDecl`] `decl` of the module (ROADMAP U11; `docs/options-u11-extern-and-inline-asm.md`):
+    /// `results = decl(args...)`. A statement, not an expression, because an effectful call has an order. The
+    /// declaration states the effects (`pure`, `sync`, `volatile`), which the checker holds it to and which every
+    /// pass honours: a call is opaque, never fused across, and a `sync` call is a barrier site like a `Barrier`.
+    /// `check_kernel` alone refuses it (the declaration lives in the module); `check_module` resolves it. The
+    /// oracle will run the declaration's `reference` kernel and trap when it has none (next slice).
+    ExternCall {
+        /// Index of the declaration in [`Module::externs`].
+        decl: u32,
+        /// The scalar arguments, in the declaration's parameter order.
+        args: Vec<ScalarExpr>,
+        /// The locals that receive the results, one per declared result, declared by this statement.
+        results: Vec<u32>,
+    },
 }
 
 /// One argument of a [`Stmt::Call`], matched to the callee's parameter of the same position
@@ -382,13 +396,173 @@ pub enum CallArg {
 pub struct Module {
     /// The kernels; a call names one by index.
     pub fns: Vec<KernelFn>,
+    /// The opaque declarations a [`Stmt::ExternCall`] names, by index.
+    #[serde(default)]
+    pub externs: Vec<ExternDecl>,
 }
 
 impl Module {
-    /// A module of `fns`.
+    /// A module of `fns` with no extern declarations.
     #[must_use]
     pub fn new(fns: Vec<KernelFn>) -> Self {
-        Self { fns }
+        Self {
+            fns,
+            externs: Vec::new(),
+        }
+    }
+
+    /// This module with the extern declarations `externs`.
+    #[must_use]
+    pub fn with_externs(mut self, externs: Vec<ExternDecl>) -> Self {
+        self.externs = externs;
+        self
+    }
+}
+
+/// What an opaque call is allowed to do, **declared** by whoever writes it (Unpopped cannot look inside asm). The
+/// checker holds a declaration to its own words (`check_module`): `pure` excludes everything else, `sync` makes a
+/// call a barrier site, and a call that is not `pure` has results that may differ between threads.
+///
+/// v1 has no pointer operands, so `reads` and `writes` must be empty; they exist so that memory-touching asm
+/// (which needs U8's descriptors) is not a second break of [`ExternDecl`].
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Effects {
+    /// No effect at all: the call may be reordered, duplicated or dropped if its results are unused.
+    pub pure: bool,
+    /// Memory spaces it may read through a pointer operand (empty in v1).
+    pub reads: Vec<MemorySpace>,
+    /// Memory spaces it may write through a pointer operand (empty in v1).
+    pub writes: Vec<MemorySpace>,
+    /// A rendezvous at this scope: the call is a barrier site, reached in uniform control by the whole group.
+    pub sync: Option<Scope>,
+    /// Must not be moved or removed (CUDA `asm volatile`).
+    pub volatile: bool,
+}
+
+impl Effects {
+    /// A pure call.
+    #[must_use]
+    pub fn pure() -> Self {
+        Self {
+            pure: true,
+            ..Self::default()
+        }
+    }
+
+    /// A call with an effect Unpopped does not model: not pure, never removed or moved.
+    #[must_use]
+    pub fn opaque() -> Self {
+        Self {
+            volatile: true,
+            ..Self::default()
+        }
+    }
+
+    /// This call also rendezvouses at `scope`.
+    #[must_use]
+    pub fn with_sync(mut self, scope: Scope) -> Self {
+        self.sync = Some(scope);
+        self
+    }
+}
+
+/// The text of one target's body of an [`ExternDecl`]. Unpopped never parses it and cannot check it is correct:
+/// only its shape (`check_module`) and, on a device leg, its result against the declaration's `reference`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum BodyText {
+    /// Inline assembly (PTX, SPIR-V asm, AMDGCN). Operands are `{0}`, `{1}`, ... : the parameters first, then the
+    /// results.
+    Asm {
+        /// The template.
+        template: String,
+        /// The target's constraint string (`"=r,r"`), opaque.
+        constraints: String,
+    },
+    /// A symbol of a library the target links (libdevice, ocml, a linked object).
+    Symbol {
+        /// The library.
+        library: String,
+        /// The symbol.
+        symbol: String,
+    },
+}
+
+/// A body for one target. `target` is the backend's own name (`"cuda-ptx"`, `"spirv"`); a target nobody has is never used.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct TargetBody {
+    /// The target's key.
+    pub target: String,
+    /// The body.
+    pub body: BodyText,
+}
+
+impl TargetBody {
+    /// A body for `target`.
+    #[must_use]
+    pub fn new(target: impl Into<String>, body: BodyText) -> Self {
+        Self {
+            target: target.into(),
+            body,
+        }
+    }
+}
+
+/// An opaque function the IR cannot express (ROADMAP U11): typed scalar parameters and results, declared
+/// [`Effects`], a body per target, and optionally a `reference` kernel that says what it computes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ExternDecl {
+    /// For diagnostics.
+    pub name: String,
+    /// The scalar parameter types.
+    #[serde(with = "crate::text::ek_vec")]
+    pub params: Vec<ElementKind>,
+    /// The result types (none, one, or a tuple).
+    #[serde(with = "crate::text::ek_vec")]
+    pub results: Vec<ElementKind>,
+    /// What it may do.
+    pub effects: Effects,
+    /// One body per target, at most one each.
+    pub bodies: Vec<TargetBody>,
+    /// Index into [`Module::fns`] of a plain kernel with this signature, run by the oracle and cpu-c in place of
+    /// the bodies. Only the device leg shows that a body means what its reference means.
+    pub reference: Option<u32>,
+}
+
+impl ExternDecl {
+    /// A declaration with no body and no reference.
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        params: Vec<ElementKind>,
+        results: Vec<ElementKind>,
+        effects: Effects,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            params,
+            results,
+            effects,
+            bodies: Vec::new(),
+            reference: None,
+        }
+    }
+
+    /// This declaration with a body for one more target.
+    #[must_use]
+    pub fn with_body(mut self, body: TargetBody) -> Self {
+        self.bodies.push(body);
+        self
+    }
+
+    /// This declaration with the reference kernel `fn_index`.
+    #[must_use]
+    pub fn with_reference(mut self, fn_index: u32) -> Self {
+        self.reference = Some(fn_index);
+        self
     }
 }
 
@@ -689,6 +863,18 @@ pub enum KernelError {
     /// A `Call` outside a module (`check_kernel` alone), or something a callee may not yet be: the shape is
     /// accepted only where the module checker can resolve it.
     CallUnsupported {
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// A `Stmt::ExternCall` names a declaration that is not in the module.
+    BadExtern {
+        /// The index.
+        decl: u32,
+    },
+    /// An [`ExternDecl`] or a `Stmt::ExternCall` the checker refuses: a declaration at odds with its own effects, a
+    /// body of the wrong shape, a reference of the wrong signature, a call with the wrong arity, argument or result
+    /// type, or an `ExternCall` outside a module.
+    ExternUnsupported {
         /// What is wrong.
         what: &'static str,
     },

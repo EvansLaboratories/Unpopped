@@ -214,6 +214,9 @@ impl Emitter<'_> {
             Stmt::AtomicCas { .. } => self.atomic_cas(s)?,
             Stmt::Fence { .. } => {}
             Stmt::Collective { .. } => return Err(refuse("a Collective is block-level only")),
+            Stmt::ExternCall { .. } => {
+                return Err(refuse("an ExternCall (cpu-c does not spell it yet)"));
+            }
             Stmt::Mma { .. } => return Err(refuse("a Stmt::Mma is block-level only")),
             Stmt::Call {
                 callee,

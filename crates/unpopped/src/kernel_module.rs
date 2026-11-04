@@ -6,8 +6,8 @@
 use std::collections::BTreeSet;
 
 use crate::exec::MemorySpace;
-use crate::kernel::{Block, KernelError, KernelFn, Module, Stmt};
-use crate::kernel_check::{CalleeSig, check_kernel_with};
+use crate::kernel::{Block, ExternDecl, KernelError, KernelFn, Module, Stmt};
+use crate::kernel_check::{CalleeSig, ExternSig, check_kernel_with};
 
 /// Check every function of `m`, with `entry` the function a launch starts at.
 ///
@@ -24,6 +24,7 @@ pub fn check_module(m: &Module, entry: u32) -> Result<(), KernelError> {
     if m.fns.get(entry as usize).is_none() {
         return Err(KernelError::BadCallee { callee: entry });
     }
+    crate::kernel_extern::check_extern_decls(m)?;
     let edges = call_edges(m)?;
     no_cycle(&edges)?;
     let called: BTreeSet<u32> = edges.iter().flatten().copied().collect();
@@ -31,6 +32,7 @@ pub fn check_module(m: &Module, entry: u32) -> Result<(), KernelError> {
         plain_function(&m.fns[f as usize])?;
     }
     let sigs = signatures(m, &edges)?;
+    let externs = extern_sigs(m);
     let reach = reachable(&edges, entry);
     let launch = m.fns[entry as usize].launch;
     for (i, f) in m.fns.iter().enumerate() {
@@ -39,9 +41,9 @@ pub fn check_module(m: &Module, entry: u32) -> Result<(), KernelError> {
             // a callee runs inside the entry's launch: its ids and barriers are the entry's
             let mut g = f.clone();
             g.launch = launch;
-            check_kernel_with(&g, sigs.clone())?;
+            check_kernel_with(&g, sigs.clone(), externs.clone())?;
         } else {
-            check_kernel_with(f, sigs.clone())?;
+            check_kernel_with(f, sigs.clone(), externs.clone())?;
         }
     }
     Ok(())
@@ -130,14 +132,31 @@ fn plain_function(f: &KernelFn) -> Result<(), KernelError> {
     Ok(())
 }
 
-/// Whether `b` holds a rendezvous: a `Barrier` or a `Collective` (a call that reaches one is a barrier site).
-fn holds_barrier(b: &Block) -> bool {
+/// Whether `b` holds a rendezvous: a `Barrier`, a `Collective`, an `Mma` or an `ExternCall` declared `sync` (a call
+/// that reaches one is a barrier site).
+fn holds_barrier(b: &Block, externs: &[ExternDecl]) -> bool {
     b.0.iter().any(|st| match st {
         Stmt::Barrier { .. } | Stmt::Collective { .. } | Stmt::Mma { .. } => true,
-        Stmt::If { then, els, .. } => holds_barrier(then) || holds_barrier(els),
-        Stmt::For { body, .. } | Stmt::While { body, .. } => holds_barrier(body),
+        Stmt::ExternCall { decl, .. } => externs
+            .get(*decl as usize)
+            .is_some_and(|d| d.effects.sync.is_some()),
+        Stmt::If { then, els, .. } => holds_barrier(then, externs) || holds_barrier(els, externs),
+        Stmt::For { body, .. } | Stmt::While { body, .. } => holds_barrier(body, externs),
         _ => false,
     })
+}
+
+/// The extern declarations as the checker reads them.
+fn extern_sigs(m: &Module) -> Vec<ExternSig> {
+    m.externs
+        .iter()
+        .map(|d| ExternSig {
+            params: d.params.clone(),
+            results: d.results.clone(),
+            pure: d.effects.pure,
+            sync: d.effects.sync,
+        })
+        .collect()
 }
 
 /// Whether each function reaches a barrier, directly or through its calls (the graph is acyclic here).
@@ -146,7 +165,7 @@ fn reaches_barrier(m: &Module, edges: &[Vec<u32>]) -> Vec<bool> {
         if let Some(v) = memo[f] {
             return v;
         }
-        let mut v = holds_barrier(&m.fns[f].body);
+        let mut v = holds_barrier(&m.fns[f].body, &m.externs);
         for c in &edges[f] {
             v |= go(*c as usize, m, edges, memo);
         }

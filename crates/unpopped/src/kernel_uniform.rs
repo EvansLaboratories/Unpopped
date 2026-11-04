@@ -16,6 +16,7 @@
 use crate::exec::{ExecId, MemorySpace, Scope};
 use crate::ir::ScalarExpr;
 use crate::kernel::{Block, CallArg, KernelError, KernelFn, Place, Stmt};
+use crate::kernel_check::ExternSig;
 use crate::types::operands;
 
 /// Reject a `Barrier` that may not be reached by every thread of its scope.
@@ -23,10 +24,15 @@ use crate::types::operands;
 /// `barrier_callees[i]` is whether function `i` of the module reaches a barrier: a `Call` of it is a barrier
 /// site (it must sit in uniform control and pass uniform scalar arguments, since the callee was checked
 /// with its scalar parameters uniform).
-pub(crate) fn check_barriers(k: &KernelFn, barrier_callees: &[bool]) -> Result<(), KernelError> {
+pub(crate) fn check_barriers(
+    k: &KernelFn,
+    barrier_callees: &[bool],
+    externs: &[ExternSig],
+) -> Result<(), KernelError> {
     let mut w = Walk {
         k,
         barrier_callees,
+        externs,
         device: holds_device_barrier(&k.body),
         divergent: vec![false; k.locals.len()],
         changed: false,
@@ -57,6 +63,7 @@ fn holds_device_barrier(b: &Block) -> bool {
 struct Walk<'a> {
     k: &'a KernelFn,
     barrier_callees: &'a [bool],
+    externs: &'a [ExternSig],
     /// The kernel holds a `Device` barrier, so `BlockIdx` is divergent.
     device: bool,
     divergent: Vec<bool>,
@@ -117,6 +124,29 @@ impl Walk<'_> {
         Ok(())
     }
 
+    /// An `ExternCall`. A pure one's results differ between threads only if an argument does; any other effect may
+    /// (a clock, a lane id), so its results are marked. A `sync` call is a barrier site: `div` is whether control
+    /// reaching it may differ between threads, and its arguments must be uniform like a call's.
+    fn extern_call(
+        &mut self,
+        decl: u32,
+        args: &[ScalarExpr],
+        results: &[u32],
+        div: bool,
+    ) -> Result<(), KernelError> {
+        let sig = self.externs.get(decl as usize);
+        let divergent_arg = args.iter().any(|a| self.expr(a));
+        if sig.is_none_or(|s| !s.pure || divergent_arg) {
+            for r in results {
+                self.mark(*r);
+            }
+        }
+        if sig.is_some_and(|s| s.sync.is_some()) && self.check && (div || divergent_arg) {
+            return Err(KernelError::BarrierDivergent);
+        }
+        Ok(())
+    }
+
     /// A `Call`. Its result may differ between threads (the conservative mark). A call that reaches a barrier
     /// is a barrier site: `div` is whether control reaching it may differ between threads.
     fn call(
@@ -151,7 +181,8 @@ impl Walk<'_> {
             | Stmt::AtomicRmw { .. }
             | Stmt::AtomicCas { .. }
             | Stmt::Collective { .. }
-            | Stmt::Call { .. } => self.defines(st, div || *poisoned)?,
+            | Stmt::Call { .. }
+            | Stmt::ExternCall { .. } => self.defines(st, div || *poisoned)?,
             Stmt::If { .. } | Stmt::For { .. } | Stmt::While { .. } => {
                 self.control(st, div, poisoned)?;
             }
@@ -196,6 +227,11 @@ impl Walk<'_> {
                 args,
                 result,
             } => self.call(*callee, args, *result, skipped)?,
+            Stmt::ExternCall {
+                decl,
+                args,
+                results,
+            } => self.extern_call(*decl, args, results, skipped)?,
             // A collective is a rendezvous like a barrier: every lane of its scope must reach it, and a lane's
             // result differs from another's.
             Stmt::Collective { result, .. } => {
