@@ -88,11 +88,8 @@ fn operands(atom: &MmaAtom) -> Vec<(E, u32)> {
     ops
 }
 
-/// Each lane copies every input fragment from its buffer, runs the MMA, writes D to the last buffer.
-fn kernel(atom: &MmaAtom) -> KernelFn {
-    let ops = operands(atom);
-    let nin = ops.len() as u32;
-    let acc = atom.dtypes().2;
+/// The `Private` fragment arrays: one per input operand, then D.
+fn fragment_allocs(atom: &MmaAtom, ops: &[(E, u32)]) -> Vec<AllocDecl> {
     let mut allocs: Vec<AllocDecl> = ops
         .iter()
         .enumerate()
@@ -108,28 +105,62 @@ fn kernel(atom: &MmaAtom) -> KernelFn {
     allocs.push(AllocDecl::new(
         "d",
         MemorySpace::Private,
-        acc,
+        atom.dtypes().2,
         Extent::Static(atom.values(2)),
     ));
-    let mut locals = vec![LocalDecl::scalar(E::U32)];
-    let mut body = vec![Stmt::Let {
-        local: 0,
-        init: ScalarExpr::Exec(ExecId::ThreadIdx(0)),
-    }];
+    allocs
+}
+
+/// Copy every slot of every input buffer into its `Private` fragment.
+fn copy_in(ops: &[(E, u32)], locals: &mut Vec<LocalDecl>) -> Vec<Stmt> {
+    let mut out = Vec::new();
     for (i, (ty, n)) in ops.iter().enumerate() {
         for v in 0..*n {
             let l = locals.len() as u32;
             locals.push(LocalDecl::scalar(*ty));
-            body.push(Stmt::Load {
+            out.push(Stmt::Load {
                 local: l,
                 place: slot(i as u32, *n, v),
             });
-            body.push(Stmt::Store {
+            out.push(Stmt::Store {
                 place: frag(i as u32, v),
                 value: ScalarExpr::Local(l),
             });
         }
     }
+    out
+}
+
+/// Write the D fragment (`Private` array `alloc`) to the buffer of the same number.
+fn copy_out(atom: &MmaAtom, alloc: u32, locals: &mut Vec<LocalDecl>) -> Vec<Stmt> {
+    let mut out = Vec::new();
+    for v in 0..atom.values(2) {
+        let l = locals.len() as u32;
+        locals.push(LocalDecl::scalar(atom.dtypes().2));
+        out.push(Stmt::Load {
+            local: l,
+            place: frag(alloc, v),
+        });
+        out.push(Stmt::Store {
+            place: slot(alloc, atom.values(2), v),
+            value: ScalarExpr::Local(l),
+        });
+    }
+    out
+}
+
+/// Each lane copies every input fragment from its buffer, runs the MMA, writes D to the last buffer.
+fn kernel(atom: &MmaAtom) -> KernelFn {
+    let ops = operands(atom);
+    let nin = ops.len() as u32;
+    let acc = atom.dtypes().2;
+    let allocs = fragment_allocs(atom, &ops);
+    let mut locals = vec![LocalDecl::scalar(E::U32)];
+    let mut body = vec![Stmt::Let {
+        local: 0,
+        init: ScalarExpr::Exec(ExecId::ThreadIdx(0)),
+    }];
+    body.extend(copy_in(&ops, &mut locals));
     body.push(Stmt::Mma {
         atom: atom.clone(),
         a: 0,
@@ -138,18 +169,7 @@ fn kernel(atom: &MmaAtom) -> KernelFn {
         d: nin,
         extra: (3..nin).collect(),
     });
-    for v in 0..atom.values(2) {
-        let l = locals.len() as u32;
-        locals.push(LocalDecl::scalar(acc));
-        body.push(Stmt::Load {
-            local: l,
-            place: frag(nin, v),
-        });
-        body.push(Stmt::Store {
-            place: slot(nin, atom.values(2), v),
-            value: ScalarExpr::Local(l),
-        });
-    }
+    body.extend(copy_out(atom, nin, &mut locals));
     let mut params: Vec<Param> = ops
         .iter()
         .enumerate()
