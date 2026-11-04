@@ -27,6 +27,7 @@ pub use crate::kernel_module::check_module;
 
 use crate::exec::{AllocDecl, LaunchShape, Scope};
 use crate::ir::{ReduceOp, ScalarExpr};
+use crate::mma::MmaAtom;
 use crate::types::{Ty, TypeError};
 
 /// What a buffer parameter may do. Checked by [`check_kernel`] against every `Load` and `Store`.
@@ -321,6 +322,26 @@ pub enum Stmt {
         result: u32,
         /// The group that takes part.
         scope: Scope,
+    },
+    /// A warp-level matrix multiply-accumulate (ROADMAP U7 S2): every lane of `atom`'s scope contributes its
+    /// fragments and receives its share of `D = A.B + C`. The fragments are the `Private` arrays `a`, `b`, `c` and
+    /// `d` (indices into [`KernelFn::allocs`]; `d` may be `c`), each `atom.values(..)` elements of the atom's type.
+    /// A rendezvous like [`Stmt::Collective`]: it must be reached in uniform control by the whole group. The
+    /// oracle gathers the lanes' fragments into the logical matrices through the atom's layouts, computes with
+    /// exact products summed in `f64` (or exact integers, wrapping at the accumulator type) and rounded once to the
+    /// accumulator type, and scatters `D` back. A device may sum in another order, so compare floats within a
+    /// tolerance. It orders no memory.
+    Mma {
+        /// The atom: shape, types and fragment layouts.
+        atom: MmaAtom,
+        /// The `Private` allocation holding the A fragment.
+        a: u32,
+        /// The `Private` allocation holding the B fragment.
+        b: u32,
+        /// The `Private` allocation holding the C fragment.
+        c: u32,
+        /// The `Private` allocation that receives the D fragment.
+        d: u32,
     },
     /// Call another kernel of the same [`Module`]: `result = callee(args...)`. The callee is a
     /// [`KernelFn`] (PM ruling 2026-11-02 on `docs/options-u3-remainder.md`, R1a); `callee` indexes
@@ -648,6 +669,11 @@ pub enum KernelError {
     },
     /// A `Call` asks for a result the callee does not have.
     CallResult {
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// A `Stmt::Mma` the checker refuses: what is wrong with the atom, the launch or a fragment.
+    MmaUnsupported {
         /// What is wrong.
         what: &'static str,
     },

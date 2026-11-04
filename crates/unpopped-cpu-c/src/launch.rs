@@ -163,7 +163,7 @@ fn has_return(b: &[Stmt]) -> bool {
 fn contains_barrier(s: &Stmt) -> bool {
     match s {
         // a collective is a rendezvous like a barrier: the thread loop ends before it and a new one starts after
-        Stmt::Barrier { .. } | Stmt::Collective { .. } => true,
+        Stmt::Barrier { .. } | Stmt::Collective { .. } | Stmt::Mma { .. } => true,
         Stmt::If { then, els, .. } => has_barrier_block(&then.0) || has_barrier_block(&els.0),
         Stmt::For { body, .. } | Stmt::While { body, .. } => has_barrier_block(&body.0),
         _ => false,
@@ -409,6 +409,7 @@ impl Emitter<'_> {
             match s {
                 Stmt::Barrier { .. } => self.line("// barrier: the thread loop ends here"),
                 Stmt::Collective { .. } => self.collective(s)?,
+                Stmt::Mma { .. } => return Err(refuse("a Stmt::Mma (not spelled yet)")),
                 Stmt::If { cond, then, els } => self.block_if(cond, then, els)?,
                 Stmt::For {
                     local,

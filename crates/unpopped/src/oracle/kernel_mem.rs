@@ -153,6 +153,12 @@ pub(super) struct AllocMem {
 }
 
 impl AllocMem {
+    /// Store `v` at element `i` (the element becomes initialized).
+    pub(super) fn set(&mut self, i: usize, v: Val) {
+        store_val(v, self.dtype, &mut self.bytes, i);
+        self.init[i] = true;
+    }
+
     pub(super) fn new(dtype: ElementKind, len: usize) -> Self {
         Self {
             dtype,
@@ -340,6 +346,23 @@ impl Machine<'_> {
             .ok()
             .filter(|i| *i < len)
             .ok_or(KernelTrap::AllocOutOfBounds { alloc })
+    }
+
+    /// Every element of this thread's `Private` allocation `alloc`, in order. A trap if any was never stored.
+    pub(super) fn private_all(&self, alloc: u32) -> Result<Vec<Val>, KernelTrap> {
+        let c = self
+            .ctx
+            .as_ref()
+            .ok_or(KernelTrap::Unsupported("a fragment outside run_launch"))?;
+        let m = c
+            .mem(alloc, MemorySpace::Private)
+            .ok_or(KernelTrap::Unsupported("a fragment that is not Private"))?;
+        if m.init.iter().any(|i| !i) {
+            return Err(KernelTrap::UninitializedPrivate { alloc });
+        }
+        Ok((0..m.init.len())
+            .map(|i| Val::Raw(read_elem(&m.bytes, i, m.dtype), m.dtype))
+            .collect())
     }
 
     pub(super) fn alloc_load(&mut self, alloc: u32, index: &ScalarExpr) -> Result<Val, KernelTrap> {
