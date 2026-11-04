@@ -86,6 +86,7 @@ mod kernel_uniform;
 pub mod kisc;
 pub mod lift;
 pub mod link;
+pub mod mma;
 pub mod numerics;
 pub mod optimize;
 pub mod oracle;
