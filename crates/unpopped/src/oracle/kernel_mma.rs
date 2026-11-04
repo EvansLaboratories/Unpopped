@@ -43,28 +43,35 @@ fn gather(atom: &MmaAtom, which: usize, lanes: &[MmaContribution]) -> Result<Vec
         ))
 }
 
-/// `D[row, col]` of the logical matrices `a` (`m x k`), `b` (`k x n`), `c` (`m x n`), all column-major.
-fn element(
-    (a, b, c): (&[Val], &[Val], &[Val]),
-    (m, k): (usize, usize),
-    (row, col): (usize, usize),
-    acc: ElementKind,
-) -> Val {
-    if types::int_range(acc).is_some() {
-        let sum: i128 = (0..k)
-            .map(|i| a[row + m * i].i128() * b[i + k * col].i128())
-            .sum::<i128>()
-            + c[row + m * col].i128();
-        return int_val(wrap(acc, sum), acc);
+/// The gathered logical matrices: `a` is `m x k`, `b` is `k x n`, `c` is `m x n`, all column-major.
+struct Matrices<'a> {
+    a: &'a [Val],
+    b: &'a [Val],
+    c: &'a [Val],
+    m: usize,
+    k: usize,
+}
+
+impl Matrices<'_> {
+    /// `D[row, col]` in the accumulator type `acc`.
+    fn element(&self, (row, col): (usize, usize), acc: ElementKind) -> Val {
+        let Self { a, b, c, m, k } = *self;
+        if types::int_range(acc).is_some() {
+            let sum: i128 = (0..k)
+                .map(|i| a[row + m * i].i128() * b[i + k * col].i128())
+                .sum::<i128>()
+                + c[row + m * col].i128();
+            return int_val(wrap(acc, sum), acc);
+        }
+        let sum = (0..k)
+            .map(|i| a[row + m * i].f64() * b[i + k * col].f64())
+            .fold(c[row + m * col].f64(), |s, p| s + p);
+        Val::Float(if acc == ElementKind::F32 {
+            f64::from(sum as f32)
+        } else {
+            sum
+        })
     }
-    let sum = (0..k)
-        .map(|i| a[row + m * i].f64() * b[i + k * col].f64())
-        .fold(c[row + m * col].f64(), |s, p| s + p);
-    Val::Float(if acc == ElementKind::F32 {
-        f64::from(sum as f32)
-    } else {
-        sum
-    })
 }
 
 /// Every lane's D fragment, in lane order.
@@ -81,10 +88,17 @@ pub(super) fn compute(lanes: &[MmaContribution]) -> Result<Vec<Vec<Val>>, Kernel
     let b = gather(atom, 1, lanes)?;
     let c = gather(atom, 2, lanes)?;
     let acc = atom.dtypes().2;
+    let logical = Matrices {
+        a: &a,
+        b: &b,
+        c: &c,
+        m,
+        k,
+    };
     let mut d = Vec::with_capacity(m * n);
     for col in 0..n {
         for row in 0..m {
-            d.push(element((&a, &b, &c), (m, k), (row, col), acc));
+            d.push(logical.element((row, col), acc));
         }
     }
     (0..lanes.len())
