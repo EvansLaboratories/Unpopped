@@ -15,6 +15,10 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.42.31` — options note for U11, typed `Extern` and inline asm (docs only)
+
+`docs/options-u11-extern-and-inline-asm.md`: the shape of a typed `ExternDecl` (declared effects, per-target bodies, an optional reference kernel) and `Stmt::ExternCall`, approved by the PM as written (Q1-Q6). Nothing is built; no behaviour changes.
+
 ## `0.42.30` — cpu-c spells `Stmt::Mma` extra operands (additive, ROADMAP U7 S3b; version proposed, the PM allocates)
 
 `unpopped-cpu-c` now spells an atom with 2:4 metadata and/or block scales instead of refusing it: the extras get id tables from the atom like A, B and C; a sparse `A` is expanded into a dense matrix through the metadata (the two other positions of a group are zero); scales multiply the factors as `(a * sa) * (b * sb)` per `k` block, in the oracle's order. Preconditions the C cannot check (the oracle traps on them): broadcast lanes agree, a metadata nibble is `i0 < i1`. A statement whose `extra` list is not the atom's is refused with a typed error. Tests: `kernel_mma_extras_emit_agrees` compiles and runs the C against `run_launch` byte for byte for a sparse s8 atom, a scaled f32 atom, both together and a broadcast scale. Eight seeded mutants (kept positions swapped, compressed slot swapped, scale block index, `SFB` stride, sparse `A` ignored, metadata mask, `SFA`/`SFB` swapped, `SFB` stride +1) all red.
