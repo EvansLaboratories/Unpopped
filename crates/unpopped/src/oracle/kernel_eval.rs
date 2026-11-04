@@ -254,11 +254,11 @@ impl<'a> Machine<'a> {
             }
             Stmt::Collective { .. } => return Err(KernelTrap::Unsupported("Collective")),
             Stmt::Mma { .. } => return Err(KernelTrap::Unsupported("Mma")),
-            Stmt::ExternCall { .. } => {
-                return Err(KernelTrap::Unsupported(
-                    "ExternCall (the oracle does not run it yet)",
-                ));
-            }
+            Stmt::ExternCall {
+                decl,
+                args,
+                results,
+            } => self.exec_extern(*decl, args, results)?,
             Stmt::Call {
                 callee,
                 args,
