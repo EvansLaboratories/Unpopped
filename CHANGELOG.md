@@ -18,6 +18,9 @@ behaviour change, and a version check cannot see a tree that never bumped.
 ## `0.42.26` — `unpopped::mma::MmaAtom`, MMA atoms as data (additive, ROADMAP U7 S2 first step)
 
 A new `MmaAtom` type: the logical `M x N x K`, the A/B/accumulator types, the lane count and the thread-value `Layout` of A, B and C/D (column-major logical matrices; index `lane + lanes*value`). `MmaAtom::new` refuses a layout that is not a bijection onto its matrix, a scope other than `Subgroup`, and a wrong size. Shipped atoms: PTX `mma.sync` `m16n8k16` f16 and bf16 into f32, and `m16n8k32` s8 into s32; the `m16n8k8` tf32 atom waits for a tf32 operand notion (no tf32 `ElementKind`). No `Stmt` yet: `Stmt::Mma` (checker, oracle, cpu-c) follows. Tests: `mma_atoms` checks every fragment element against the PTX fragment tables written independently as `(row, col)` formulas; three seeded stride mutants all red. The tables and the layouts were both written from the same PTX ISA text, so they agree on a shared reading; an hardware or CUTLASS-derived cross-check is still open.
+## `0.42.25` — cpu-c spells `Private` arrays (additive, ROADMAP U7 S2 groundwork)
+
+The serialized thread-loop C now accepts a `Private` allocation: one slice of `n` elements per thread of the block (thread `t`'s element `o` is `t*n + o`, bounds-checked against `n`), also across `Device` barriers. It was refused before ("only Shared is spelled"). A `Private` array passed to a callee is still refused (its slice is not the callee's whole array); `Constant` and dynamic extents are still refused. `Stmt::Mma` fragments (U7 S2) need this. Tests: `kernel_private_array_emit_agrees` (C vs the launch oracle, per-thread-distinct data, with and without a Device barrier; two seeded mutants, a shared slice and a one-thread stride, both red).
 
 ## `0.42.24` — a full `[M,N]` C operand on a contraction (additive, ROADMAP U7 S1a-2)
 

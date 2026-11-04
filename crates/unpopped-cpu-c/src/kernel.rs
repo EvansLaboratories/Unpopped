@@ -28,6 +28,7 @@ use std::fmt::Write as _;
 
 use unpopped::backend::{Decline, DeclinedOp, GeneratedKernel, LowerError};
 use unpopped::backend::{Lowering, Spelling, const_lit, lower_expr};
+use unpopped::exec::MemorySpace;
 use unpopped::ir::ScalarExpr;
 use unpopped::kernel::{
     Block, BufferRole, CallArg, KernelFn, ParamKind, Place, Stmt, check_kernel,
@@ -313,6 +314,12 @@ impl Emitter<'_> {
                 }
                 (CallArg::Buffer(b), ParamKind::Buffer { .. }) => {
                     out.push(format!("b{b}, b{b}_shape, b{b}_stride, b{b}_base"));
+                }
+                (CallArg::Alloc(a), ParamKind::Buffer { .. })
+                    if self.launch.is_some()
+                        && self.k.allocs[*a as usize].space == MemorySpace::Private =>
+                {
+                    return Err(refuse("a Private allocation passed to a callee"));
                 }
                 (CallArg::Alloc(a), ParamKind::Buffer { .. }) if self.launch.is_some() => {
                     // the block's `Shared` array, with the one-dimensional shape and stride it declares
