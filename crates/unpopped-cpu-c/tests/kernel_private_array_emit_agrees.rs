@@ -127,3 +127,19 @@ fn a_private_array_survives_a_device_barrier() {
         );
     }
 }
+
+/// `Private` is spelled now; `Constant` still is not, and the refusal says which spaces are.
+#[test]
+fn a_constant_allocation_is_still_refused_with_the_spelled_spaces_named() {
+    use unpopped::backend::{Backend, LowerError};
+    let mut k = kernel(4, 1, 2, false);
+    // the checker refuses a store to a Constant array first, so lower a body that stores nothing
+    k.body = Block(vec![]);
+    k.allocs[0].space = MemorySpace::Constant;
+    match unpopped_cpu_c::CpuC.lower_kernel(&k) {
+        Err(LowerError::UnsupportedKernel { detail }) => {
+            assert!(detail.contains("only Shared and Private"), "{detail}");
+        }
+        other => panic!("expected a typed refusal, got {other:?}"),
+    }
+}
