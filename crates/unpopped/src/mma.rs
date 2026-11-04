@@ -45,6 +45,21 @@ pub enum MmaAtomError {
 /// One flat `(shape, stride)` mode list: a [`Layout`] in a serializable form.
 type Modes = Vec<(i64, i64)>;
 
+/// What an atom is, apart from its fragment layouts: the arguments of [`MmaAtom::new`] as one record.
+#[derive(Clone, Copy, Debug)]
+pub struct AtomSpec<'a> {
+    /// The atom's name, for diagnostics.
+    pub name: &'a str,
+    /// The logical `(M, N, K)`.
+    pub mnk: (u32, u32, u32),
+    /// The element types of A, B and of the accumulator (C and D).
+    pub dtypes: (ElementKind, ElementKind, ElementKind),
+    /// The group that takes part (the register-fragment atoms are `Subgroup`).
+    pub scope: Scope,
+    /// The number of lanes in the group.
+    pub lanes: u32,
+}
+
 /// A matrix-multiply-accumulate atom: see the [module docs](self).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -71,13 +86,14 @@ impl MmaAtom {
     /// # Errors
     /// [`MmaAtomError`] for a zero dimension, a scope other than `Subgroup`, an invalid layout, or a layout that
     /// is not a bijection onto its logical matrix.
-    pub fn new(
-        name: &str,
-        (m, n, k): (u32, u32, u32),
-        (a, b, acc): (ElementKind, ElementKind, ElementKind),
-        (scope, lanes): (Scope, u32),
-        layouts: [&Layout; 3],
-    ) -> Result<Self, MmaAtomError> {
+    pub fn new(spec: AtomSpec<'_>, layouts: [&Layout; 3]) -> Result<Self, MmaAtomError> {
+        let AtomSpec {
+            name,
+            mnk: (m, n, k),
+            dtypes: (a, b, acc),
+            scope,
+            lanes,
+        } = spec;
         if m == 0 || n == 0 || k == 0 || lanes == 0 {
             return Err(MmaAtomError::ZeroDimension);
         }
@@ -232,10 +248,13 @@ impl MmaAtom {
         let a = flat(&[(4, 32), (8, 1), (2, 16), (2, 8), (2, 128)]);
         let b = flat(&[(4, 2), (8, 16), (2, 1), (2, 8)]);
         Self::new(
-            name,
-            (16, 8, 16),
-            (input, input, ElementKind::F32),
-            (Scope::Subgroup, 32),
+            AtomSpec {
+                name,
+                mnk: (16, 8, 16),
+                dtypes: (input, input, ElementKind::F32),
+                scope: Scope::Subgroup,
+                lanes: 32,
+            },
             [&a, &b, &c_m16n8()],
         )
         .expect("the PTX m16n8k16 fragment layouts are bijections")
@@ -247,10 +266,13 @@ impl MmaAtom {
         let a = flat(&[(4, 64), (8, 1), (4, 16), (2, 8), (2, 256)]);
         let b = flat(&[(4, 4), (8, 32), (4, 1), (2, 16)]);
         Self::new(
-            "nvidia.mma.sync.m16n8k32.s8.s32",
-            (16, 8, 32),
-            (ElementKind::I8, ElementKind::I8, ElementKind::I32),
-            (Scope::Subgroup, 32),
+            AtomSpec {
+                name: "nvidia.mma.sync.m16n8k32.s8.s32",
+                mnk: (16, 8, 32),
+                dtypes: (ElementKind::I8, ElementKind::I8, ElementKind::I32),
+                scope: Scope::Subgroup,
+                lanes: 32,
+            },
             [&a, &b, &c_m16n8()],
         )
         .expect("the PTX m16n8k32 fragment layouts are bijections")
