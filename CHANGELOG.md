@@ -15,6 +15,40 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.10` — GEMM-family kernel K7: implicit-GEMM convolution forward (ROADMAP U9; tests only)
+
+`conv_implicit_gemm` (`tests/support/conv.rs`, copied into cpu-c): NHWC forward convolution as a GEMM over `(r, s, c)` with the
+im2col index math inside the loop and zero padding by skipping taps outside the image, no staged matrix. The shapes make an
+index mix-up loud: a non-square image (4x5), a non-square filter (3x2), padding on height only, three input channels, two
+output channels, two batches (one block each). Oracle, the C compiled with a host compiler, and a direct host convolution
+agree. Twelve seeded mutants (pad dropped or added, filter or input coordinates swapped, batch ignored, bounds swapped
+or off by one, channel loop short, output coordinates swapped, accumulator not accumulated) are all caught. dgrad, wgrad
+and grouped convolution follow only if a consumer asks.
+
+---
+
+## `0.44.9` — GEMM-family kernel K5: grouped GEMM by a problem table (ROADMAP U9; tests only)
+
+`grouped_gemm` (`tests/support/grouped.rs`, copied into cpu-c): three GEMMs of different shapes `(3,2,4)`, `(4,4,2)`, `(2,4,3)`
+in one launch, one block per problem, a `U32` problem table `[P, 6]` of `m, n, k` and element offsets into one flat buffer per
+operand (the kernel-layer form of a grouped / pointer-array GEMM until pointer values exist, ROADMAP U9c); a thread outside
+its problem's `m x n` does nothing, and `d` is exactly the packed outputs so a stray write runs off or overwrites a neighbour.
+Oracle, the C compiled with a host compiler, and the host loop agree. Eleven seeded mutants (block index unused, bounds
+swapped or removed, `k` end wrong, each of the three offsets ignored, row strides swapped, accumulator not accumulated) are
+all caught.
+
+---
+
+## `0.44.8` — GEMM-family kernel K4: split-K with a `Device`-barrier fix-up (ROADMAP U9; tests only)
+
+`split_k_with_fixup`, the stream-K shape without atomics: the two blocks of a `1x1x2` grid write half-K partials to a
+global workspace, a `Device` barrier orders the phases, and block 0 adds them into `out`. Oracle, the C (the S6a phase
+loop) and the host loop agree. Five seeded mutants (barrier removed or demoted to `Block`, colliding workspace slots, one
+partial read, slice not chosen by block) are caught; moving the fix-up to block 1 survives and is equivalent (either block
+computes the same `out`).
+
+---
+
 ## `0.44.7` — GEMM-family kernel K3: split-K in a block and across blocks (ROADMAP U9; tests only)
 
 `split_k_in_block` (two thread layers per output sum their half of K, publish through `Shared`, a `Block` barrier, one adds

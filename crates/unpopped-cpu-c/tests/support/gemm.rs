@@ -355,6 +355,58 @@ pub(crate) fn split_k_across_blocks() -> KernelFn {
     .with_launch(LaunchShape::new([N, M, 1], [1, 1, 2]))
 }
 
+/// Block 0 adds the two partials the blocks left in the workspace (`ws[s * M + r][c]`) and stores `out`.
+fn fixup() -> Stmt {
+    let ws = |s: i64| at2(2, add(cu(s * i64::from(M)), row()), col());
+    Stmt::If {
+        cond: bin(
+            BinaryOp::CmpEq,
+            ScalarExpr::Exec(ExecId::BlockIdx(2)),
+            cu(0),
+        ),
+        then: Block(vec![
+            Stmt::Load {
+                local: 3,
+                place: ws(0),
+            },
+            Stmt::Load {
+                local: 4,
+                place: ws(1),
+            },
+            Stmt::Store {
+                place: at2(3, row(), col()),
+                value: add(local(3), local(4)),
+            },
+        ]),
+        els: Block(vec![]),
+    }
+}
+
+/// Split-K with a fix-up phase (the stream-K shape): the two blocks of a `1x1x2` grid each write their half-K partial
+/// to the global workspace `ws` (`[2 * M, N]`), a `Device` barrier, and block 0 adds the partials into `out`. No
+/// atomics: the result is deterministic and the barrier is what orders the phases. Buffers: `a`, `b`, `ws`, `out`.
+pub(crate) fn split_k_with_fixup() -> KernelFn {
+    let s = ScalarExpr::Exec(ExecId::BlockIdx(2));
+    let mut body = slice_loop(s.clone());
+    body.push(Stmt::Store {
+        place: at2(2, add(mul(s, cu(i64::from(M))), row()), col()),
+        value: local(0),
+    });
+    body.push(Stmt::Barrier {
+        scope: Scope::Device,
+        kind: BarrierKind::Full,
+    });
+    body.push(fixup());
+    KernelFn::new(
+        "split_k_fixup",
+        I32,
+        matrix_params(&["ws", "out"]),
+        split_locals(),
+        Block(body),
+    )
+    .with_launch(LaunchShape::new([N, M, 1], [1, 1, 2]))
+}
+
 /// The host reference for [`fused_epilogue`].
 pub(crate) fn fused_epilogue_ref(a: &[i32], b: &[i32], c: &[i32], bias: &[i32]) -> Vec<i32> {
     let (m, n, k) = (M as usize, N as usize, K as usize);
