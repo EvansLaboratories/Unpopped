@@ -47,6 +47,12 @@ pub(crate) fn refuse(detail: impl Into<String>) -> LowerError {
 
 /// The C type of a scalar the emitter handles, or the refusal.
 pub(crate) fn ctype(t: ElementKind, what: &str) -> Result<&'static str, LowerError> {
+    // a sub-byte value lives in a local as its widened nibble (`I4` sign-extended); only a buffer packs two to a byte
+    match t {
+        ElementKind::I4 => return Ok("signed char"),
+        ElementKind::U4 => return Ok("unsigned char"),
+        _ => {}
+    }
     typed::c_type(t).ok_or_else(|| {
         refuse(format!(
             "{what} has dtype {t:?}, which this emitter does not spell"
@@ -187,6 +193,7 @@ impl Emitter<'_> {
             }
             Stmt::Load { local, place } => {
                 let at = self.address(place)?;
+                let at = self.unpack_nibble(place, at)?;
                 self.bind_local(*local, &at)?;
             }
             Stmt::Store { place, value } => {
@@ -439,6 +446,30 @@ impl Emitter<'_> {
         Ok(())
     }
 
+    /// The element a load reads: `at` itself, or for a sub-byte buffer the nibble of the byte `at` indexes
+    /// (`b[o]` becomes `b[o >> 1]` shifted by `4 * (o & 1)`; an `I4` is sign-extended by the xor-and-subtract).
+    fn unpack_nibble(&self, place: &Place, at: String) -> Result<String, LowerError> {
+        let Place::Logical { buffer, .. } = place else {
+            return Ok(at);
+        };
+        let ParamKind::Buffer { elem, .. } = &self.k.params[*buffer as usize].kind else {
+            return Ok(at);
+        };
+        if !unpopped::types::is_subbyte_int(*elem) {
+            return Ok(at);
+        }
+        let off = at
+            .strip_prefix(&format!("b{buffer}["))
+            .and_then(|s| s.strip_suffix(']'))
+            .ok_or_else(|| refuse("a sub-byte load through an address this emitter does not unpack"))?;
+        let nib = format!("((b{buffer}[({off}) >> 1] >> ((({off}) & 1) * 4)) & 15)");
+        Ok(if *elem == ElementKind::I4 {
+            format!("(({nib} ^ 8) - 8)")
+        } else {
+            nib
+        })
+    }
+
     /// An lvalue for `place`, after the statements that bounds-check its coordinates.
     pub(crate) fn address(&mut self, place: &Place) -> Result<String, LowerError> {
         let Place::Logical { buffer, coords } = place else {
@@ -467,7 +498,11 @@ fn signature(
     for (i, p) in k.params.iter().enumerate() {
         match &p.kind {
             ParamKind::Buffer { elem, role, .. } => {
-                let t = ctype(*elem, "a buffer")?;
+                let t = if unpopped::types::is_subbyte_int(*elem) {
+                    "unsigned char" // packed two elements to a byte, low nibble first
+                } else {
+                    ctype(*elem, "a buffer")?
+                };
                 let q = if matches!(role, BufferRole::Write | BufferRole::ReadWrite) {
                     ""
                 } else {

@@ -116,6 +116,9 @@ pub(crate) fn cpu_cast(
     spec: CastSpec,
 ) -> Result<Spelling, LowerError> {
     let to = spec.to;
+    if unpopped::types::is_subbyte_int(from) || unpopped::types::is_subbyte_int(to) {
+        return cpu_subbyte_cast(x, from, to);
+    }
     // The conversion helpers (`unp_clamp_ll`, `unp_sat_f2ll`) are `long long` based, which
     // cannot hold a `u64` above `i64::MAX` or its range: decline rather than approximate.
     if from == ElementKind::U64 || to == ElementKind::U64 {
@@ -195,6 +198,25 @@ pub(crate) fn cpu_cast(
             // Two's-complement truncation: every C compiler targeted here wraps an
             // out-of-range signed conversion (C23 makes it the rule).
             _ => format!("(({to_c})({x}))"),
+        },
+    };
+    Ok(Spelling::Spelled(spelled))
+}
+
+/// Spell a `Cast` with a sub-byte endpoint (the checker allows only `Saturation::Wrap` and an integer on the other side).
+/// A sub-byte local already holds its widened value, so widening is the plain C conversion; narrowing wraps modulo 16.
+fn cpu_subbyte_cast(x: String, from: ElementKind, to: ElementKind) -> Result<Spelling, LowerError> {
+    let spelled = match to {
+        ElementKind::I4 => format!("((signed char)(((((long long)({x})) + 8) & 15) - 8))"),
+        ElementKind::U4 => format!("((unsigned char)(((long long)({x})) & 15))"),
+        _ => match c_type(to) {
+            Some(c) if unpopped::types::is_cast_int(to) => format!("(({c})({x}))"),
+            _ => {
+                return decline(
+                    DeclinedOp::Cast,
+                    format!("cpu_c has no C type for the Cast {from:?} -> {to:?}"),
+                );
+            }
         },
     };
     Ok(Spelling::Spelled(spelled))
