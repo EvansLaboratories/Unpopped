@@ -47,8 +47,8 @@ def varint(b, i):
             return r, i
 
 
-def probe(b):
-    """Structure of one bytecode buffer: (version, [(section, offset, length)], strings)."""
+def header(b):
+    """The (major, minor, tag) of the 12-byte header, or the reason it is rejected."""
     if b[:len(MAGIC)] != MAGIC[:len(b)]:
         raise Reject("magic", "invalid magic number")
     if len(b) < 12:
@@ -56,6 +56,36 @@ def probe(b):
     ver = (b[8], b[9], b[10] | b[11] << 8)
     if (ver[0], ver[1]) not in SUPPORTED:
         raise Reject("version", "unsupported Tile version %d.%d.%d" % ver)
+    return ver
+
+
+def skip_alignment(b, i):
+    """Step over a section's alignment field and its 0xCB padding."""
+    align, i = varint(b, i)
+    if align < 2:
+        raise Reject("section", "alignment flag with alignment < 2")
+    while i % align:
+        if i >= len(b) or b[i] != ALIGN:
+            raise Reject("section", "alignment padding is not 0xCB")
+        i += 1
+    return i
+
+
+def section(b, i, sid, aligned):
+    """Body (offset, length) of a non-end section whose id byte was just read, and the offset after it."""
+    if sid not in SECTIONS:
+        raise Reject("section_id", "unknown section ID: %d" % sid)
+    length, i = varint(b, i)
+    if aligned:
+        i = skip_alignment(b, i)
+    if i + length > len(b):
+        raise Reject("section_length", "section %s runs past the end" % SECTIONS[sid])
+    return i, length
+
+
+def probe(b):
+    """Structure of one bytecode buffer: (version, [(section, offset, length)], strings)."""
+    ver = header(b)
     i, secs, strings = 12, [], None
     while True:
         if i >= len(b):
@@ -68,19 +98,7 @@ def probe(b):
             if i != len(b):
                 raise Reject("section_length", "end section is not the last section")
             return ver, secs, strings
-        if sid not in SECTIONS:
-            raise Reject("section_id", "unknown section ID: %d" % sid)
-        length, i = varint(b, i)
-        if aligned:
-            align, i = varint(b, i)
-            if align < 2:
-                raise Reject("section", "alignment flag with alignment < 2")
-            while i % align:
-                if i >= len(b) or b[i] != ALIGN:
-                    raise Reject("section", "alignment padding is not 0xCB")
-                i += 1
-        if i + length > len(b):
-            raise Reject("section_length", "section %s runs past the end" % SECTIONS[sid])
+        i, length = section(b, i, sid, aligned)
         secs.append((SECTIONS[sid], i, length))
         if sid == 1:
             strings = decode_strings(b[i:i + length])
