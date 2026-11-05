@@ -186,7 +186,12 @@ impl Walk<'_> {
             Stmt::If { .. } | Stmt::For { .. } | Stmt::While { .. } => {
                 self.control(st, div, poisoned)?;
             }
-            Stmt::Store { .. } | Stmt::Fence { .. } | Stmt::Return => {}
+            Stmt::Store { .. }
+            | Stmt::Fence { .. }
+            | Stmt::CopyAsync { .. }
+            | Stmt::AsyncCommit
+            | Stmt::AsyncWait { .. }
+            | Stmt::Return => {}
             // an MMA is a rendezvous of its subgroup, like a barrier; it defines no local
             Stmt::Mma { .. } => {
                 if self.check && (div || *poisoned) {

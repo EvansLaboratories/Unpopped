@@ -135,6 +135,9 @@ impl<'a> Machine<'a> {
             | Stmt::Store { .. }
             | Stmt::AtomicRmw { .. }
             | Stmt::AtomicCas { .. }
+            | Stmt::CopyAsync { .. }
+            | Stmt::AsyncCommit
+            | Stmt::AsyncWait { .. }
             | Stmt::Fence { .. } => {
                 self.exec_simple(st)?;
             }

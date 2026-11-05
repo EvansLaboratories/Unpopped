@@ -15,6 +15,23 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.0` — **BREAKING**: `Stmt::{CopyAsync, AsyncCommit, AsyncWait}`, `cp.async` in the IR (ROADMAP U8 S1)
+
+`Stmt` is exhaustive, so three new variants break every downstream `match`; `KernelError` gains `AsyncUnsupported` and
+`KernelTrap` gains `AsyncRace { alloc }` and `AsyncUnwaited` (both `#[non_exhaustive]`). `CopyAsync { dst, src, elems }`
+copies 4, 8 or 16 bytes from a readable global buffer place to a `Shared` allocation place; `AsyncCommit` closes the
+thread's open copies into a group (an empty commit still makes one, as on hardware); `AsyncWait { pending }` lands the
+older groups. `check_kernel` refuses a destination that is not a `Shared` allocation, a source that is not a global
+buffer, a write-only source, mismatched element types and other sizes. The oracle reads the source at issue and writes
+the destination at the wait; touching a destination element before it lands is `AsyncRace`, a copy never waited for is
+`AsyncUnwaited`, and a landed copy is an ordinary logged `Shared` write (another thread reads it after a barrier).
+`unpopped-cpu-c` performs the copy at issue and spells commit and wait as nothing. Not checked statically: the
+destination's alignment to its size, and whether a wait covers a copy (both depend on run-time values and control
+flow; the oracle traps on the second). Tests: `kernel_async_copy` (14), `kernel_async_copy_emit_agrees` (4, real host C
+compiler); 15 seeded oracle/checker mutants and 3 emitter mutants all caught.
+
+---
+
 ## `0.43.3` — cpu-c tests no longer reach outside their crate (sweep SUP-004; tests only)
 
 `kernel_emit_argmax_agrees.rs` took `arg_loop.rs` from `../../unpopped/tests/support`, a path the published `unpopped-cpu-c`

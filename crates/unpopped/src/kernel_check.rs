@@ -2,6 +2,7 @@
 //! The scope and type checker for [`crate::kernel::KernelFn`] ([`check_kernel`]), split from
 //! `kernel.rs` so neither file outgrows the size the analysers accept.
 
+mod async_copy;
 mod collective;
 mod extern_call;
 mod mma;
@@ -223,6 +224,9 @@ fn check_sync_stmt(
         }
         Stmt::Collective { .. } => collective::check_collective(k, st, sc, declared_here)?,
         Stmt::Mma { .. } => mma::check_mma(k, st)?,
+        Stmt::CopyAsync { .. } | Stmt::AsyncCommit | Stmt::AsyncWait { .. } => {
+            async_copy::check_async(k, st, sc)?;
+        }
         Stmt::ExternCall {
             decl,
             args,
@@ -385,6 +389,9 @@ fn check_stmt(
         | Stmt::Fence { .. }
         | Stmt::Collective { .. }
         | Stmt::Mma { .. }
+        | Stmt::CopyAsync { .. }
+        | Stmt::AsyncCommit
+        | Stmt::AsyncWait { .. }
         | Stmt::Call { .. }
         | Stmt::ExternCall { .. }
         | Stmt::Barrier { .. } => check_sync_stmt(k, st, sc, declared_here)?,

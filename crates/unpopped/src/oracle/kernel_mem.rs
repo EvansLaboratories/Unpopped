@@ -149,7 +149,7 @@ fn note_reader(a: &mut Access, now: Stamp) {
 pub(super) struct AllocMem {
     dtype: ElementKind,
     bytes: Vec<u8>,
-    init: Vec<bool>,
+    pub(super) init: Vec<bool>,
 }
 
 impl AllocMem {
@@ -195,11 +195,42 @@ pub(super) struct ThreadCtx<'a> {
     pub(super) thread_lin: u32,
     pub(super) subgroup: u32,
     pub(super) private: Vec<Option<AllocMem>>,
+    /// This thread's `CopyAsync` copies that have not landed.
+    pub(super) asyncq: AsyncQueue,
     pub(super) block: &'a mut BlockMem,
     pub(super) global: &'a mut Log,
     /// The launch-wide release/acquire state, and the order and scope of the atomic statement now running.
     pub(super) sync: &'a mut Edges,
     pub(super) site: (MemoryOrder, Scope),
+}
+
+/// One `CopyAsync` copy waiting to land: where, and the values read from the source at issue.
+pub(super) struct PendingCopy {
+    pub(super) alloc: u32,
+    pub(super) at: usize,
+    pub(super) vals: Vec<Val>,
+}
+
+/// A thread's asynchronous copies: those issued since its last commit, and the committed groups, oldest first.
+#[derive(Default)]
+pub(super) struct AsyncQueue {
+    pub(super) open: Vec<PendingCopy>,
+    pub(super) groups: std::collections::VecDeque<Vec<PendingCopy>>,
+}
+
+impl AsyncQueue {
+    /// Nothing issued is still waiting to land.
+    pub(super) fn is_empty(&self) -> bool {
+        self.open.is_empty() && self.groups.iter().all(Vec::is_empty)
+    }
+
+    /// Whether element `i` of `alloc` is the destination of a copy that has not landed.
+    pub(super) fn covers(&self, alloc: u32, i: usize) -> bool {
+        self.open
+            .iter()
+            .chain(self.groups.iter().flatten())
+            .any(|c| c.alloc == alloc && (c.at..c.at + c.vals.len()).contains(&i))
+    }
 }
 
 impl ThreadCtx<'_> {
@@ -239,7 +270,7 @@ impl ThreadCtx<'_> {
         }
     }
 
-    fn mem(&self, alloc: u32, space: MemorySpace) -> Option<&AllocMem> {
+    pub(super) fn mem(&self, alloc: u32, space: MemorySpace) -> Option<&AllocMem> {
         match space {
             MemorySpace::Shared => self.block.shared[alloc as usize].as_ref(),
             MemorySpace::Private => self.private[alloc as usize].as_ref(),
@@ -324,7 +355,7 @@ impl Machine<'_> {
     }
 
     /// The checked element index of `index` into allocation `alloc`.
-    fn alloc_index(&self, alloc: u32, index: &ScalarExpr) -> Result<usize, KernelTrap> {
+    pub(super) fn alloc_index(&self, alloc: u32, index: &ScalarExpr) -> Result<usize, KernelTrap> {
         let space = self.alloc_k.allocs[alloc as usize].space;
         if space == MemorySpace::Constant {
             return Err(KernelTrap::Unsupported(
@@ -342,10 +373,14 @@ impl Machine<'_> {
             .as_ref()
             .ok_or(KernelTrap::Unsupported("an allocation outside run_launch"))?;
         let len = c.mem(alloc, space).map_or(0, |m| m.init.len());
-        usize::try_from(i)
+        let i = usize::try_from(i)
             .ok()
             .filter(|i| *i < len)
-            .ok_or(KernelTrap::AllocOutOfBounds { alloc })
+            .ok_or(KernelTrap::AllocOutOfBounds { alloc })?;
+        if c.asyncq.covers(alloc, i) {
+            return Err(KernelTrap::AsyncRace { alloc });
+        }
+        Ok(i)
     }
 
     /// Every element of this thread's `Private` allocation `alloc`, in order. A trap if any was never stored.
