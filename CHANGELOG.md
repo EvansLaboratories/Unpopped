@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.2` — options note for U9 (the GEMM family at the kernel layer); docs only
+
+`docs/options-u9-gemm-family.md` (ROADMAP U9, issue #120): scope A approved by the PM 2026-11-04 (kernel-layer conformance
+kernels K1..K7, no new IR, one PR each), what each U9 item becomes, and the plan-layer items that stay blocked on Fuel, KISS
+and the PM (D2, P9). `StructureKey` is not touched.
+
+---
+
 ## `0.44.1` — the double-buffered `cp.async` conformance kernel (ROADMAP U8 S4; tests only, stacked on 0.44.0)
 
 `tests/kernel_pipeline_double_buffer.rs` and `unpopped-cpu-c/tests/kernel_pipeline_emit_agrees.rs` (the builder is
