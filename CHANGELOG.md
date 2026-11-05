@@ -15,6 +15,30 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.11` — GEMM-family kernel K6: a K loop of `Stmt::Mma` accumulating in the fragment (ROADMAP U9; tests only)
+
+`unpopped-cpu-c/tests/kernel_gemm_mma_chain_emit_agrees.rs`: two `Stmt::Mma` run back to back over two K slices, the second reading
+the first result as its `C` (`d` is `c`), for a dense atom, a 2:4 sparse atom, a block-scaled atom and both (the toy 4-lane
+atom of the extras tests). For each the compiled C agrees with the launch interpreter byte for byte, and the interpreter chained
+result equals the sum of the two slices run as separate single-slice MMAs on a zero `C`, which pins the accumulation itself.
+Four seeded product mutants (the oracle ignoring `C` in the integer and in the float path, the C emitter starting its
+accumulator at zero, its K loop one short) are all caught. The sparse WGMMA/tcgen05 atoms and a real warp-level tile loop
+wait for a second lane-table source (ROADMAP U7 / U8b).
+
+---
+
+## `0.44.10` — GEMM-family kernel K7: implicit-GEMM convolution forward (ROADMAP U9; tests only)
+
+`conv_implicit_gemm` (`tests/support/conv.rs`, copied into cpu-c): NHWC forward convolution as a GEMM over `(r, s, c)` with the
+im2col index math inside the loop and zero padding by skipping taps outside the image, no staged matrix. The shapes make an
+index mix-up loud: a non-square image (4x5), a non-square filter (3x2), padding on height only, three input channels, two
+output channels, two batches (one block each). Oracle, the C compiled with a host compiler, and a direct host convolution
+agree. Twelve seeded mutants (pad dropped or added, filter or input coordinates swapped, batch ignored, bounds swapped
+or off by one, channel loop short, output coordinates swapped, accumulator not accumulated) are all caught. dgrad, wgrad
+and grouped convolution follow only if a consumer asks.
+
+---
+
 ## `0.44.9` — GEMM-family kernel K5: grouped GEMM by a problem table (ROADMAP U9; tests only)
 
 `grouped_gemm` (`tests/support/grouped.rs`, copied into cpu-c): three GEMMs of different shapes `(3,2,4)`, `(4,4,2)`, `(2,4,3)`
