@@ -15,6 +15,35 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.4` — GEMM-family kernel K2: aux outputs, `dbias` and `amax` by atomics (ROADMAP U9; tests only, stacked on 0.44.3)
+
+`aux_outputs` in `tests/support/gemm.rs`: the same main loop, then `D = acc`, a mask `acc > 0`, the per-column sum of
+`relu(acc)` by `AtomicRmw Add` (`dbias`) and the maximum of `acc` by `AtomicRmw Max` (`amax`, started at `i32::MIN`), on
+a mixed-sign dataset and an all-negative one (on the second, `max(relu(acc))` would be 0, not the maximum, which a
+positive-only dataset cannot tell apart). Oracle, the C compiled with a host compiler, and the host loop agree. Eight
+seeded mutants (add to max, max to min, no relu in `dbias`, mask flipped or inverted, `dbias` by row, `D` clamped,
+`amax` of the clamped value) are all caught; the last survived the first, positive-only dataset.
+
+---
+
+## `0.44.3` — GEMM-family kernel K1: the fused-epilogue integer GEMM (ROADMAP U9; tests only)
+
+`tests/kernel_gemm_family.rs` and `unpopped-cpu-c/tests/kernel_gemm_family_emit_agrees.rs` (builder `tests/support/gemm.rs`,
+copied into cpu-c): `out = relu(2 * (A.B) + 3 * C + bias[col])`, one thread per output on a 4x4 launch, `I32` so a plain
+host loop is the exact reference, with data that clamps some outputs and not others. The oracle, the C compiled with a
+host compiler, and the host loop agree. Twelve seeded mutants (alpha, beta, C, bias dropped; bias indexed by row; relu
+dropped or flipped; K loop short; A or B transposed; output transposed; accumulator not accumulated) are all caught.
+
+---
+
+## `0.44.2` — options note for U9 (the GEMM family at the kernel layer); docs only
+
+`docs/options-u9-gemm-family.md` (ROADMAP U9, issue #120): scope A approved by the PM 2026-11-04 (kernel-layer conformance
+kernels K1..K7, no new IR, one PR each), what each U9 item becomes, and the plan-layer items that stay blocked on Fuel, KISS
+and the PM (D2, P9). `StructureKey` is not touched.
+
+---
+
 ## `0.44.1` — the double-buffered `cp.async` conformance kernel (ROADMAP U8 S4; tests only, stacked on 0.44.0)
 
 `tests/kernel_pipeline_double_buffer.rs` and `unpopped-cpu-c/tests/kernel_pipeline_emit_agrees.rs` (the builder is
