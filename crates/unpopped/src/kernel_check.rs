@@ -452,6 +452,12 @@ fn check_store(
             Place::Alloc { alloc, .. } => KernelError::WriteToConstant { alloc: *alloc },
         });
     }
+    if types::is_subbyte_int(elem) {
+        // a sub-byte Store is a read-modify-write of a byte two threads share (ROADMAP U9b, ruled 2026-11-05)
+        return Err(KernelError::TypeMismatch {
+            what: "a Store of a sub-byte element (sub-byte buffers are read-only in kernels)",
+        });
+    }
     if check_expr(k, value, sc)? != Ty::Scalar(elem) {
         return Err(KernelError::TypeMismatch { what: "Store" });
     }
@@ -760,6 +766,14 @@ fn walk(k: &KernelFn, e: &ScalarExpr, sc: &Scope) -> Result<(), KernelError> {
     }
     for x in types::operands(e) {
         walk(k, x, sc)?;
+        // a sub-byte value is read, widened and narrowed, never computed on (ROADMAP U9b, ruled 2026-11-05)
+        if !matches!(e, ScalarExpr::Cast(..))
+            && matches!(types::infer_ty_in(x, k.compute, &sc.tys), Ok(Ty::Scalar(t)) if types::is_subbyte_int(t))
+        {
+            return Err(KernelError::TypeMismatch {
+                what: "arithmetic on a sub-byte value (widen it with a Cast first)",
+            });
+        }
     }
     Ok(())
 }

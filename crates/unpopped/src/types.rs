@@ -211,6 +211,24 @@ pub const fn is_cast_int(t: ElementKind) -> bool {
     )
 }
 
+/// A sub-byte integer (`I4`, `U4`): a `Cast` endpoint (ROADMAP U9b S1, `docs/options-u9b-subbyte-dequant.md`),
+/// against an integer endpoint and with `Saturation::Wrap` only. It is not an arithmetic type: `int_range` does not
+/// cover it, and a kernel reads one from a `Read` buffer and widens it.
+#[must_use]
+pub const fn is_subbyte_int(t: ElementKind) -> bool {
+    matches!(t, ElementKind::I4 | ElementKind::U4)
+}
+
+/// The value range of a sub-byte integer: `I4` is `-8..=7`, `U4` is `0..=15`.
+#[must_use]
+pub const fn subbyte_range(t: ElementKind) -> Option<(i128, i128)> {
+    match t {
+        ElementKind::I4 => Some((-8, 7)),
+        ElementKind::U4 => Some((0, 15)),
+        _ => None,
+    }
+}
+
 /// Bit width of a type the typed nodes accept, or `None`.
 #[must_use]
 pub const fn typed_bits(t: ElementKind) -> Option<u32> {
@@ -254,6 +272,19 @@ pub fn check_cast(from: ElementKind, spec: CastSpec) -> Result<(), TypeError> {
     let bad = |why: &'static str| Err(TypeError::IllegalCast { from, spec, why });
     let to = spec.to;
     let known = |t| is_cast_float_endpoint(t) || is_cast_int(t);
+    if is_subbyte_int(from) || is_subbyte_int(to) {
+        // the other endpoint must be an integer (widen to i32 before a float), the only conversion is a wrap
+        let other = if is_subbyte_int(from) { to } else { from };
+        if !is_cast_int(other) && !is_subbyte_int(other) {
+            return bad("a sub-byte Cast takes an integer on the other side: widen to i32 first");
+        }
+        return match spec.sat {
+            Saturation::Wrap => Ok(()),
+            _ => bad(
+                "a sub-byte Cast takes Saturation::Wrap: clamp with Min and Max before narrowing",
+            ),
+        };
+    }
     if !known(from) || !known(to) {
         return bad(
             "a Cast endpoint outside {f4e2m1, f6e2m3, f6e3m2, f16, bf16, f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32, u64} is not defined yet",
