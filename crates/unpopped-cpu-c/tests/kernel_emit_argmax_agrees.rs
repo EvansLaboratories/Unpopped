@@ -16,7 +16,7 @@ use unpopped::oracle::kernel_eval::KernelArg;
 use unpopped_cpu_c::CpuC;
 use unpopped_vocab::ElementKind;
 
-#[path = "../../unpopped/tests/support/arg_loop.rs"]
+#[path = "support/arg_loop.rs"]
 mod arg_loop;
 #[path = "support/cc.rs"]
 mod cc;

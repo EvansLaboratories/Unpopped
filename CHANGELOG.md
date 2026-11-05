@@ -15,6 +15,13 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.43.3` — cpu-c tests no longer reach outside their crate (sweep SUP-004; tests only)
+
+`kernel_emit_argmax_agrees.rs` took `arg_loop.rs` from `../../unpopped/tests/support`, a path the published `unpopped-cpu-c`
+package does not contain. The helper is now a copy in `unpopped-cpu-c/tests/support/` (header says to change both).
+
+---
+
 ## `0.43.2` — options note for U8 (copy atoms, pipelines and roles); docs only, stacked on 0.43.1
 
 `docs/options-u8-copy-atoms.md` (ROADMAP U8, issue #119): what exists, the line between IR and idiom, four slices
