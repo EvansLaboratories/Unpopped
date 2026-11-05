@@ -57,13 +57,17 @@ fn relu(x: ScalarExpr) -> ScalarExpr {
     )
 }
 
-/// Buffers: 0 `a` `[M, K]`, 1 `b` `[K, N]`, 2 `c` `[M, N]`, 3 `bias` `[N]` (all read), 4 `out` `[M, N]`.
-/// `out[r][c] = relu(ALPHA * (A.B)[r][c] + BETA * C[r][c] + bias[c])`, one thread per `(r, c)`.
-pub(crate) fn fused_epilogue() -> KernelFn {
-    let r = ScalarExpr::Exec(ExecId::ThreadIdx(1));
-    let c = ScalarExpr::Exec(ExecId::ThreadIdx(0));
-    // locals: 0 acc, 1 a, 2 b, 3 c-in, 4 bias, 5 k (U32), 6 value
-    let body = vec![
+fn row() -> ScalarExpr {
+    ScalarExpr::Exec(ExecId::ThreadIdx(1))
+}
+
+fn col() -> ScalarExpr {
+    ScalarExpr::Exec(ExecId::ThreadIdx(0))
+}
+
+/// `acc = sum over k of A[r][k] * B[k][c]` into local 0 (locals 1, 2 the operands, 5 the K counter).
+fn mainloop() -> Vec<Stmt> {
+    vec![
         Stmt::Let {
             local: 0,
             init: ci(0),
@@ -76,11 +80,11 @@ pub(crate) fn fused_epilogue() -> KernelFn {
             body: Block(vec![
                 Stmt::Load {
                     local: 1,
-                    place: at2(0, r.clone(), local(5)),
+                    place: at2(0, row(), local(5)),
                 },
                 Stmt::Load {
                     local: 2,
-                    place: at2(1, local(5), c.clone()),
+                    place: at2(1, local(5), col()),
                 },
                 Stmt::Assign {
                     local: 0,
@@ -88,15 +92,21 @@ pub(crate) fn fused_epilogue() -> KernelFn {
                 },
             ]),
         },
+    ]
+}
+
+/// The epilogue: read `C` and the column's bias, combine, clamp, store (locals 3, 4, 6).
+fn epilogue() -> Vec<Stmt> {
+    vec![
         Stmt::Load {
             local: 3,
-            place: at2(2, r.clone(), c.clone()),
+            place: at2(2, row(), col()),
         },
         Stmt::Load {
             local: 4,
             place: Place::Logical {
                 buffer: 3,
-                coords: vec![c.clone()],
+                coords: vec![col()],
             },
         },
         Stmt::Let {
@@ -107,11 +117,20 @@ pub(crate) fn fused_epilogue() -> KernelFn {
             ),
         },
         Stmt::Store {
-            place: at2(4, r, c),
+            place: at2(4, row(), col()),
             value: relu(local(6)),
         },
-    ];
+    ]
+}
+
+/// Buffers: 0 `a` `[M, K]`, 1 `b` `[K, N]`, 2 `c` `[M, N]`, 3 `bias` `[N]` (all read), 4 `out` `[M, N]`.
+/// `out[r][c] = relu(ALPHA * (A.B)[r][c] + BETA * C[r][c] + bias[c])`, one thread per `(r, c)`.
+pub(crate) fn fused_epilogue() -> KernelFn {
+    let mut body = mainloop();
+    body.extend(epilogue());
     let p = |name: &str, role: BufferRole, rank: u8| Param::buffer(name, I32, role, Some(rank));
+    let mut locals: Vec<LocalDecl> = (0..7).map(|_| LocalDecl::scalar(I32)).collect();
+    locals[5] = LocalDecl::scalar(U32);
     KernelFn::new(
         "gemm_epilogue",
         I32,
@@ -122,15 +141,7 @@ pub(crate) fn fused_epilogue() -> KernelFn {
             p("bias", BufferRole::Read, 1),
             p("out", BufferRole::ReadWrite, 2),
         ],
-        vec![
-            LocalDecl::scalar(I32),
-            LocalDecl::scalar(I32),
-            LocalDecl::scalar(I32),
-            LocalDecl::scalar(I32),
-            LocalDecl::scalar(I32),
-            LocalDecl::scalar(U32),
-            LocalDecl::scalar(I32),
-        ],
+        locals,
         Block(body),
     )
     .with_launch(LaunchShape::new([N, M, 1], [1, 1, 1]))
