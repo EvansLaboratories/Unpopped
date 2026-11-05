@@ -124,6 +124,49 @@ fn copy(
     out
 }
 
+/// The read-only input buffers: slice 0's operands, slice 1's, the zero `C`, then the `out` buffer.
+fn chain_params(atom: &MmaAtom) -> Vec<Param> {
+    let ops = slice_ops(atom);
+    let acc = atom.dtypes().2;
+    let mut params: Vec<Param> = (0..2)
+        .flat_map(|s| ops.iter().enumerate().map(move |(j, (ty, _))| (s, j, *ty)))
+        .map(|(s, j, ty)| Param::buffer(format!("s{s}_{j}"), ty, BufferRole::Read, Some(1)))
+        .collect();
+    params.push(Param::buffer("c0", acc, BufferRole::Read, Some(1)));
+    params.push(Param::buffer("out", acc, BufferRole::ReadWrite, Some(1)));
+    params
+}
+
+/// The `Private` fragments: the same operands, then `C` and `D`.
+fn chain_allocs(atom: &MmaAtom) -> Vec<AllocDecl> {
+    let ops = slice_ops(atom);
+    let acc = atom.dtypes().2;
+    let mut allocs: Vec<AllocDecl> = (0..2)
+        .flat_map(|s| {
+            ops.iter()
+                .enumerate()
+                .map(move |(j, (ty, len))| (s, j, *ty, *len))
+        })
+        .map(|(s, j, ty, len)| {
+            AllocDecl::new(
+                format!("f{s}_{j}"),
+                MemorySpace::Private,
+                ty,
+                Extent::Static(len),
+            )
+        })
+        .collect();
+    for name in ["c", "d"] {
+        allocs.push(AllocDecl::new(
+            name,
+            MemorySpace::Private,
+            acc,
+            Extent::Static(atom.values(2)),
+        ));
+    }
+    allocs
+}
+
 /// Buffers and fragments: slice 0's operands (`0..n`), slice 1's (`n..2n`), the zero `C` (`2n`), then `D`/`out` (`2n+1`).
 fn chain_kernel(atom: &MmaAtom) -> KernelFn {
     let ops = slice_ops(atom);
@@ -153,38 +196,9 @@ fn chain_kernel(atom: &MmaAtom) -> KernelFn {
         });
     }
     body.extend(copy(false, acc, (d, d, atom.values(2)), &mut locals));
-    let mut params: Vec<Param> = (0..2)
-        .flat_map(|s| ops.iter().enumerate().map(move |(j, (ty, _))| (s, j, *ty)))
-        .map(|(s, j, ty)| Param::buffer(format!("s{s}_{j}"), ty, BufferRole::Read, Some(1)))
-        .collect();
-    params.push(Param::buffer("c0", acc, BufferRole::Read, Some(1)));
-    params.push(Param::buffer("out", acc, BufferRole::ReadWrite, Some(1)));
-    let mut allocs: Vec<AllocDecl> = (0..2)
-        .flat_map(|s| {
-            ops.iter()
-                .enumerate()
-                .map(move |(j, (ty, len))| (s, j, *ty, *len))
-        })
-        .map(|(s, j, ty, len)| {
-            AllocDecl::new(
-                format!("f{s}_{j}"),
-                MemorySpace::Private,
-                ty,
-                Extent::Static(len),
-            )
-        })
-        .collect();
-    for name in ["c", "d"] {
-        allocs.push(AllocDecl::new(
-            name,
-            MemorySpace::Private,
-            acc,
-            Extent::Static(atom.values(2)),
-        ));
-    }
-    KernelFn::new("mma_chain", acc, params, locals, Block(body))
+    KernelFn::new("mma_chain", acc, chain_params(atom), locals, Block(body))
         .with_launch(LaunchShape::new([LANES, 1, 1], [1, 1, 1]).with_subgroup(LANES, LANES))
-        .with_allocs(allocs)
+        .with_allocs(chain_allocs(atom))
 }
 
 /// Small deterministic values in `-3..=3`.
