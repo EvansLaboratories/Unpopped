@@ -15,6 +15,18 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.1` — the double-buffered `cp.async` conformance kernel (ROADMAP U8 S4; tests only, stacked on 0.44.0)
+
+`tests/kernel_pipeline_double_buffer.rs` and `unpopped-cpu-c/tests/kernel_pipeline_emit_agrees.rs` (the builder is
+`tests/support/pipeline.rs`, with a copy in cpu-c): four threads sum a four-tile pipeline through a two-stage `Shared`
+ring, prefetching tile `k + 1` while consuming tile `k` of the mirror thread, one group committed per iteration. The
+correct kernel sums to `[436, 432, 428, 424]` and the C agrees byte for byte; waiting for too little, dropping the read
+barrier and dropping the reuse barrier are each a typed trap (`UninitializedShared`, `UninitializedShared`,
+`DataRace`). Writing the third found that the 0.44.0 oracle logged the destination write only at the wait, so a refill
+issued before another thread's read passed silently; 0.44.0 now logs the issue as a write too.
+
+---
+
 ## `0.44.0` — **BREAKING**: `Stmt::{CopyAsync, AsyncCommit, AsyncWait}`, `cp.async` in the IR (ROADMAP U8 S1)
 
 `Stmt` is exhaustive, so three new variants break every downstream `match`; `KernelError` gains `AsyncUnsupported` and
