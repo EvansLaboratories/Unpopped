@@ -13,6 +13,10 @@ use unpopped_cpu_c::CpuC;
 mod cc;
 #[path = "support/gemm.rs"]
 mod gemm;
+#[expect(
+    dead_code,
+    reason = "the shared data builders; this file builds its own matrices"
+)]
 #[path = "support/kernel_data.rs"]
 mod kernel_data;
 #[expect(

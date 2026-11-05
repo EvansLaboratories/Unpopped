@@ -60,6 +60,6 @@ fn the_fused_epilogue_gemm_matches_the_host_loop() {
     let want = fused_epilogue_ref(&a, &b, &c, &bias);
     assert_eq!(words(&args[4]), want);
     // the data really exercise the epilogue: some outputs are clamped, some are not
-    assert!(want.iter().any(|v| *v == 0), "a relu-clamped output");
+    assert!(want.contains(&0), "a relu-clamped output");
     assert!(want.iter().any(|v| *v > 0), "an unclamped output");
 }
