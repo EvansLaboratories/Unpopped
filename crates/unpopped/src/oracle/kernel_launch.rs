@@ -28,7 +28,7 @@ use std::ops::Range;
 use super::Val;
 use super::kernel_collective::{Contribution, results};
 use super::kernel_eval::{KernelArg, KernelTrap, Machine, STEP_LIMIT};
-use super::kernel_mem::{AllocMem, BlockMem, Log, ThreadCtx, cluster_of};
+use super::kernel_mem::{AllocMem, AsyncQueue, BlockMem, Log, ThreadCtx, cluster_of};
 use super::kernel_mma::{MmaContribution, compute};
 use super::kernel_resume::{Frame, Stop, initial_stack};
 use super::kernel_sync::Edges;
@@ -298,6 +298,8 @@ struct ThreadRun<'a> {
     stack: Vec<Frame<'a>>,
     locals: Vec<Option<Val>>,
     private: Vec<Option<AllocMem>>,
+    /// Its `CopyAsync` copies that have not landed.
+    asyncq: AsyncQueue,
     steps: u64,
     started: bool,
     status: Status,
@@ -339,6 +341,7 @@ fn start_block<'a>(b: &BlockRun<'a>) -> BlockState<'a> {
             stack: Vec::new(),
             locals: vec![None; b.k.locals.len()],
             private: instances(b.k, b.lens, MemorySpace::Private),
+            asyncq: AsyncQueue::default(),
             steps: 0,
             started: false,
             status: Status::Runnable,
@@ -406,6 +409,7 @@ fn run_phase<'a>(
         thread_lin: t.lin,
         subgroup: b.sg,
         private: std::mem::take(&mut t.private),
+        asyncq: std::mem::take(&mut t.asyncq),
         block: mem,
         global,
         sync: edges,
@@ -436,8 +440,12 @@ fn run_phase<'a>(
     t.bufmap = std::mem::take(&mut m.bufmap);
     if let Some(c) = m.ctx.take() {
         t.private = c.private;
+        t.asyncq = c.asyncq;
     }
     t.status = status_after(stop?, t);
+    if matches!(t.status, Status::Done) && !t.asyncq.is_empty() {
+        return Err(KernelTrap::AsyncUnwaited);
+    }
     Ok(())
 }
 
@@ -601,6 +609,7 @@ mod tests {
                 stack: Vec::new(),
                 locals: Vec::new(),
                 private: Vec::new(),
+                asyncq: AsyncQueue::default(),
                 steps: 0,
                 started: true,
                 status: *s,
