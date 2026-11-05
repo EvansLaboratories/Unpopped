@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.12` — CUDA Tile IR reader spike (a report and a throwaway probe; docs and tools only)
+
+`docs/cuda-tile-ir-reader-spike.md` and `tools/spikes/cuda_tile_probe.py`: NVIDIA/cuda-tile read at `0192668`, parse and validate only,
+no lowering. 105 ops, 29 bytecode files (25 parsed, 4 of 4 structural rejections matched), 96 of 105 ops used by the 92 text tests;
+the suite is not a lowering oracle and the open dialect has no `mbarrier`/`wgmma`/`cp.async` ops. Nothing copied from the repository.
+
+---
+
 ## `0.44.11` — GEMM-family kernel K6: a K loop of `Stmt::Mma` accumulating in the fragment (ROADMAP U9; tests only)
 
 `unpopped-cpu-c/tests/kernel_gemm_mma_chain_emit_agrees.rs`: two `Stmt::Mma` run back to back over two K slices, the second reading
