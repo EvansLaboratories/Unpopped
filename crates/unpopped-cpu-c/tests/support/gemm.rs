@@ -6,11 +6,11 @@
 //! is exact and a plain host loop is the reference). Shared by the oracle test (`kernel_gemm_family.rs`) and the C test
 //! (`unpopped-cpu-c/tests/kernel_gemm_family_emit_agrees.rs`, which keeps a copy: change both).
 
-use unpopped::exec::Scope;
+use unpopped::exec::{AllocDecl, Extent, MemorySpace, Scope};
 use unpopped::exec::{ExecId, LaunchShape};
 use unpopped::ir::{BinaryOp, ScalarExpr};
 use unpopped::kernel::{
-    AtomicOp, Block, BufferRole, KernelFn, LocalDecl, MemoryOrder, Param, Place, Stmt,
+    AtomicOp, BarrierKind, Block, BufferRole, KernelFn, LocalDecl, MemoryOrder, Param, Place, Stmt,
 };
 use unpopped_vocab::ElementKind;
 
@@ -72,6 +72,11 @@ fn col() -> ScalarExpr {
 
 /// `acc = sum over k of A[r][k] * B[k][c]` into local 0 (locals 1, 2 the operands, 5 the K counter).
 fn mainloop() -> Vec<Stmt> {
+    mainloop_in(cu(0), cu(i64::from(K)))
+}
+
+/// The same over `k` in `start..end` (`U32` expressions).
+fn mainloop_in(start: ScalarExpr, end: ScalarExpr) -> Vec<Stmt> {
     vec![
         Stmt::Let {
             local: 0,
@@ -79,8 +84,8 @@ fn mainloop() -> Vec<Stmt> {
         },
         Stmt::For {
             local: 5,
-            start: cu(0),
-            end: cu(i64::from(K)),
+            start,
+            end,
             step: cu(1),
             body: Block(vec![
                 Stmt::Load {
@@ -244,6 +249,110 @@ pub(crate) fn aux_outputs_ref(a: &[i32], b: &[i32]) -> (Vec<i32>, Vec<i32>, Vec<
         .collect();
     let amax = *d.iter().max().expect("a non-empty product");
     (d, mask, dbias, amax)
+}
+
+/// Half of `K`: the width of one split-K slice.
+const HALF: i64 = (K / 2) as i64;
+
+/// The main loop over the K slice `s` (`s * HALF .. s * HALF + HALF`).
+fn slice_loop(s: ScalarExpr) -> Vec<Stmt> {
+    let lo = mul(s, cu(HALF));
+    mainloop_in(lo.clone(), add(lo, cu(HALF)))
+}
+
+fn matrix_params(outputs: &[&str]) -> Vec<Param> {
+    let p = |name: &str, role: BufferRole| Param::buffer(name, I32, role, Some(2));
+    let mut v = vec![p("a", BufferRole::Read), p("b", BufferRole::Read)];
+    v.extend(outputs.iter().map(|n| p(n, BufferRole::ReadWrite)));
+    v
+}
+
+fn split_locals() -> Vec<LocalDecl> {
+    let mut locals: Vec<LocalDecl> = (0..5).map(|_| LocalDecl::scalar(I32)).collect();
+    locals.push(LocalDecl::scalar(U32));
+    locals
+}
+
+/// The `Shared` slot of the partial that K slice `s` of output `(r, c)` publishes.
+fn slot(s: ScalarExpr) -> ScalarExpr {
+    add(
+        mul(add(mul(s, cu(i64::from(M))), row()), cu(i64::from(N))),
+        col(),
+    )
+}
+
+fn part(s: ScalarExpr) -> Place {
+    Place::Alloc {
+        alloc: 0,
+        index: slot(s),
+    }
+}
+
+/// Thread `z = 0` adds the two published partials and stores `out`.
+fn combine(z: ScalarExpr) -> Stmt {
+    Stmt::If {
+        cond: bin(BinaryOp::CmpEq, z, cu(0)),
+        then: Block(vec![
+            Stmt::Load {
+                local: 3,
+                place: part(cu(0)),
+            },
+            Stmt::Load {
+                local: 4,
+                place: part(cu(1)),
+            },
+            Stmt::Store {
+                place: at2(2, row(), col()),
+                value: add(local(3), local(4)),
+            },
+        ]),
+        els: Block(vec![]),
+    }
+}
+
+/// Split-K inside a block: threads `z = 0, 1` of each `(r, c)` sum their half of K, publish the partial through
+/// `Shared`, and after a `Block` barrier thread `z = 0` adds the two and stores `out`. Buffers: `a`, `b`, `out`.
+pub(crate) fn split_k_in_block() -> KernelFn {
+    let z = ScalarExpr::Exec(ExecId::ThreadIdx(2));
+    let mut body = slice_loop(z.clone());
+    body.push(Stmt::Store {
+        place: part(z.clone()),
+        value: local(0),
+    });
+    body.push(Stmt::Barrier {
+        scope: Scope::Block,
+        kind: BarrierKind::Full,
+    });
+    body.push(combine(z));
+    KernelFn::new(
+        "split_k_block",
+        I32,
+        matrix_params(&["out"]),
+        split_locals(),
+        Block(body),
+    )
+    .with_allocs(vec![AllocDecl::new(
+        "part",
+        MemorySpace::Shared,
+        I32,
+        Extent::Static(2 * M * N),
+    )])
+    .with_launch(LaunchShape::new([N, M, 2], [1, 1, 1]))
+}
+
+/// Split-K across blocks: block `s` of a `1x1x2` grid sums its half of K and adds it into `out` with a device-scope
+/// `AtomicRmw Add` (`out` starts at zero). Buffers: `a`, `b`, `out`.
+pub(crate) fn split_k_across_blocks() -> KernelFn {
+    let mut body = slice_loop(ScalarExpr::Exec(ExecId::BlockIdx(2)));
+    body.push(atomic(AtomicOp::Add, at2(2, row(), col()), local(0)));
+    KernelFn::new(
+        "split_k_grid",
+        I32,
+        matrix_params(&["out"]),
+        split_locals(),
+        Block(body),
+    )
+    .with_launch(LaunchShape::new([N, M, 1], [1, 1, 2]))
 }
 
 /// The host reference for [`fused_epilogue`].

@@ -27,7 +27,10 @@ mod kernel_data;
 mod kernel_run;
 #[path = "support/launch_run.rs"]
 mod launch_run;
-use gemm::{I32, K, M, N, aux_outputs, aux_outputs_ref, fused_epilogue, fused_epilogue_ref};
+use gemm::{
+    I32, K, M, N, aux_outputs, aux_outputs_ref, fused_epilogue, fused_epilogue_ref,
+    split_k_across_blocks, split_k_in_block,
+};
 use launch_run::agree_launch;
 
 fn mat(rows: u32, cols: u32, f: impl Fn(i32, i32) -> i32) -> Vec<i32> {
@@ -135,5 +138,30 @@ fn the_aux_epilogue_agrees_with_the_oracle_and_the_host_loop() {
         let (mut run, _) = aux_args(mixed);
         run_launch(&k, &mut run).expect("the oracle runs it");
         check_aux(&run, &want, mixed);
+    }
+}
+
+fn split_args() -> (Vec<KernelArg>, Vec<i32>) {
+    let a = mat(M, K, |r, c| 3 * r - c + 2);
+    let b = mat(K, N, |r, c| c * r - 2 * r + 1);
+    let args = vec![
+        arg(&[i64::from(M), i64::from(K)], &a),
+        arg(&[i64::from(K), i64::from(N)], &b),
+        arg(&[i64::from(M), i64::from(N)], &vec![0; (M * N) as usize]),
+    ];
+    (args, aux_outputs_ref(&a, &b).0)
+}
+
+#[test]
+fn split_k_agrees_with_the_oracle_and_the_unsplit_product() {
+    for (name, k) in [
+        ("split_block", split_k_in_block()),
+        ("split_grid", split_k_across_blocks()),
+    ] {
+        let (args, want) = split_args();
+        agree_launch(name, &k, args);
+        let (mut run, _) = split_args();
+        run_launch(&k, &mut run).expect("the oracle runs it");
+        assert_eq!(words(&run[2]), want, "{name}");
     }
 }
