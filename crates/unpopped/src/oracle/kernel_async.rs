@@ -47,6 +47,23 @@ impl Machine<'_> {
         if (at..at + n).any(|i| c.asyncq.covers(*alloc, i)) {
             return Err(KernelTrap::AsyncRace { alloc: *alloc });
         }
+        let vals = self.read_source(src, n)?;
+        let c = self.ctx.as_mut().expect("checked above");
+        // the hardware may write the destination at any time after issue, so the issue is already a logged write: a
+        // thread still reading the stage this copy refills (no barrier between) races it. The landing logs again.
+        for j in 0..n {
+            c.log_shared(*alloc, at + j, MemorySpace::Shared, AccessKind::Write)?;
+        }
+        c.asyncq.open.push(PendingCopy {
+            alloc: *alloc,
+            at,
+            vals,
+        });
+        Ok(())
+    }
+
+    /// Read `n` consecutive source elements starting at `src` now (logged global reads), bounds-checked on the buffer.
+    fn read_source(&mut self, src: &Place, n: usize) -> Result<Vec<Val>, KernelTrap> {
         let (b, off) = self.offset(src)?;
         let (count, dt) = match &self.args[b] {
             KernelArg::Buffer(tb) => (tb.bytes.len() * 8 / elem_bits(tb.dtype), tb.dtype),
@@ -63,18 +80,7 @@ impl Machine<'_> {
             };
             vals.push(Val::Raw(read_elem(&tb.bytes, off + j, dt), dt));
         }
-        let c = self.ctx.as_mut().expect("checked above");
-        // the hardware may write the destination at any time after issue, so the issue is already a logged write: a
-        // thread still reading the stage this copy refills (no barrier between) races it. The landing logs again.
-        for j in 0..n {
-            c.log_shared(*alloc, at + j, MemorySpace::Shared, AccessKind::Write)?;
-        }
-        c.asyncq.open.push(PendingCopy {
-            alloc: *alloc,
-            at,
-            vals,
-        });
-        Ok(())
+        Ok(vals)
     }
 
     /// Close the open copies into a group (an empty group too, as `cp.async.commit_group` does).
