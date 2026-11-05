@@ -10,7 +10,10 @@ use unpopped::oracle::kernel_launch::run_launch;
 
 #[path = "support/gemm.rs"]
 mod gemm;
-use gemm::{I32, K, M, N, aux_outputs, aux_outputs_ref, fused_epilogue, fused_epilogue_ref};
+use gemm::{
+    I32, K, M, N, aux_outputs, aux_outputs_ref, fused_epilogue, fused_epilogue_ref,
+    split_k_across_blocks, split_k_in_block,
+};
 
 fn mat(rows: u32, cols: u32, f: impl Fn(i32, i32) -> i32) -> Vec<i32> {
     (0..rows as i32)
@@ -106,5 +109,30 @@ fn the_aux_epilogue_writes_d_the_mask_dbias_and_amax() {
         let (mut args, want) = aux_args(mixed);
         run_launch(&k, &mut args).unwrap();
         check_aux(&args, &want, mixed);
+    }
+}
+
+fn split_args() -> (Vec<KernelArg>, Vec<i32>) {
+    let a = mat(M, K, |r, c| 3 * r - c + 2);
+    let b = mat(K, N, |r, c| c * r - 2 * r + 1);
+    let args = vec![
+        arg(&[i64::from(M), i64::from(K)], &a),
+        arg(&[i64::from(K), i64::from(N)], &b),
+        arg(&[i64::from(M), i64::from(N)], &vec![0; (M * N) as usize]),
+    ];
+    (args, aux_outputs_ref(&a, &b).0)
+}
+
+#[test]
+fn split_k_in_a_block_and_across_blocks_equal_the_unsplit_product() {
+    for (name, k) in [
+        ("in a block", split_k_in_block()),
+        ("across blocks", split_k_across_blocks()),
+    ] {
+        assert_eq!(check_kernel(&k), Ok(()), "{name}");
+        let (mut args, want) = split_args();
+        run_launch(&k, &mut args).unwrap();
+        assert_eq!(words(&args[2]), want, "{name}");
+        assert!(want.iter().any(|v| *v < 0) && want.iter().any(|v| *v > 0));
     }
 }
