@@ -60,50 +60,67 @@ fn barrier() -> Stmt {
     }
 }
 
+fn stage(tile: i64) -> i64 {
+    (tile % 2) * i64::from(THREADS)
+}
+
+/// The prologue: `acc = 0`, and tile 0 copied into stage 0 as the first group.
+fn prologue() -> Vec<Stmt> {
+    vec![
+        Stmt::Let {
+            local: 0,
+            init: ScalarExpr::ConstInt(0, I32),
+        },
+        Stmt::CopyAsync {
+            dst: shared(add(cu(stage(0)), tid())),
+            src: global(0, tid()),
+            elems: 1,
+        },
+        Stmt::AsyncCommit,
+    ]
+}
+
+/// Iteration `k`: prefetch tile `k + 1` (if any), commit, wait, barrier, consume the mirror thread's element of tile
+/// `k`, barrier.
+fn iteration(k: i64, fault: Fault) -> Vec<Stmt> {
+    let mut body = Vec::new();
+    if k + 1 < TILES {
+        body.push(Stmt::CopyAsync {
+            dst: shared(add(cu(stage(k + 1)), tid())),
+            src: global(0, add(cu((k + 1) * i64::from(THREADS)), tid())),
+            elems: 1,
+        });
+    }
+    body.push(Stmt::AsyncCommit);
+    body.push(Stmt::AsyncWait {
+        pending: if fault == Fault::WaitsTooLittle { 2 } else { 1 },
+    });
+    if fault != Fault::NoReadBarrier {
+        body.push(barrier());
+    }
+    // the mirror thread's element of tile k: stage + (3 - tid)
+    body.push(Stmt::Load {
+        local: 1 + k as u32,
+        place: shared(add(
+            cu(stage(k)),
+            ScalarExpr::Sub(Box::new(cu(i64::from(THREADS) - 1)), Box::new(tid())),
+        )),
+    });
+    body.push(Stmt::Assign {
+        local: 0,
+        value: add(ScalarExpr::Local(0), ScalarExpr::Local(1 + k as u32)),
+    });
+    if fault != Fault::NoReuseBarrier {
+        body.push(barrier());
+    }
+    body
+}
+
 /// `src` is 16 `I32` (four tiles of four), `out` four `I32`.
 pub(crate) fn double_buffered(fault: Fault) -> KernelFn {
-    let stage = |tile: i64| (tile % 2) * i64::from(THREADS);
-    let mut body = vec![Stmt::Let {
-        local: 0,
-        init: ScalarExpr::ConstInt(0, I32),
-    }];
-    // tile 0 into stage 0, one group
-    body.push(Stmt::CopyAsync {
-        dst: shared(add(cu(stage(0)), tid())),
-        src: global(0, tid()),
-        elems: 1,
-    });
-    body.push(Stmt::AsyncCommit);
+    let mut body = prologue();
     for k in 0..TILES {
-        if k + 1 < TILES {
-            body.push(Stmt::CopyAsync {
-                dst: shared(add(cu(stage(k + 1)), tid())),
-                src: global(0, add(cu((k + 1) * i64::from(THREADS)), tid())),
-                elems: 1,
-            });
-        }
-        body.push(Stmt::AsyncCommit);
-        body.push(Stmt::AsyncWait {
-            pending: if fault == Fault::WaitsTooLittle { 2 } else { 1 },
-        });
-        if fault != Fault::NoReadBarrier {
-            body.push(barrier());
-        }
-        // the mirror thread's element of tile k: stage + (3 - tid)
-        body.push(Stmt::Load {
-            local: 1 + k as u32,
-            place: shared(add(
-                cu(stage(k)),
-                ScalarExpr::Sub(Box::new(cu(i64::from(THREADS) - 1)), Box::new(tid())),
-            )),
-        });
-        body.push(Stmt::Assign {
-            local: 0,
-            value: add(ScalarExpr::Local(0), ScalarExpr::Local(1 + k as u32)),
-        });
-        if fault != Fault::NoReuseBarrier {
-            body.push(barrier());
-        }
+        body.extend(iteration(k, fault));
     }
     body.push(Stmt::AsyncWait { pending: 0 });
     body.push(Stmt::Store {
