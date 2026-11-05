@@ -5,12 +5,14 @@
 //! as `run_launch`. Kernels: a waited copy read across a barrier, the 8-byte and 4-byte forms, two groups waited in
 //! turn, and a copy whose source is offset by a loop variable.
 
+use unpopped::backend::Backend;
 use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
 use unpopped::ir::ScalarExpr;
 use unpopped::kernel::{
     BarrierKind, Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt, check_kernel,
 };
 use unpopped::oracle::kernel_eval::KernelArg;
+use unpopped_cpu_c::CpuC;
 use unpopped_vocab::ElementKind;
 
 #[path = "support/cc.rs"]
@@ -210,4 +212,16 @@ fn a_copy_inside_a_loop_whose_source_moves() {
         KernelArg::Buffer(zeroed(I32, &[4])),
     ];
     agree_launch("cp_loop", &k, args);
+}
+
+#[test]
+fn the_c_is_a_plain_copy_loop_and_commit_and_wait_leave_no_trace() {
+    let k = kernel(vec![
+        copy(shared(row(0)), global(0, row(0)), 4),
+        Stmt::AsyncCommit,
+        wait(0),
+    ]);
+    let g = CpuC.lower_kernel(&k).expect("a CopyAsync lowers");
+    assert_eq!(g.source.matches("cp_ < 4").count(), 1, "{}", g.source);
+    assert!(!g.source.contains("async") && !g.source.contains("wait"));
 }
