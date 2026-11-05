@@ -93,6 +93,15 @@ pub enum KernelTrap {
     /// Two threads touched one element with no ordering between them and at least one wrote it:
     /// a store racing a store, or a read of another thread's store.
     DataRace,
+    /// A thread touched a `Shared` element that one of its own `CopyAsync` copies has not yet landed on (read it,
+    /// stored it, or copied onto it again before the `AsyncWait` that covers the copy). Hardware gives the old or
+    /// the new value; a reference should not.
+    AsyncRace {
+        /// The allocation index.
+        alloc: u32,
+    },
+    /// A thread finished with `CopyAsync` copies it never waited for (committed or not).
+    AsyncUnwaited,
 }
 
 pub(super) enum Flow {
@@ -106,7 +115,7 @@ pub(super) struct Machine<'a> {
     pub(super) k: &'a KernelFn,
     pub(super) local_tys: Vec<Ty>,
     pub(super) locals: Vec<Option<Val>>,
-    args: &'a mut [KernelArg],
+    pub(super) args: &'a mut [KernelArg],
     /// The module a `Call` resolves in (`run_module` only).
     pub(super) module: Option<&'a crate::kernel::Module>,
     /// Inside a callee: the root argument each buffer parameter is bound to. Empty in the entry frame.
@@ -170,7 +179,7 @@ impl<'a> Machine<'a> {
 
     /// The entry's allocation a buffer parameter of the running function is bound to, with the index
     /// expression of an access through it (`Place::Logical` of rank 1 on an allocation-bound parameter).
-    fn alloc_bound<'p>(&self, place: &'p Place) -> Option<(u32, &'p ScalarExpr)> {
+    pub(super) fn alloc_bound<'p>(&self, place: &'p Place) -> Option<(u32, &'p ScalarExpr)> {
         let Place::Logical { buffer, coords } = place else {
             return None;
         };
@@ -291,6 +300,11 @@ impl<'a> Machine<'a> {
             Stmt::Barrier { .. } => {
                 return Err(KernelTrap::Unsupported("Barrier (run_launch runs it)"));
             }
+            Stmt::CopyAsync { .. } | Stmt::AsyncCommit | Stmt::AsyncWait { .. } => {
+                return Err(KernelTrap::Unsupported(
+                    "an async copy (run_launch runs it)",
+                ));
+            }
         }
         Ok(Flow::Next)
     }
@@ -316,6 +330,9 @@ impl<'a> Machine<'a> {
             }
             Stmt::AtomicRmw { .. } | Stmt::AtomicCas { .. } => self.exec_atomic(st)?,
             Stmt::Fence { scope, order } => self.fence(*order, *scope),
+            Stmt::CopyAsync { dst, src, elems } => self.copy_async(dst, src, *elems)?,
+            Stmt::AsyncCommit => self.async_commit()?,
+            Stmt::AsyncWait { pending } => self.async_wait(*pending)?,
             _ => unreachable!("exec_simple is called for straight-line statements only"),
         }
         Ok(())
@@ -402,7 +419,7 @@ impl<'a> Machine<'a> {
     // ---- places -------------------------------------------------------------------------
 
     /// The element offset of `place` through the buffer's view, bounds-checked against its shape.
-    fn offset(&mut self, place: &Place) -> Result<(usize, usize), KernelTrap> {
+    pub(super) fn offset(&mut self, place: &Place) -> Result<(usize, usize), KernelTrap> {
         let Place::Logical { buffer, coords } = place else {
             return Err(KernelTrap::Unsupported("Place::Alloc (U3 row 4 PR 2)"));
         };

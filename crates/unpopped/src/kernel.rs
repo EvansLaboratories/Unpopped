@@ -347,6 +347,30 @@ pub enum Stmt {
         #[serde(default)]
         extra: Vec<u32>,
     },
+    /// An asynchronous copy of `elems` contiguous elements from the global buffer place `src` to the `Shared`
+    /// allocation place `dst`, issued by one thread (`cp.async`; ROADMAP U8 S1, `docs/options-u8-copy-atoms.md`). It
+    /// lands only when a later [`Stmt::AsyncWait`] covers its group: `elems` times the element size is 4, 8 or 16
+    /// bytes. The oracle reads the source at issue and writes the destination at the wait (issue and landing are both
+    /// logged writes, as the hardware may write any time after issue), so reading or
+    /// overwriting those elements in between is the typed `KernelTrap::AsyncRace`; a copy never waited for is
+    /// `KernelTrap::AsyncUnwaited`. `unpopped-cpu-c` performs the copy at issue (a correct kernel cannot tell).
+    CopyAsync {
+        /// The first destination element: a `Shared` allocation place.
+        dst: Place,
+        /// The first source element: a place of a readable global buffer of the same element type.
+        src: Place,
+        /// How many consecutive elements.
+        elems: u32,
+    },
+    /// Close this thread's open [`Stmt::CopyAsync`] copies into one group (`cp.async.commit_group`). A commit with
+    /// no open copy still makes a group, as on hardware, so that wait counts line up.
+    AsyncCommit,
+    /// Wait until at most `pending` of this thread's committed groups are still in flight
+    /// (`cp.async.wait_group`); the older ones land. Copies not yet committed are not waited for.
+    AsyncWait {
+        /// How many of the newest groups may stay in flight.
+        pending: u32,
+    },
     /// Call another kernel of the same [`Module`]: `result = callee(args...)`. The callee is a
     /// [`KernelFn`] (PM ruling 2026-11-02 on `docs/options-u3-remainder.md`, R1a); `callee` indexes
     /// [`Module::fns`]. **Shape reserved: `check_kernel` refuses it** until the module checker and the
@@ -875,6 +899,12 @@ pub enum KernelError {
     /// body of the wrong shape, a reference of the wrong signature, a call with the wrong arity, argument or result
     /// type, or an `ExternCall` outside a module.
     ExternUnsupported {
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// A [`Stmt::CopyAsync`] the checker refuses: a destination that is not a `Shared` allocation, a source that is
+    /// not a global buffer, or a size other than 4, 8 or 16 bytes.
+    AsyncUnsupported {
         /// What is wrong.
         what: &'static str,
     },

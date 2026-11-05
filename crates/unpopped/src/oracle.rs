@@ -103,6 +103,7 @@
 //! mask, not the runtime value.
 
 mod accum_policy;
+mod kernel_async;
 mod kernel_call;
 mod kernel_collective;
 pub mod kernel_eval;
@@ -550,7 +551,7 @@ fn dense_strides(shape: &[i64]) -> Vec<i64> {
 /// Those are not stored one-per-byte: KISS-CLASSIFY §6.1 pins their packing
 /// normatively, and packing is part of what a dtype *is* there (§6.0-0001 makes
 /// the packing convention normative alongside the token and the width).
-fn elem_bits(dt: ElementKind) -> usize {
+pub(crate) fn elem_bits(dt: ElementKind) -> usize {
     match dt {
         ElementKind::I4 | ElementKind::U4 => 4,
         ElementKind::B1 => 1,
