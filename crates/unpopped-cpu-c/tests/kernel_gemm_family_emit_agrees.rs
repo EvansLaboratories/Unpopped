@@ -29,7 +29,7 @@ mod kernel_run;
 mod launch_run;
 use gemm::{
     I32, K, M, N, aux_outputs, aux_outputs_ref, fused_epilogue, fused_epilogue_ref,
-    split_k_across_blocks, split_k_in_block,
+    split_k_across_blocks, split_k_in_block, split_k_with_fixup,
 };
 use launch_run::agree_launch;
 
@@ -164,4 +164,28 @@ fn split_k_agrees_with_the_oracle_and_the_unsplit_product() {
         run_launch(&k, &mut run).expect("the oracle runs it");
         assert_eq!(words(&run[2]), want, "{name}");
     }
+}
+
+fn fixup_args() -> (Vec<KernelArg>, Vec<i32>) {
+    let (mut args, want) = split_args();
+    // buffers: a, b, ws [2M, N], out [M, N]
+    args[2] = arg(
+        &[2 * i64::from(M), i64::from(N)],
+        &vec![0; (2 * M * N) as usize],
+    );
+    args.push(arg(
+        &[i64::from(M), i64::from(N)],
+        &vec![0; (M * N) as usize],
+    ));
+    (args, want)
+}
+
+#[test]
+fn the_device_barrier_fixup_agrees_with_the_oracle_and_the_unsplit_product() {
+    let k = split_k_with_fixup();
+    let (args, want) = fixup_args();
+    agree_launch("split_fixup", &k, args);
+    let (mut run, _) = fixup_args();
+    run_launch(&k, &mut run).expect("the oracle runs it");
+    assert_eq!(words(&run[3]), want);
 }
