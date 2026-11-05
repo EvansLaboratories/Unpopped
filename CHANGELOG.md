@@ -15,19 +15,7 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## `0.44.9` — GEMM-family kernel K3: split-K in a block and across blocks (ROADMAP U9; tests only)
-
-`split_k_in_block` (two thread layers per output sum their half of K, publish through `Shared`, a `Block` barrier, one adds
-the two) and `split_k_across_blocks` (a `1x1x2` grid, each block adds its half into `out` with a device-scope
-`AtomicRmw Add`), both equal to the unsplit product on mixed-sign data; oracle, C compiled with a host compiler, and host
-loop agree. Nine seeded mutants (slice end short, slice start wrong, barrier removed, one partial only, wrong slot, atomic
-add to max or exchange, block index unused) are all caught.
-
-`split_k_with_fixup`, the stream-K shape without atomics: the two blocks of a `1x1x2` grid write half-K partials to a
-global workspace, a `Device` barrier orders the phases, and block 0 adds them into `out`. Oracle, the C (the S6a phase
-loop) and the host loop agree. Five seeded mutants (barrier removed or demoted to `Block`, colliding workspace slots, one
-partial read, slice not chosen by block) are caught; moving the fix-up to block 1 survives and is equivalent (either block
-computes the same `out`).
+## `0.44.9` — GEMM-family kernel K5: grouped GEMM by a problem table (ROADMAP U9; tests only)
 
 `grouped_gemm` (`tests/support/grouped.rs`, copied into cpu-c): three GEMMs of different shapes `(3,2,4)`, `(4,4,2)`, `(2,4,3)`
 in one launch, one block per problem, a `U32` problem table `[P, 6]` of `m, n, k` and element offsets into one flat buffer per
