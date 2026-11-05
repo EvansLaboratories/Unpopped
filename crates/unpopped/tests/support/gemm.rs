@@ -4,9 +4,12 @@
 //! is exact and a plain host loop is the reference). Shared by the oracle test (`kernel_gemm_family.rs`) and the C test
 //! (`unpopped-cpu-c/tests/kernel_gemm_family_emit_agrees.rs`, which keeps a copy: change both).
 
+use unpopped::exec::Scope;
 use unpopped::exec::{ExecId, LaunchShape};
 use unpopped::ir::{BinaryOp, ScalarExpr};
-use unpopped::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
+use unpopped::kernel::{
+    AtomicOp, Block, BufferRole, KernelFn, LocalDecl, MemoryOrder, Param, Place, Stmt,
+};
 use unpopped_vocab::ElementKind;
 
 pub(crate) const I32: ElementKind = ElementKind::I32;
@@ -145,6 +148,100 @@ pub(crate) fn fused_epilogue() -> KernelFn {
         Block(body),
     )
     .with_launch(LaunchShape::new([N, M, 1], [1, 1, 1]))
+}
+
+/// An atomic read-modify-write of `place` at device scope, result unused.
+fn atomic(op: AtomicOp, place: Place, value: ScalarExpr) -> Stmt {
+    Stmt::AtomicRmw {
+        op,
+        place,
+        value,
+        old: None,
+        order: MemoryOrder::Relaxed,
+        scope: Scope::Device,
+    }
+}
+
+/// The aux epilogue: `D = acc`, the mask `acc > 0`, the per-column sum of `relu(acc)` (`dbias`) and the maximum of
+/// `acc` (`amax`), the last two by atomics (locals 6 and 7).
+fn aux_epilogue() -> Vec<Stmt> {
+    vec![
+        Stmt::Store {
+            place: at2(2, row(), col()),
+            value: local(0),
+        },
+        Stmt::Let {
+            local: 6,
+            init: ScalarExpr::Select(
+                Box::new(bin(BinaryOp::CmpLt, ci(0), local(0))),
+                Box::new(ci(1)),
+                Box::new(ci(0)),
+            ),
+        },
+        Stmt::Store {
+            place: at2(3, row(), col()),
+            value: local(6),
+        },
+        Stmt::Let {
+            local: 7,
+            init: relu(local(0)),
+        },
+        atomic(
+            AtomicOp::Add,
+            Place::Logical {
+                buffer: 4,
+                coords: vec![col()],
+            },
+            local(7),
+        ),
+        atomic(
+            AtomicOp::Max,
+            Place::Logical {
+                buffer: 5,
+                coords: vec![cu(0)],
+            },
+            local(0),
+        ),
+    ]
+}
+
+/// Buffers: 0 `a` `[M, K]`, 1 `b` `[K, N]` (read); 2 `d` `[M, N]` (`A.B`), 3 `mask` `[M, N]` (`acc > 0`), 4 `dbias` `[N]`
+/// (per-column sum of `relu(acc)`, start at zero), 5 `amax` `[1]` (the maximum of `acc`, start at `i32::MIN`).
+pub(crate) fn aux_outputs() -> KernelFn {
+    let mut body = mainloop();
+    body.extend(aux_epilogue());
+    let p = |name: &str, role: BufferRole, rank: u8| Param::buffer(name, I32, role, Some(rank));
+    let mut locals: Vec<LocalDecl> = (0..8).map(|_| LocalDecl::scalar(I32)).collect();
+    locals[5] = LocalDecl::scalar(U32);
+    KernelFn::new(
+        "gemm_aux",
+        I32,
+        vec![
+            p("a", BufferRole::Read, 2),
+            p("b", BufferRole::Read, 2),
+            p("d", BufferRole::ReadWrite, 2),
+            p("mask", BufferRole::ReadWrite, 2),
+            p("dbias", BufferRole::ReadWrite, 1),
+            p("amax", BufferRole::ReadWrite, 1),
+        ],
+        locals,
+        Block(body),
+    )
+    .with_launch(LaunchShape::new([N, M, 1], [1, 1, 1]))
+}
+
+/// The host reference for [`aux_outputs`]: `(D, mask, dbias, amax)`.
+pub(crate) fn aux_outputs_ref(a: &[i32], b: &[i32]) -> (Vec<i32>, Vec<i32>, Vec<i32>, i32) {
+    let (m, n, k) = (M as usize, N as usize, K as usize);
+    let d: Vec<i32> = (0..m * n)
+        .map(|i| (0..k).map(|t| a[(i / n) * k + t] * b[t * n + i % n]).sum())
+        .collect();
+    let mask = d.iter().map(|v| i32::from(*v > 0)).collect();
+    let dbias = (0..n)
+        .map(|c| (0..m).map(|r| d[r * n + c].max(0)).sum())
+        .collect();
+    let amax = *d.iter().max().expect("a non-empty product");
+    (d, mask, dbias, amax)
 }
 
 /// The host reference for [`fused_epilogue`].
