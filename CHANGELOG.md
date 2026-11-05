@@ -15,6 +15,16 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.3` — GEMM-family kernel K1: the fused-epilogue integer GEMM (ROADMAP U9; tests only)
+
+`tests/kernel_gemm_family.rs` and `unpopped-cpu-c/tests/kernel_gemm_family_emit_agrees.rs` (builder `tests/support/gemm.rs`,
+copied into cpu-c): `out = relu(2 * (A.B) + 3 * C + bias[col])`, one thread per output on a 4x4 launch, `I32` so a plain
+host loop is the exact reference, with data that clamps some outputs and not others. The oracle, the C compiled with a
+host compiler, and the host loop agree. Twelve seeded mutants (alpha, beta, C, bias dropped; bias indexed by row; relu
+dropped or flipped; K loop short; A or B transposed; output transposed; accumulator not accumulated) are all caught.
+
+---
+
 ## `0.43.3` — cpu-c tests no longer reach outside their crate (sweep SUP-004; tests only)
 
 `kernel_emit_argmax_agrees.rs` took `arg_loop.rs` from `../../unpopped/tests/support`, a path the published `unpopped-cpu-c`
