@@ -7,12 +7,26 @@ vendoring better than retyping.
 
 | File | Source path in KISS | Vendored from commit |
 |---|---|---|
-| `dtype_manifest.json` | `conformance/corpus/dtype_manifest.json` | `bafbe07` (blob `7aa676d9324b800241ddcb31d294ddce8e70af0a`) |
+| `dtype_manifest.json` | `conformance/corpus/dtype_manifest.json` | `e786097` (blob `129690fe20618e3c2b702c008e1e730369d72de9`) |
 | `structure_key_vectors.json` | `conformance/corpus/structure_key_vectors.json` | `bafbe07` (blob `05c7a99bff4451dad318393c3360ac254d598da1`) |
 | `structure_key_derivation_vectors.json` | `conformance/corpus/structure_key_derivation_vectors.json` | `bafbe07` (blob `313a03f0e0805f382e63801b943f34a0b2bf2529`) |
 
 `bafbe07` is KISS `main` as read on 2026-10-28 (KISS#713). It is a single commit
 for all three files, so the table cannot name two different spec states.
+
+### `dtype_manifest.json` re-vendored 2026-11-05 from KISS `e786097` (KISS#772, 0.7.11)
+
+KISS noticed (board KISS#218) that only the `generated_from` member changed: it now names the emitting program
+(`tools/kiss_dtypes.py --emit-manifest`, reading the `spec/classify.md` section 6.1 table) instead of `spec/classify.md`.
+No entry, count or schema moved (`diff` against the previous copy shows that one line), and the value is not to be relied
+on (KISS-CONFORM-6.3-0010 part c). Read at KISS `main` `b506222`; the blob is unchanged since `e786097`. Verified after
+writing: `git hash-object` equals the KISS blob `129690fe20618e3c2b702c008e1e730369d72de9`, 0 CR bytes. The other two files
+are unchanged (their rows below stand). `op_manifest.json` is not vendored here. The content pin in
+`tests/kiss_byte_match.rs` moved with it (length 3,554 to 3,650, FNV-1a-64 `0x7592d2075f076940`).
+
+| File | KISS blob | sha256 | bytes |
+|---|---|---|---|
+| `dtype_manifest.json` | `129690fe20618e3c2b702c008e1e730369d72de9` | `8d7c480691e9054cb74e59d3ff92445ca69a078beb0aaeca4f2b97c4317eea36` | 3650 |
 
 ### Re-vendored 2026-10-28 from KISS `bafbe07` (MX element dtypes, unpopped-vocab 0.29.0)
 

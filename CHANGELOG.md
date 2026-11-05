@@ -15,6 +15,35 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.7` — GEMM-family kernel K3: split-K in a block and across blocks (ROADMAP U9; tests only)
+
+`split_k_in_block` (two thread layers per output sum their half of K, publish through `Shared`, a `Block` barrier, one adds
+the two) and `split_k_across_blocks` (a `1x1x2` grid, each block adds its half into `out` with a device-scope
+`AtomicRmw Add`), both equal to the unsplit product on mixed-sign data; oracle, C compiled with a host compiler, and host
+loop agree. Nine seeded mutants (slice end short, slice start wrong, barrier removed, one partial only, wrong slot, atomic
+add to max or exchange, block index unused) are all caught.
+
+---
+
+## `0.44.6` — re-vendor KISS `dtype_manifest.json` (KISS#772; vendored data and its pin only)
+
+`crates/unpopped-vocab/kiss/dtype_manifest.json` re-vendored verbatim from KISS `e786097`: only the `generated_from` member
+changed (it names the emitting tool now); no entry, count or schema moved. Blob `129690fe` read back equal to KISS, 0 CR bytes;
+the content pin in `tests/kiss_byte_match.rs` (length 3,650, FNV-1a-64) and the `kiss/README.md` table moved with it.
+
+---
+
+## `0.44.5` — CHANGELOG fragments and `tools/stamp-version.py` (the version-stamp pilot; tools and docs only)
+
+`changelog.d/<topic>.md` fragments and `python tools/stamp-version.py <version>`, ported from coderipper's pilot to
+Unpopped's layout: a PR adds a fragment and never edits `CHANGELOG.md`, a `Cargo.toml` version, `Cargo.lock` or the cpu-c
+README pins; the one command sets the version in the root path-dependency lines, the four crates, the four `unpopped*`
+lockfile entries and the README pins, writes one `## `<version>` — <kind>` heading from the fragments above the newest entry,
+and deletes them. Self-tested on a throwaway fragment (`--dry-run`, then a real run, `cargo check --workspace --locked`
+green, CRLF kept, a repeat of the same version refused). This PR carries only its fragment and no number: the gate stamps it.
+
+---
+
 ## `0.44.4` — GEMM-family kernel K2: aux outputs, `dbias` and `amax` by atomics (ROADMAP U9; tests only, stacked on 0.44.3)
 
 `aux_outputs` in `tests/support/gemm.rs`: the same main loop, then `D = acc`, a mask `acc > 0`, the per-column sum of
