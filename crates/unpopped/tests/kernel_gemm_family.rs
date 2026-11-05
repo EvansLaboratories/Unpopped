@@ -12,7 +12,7 @@ use unpopped::oracle::kernel_launch::run_launch;
 mod gemm;
 use gemm::{
     I32, K, M, N, aux_outputs, aux_outputs_ref, fused_epilogue, fused_epilogue_ref,
-    split_k_across_blocks, split_k_in_block,
+    split_k_across_blocks, split_k_in_block, split_k_with_fixup,
 };
 
 fn mat(rows: u32, cols: u32, f: impl Fn(i32, i32) -> i32) -> Vec<i32> {
@@ -135,4 +135,27 @@ fn split_k_in_a_block_and_across_blocks_equal_the_unsplit_product() {
         assert_eq!(words(&args[2]), want, "{name}");
         assert!(want.iter().any(|v| *v < 0) && want.iter().any(|v| *v > 0));
     }
+}
+
+fn fixup_args() -> (Vec<KernelArg>, Vec<i32>) {
+    let (mut args, want) = split_args();
+    // buffers: a, b, ws [2M, N], out [M, N]
+    args[2] = arg(
+        &[2 * i64::from(M), i64::from(N)],
+        &vec![0; (2 * M * N) as usize],
+    );
+    args.push(arg(
+        &[i64::from(M), i64::from(N)],
+        &vec![0; (M * N) as usize],
+    ));
+    (args, want)
+}
+
+#[test]
+fn split_k_with_a_device_barrier_fixup_equals_the_unsplit_product() {
+    let k = split_k_with_fixup();
+    assert_eq!(check_kernel(&k), Ok(()));
+    let (mut args, want) = fixup_args();
+    run_launch(&k, &mut args).unwrap();
+    assert_eq!(words(&args[3]), want);
 }
