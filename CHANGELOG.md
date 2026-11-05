@@ -15,6 +15,15 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.43.2` — options note for U8 (copy atoms, pipelines and roles); docs only, stacked on 0.43.1
+
+`docs/options-u8-copy-atoms.md` (ROADMAP U8, issue #119): what exists, the line between IR and idiom, four slices
+(S1 `cp.async` and async groups recommended first; S2 `ldmatrix`/`stmatrix` held on a second lane-table source; S3
+`mbarrier`/TMA/descriptors waits for the Baracuda sm_90 emitter; S4 pipelines and roles as recipes, no IR node) and six
+questions for the PM. Nothing is built.
+
+---
+
 ## `0.43.1` — the oracle and cpu-c run an `ExternCall` through its reference (additive, ROADMAP U11 step 2; stacked on 0.43.0)
 
 The oracle runs `Stmt::ExternCall` as a call of the declaration's `reference` kernel on the calling thread, in both evaluators (`run_module`, and `run_launch_module` with a frame stack per thread); a declaration with no reference traps `Unsupported("an Extern with no reference body")`. `unpopped-cpu-c` spells it as a C call of the reference (the reference is emitted with the other callees); a declaration with no reference, or with a body of its own target `"cpu-c"` which it would have to honour, is refused with a typed `UnsupportedKernel` rather than silently replaced. Only a device leg can show an asm body means what its reference means (step 3). A declared `sync` effect is not modelled by the reference run: the oracle rendezvouses only if the reference itself holds a barrier. Tests: `kernel_extern_run` (6) and `kernel_extern_emit_agrees` (6, byte-for-byte against the oracle on a host C compiler); four oracle and five emitter seeded mutants all red.
