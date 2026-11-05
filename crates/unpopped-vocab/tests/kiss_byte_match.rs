@@ -125,8 +125,8 @@ fn the_vendored_artifacts_are_the_revisions_this_leg_was_written_against() {
         (
             "dtype_manifest.json",
             MANIFEST,
-            3_554_usize,
-            0xbfa2_ea46_d958_466f_u64,
+            3_650_usize,
+            0x7592_d207_5f07_6940_u64,
         ),
     ] {
         assert_eq!(
