@@ -157,6 +157,44 @@ fn narrowing_to_a_sub_byte_type_wraps_modulo_16() {
     }
 }
 
+/// `out[t] = (i32)(sub) x[t]` in one expression, with no local to mask the value in between.
+fn nested(sub: ElementKind) -> KernelFn {
+    eight_threads(KernelFn::new(
+        "nested",
+        I32,
+        vec![
+            Param::buffer("x", I32, BufferRole::Read, Some(1)),
+            Param::buffer("out", I32, BufferRole::ReadWrite, Some(1)),
+        ],
+        vec![LocalDecl::scalar(I32)],
+        Block(vec![
+            Stmt::Load {
+                local: 0,
+                place: at(0),
+            },
+            Stmt::Store {
+                place: at(1),
+                value: cast(cast(local(0), sub, Saturation::Wrap), I32, Saturation::Wrap),
+            },
+        ]),
+    ))
+}
+
+#[test]
+fn a_nested_narrowing_cast_wraps_in_the_expression_itself() {
+    let x = [9, -9, 16, 7, 8, -8, 100, -1];
+    for (sub, want) in [
+        (I4, [-7, 7, 0, 7, -8, -8, 4, -1]),
+        (U4, [9, 7, 0, 7, 8, 8, 4, 15]),
+    ] {
+        let k = nested(sub);
+        assert_eq!(check_kernel(&k), Ok(()), "{sub:?}");
+        let mut args = [i32_buf(&x), i32_buf(&[0; 8])];
+        run_launch(&k, &mut args).expect("the oracle runs it");
+        assert_eq!(words(&args[1]), want, "{sub:?}");
+    }
+}
+
 fn illegal_cast_text(k: &KernelFn) -> String {
     match check_kernel(k) {
         Err(KernelError::Type(TypeError::IllegalCast { why, .. })) => why.to_string(),
