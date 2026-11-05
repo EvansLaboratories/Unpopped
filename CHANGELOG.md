@@ -15,6 +15,28 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.5` — CHANGELOG fragments and `tools/stamp-version.py` (the version-stamp pilot; tools and docs only)
+
+`changelog.d/<topic>.md` fragments and `python tools/stamp-version.py <version>`, ported from coderipper's pilot to
+Unpopped's layout: a PR adds a fragment and never edits `CHANGELOG.md`, a `Cargo.toml` version, `Cargo.lock` or the cpu-c
+README pins; the one command sets the version in the root path-dependency lines, the four crates, the four `unpopped*`
+lockfile entries and the README pins, writes one `## `<version>` — <kind>` heading from the fragments above the newest entry,
+and deletes them. Self-tested on a throwaway fragment (`--dry-run`, then a real run, `cargo check --workspace --locked`
+green, CRLF kept, a repeat of the same version refused). This PR carries only its fragment and no number: the gate stamps it.
+
+---
+
+## `0.44.4` — GEMM-family kernel K2: aux outputs, `dbias` and `amax` by atomics (ROADMAP U9; tests only, stacked on 0.44.3)
+
+`aux_outputs` in `tests/support/gemm.rs`: the same main loop, then `D = acc`, a mask `acc > 0`, the per-column sum of
+`relu(acc)` by `AtomicRmw Add` (`dbias`) and the maximum of `acc` by `AtomicRmw Max` (`amax`, started at `i32::MIN`), on
+a mixed-sign dataset and an all-negative one (on the second, `max(relu(acc))` would be 0, not the maximum, which a
+positive-only dataset cannot tell apart). Oracle, the C compiled with a host compiler, and the host loop agree. Eight
+seeded mutants (add to max, max to min, no relu in `dbias`, mask flipped or inverted, `dbias` by row, `D` clamped,
+`amax` of the clamped value) are all caught; the last survived the first, positive-only dataset.
+
+---
+
 ## `0.44.3` — GEMM-family kernel K1: the fused-epilogue integer GEMM (ROADMAP U9; tests only)
 
 `tests/kernel_gemm_family.rs` and `unpopped-cpu-c/tests/kernel_gemm_family_emit_agrees.rs` (builder `tests/support/gemm.rs`,

@@ -27,7 +27,7 @@ mod kernel_data;
 mod kernel_run;
 #[path = "support/launch_run.rs"]
 mod launch_run;
-use gemm::{I32, K, M, N, fused_epilogue, fused_epilogue_ref};
+use gemm::{I32, K, M, N, aux_outputs, aux_outputs_ref, fused_epilogue, fused_epilogue_ref};
 use launch_run::agree_launch;
 
 fn mat(rows: u32, cols: u32, f: impl Fn(i32, i32) -> i32) -> Vec<i32> {
@@ -90,4 +90,50 @@ fn the_c_names_every_epilogue_term() {
         .lower_kernel(&fused_epilogue())
         .expect("the kernel lowers");
     assert!(g.source.contains("for ("), "the K loop: {}", g.source);
+}
+
+/// `mixed`: products of both signs; otherwise every product is negative (so `amax` and the clamps are decided by the
+/// negative side: `max(relu(acc))` would be 0, not the maximum).
+fn aux_args(mixed: bool) -> (Vec<KernelArg>, (Vec<i32>, Vec<i32>, Vec<i32>, i32)) {
+    let a = mat(
+        M,
+        K,
+        |r, c| if mixed { 2 * r - 3 * c + 1 } else { r + c + 1 },
+    );
+    let b = mat(K, N, |r, c| if mixed { c - r + 1 } else { -(r + c + 1) });
+    let args = vec![
+        arg(&[i64::from(M), i64::from(K)], &a),
+        arg(&[i64::from(K), i64::from(N)], &b),
+        arg(&[i64::from(M), i64::from(N)], &vec![0; (M * N) as usize]),
+        arg(&[i64::from(M), i64::from(N)], &vec![0; (M * N) as usize]),
+        arg(&[i64::from(N)], &vec![0; N as usize]),
+        arg(&[1], &[i32::MIN]),
+    ];
+    (args, aux_outputs_ref(&a, &b))
+}
+
+fn check_aux(args: &[KernelArg], want: &(Vec<i32>, Vec<i32>, Vec<i32>, i32), mixed: bool) {
+    assert_eq!(words(&args[2]), want.0, "D");
+    assert_eq!(words(&args[3]), want.1, "mask");
+    assert_eq!(words(&args[4]), want.2, "dbias");
+    assert_eq!(words(&args[5]), vec![want.3], "amax");
+    // the data exercise every output
+    if mixed {
+        assert!(want.1.contains(&0) && want.1.contains(&1));
+        assert!(want.0.iter().any(|v| *v < 0) && want.3 > 0);
+    } else {
+        assert!(want.1.iter().all(|m| *m == 0) && want.2.iter().all(|s| *s == 0) && want.3 < 0);
+    }
+}
+
+#[test]
+fn the_aux_epilogue_agrees_with_the_oracle_and_the_host_loop() {
+    let k = aux_outputs();
+    for mixed in [true, false] {
+        let (args, want) = aux_args(mixed);
+        agree_launch(if mixed { "gemm_aux" } else { "gemm_aux_neg" }, &k, args);
+        let (mut run, _) = aux_args(mixed);
+        run_launch(&k, &mut run).expect("the oracle runs it");
+        check_aux(&run, &want, mixed);
+    }
 }
