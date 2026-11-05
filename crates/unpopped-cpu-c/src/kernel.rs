@@ -461,7 +461,9 @@ impl Emitter<'_> {
         let off = at
             .strip_prefix(&format!("b{buffer}["))
             .and_then(|s| s.strip_suffix(']'))
-            .ok_or_else(|| refuse("a sub-byte load through an address this emitter does not unpack"))?;
+            .ok_or_else(|| {
+                refuse("a sub-byte load through an address this emitter does not unpack")
+            })?;
         let nib = format!("((b{buffer}[({off}) >> 1] >> ((({off}) & 1) * 4)) & 15)");
         Ok(if *elem == ElementKind::I4 {
             format!("(({nib} ^ 8) - 8)")

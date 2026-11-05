@@ -1,6 +1,6 @@
 # Options note: sub-byte loads and the dequantizing GEMM (ROADMAP U9b, issue #120)
 
-Status: **Q1 to Q4 ruled by the PM 2026-11-05 as recommended (cast endpoints `I4`/`U4`, sub-byte buffers read-only in kernels for v1, emitter reuses the plan-path codecs, `B1` not now; revisit a sub-byte `Store` only when a consumer needs it); S1 (checker and oracle) is built in this PR.** U9b is the row "mixed-input dequant GEMM at the kernel
+Status: **Q1 to Q4 ruled by the PM 2026-11-05 as recommended (cast endpoints `I4`/`U4`, sub-byte buffers read-only in kernels for v1, emitter reuses the plan-path codecs, `B1` not now; revisit a sub-byte `Store` only when a consumer needs it); S1 (checker and oracle) is built; S2 (the C emitter spells `I4`/`U4` buffer loads and sub-byte `Cast`) is built in the next PR.** U9b is the row "mixed-input dequant GEMM at the kernel
 layer (int4 weights x wider activations)" whose trigger was "the kernel layer's sub-byte `Load` is read at source and found to work".
 It was read at `origin/main` 23671f0 (`kernel_subbyte_load.rs`, `kernel_subbyte_load_refused.rs`). The answer is **half**.
 

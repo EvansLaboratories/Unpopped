@@ -1,0 +1,3 @@
+kind: cpu-c spells `I4`/`U4` kernel buffers and sub-byte `Cast` (ROADMAP U9b S2; additive: a refusal becomes an acceptance)
+---
+A kernel `Load` of an `I4`/`U4` buffer element is spelled as a shift and mask of the packed byte (low nibble first; `I4` sign-extended by xor-and-subtract), a widening `Cast` as the plain C conversion and a narrowing `Cast` as a wrap modulo 16. The buffer argument is `const unsigned char*`. `kernel_subbyte_load_refused.rs` becomes `kernel_subbyte_emit_agrees.rs` (C compiled and run against `run_launch` over all 16 nibble values and the narrowing wrap); five seeded mutants caught. S3 (the dequant GEMM) is next.
