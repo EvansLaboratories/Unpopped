@@ -1,6 +1,6 @@
 # Options note: sub-byte loads and the dequantizing GEMM (ROADMAP U9b, issue #120)
 
-Status: **proposal for the PM gate; nothing built beyond two pinning tests.** U9b is the row "mixed-input dequant GEMM at the kernel
+Status: **Q1 to Q4 ruled by the PM 2026-11-05 as recommended (cast endpoints `I4`/`U4`, sub-byte buffers read-only in kernels for v1, emitter reuses the plan-path codecs, `B1` not now; revisit a sub-byte `Store` only when a consumer needs it); S1 is next.** U9b is the row "mixed-input dequant GEMM at the kernel
 layer (int4 weights x wider activations)" whose trigger was "the kernel layer's sub-byte `Load` is read at source and found to work".
 It was read at `origin/main` 23671f0 (`kernel_subbyte_load.rs`, `kernel_subbyte_load_refused.rs`). The answer is **half**.
 
@@ -29,7 +29,7 @@ instead of writing a second pair. *Question below:* what a `Store` is.
 buffer, group scales in a second buffer, integer or exactly representable data, an oracle test and a C differential against a host
 loop, with the seeded-mutation pass (nibble order swapped, sign extension dropped, scale group off by one, zero point ignored).
 
-## Questions for the PM
+## Questions for the PM (all ruled yes, 2026-11-05)
 
 | # | Question | Recommendation |
 |---|---|---|
