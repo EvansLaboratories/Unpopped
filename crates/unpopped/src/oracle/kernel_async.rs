@@ -2,7 +2,8 @@
 //! The oracle's `cp.async` model (ROADMAP U8 S1, `docs/options-u8-copy-atoms.md`): `CopyAsync` reads its source at
 //! issue and records the values, `AsyncCommit` closes the open copies into a group, and `AsyncWait` lands every group
 //! older than the newest `pending` ones by storing the recorded values (a logged `Shared` write at the wait, so the
-//! existing race rules order it against other threads). Touching a destination element before it lands is
+//! existing race rules order it against other threads; the issue is a logged write too, as the copy may land any time
+//! after it). Touching a destination element before it lands is
 //! `KernelTrap::AsyncRace` (checked in `alloc_index`).
 
 use super::kernel_eval::{KernelArg, KernelTrap, Machine};
@@ -63,6 +64,11 @@ impl Machine<'_> {
             vals.push(Val::Raw(read_elem(&tb.bytes, off + j, dt), dt));
         }
         let c = self.ctx.as_mut().expect("checked above");
+        // the hardware may write the destination at any time after issue, so the issue is already a logged write: a
+        // thread still reading the stage this copy refills (no barrier between) races it. The landing logs again.
+        for j in 0..n {
+            c.log_shared(*alloc, at + j, MemorySpace::Shared, AccessKind::Write)?;
+        }
         c.asyncq.open.push(PendingCopy {
             alloc: *alloc,
             at,

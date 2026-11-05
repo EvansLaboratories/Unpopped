@@ -307,6 +307,45 @@ fn a_copy_off_either_end_is_a_typed_trap() {
     assert_eq!(run(&dst), Err(KernelTrap::AllocOutOfBounds { alloc: 0 }));
 }
 
+#[test]
+fn the_issue_is_a_logged_write_so_a_refill_races_a_reader_even_if_a_barrier_precedes_the_landing() {
+    // every thread fills its slot, barrier, reads its mirror's slot, then issues a copy onto its OWN slot with nothing
+    // ordering that issue after the mirror's read; the barrier before the wait would order only the LANDING. Hardware
+    // may write the destination any time after issue, so the issue itself races the read.
+    let body = |read_barrier: bool| {
+        let mut b = vec![
+            Stmt::Store {
+                place: shared(tid()),
+                value: ScalarExpr::ConstInt(7, I32),
+            },
+            barrier(),
+            load(
+                1,
+                shared(ScalarExpr::Sub(
+                    Box::new(cu(i64::from(THREADS) - 1)),
+                    Box::new(tid()),
+                )),
+            ),
+        ];
+        if read_barrier {
+            b.push(barrier());
+        }
+        b.extend([
+            copy(shared(tid()), global(0, tid()), 1),
+            Stmt::AsyncCommit,
+            barrier(),
+            wait(0),
+        ]);
+        kernel(b)
+    };
+    assert_eq!(
+        run(&body(true)),
+        Ok(vec![0; 4]),
+        "control: a barrier after the read"
+    );
+    assert_eq!(run(&body(false)), Err(KernelTrap::DataRace));
+}
+
 fn refused(body: Vec<Stmt>) -> KernelError {
     check_kernel(&kernel(body)).expect_err("the checker refuses it")
 }

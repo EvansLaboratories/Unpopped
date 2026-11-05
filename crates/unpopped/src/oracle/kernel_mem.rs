@@ -287,7 +287,7 @@ impl ThreadCtx<'_> {
     }
 
     /// Log an access to a `Shared` element (a no-op for the other spaces).
-    fn log_shared(
+    pub(super) fn log_shared(
         &mut self,
         alloc: u32,
         i: usize,

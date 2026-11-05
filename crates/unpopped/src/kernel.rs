@@ -350,7 +350,8 @@ pub enum Stmt {
     /// An asynchronous copy of `elems` contiguous elements from the global buffer place `src` to the `Shared`
     /// allocation place `dst`, issued by one thread (`cp.async`; ROADMAP U8 S1, `docs/options-u8-copy-atoms.md`). It
     /// lands only when a later [`Stmt::AsyncWait`] covers its group: `elems` times the element size is 4, 8 or 16
-    /// bytes. The oracle reads the source at issue and writes the destination at the wait, so reading or
+    /// bytes. The oracle reads the source at issue and writes the destination at the wait (issue and landing are both
+    /// logged writes, as the hardware may write any time after issue), so reading or
     /// overwriting those elements in between is the typed `KernelTrap::AsyncRace`; a copy never waited for is
     /// `KernelTrap::AsyncUnwaited`. `unpopped-cpu-c` performs the copy at issue (a correct kernel cannot tell).
     CopyAsync {
