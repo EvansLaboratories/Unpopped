@@ -548,6 +548,9 @@ impl<'a> Machine<'a> {
             .map_err(|_| KernelTrap::Unsupported("ill-typed expression"))?
         {
             Ty::Packed(..) => Err(KernelTrap::Unsupported("packed value")),
+            Ty::Scalar(t) if types::is_subbyte_int(t) => {
+                Ok(Val::Raw((self.eval_subbyte(e, t)? as u128) & 0xf, t))
+            }
             Ty::Scalar(t) if types::int_range(t).is_some() => Ok(int_val(self.eval_int(e, t)?, t)),
             Ty::Scalar(t) => self.eval_float(e, t),
         }
@@ -632,9 +635,32 @@ impl<'a> Machine<'a> {
         }))
     }
 
+    /// A sub-byte integer expression (`I4`, `U4`): only a local, a constant or a narrowing `Cast` of an integer exists
+    /// (a sub-byte value is read, widened and narrowed, never computed on). The value is in the type's range.
+    fn eval_subbyte(&self, e: &ScalarExpr, t: ElementKind) -> Result<i128, KernelTrap> {
+        let (lo, hi) = types::subbyte_range(t).expect("a sub-byte type");
+        let wrap = |v: i128| (v - lo).rem_euclid(hi - lo + 1) + lo;
+        match e {
+            ScalarExpr::Local(i) => match self.local_val(*i) {
+                Val::Raw(b, dt) => Ok(raw_to_i128(b, dt)),
+                _ => Err(KernelTrap::Unsupported(
+                    "a non-raw value in a sub-byte local",
+                )),
+            },
+            ScalarExpr::ConstInt(v, _) => Ok(wrap(i128::from(*v))),
+            ScalarExpr::Cast(x, spec) if spec.to == t && spec.sat == Saturation::Wrap => {
+                Ok(wrap(self.eval_operand_int(x)?))
+            }
+            _ => Err(KernelTrap::Unsupported(
+                "arithmetic on a sub-byte value (widen it with a Cast first)",
+            )),
+        }
+    }
+
     /// An integer operand evaluated at its own inferred type.
     fn eval_operand_int(&self, e: &ScalarExpr) -> Result<i128, KernelTrap> {
         match types::infer_ty_in(e, self.k.compute, &self.local_tys) {
+            Ok(Ty::Scalar(t)) if types::is_subbyte_int(t) => self.eval_subbyte(e, t),
             Ok(Ty::Scalar(t)) if types::int_range(t).is_some() => self.eval_int(e, t),
             _ => Err(KernelTrap::Unsupported(
                 "comparison of a non-integer operand",
