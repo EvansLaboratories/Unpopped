@@ -10,6 +10,7 @@ use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
 use unpopped::oracle::kernel_launch::run_launch;
 
+#[expect(dead_code, reason = "the shared kernels; this file uses its own")]
 #[path = "support/attention.rs"]
 mod attention;
 use attention::{
