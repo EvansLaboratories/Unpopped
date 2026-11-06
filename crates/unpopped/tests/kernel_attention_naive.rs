@@ -15,6 +15,7 @@ use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
 use unpopped::oracle::kernel_launch::run_launch;
 
+#[expect(dead_code, reason = "the shared kernels; this file uses the naive one")]
 #[path = "support/attention.rs"]
 mod attention;
 use attention::{D, DV, F32, LK, LQ, attention_data, attention_reference, naive_attention};
