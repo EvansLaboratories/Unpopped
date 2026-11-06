@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.15` — docs: options note for U10 attention at the kernel layer; ROADMAP U9b marked done
+
+`docs/options-u10-attention.md` proposes scope A for ROADMAP U10 (kernel-layer attention conformance kernels A1 to A4 and A6 with cpu-c differentials and seeded-mutation passes, no new IR; backward held) and lists the plan-layer items that stay blocked on KISS and Fuel. The U9b row is updated to match #305 and #306. No code changes.
+
+---
+
 ## `0.44.14` — cpu-c spells `I4`/`U4` kernel buffers and sub-byte `Cast` (ROADMAP U9b S2; additive: a refusal becomes an acceptance)
 
 A kernel `Load` of an `I4`/`U4` buffer element is spelled as a shift and mask of the packed byte (low nibble first; `I4` sign-extended by xor-and-subtract), a widening `Cast` as the plain C conversion and a narrowing `Cast` as a wrap modulo 16. The buffer argument is `const unsigned char*`. `kernel_subbyte_load_refused.rs` becomes `kernel_subbyte_emit_agrees.rs` (C compiled and run against `run_launch` over all 16 nibble values and the narrowing wrap); five seeded mutants caught. S3 adds the dequantizing GEMM conformance kernel (`out[r][c] = sum_k (w4[r][k] - zero[g]) * scale[g] * x[k][c]`, `I4` and `U4` weights; `kernel_dequant_gemm.rs`, `kernel_dequant_gemm_emit_agrees.rs`; five seeded mutants caught: nibble order, zero point ignored, scale group ignored, zero group ignored, k stride).
