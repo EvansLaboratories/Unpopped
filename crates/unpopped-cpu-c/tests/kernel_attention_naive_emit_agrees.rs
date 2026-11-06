@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! **The serial C of naive attention agrees with the launch interpreter** (ROADMAP U10 A1, `docs/options-u10-attention.md`):
-//! compiled with a host C compiler and run, the scores and the output match `run_launch` within a few ulps (the C library's `exp`
-//! need not equal the interpreter's bit for bit) and the host loop within the oracle test's tolerance.
+//! compiled with a host C compiler and run, the scores and the output match `run_launch` within 64 ulps (the C library's `exp`
+//! need not equal the interpreter's bit for bit).
 
 use unpopped::backend::Backend;
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
 use unpopped_cpu_c::CpuC;
 
+#[expect(
+    dead_code,
+    reason = "the shared kernel and data; the host reference is the oracle test's"
+)]
 #[path = "support/attention.rs"]
 mod attention;
 #[path = "support/cc.rs"]
@@ -18,6 +22,10 @@ mod cc;
 )]
 #[path = "support/kernel_run.rs"]
 mod kernel_run;
+#[expect(
+    dead_code,
+    reason = "the shared runner; this file uses the tolerance form"
+)]
 #[path = "support/launch_run.rs"]
 mod launch_run;
 use attention::{DV, F32, LK, LQ, attention_data, naive_attention};

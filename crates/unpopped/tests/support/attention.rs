@@ -120,7 +120,11 @@ fn softmax_stats() -> Vec<Stmt> {
                 load(7, 3, s_at(local(1))),
                 Stmt::Assign {
                     local: 5,
-                    value: ScalarExpr::Binary(BinaryOp::Max, Box::new(local(5)), Box::new(local(7))),
+                    value: ScalarExpr::Binary(
+                        BinaryOp::Max,
+                        Box::new(local(5)),
+                        Box::new(local(7)),
+                    ),
                 },
             ],
         ),

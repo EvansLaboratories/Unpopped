@@ -1,0 +1,3 @@
+kind: naive attention conformance kernel A1 (ROADMAP U10; tests only)
+---
+`kernel_attention_naive.rs` and `unpopped-cpu-c/tests/kernel_attention_naive_emit_agrees.rs` pin a single-head attention written with the kernel layer alone (scores into a scratch buffer, row max, `exp(s - max)` sum, weighted values; `F32`, one thread per query row, scores past 89 so an `exp` without the max subtraction overflows). Oracle against a host loop; C compiled and run against `run_launch` within 64 ulps. Seven seeded mutants are caught by the oracle test and two more (row max a min, max subtraction dropped everywhere) only by the C differential, because the oracle keeps an `F32` local unrounded between statements; one mutant is equivalent. See `docs/options-u10-attention.md`.

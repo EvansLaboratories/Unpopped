@@ -3,6 +3,14 @@
 //! max and sum, then the weighted values. The oracle's result must match a host loop in the same `f32` order, and the data must be
 //! able to tell the mutants apart: some score passes 89 (an `exp` without the max subtraction overflows), the row maximum sits
 //! at different positions, and the output is not constant across rows.
+//!
+//! Seeded mutants (anchor count 1, tree committed first): scale dropped, max subtraction dropped in the sums or in the weights,
+//! normalizer dropped, a key read d-major, the last key left out of the sum, and the `V` row stride wrong (`DV` differs from `D` on
+//! purpose) are caught here. **Two survive here and are not equivalent in the same way.** "Row max starts at the last score" is
+//! equivalent (the loop still visits every score). "Row max is a min" and "max subtraction dropped from both places" survive
+//! because the oracle keeps an `F32` local unrounded at `f64` between statements (`exp(234)` stays finite in a local and is `inf`
+//! only when stored), where `float` C overflows; the C differential (`unpopped-cpu-c/tests/kernel_attention_naive_emit_agrees.rs`)
+//! catches both (C gives NaN, the interpreter a finite row). That oracle behaviour is reported to the PM, not changed here.
 
 use unpopped::kernel::check_kernel;
 use unpopped::oracle::TypedBuffer;
@@ -74,7 +82,10 @@ fn the_data_can_tell_the_mutants_apart() {
     };
     let positions: std::collections::BTreeSet<usize> = (0..LQ).map(argmax).collect();
     assert!(positions.len() >= 2, "the maximum moves: {positions:?}");
-    assert!(positions.contains(&(LK - 1)), "a row peaks in the last position");
+    assert!(
+        positions.contains(&(LK - 1)),
+        "a row peaks in the last position"
+    );
     assert!(
         out.chunks(DV).any(|r| r != &out[..DV]),
         "rows of the output differ"
