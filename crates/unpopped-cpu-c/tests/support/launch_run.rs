@@ -27,6 +27,11 @@ pub(crate) fn written(k: &KernelFn, args: &[KernelArg]) -> (Vec<Vec<u8>>, Vec<El
 /// with the same bytes in every written buffer. (A launch trap is not compared: the C reference
 /// only claims the kernels the interpreter finishes.)
 pub(crate) fn agree_launch(tag: &str, k: &KernelFn, args: Vec<KernelArg>) {
+    agree_launch_within(tag, k, args, 0);
+}
+
+/// [`agree_launch`] with an `F32` tolerance of `tol` ulps (the C library's `exp` need not match the interpreter's bit for bit).
+pub(crate) fn agree_launch_within(tag: &str, k: &KernelFn, args: Vec<KernelArg>, tol: u64) {
     let Some(c) = run_c(tag, k, &args) else {
         return;
     };
@@ -39,7 +44,7 @@ pub(crate) fn agree_launch(tag: &str, k: &KernelFn, args: Vec<KernelArg>) {
                 c.status
             );
             let (want, dtypes) = written(k, &interp);
-            same_bytes(tag, &c.outs, &want, &dtypes, 0);
+            same_bytes(tag, &c.outs, &want, &dtypes, tol);
         }
         Err(KernelTrap::OutOfBounds { .. }) => {
             assert_eq!(c.status, 1, "{tag}: interpreter OutOfBounds");
