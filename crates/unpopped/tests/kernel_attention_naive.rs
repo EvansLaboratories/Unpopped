@@ -4,13 +4,11 @@
 //! able to tell the mutants apart: some score passes 89 (an `exp` without the max subtraction overflows), the row maximum sits
 //! at different positions, and the output is not constant across rows.
 //!
-//! Seeded mutants (anchor count 1, tree committed first): scale dropped, max subtraction dropped in the sums or in the weights,
-//! normalizer dropped, a key read d-major, the last key left out of the sum, and the `V` row stride wrong (`DV` differs from `D` on
-//! purpose) are caught here. **Two survive here and are not equivalent in the same way.** "Row max starts at the last score" is
-//! equivalent (the loop still visits every score). "Row max is a min" and "max subtraction dropped from both places" survive
-//! because the oracle keeps an `F32` local unrounded at `f64` between statements (`exp(234)` stays finite in a local and is `inf`
-//! only when stored), where `float` C overflows; the C differential (`unpopped-cpu-c/tests/kernel_attention_naive_emit_agrees.rs`)
-//! catches both (C gives NaN, the interpreter a finite row). That oracle behaviour is reported to the PM, not changed here.
+//! Seeded mutants (anchor count fixed, tree committed first), all caught here: scale dropped, max subtraction dropped in the sums, in
+//! the weights or in both, normalizer dropped, the row max a min, a key read d-major, the last key left out of the sum, and the `V`
+//! row stride wrong (`DV` differs from `D` on purpose). One is equivalent and documented: "row max starts at the last score" (the loop
+//! still visits every score). The overflow mutants need the oracle to hold an `F32` local as an `f32` (fixed with this kernel's
+//! base, `tests/kernel_f32_local_rounding.rs`): before it, only the C differential caught them.
 
 use unpopped::kernel::check_kernel;
 use unpopped::oracle::TypedBuffer;
