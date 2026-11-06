@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.17` — naive attention conformance kernel A1 (ROADMAP U10; tests only)
+
+`kernel_attention_naive.rs` and `unpopped-cpu-c/tests/kernel_attention_naive_emit_agrees.rs` pin a single-head attention written with the kernel layer alone (scores into a scratch buffer, row max, `exp(s - max)` sum, weighted values; `F32`, one thread per query row, scores past 89 so an `exp` without the max subtraction overflows). Oracle against a host loop; C compiled and run against `run_launch` within 2 ulps. Nine seeded mutants are caught by the oracle test (the overflow ones depend on the oracle rounding `F32` locals, the fix in the same queue); one is equivalent and documented. See `docs/options-u10-attention.md`.
+
+---
+
 ## `0.44.16` — the kernel oracle rounds a floating local to its own type
 
 `Let`, `Assign` and a call's scalar argument now round a floating value to the local's type (`F32`, `F16`, `BF16`, `F32Strict`) when it is written, as the serial C does for a `float` variable; before, the oracle kept the `f64` result in an `F32` local between statements, so `exp(234)` stayed finite and `2^24 + 1 - 2^24` was `1` where `float` C gives `inf` and `0`. Found writing the U10 attention kernel A1. `tests/kernel_f32_local_rounding.rs` is red on the old behaviour (an overflowing local, an assigned local, an `F64` control); the full `unpopped`, `unpopped-cpu-c` and `unpopped-vocab` suites pass unchanged, so no test moved and no tolerance was touched. Recorded in `docs/ir-kernel-layer.md` section 5.
