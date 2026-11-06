@@ -253,3 +253,113 @@ pub(crate) fn attention_reference() -> (Vec<f32>, Vec<f32>) {
     }
     (s, out)
 }
+
+// A2 locals: 0 dot, 1 j, 2 d (output column), 3 q, 4 k, 5 m, 6 l, 7 s, 8 v, 9 m_new, 10 alpha, 11 p, 12 acc, 13 e (head dim).
+
+/// The most negative finite `f32` stands for "no score yet", so the first rescale `exp(m - m_new)` is exactly 0.
+pub(crate) const NO_SCORE: f64 = -3.0e38;
+
+/// `s = SCALE * dot(Q[row], K[j])` into local 7, without storing it anywhere.
+fn score_inline() -> Vec<Stmt> {
+    vec![
+        Stmt::Let {
+            local: 0,
+            init: ScalarExpr::Const(0.0),
+        },
+        counted(
+            13,
+            D,
+            vec![
+                load(3, 0, add(mul(row(), cu(D)), local(13))),
+                load(4, 1, add(mul(local(1), cu(D)), local(13))),
+                Stmt::Assign {
+                    local: 0,
+                    value: add(local(0), mul(local(3), local(4))),
+                },
+            ],
+        ),
+        Stmt::Let {
+            local: 7,
+            init: mul(local(0), ScalarExpr::Const(SCALE)),
+        },
+    ]
+}
+
+/// The online-softmax update for one key: `m' = max(m, s)`, `alpha = exp(m - m')`, `p = exp(s - m')`,
+/// `l = l * alpha + p`, `acc = acc * alpha + p * V[j][d]`, `m = m'`.
+fn online_step() -> Vec<Stmt> {
+    let mut b = score_inline();
+    b.extend([
+        load(8, 2, add(mul(local(1), cu(DV)), local(2))),
+        Stmt::Let {
+            local: 9,
+            init: ScalarExpr::Binary(BinaryOp::Max, Box::new(local(5)), Box::new(local(7))),
+        },
+        Stmt::Let {
+            local: 10,
+            init: exp(sub(local(5), local(9))),
+        },
+        Stmt::Let {
+            local: 11,
+            init: exp(sub(local(7), local(9))),
+        },
+        Stmt::Assign {
+            local: 6,
+            value: add(mul(local(6), local(10)), local(11)),
+        },
+        Stmt::Assign {
+            local: 12,
+            value: add(mul(local(12), local(10)), mul(local(11), local(8))),
+        },
+        Stmt::Assign {
+            local: 5,
+            value: local(9),
+        },
+    ]);
+    b
+}
+
+/// Flash-style forward: no score matrix. Per query row and output column, one pass over the keys keeps `(m, l, acc)`.
+/// Buffers: 0 `q`, 1 `k`, 2 `v` (read), 3 `out` `[LQ*DV]`; all `F32`.
+pub(crate) fn flash_attention() -> KernelFn {
+    let column = counted(
+        2,
+        DV,
+        vec![
+            Stmt::Let {
+                local: 5,
+                init: ScalarExpr::Const(NO_SCORE),
+            },
+            Stmt::Let {
+                local: 6,
+                init: ScalarExpr::Const(0.0),
+            },
+            Stmt::Let {
+                local: 12,
+                init: ScalarExpr::Const(0.0),
+            },
+            counted(1, LK, online_step()),
+            Stmt::Store {
+                place: flat(3, add(mul(row(), cu(DV)), local(2))),
+                value: div(local(12), local(6)),
+            },
+        ],
+    );
+    let mut locals = vec![LocalDecl::scalar(F32); 14];
+    for u in [1, 2, 13] {
+        locals[u] = LocalDecl::scalar(U32);
+    }
+    KernelFn::new(
+        "attention_flash",
+        F32,
+        vec![
+            Param::buffer("q", F32, BufferRole::Read, Some(1)),
+            Param::buffer("k", F32, BufferRole::Read, Some(1)),
+            Param::buffer("v", F32, BufferRole::Read, Some(1)),
+            Param::buffer("out", F32, BufferRole::ReadWrite, Some(1)),
+        ],
+        locals,
+        Block(vec![column]),
+    )
+    .with_launch(LaunchShape::new([LQ as u32, 1, 1], [1, 1, 1]))
+}
