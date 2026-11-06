@@ -120,3 +120,9 @@ fn the_data_can_tell_the_mutants_apart() {
     );
     assert!(out.iter().all(|x| x.is_finite()));
 }
+
+#[test]
+fn the_a_and_b_id_tables_are_the_same_for_this_atom() {
+    // Documents the equivalent mutant "P gathered with the B table": for the toy atom the two fragment layouts coincide.
+    assert_eq!(id_table(0), id_table(1));
+}
