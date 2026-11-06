@@ -33,7 +33,7 @@ fn the_dequant_gemm_matches_the_host_loop_for_i4_and_u4_weights() {
             i32_buf(&zero),
             i32_buf(&scale),
             i32_buf(&x),
-            i32_buf(&vec![0; R * C]),
+            i32_buf(&[0; R * C]),
         ];
         run_launch(&k, &mut args).expect("the oracle runs it");
         let KernelArg::Buffer(out) = &args[4] else {

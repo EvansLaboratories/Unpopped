@@ -47,7 +47,7 @@ fn args(sub: ElementKind) -> Vec<KernelArg> {
         i32_buf(&zero),
         i32_buf(&scale),
         i32_buf(&x),
-        i32_buf(&vec![0; R * C]),
+        i32_buf(&[0; R * C]),
     ]
 }
 
