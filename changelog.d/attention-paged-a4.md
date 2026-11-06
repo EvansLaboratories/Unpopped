@@ -1,0 +1,3 @@
+kind: paged-KV decode attention conformance kernel A4 (ROADMAP U10; tests only)
+---
+`kernel_attention_paged.rs` and `unpopped-cpu-c/tests/kernel_attention_paged_emit_agrees.rs` pin flash-style decode attention over a paged KV cache written with the kernel layer alone: K and V in a pool of pages, an `I32` block table in a buffer (options note Q5, no pointers) mapping (sequence, logical page) to a pool page, and per-sequence lengths (a partial last page, exactly one page, an odd count, and a zero-length sequence that yields zeros). Unused table entries name a poison page, so a wrong page, slot or length changes the answer. Oracle against a host gather; C against `run_launch` within 2 ulps. See `docs/options-u10-attention.md`.

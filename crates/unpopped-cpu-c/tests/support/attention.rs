@@ -260,7 +260,7 @@ pub(crate) fn attention_reference() -> (Vec<f32>, Vec<f32>) {
 pub(crate) const NO_SCORE: f64 = -3.0e38;
 
 /// `s = SCALE * dot(Q[row], K[j])` into local 7, without storing it anywhere.
-fn score_inline() -> Vec<Stmt> {
+fn score_inline(k_row: ScalarExpr) -> Vec<Stmt> {
     vec![
         Stmt::Let {
             local: 0,
@@ -271,7 +271,7 @@ fn score_inline() -> Vec<Stmt> {
             D,
             vec![
                 load(3, 0, add(mul(row(), cu(D)), local(13))),
-                load(4, 1, add(mul(local(1), cu(D)), local(13))),
+                load(4, 1, add(mul(k_row, cu(D)), local(13))),
                 Stmt::Assign {
                     local: 0,
                     value: add(local(0), mul(local(3), local(4))),
@@ -288,15 +288,15 @@ fn score_inline() -> Vec<Stmt> {
 /// The online-softmax update for one key: `m' = max(m, s)`, `alpha = exp(m - m')`, `p = exp(s - m')`,
 /// `l = l * alpha + p`, `acc = acc * alpha + p * V[j][d]`, `m = m'`.
 fn online_step() -> Vec<Stmt> {
-    let mut b = score_inline();
-    b.extend(online_tail());
+    let mut b = score_inline(local(1));
+    b.extend(online_tail(local(1)));
     b
 }
 
 /// The update half of [`online_step`], given the score in local 7.
-fn online_tail() -> Vec<Stmt> {
+fn online_tail(v_row: ScalarExpr) -> Vec<Stmt> {
     vec![
-        load(8, 2, add(mul(local(1), cu(DV)), local(2))),
+        load(8, 2, add(mul(v_row, cu(DV)), local(2))),
         Stmt::Let {
             local: 9,
             init: ScalarExpr::Binary(BinaryOp::Max, Box::new(local(5)), Box::new(local(7))),
@@ -439,9 +439,9 @@ fn decode_kernel(
 /// A3: key `j` is visible to query row `i` when `j + lag <= i` (`lag = 0` is causal; `lag = 1` hides the diagonal, so row 0 sees
 /// nothing). With a `slope`, a visible score also loses `slope * (i - j)` (the ALiBi bias). A row that sees no key is all zeros.
 pub(crate) fn masked_attention(lag: usize, slope: Option<f64>) -> KernelFn {
-    let mut step = score_inline();
+    let mut step = score_inline(local(1));
     step.extend(slope.map(alibi_bias));
-    step.extend(online_tail());
+    step.extend(online_tail(local(1)));
     let visible = ScalarExpr::Binary(
         BinaryOp::CmpLe,
         Box::new(add(local(1), cu(lag))),
@@ -490,6 +490,127 @@ pub(crate) fn masked_reference(lag: usize, slope: Option<f64>) -> Vec<f32> {
                 let p = (s - mn).exp();
                 l = l * alpha + p;
                 acc = acc * alpha + p * v[j * DV + d];
+                m = mn;
+            }
+            out[i * DV + d] = if l > 0.0 { acc / l } else { 0.0 };
+        }
+    }
+    out
+}
+
+// A4: a paged KV cache. One query token per sequence; K and V live in a pool of PAGE-token pages, and an `I32` block table maps
+// (sequence, logical page) to a pool page. `lens` holds each sequence's token count. Locals: 14 page (`I32`), 15 slot, 16 len (`I32`).
+
+pub(crate) const I32: ElementKind = ElementKind::I32;
+/// Sequences (one thread each), tokens per page, logical pages per sequence, pool pages.
+pub(crate) const NSEQ: usize = 3;
+pub(crate) const PAGE: usize = 2;
+pub(crate) const MAXP: usize = 4;
+pub(crate) const NPAGES: usize = 9;
+/// Token counts: a partial last page, exactly one full page, an odd count.
+pub(crate) const LENS: [i32; NSEQ] = [7, 2, 5];
+/// The block table, row per sequence. Unused entries name page 8, whose contents are poison.
+pub(crate) const TABLE: [i32; NSEQ * MAXP] = [5, 2, 7, 0, 3, 8, 8, 8, 6, 1, 4, 8];
+
+fn to_u32(x: ScalarExpr) -> ScalarExpr {
+    ScalarExpr::Cast(
+        Box::new(x),
+        CastSpec {
+            to: U32,
+            round: RoundMode::NearestEven,
+            sat: Saturation::Wrap,
+        },
+    )
+}
+
+/// Paged decode attention, flash-style. Buffers: 0 `q` `[NSEQ*D]`, 1 `k` pool `[NPAGES*PAGE*D]`, 2 `v` pool `[NPAGES*PAGE*DV]`,
+/// 3 `table` `I32` `[NSEQ*MAXP]`, 4 `lens` `I32` `[NSEQ]`, 5 `out` `[NSEQ*DV]`.
+pub(crate) fn paged_attention() -> KernelFn {
+    let pool_row = add(mul(to_u32(local(14)), cu(PAGE)), local(15));
+    let mut step = score_inline(pool_row.clone());
+    step.extend(online_tail(pool_row));
+    let token = add(mul(local(1), cu(PAGE)), local(15));
+    let visible = ScalarExpr::Binary(
+        BinaryOp::CmpLt,
+        Box::new(token),
+        Box::new(to_u32(local(16))),
+    );
+    let page_loop = counted(
+        1,
+        MAXP,
+        vec![
+            load(14, 3, add(mul(row(), cu(MAXP)), local(1))),
+            counted(
+                15,
+                PAGE,
+                vec![Stmt::If {
+                    cond: visible,
+                    then: Block(step),
+                    els: Block(vec![]),
+                }],
+            ),
+        ],
+    );
+    let column = softmax_column(vec![load(16, 4, row()), page_loop], 5);
+    let params = vec![
+        Param::buffer("q", F32, BufferRole::Read, Some(1)),
+        Param::buffer("k", F32, BufferRole::Read, Some(1)),
+        Param::buffer("v", F32, BufferRole::Read, Some(1)),
+        Param::buffer("table", I32, BufferRole::Read, Some(1)),
+        Param::buffer("lens", I32, BufferRole::Read, Some(1)),
+        Param::buffer("out", F32, BufferRole::ReadWrite, Some(1)),
+    ];
+    let ints = [
+        (1, U32),
+        (2, U32),
+        (13, U32),
+        (14, I32),
+        (15, U32),
+        (16, I32),
+    ];
+    decode_kernel("attention_paged", params, &ints, 17, column, NSEQ)
+}
+
+/// `(q, k_pool, v_pool)`: quarter-integer queries (so the softmax is not one-hot and K matters), small-integer pools; page 8 is poison (huge), so a read of an unused table entry or past a length shows.
+pub(crate) fn paged_data() -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    let (q, _, _) = attention_data();
+    let pool = |width: usize, mul_a: usize, mod_a: usize, skew: usize| -> Vec<f32> {
+        (0..NPAGES * PAGE * width)
+            .map(|i| {
+                if i / (PAGE * width) == 8 {
+                    1000.0
+                } else {
+                    ((i * mul_a + i / width * skew) % mod_a) as f32 - (mod_a / 2) as f32
+                }
+            })
+            .collect()
+    };
+    (
+        q[..NSEQ * D].iter().map(|x| x * 0.25).collect(),
+        pool(D, 1, 5, 3),
+        pool(DV, 1, 5, 3),
+    )
+}
+
+/// The host result, gathering each sequence's tokens through the table, in the kernel's `f32` order.
+pub(crate) fn paged_reference() -> Vec<f32> {
+    let (q, k, v) = paged_data();
+    let mut out = vec![0f32; NSEQ * DV];
+    for i in 0..NSEQ {
+        for d in 0..DV {
+            let (mut m, mut l, mut acc) = (NO_SCORE as f32, 0f32, 0f32);
+            for t in 0..LENS[i] as usize {
+                let r = TABLE[i * MAXP + t / PAGE] as usize * PAGE + t % PAGE;
+                let mut dot = 0f32;
+                for e in 0..D {
+                    dot += q[i * D + e] * k[r * D + e];
+                }
+                let s = dot * SCALE as f32;
+                let mn = m.max(s);
+                let alpha = (m - mn).exp();
+                let p = (s - mn).exp();
+                l = l * alpha + p;
+                acc = acc * alpha + p * v[r * DV + d];
                 m = mn;
             }
             out[i * DV + d] = if l > 0.0 { acc / l } else { 0.0 };
