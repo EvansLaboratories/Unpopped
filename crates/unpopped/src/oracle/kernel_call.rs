@@ -118,8 +118,15 @@ impl<'a> Machine<'a> {
         };
         for (a, p) in args.iter().zip(&f.params) {
             match (a, &p.kind) {
-                (CallArg::Scalar(e), ParamKind::Scalar { local, .. }) => {
-                    bound.scalars.push((*local, self.eval_expr(e)?));
+                (CallArg::Scalar(e), ParamKind::Scalar { local, ty }) => {
+                    // a float argument is held in the parameter's own type, as a C call converts it
+                    let v = match self.eval_expr(e)? {
+                        super::Val::Float(f) => {
+                            super::Val::Float(crate::oracle::round_to_compute(f, *ty))
+                        }
+                        other => other,
+                    };
+                    bound.scalars.push((*local, v));
                     bound.bufmap.push(usize::MAX);
                 }
                 (CallArg::Buffer(b), ParamKind::Buffer { .. }) => {

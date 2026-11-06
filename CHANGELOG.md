@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.16` — the kernel oracle rounds a floating local to its own type
+
+`Let`, `Assign` and a call's scalar argument now round a floating value to the local's type (`F32`, `F16`, `BF16`, `F32Strict`) when it is written, as the serial C does for a `float` variable; before, the oracle kept the `f64` result in an `F32` local between statements, so `exp(234)` stayed finite and `2^24 + 1 - 2^24` was `1` where `float` C gives `inf` and `0`. Found writing the U10 attention kernel A1. `tests/kernel_f32_local_rounding.rs` is red on the old behaviour (an overflowing local, an assigned local, an `F64` control); the full `unpopped`, `unpopped-cpu-c` and `unpopped-vocab` suites pass unchanged, so no test moved and no tolerance was touched. Recorded in `docs/ir-kernel-layer.md` section 5.
+
+---
+
 ## `0.44.15` — docs: options note for U10 attention at the kernel layer; ROADMAP U9b marked done
 
 `docs/options-u10-attention.md` proposes scope A for ROADMAP U10 (kernel-layer attention conformance kernels A1 to A4 and A6 with cpu-c differentials and seeded-mutation passes, no new IR; backward held) and lists the plan-layer items that stay blocked on KISS and Fuel. The U9b row is updated to match #305 and #306. No code changes.
