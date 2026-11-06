@@ -41,7 +41,7 @@ fn f32_buf(v: &[f32]) -> KernelArg {
 
 #[test]
 fn the_c_masked_attention_agrees_with_the_oracle() {
-    for (lag, slope) in [(0, None), (0, Some(0.75)), (1, None), (1, Some(0.75))] {
+    for (lag, slope) in [(0, None), (0, Some(4.0)), (1, None), (1, Some(4.0))] {
         let k = masked_attention(lag, slope);
         assert!(CpuC.lower_kernel(&k).is_ok(), "the kernel lowers");
         let (q, kk, v) = attention_data();

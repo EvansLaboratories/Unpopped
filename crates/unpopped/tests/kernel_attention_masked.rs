@@ -88,4 +88,10 @@ fn a_row_that_sees_no_key_is_zeros_and_the_variants_differ() {
     // Row 0 of the causal kernel sees exactly key 0, so its output is V[0].
     let (_, _, v) = attention_data();
     assert_eq!(&causal[..DV], &v[..DV]);
+    // Scores are multiples of 6, so a small slope barely moves the softmax; slope 4 does, by far more than the tolerance.
+    let (plain, biased) = (run(0, None), run(0, Some(4.0)));
+    assert!(
+        plain.iter().zip(&biased).any(|(a, b)| (a - b).abs() > 1e-2),
+        "the bias is visible"
+    );
 }
