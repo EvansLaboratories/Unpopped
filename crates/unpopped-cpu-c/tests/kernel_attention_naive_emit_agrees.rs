@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! **The serial C of naive attention agrees with the launch interpreter** (ROADMAP U10 A1, `docs/options-u10-attention.md`):
-//! compiled with a host C compiler and run, the scores and the output match `run_launch` within 64 ulps (the C library's `exp`
+//! compiled with a host C compiler and run, the scores and the output match `run_launch` within 2 ulps (the C library's `exp`
 //! need not equal the interpreter's bit for bit).
 
 use unpopped::backend::Backend;
@@ -52,5 +52,5 @@ fn the_c_naive_attention_agrees_with_the_oracle() {
         f32_buf(&[0.0; LQ * LK]),
         f32_buf(&[0.0; LQ * DV]),
     ];
-    agree_launch_within("naive attention", &k, args, 64);
+    agree_launch_within("naive attention", &k, args, 2);
 }
