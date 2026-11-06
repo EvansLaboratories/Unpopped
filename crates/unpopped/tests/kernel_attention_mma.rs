@@ -3,7 +3,14 @@
 //! `Stmt::Mma` over the two key tiles, the row softmax between them in scalar code (the lanes exchange `S` and `P` through
 //! global scratch and block barriers), and `O = P V` as a third `Stmt::Mma`, on an `F32` toy `m4n4k8` atom. The oracle's
 //! result must match a host loop in the same `f32` order. Scores pass 89, the row maximum sits at different keys, and the key
-//! tiles differ, so a dropped max subtraction, a swapped tile, a wrong fragment table or a missing barrier changes the answer.
+//! tiles differ, so a dropped max subtraction, a swapped tile, a wrong fragment or output index or a wrong scale changes the answer.
+//!
+//! Seeded mutants (tree committed first, anchor count fixed): scale dropped, second key tile read from the first, max subtraction
+//! dropped in the sums, in the weights, normalizer dropped, `V` from the wrong buffer, `C` of the output MMA not zeroed, row max a
+//! min, `P` tile offset dropped, output index table wrong; all caught. Not pinned, and said so: the two block barriers (one
+//! subgroup runs in lockstep in the oracle and in the serial C, so dropping either changes nothing either backend can see; the
+//! barrier semantics are pinned by `kernel_barrier.rs`), and two equivalent mutants ("row max starts at key 4", and "`P` gathered
+//! with the `B` table", because for this atom the two id tables are equal, asserted below).
 
 use unpopped::kernel::check_kernel;
 use unpopped::oracle::TypedBuffer;
