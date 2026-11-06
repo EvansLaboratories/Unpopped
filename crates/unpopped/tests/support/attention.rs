@@ -367,24 +367,78 @@ pub(crate) fn flash_attention() -> KernelFn {
     .with_launch(LaunchShape::new([LQ as u32, 1, 1], [1, 1, 1]))
 }
 
+/// The ALiBi bias on a visible score: `s -= slope * (row - j)`.
+fn alibi_bias(slope: f64) -> Stmt {
+    let dist = ScalarExpr::Cast(
+        Box::new(sub(row(), local(1))),
+        CastSpec {
+            to: F32,
+            round: RoundMode::NearestEven,
+            sat: Saturation::Wrap,
+        },
+    );
+    Stmt::Assign {
+        local: 7,
+        value: sub(local(7), mul(ScalarExpr::Const(slope), dist)),
+    }
+}
+
+/// The per-output-column skeleton of a streamed softmax: `(m, l, acc)` start empty, `scan` updates them, and the column
+/// `out[row][d]` is `acc / l`, or 0 when no key was visible (`l == 0`). `out` is the output buffer's index.
+fn softmax_column(scan: Vec<Stmt>, out: u32) -> Stmt {
+    let nonempty = ScalarExpr::Binary(
+        BinaryOp::CmpGt,
+        Box::new(local(6)),
+        Box::new(ScalarExpr::Const(0.0)),
+    );
+    let mut body = vec![
+        Stmt::Let {
+            local: 5,
+            init: ScalarExpr::Const(NO_SCORE),
+        },
+        Stmt::Let {
+            local: 6,
+            init: ScalarExpr::Const(0.0),
+        },
+        Stmt::Let {
+            local: 12,
+            init: ScalarExpr::Const(0.0),
+        },
+    ];
+    body.extend(scan);
+    body.push(Stmt::Store {
+        place: flat(out, add(mul(row(), cu(DV)), local(2))),
+        value: ScalarExpr::Select(
+            Box::new(nonempty),
+            Box::new(div(local(12), local(6))),
+            Box::new(ScalarExpr::Const(0.0)),
+        ),
+    });
+    counted(2, DV, body)
+}
+
+/// A one-thread-per-row kernel over `rows` rows: `n_locals` `F32` locals except the listed integer ones.
+fn decode_kernel(
+    name: &str,
+    params: Vec<Param>,
+    int_locals: &[(usize, ElementKind)],
+    n_locals: usize,
+    column: Stmt,
+    rows: usize,
+) -> KernelFn {
+    let mut locals = vec![LocalDecl::scalar(F32); n_locals];
+    for &(i, ty) in int_locals {
+        locals[i] = LocalDecl::scalar(ty);
+    }
+    KernelFn::new(name, F32, params, locals, Block(vec![column]))
+        .with_launch(LaunchShape::new([rows as u32, 1, 1], [1, 1, 1]))
+}
+
 /// A3: key `j` is visible to query row `i` when `j + lag <= i` (`lag = 0` is causal; `lag = 1` hides the diagonal, so row 0 sees
 /// nothing). With a `slope`, a visible score also loses `slope * (i - j)` (the ALiBi bias). A row that sees no key is all zeros.
 pub(crate) fn masked_attention(lag: usize, slope: Option<f64>) -> KernelFn {
     let mut step = score_inline();
-    if let Some(m) = slope {
-        let dist = ScalarExpr::Cast(
-            Box::new(sub(row(), local(1))),
-            CastSpec {
-                to: F32,
-                round: RoundMode::NearestEven,
-                sat: Saturation::Wrap,
-            },
-        );
-        step.push(Stmt::Assign {
-            local: 7,
-            value: sub(local(7), mul(ScalarExpr::Const(m), dist)),
-        });
-    }
+    step.extend(slope.map(alibi_bias));
     step.extend(online_tail());
     let visible = ScalarExpr::Binary(
         BinaryOp::CmpLe,
@@ -396,55 +450,21 @@ pub(crate) fn masked_attention(lag: usize, slope: Option<f64>) -> KernelFn {
         then: Block(step),
         els: Block(vec![]),
     };
-    let nonempty = ScalarExpr::Binary(
-        BinaryOp::CmpGt,
-        Box::new(local(6)),
-        Box::new(ScalarExpr::Const(0.0)),
-    );
-    let column = counted(
-        2,
-        DV,
-        vec![
-            Stmt::Let {
-                local: 5,
-                init: ScalarExpr::Const(NO_SCORE),
-            },
-            Stmt::Let {
-                local: 6,
-                init: ScalarExpr::Const(0.0),
-            },
-            Stmt::Let {
-                local: 12,
-                init: ScalarExpr::Const(0.0),
-            },
-            counted(1, LK, vec![guarded]),
-            Stmt::Store {
-                place: flat(3, add(mul(row(), cu(DV)), local(2))),
-                value: ScalarExpr::Select(
-                    Box::new(nonempty),
-                    Box::new(div(local(12), local(6))),
-                    Box::new(ScalarExpr::Const(0.0)),
-                ),
-            },
-        ],
-    );
-    let mut locals = vec![LocalDecl::scalar(F32); 14];
-    for u in [1, 2, 13] {
-        locals[u] = LocalDecl::scalar(U32);
-    }
-    KernelFn::new(
+    let column = softmax_column(vec![counted(1, LK, vec![guarded])], 3);
+    let params = vec![
+        Param::buffer("q", F32, BufferRole::Read, Some(1)),
+        Param::buffer("k", F32, BufferRole::Read, Some(1)),
+        Param::buffer("v", F32, BufferRole::Read, Some(1)),
+        Param::buffer("out", F32, BufferRole::ReadWrite, Some(1)),
+    ];
+    decode_kernel(
         "attention_masked",
-        F32,
-        vec![
-            Param::buffer("q", F32, BufferRole::Read, Some(1)),
-            Param::buffer("k", F32, BufferRole::Read, Some(1)),
-            Param::buffer("v", F32, BufferRole::Read, Some(1)),
-            Param::buffer("out", F32, BufferRole::ReadWrite, Some(1)),
-        ],
-        locals,
-        Block(vec![column]),
+        params,
+        &[(1, U32), (2, U32), (13, U32)],
+        14,
+        column,
+        LQ,
     )
-    .with_launch(LaunchShape::new([LQ as u32, 1, 1], [1, 1, 1]))
 }
 
 /// The host result of [`masked_attention`], in the same `f32` operation order.
