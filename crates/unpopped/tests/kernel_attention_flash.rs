@@ -84,3 +84,26 @@ fn some_row_raises_its_maximum_after_the_first_key() {
         "rows whose running max moves more than once"
     );
 }
+
+#[test]
+fn rows_whose_every_score_is_very_negative_still_normalize() {
+    // q = 3, k = -4: every score is SCALE * 4 * -12 = -288, where exp underflows an f32. A running max that starts at 0
+    // instead of "no score yet" gives p = 0, l = 0 and 0/0; the true answer is the mean of V's rows (all weights equal).
+    use attention::{D, LK};
+    let k = flash_attention();
+    let q = vec![3.0f32; LQ * D];
+    let kk = vec![-4.0f32; LK * D];
+    let (_, _, v) = attention_data();
+    let mut args = [
+        f32_buf(&q),
+        f32_buf(&kk),
+        f32_buf(&v),
+        f32_buf(&[0.0; LQ * DV]),
+    ];
+    run_launch(&k, &mut args).expect("the oracle runs it");
+    let mean: Vec<f32> = (0..DV)
+        .map(|d| (0..LK).map(|j| v[j * DV + d]).sum::<f32>() / LK as f32)
+        .collect();
+    let want: Vec<f32> = (0..LQ).flat_map(|_| mean.clone()).collect();
+    close(&floats(&args[3]), &want, "uniform weights");
+}
