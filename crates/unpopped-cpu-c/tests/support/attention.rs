@@ -17,7 +17,7 @@ pub(crate) const U32: ElementKind = ElementKind::U32;
 pub(crate) const LQ: usize = 4;
 pub(crate) const LK: usize = 6;
 pub(crate) const D: usize = 4;
-pub(crate) const DV: usize = 4;
+pub(crate) const DV: usize = 3;
 /// The score scale. Large on purpose: with these inputs some scores pass 89, where `exp` overflows an `f32`, so a kernel that
 /// does not subtract the row max produces infinities and NaN.
 pub(crate) const SCALE: f64 = 6.0;
