@@ -67,6 +67,10 @@ fn the_c_dequant_gemm_agrees_with_the_oracle_and_the_host_loop() {
             .chunks(4)
             .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
             .collect();
-        assert_eq!(got, dequant_reference(signed), "{sub:?} against the host loop");
+        assert_eq!(
+            got,
+            dequant_reference(signed),
+            "{sub:?} against the host loop"
+        );
     }
 }
