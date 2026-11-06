@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.18` — flash-style attention conformance kernel A2 (ROADMAP U10; tests only)
+
+`kernel_attention_flash.rs` and `unpopped-cpu-c/tests/kernel_attention_flash_emit_agrees.rs` pin an online-softmax attention written with the kernel layer alone: no score matrix, per row and output column a running max, sum and accumulator, rescaled by `exp(m - m')` when a key raises the max. The oracle result matches A1's naive kernel and the host loop; the C matches `run_launch` within 2 ulps. See `docs/options-u10-attention.md`.
+
+---
+
 ## `0.44.17` — naive attention conformance kernel A1 (ROADMAP U10; tests only)
 
 `kernel_attention_naive.rs` and `unpopped-cpu-c/tests/kernel_attention_naive_emit_agrees.rs` pin a single-head attention written with the kernel layer alone (scores into a scratch buffer, row max, `exp(s - max)` sum, weighted values; `F32`, one thread per query row, scores past 89 so an `exp` without the max subtraction overflows). Oracle against a host loop; C compiled and run against `run_launch` within 2 ulps. Nine seeded mutants are caught by the oracle test (the overflow ones depend on the oracle rounding `F32` locals, the fix in the same queue); one is equivalent and documented. See `docs/options-u10-attention.md`.
