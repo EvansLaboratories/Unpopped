@@ -314,7 +314,7 @@ impl<'a> Machine<'a> {
         match st {
             Stmt::Let { local, init } => {
                 let v = self.eval_expr(init)?;
-                self.locals[*local as usize] = Some(v);
+                self.locals[*local as usize] = Some(self.settle(*local, v));
             }
             Stmt::Load { local, place } => {
                 let v = self.load(place)?;
@@ -322,7 +322,7 @@ impl<'a> Machine<'a> {
             }
             Stmt::Assign { local, value } => {
                 let v = self.eval_expr(value)?;
-                self.locals[*local as usize] = Some(v);
+                self.locals[*local as usize] = Some(self.settle(*local, v));
             }
             Stmt::Store { place, value } => {
                 let v = self.eval_expr(value)?;
@@ -538,6 +538,15 @@ impl<'a> Machine<'a> {
     }
 
     // ---- expressions --------------------------------------------------------------------
+
+    /// `v` as local `local` holds it: a floating local of a narrower type than `f64` stores the value rounded to that type, as the
+    /// serial C does for a `float` variable (an expression is evaluated at `f64` and rounded once per statement, not once per kernel).
+    fn settle(&self, local: u32, v: Val) -> Val {
+        match (v, self.local_tys[local as usize]) {
+            (Val::Float(f), Ty::Scalar(t)) => Val::Float(super::round_to_compute(f, t)),
+            _ => v,
+        }
+    }
 
     fn local_val(&self, i: u32) -> Val {
         self.locals[i as usize].expect("check_kernel guarantees a local is set before it is read")

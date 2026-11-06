@@ -113,6 +113,13 @@ buffers and returns the written buffers. Rules:
   (`KernelTrap::StepLimit`, default 10^7) so a test of a bad program terminates; it is not part of the language.
 - Expression evaluation reuses the oracle's existing evaluator unchanged (`Local` reads the cell); that is what
   makes the layers comparable bit for bit rather than approximately.
+- **A local holds its own type (fixed 2026-11-06).** `Let`, `Assign` and a call's scalar argument round a floating value to
+  the local's type (`F32`, `F16`, `BF16`, `F32Strict`; `F64` is left alone) when it is written, so a chain of statements
+  rounds at every step as the serial C does for a `float` variable; an expression is still evaluated at `f64` and rounded
+  once, per statement. Before this the oracle kept the `f64` in an `F32` local: `Let l = exp(234.0); Let r = l / l` gave `1`
+  where `float` C gives `inf / inf = NaN`, and `b = 2^24; b = b + 1; b - 2^24` gave `1` where `float` C gives `0`. Found
+  writing the attention kernel A1 (a seeded mutant survived the oracle and only the C differential caught it); probed with
+  `tests/kernel_f32_local_rounding.rs`, which is red on the old behaviour. No existing test moved.
 - `Store` writes through the operand's view, as the oracle's writeback does. Two stores to one element: the later
   wins. (Concurrent stores do not exist in v0.)
 
