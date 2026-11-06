@@ -5,7 +5,7 @@
 //! test (`unpopped-cpu-c/tests/kernel_attention_naive_emit_agrees.rs`, which keeps a copy: change both).
 
 use unpopped::exec::{ExecId, LaunchShape};
-use unpopped::ir::{BinaryOp, ScalarExpr, UnaryOp};
+use unpopped::ir::{BinaryOp, CastSpec, RoundMode, Saturation, ScalarExpr, UnaryOp};
 use unpopped::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 use unpopped_vocab::ElementKind;
 
@@ -287,7 +287,13 @@ fn score_inline() -> Vec<Stmt> {
 /// `l = l * alpha + p`, `acc = acc * alpha + p * V[j][d]`, `m = m'`.
 fn online_step() -> Vec<Stmt> {
     let mut b = score_inline();
-    b.extend([
+    b.extend(online_tail());
+    b
+}
+
+/// The update half of [`online_step`], given the score in local 7.
+fn online_tail() -> Vec<Stmt> {
+    vec![
         load(8, 2, add(mul(local(1), cu(DV)), local(2))),
         Stmt::Let {
             local: 9,
@@ -313,8 +319,7 @@ fn online_step() -> Vec<Stmt> {
             local: 5,
             value: local(9),
         },
-    ]);
-    b
+    ]
 }
 
 /// Flash-style forward: no score matrix. Per query row and output column, one pass over the keys keeps `(m, l, acc)`.
@@ -360,4 +365,113 @@ pub(crate) fn flash_attention() -> KernelFn {
         Block(vec![column]),
     )
     .with_launch(LaunchShape::new([LQ as u32, 1, 1], [1, 1, 1]))
+}
+
+/// A3: key `j` is visible to query row `i` when `j + lag <= i` (`lag = 0` is causal; `lag = 1` hides the diagonal, so row 0 sees
+/// nothing). With a `slope`, a visible score also loses `slope * (i - j)` (the ALiBi bias). A row that sees no key is all zeros.
+pub(crate) fn masked_attention(lag: usize, slope: Option<f64>) -> KernelFn {
+    let mut step = score_inline();
+    if let Some(m) = slope {
+        let dist = ScalarExpr::Cast(
+            Box::new(sub(row(), local(1))),
+            CastSpec {
+                to: F32,
+                round: RoundMode::NearestEven,
+                sat: Saturation::Wrap,
+            },
+        );
+        step.push(Stmt::Assign {
+            local: 7,
+            value: sub(local(7), mul(ScalarExpr::Const(m), dist)),
+        });
+    }
+    step.extend(online_tail());
+    let visible = ScalarExpr::Binary(
+        BinaryOp::CmpLe,
+        Box::new(add(local(1), cu(lag))),
+        Box::new(row()),
+    );
+    let guarded = Stmt::If {
+        cond: visible,
+        then: Block(step),
+        els: Block(vec![]),
+    };
+    let nonempty = ScalarExpr::Binary(
+        BinaryOp::CmpGt,
+        Box::new(local(6)),
+        Box::new(ScalarExpr::Const(0.0)),
+    );
+    let column = counted(
+        2,
+        DV,
+        vec![
+            Stmt::Let {
+                local: 5,
+                init: ScalarExpr::Const(NO_SCORE),
+            },
+            Stmt::Let {
+                local: 6,
+                init: ScalarExpr::Const(0.0),
+            },
+            Stmt::Let {
+                local: 12,
+                init: ScalarExpr::Const(0.0),
+            },
+            counted(1, LK, vec![guarded]),
+            Stmt::Store {
+                place: flat(3, add(mul(row(), cu(DV)), local(2))),
+                value: ScalarExpr::Select(
+                    Box::new(nonempty),
+                    Box::new(div(local(12), local(6))),
+                    Box::new(ScalarExpr::Const(0.0)),
+                ),
+            },
+        ],
+    );
+    let mut locals = vec![LocalDecl::scalar(F32); 14];
+    for u in [1, 2, 13] {
+        locals[u] = LocalDecl::scalar(U32);
+    }
+    KernelFn::new(
+        "attention_masked",
+        F32,
+        vec![
+            Param::buffer("q", F32, BufferRole::Read, Some(1)),
+            Param::buffer("k", F32, BufferRole::Read, Some(1)),
+            Param::buffer("v", F32, BufferRole::Read, Some(1)),
+            Param::buffer("out", F32, BufferRole::ReadWrite, Some(1)),
+        ],
+        locals,
+        Block(vec![column]),
+    )
+    .with_launch(LaunchShape::new([LQ as u32, 1, 1], [1, 1, 1]))
+}
+
+/// The host result of [`masked_attention`], in the same `f32` operation order.
+pub(crate) fn masked_reference(lag: usize, slope: Option<f64>) -> Vec<f32> {
+    let (q, k, v) = attention_data();
+    let mut out = vec![0f32; LQ * DV];
+    for i in 0..LQ {
+        for d in 0..DV {
+            let (mut m, mut l, mut acc) = (NO_SCORE as f32, 0f32, 0f32);
+            for j in (0..LK).filter(|&j| j + lag <= i) {
+                let mut dot = 0f32;
+                for e in 0..D {
+                    dot += q[i * D + e] * k[j * D + e];
+                }
+                let mut s = dot * SCALE as f32;
+                if let Some(a) = slope {
+                    s -= a as f32 * (i - j) as f32;
+                }
+                let mn = m.max(s);
+                let alpha = (m - mn).exp();
+                let p = (s - mn).exp();
+                l = l * alpha + p;
+                acc = acc * alpha + p * v[j * DV + d];
+                m = mn;
+            }
+            out[i * DV + d] = if l > 0.0 { acc / l } else { 0.0 };
+        }
+    }
+    out
 }
