@@ -93,6 +93,9 @@ fn every_non_canonical_text_is_declined() {
     assert!("swz(2,3,+3)((8,8):(8,1))".parse::<ComposedLayout>().is_err());
     assert!("swz(2,3,-0)((8,8):(8,1))".parse::<ComposedLayout>().is_err());
     assert!("swz(2,03,3)((8,8):(8,1))".parse::<ComposedLayout>().is_err());
+    // `swz(0,0,0)` is a valid identity swizzle, so only the `-0` rule can decline its negative-zero spelling
+    assert!("swz(0,0,0)".parse::<Swizzle>().is_ok());
+    assert!("swz(0,0,-0)".parse::<Swizzle>().is_err());
     assert!("swz(-2,3,3)((8,8):(8,1))".parse::<ComposedLayout>().is_err());
     assert!("swz(2,3)((8,8):(8,1))".parse::<ComposedLayout>().is_err());
     assert!("(8,8):(8,1)".parse::<ComposedLayout>().is_err(), "a plain layout is not a swizzled one");
