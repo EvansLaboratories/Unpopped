@@ -33,6 +33,7 @@ use std::fmt;
 
 mod slice;
 mod swizzle;
+mod text;
 
 pub use slice::SliceCrd;
 pub use swizzle::{ComposedLayout, Swizzle};
@@ -77,6 +78,8 @@ pub enum LayoutError {
     /// A swizzle parameter set that is not a bijection (`|shift| < bits`) or
     /// would not fit in `i64`.
     BadSwizzle,
+    /// Text that is not the canonical form of a layout or swizzle (see the `text` module); the reason.
+    Parse(&'static str),
 }
 
 impl fmt::Display for LayoutError {
@@ -95,6 +98,7 @@ impl fmt::Display for LayoutError {
             Self::NotComplementable => write!(f, "layout modes overlap or are not stride-nested"),
             Self::NonPositiveCotarget(v) => write!(f, "cotarget {v} is not >= 1"),
             Self::BadSwizzle => write!(f, "swizzle parameters are not a valid bijection"),
+            Self::Parse(why) => write!(f, "not a canonical layout text: {why}"),
         }
     }
 }
