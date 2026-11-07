@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.23` — docs-only, the plan for moving the IR and lowering contract into FireLine interface crates
+
+Adds `docs/fireline-unpopped-interface-plan.md`: what moves, what stays, what breaks on the first release, and the drift test. No code or version change.
+
+---
+
 ## `0.44.22` — master capability list, every cell checked against primary sources (docs only)
 
 `docs/ir-union-master-capabilities.md` promotes the 46-row capability grid into the master list of everything the seven kernel languages (CUDA, CUTLASS, CuTe, Slang, Mojo, Triton, ThunderKittens) can do, against the Unpopped IR at b3e44429. Every cell cites its primary source (version, path or URL, quote) in `docs/ir-union-evidence/`; the unknown count is 0. New rows C4b (padding fill modes), F9 (MMA operand count and kinds) and I1 (normalisation family, several axes). The R5.7 rows come first, each language column names the version it was read at, and a schedule-only marker flags rows KISS does not describe. The Unpopped column is refreshed (A2, A3, B1, C1, D6, E3, E4, E6, H1 had landed). KISS owns the verdict column, keyed by these row ids.
