@@ -1,6 +1,6 @@
 # Options note: typed `Extern` and inline asm, with declared effects and per-target bodies (ROADMAP U11, I11)
 
-Status: **proposal, nothing built.** Docs first, as for U7. Read at `origin/main` `dcc3174` (0.42.30). U11 waits only on U3 (kernel
+Status: **proposal; typed `ExternDecl` and `Stmt::ExternCall` are built and checked (0.43.0, #288), the rest is not.** Docs first, as for U7. Read at `origin/main` `dcc3174` (0.42.30). U11 waits only on U3 (kernel
 layer, `Module`, `Stmt::Call`), which is done. Closes gap row 3.19 of `docs/ir-union-design.md`; decision D2 there already says **yes,
 with declared effects and per-target bodies, opaque to the optimizer by construction**. This note settles the shape.
 
