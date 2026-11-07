@@ -82,3 +82,15 @@ Seed three mutants when built (drop a variant's handling in one emitter; change 
   non-`ir`/`backend` dependency. **Fishstringer:** say what it will import (I found nothing to measure). **KISS:** rename and citation impact (5).
 - **PM / CireSnave:** project name is FireLine (not SeamAnt); crate names above are placeholders; the version-start decision in 4.
 - Unknown to me: how many public types are `#[non_exhaustive]` (5); whether `artifact` can be cut from `capset` without touching Baracuda's cache key.
+
+## 8. The Unpopped-to-Fuel boundary (CireSnave 2026-11-07: Fuel talks to Unpopped via FireLine, no direct wiring)
+
+**Measured today** at Fuel `origin/main` d010189e4 (`git grep` over `*.rs` and every `Cargo.toml`; a census of use sites, not of behaviour):
+- **Crates:** Fuel depends on `unpopped-vocab` only, pinned `0.43.2` in the workspace manifest. **It has no dependency on `unpopped`** (the core), `unpopped-cpu-c`, or any kernel-layer or `Backend` type; the only `unpopped::` text in Fuel sources is prose (`gaps.md`, `ROADMAP.md`, a doc comment).
+- **Who:** `fuel-dispatch` (optional, behind feature `jit`, which also pulls `fuel-kernel-seam` and `kiss-ops-vocab`), `fuel-kernel-seam`, and `fuel-kernel-seam-types` (it re-states the vocabulary types so a synthesizer backend does not depend on Fuel's graph).
+- **Symbols, by use-site count:** `ElementKind` (about 22), `OperandDesc` (about 21), `ArchSku` (`Sm80`, `Sm89`, `Sm90`, `Sm90a`, mapped by hand in `fuel-dispatch/src/telemetry/baracuda_provider.rs` `map_arch_sku`, GAP-179), `TargetId` (1), `structure_key` (1). Files with `unpopped_vocab` uses: `jit_ingest.rs` 17, `jit_adopt.rs` 4, `jit_carrier.rs` 2, `jit_ingest_probe.rs` 2, `jit_synth_kernel_live.rs` 1, `fuel-kernel-seam/src/lib.rs` 2.
+- **Direction:** Fuel calls nothing in Unpopped at run time; it uses vocabulary types as the key and operand description for a JIT request that goes to a synthesizer backend (Baracuda). Unpopped never calls Fuel.
+- **Not read:** anything in Fuel under other names (`baracuda-kernels-types` re-exports the vocabulary; I did not walk that crate), and Fuel's unmerged branches.
+
+**What crosses the boundary, as FireLine crates:** `fireline-vocab` (the six symbols above, the whole of today's link) and, for the JIT request, `fireline-caps` if the arch/target keys move there. **What does not cross:** `fireline-ir`, `fireline-lowering` and the planner. Fuel is a consumer of identity and capability vocabulary, not of the IR. Fuel's planned Slang parser and emitter (`SLANG-SEAM-REQUIREMENTS.md`, ROADMAP row 101, not started) would be the first Fuel code on `fireline-ir`/`-lowering`, as a parser/emitter provider, not as a consumer.
+**For the first release:** Fuel's change is `unpopped-vocab = "0.43.2"` to `fireline-vocab = "~x"`; `ArchSku` and `ElementKind` paths are unchanged if Unpopped re-exports; the hand-written `ArchSku` mapping is the drift risk the conformance suite should pin (a test that every `ArchSku` variant round-trips through Fuel's string form). Fuel ROADMAP row 41 ("adopt unpopped 0.22.0 `DtypeSupport`") names a symbol Fuel does not import today.
