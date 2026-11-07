@@ -32,14 +32,14 @@ fn the_two_kiss_vectors_round_trip_byte_for_byte() {
 #[test]
 fn layouts_of_every_shape_category_round_trip() {
     for t in [
-        "1:0",                      // scalar
-        "8:1",                      // flat
-        "(2,2):(1,2)",              // rank 2
-        "((2,3),4):((1,2),6)",      // nested
-        "(4,3):(0,1)",              // broadcast, stride 0
-        "(2,(3,4)):(1,(2,6))",      // second mode nested
-        "(1):(0)",                  // one-element tuple is not an integer
-        "((2)):((1))",              // and nests
+        "1:0",                       // scalar
+        "8:1",                       // flat
+        "(2,2):(1,2)",               // rank 2
+        "((2,3),4):((1,2),6)",       // nested
+        "(4,3):(0,1)",               // broadcast, stride 0
+        "(2,(3,4)):(1,(2,6))",       // second mode nested
+        "(1):(0)",                   // one-element tuple is not an integer
+        "((2)):((1))",               // and nests
         "(9223372036854775807):(0)", // the largest leaf
     ] {
         let l = layout(t);
@@ -87,27 +87,59 @@ fn every_non_canonical_text_is_declined() {
     ] {
         assert!(t.parse::<Layout>().is_err(), "{why}: {t}");
     }
-    assert!("swz(2,3,-3) ((8,8):(8,1))".parse::<ComposedLayout>().is_err());
+    assert!(
+        "swz(2,3,-3) ((8,8):(8,1))"
+            .parse::<ComposedLayout>()
+            .is_err()
+    );
     assert!("swz(2,3,-3)(8,8):(8,1)".parse::<ComposedLayout>().is_err());
     assert!("swz(2,3,-3)((8,8):(8,1)".parse::<ComposedLayout>().is_err());
-    assert!("swz(2,3,+3)((8,8):(8,1))".parse::<ComposedLayout>().is_err());
-    assert!("swz(2,3,-0)((8,8):(8,1))".parse::<ComposedLayout>().is_err());
-    assert!("swz(2,03,3)((8,8):(8,1))".parse::<ComposedLayout>().is_err());
+    assert!(
+        "swz(2,3,+3)((8,8):(8,1))"
+            .parse::<ComposedLayout>()
+            .is_err()
+    );
+    assert!(
+        "swz(2,3,-0)((8,8):(8,1))"
+            .parse::<ComposedLayout>()
+            .is_err()
+    );
+    assert!(
+        "swz(2,03,3)((8,8):(8,1))"
+            .parse::<ComposedLayout>()
+            .is_err()
+    );
     // `swz(0,0,0)` is a valid identity swizzle, so only the `-0` rule can decline its negative-zero spelling
     assert!("swz(0,0,0)".parse::<Swizzle>().is_ok());
     assert!("swz(0,0,-0)".parse::<Swizzle>().is_err());
-    assert!("swz(-2,3,3)((8,8):(8,1))".parse::<ComposedLayout>().is_err());
+    assert!(
+        "swz(-2,3,3)((8,8):(8,1))"
+            .parse::<ComposedLayout>()
+            .is_err()
+    );
     assert!("swz(2,3)((8,8):(8,1))".parse::<ComposedLayout>().is_err());
-    assert!("(8,8):(8,1)".parse::<ComposedLayout>().is_err(), "a plain layout is not a swizzled one");
+    assert!(
+        "(8,8):(8,1)".parse::<ComposedLayout>().is_err(),
+        "a plain layout is not a swizzled one"
+    );
     assert!("swz(2,3,-3)".parse::<Layout>().is_err());
 }
 
 #[test]
 fn invalid_layouts_are_declined_with_the_layout_algebras_own_reason() {
-    assert_eq!("(2,2):(1)".parse::<Layout>(), Err(LayoutError::NotCongruent));
+    assert_eq!(
+        "(2,2):(1)".parse::<Layout>(),
+        Err(LayoutError::NotCongruent)
+    );
     assert_eq!("2:(1,2)".parse::<Layout>(), Err(LayoutError::NotCongruent));
-    assert_eq!("(2,2):(1,-2)".parse::<Layout>(), Err(LayoutError::Parse("expected an integer")));
-    assert_eq!("(0,2):(1,2)".parse::<Layout>(), Err(LayoutError::NonPositiveShape(0)));
+    assert_eq!(
+        "(2,2):(1,-2)".parse::<Layout>(),
+        Err(LayoutError::Parse("expected an integer"))
+    );
+    assert_eq!(
+        "(0,2):(1,2)".parse::<Layout>(),
+        Err(LayoutError::NonPositiveShape(0))
+    );
     assert_eq!("():()".parse::<Layout>(), Err(LayoutError::EmptyTuple));
     let deep = |n: usize| format!("{0}1{1}:{0}0{1}", "(".repeat(n), ")".repeat(n));
     assert!(deep(16).parse::<Layout>().is_ok(), "depth 16 is the limit");
@@ -119,10 +151,22 @@ fn invalid_layouts_are_declined_with_the_layout_algebras_own_reason() {
 #[test]
 fn an_invalid_swizzle_is_declined_as_a_bad_swizzle() {
     // |S| < B: the two bit groups overlap, so it is not an involution
-    assert_eq!("swz(3,0,2)".parse::<Swizzle>(), Err(LayoutError::BadSwizzle));
+    assert_eq!(
+        "swz(3,0,2)".parse::<Swizzle>(),
+        Err(LayoutError::BadSwizzle)
+    );
     // too wide for i64
-    assert_eq!("swz(10,40,20)".parse::<Swizzle>(), Err(LayoutError::BadSwizzle));
+    assert_eq!(
+        "swz(10,40,20)".parse::<Swizzle>(),
+        Err(LayoutError::BadSwizzle)
+    );
     // a parameter past u32 / i32
-    assert_eq!("swz(4294967296,0,5)".parse::<Swizzle>(), Err(LayoutError::BadSwizzle));
-    assert_eq!("swz(1,0,3000000000)".parse::<Swizzle>(), Err(LayoutError::BadSwizzle));
+    assert_eq!(
+        "swz(4294967296,0,5)".parse::<Swizzle>(),
+        Err(LayoutError::BadSwizzle)
+    );
+    assert_eq!(
+        "swz(1,0,3000000000)".parse::<Swizzle>(),
+        Err(LayoutError::BadSwizzle)
+    );
 }
