@@ -9,20 +9,21 @@ Legend: ✅ supported as a first-class named construct, in the language or its o
 | Part | Rows | Cells checked against primary sources | ❔ |
 |---|---|---|---|
 | R5.7 rows (below) | 9 rows: 7 from the grid (F3 G3 G4 D4 C4 F4 F7) and 2 new (C4b F9) | 63 of 63 | 0 |
-| Remaining rows (second table) | 39 | **0 of 273: survey-derived, not yet verified** (wave 2) | not yet counted |
+| Remaining 39 rows (second table) | 39 | 273 of 273, plus the Unpopped column 39 of 39 | 0 |
+| New row I1 (norm family) | 1 | 7 of 7, plus Unpopped | 0 |
 
-Every cell in the R5.7 table cites its primary source in `docs/ir-union-evidence/<language>-wave1.md` (version, URL or file path with line, quoted text or identifier). Cells in the second table still carry the earlier grid marks, which came from the surveys and were never checked; do not rely on them yet.
+Every cell in the R5.7 table cites its primary source in `docs/ir-union-evidence/<language>-wave1.md` (version, URL or file path with line, quoted text or identifier). The cells of the second table carry the same evidence in the wave-2 files.
 
 ## Versions each column was read at
 
 | Column | Source read | Version |
 |---|---|---|
 | Unpopped | `crates/unpopped/src` at `origin/main` b3e44429 (0.44.20) | b3e44429 |
-| CUDA | PTX ISA 9.5; CUDA Math, Driver, nvcc, Programming Guide 13.5; CCCL (CUB) | fetched 2026-11-06; CCCL v3.5.0 |
+| CUDA | PTX ISA 9.5; CUDA Math, Driver, nvcc, Programming Guide 13.5; CCCL (CUB) | fetched 2026-11-06; CCCL v3.5.0; cuBLAS 13.5 and cudnn-frontend (v1.32.2 for I1, commit ad4e0035 for F8) where a row names them |
 | CUTLASS | `NVIDIA/cutlass` headers | v4.8.1 (tag object 2c85f497) |
 | CuTe | `include/cute` (C++) and `python/CuTeDSL`, same repo | v4.8.1, commit 2c85f497547eb441f0fe80bfb0fb2e6f9add1719 |
 | Slang | `shader-slang/slang` source, prelude, standard modules, docs | v2026.21, commit e73d2689 |
-| Mojo | `modular/modular` source (stdlib, `max/mojo`, kernels); docs site not used | main @6b93ed4, nearest tag max/v26.7.0 |
+| Mojo | `modular/modular` source (stdlib, `max/mojo`, kernels); docs site not used | main @6b93ed4 (most rows); A-C rows of wave 2 at tag max/v26.7.0 = 527d069; nearest tag max/v26.7.0 |
 | Triton | `triton-lang/triton` source at the tag (rendered docs not used) | v3.9.0, commit b7ddcf86 |
 | ThunderKittens | `HazyResearch/ThunderKittens` `include/` | commit 67845f5f |
 
@@ -60,51 +61,66 @@ Reviewer changes to agent marks: **CuTe C4** ✅→🟡 (fill is zero-only per o
 
 - **D3, D6 (stability, keepdim):** CireSnave 2026-11-07 (relayed by the KISS lane): keepdim and stability become real flags, default 1. Provisional IR needs: D3 a reduce whose output omits the reduced axes (or reduce plus a rank-reducing `Reshape`; all-axes drop = rank 0); D6 a sort marked unstable (any tie order). The argmax/argmin tie rule is awaiting a ruling. Recorded here; no mark changes until it is ruled.
 
-## Remaining rows (survey-derived marks, not yet verified against primary sources)
+## Remaining 39 rows (verified)
 
-Same columns, same order. These are the earlier grid marks; wave 2 replaces them with checked cells and the same evidence files. The Unpopped column is from `a575e66` and is stale (U7, U9, U10, U11 have since landed); wave 2 refreshes it from main.
+Same columns and order as above. Every cell was read against the primary sources named in the version table, by one reading agent per language and row group; its evidence (version, path or URL with line, quote, notes) is in `docs/ir-union-evidence/<language>-wave2{a,b,c}.md` (A-C rows, D-E rows, F-H rows), and for Unpopped in `unpopped-wave2{a,b}.md`. Seven cells that the first readers left unknown were re-searched: `resolved-unknowns.md`. The last column is the earlier survey-derived grid, kept so the movement is visible. These cells had one pass by a reading agent and my read of its report; they have not had the cell-by-cell reviewer pass the R5.7 rows had.
 
-| ID | Capability | schedule-only | Unpopped (stale) | CUDA | CUTLASS | CuTe | Slang | Mojo | Triton | TK |
+| ID | Capability | schedule-only | Unpopped | CUDA | CUTLASS | CuTe | Slang | Mojo | Triton | TK | Old (Unpopped; CUDA..TK) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| A1 | Elementwise scalar expressions over tensor inputs (arith, math functions, select) | no | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅; ✅ ✅ ✅ ✅ ✅ ✅ ✅ |
+| A2 | Local variables / mutation / structured control flow (if, for, while, break, return) | no | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 | ✅ | ❌; ✅ ✅ ✅ ✅ ✅ ✅ ✅ |
+| A3 | Device function calls / user-defined functions / recursion-free call graph | no | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌; ✅ ✅ ✅ ✅ ✅ ✅ ✅ |
+| A4 | Generics / templates / compile-time specialization (comptime, constexpr) | yes | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌; ✅ ✅ ✅ ✅ ✅ ✅ ✅ |
+| B1 | Thread/lane/warp/block/grid ids and dims (SIMT explicit) | no | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ❌; ✅ ✅ ✅ ✅ ✅ ❌ ✅ |
+| B2 | Block-level SPMD program ids (program_id style, no explicit threads) | no | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌; ❌ ❌ ❌ ❌ ❌ ✅ ❌ |
+| B3 | Cluster / thread-block-cluster scope and distributed shared memory | partly | 🟡 | ✅ | ✅ | ✅ | ❌ | ✅ | 🟡 | ✅ | ❌; ✅ ✅ ✅ ❌ ✅ 🟡 ✅ |
+| B4 | Persistent kernels / tile schedulers (static, stream-K, cluster launch control) | yes | 🟡 | 🟡 | ✅ | 🟡 | ❌ | 🟡 | ✅ | ✅ | ❌; 🟡 ✅ ✅ ❌ 🟡 ✅ ✅ |
+| C1 | Shared / workgroup memory (static + dynamic) | no | ✅ | ✅ | ✅ | ✅ | 🟡 | ✅ | 🟡 | ✅ | 🟡; ✅ ✅ ✅ ✅ ✅ 🟡 ✅ |
+| C2 | Register-level fragments / explicit register tiles | no | 🟡 | 🟡 | ✅ | ✅ | 🟡 | ✅ | 🟡 | ✅ | ❌; 🟡 ✅ ✅ 🟡 ✅ 🟡 ✅ |
+| C3 | Typed load/store, pointers, byte-offset access, bitcast | no | 🟡 | ✅ | ✅ | ✅ | 🟡 | ✅ | ✅ | 🟡 | ❌; ✅ ✅ ✅ 🟡 ✅ ✅ 🟡 |
+| C5 | Gather/scatter (data-dependent indexing) | no | ✅ | ✅ | ✅ | 🟡 | ✅ | ✅ | ✅ | 🟡 | ✅; ✅ ✅ 🟡 ✅ 🟡 ✅ 🟡 |
+| C6 | Textures / samplers / images / resource handles | no | ❌ | ✅ | ❌ | 🟡 | ✅ | ❌ | 🟡 | ❌ | ❌; ✅ ❌ ❌ ✅ ❔ ❌ ❌ |
+| C7 | Structs / arrays / vectors / matrices as values | no | 🟡 | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 | ✅ | ❌; ✅ ✅ ✅ ✅ ✅ 🟡 ✅ |
+| D1 | Hierarchical layout algebra (shape:stride, composition, divide, product, coalesce) | no | 🟡 | ❌ | ✅ | ✅ | ❌ | ✅ | 🟡 | ❌ | 🟡; ❌ ✅ ✅ ❔ ✅ 🟡 ❌ |
+| D2 | Swizzle | partly | 🟡 | 🟡 | ✅ | ✅ | ❌ | ✅ | 🟡 | ✅ | ❌; 🟡 ✅ ✅ ❔ ✅ 🟡 ✅ |
+| D3 | Reductions (sum/max/min/arg-, row and tile) | no | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | ✅ | 🟡 | ✅; 🟡 🟡 🟡 🟡 ✅ ✅ ✅ |
+| D5 | Scans (prefix)  | no | ✅ | 🟡 | ❌ | 🟡 | 🟡 | ✅ | ✅ | ❌ | ✅; 🟡 ❌ ❔ 🟡 ✅ ✅ ❌ |
+| D6 | Sort / top-k | no | ✅ | 🟡 | 🟡 | ❌ | ❌ | ✅ | ✅ | ❌ | 🟡; 🟡 🟡 ❔ ❌ ❔ ✅ ❔ |
+| E1 | Block / named barriers | no | 🟡 | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 | ✅ | ❌; ✅ ✅ ✅ ✅ ✅ 🟡 ✅ |
+| E2 | mbarrier-style split arrive/wait with transaction counts | no | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ | 🟡 | ✅ | ❌; ✅ ✅ ✅ ❌ ✅ 🟡 ✅ |
+| E3 | Memory fences / scoped memory model (acquire/release, scope) | no | ✅ | ✅ | 🟡 | ✅ | 🟡 | ✅ | 🟡 | 🟡 | ❌; ✅ ✅ ✅ 🟡 ✅ 🟡 ✅ |
+| E4 | Atomics (add, min/max, CAS, exchange, returned old value, on shared memory) | no | ✅ | ✅ | 🟡 | ✅ | ✅ | 🟡 | ✅ | 🟡 | 🟡; ✅ ✅ ✅ ✅ ✅ ✅ 🟡 |
+| E5 | Warp/subgroup collectives (shuffle, vote, ballot, match, elect) | no | 🟡 | ✅ | 🟡 | ✅ | ✅ | ✅ | ❌ | 🟡 | 🟡; ✅ ✅ ✅ ✅ ✅ ❌ ✅ |
+| E6 | Block-level collectives (block reduce / scan / broadcast / cooperative groups) | no | ✅ | 🟡 | 🟡 | 🟡 | ❌ | ✅ | ✅ | 🟡 | 🟡; 🟡 🟡 🟡 ❌ ✅ ✅ ✅ |
+| F1 | Tensor-core MMA atoms (mma.sync, WGMMA, tcgen05/UMMA) | no | 🟡 | ✅ | ✅ | ✅ | 🟡 | ✅ | ✅ | ✅ | ❌; ✅ ✅ ✅ 🟡 ✅ ✅ ✅ |
+| F2 | Mixed-dtype / block-scaled (MX, NVFP4) / 2:4 sparse MMA | no | 🟡 | ✅ | ✅ | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | 🟡; ✅ ✅ ✅ 🟡 🟡 🟡 🟡 |
+| F5 | Software pipelining: stages, producer/consumer warp specialization, setmaxnreg | yes | 🟡 | 🟡 | ✅ | ✅ | ❌ | 🟡 | ✅ | ✅ | ❌; 🟡 ✅ ✅ ❌ 🟡 ✅ ✅ |
+| F6 | GEMM epilogue fusion trees (EVT), grouped / ptr-array GEMM, split-K / stream-K | partly | 🟡 | 🟡 | ✅ | 🟡 | ❌ | 🟡 | 🟡 | ❌ | ❌; ❌ ✅ 🟡 ❌ ❔ 🟡 ❌ |
+| F8 | Attention as a first-class op (online softmax, masks, paged KV, backward) | no | 🟡 | 🟡 | 🟡 | ❌ | ❌ | 🟡 | ❌ | 🟡 | ❌; ❌ ✅ ❌ ❌ ❔ ❌ 🟡 |
+| G1 | Narrow float dtypes: fp8 (e4m3/e5m2), fp4 e2m1, fp6, MX scale types | no | 🟡 | ✅ | ✅ | ✅ | 🟡 | ✅ | ✅ | 🟡 | 🟡; ✅ ✅ ✅ 🟡 ✅ ✅ ✅ |
+| G2 | Packed / vector value types (half2, float4, 128-bit) | no | 🟡 | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 | ✅ | ❌; ✅ ✅ ✅ ✅ ✅ 🟡 ✅ |
+| G5 | NaN/Inf-preserving semantics control | no | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | 🟡; 🟡 ❔ ❔ ❔ ❔ 🟡 ❔ |
+| H1 | Inline asm / extern device libraries / typed escape hatch | no | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌; ✅ ✅ 🟡 ✅ ✅ ✅ ✅ |
+| H2 | Automatic differentiation | no | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌; ❌ ❌ ❌ ✅ ❌ ❌ ❌ |
+| H3 | RNG (Philox etc.), device assert, device print (side-effecting ops) | no | ❌ | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | ✅ | 🟡 | ❌; ✅ 🟡 ❔ 🟡 ❔ ✅ ❔ |
+| H4 | Autotuning configs (num_warps, num_stages, tile config) as schedule hints | yes | 🟡 | 🟡 | ✅ | 🟡 | ❌ | 🟡 | ✅ | ❌ | 🟡; 🟡 ✅ 🟡 ❌ 🟡 ✅ ❌ |
+| H5 | Multi-GPU: peer pointers, multicast, multimem | partly | ❌ | ✅ | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ✅ | ❌; ✅ 🟡 🟡 ❌ 🟡 ❌ ✅ |
+| H6 | Emits to / parses from multiple targets (portability across vendors) | no | 🟡 | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ❌ | ✅; ❌ ❌ ❌ ✅ ✅ 🟡 🟡 |
+
+Cells that differ from the old grid: 63 of 312 (39 rows; Unpopped and the seven languages).
+**Unknown (❔) cells in this table: 0.** 
+
+Judgement calls the readers flagged (a different reading moves the mark one step): CUDA F6 and F8 are 🟡 because the support is in separate NVIDIA libraries (cuBLAS grouped GEMM and split-K, cuDNN SDPA), the same rule that puts CUB in 🟡; CUTLASS and CuTe E3/E4/E5 are 🟡 (the library wraps only part of the primitive and the rest is raw CUDA inside kernels); Triton B4 ✅ (Blackwell cluster launch control only, no tile scheduler or stream-K), E2 🟡, D6 ✅; Slang C1 🟡 (no dynamic shared memory found); Unpopped A4 ❌ (generics are front-end by design; 🟡 is arguable), D1 🟡 (the layout algebra lives in `unpopped-vocab`, not as a kernel-IR leaf), B2 and C2 🟡 (by composition). Many ❌ cells are source searches, each with a positive control in its evidence file; few are a sentence in the docs saying "unsupported".
+
+Stale text found while reading Unpopped (to fix separately): doc comments in `kernel.rs` on `Stmt::Call` (about lines 15-17 and 407-420) and on `AtomicCas` say the checker refuses it; `docs/options-u11-extern-and-inline-asm.md` says "nothing built".
+
+## New row (verified)
+
+| ID | Capability | schedule-only | Unpopped | CUDA | CUTLASS | CuTe | Slang | Mojo | Triton | TK |
 |---|---|---|---|---|---|---|---|---|---|---|
-| A1 | Elementwise scalar expressions over tensor inputs (arith, math functions, select) | tbd | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| A2 | Local variables / mutation / structured control flow (if, for, while, break, return) | tbd | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| A3 | Device function calls / user-defined functions / recursion-free call graph | tbd | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| A4 | Generics / templates / compile-time specialization (comptime, constexpr) | tbd | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| B1 | Thread/lane/warp/block/grid ids and dims (SIMT explicit) | tbd | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
-| B2 | Block-level SPMD program ids (program_id style, no explicit threads) | tbd | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
-| B3 | Cluster / thread-block-cluster scope and distributed shared memory | partly | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ | 🟡 | ✅ |
-| B4 | Persistent kernels / tile schedulers (static, stream-K, cluster launch control) | yes | ❌ | 🟡 | ✅ | ✅ | ❌ | 🟡 | ✅ | ✅ |
-| C1 | Shared / workgroup memory (static + dynamic) | tbd | 🟡 | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 | ✅ |
-| C2 | Register-level fragments / explicit register tiles | tbd | ❌ | 🟡 | ✅ | ✅ | 🟡 | ✅ | 🟡 | ✅ |
-| C3 | Typed load/store, pointers, byte-offset access, bitcast | tbd | ❌ | ✅ | ✅ | ✅ | 🟡 | ✅ | ✅ | 🟡 |
-| C5 | Gather/scatter (data-dependent indexing) | tbd | ✅ | ✅ | ✅ | 🟡 | ✅ | 🟡 | ✅ | 🟡 |
-| C6 | Textures / samplers / images / resource handles | tbd | ❌ | ✅ | ❌ | ❌ | ✅ | ❔ | ❌ | ❌ |
-| C7 | Structs / arrays / vectors / matrices as values | tbd | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 | ✅ |
-| D1 | Hierarchical layout algebra (shape:stride, composition, divide, product, coalesce) | tbd | 🟡 | ❌ | ✅ | ✅ | ❔ | ✅ | 🟡 | ❌ |
-| D2 | Swizzle | tbd | ❌ | 🟡 | ✅ | ✅ | ❔ | ✅ | 🟡 | ✅ |
-| D3 | Reductions (sum/max/min/arg-, row and tile) | tbd | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | ✅ | ✅ |
-| D5 | Scans (prefix)  | tbd | ✅ | 🟡 | ❌ | ❔ | 🟡 | ✅ | ✅ | ❌ |
-| D6 | Sort / top-k | tbd | 🟡 | 🟡 | 🟡 | ❔ | ❌ | ❔ | ✅ | ❔ |
-| E1 | Block / named barriers | tbd | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 | ✅ |
-| E2 | mbarrier-style split arrive/wait with transaction counts | tbd | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ | 🟡 | ✅ |
-| E3 | Memory fences / scoped memory model (acquire/release, scope) | tbd | ❌ | ✅ | ✅ | ✅ | 🟡 | ✅ | 🟡 | ✅ |
-| E4 | Atomics (add, min/max, CAS, exchange, returned old value, on shared memory) | tbd | 🟡 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 |
-| E5 | Warp/subgroup collectives (shuffle, vote, ballot, match, elect) | tbd | 🟡 | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
-| E6 | Block-level collectives (block reduce / scan / broadcast / cooperative groups) | tbd | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ✅ | ✅ | ✅ |
-| F1 | Tensor-core MMA atoms (mma.sync, WGMMA, tcgen05/UMMA) | tbd | ❌ | ✅ | ✅ | ✅ | 🟡 | ✅ | ✅ | ✅ |
-| F2 | Mixed-dtype / block-scaled (MX, NVFP4) / 2:4 sparse MMA | tbd | 🟡 | ✅ | ✅ | ✅ | 🟡 | 🟡 | 🟡 | 🟡 |
-| F5 | Software pipelining: stages, producer/consumer warp specialization, setmaxnreg | yes | ❌ | 🟡 | ✅ | ✅ | ❌ | 🟡 | ✅ | ✅ |
-| F6 | GEMM epilogue fusion trees (EVT), grouped / ptr-array GEMM, split-K / stream-K | partly | ❌ | ❌ | ✅ | 🟡 | ❌ | ❔ | 🟡 | ❌ |
-| F8 | Attention as a first-class op (online softmax, masks, paged KV, backward) | tbd | ❌ | ❌ | ✅ | ❌ | ❌ | ❔ | ❌ | 🟡 |
-| G1 | Narrow float dtypes: fp8 (e4m3/e5m2), fp4 e2m1, fp6, MX scale types | tbd | 🟡 | ✅ | ✅ | ✅ | 🟡 | ✅ | ✅ | ✅ |
-| G2 | Packed / vector value types (half2, float4, 128-bit) | tbd | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 | ✅ |
-| G5 | NaN/Inf-preserving semantics control | tbd | 🟡 | 🟡 | ❔ | ❔ | ❔ | ❔ | 🟡 | ❔ |
-| H1 | Inline asm / extern device libraries / typed escape hatch | tbd | ❌ | ✅ | ✅ | 🟡 | ✅ | ✅ | ✅ | ✅ |
-| H2 | Automatic differentiation | tbd | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
-| H3 | RNG (Philox etc.), device assert, device print (side-effecting ops) | tbd | ❌ | ✅ | 🟡 | ❔ | 🟡 | ❔ | ✅ | ❔ |
-| H4 | Autotuning configs (num_warps, num_stages, tile config) as schedule hints | yes | 🟡 | 🟡 | ✅ | 🟡 | ❌ | 🟡 | ✅ | ❌ |
-| H5 | Multi-GPU: peer pointers, multicast, multimem | tbd | ❌ | ✅ | 🟡 | 🟡 | ❌ | 🟡 | ❌ | ✅ |
-| H6 | Emits to / parses from multiple targets (portability across vendors) | tbd | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ | 🟡 | 🟡 |
+| I1 | Normalisation family as an operation: softmax, log_softmax, rms_norm, layer_norm, over several trailing axes (PyTorch `normalized_shape`), affine gamma/beta | no | 🟡 | 🟡 | 🟡 | ❌ | ❌ | 🟡 | 🟡 | ❌ |
+
+Evidence: `docs/ir-union-evidence/norm-family-I1.md` (all seven languages plus Unpopped). Findings: Unpopped has no kernel-IR norm op (softmax and rms_norm are composed from reduce and elementwise); its SKU vocabulary layer has `NormalizationKind` (RMSNorm, LayerNorm, GroupNorm, BatchNorm training-only, InstanceNorm) and `SoftmaxKind` (Softmax, LogSoftmax) with a **multi-axis bitmask for RMSNorm/LayerNorm, the normalized axes a suffix of the input shape** (`unpopped-vocab/src/ops.rs:663-694`); the gamma/beta shape is **not specified in this repo** (only `* gamma`, `* gamma + beta` in the docs; the plan types and launcher live in Baracuda). Softmax is "along a single axis". Of the seven languages only cuDNN (CUDA column, separate NVIDIA library) accepts more than one normalized axis, with scale and bias of input rank (full extent on the normalized axes, 1 elsewhere); CUTLASS, CuTe and ThunderKittens have only examples or host utilities (single axis, gamma and beta of shape `[n]`); Mojo has library ops with one comptime reduce axis and rank-1 gamma; Triton has `tl.softmax` (one `dim`) and a layer-norm tutorial that ignores `normalized_shape`; Slang has none.
 
 ## How this list is kept
 

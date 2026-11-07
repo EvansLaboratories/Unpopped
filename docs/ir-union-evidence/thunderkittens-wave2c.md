@@ -1,0 +1,20 @@
+# ThunderKittens wave 2 group 3 (commit 67845f5fa48d05343dbbc1ba1403f11061f08d2d, HazyResearch/ThunderKittens, clone read locally; base URL https://github.com/HazyResearch/ThunderKittens/blob/67845f5f/)
+
+schedule-only rows: F5 = yes, H4 = yes; all others no (F6 is mixed: tile ordering is schedule, grouped/EVT/split-K would be computation, and that part is absent).
+
+| ID | mark | version | URL (path) | quote-or-identifier | disagrees-with-grid | notes |
+|---|---|---|---|---|---|---|
+| F1 | ✅ | 67845f5f | include/ops/group/mma/base/64x16.impl; include/ops/group/mma/warp.cuh; include/ops/thread/mma/tcgen05.cuh | `wgmma.mma_async.sync.aligned.m64n16k16.f32.bf16.bf16`; `mma.sync.aligned.m16n8k16...`; `tcgen05.mma.cta_group::1.kind::f16` | - | All three families wrapped. schedule-only: no |
+| F2 | 🟡 | 67845f5f | include/ops/thread/mma/tcgen05.cuh:497; warp.cuh:144 | `tcgen05.mma.cta_group::1.kind::mxf4nvf4.block_scale.block16`; `...kind::mxf8f6f4.block_scale.block32` | - | Block-scaled MX/NVFP4 and mixed fp8/fp4 MMA present (tcgen05 only); no 2:4 sparse: grep `sparse` and `mma.sp`/`.sp::` over include/ = 0 hits (control: same grep style finds `mxf4nvf4`). Hence partial |
+| F5 | ✅ | 67845f5f | include/ops/group/group.cuh:52-61; kernels/gemm/bf16_h100/*.cu | `setmaxnreg.inc.sync.aligned.u32`; `increase_registers`, `producer_registers`; kernel `INPUT_PIPE_STAGES=4` | - | Stages and producer/consumer are kernel-level patterns plus the setmaxnreg wrappers. schedule-only: yes |
+| F6 | ❌ | 67845f5f | include/ and kernels/gemm/ | no hits for `split-k`, `stream-k`, `grouped`, `ptr-array`, `epilogue` in kernels/gemm (control: `supergroup` found in nvfp4_b200_gemm.cu:155) | - | Only `SUPERGROUP` tile-ordering in example kernels; no epilogue-fusion tree, grouped GEMM or split/stream-K |
+| F8 | 🟡 | 67845f5f | kernels/attention/mha_h100/mha_h100.cu | `template<int D, bool is_causal>`, `bwd_attend_ker_tile_dims`, `make_causal` (conversions.cuh:394) | - | Attention exists as example kernels (online softmax, causal mask, backward) not a library op; no `paged` KV hit anywhere (control: `bwd` found) |
+| G1 | 🟡 | 67845f5f | include/common/base_types.cuh:68-103 | `using fp8e4m3`, `fp8e5m2`, `fp8e8m0`, `fp4e2m1` | ✅ -> 🟡 | fp8, fp4 e2m1 and e8m0 scale types present; no fp6 type (grep `fp6|e3m2|e2m3` over include = 0 hits; control: `fp4e2m1` hits) |
+| G2 | ✅ | 67845f5f | include/common/base_types.cuh:47-103 | `using bf16_2 = __nv_bfloat162`, `half_2`, `fp8e4m3_4`, `fp4e2m1_4` | - | float2/float4 types also defined |
+| G5 | ❔ | 67845f5f | include/ops/group/register/tile/tile.cuh:11 | only `hasnan(...)` debug helper | - | Searched include/ for nan/ftz/NaN-propagation controls: only a detector, no semantics control mode |
+| H1 | ✅ | 67845f5f | include/common/multimem.cuh; group.cuh:54 | `asm volatile("setmaxnreg.inc...` | - | CUDA C++ host language so user inline asm is available; library uses asm throughout. Nothing TK-specific typed beyond that |
+| H2 | ❌ | 67845f5f | include/ | no autodiff facility (grep grad/autodiff/jvp in include = 0 hits; control: `bwd_attend_ker` found in kernels) | - | Backward attention is hand-written |
+| H3 | ❔ | 67845f5f | include/, kernels/, README.md | - | - | Searched printf/assert/curand/philox in include: 0 hits (only static_assert); no RNG or device-print facility, docs silent |
+| H4 | ❌ | 67845f5f | kernels/*/ | tile configs are compile-time constants (`NUM_CONSUMER_WARPS`, `INPUT_PIPE_STAGES`) | - | No autotune hits across include/kernels/README. schedule-only: yes |
+| H5 | ✅ | 67845f5f | include/common/multimem.cuh; include/types/system/pgl.cuh:44-54; include/ops/group/memory/tile/tma_cluster.cuh | `struct multimem`, `struct pgl`, `T *mc_ptr; // multicast pointer` | - | README: "transfer data over NVLink and utilize NVSwitch acceleration" |
+| H6 | ❌ | 67845f5f | README.md:20,400-401 | "ThunderKittens is built for NVIDIA GPUs. For AMD GPUs, check out HipKittens" | 🟡 -> ❌ | This repo is NVIDIA-only; HipKittens/ThunderMittens are separate repos. A grid 🟡 could be kept if the family counts |
