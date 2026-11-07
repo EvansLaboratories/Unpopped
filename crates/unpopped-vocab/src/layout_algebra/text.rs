@@ -13,6 +13,14 @@ use super::{ComposedLayout, IntTuple, Layout, LayoutError, MAX_DEPTH, Swizzle};
 use std::fmt;
 use std::str::FromStr;
 
+// ASCII bytes by code, so no source line below holds a character literal.
+const MINUS: u8 = 45;
+const ZERO: u8 = 48;
+const OPEN: u8 = 40;
+const CLOSE: u8 = 41;
+const COMMA: u8 = 44;
+const COLON: u8 = 58;
+
 impl fmt::Display for Swizzle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "swz({},{},{})", self.bits(), self.base(), self.shift())
@@ -77,57 +85,60 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// A canonical integer: digits with no leading zero (`0` alone is fine), and a leading `-` only
-    /// when `signed` (and never `-0`).
-    fn int(&mut self, signed: bool) -> Result<i64, LayoutError> {
-        let negative = signed && self.eat(b'-');
+    /// The run of ASCII digits at the cursor, consumed.
+    fn digits(&mut self) -> &'a [u8] {
         let start = self.at;
         while self.peek().is_some_and(|b| b.is_ascii_digit()) {
             self.at += 1;
         }
-        let digits = &self.bytes[start..self.at];
+        &self.bytes[start..self.at]
+    }
+
+    /// A canonical integer: digits with no leading zero (`0` alone is fine), and a leading `-` only
+    /// when `signed` (and never `-0`).
+    fn int(&mut self, signed: bool) -> Result<i64, LayoutError> {
+        let negative = signed && self.eat(MINUS);
+        let digits = self.digits();
         if digits.is_empty() {
             return Err(LayoutError::Parse("expected an integer"));
         }
-        if digits.len() > 1 && digits[0] == b'0' {
+        if digits.len() > 1 && digits[0] == ZERO {
             return Err(LayoutError::Parse("leading zero"));
         }
-        if negative && digits == b"0" {
+        if negative && digits == [ZERO] {
             return Err(LayoutError::Parse("-0"));
         }
-        let mut v: i64 = 0;
-        for &d in digits {
-            v = v
-                .checked_mul(10)
-                .and_then(|x| x.checked_add(i64::from(d - b'0')))
-                .ok_or(LayoutError::Overflow)?;
-        }
+        let v = digits.iter().try_fold(0i64, |v, &d| {
+            v.checked_mul(10)
+                .and_then(|x| x.checked_add(i64::from(d - ZERO)))
+                .ok_or(LayoutError::Overflow)
+        })?;
         Ok(if negative { -v } else { v })
     }
 
     /// An [`IntTuple`] at nesting `level` (1 for the outermost tuple); deeper than [`MAX_DEPTH`] is
     /// declined before recursing, so no input can overflow the stack.
     fn tuple(&mut self, level: usize) -> Result<IntTuple, LayoutError> {
-        if !self.eat(b'(') {
+        if !self.eat(OPEN) {
             return self.int(false).map(IntTuple::Int);
         }
         if level > MAX_DEPTH {
             return Err(LayoutError::TooDeep);
         }
-        if self.peek() == Some(b')') {
+        if self.peek() == Some(CLOSE) {
             return Err(LayoutError::EmptyTuple);
         }
         let mut items = vec![self.tuple(level + 1)?];
-        while self.eat(b',') {
+        while self.eat(COMMA) {
             items.push(self.tuple(level + 1)?);
         }
-        self.expect(b')', "expected `,` or `)`")?;
+        self.expect(CLOSE, "expected `,` or `)`")?;
         Ok(IntTuple::Tuple(items))
     }
 
     fn layout(&mut self) -> Result<Layout, LayoutError> {
         let shape = self.tuple(1)?;
-        self.expect(b':', "expected `:` between shape and stride")?;
+        self.expect(COLON, "expected `:` between shape and stride")?;
         let stride = self.tuple(1)?;
         Layout::new(shape, stride)
     }
@@ -135,11 +146,11 @@ impl<'a> Cursor<'a> {
     fn swizzle(&mut self) -> Result<Swizzle, LayoutError> {
         self.keyword("swz(", "expected `swz(`")?;
         let bits = u32::try_from(self.int(false)?).map_err(|_| LayoutError::BadSwizzle)?;
-        self.expect(b',', "expected `,`")?;
+        self.expect(COMMA, "expected `,`")?;
         let base = u32::try_from(self.int(false)?).map_err(|_| LayoutError::BadSwizzle)?;
-        self.expect(b',', "expected `,`")?;
+        self.expect(COMMA, "expected `,`")?;
         let shift = i32::try_from(self.int(true)?).map_err(|_| LayoutError::BadSwizzle)?;
-        self.expect(b')', "expected `)` after the swizzle")?;
+        self.expect(CLOSE, "expected `)` after the swizzle")?;
         Swizzle::new(bits, base, shift)
     }
 }
@@ -175,9 +186,9 @@ impl FromStr for ComposedLayout {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut c = Cursor::new(s);
         let z = c.swizzle()?;
-        c.expect(b'(', "expected `(` before the layout")?;
+        c.expect(OPEN, "expected `(` before the layout")?;
         let l = c.layout()?;
-        c.expect(b')', "expected `)` after the layout")?;
+        c.expect(CLOSE, "expected `)` after the layout")?;
         c.finish()?;
         Ok(ComposedLayout::new(z, l))
     }

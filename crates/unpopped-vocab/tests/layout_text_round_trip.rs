@@ -87,6 +87,10 @@ fn every_non_canonical_text_is_declined() {
     ] {
         assert!(t.parse::<Layout>().is_err(), "{why}: {t}");
     }
+}
+
+#[test]
+fn every_non_canonical_swizzled_text_is_declined() {
     assert!(
         "swz(2,3,-3) ((8,8):(8,1))"
             .parse::<ComposedLayout>()
