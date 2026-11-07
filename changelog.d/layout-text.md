@@ -1,3 +1,0 @@
-kind: feature, canonical text and parser for Layout, Swizzle and ComposedLayout (swz(B,M,S)(shape:stride)) for KISS Contract 6.5 output_layouts
----
-`unpopped-vocab`: `Display` for `Swizzle` (`swz(B,M,S)`) and `ComposedLayout` (`swz(B,M,S)(shape:stride)`), and `FromStr` for `Layout`, `Swizzle` and `ComposedLayout`. One canonical spelling: no spaces, no leading `+` or zero, no `-0`, only the swizzle shift may be negative; nesting is bounded by `MAX_DEPTH` before recursion. New `LayoutError::Parse(reason)` (the enum is `#[non_exhaustive]`). Round trip tested against the two entries of KISS `output_layout_vectors`.

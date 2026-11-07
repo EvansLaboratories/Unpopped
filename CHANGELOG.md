@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.26` — feature, canonical text and parser for Layout, Swizzle and ComposedLayout (swz(B,M,S)(shape:stride)) for KISS Contract 6.5 output_layouts
+
+`unpopped-vocab`: `Display` for `Swizzle` (`swz(B,M,S)`) and `ComposedLayout` (`swz(B,M,S)(shape:stride)`), and `FromStr` for `Layout`, `Swizzle` and `ComposedLayout`. One canonical spelling: no spaces, no leading `+` or zero, no `-0`, only the swizzle shift may be negative; nesting is bounded by `MAX_DEPTH` before recursion. New `LayoutError::Parse(reason)` (the enum is `#[non_exhaustive]`). Round trip tested against the two entries of KISS `output_layout_vectors`.
+
+---
+
 ## `0.44.25` — docs, doc comments that said Call, AtomicCas and the module type were unchecked, and the U11 note that said nothing was built
 
 `kernel.rs` said `check_kernel` refuses `AtomicCas` and that nothing checks or runs `Stmt::Call` or `Module`; both are checked and run. `docs/options-u11-extern-and-inline-asm.md` said "nothing built" after typed `Extern` and `Stmt::ExternCall` landed (0.43.0). Comments only.
