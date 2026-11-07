@@ -1,3 +1,0 @@
-kind: tensor-core attention conformance kernel A6 (ROADMAP U10; tests only)
----
-`kernel_attention_mma.rs` and `unpopped-cpu-c/tests/kernel_attention_mma_emit_agrees.rs` pin attention with both GEMMs on `Stmt::Mma`, written with the kernel layer alone: `S = scale * Q K^T` as two MMAs over two key tiles, a scalar row softmax between block barriers (the lanes exchange `S` and `P` through global scratch, with the atom's own fragment layout supplied as id tables), and `O = P V` as a third MMA, on an `F32` toy `m4n4k8` atom (the shipped half-precision atoms have no C element type in cpu-c). Scores pass 89 and the row maximum falls in both key tiles. Oracle against a host loop; C against `run_launch` within 2 ulps. See `docs/options-u10-attention.md`.
