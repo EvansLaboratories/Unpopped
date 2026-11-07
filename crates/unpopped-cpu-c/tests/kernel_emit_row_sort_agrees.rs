@@ -114,7 +114,11 @@ fn check(dtype: ElementKind, order: SortOrder, out: SortOut, k_out: Option<i64>,
     let tag = format!(
         "sort_{dtype:?}_{order:?}_{out:?}_{}_{}",
         k_out.unwrap_or(0),
-        shape.iter().map(i64::to_string).collect::<Vec<_>>().join("x")
+        shape
+            .iter()
+            .map(i64::to_string)
+            .collect::<Vec<_>>()
+            .join("x")
     );
     agree(&tag, &k, args);
 }
