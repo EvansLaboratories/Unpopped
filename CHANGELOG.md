@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.21` — tensor-core attention conformance kernel A6 (ROADMAP U10; tests only)
+
+`kernel_attention_mma.rs` and `unpopped-cpu-c/tests/kernel_attention_mma_emit_agrees.rs` pin attention with both GEMMs on `Stmt::Mma`, written with the kernel layer alone: `S = scale * Q K^T` as two MMAs over two key tiles, a scalar row softmax between block barriers (the lanes exchange `S` and `P` through global scratch, with the atom's own fragment layout supplied as id tables), and `O = P V` as a third MMA, on an `F32` toy `m4n4k8` atom (the shipped half-precision atoms have no C element type in cpu-c). Scores pass 89 and the row maximum falls in both key tiles. Oracle against a host loop; C against `run_launch` within 2 ulps. See `docs/options-u10-attention.md`.
+
+---
+
 ## `0.44.20` — paged-KV decode attention conformance kernel A4 (ROADMAP U10; tests only)
 
 `kernel_attention_paged.rs` and `unpopped-cpu-c/tests/kernel_attention_paged_emit_agrees.rs` pin flash-style decode attention over a paged KV cache written with the kernel layer alone: K and V in a pool of pages, an `I32` block table in a buffer (options note Q5, no pointers) mapping (sequence, logical page) to a pool page, and per-sequence lengths (a partial last page, exactly one page, an odd count, and a zero-length sequence that yields zeros). Unused table entries name a poison page, so a wrong page, slot or length changes the answer. Oracle against a host gather; C against `run_launch` within 2 ulps. See `docs/options-u10-attention.md`.
