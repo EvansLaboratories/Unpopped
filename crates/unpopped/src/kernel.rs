@@ -15,9 +15,8 @@
 //! knows them, and `oracle::kernel_launch::run_launch` runs them (`run_kernel` runs unlaunched
 //! kernels only).
 //!
-//! Deliberately **not** here yet (each is named in the spec): `Stmt::Call` (needs a module type,
-//! spec unknown U-2), pointer values (`Place::Ptr`), the effect set (computed when a consumer
-//! asks), and any producer other than `lift_opdef`.
+//! Deliberately **not** here yet (each is named in the spec): pointer values (`Place::Ptr`) and the effect
+//! set (computed when a consumer asks). `Stmt::Call` and the module type landed later (`check_module`, `run_module`).
 
 use serde::{Deserialize, Serialize};
 use unpopped_vocab::ElementKind;
@@ -279,8 +278,8 @@ pub enum Stmt {
         scope: Scope,
     },
     /// Compare-and-exchange: if the element equals `expected`, set it to `desired`; `old` receives the
-    /// value found either way. **Shape reserved: `check_kernel` refuses it** until its semantics land
-    /// (`docs/options-u4-sync-and-atomics.md`, S3).
+    /// value found either way. Checked (an integer element, `expected` and `desired` of its type) and run by the
+    /// oracle and `unpopped-cpu-c` (`docs/options-u4-sync-and-atomics.md`, S3).
     AtomicCas {
         /// The element.
         place: Place,
@@ -373,9 +372,9 @@ pub enum Stmt {
     },
     /// Call another kernel of the same [`Module`]: `result = callee(args...)`. The callee is a
     /// [`KernelFn`] (PM ruling 2026-11-02 on `docs/options-u3-remainder.md`, R1a); `callee` indexes
-    /// [`Module::fns`]. **Shape reserved: `check_kernel` refuses it** until the module checker and the
-    /// call semantics land (acyclic call graph; a callee holding a `Barrier` called from uniform
-    /// control only). It is in the 0.41.0 break so that `Stmt` breaks downstream once.
+    /// [`Module::fns`]. Alone, `check_kernel` refuses it (the callee lives in the module); `check_module` resolves it
+    /// (acyclic call graph; a callee holding a `Barrier` called from uniform control only) and `run_module` runs it.
+    /// It entered in the 0.41.0 break so that `Stmt` broke downstream once.
     Call {
         /// Index of the callee in the module's functions.
         callee: u32,
@@ -401,7 +400,7 @@ pub enum Stmt {
 }
 
 /// One argument of a [`Stmt::Call`], matched to the callee's parameter of the same position
-/// (`docs/options-u3-calls.md`, Q2; PM ruling 2026-11-02). **Shape only**: nothing checks or runs it yet.
+/// (`docs/options-u3-calls.md`, Q2; PM ruling 2026-11-02). Checked by `check_module` and run by `run_module`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum CallArg {
@@ -413,8 +412,8 @@ pub enum CallArg {
     Alloc(u32),
 }
 
-/// A set of kernels, any of which may [`Stmt::Call`] another. **Shape only** (0.41.0): nothing checks or
-/// runs a module yet; the type exists so `Stmt::Call` has a callee to name.
+/// A set of kernels, any of which may [`Stmt::Call`] another. Checked by `check_module` and run
+/// by `run_module` (unlaunched entries) and by `run_launch` (launched).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Module {
