@@ -254,15 +254,9 @@ fn allocs(a: &MmaAtom) -> Vec<AllocDecl> {
     .collect()
 }
 
-/// Attention for `M` queries over 8 keys with both GEMMs on `Stmt::Mma`.
-pub(crate) fn mma_attention() -> KernelFn {
-    let a = atom();
-    let (va, vb, vc) = (
-        a.values(0) as usize,
-        a.values(1) as usize,
-        a.values(2) as usize,
-    );
-    let mut body = vec![
+/// Phase 1: both score MMAs, the scaled scores out to scratch, then the block barrier before the softmax reads them.
+fn scores_phase(va: usize, vb: usize, vc: usize) -> Vec<Stmt> {
+    vec![
         Stmt::Let {
             local: 0,
             init: lane(),
@@ -277,9 +271,12 @@ pub(crate) fn mma_attention() -> KernelFn {
         scatter_scaled(6, 7, vc),
         scatter_scaled(8, 8, vc),
         barrier(),
-    ];
-    body.extend(softmax_row());
-    body.extend([
+    ]
+}
+
+/// Phase 3: `P` and `V` into fragments, the output MMA, and the result out through the C id table.
+fn output_phase(va: usize, vb: usize, vc: usize) -> Vec<Stmt> {
+    vec![
         barrier(),
         gather(3, 9, 4, va),
         gather(4, 3, 5, vb),
@@ -297,7 +294,20 @@ pub(crate) fn mma_attention() -> KernelFn {
                 },
             ],
         ),
-    ]);
+    ]
+}
+
+/// Attention for `M` queries over 8 keys with both GEMMs on `Stmt::Mma`.
+pub(crate) fn mma_attention() -> KernelFn {
+    let a = atom();
+    let (va, vb, vc) = (
+        a.values(0) as usize,
+        a.values(1) as usize,
+        a.values(2) as usize,
+    );
+    let mut body = scores_phase(va, vb, vc);
+    body.extend(softmax_row());
+    body.extend(output_phase(va, vb, vc));
     let mut locals = vec![LocalDecl::scalar(F32); 9];
     for u in [0, 1, 2, 4] {
         locals[u] = LocalDecl::scalar(U32);
