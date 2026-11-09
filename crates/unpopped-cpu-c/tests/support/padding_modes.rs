@@ -49,22 +49,25 @@ fn at(buffer: u32, i: ScalarExpr) -> Place {
     }
 }
 
-/// Local 0 is the tap `t`, local 1 the source position `t - PAD`, local 2 the value.
-pub(crate) fn window(mode: Mode) -> KernelFn {
-    let t = ScalarExpr::Local(0);
-    let pos = ScalarExpr::Local(1);
-    // an integer that is non-zero exactly when `0 <= pos < IN_LEN`: max(0, min(pos + 1, IN_LEN - pos)). (A comparison of
-    // integers is a float 0/1, which an integer `Select` cannot take as its condition, so these remaps use Min and Max.)
-    let in_range = bin(
+/// An integer that is non-zero exactly when `0 <= pos < IN_LEN`: max(0, min(pos + 1, IN_LEN - pos)). (A comparison of
+/// integers is a float 0/1, which an integer `Select` cannot take as its condition, so these remaps use Min and Max.)
+fn in_range(pos: ScalarExpr) -> ScalarExpr {
+    bin(
         BinaryOp::Max,
         ci(0),
         bin(
             BinaryOp::Min,
             ScalarExpr::Add(Box::new(pos.clone()), Box::new(ci(1))),
-            sub(ci(IN_LEN), pos.clone()),
+            sub(ci(IN_LEN), pos),
         ),
-    );
-    let load = match mode {
+    )
+}
+
+/// The statement that sets local 2 to the element at source position `pos` (local 1) in `mode`.
+fn read(mode: Mode) -> Stmt {
+    let pos = ScalarExpr::Local(1);
+    let in_range = in_range(pos.clone());
+    match mode {
         Mode::Zero | Mode::Nan | Mode::Constant(_) => {
             let fill = match mode {
                 Mode::Zero => 0.0,
@@ -102,7 +105,13 @@ pub(crate) fn window(mode: Mode) -> KernelFn {
                 place: at(0, mapped),
             }
         }
-    };
+    }
+}
+
+/// Local 0 is the tap `t`, local 1 the source position `t - PAD`, local 2 the value.
+pub(crate) fn window(mode: Mode) -> KernelFn {
+    let t = ScalarExpr::Local(0);
+    let load = read(mode);
     KernelFn::new(
         "pad",
         F32,
