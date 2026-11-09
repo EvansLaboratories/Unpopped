@@ -198,21 +198,19 @@ fn a_combining_reduce_and_scan_agree_with_the_oracle() {
     }
 }
 
-#[test]
-fn the_corpus_catches_seeded_mutants_of_the_emitted_fold() {
-    // An emitted fold step is `cs = f((int)(acc), (int)(cv1[i]), ..., &cr)` then `acc = cr`; each mutant must change the
-    // bytes of a combine for which it matters, or the data could not tell a swapped, skipped or restarted step from the
-    // right one. (`last` and `first` are not symmetric; `add` counts every lane once.)
-    type Mutant = (
-        &'static str,
-        CollectiveKind,
-        KernelFn,
-        &'static str,
-        &'static str,
-    );
+type Mutant = (
+    &'static str,
+    CollectiveKind,
+    KernelFn,
+    &'static str,
+    &'static str,
+);
+
+/// The seeded mutants: a name, the collective, its combine, and the emitted text to replace and what replaces it.
+fn mutants() -> Vec<Mutant> {
     let reduce = || CollectiveKind::ReduceWith { combine: 1 };
     let scan = || CollectiveKind::ScanWith { combine: 1 };
-    let mutants: Vec<Mutant> = vec![
+    vec![
         // the arguments swapped: `last` becomes `first`
         (
             "cmb_mut_swap",
@@ -247,8 +245,15 @@ fn the_corpus_catches_seeded_mutants_of_the_emitted_fold() {
             "if (i > g1) {",
             "if (i >= g1) {",
         ),
-    ];
-    for (tag, kind, f, from, to) in mutants {
+    ]
+}
+
+#[test]
+fn the_corpus_catches_seeded_mutants_of_the_emitted_fold() {
+    // An emitted fold step is `cs = f((int)(acc), (int)(cv1[i]), ..., &cr)` then `acc = cr`; each mutant must change the
+    // bytes of a combine for which it matters, or the data could not tell a swapped, skipped or restarted step from the
+    // right one. (`last` and `first` are not symmetric; `add` counts every lane once.)
+    for (tag, kind, f, from, to) in mutants() {
         let m = module(kind, Scope::Block, f);
         let want = oracle(&m);
         let src = lower_module(&m, 0).expect("lowers").source;

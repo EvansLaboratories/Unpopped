@@ -274,6 +274,16 @@ fn a_combine_that_is_not_a_t_t_to_t_function_is_refused() {
         Scope::Block,
         none
     )));
+}
+
+#[test]
+fn a_combine_with_a_wrong_parameter_or_result_type_is_refused() {
+    let refused = |m: Module| {
+        matches!(
+            check_module(&m, 0),
+            Err(KernelError::CollectiveUnsupported { .. })
+        )
+    };
     // a third parameter
     let mut three = add();
     three.params.push(Param::scalar("c", I32, 3));
