@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.31` — tests, the implicit-GEMM convolution family (forward, data gradient, filter gradient) with stride, dilation and padding at the kernel layer, ROADMAP R5.7 F7
+
+`kernel_conv_family` (oracle, against a host scatter reference) and `kernel_conv_family_emit_agrees` (`unpopped-cpu-c` against the oracle): an NHWC convolution with stride (3, 1), dilation (2, 3), padding (1, 1), a non-square image and filter and taps off the image at both ends of both axes, as three kernel-layer kernels with the im2col index math in the loops and no staged matrix: `fprop`, `dgrad` (each input element gathers the taps that reach it, with the divisibility and range test of a strided convolution) and `wgrad`. No IR change: U9 K7 was the stride-1, dilation-1 forward kernel; this generalises it and adds the two backward convolutions CUTLASS names beside it.
+
+---
+
 ## `0.44.30` — feature, Stmt::MaskedLoad and Stmt::MaskedStore (predicated access with a user fill value), ROADMAP R5.7 C4
 
 `kernel::Stmt::{MaskedLoad { local, place, mask, fill }, MaskedStore { place, value, mask }}` (`Stmt` is `#[non_exhaustive]`): a load declares its local as the element where `mask != 0` and as `fill` (any value of the element type, not only zero) where the mask is zero; a store writes only where the mask holds. Where a mask is false the memory is not touched: no bounds check and no race record, so an index outside the buffer under a false mask is legal and a false lane cannot race a true one. The checker types the fill and the mask; the uniformity analysis treats a value as divergent when its mask or fill is; the oracle and `unpopped-cpu-c` run it (the C is a bounds-checked access inside `if ((mask) != 0)`).
