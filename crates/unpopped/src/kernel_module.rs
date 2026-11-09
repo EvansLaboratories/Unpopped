@@ -78,7 +78,7 @@ fn call_edges(m: &Module) -> Result<Vec<Vec<u32>>, KernelError> {
 fn collect_calls(b: &Block, out: &mut Vec<u32>) {
     for st in &b.0 {
         match st {
-            Stmt::Call { callee, .. } => out.push(*callee),
+            Stmt::Call { callee, .. } | Stmt::CallTuple { callee, .. } => out.push(*callee),
             // a combining collective calls its combine function once per lane
             Stmt::Collective {
                 kind: CollectiveKind::ReduceWith { combine } | CollectiveKind::ScanWith { combine },
@@ -196,9 +196,18 @@ fn signatures(m: &Module, edges: &[Vec<u32>]) -> Result<Vec<CalleeSig>, KernelEr
                     None => return Err(KernelError::UnknownLocal { local: l }),
                 },
             };
+            let extra = f
+                .results
+                .iter()
+                .map(|l| match f.locals.get(*l as usize) {
+                    Some(d) => Ok(d.ty()),
+                    None => Err(KernelError::UnknownLocal { local: *l }),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(CalleeSig {
                 params: f.params.iter().map(|p| p.kind.clone()).collect(),
                 result,
+                extra,
                 barrier,
             })
         })

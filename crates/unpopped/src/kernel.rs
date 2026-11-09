@@ -407,6 +407,19 @@ pub enum Stmt {
         /// The local that receives the callee's result, if it has one.
         result: Option<u32>,
     },
+    /// Call a kernel of the same [`Module`] that returns several values (ROADMAP R5.7 D4b,
+    /// `docs/options-d4b-tuple-state-combine.md`, option B): `results = callee(args...)`. The callee's results are
+    /// its [`KernelFn::result`] (if any) followed by its [`KernelFn::results`], and `results` names one local per
+    /// value, in that order, each declared by this statement. A [`Stmt::Call`] still takes the first value only.
+    /// Checked by `check_module`, run by `run_module` and `run_launch_module`.
+    CallTuple {
+        /// Index of the callee in the module's functions.
+        callee: u32,
+        /// The arguments, in the callee's parameter order.
+        args: Vec<CallArg>,
+        /// The locals that receive the callee's values, one per value, in order.
+        results: Vec<u32>,
+    },
     /// Call the opaque [`ExternDecl`] `decl` of the module (ROADMAP U11; `docs/options-u11-extern-and-inline-asm.md`):
     /// `results = decl(args...)`. A statement, not an expression, because an effectful call has an order. The
     /// declaration states the effects (`pure`, `sync`, `volatile`), which the checker holds it to and which every
@@ -780,6 +793,11 @@ pub struct KernelFn {
     /// end of the body. `None` for a kernel and for a callee with no result. Shape only (0.41.4).
     #[serde(default)]
     pub result: Option<u32>,
+    /// The locals that carry the values after [`Self::result`] when a [`Stmt::CallTuple`] calls this function: a
+    /// function that returns `(a, b)` has `result = a` and `results = [b]`. Empty for every function that returns at
+    /// most one value (R5.7 D4b).
+    #[serde(default)]
+    pub results: Vec<u32>,
 }
 
 impl KernelFn {
@@ -801,6 +819,7 @@ impl KernelFn {
             launch: None,
             allocs: Vec::new(),
             result: None,
+            results: Vec::new(),
         }
     }
 
@@ -816,6 +835,19 @@ impl KernelFn {
     pub fn with_result(mut self, local: u32) -> Self {
         self.result = Some(local);
         self
+    }
+
+    /// The same function with `locals` as the values after its result (what a [`Stmt::CallTuple`] of it also
+    /// receives): `with_result(a).with_results([b, c])` returns `(a, b, c)`.
+    #[must_use]
+    pub fn with_results(mut self, locals: impl Into<Vec<u32>>) -> Self {
+        self.results = locals.into();
+        self
+    }
+
+    /// Every value this function returns, in order: [`Self::result`] then [`Self::results`].
+    pub fn all_results(&self) -> impl Iterator<Item = u32> + '_ {
+        self.result.into_iter().chain(self.results.iter().copied())
     }
 
     /// The same kernel with the allocations `allocs`.

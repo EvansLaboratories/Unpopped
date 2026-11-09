@@ -274,7 +274,12 @@ impl<'a> Machine<'a> {
                 callee,
                 args,
                 result,
-            } => self.exec_call(*callee, args, *result)?,
+            } => self.exec_call(*callee, args, result.as_slice())?,
+            Stmt::CallTuple {
+                callee,
+                args,
+                results,
+            } => self.exec_call(*callee, args, results)?,
             Stmt::If { cond, then, els } => {
                 let taken = self.truthy(cond)?;
                 return self.exec_block(if taken { then } else { els });

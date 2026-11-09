@@ -41,7 +41,7 @@ pub(super) enum Frame<'a> {
         caller: u32,
         locals: Vec<Option<super::Val>>,
         bufmap: Vec<usize>,
-        result: Option<u32>,
+        results: Vec<u32>,
     },
 }
 
@@ -159,7 +159,12 @@ impl<'a> Machine<'a> {
                 callee,
                 args,
                 result,
-            } => self.call_stmt(stack, module, (*callee, args, *result))?,
+            } => self.call_stmt(stack, module, (*callee, args, result.as_slice()))?,
+            Stmt::CallTuple {
+                callee,
+                args,
+                results,
+            } => self.call_stmt(stack, module, (*callee, args, results))?,
             Stmt::If { cond, then, els } => {
                 let block = if self.truthy(cond)? { then } else { els };
                 stack.push(Frame::seq(block));
@@ -211,14 +216,14 @@ impl<'a> Machine<'a> {
         &mut self,
         stack: &mut Vec<Frame<'k>>,
         module: Option<&'k Module>,
-        (callee, args, result): (u32, &[CallArg], Option<u32>),
+        (callee, args, results): (u32, &[CallArg], &[u32]),
     ) -> Result<(), KernelTrap> {
         let Some(m) = module else {
             return Err(KernelTrap::Unsupported(
                 "a Call outside run_launch_module (check_kernel refuses it)",
             ));
         };
-        self.enter_call(stack, (callee, &m.fns[callee as usize]), (args, result))
+        self.enter_call(stack, (callee, &m.fns[callee as usize]), (args, results))
     }
 
     /// An `ExternCall` against the module: push the declaration's reference as a call frame.
@@ -237,7 +242,7 @@ impl<'a> Machine<'a> {
         self.enter_call(
             stack,
             (reference, &m.fns[reference as usize]),
-            (&call_args, results.first().copied()),
+            (&call_args, &results[..results.len().min(1)]),
         )
     }
 

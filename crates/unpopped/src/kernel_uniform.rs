@@ -153,11 +153,11 @@ impl Walk<'_> {
         &mut self,
         callee: u32,
         args: &[CallArg],
-        result: Option<u32>,
+        results: &[u32],
         div: bool,
     ) -> Result<(), KernelError> {
-        if let Some(local) = result {
-            self.mark(local);
+        for local in results {
+            self.mark(*local);
         }
         let reaches = self
             .barrier_callees
@@ -183,6 +183,7 @@ impl Walk<'_> {
             | Stmt::AtomicCas { .. }
             | Stmt::Collective { .. }
             | Stmt::Call { .. }
+            | Stmt::CallTuple { .. }
             | Stmt::ExternCall { .. } => self.defines(st, div || *poisoned)?,
             Stmt::If { .. } | Stmt::For { .. } | Stmt::While { .. } => {
                 self.control(st, div, poisoned)?;
@@ -243,7 +244,12 @@ impl Walk<'_> {
                 callee,
                 args,
                 result,
-            } => self.call(*callee, args, *result, skipped)?,
+            } => self.call(*callee, args, result.as_slice(), skipped)?,
+            Stmt::CallTuple {
+                callee,
+                args,
+                results,
+            } => self.call(*callee, args, results, skipped)?,
             Stmt::ExternCall {
                 decl,
                 args,

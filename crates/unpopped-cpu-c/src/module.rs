@@ -122,7 +122,9 @@ fn postorder(m: &Module, entry: u32) -> Vec<usize> {
 fn collect_calls(b: &Block, externs: &[ExternDecl], out: &mut Vec<usize>) {
     for st in &b.0 {
         match st {
-            Stmt::Call { callee, .. } => out.push(*callee as usize),
+            Stmt::Call { callee, .. } | Stmt::CallTuple { callee, .. } => {
+                out.push(*callee as usize)
+            }
             // a combining collective calls its combine function
             Stmt::Collective {
                 kind:
