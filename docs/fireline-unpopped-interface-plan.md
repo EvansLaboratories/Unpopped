@@ -83,7 +83,9 @@ Seed three mutants when built (drop a variant's handling in one emitter; change 
 - **PM / CireSnave:** project name is FireLine (not SeamAnt); crate names above are placeholders; the version-start decision in 4.
 - Unknown to me: how many public types are `#[non_exhaustive]` (5); whether `artifact` can be cut from `capset` without touching Baracuda's cache key.
 
-## 8. The Unpopped-to-Fuel boundary (CireSnave 2026-11-07: Fuel talks to Unpopped via FireLine, no direct wiring)
+## 8. The Unpopped-to-Fuel boundary (the seam is defined in FireLine; Unpopped and Fuel may call each other directly)
+
+**Meaning corrected 2026-11-09** (CireSnave, decision 395, relayed by the PM): every seam has its definitions in FireLine and other crates use them to define how they communicate; no project has to call *into* FireLine and have FireLine call out to the other side. The 2026-11-07 relay ("via FireLine") overstated it. This section was always about which **definitions** cross (below), not about a runtime hop, so its content stands; only this heading said otherwise.
 
 **Measured today** at Fuel `origin/main` d010189e4 (`git grep` over `*.rs` and every `Cargo.toml`; a census of use sites, not of behaviour):
 - **Crates:** Fuel depends on `unpopped-vocab` only, pinned `0.43.2` in the workspace manifest. **It has no dependency on `unpopped`** (the core), `unpopped-cpu-c`, or any kernel-layer or `Backend` type; the only `unpopped::` text in Fuel sources is prose (`gaps.md`, `ROADMAP.md`, a doc comment).
