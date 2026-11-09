@@ -86,8 +86,9 @@ fn the_geometry_exercises_stride_dilation_and_padding_at_both_ends() {
     // the output is 2 x 5 from a 6 x 6 image: a stride of 3 and a dilation of 2 on H shrink it, a dilation of 3 on W with
     // padding 1 takes one column off
     assert_eq!((P, Q), (2, 5));
-    // the three row parameters and the three column parameters are all different, so a mix-up changes the answer
-    assert!(SH != SW && DH != DW && PH == PW && DH != SH);
+    // the row and column parameters differ (and a stride is not the dilation beside it), so a mix-up changes the answer
+    let differ = |a: i64, b: i64| a != b;
+    assert!(differ(SH, SW) && differ(DH, DW) && differ(DH, SH));
     // a tap that falls off the image exists at both ends of each axis, so a dropped bounds check changes the answer
     let pos = |o: i64, t: i64, stride: i64, dil: i64, pad: i64| o * stride + t * dil - pad;
     let rows: Vec<i64> = (0..P)

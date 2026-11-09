@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! **The C of the implicit-GEMM convolution family agrees with the oracle** (ROADMAP R5.7 F7; the kernels and the host
 //! scatter references are `support/conv_family.rs`, checked in `crates/unpopped/tests/kernel_conv_family.rs`): forward, data
-//! gradient and filter gradient with stride `(2, 1)`, dilation `(1, 2)` and padding `(1, 1)`, lowered by
+//! gradient and filter gradient with stride `(3, 1)`, dilation `(2, 3)` and padding `(1, 1)`, lowered by
 //! `unpopped_cpu_c::CpuC::lower_kernel`, compiled and run with a host C compiler, and compared byte for byte with
 //! `run_launch`. The integer divisions of the data gradient go through the C helpers the oracle's totality rule defines.
 
