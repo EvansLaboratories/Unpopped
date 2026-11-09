@@ -55,6 +55,9 @@ impl ArithOp {
 /// Consulted only when the conversion cannot be exact (wider float to narrower
 /// float, float to integer, integer to float). Stochastic rounding needs a
 /// random-bits operand and is a separate follow-up, hence `non_exhaustive`.
+///
+/// A [`ScalarExpr::Qualified`] arithmetic operation takes only the four IEEE directions
+/// (PTX `add.rn/.rz/.rm/.rp`); [`Self::NearestAway`] there is a type error.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum RoundMode {
@@ -66,6 +69,8 @@ pub enum RoundMode {
     TowardNegInf,
     /// Round toward positive infinity (`.rp`).
     TowardPosInf,
+    /// Round to nearest, ties away from zero (PTX `.rna`, C `round`). Only a [`ScalarExpr::Cast`] takes it.
+    NearestAway,
 }
 
 /// Out-of-range behaviour of a [`ScalarExpr::Cast`].
@@ -2414,6 +2419,16 @@ pub enum AccumSpec {
         /// Contracted elements per accumulator rounding (at least 1).
         k_step: u32,
     },
+    /// An integer tensor-core model (`mma ... s8/u8 ... s32`): `I8` or `U8` operands, exact products, an `i32`
+    /// accumulator that wraps (two's complement). The result is the exact sum modulo 2^32, whatever the order. The op's
+    /// `out_dtype` is `I32` and its epilogue is the identity (`Reduced(0)`).
+    Int32,
+    /// As [`Self::Int32`] with a saturating accumulator (PTX `.satfinite`): after every `k_step` contracted elements
+    /// the accumulator is clamped into the `i32` range, so a later negative product can bring a saturated value down.
+    Int32Sat {
+        /// Contracted elements per accumulator clamp (the atom's K; at least 1).
+        k_step: u32,
+    },
 }
 
 /// Accumulator policy for a **non-contraction reduction** ([`Access::Reduction`])
@@ -4527,7 +4542,9 @@ mod reduction_axes_tests {
                 | AccumSpec::Tf32 { .. }
                 | AccumSpec::Tf32x3 { .. }
                 | AccumSpec::Bf16x3 { .. }
-                | AccumSpec::F16Accum { .. } => true,
+                | AccumSpec::F16Accum { .. }
+                | AccumSpec::Int32
+                | AccumSpec::Int32Sat { .. } => true,
             }
         }
 

@@ -649,6 +649,22 @@ pub enum CollectiveKind {
         /// The source lane.
         lane: ScalarExpr,
     },
+    /// Every lane receives the fold of the scope's values under a **user combine function**: the function `combine`
+    /// of the [`Module`] (`fns[combine]`), a plain function `(a: T, b: T) -> T` over the collective's value type, with
+    /// no barrier (ROADMAP R5.7 D4; PM ruling 2026-11-09: the custom combine stays at the kernel layer, as a callee).
+    /// The oracle folds left to right in lane order. The author asserts the function is **associative**, which lets
+    /// a device reassociate it (a shuffle tree); a float combine is therefore compared within a tolerance, not bytes.
+    /// It needs a module: `check_kernel` alone refuses it, `check_module` resolves the function.
+    ReduceWith {
+        /// Index of the combine function in [`Module::fns`].
+        combine: u32,
+    },
+    /// Every lane receives the prefix fold up to itself (inclusive) under the combine function `combine`; see
+    /// [`Self::ReduceWith`]. There is no exclusive form: a user combine has no identity to hand lane 0.
+    ScanWith {
+        /// Index of the combine function in [`Module::fns`].
+        combine: u32,
+    },
 }
 
 /// How a shuffle names its source lane.

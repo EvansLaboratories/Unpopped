@@ -18,6 +18,28 @@ use unpopped_vocab::ElementKind;
 
 use crate::kernel::{Emitter, ctype, refuse};
 
+/// The C function a combining collective folds with, and the extra id arguments it takes.
+struct Combine {
+    name: String,
+    ids: Vec<String>,
+}
+
+impl Combine {
+    /// The C statements that set `acc = f(acc, rhs)` (the callee returns a status, then its result through a pointer).
+    fn step(&self, s: &Spec, acc: &str, rhs: &str) -> Vec<String> {
+        let n = s.n;
+        let mut actuals = vec![format!("({})({acc})", s.val), format!("({})({rhs})", s.val)];
+        actuals.extend(self.ids.iter().cloned());
+        actuals.push(format!("&cr{n}"));
+        vec![
+            format!("{} cr{n} = 0;", s.val),
+            format!("int cs{n} = {}({});", self.name, actuals.join(", ")),
+            format!("if (cs{n}) return cs{n};"),
+            format!("{acc} = cr{n};"),
+        ]
+    }
+}
+
 /// What the C of one collective is spelled from.
 struct Spec {
     /// The id making the names unique: `cv<n>`, `co<n>`.
@@ -70,7 +92,13 @@ impl Emitter<'_> {
         self.line(&format!(
             "const int ge{n} = g{n} + {group} < {nt} ? g{n} + {group} : {nt}; (void)ge{n};"
         ));
-        let body = group_body(&spec, kind);
+        let comb = match kind {
+            CollectiveKind::ReduceWith { combine } | CollectiveKind::ScanWith { combine } => {
+                Some(self.combine_call(*combine)?)
+            }
+            _ => None,
+        };
+        let body = group_body(&spec, kind, comb.as_ref());
         for l in body? {
             self.line(&l);
         }
@@ -79,6 +107,22 @@ impl Emitter<'_> {
         self.depth -= 1;
         self.line("}");
         Ok(())
+    }
+
+    /// The C function of the combine function `callee` and the id actuals it takes: a combine function runs on the
+    /// group, not on a thread, so a launched module's id parameters are passed as `0` (a combine that reads an id is
+    /// not a combine; the oracle traps on it).
+    fn combine_call(&self, callee: u32) -> Result<Combine, LowerError> {
+        let Some(m) = self.module else {
+            return Err(refuse(
+                "a combining collective outside a module (use lower_module)",
+            ));
+        };
+        let ids = if m.launch.is_some() { 6 } else { 0 };
+        Ok(Combine {
+            name: m.names[callee as usize].clone(),
+            ids: vec!["0".to_string(); ids],
+        })
     }
 
     /// Open the construct's block and run the thread loop that stores every thread's contribution.
@@ -108,8 +152,14 @@ impl Emitter<'_> {
 }
 
 /// The lines of the per-group code, given `g<n>` (first lane) and `ge<n>` (one past the last).
-fn group_body(s: &Spec, kind: &CollectiveKind) -> Result<Vec<String>, LowerError> {
+fn group_body(
+    s: &Spec,
+    kind: &CollectiveKind,
+    comb: Option<&Combine>,
+) -> Result<Vec<String>, LowerError> {
     match kind {
+        CollectiveKind::ReduceWith { .. } => Ok(reduce_with(s, comb.expect("resolved"))),
+        CollectiveKind::ScanWith { .. } => Ok(scan_with(s, comb.expect("resolved"))),
         CollectiveKind::Reduce(op) => reduce(s, *op),
         CollectiveKind::Scan { op, exclusive } => scan(s, *op, *exclusive),
         CollectiveKind::Shuffle { mode, .. } => Ok(shuffle(s, Some(*mode))),
@@ -117,6 +167,45 @@ fn group_body(s: &Spec, kind: &CollectiveKind) -> Result<Vec<String>, LowerError
         CollectiveKind::Vote(v) => Ok(vote(s, *v)),
         _ => Err(refuse("a collective kind this emitter has not been taught")),
     }
+}
+
+/// The left fold of the group's values under the combine function, every lane receiving it.
+fn reduce_with(s: &Spec, c: &Combine) -> Vec<String> {
+    let (n, local) = (s.n, s.local);
+    let mut out = vec![
+        format!("{} acc = cv{n}[g{n}];", s.val),
+        format!("for (int i = g{n} + 1; i < ge{n}; ++i) {{"),
+    ];
+    out.extend(
+        c.step(s, "acc", &format!("cv{n}[i]"))
+            .into_iter()
+            .map(|l| format!("    {l}")),
+    );
+    out.push("}".to_string());
+    out.push(format!(
+        "for (int i = g{n}; i < ge{n}; ++i) l{local}[i] = ({})acc;",
+        s.res
+    ));
+    out
+}
+
+/// The inclusive prefix fold under the combine function.
+fn scan_with(s: &Spec, c: &Combine) -> Vec<String> {
+    let (n, local) = (s.n, s.local);
+    let mut out = vec![
+        format!("{} acc = cv{n}[g{n}];", s.val),
+        format!("for (int i = g{n}; i < ge{n}; ++i) {{"),
+        format!("    if (i > g{n}) {{"),
+    ];
+    out.extend(
+        c.step(s, "acc", &format!("cv{n}[i]"))
+            .into_iter()
+            .map(|l| format!("        {l}")),
+    );
+    out.push("    }".to_string());
+    out.push(format!("    l{local}[i] = ({})acc;", s.res));
+    out.push("}".to_string());
+    out
 }
 
 fn reduce(s: &Spec, op: ReduceOp) -> Result<Vec<String>, LowerError> {
