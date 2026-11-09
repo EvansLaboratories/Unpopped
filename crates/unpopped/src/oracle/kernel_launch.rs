@@ -470,12 +470,20 @@ fn status_after(stop: Stop, t: &mut ThreadRun<'_>) -> Status {
 
 /// A collective whose every lane has arrived: compute the results and put each in its lane's local. It exchanges
 /// registers and orders no memory, so no epoch is counted.
-fn deliver(members: &mut [ThreadRun<'_>]) -> Result<(), KernelTrap> {
+fn deliver(
+    members: &mut [ThreadRun<'_>],
+    module: Option<(&Module, u32)>,
+) -> Result<(), KernelTrap> {
     let lanes: Vec<Contribution> = members
         .iter()
         .map(|t| t.contrib.expect("every lane contributed"))
         .collect();
-    let out = results(&lanes)?;
+    let out = results(&lanes, &mut |f, a, b| match module {
+        Some((m, _)) => super::kernel_call::eval_combine(m, f, a, b),
+        None => Err(KernelTrap::Unsupported(
+            "a combining collective outside a module (check_kernel refuses it)",
+        )),
+    })?;
     for ((t, c), v) in members.iter_mut().zip(&lanes).zip(out) {
         t.locals[c.result as usize] = Some(v);
         t.contrib = None;
@@ -553,7 +561,7 @@ fn release(
         if members.iter().all(|t| t.mma.is_some()) {
             deliver_mma(members)?;
         } else if members.iter().all(|t| t.contrib.is_some()) {
-            deliver(members)?;
+            deliver(members, b.module)?;
         } else if scope == Scope::Subgroup {
             mem.sub_epoch[(group.start / b.sg) as usize] += 1;
         } else {
