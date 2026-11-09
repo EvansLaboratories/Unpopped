@@ -7,7 +7,7 @@
 //! math is in the loops). `conv.rs` is the stride-1, dilation-1 forward kernel of U9 K7; this file generalises it and adds
 //! the two backward convolutions that CUTLASS names beside it.
 //!
-//! The shapes make an index mix-up loud: a non-square image and filter, stride `(2, 1)`, dilation `(1, 2)`, padding `(1, 1)`,
+//! The shapes make an index mix-up loud: a non-square image and filter, stride `(3, 1)`, dilation `(2, 3)`, padding `(1, 1)`,
 //! several channels, and taps that fall outside the image at both ends of both axes. Integer data, so every comparison is
 //! exact. Shared by the oracle test (`kernel_conv_family.rs`) and the C test
 //! (`unpopped-cpu-c/tests/kernel_conv_family_emit_agrees.rs`, which keeps a copy: change both).
@@ -19,16 +19,16 @@ use unpopped_vocab::ElementKind;
 
 pub(crate) const I32: ElementKind = ElementKind::I32;
 pub(crate) const N: i64 = 2;
-pub(crate) const H: i64 = 5;
+pub(crate) const H: i64 = 6;
 pub(crate) const W: i64 = 6;
 pub(crate) const C: i64 = 3;
 pub(crate) const K: i64 = 2;
 pub(crate) const R: i64 = 3;
 pub(crate) const S: i64 = 2;
-pub(crate) const SH: i64 = 2;
+pub(crate) const SH: i64 = 3;
 pub(crate) const SW: i64 = 1;
-pub(crate) const DH: i64 = 1;
-pub(crate) const DW: i64 = 2;
+pub(crate) const DH: i64 = 2;
+pub(crate) const DW: i64 = 3;
 pub(crate) const PH: i64 = 1;
 pub(crate) const PW: i64 = 1;
 pub(crate) const P: i64 = (H + 2 * PH - DH * (R - 1) - 1) / SH + 1;
