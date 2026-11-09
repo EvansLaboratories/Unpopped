@@ -48,7 +48,8 @@ operation on its (already-rounded) operands, rounded once in the stated directio
 `NearestEven` is today's behaviour and the default. For the directed modes:
 
 - `TowardZero`, `TowardNegInf`, `TowardPosInf` round the exact result; an exact result is returned
-  unchanged in every mode.
+  unchanged in every mode. `RoundMode::NearestAway` (ties away from zero) is a `Cast`'s mode only: PTX arithmetic
+  has no `.rna`, so a `Qualified` operation under it is `TypeError::IllegalQualifier` and a plan-gate decline.
 - **Overflow** follows IEEE 754 section 7.4: `TowardZero` returns the largest finite value of the
   sign; `TowardNegInf` returns the largest finite value for a positive result and `-inf` for a
   negative one; `TowardPosInf` the mirror image.

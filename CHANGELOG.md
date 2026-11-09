@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.27` — feature, RoundMode::NearestAway (ties away from zero) for Cast; arithmetic qualifiers refuse it
+
+`ir::RoundMode::NearestAway` (PTX `.rna`, C `round`): a `Cast` rounds to nearest with ties away from zero, in the oracle for every inexact conversion (float to integer, f64 to f32, integer to f32/f64, 16-bit floats, MX elements). `unpopped-cpu-c` spells it for float to integer (`round`) and declines the other inexact conversions with a reason. A `Qualified` arithmetic operation takes only the four IEEE directions, so `NearestAway` there is a new `TypeError::IllegalQualifier` and a plan-gate decline. Stochastic rounding is still not here. The enum is `#[non_exhaustive]`.
+
+---
+
 ## `0.44.26` — feature, canonical text and parser for Layout, Swizzle and ComposedLayout (swz(B,M,S)(shape:stride)) for KISS Contract 6.5 output_layouts
 
 `unpopped-vocab`: `Display` for `Swizzle` (`swz(B,M,S)`) and `ComposedLayout` (`swz(B,M,S)(shape:stride)`), and `FromStr` for `Layout`, `Swizzle` and `ComposedLayout`. One canonical spelling: no spaces, no leading `+` or zero, no `-0`, only the swizzle shift may be negative; nesting is bounded by `MAX_DEPTH` before recursion. New `LayoutError::Parse(reason)` (the enum is `#[non_exhaustive]`). Round trip tested against the two entries of KISS `output_layout_vectors`.
