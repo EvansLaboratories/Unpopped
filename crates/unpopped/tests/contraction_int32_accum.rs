@@ -211,30 +211,36 @@ fn a_policy_that_does_not_fit_the_cell_is_a_typed_decline_and_the_control_builds
 }
 
 #[test]
-fn a_float_cell_under_an_integer_policy_is_declined() {
+fn a_float_cell_under_an_integer_policy_is_declined_for_its_operands_alone() {
+    // Everything else is right (an I32 accumulator and output, out_dtype I32, identity epilogue): only the F32
+    // operands are wrong, so only the operand rule can decline it.
     let ops = [
         OperandDesc::new(2, &[1, 4], &[4, 1], ElementKind::F32, 256),
         OperandDesc::new(2, &[4, 1], &[1, 1], ElementKind::F32, 256),
-        OperandDesc::new(2, &[1, 1], &[1, 1], ElementKind::F32, 256),
+        OperandDesc::new(2, &[1, 1], &[1, 1], I32, 256),
     ];
     let mut facts = CellFacts::new();
     facts.contraction_declared = true;
     facts.weight_operand = Some(1);
     facts.contraction_roles = Some(ContractionRoles::gemm(2, 0));
+    facts.accumulator = Some(I32);
     let key = derive_structure_key(&ops, &facts, ArchSku::Sm89).expect("a key");
-    let op = OpDef::contraction(
+    let mut op = OpDef::contraction(
         "mm",
         &[ElementKind::F32],
         ContractionAxes::matmul(),
         reduced(0),
     )
     .with_accum(AccumSpec::Int32);
-    assert!(matches!(
-        try_build_plan(&op, &key),
-        Err(PlanError::UnservableContraction(
-            ContractionDecline::IntegerPolicyMismatch { .. }
-        ))
-    ));
+    op.out_dtype = Some(I32);
+    match try_build_plan(&op, &key) {
+        Err(PlanError::UnservableContraction(ContractionDecline::IntegerPolicyMismatch {
+            detail,
+        })) => {
+            assert!(detail.contains("I8 or U8"), "{detail}");
+        }
+        other => panic!("expected the operand decline, got {other:?}"),
+    }
 }
 
 #[test]
