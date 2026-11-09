@@ -200,6 +200,39 @@ impl Emitter<'_> {
                 let (at, v) = (self.address(place)?, self.expr(value)?);
                 self.line(&format!("{at} = {v};"));
             }
+            Stmt::MaskedLoad {
+                local,
+                place,
+                mask,
+                fill,
+            } => {
+                // the memory is touched (and bounds-checked) only where the mask holds
+                let n = self.fresh;
+                self.fresh += 1;
+                let (t, m, f) = (
+                    self.local_ctype(*local)?,
+                    self.expr(mask)?,
+                    self.expr(fill)?,
+                );
+                self.line(&format!("{t} mv{n} = ({t})({f});"));
+                self.line(&format!("if (({m}) != 0) {{"));
+                self.depth += 1;
+                let at = self.address(place)?;
+                let at = self.unpack_nibble(place, at)?;
+                self.line(&format!("mv{n} = ({t})({at});"));
+                self.depth -= 1;
+                self.line("}");
+                self.bind_local(*local, &format!("mv{n}"))?;
+            }
+            Stmt::MaskedStore { place, value, mask } => {
+                let m = self.expr(mask)?;
+                self.line(&format!("if (({m}) != 0) {{"));
+                self.depth += 1;
+                let (at, v) = (self.address(place)?, self.expr(value)?);
+                self.line(&format!("{at} = {v};"));
+                self.depth -= 1;
+                self.line("}");
+            }
             Stmt::If { cond, then, els } => self.if_stmt(cond, then, els)?,
             Stmt::For {
                 local,

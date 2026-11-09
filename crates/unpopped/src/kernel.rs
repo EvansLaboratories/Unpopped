@@ -203,6 +203,30 @@ pub enum Stmt {
         /// The value (the buffer's element type).
         value: ScalarExpr,
     },
+    /// Declare `local` as the element at `place` where `mask != 0`, and as `fill` where it is zero (ROADMAP R5.7 C4;
+    /// PTX predicated `ld`, Triton `tl.load(mask, other)`, Mojo `masked_load(.., passthrough)`). Where the mask is false
+    /// the memory is **not touched**: no bounds check, no race record, so an out-of-range index under a false mask is
+    /// legal. `fill` has the element's type, and any value, not only zero.
+    MaskedLoad {
+        /// The local id.
+        local: u32,
+        /// Where to read when the mask holds.
+        place: Place,
+        /// The predicate: any scalar type, tested `!= 0`.
+        mask: ScalarExpr,
+        /// The value the local takes where the mask is false (the buffer's element type).
+        fill: ScalarExpr,
+    },
+    /// Write one element where `mask != 0`; where it is zero nothing happens and the memory is not touched (no bounds
+    /// check, no race record).
+    MaskedStore {
+        /// Where to write when the mask holds.
+        place: Place,
+        /// The value (the buffer's element type).
+        value: ScalarExpr,
+        /// The predicate: any scalar type, tested `!= 0`.
+        mask: ScalarExpr,
+    },
     /// Branch on `cond != 0`.
     If {
         /// Condition, any scalar type.
