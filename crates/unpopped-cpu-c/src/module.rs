@@ -123,6 +123,13 @@ fn collect_calls(b: &Block, externs: &[ExternDecl], out: &mut Vec<usize>) {
     for st in &b.0 {
         match st {
             Stmt::Call { callee, .. } => out.push(*callee as usize),
+            // a combining collective calls its combine function
+            Stmt::Collective {
+                kind:
+                    unpopped::kernel::CollectiveKind::ReduceWith { combine }
+                    | unpopped::kernel::CollectiveKind::ScanWith { combine },
+                ..
+            } => out.push(*combine as usize),
             Stmt::ExternCall { decl, .. } => {
                 if let Some(r) = externs.get(*decl as usize).and_then(|d| d.reference) {
                     out.push(r as usize);
