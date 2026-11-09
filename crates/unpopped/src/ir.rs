@@ -55,6 +55,9 @@ impl ArithOp {
 /// Consulted only when the conversion cannot be exact (wider float to narrower
 /// float, float to integer, integer to float). Stochastic rounding needs a
 /// random-bits operand and is a separate follow-up, hence `non_exhaustive`.
+///
+/// A [`ScalarExpr::Qualified`] arithmetic operation takes only the four IEEE directions
+/// (PTX `add.rn/.rz/.rm/.rp`); [`Self::NearestAway`] there is a type error.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum RoundMode {
@@ -66,6 +69,8 @@ pub enum RoundMode {
     TowardNegInf,
     /// Round toward positive infinity (`.rp`).
     TowardPosInf,
+    /// Round to nearest, ties away from zero (PTX `.rna`, C `round`). Only a [`ScalarExpr::Cast`] takes it.
+    NearestAway,
 }
 
 /// Out-of-range behaviour of a [`ScalarExpr::Cast`].

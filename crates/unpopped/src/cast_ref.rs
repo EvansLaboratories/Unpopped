@@ -67,6 +67,8 @@ fn round_scaled(ax: f64, eff: i32, mbits: u32, mode: RoundMode, neg: bool) -> u1
         RoundMode::TowardZero => false,
         RoundMode::TowardNegInf => frac > 0.0 && neg,
         RoundMode::TowardPosInf => frac > 0.0 && !neg,
+        // `q` is a magnitude, so a tie (`frac == 0.5`) rounds up, away from zero.
+        RoundMode::NearestAway => frac >= 0.5,
     };
     n + u128::from(up)
 }
@@ -130,7 +132,7 @@ pub(crate) fn encode_mx(x: f64, ebits: u32, mbits: u32, mode: RoundMode) -> u128
 /// points toward the overflowing side.
 fn overflows_to_infinity(mode: RoundMode, neg: bool) -> bool {
     match mode {
-        RoundMode::NearestEven => true,
+        RoundMode::NearestEven | RoundMode::NearestAway => true,
         RoundMode::TowardZero => false,
         RoundMode::TowardNegInf => neg,
         RoundMode::TowardPosInf => !neg,
@@ -318,6 +320,17 @@ fn f64_to_f32(x: f64, mode: RoundMode) -> f32 {
     let rd = f64::from(r);
     match mode {
         RoundMode::NearestEven => r,
+        RoundMode::NearestAway => {
+            // `r` is the tie-to-even result. When `x` is exactly halfway to the neighbour on the far
+            // side of `x`, take whichever of the two is farther from zero.
+            let other = step32(r, rd < x);
+            let od = f64::from(other);
+            if other.is_finite() && x * 2.0 == rd + od && od.abs() > rd.abs() {
+                other
+            } else {
+                r
+            }
+        }
         RoundMode::TowardZero => {
             if rd.abs() > x.abs() {
                 step32(r, rd < 0.0)
@@ -352,6 +365,15 @@ fn int_to_f32(i: i128, mode: RoundMode) -> f32 {
     }
     match mode {
         RoundMode::NearestEven => r,
+        RoundMode::NearestAway => {
+            let other = step32(r, ri < i);
+            let oi = other as i128;
+            if other.is_finite() && i * 2 == ri + oi && oi.abs() > ri.abs() {
+                other
+            } else {
+                r
+            }
+        }
         RoundMode::TowardZero => {
             if ri.abs() > i.abs() {
                 step32(r, ri < 0)
@@ -385,6 +407,15 @@ fn int_to_f64(i: i128, mode: RoundMode) -> f64 {
     }
     match mode {
         RoundMode::NearestEven => r,
+        RoundMode::NearestAway => {
+            let other = step64(r, ri < i);
+            let oi = other as i128;
+            if other.is_finite() && i * 2 == ri + oi && oi.abs() > ri.abs() {
+                other
+            } else {
+                r
+            }
+        }
         RoundMode::TowardZero => {
             if ri.abs() > i.abs() {
                 step64(r, ri < 0)
@@ -418,6 +449,8 @@ fn round_to_integral(x: f64, mode: RoundMode) -> f64 {
         RoundMode::TowardPosInf => x.ceil(),
         // ties to even: `round_ties_even` is stable from 1.77.
         RoundMode::NearestEven => x.round_ties_even(),
+        // ties away from zero: `f64::round` is exactly that.
+        RoundMode::NearestAway => x.round(),
     }
 }
 
@@ -516,11 +549,12 @@ mod tests {
         CastSpec { to, round, sat }
     }
 
-    const MODES: [RoundMode; 4] = [
+    const MODES: [RoundMode; 5] = [
         RoundMode::NearestEven,
         RoundMode::TowardZero,
         RoundMode::TowardNegInf,
         RoundMode::TowardPosInf,
+        RoundMode::NearestAway,
     ];
 
     /// Probe values: every f32 boundary region the 16-bit formats care about, both signs.
@@ -610,6 +644,13 @@ mod tests {
                 RoundMode::TowardPosInf => [hi.1, lo.1][usize::from(neg)],
                 RoundMode::TowardNegInf => [lo.1, hi.1][usize::from(neg)],
                 RoundMode::NearestEven => nearest_tie_even(*lo, *hi, a),
+                RoundMode::NearestAway => {
+                    if a - lo.1 < hi.1 - a {
+                        lo.1
+                    } else {
+                        hi.1
+                    }
+                }
             }
         };
         if neg { -mag } else { mag }
@@ -916,5 +957,73 @@ mod tests {
         assert_eq!(int_to_f32(i, RoundMode::TowardZero), (1u32 << 24) as f32);
         assert_eq!(int_to_f32(i, RoundMode::TowardPosInf), up);
         assert_eq!(int_to_f32(-i, RoundMode::TowardNegInf), -up);
+    }
+
+    #[test]
+    fn nearest_away_breaks_ties_away_from_zero_and_nowhere_else() {
+        let away = RoundMode::NearestAway;
+        let even = RoundMode::NearestEven;
+        // float -> integer: C `round`
+        for (x, want) in [
+            (0.5, 1.0),
+            (1.5, 2.0),
+            (2.5, 3.0),
+            (-0.5, -1.0),
+            (-2.5, -3.0),
+            (0.499_999_999_999_999_94, 0.0),
+            (2.4, 2.0),
+            (-2.6, -3.0),
+        ] {
+            assert_eq!(round_to_integral(x, away), want, "{x}");
+        }
+        assert_eq!(
+            round_to_integral(2.5, even),
+            2.0,
+            "the control: nearest-even differs on a tie"
+        );
+        // f64 -> f32: 1 + 2^-24 is halfway between 1 and 1 + 2^-23
+        let t = 1.0 + 2f64.powi(-24);
+        assert_eq!(f64_to_f32(t, even), 1.0);
+        assert_eq!(f64_to_f32(t, away), 1.0 + 2f32.powi(-23));
+        assert_eq!(f64_to_f32(-t, away), -(1.0 + 2f32.powi(-23)));
+        // not a tie: the closer neighbour wins, either side
+        assert_eq!(
+            f64_to_f32(1.0 + 2f64.powi(-24) + 2f64.powi(-40), away),
+            1.0 + 2f32.powi(-23)
+        );
+        assert_eq!(f64_to_f32(1.0 + 2f64.powi(-24) - 2f64.powi(-40), away), 1.0);
+        // half the smallest f32 subnormal rounds to it, not to zero
+        assert_eq!(f64_to_f32(2f64.powi(-150), away), f32::from_bits(1));
+        assert_eq!(f64_to_f32(2f64.powi(-150), even), 0.0);
+        // exactly representable values are untouched
+        assert_eq!(f64_to_f32(1.5, away), 1.5);
+        // integer -> float: 2^24 + 1 is halfway between 2^24 and 2^24 + 2
+        let i = (1i128 << 24) + 1;
+        assert_eq!(int_to_f32(i, even), (1u32 << 24) as f32);
+        assert_eq!(int_to_f32(i, away), ((1u32 << 24) + 2) as f32);
+        assert_eq!(int_to_f32(-i, away), -(((1u32 << 24) + 2) as f32));
+        let j = (1i128 << 53) + 1;
+        assert_eq!(int_to_f64(j, even), (1u64 << 53) as f64);
+        assert_eq!(int_to_f64(j, away), ((1u64 << 53) + 2) as f64);
+        // 16-bit floats: 2049 is halfway between 2048 and 2050 in f16
+        let f16 = |x: f64, mode| decode_ieee(encode_ieee(x, 5, 10, mode, false), 5, 10);
+        assert_eq!(f16(2049.0, even), 2048.0);
+        assert_eq!(f16(2049.0, away), 2050.0);
+        assert_eq!(f16(-2049.0, away), -2050.0);
+        // an overflow tie goes to infinity (65520 is halfway to 2^16), as nearest-even does
+        assert_eq!(f16(65520.0, away), f64::INFINITY);
+        assert_eq!(f16(65519.0, away), 65504.0);
+        // MX e2m1 (grid 0, .5, 1, 1.5, 2, 3, 4, 6): ties go to the larger magnitude
+        let mx = |x: f64, mode| decode_mx(encode_mx(x, 2, 1, mode), 2, 1);
+        for (x, ev, aw) in [
+            (0.25, 0.0, 0.5),
+            (1.25, 1.0, 1.5),
+            (2.5, 2.0, 3.0),
+            (5.0, 4.0, 6.0),
+        ] {
+            assert_eq!(mx(x, even), ev, "{x} even");
+            assert_eq!(mx(x, away), aw, "{x} away");
+            assert_eq!(mx(-x, away), -aw, "-{x} away");
+        }
     }
 }

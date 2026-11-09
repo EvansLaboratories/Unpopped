@@ -10,7 +10,7 @@
 //!
 //! The rules and the reasoning are in `docs/ir-typed-expressions.md`.
 
-use crate::ir::{BinaryOp, CastSpec, Saturation, ScalarExpr};
+use crate::ir::{BinaryOp, CastSpec, RoundMode, Saturation, ScalarExpr};
 use unpopped_vocab::ElementKind;
 
 /// Why an expression does not type-check.
@@ -94,6 +94,11 @@ pub enum TypeError {
     /// A [`ScalarExpr::Local`] was typed with no kernel to say what the local is: a local has
     /// meaning only inside a `kernel::KernelFn` (use [`infer_ty_in`]).
     LocalOutsideKernel,
+    /// A [`ScalarExpr::Qualified`] whose rounding mode its operation does not take.
+    IllegalQualifier {
+        /// Why it is rejected.
+        why: &'static str,
+    },
 }
 
 /// The type of a [`ScalarExpr`] node: a scalar, or a packed value of 2 or 4 lanes
@@ -734,8 +739,16 @@ fn node_ty(
             check_bitcast(k[0], *to)?;
             Ok(*to)
         }
-        // A qualifier changes how the wrapped operation rounds, not what type it has.
-        ScalarExpr::Qualified(..) => Ok(k[0]),
+        // A qualifier changes how the wrapped operation rounds, not what type it has. Arithmetic
+        // takes the four IEEE directions only: ties-away is a conversion's mode (PTX `.rna`).
+        ScalarExpr::Qualified(_, n) => {
+            if n.round == RoundMode::NearestAway {
+                return Err(TypeError::IllegalQualifier {
+                    why: "an arithmetic operation takes no ties-away rounding (RoundMode::NearestAway is a Cast's)",
+                });
+            }
+            Ok(k[0])
+        }
         // `infer_ty` answers these itself; reaching here is an internal misuse, reported
         // rather than panicked on.
         ScalarExpr::Pack(_)
