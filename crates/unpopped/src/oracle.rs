@@ -2779,7 +2779,7 @@ fn eval_contraction(
                     (a, b)
                 };
                 // an integer policy stores its i32 accumulator directly (the epilogue is the identity, checked by the gate)
-                if let Some(v) = accum_policy::contract_int(accum, k, &pair) {
+                if let Some(v) = accum_policy::contract_int(accum, k, pair) {
                     let off = if batched {
                         bi * out.strides[0] + mi * out.strides[1] + ni * out.strides[2]
                     } else {
