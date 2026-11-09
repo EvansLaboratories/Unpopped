@@ -1,0 +1,22 @@
+# A redirect release: no code, no dependencies. It is its own workspace so the Unpopped workspace (`crates/*`) never builds it.
+[workspace]
+
+[package]
+name = "unpopped-slang"
+version = "0.35.4"
+edition = "2024"
+rust-version = "1.85"
+authors = ["The Unpopped contributors"]
+description = "DEPRECATED and no longer developed: use fishstringer-slang-parse and fishstringer-slang-emit. This release holds only a README."
+homepage = "https://github.com/EvansLaboratories/Unpopped"
+repository = "https://github.com/EvansLaboratories/Unpopped"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+keywords = ["slang", "shader", "deprecated"]
+categories = ["development-tools"]
+
+[badges.maintenance]
+status = "deprecated"
+
+[lib]
+path = "src/lib.rs"
