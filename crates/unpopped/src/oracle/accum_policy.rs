@@ -98,6 +98,40 @@ pub(super) fn contract(
     Some(acc)
 }
 
+/// The K-sum of `k` integer pairs under an integer policy ([`AccumSpec::Int32`]: the exact sum wrapped to `i32`;
+/// [`AccumSpec::Int32Sat`]: clamped into the `i32` range after every `k_step` elements), as the accumulator's value.
+/// `None` for every other policy. The operands are integers an `f64` holds exactly.
+pub(super) fn contract_int(
+    policy: &AccumSpec,
+    k: i64,
+    pair: impl Fn(i64) -> (f64, f64),
+) -> Option<i128> {
+    let term = |i: i64| {
+        let (a, b) = pair(i);
+        (a as i128) * (b as i128)
+    };
+    match *policy {
+        AccumSpec::Int32 => {
+            let sum: i128 = (0..k).map(term).sum();
+            Some(i128::from(sum as i32))
+        }
+        AccumSpec::Int32Sat { k_step } => {
+            let step = i64::from(k_step.max(1));
+            let (lo, hi) = (i128::from(i32::MIN), i128::from(i32::MAX));
+            let mut acc: i128 = 0;
+            let mut at = 0;
+            while at < k {
+                let end = (at + step).min(k);
+                let sum: i128 = (at..end).map(term).sum();
+                acc = (acc + sum).clamp(lo, hi);
+                at = end;
+            }
+            Some(acc)
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{tf32, to_f16};

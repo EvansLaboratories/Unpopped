@@ -625,6 +625,23 @@ fn each_illegal_cell_is_a_typed_decline_naming_it() {
     );
 }
 
+#[test]
+fn ties_away_is_a_cast_mode_and_arithmetic_refuses_it_at_the_type_check_and_the_gate() {
+    use unpopped::types::{TypeError, infer};
+    let body = |round| (input(0) + input(1)).rounded(round);
+    // Control: the four IEEE directions type and plan.
+    for round in [RoundMode::NearestEven, RoundMode::TowardZero] {
+        assert_eq!(infer(&body(round).0, F32), Ok(F32), "{round:?}");
+        assert!(plan(&elementwise(body(round)), F32).is_ok(), "{round:?}");
+    }
+    let away = body(RoundMode::NearestAway);
+    assert!(matches!(
+        infer(&away.0, F32),
+        Err(TypeError::IllegalQualifier { .. })
+    ));
+    declines(plan(&elementwise(away), F32), "NearestAway");
+}
+
 // ---------------------------------------------------------------- optimizer, pattern
 
 #[test]
