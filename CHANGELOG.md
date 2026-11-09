@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.33` — docs-only, correct the meaning of the FireLine seam in the interface plan (definitions shared, no runtime hop required)
+
+`docs/fireline-unpopped-interface-plan.md` section 8 heading said Fuel talks to Unpopped "via FireLine, no direct wiring". CireSnave's decision 395 (2026-11-09) says every seam has its definitions in FireLine and crates use them; nothing has to hop through FireLine at run time. Heading corrected; the content (which definitions cross) is unchanged.
+
+---
+
 ## `0.44.32` — docs-only, options note for a tuple state in a combining collective (R5.7 D4 slice b)
 
 Adds `docs/options-d4b-tuple-state-combine.md`: why the tuple state cannot be a packed local today (the kernel evaluator refuses a packed value; a callee has one result), three representations, and a recommendation (a struct of scalars: multi-result callees and a `CollectiveTuple` statement). No code.
