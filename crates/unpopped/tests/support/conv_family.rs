@@ -32,6 +32,29 @@ pub(crate) const PW: i64 = 1;
 pub(crate) const P: i64 = (H + 2 * PH - DH * (R - 1) - 1) / SH + 1;
 pub(crate) const Q: i64 = (W + 2 * PW - DW * (S - 1) - 1) / SW + 1;
 
+/// The geometry of one spatial axis: the input coordinate of output `o` and filter tap `t` is `o * stride + t * dil - pad`,
+/// valid inside `0..limit`.
+#[derive(Clone, Copy)]
+struct Axis {
+    stride: i64,
+    dil: i64,
+    pad: i64,
+    limit: i64,
+}
+
+const ROWS: Axis = Axis {
+    stride: SH,
+    dil: DH,
+    pad: PH,
+    limit: H,
+};
+const COLS: Axis = Axis {
+    stride: SW,
+    dil: DW,
+    pad: PW,
+    limit: W,
+};
+
 fn ci(v: i64) -> ScalarExpr {
     ScalarExpr::ConstInt(v, I32)
 }
@@ -192,10 +215,16 @@ pub(crate) fn fprop() -> KernelFn {
 fn source(
     i: ScalarExpr,
     t: ScalarExpr,
-    (stride, dil, pad, limit): (i64, i64, i64, i64),
+    axis: Axis,
     (num, o): (u32, u32),
     then: Vec<Stmt>,
 ) -> Vec<Stmt> {
+    let Axis {
+        stride,
+        dil,
+        pad,
+        limit,
+    } = axis;
     vec![
         let_(num, sub(add(i, ci(pad)), mul(t, ci(dil)))),
         when(
@@ -231,11 +260,17 @@ pub(crate) fn dgrad() -> KernelFn {
             mac(9, 7, 8),
         ],
     )];
-    let s_body = source(w.clone(), local(1), (SW, DW, PW, Q), (4, 6), reduce_k);
+    let s_body = source(
+        w.clone(),
+        local(1),
+        Axis { limit: Q, ..COLS },
+        (4, 6),
+        reduce_k,
+    );
     let r_body = source(
         h.clone(),
         local(0),
-        (SH, DH, PH, P),
+        Axis { limit: P, ..ROWS },
         (3, 5),
         vec![counted(1, S, s_body)],
     );
@@ -331,9 +366,9 @@ fn idx4(d: [i64; 4], i: [i64; 4]) -> usize {
 }
 
 /// The input position of output `o`, tap `t`, if it lies inside `0..limit`.
-fn src(o: i64, t: i64, (stride, dil, pad, limit): (i64, i64, i64, i64)) -> Option<i64> {
-    let i = o * stride + t * dil - pad;
-    (0..limit).contains(&i).then_some(i)
+fn src(o: i64, t: i64, axis: Axis) -> Option<i64> {
+    let i = o * axis.stride + t * axis.dil - axis.pad;
+    (0..axis.limit).contains(&i).then_some(i)
 }
 
 /// The host references, each a **scatter** over every `(n, p, q, r, s, c, k)` (the kernels gather), so the loop structure
@@ -351,9 +386,7 @@ pub(crate) fn reference(
             for q in 0..Q {
                 for r in 0..R {
                     for s in 0..S {
-                        let (Some(ih), Some(iw)) =
-                            (src(p, r, (SH, DH, PH, H)), src(q, s, (SW, DW, PW, W)))
-                        else {
+                        let (Some(ih), Some(iw)) = (src(p, r, ROWS), src(q, s, COLS)) else {
                             continue;
                         };
                         for c in 0..C {
