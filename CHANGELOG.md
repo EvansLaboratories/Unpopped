@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.35` — docs, the master capability list's Unpopped column refreshed for the R5.7 rows (F3, D4, C4, C4b, F7)
+
+`docs/ir-union-master-capabilities.md`: the Unpopped column is re-read at `origin/main` 5c12a76b now that R5.7 PRs #319 to #326 have merged. D4 (a combine function and a tuple state: `ReduceWith`/`ScanWith`, `CallTuple`, `CollectiveTuple`) and C4 (`MaskedLoad`/`MaskedStore` with a user fill) go 🟡 to ✅. F3 (Int32 accumulators landed; TF32, 3xTF32 and fp8 fast-accumulate absent), C4b (clamp and reflect are an index remap, not a named mode) and F7 (the convolution family is kernels, no fused conv op) stay 🟡, and their per-row notes say what landed and what is still missing. G3 and G4 are unchanged. No code change; the other seven columns are untouched.
+
+---
+
 ## `0.44.34` — feature, a tuple state for a combining collective: KernelFn::results, Stmt::CallTuple and Stmt::CollectiveTuple, ROADMAP R5.7 D4b
 
 Triton's `tl.reduce` and `tl.associative_scan` fold a tuple with a user combine (argmax carries `(value, index)`, Welford `(mean, m2, count)`), which a scalar combine (`ReduceWith`/`ScanWith`, 0.44.28) cannot express. Option B of `docs/options-d4b-tuple-state-combine.md` (PM-approved 2026-11-09): the state is `k` scalars, each its own type.
