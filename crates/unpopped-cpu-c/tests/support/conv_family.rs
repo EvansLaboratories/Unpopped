@@ -242,6 +242,19 @@ fn source(
     ]
 }
 
+/// The sum over `k` of `d_out[n][p][q][k] * filter[r][s][c][k]`, for the `(p, q)` that `source` set in locals 5 and 6.
+fn reduce_k(n: ScalarExpr, c: ScalarExpr) -> Vec<Stmt> {
+    vec![counted(
+        2,
+        K,
+        vec![
+            load(7, at4(0, [n, local(5), local(6), local(2)])),
+            load(8, at4(1, [local(0), local(1), c, local(2)])),
+            mac(9, 7, 8),
+        ],
+    )]
+}
+
 /// Gradient with respect to the input: buffers 0 `d_out` `[N, P, Q, K]`, 1 `filter` `[R, S, C, K]`, 2 `d_in`
 /// `[N, H, W, C]`. Block `n`; thread `(x, y, z)` is input `(w, h, c)`. Each input element sums, over the taps `(r, s)` that
 /// reach it, `d_out[n][p][q][k] * filter[r][s][c][k]` where `p * SH + r * DH - PH == h` (and likewise for `q`). Locals: 0 `r`,
@@ -253,21 +266,12 @@ pub(crate) fn dgrad() -> KernelFn {
         exec_i32(ExecId::ThreadIdx(1)),
         exec_i32(ExecId::ThreadIdx(2)),
     );
-    let reduce_k = vec![counted(
-        2,
-        K,
-        vec![
-            load(7, at4(0, [n.clone(), local(5), local(6), local(2)])),
-            load(8, at4(1, [local(0), local(1), c.clone(), local(2)])),
-            mac(9, 7, 8),
-        ],
-    )];
     let s_body = source(
         w.clone(),
         local(1),
         Axis { limit: Q, ..COLS },
         (4, 6),
-        reduce_k,
+        reduce_k(n.clone(), c.clone()),
     );
     let r_body = source(
         h.clone(),
