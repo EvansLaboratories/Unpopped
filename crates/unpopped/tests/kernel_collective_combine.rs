@@ -274,6 +274,32 @@ fn a_combine_that_is_not_a_t_t_to_t_function_is_refused() {
         Scope::Block,
         none
     )));
+    // a third parameter
+    let mut three = add();
+    three.params.push(Param::scalar("c", I32, 3));
+    three.locals.push(LocalDecl::scalar(I32));
+    assert!(refused(module(
+        CollectiveKind::ReduceWith { combine: 1 },
+        Scope::Block,
+        three
+    )));
+    // a first parameter of another type
+    let mut mixed = add();
+    mixed.params[0] = Param::scalar("a", F32, 0);
+    mixed.locals[0] = LocalDecl::scalar(F32);
+    assert!(refused(module(
+        CollectiveKind::ReduceWith { combine: 1 },
+        Scope::Block,
+        mixed
+    )));
+    // a result of another type
+    let mut wide = add();
+    wide.locals[2] = LocalDecl::scalar(F32);
+    assert!(refused(module(
+        CollectiveKind::ReduceWith { combine: 1 },
+        Scope::Block,
+        wide
+    )));
     // control: the same module with the right function checks
     assert_eq!(
         check_module(
