@@ -1005,6 +1005,12 @@ mod tests {
         let j = (1i128 << 53) + 1;
         assert_eq!(int_to_f64(j, even), (1u64 << 53) as f64);
         assert_eq!(int_to_f64(j, away), ((1u64 << 53) + 2) as f64);
+    }
+
+    #[test]
+    fn nearest_away_in_the_narrow_floats_and_mx_elements() {
+        let away = RoundMode::NearestAway;
+        let even = RoundMode::NearestEven;
         // 16-bit floats: 2049 is halfway between 2048 and 2050 in f16
         let f16 = |x: f64, mode| decode_ieee(encode_ieee(x, 5, 10, mode, false), 5, 10);
         assert_eq!(f16(2049.0, even), 2048.0);
