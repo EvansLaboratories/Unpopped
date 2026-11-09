@@ -123,6 +123,25 @@ pub(crate) fn argmax_combine() -> KernelFn {
     .with_results([5])
 }
 
+/// `cross_combine(av, ai, bv, bi) -> (bv, ai)`: the value of the later state with the index of the earlier one. Unlike
+/// the argmax and Welford merges it is not commutative, so a fold that swaps its arguments shows. Locals as for
+/// `argmax_combine`.
+pub(crate) fn cross_combine() -> KernelFn {
+    let mut f = argmax_combine();
+    f.name = "cross_combine".to_string();
+    f.body = Block(vec![
+        Stmt::Let {
+            local: 4,
+            init: local(2),
+        },
+        Stmt::Let {
+            local: 5,
+            init: local(1),
+        },
+    ]);
+    f
+}
+
 /// `welford_combine(ma, m2a, na, mb, m2b, nb) -> (mean, m2, n)`: Chan's merge of two partial states, with
 /// `n = na + nb`, `delta = mb - ma`, `mean = ma + delta * nb / n` and `m2 = m2a + m2b + delta^2 * na * nb / n`.
 /// Locals: 0..=5 the parameters, 6 `mean` (the result), 7 `m2`, 8 `n`, 9 `n` as `F32`, 10 `delta`.

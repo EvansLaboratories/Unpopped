@@ -23,7 +23,8 @@ use unpopped_vocab::ElementKind;
 #[path = "support/collective_tuple.rs"]
 mod fixture;
 use fixture::{
-    ARGMAX_VALS, F32, I32, N, WELFORD_VALS, argmax_module, local, welford_combine, welford_module,
+    ARGMAX_VALS, F32, I32, N, WELFORD_VALS, argmax_module, cross_combine, local, welford_combine,
+    welford_module,
 };
 
 fn floats(v: &[f32]) -> KernelArg {
@@ -235,4 +236,64 @@ fn a_tuple_collective_under_a_thread_dependent_condition_is_refused() {
     let mut plain = argmax_module(false, Scope::Block);
     plain.fns[0].body.0.truncate(3);
     assert_eq!(check(&plain), Ok(()));
+}
+
+#[test]
+fn the_fold_applies_the_combine_with_the_running_state_first() {
+    // `cross_combine` takes the value of the later state and the index of the earlier one, so it is not commutative:
+    // a block reduce of `[3, 7, -1, 7, 0, 9, 9, 2]` is (last value 2, first index 0), a subgroup reduce is (7, 0) for
+    // lanes 0..4 and (2, 4) for lanes 4..8, and a scan holds each lane's own value with index 0
+    let run = |scan, scope| {
+        let mut m = argmax_module(scan, scope);
+        m.fns[1] = cross_combine();
+        let mut args = vec![floats(&ARGMAX_VALS), zeros(F32), zeros(I32)];
+        run_launch_module(&m, 0, &mut args).expect("runs");
+        (f32s(&args[1]), i32s(&args[2]))
+    };
+    assert_eq!(run(false, Scope::Block), (vec![2.0; N], vec![0; N]));
+    assert_eq!(
+        run(false, Scope::Subgroup),
+        (
+            vec![7.0, 7.0, 7.0, 7.0, 2.0, 2.0, 2.0, 2.0],
+            vec![0, 0, 0, 0, 4, 4, 4, 4]
+        )
+    );
+    assert_eq!(run(true, Scope::Block), (ARGMAX_VALS.to_vec(), vec![0; N]));
+}
+
+#[test]
+fn a_tuple_of_no_components_is_refused_even_for_a_combine_that_takes_none() {
+    let mut m = argmax_module(false, Scope::Block);
+    m.fns[1] = unpopped::kernel::KernelFn::new(
+        "unit",
+        F32,
+        vec![],
+        vec![],
+        unpopped::kernel::Block(vec![]),
+    );
+    if let Stmt::CollectiveTuple {
+        values, results, ..
+    } = tuple_of(&mut m)
+    {
+        values.clear();
+        results.clear();
+    }
+    assert!(
+        matches!(check(&m), Err(KernelError::CollectiveUnsupported { .. })),
+        "{:?}",
+        check(&m)
+    );
+}
+
+#[test]
+fn a_tuple_collective_naming_its_own_function_is_a_call_cycle() {
+    let mut m = argmax_module(false, Scope::Block);
+    if let Stmt::CollectiveTuple { kind, .. } = tuple_of(&mut m) {
+        *kind = CollectiveKind::ReduceWith { combine: 0 };
+    }
+    assert!(
+        matches!(check(&m), Err(KernelError::CallCycle { .. })),
+        "{:?}",
+        check(&m)
+    );
 }
