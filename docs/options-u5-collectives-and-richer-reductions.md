@@ -85,6 +85,8 @@ typed refusals, so the later slices are additive.
    `UnsupportedReduceOp`), as 0.41.0 did.
 2. Then each additive, red-first, with its oracle test and seeded mutants: P1 (the NaN rule), P3 (`ArgReduce`, additive
    on its own), P5 in two steps (`Subgroup` scope, then `Block`), the cpu-c block-level reference first.
+3. **P4 stays at the kernel layer.** *Built 2026-11-09 (ROADMAP R5.7 D4, PM ruling the same day: "build the kernel-layer combine via a callee"):* `CollectiveKind::{ReduceWith, ScanWith} { combine }` fold a `Subgroup` or `Block` with a plain module function `(a: T, b: T) -> T` (no barrier), left to right in lane order; `check_module` resolves it, `check_kernel` alone refuses it; the oracle runs it on a machine of its own; `unpopped-cpu-c` spells a call per lane. The author asserts the function is associative (a device may reassociate it), so a float combine is compared within a tolerance. **Not built:** an exclusive scan (a user combine has no identity), a tuple state (the callee takes and returns one scalar; a packed state needs packed parameters and results, a later slice), and any intent-layer `ReduceOp::Custom`. The original text follows.
+
 3. **P4 stays at the kernel layer.** A custom combine is a loop over locals (it already is); an intent-layer
    `ReduceOp::Custom` is a large DAG-with-state feature nobody has asked for. The Triton survey's
    `tl.reduce(combine_fn)` is the only user, and no lane has a Triton frontend.

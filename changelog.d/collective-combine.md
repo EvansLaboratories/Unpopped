@@ -1,0 +1,3 @@
+kind: feature, a collective folded with a user combine function (CollectiveKind::ReduceWith and ScanWith), ROADMAP R5.7 D4
+---
+`kernel::CollectiveKind::{ReduceWith { combine }, ScanWith { combine }}` (the enum is `#[non_exhaustive]`): every lane of a `Subgroup` or `Block` receives the fold (or the inclusive prefix fold) of the scope's values under a plain module function `(a: T, b: T) -> T` with no barrier, left to right in lane order. The author asserts the function is associative, so a device may reassociate it. `check_module` resolves the function (the collective is a call edge, so a cycle is refused) and `check_kernel` alone refuses it; the oracle runs it; `unpopped-cpu-c` spells a call per lane. Not built: an exclusive scan (no identity) and a tuple (packed) state.
