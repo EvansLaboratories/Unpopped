@@ -159,19 +159,9 @@ pub(crate) fn welford_combine() -> KernelFn {
             Param::scalar("m2b", F32, 4),
             Param::scalar("nb", I32, 5),
         ],
-        vec![
-            LocalDecl::scalar(F32),
-            LocalDecl::scalar(F32),
-            LocalDecl::scalar(I32),
-            LocalDecl::scalar(F32),
-            LocalDecl::scalar(F32),
-            LocalDecl::scalar(I32),
-            LocalDecl::scalar(F32),
-            LocalDecl::scalar(F32),
-            LocalDecl::scalar(I32),
-            LocalDecl::scalar(F32),
-            LocalDecl::scalar(F32),
-        ],
+        [F32, F32, I32, F32, F32, I32, F32, F32, I32, F32, F32]
+            .map(LocalDecl::scalar)
+            .to_vec(),
         Block(vec![
             Stmt::Let {
                 local: 8,

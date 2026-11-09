@@ -40,6 +40,36 @@ fn assign(local: u32, value: ScalarExpr) -> Stmt {
     Stmt::Assign { local, value }
 }
 
+/// The locals of a function, one scalar per listed type.
+fn scalars(tys: &[ElementKind]) -> Vec<LocalDecl> {
+    tys.iter().map(|t| LocalDecl::scalar(*t)).collect()
+}
+
+/// The three buffers both entries use: `vals` read, `out_v` and `out_i` written.
+fn buffers() -> Vec<Param> {
+    vec![
+        Param::buffer("vals", F32, BufferRole::Read, Some(1)),
+        Param::buffer("out_v", F32, BufferRole::Write, Some(1)),
+        Param::buffer("out_i", I32, BufferRole::Write, Some(1)),
+    ]
+}
+
+fn store(buffer: u32, index: ScalarExpr, value: ScalarExpr) -> Stmt {
+    Stmt::Store {
+        place: at(buffer, index),
+        value,
+    }
+}
+
+/// `CallTuple` of `best` (function 1) with four scalar arguments, its two values landing in locals 4 and 5.
+fn call_best(args: [ScalarExpr; 4]) -> Stmt {
+    Stmt::CallTuple {
+        callee: 1,
+        args: args.into_iter().map(CallArg::Scalar).collect(),
+        results: vec![4, 5],
+    }
+}
+
 /// `best(v, i, bv, bi) -> (nv, ni)`: the pair `(v, i)` replaces `(bv, bi)` when `v` is larger, or equal with a smaller
 /// index. Locals: 0 `v`, 1 `i`, 2 `bv`, 3 `bi`, 4 `nv` (the result), 5 `ni` (the extra result).
 pub(crate) fn best() -> KernelFn {
@@ -62,14 +92,7 @@ pub(crate) fn best() -> KernelFn {
             Param::scalar("bv", F32, 2),
             Param::scalar("bi", I32, 3),
         ],
-        vec![
-            LocalDecl::scalar(F32),
-            LocalDecl::scalar(I32),
-            LocalDecl::scalar(F32),
-            LocalDecl::scalar(I32),
-            LocalDecl::scalar(F32),
-            LocalDecl::scalar(I32),
-        ],
+        scalars(&[F32, I32, F32, I32, F32, I32]),
         Block(vec![
             Stmt::Let {
                 local: 4,
@@ -98,35 +121,15 @@ pub(crate) fn argmax_loop() -> Module {
             local: 3,
             place: at(0, local(2)),
         },
-        Stmt::CallTuple {
-            callee: 1,
-            args: vec![
-                CallArg::Scalar(local(3)),
-                CallArg::Scalar(local(2)),
-                CallArg::Scalar(local(0)),
-                CallArg::Scalar(local(1)),
-            ],
-            results: vec![4, 5],
-        },
+        call_best([local(3), local(2), local(0), local(1)]),
         assign(0, local(4)),
         assign(1, local(5)),
     ];
     let main = KernelFn::new(
         "main",
         F32,
-        vec![
-            Param::buffer("vals", F32, BufferRole::Read, Some(1)),
-            Param::buffer("out_v", F32, BufferRole::Write, Some(1)),
-            Param::buffer("out_i", I32, BufferRole::Write, Some(1)),
-        ],
-        vec![
-            LocalDecl::scalar(F32),
-            LocalDecl::scalar(I32),
-            LocalDecl::scalar(I32),
-            LocalDecl::scalar(F32),
-            LocalDecl::scalar(F32),
-            LocalDecl::scalar(I32),
-        ],
+        buffers(),
+        scalars(&[F32, I32, I32, F32, F32, I32]),
         Block(vec![
             Stmt::Load {
                 local: 0,
@@ -143,14 +146,8 @@ pub(crate) fn argmax_loop() -> Module {
                 step: ci(1),
                 body: Block(step),
             },
-            Stmt::Store {
-                place: at(1, ci(0)),
-                value: local(0),
-            },
-            Stmt::Store {
-                place: at(2, ci(0)),
-                value: local(1),
-            },
+            store(1, ci(0), local(0)),
+            store(2, ci(0), local(1)),
         ]),
     );
     Module::new(vec![main, best()])
@@ -172,19 +169,8 @@ pub(crate) fn pairwise_launch() -> Module {
     let main = KernelFn::new(
         "main",
         F32,
-        vec![
-            Param::buffer("vals", F32, BufferRole::Read, Some(1)),
-            Param::buffer("out_v", F32, BufferRole::Write, Some(1)),
-            Param::buffer("out_i", I32, BufferRole::Write, Some(1)),
-        ],
-        vec![
-            LocalDecl::scalar(I32),
-            LocalDecl::scalar(I32),
-            LocalDecl::scalar(F32),
-            LocalDecl::scalar(F32),
-            LocalDecl::scalar(F32),
-            LocalDecl::scalar(I32),
-        ],
+        buffers(),
+        scalars(&[I32, I32, F32, F32, F32, I32]),
         Block(vec![
             Stmt::Let { local: 0, init: t },
             Stmt::Let {
@@ -199,24 +185,9 @@ pub(crate) fn pairwise_launch() -> Module {
                 local: 3,
                 place: at(0, local(1)),
             },
-            Stmt::CallTuple {
-                callee: 1,
-                args: vec![
-                    CallArg::Scalar(local(2)),
-                    CallArg::Scalar(local(0)),
-                    CallArg::Scalar(local(3)),
-                    CallArg::Scalar(local(1)),
-                ],
-                results: vec![4, 5],
-            },
-            Stmt::Store {
-                place: at(1, local(0)),
-                value: local(4),
-            },
-            Stmt::Store {
-                place: at(2, local(0)),
-                value: local(5),
-            },
+            call_best([local(2), local(0), local(3), local(1)]),
+            store(1, local(0), local(4)),
+            store(2, local(0), local(5)),
         ]),
     )
     .with_launch(LaunchShape::new([THREADS, 1, 1], [1, 1, 1]));

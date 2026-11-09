@@ -34,15 +34,7 @@ impl Emitter<'_> {
         else {
             unreachable!("collective_tuple is called for a CollectiveTuple");
         };
-        let (combine, scan) = match kind {
-            CollectiveKind::ReduceWith { combine } => (*combine, false),
-            CollectiveKind::ScanWith { combine } => (*combine, true),
-            _ => {
-                return Err(refuse(
-                    "a tuple collective other than ReduceWith or ScanWith",
-                ));
-            }
-        };
+        let (combine, scan) = combine_of(kind)?;
         let info = self.launch.expect("a launched emitter");
         let comps = self.components(values, results)?;
         let n = self.fresh;
@@ -96,6 +88,17 @@ impl Emitter<'_> {
             });
         }
         Ok(out)
+    }
+}
+
+/// The combine function of a tuple collective's kind, and whether it is a scan.
+fn combine_of(kind: &CollectiveKind) -> Result<(u32, bool), LowerError> {
+    match kind {
+        CollectiveKind::ReduceWith { combine } => Ok((*combine, false)),
+        CollectiveKind::ScanWith { combine } => Ok((*combine, true)),
+        _ => Err(refuse(
+            "a tuple collective other than ReduceWith or ScanWith",
+        )),
     }
 }
 
