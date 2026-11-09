@@ -263,7 +263,9 @@ impl<'a> Machine<'a> {
             | Stmt::Fence { .. } => {
                 self.exec_simple(st)?;
             }
-            Stmt::Collective { .. } => return Err(KernelTrap::Unsupported("Collective")),
+            Stmt::Collective { .. } | Stmt::CollectiveTuple { .. } => {
+                return Err(KernelTrap::Unsupported("Collective"));
+            }
             Stmt::Mma { .. } => return Err(KernelTrap::Unsupported("Mma")),
             Stmt::ExternCall {
                 decl,
@@ -274,7 +276,12 @@ impl<'a> Machine<'a> {
                 callee,
                 args,
                 result,
-            } => self.exec_call(*callee, args, *result)?,
+            } => self.exec_call(*callee, args, result.as_slice())?,
+            Stmt::CallTuple {
+                callee,
+                args,
+                results,
+            } => self.exec_call(*callee, args, results)?,
             Stmt::If { cond, then, els } => {
                 let taken = self.truthy(cond)?;
                 return self.exec_block(if taken { then } else { els });

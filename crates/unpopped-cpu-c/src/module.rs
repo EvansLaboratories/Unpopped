@@ -93,7 +93,10 @@ fn refuse_callee_barriers(m: &Module, entry: u32) -> Result<(), LowerError> {
 
 fn holds_barrier(b: &Block) -> bool {
     b.0.iter().any(|st| match st {
-        Stmt::Barrier { .. } | Stmt::Collective { .. } | Stmt::Mma { .. } => true,
+        Stmt::Barrier { .. }
+        | Stmt::Collective { .. }
+        | Stmt::CollectiveTuple { .. }
+        | Stmt::Mma { .. } => true,
         Stmt::If { then, els, .. } => holds_barrier(then) || holds_barrier(els),
         Stmt::For { body, .. } | Stmt::While { body, .. } => holds_barrier(body),
         _ => false,
@@ -122,9 +125,17 @@ fn postorder(m: &Module, entry: u32) -> Vec<usize> {
 fn collect_calls(b: &Block, externs: &[ExternDecl], out: &mut Vec<usize>) {
     for st in &b.0 {
         match st {
-            Stmt::Call { callee, .. } => out.push(*callee as usize),
+            Stmt::Call { callee, .. } | Stmt::CallTuple { callee, .. } => {
+                out.push(*callee as usize)
+            }
             // a combining collective calls its combine function
             Stmt::Collective {
+                kind:
+                    unpopped::kernel::CollectiveKind::ReduceWith { combine }
+                    | unpopped::kernel::CollectiveKind::ScanWith { combine },
+                ..
+            }
+            | Stmt::CollectiveTuple {
                 kind:
                     unpopped::kernel::CollectiveKind::ReduceWith { combine }
                     | unpopped::kernel::CollectiveKind::ScanWith { combine },

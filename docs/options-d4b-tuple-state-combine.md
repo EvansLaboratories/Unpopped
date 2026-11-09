@@ -1,6 +1,6 @@
 # Options note: a tuple state for a combining collective (ROADMAP R5.7 D4, slice b)
 
-Status: **proposal; no code.** Written 2026-11-09 against `origin/main` after #321 (`CollectiveKind::{ReduceWith, ScanWith}`, a scalar combine function). PM 2026-11-09: slice b (tuple state) goes ahead after C4, C4b and F7; this note picks the representation before any code, because the obvious one does not work today.
+Status: **built (option B, PM-approved 2026-11-09): `KernelFn::results`, `Stmt::CallTuple` and `Stmt::CollectiveTuple`; the proposal below is kept as the record of the choice.** Written 2026-11-09 against `origin/main` after #321 (`CollectiveKind::{ReduceWith, ScanWith}`, a scalar combine function). PM 2026-11-09: slice b (tuple state) goes ahead after C4, C4b and F7; this note picks the representation before any code, because the obvious one does not work today.
 
 ## What is needed
 

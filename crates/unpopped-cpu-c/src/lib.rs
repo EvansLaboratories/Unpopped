@@ -57,6 +57,7 @@ use unpopped::plan::{KernelPlan, Schedule};
 use unpopped_vocab::{ElementKind, TargetId};
 
 mod collective;
+mod collective_tuple;
 mod kernel;
 mod launch;
 mod mma;

@@ -8,7 +8,7 @@
 //! through both (`the_two_evaluators_agree`) so a drift in loop semantics shows.
 
 use super::int_val;
-use super::kernel_collective::Contribution;
+use super::kernel_collective::{Contribution, TupleContribution};
 use super::kernel_eval::{KernelTrap, Machine};
 use super::kernel_mma::MmaContribution;
 use crate::exec::Scope;
@@ -41,7 +41,7 @@ pub(super) enum Frame<'a> {
         caller: u32,
         locals: Vec<Option<super::Val>>,
         bufmap: Vec<usize>,
-        result: Option<u32>,
+        results: Vec<u32>,
     },
 }
 
@@ -66,6 +66,12 @@ pub(super) enum Stop {
         scope: Scope,
         at: usize,
         c: Contribution,
+    },
+    /// At a tuple collective, having contributed its components, waiting for the rest of `scope`.
+    Tuple {
+        scope: Scope,
+        at: usize,
+        c: Box<TupleContribution>,
     },
     /// At an MMA statement, having handed over its fragments, waiting for the rest of the subgroup.
     Mma { at: usize, c: Box<MmaContribution> },
@@ -144,6 +150,13 @@ impl<'a> Machine<'a> {
                 self.exec_simple(st)?;
             }
             Stmt::Collective { .. } => return self.collective_stop(st).map(Some),
+            Stmt::CollectiveTuple { scope, .. } => {
+                return Ok(Some(Stop::Tuple {
+                    scope: *scope,
+                    at: std::ptr::from_ref(st) as usize,
+                    c: Box::new(self.tuple_contribution(st)?),
+                }));
+            }
             Stmt::ExternCall {
                 decl,
                 args,
@@ -159,7 +172,12 @@ impl<'a> Machine<'a> {
                 callee,
                 args,
                 result,
-            } => self.call_stmt(stack, module, (*callee, args, *result))?,
+            } => self.call_stmt(stack, module, (*callee, args, result.as_slice()))?,
+            Stmt::CallTuple {
+                callee,
+                args,
+                results,
+            } => self.call_stmt(stack, module, (*callee, args, results))?,
             Stmt::If { cond, then, els } => {
                 let block = if self.truthy(cond)? { then } else { els };
                 stack.push(Frame::seq(block));
@@ -211,14 +229,14 @@ impl<'a> Machine<'a> {
         &mut self,
         stack: &mut Vec<Frame<'k>>,
         module: Option<&'k Module>,
-        (callee, args, result): (u32, &[CallArg], Option<u32>),
+        (callee, args, results): (u32, &[CallArg], &[u32]),
     ) -> Result<(), KernelTrap> {
         let Some(m) = module else {
             return Err(KernelTrap::Unsupported(
                 "a Call outside run_launch_module (check_kernel refuses it)",
             ));
         };
-        self.enter_call(stack, (callee, &m.fns[callee as usize]), (args, result))
+        self.enter_call(stack, (callee, &m.fns[callee as usize]), (args, results))
     }
 
     /// An `ExternCall` against the module: push the declaration's reference as a call frame.
@@ -237,7 +255,7 @@ impl<'a> Machine<'a> {
         self.enter_call(
             stack,
             (reference, &m.fns[reference as usize]),
-            (&call_args, results.first().copied()),
+            (&call_args, &results[..results.len().min(1)]),
         )
     }
 

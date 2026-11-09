@@ -346,6 +346,25 @@ pub enum Stmt {
         /// The group that takes part.
         scope: Scope,
     },
+    /// A combining collective over a **tuple** state (ROADMAP R5.7 D4b, `docs/options-d4b-tuple-state-combine.md`,
+    /// option B): Triton's `tl.reduce` and `tl.associative_scan` over a tuple, such as `(value, index)` for an argmax
+    /// or `(mean, m2, count)` for Welford. Every thread of `scope` contributes `values` (one scalar per state
+    /// component, each its own type) and receives the folded state in the locals `results`, one per component. `kind`
+    /// is [`CollectiveKind::ReduceWith`] or [`CollectiveKind::ScanWith`], and its `combine` names a module function of
+    /// `2k` scalar parameters (`a0..a(k-1)` then `b0..b(k-1)`, the component types twice) that returns `k` values (its
+    /// [`KernelFn::result`] then [`KernelFn::results`]), with no barrier. As for the scalar form the author asserts
+    /// associativity, the oracle folds left to right in lane order, a float component is compared within a tolerance
+    /// and there is no exclusive scan. A rendezvous like [`Stmt::Collective`], and a barrier site.
+    CollectiveTuple {
+        /// [`CollectiveKind::ReduceWith`] or [`CollectiveKind::ScanWith`].
+        kind: CollectiveKind,
+        /// The state components this thread contributes.
+        values: Vec<ScalarExpr>,
+        /// The locals that receive this thread's state, one per component, declared by this statement.
+        results: Vec<u32>,
+        /// The group that takes part.
+        scope: Scope,
+    },
     /// A warp-level matrix multiply-accumulate (ROADMAP U7 S2): every lane of `atom`'s scope contributes its
     /// fragments and receives its share of `D = A.B + C`. The fragments are the `Private` arrays `a`, `b`, `c` and
     /// `d` (indices into [`KernelFn::allocs`]; `d` may be `c`), each `atom.values(..)` elements of the atom's type.
@@ -406,6 +425,19 @@ pub enum Stmt {
         args: Vec<CallArg>,
         /// The local that receives the callee's result, if it has one.
         result: Option<u32>,
+    },
+    /// Call a kernel of the same [`Module`] that returns several values (ROADMAP R5.7 D4b,
+    /// `docs/options-d4b-tuple-state-combine.md`, option B): `results = callee(args...)`. The callee's results are
+    /// its [`KernelFn::result`] (if any) followed by its [`KernelFn::results`], and `results` names one local per
+    /// value, in that order, each declared by this statement. A [`Stmt::Call`] still takes the first value only.
+    /// Checked by `check_module`, run by `run_module` and `run_launch_module`.
+    CallTuple {
+        /// Index of the callee in the module's functions.
+        callee: u32,
+        /// The arguments, in the callee's parameter order.
+        args: Vec<CallArg>,
+        /// The locals that receive the callee's values, one per value, in order.
+        results: Vec<u32>,
     },
     /// Call the opaque [`ExternDecl`] `decl` of the module (ROADMAP U11; `docs/options-u11-extern-and-inline-asm.md`):
     /// `results = decl(args...)`. A statement, not an expression, because an effectful call has an order. The
@@ -780,6 +812,11 @@ pub struct KernelFn {
     /// end of the body. `None` for a kernel and for a callee with no result. Shape only (0.41.4).
     #[serde(default)]
     pub result: Option<u32>,
+    /// The locals that carry the values after [`Self::result`] when a [`Stmt::CallTuple`] calls this function: a
+    /// function that returns `(a, b)` has `result = a` and `results = [b]`. Empty for every function that returns at
+    /// most one value (R5.7 D4b).
+    #[serde(default)]
+    pub results: Vec<u32>,
 }
 
 impl KernelFn {
@@ -801,6 +838,7 @@ impl KernelFn {
             launch: None,
             allocs: Vec::new(),
             result: None,
+            results: Vec::new(),
         }
     }
 
@@ -816,6 +854,19 @@ impl KernelFn {
     pub fn with_result(mut self, local: u32) -> Self {
         self.result = Some(local);
         self
+    }
+
+    /// The same function with `locals` as the values after its result (what a [`Stmt::CallTuple`] of it also
+    /// receives): `with_result(a).with_results([b, c])` returns `(a, b, c)`.
+    #[must_use]
+    pub fn with_results(mut self, locals: impl Into<Vec<u32>>) -> Self {
+        self.results = locals.into();
+        self
+    }
+
+    /// Every value this function returns, in order: [`Self::result`] then [`Self::results`].
+    pub fn all_results(&self) -> impl Iterator<Item = u32> + '_ {
+        self.result.into_iter().chain(self.results.iter().copied())
     }
 
     /// The same kernel with the allocations `allocs`.

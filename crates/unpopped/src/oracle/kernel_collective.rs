@@ -227,6 +227,76 @@ fn nan_first(x: f64, y: f64, y_better: bool) -> f64 {
     }
 }
 
+/// One lane's contribution to a tuple collective (R5.7 D4b): its component values, the combine function, whether the
+/// result is a scan, and the locals that receive the lane's state.
+#[derive(Clone, Debug)]
+pub(super) struct TupleContribution {
+    pub(super) combine: u32,
+    pub(super) scan: bool,
+    pub(super) values: Vec<Val>,
+    pub(super) results: Vec<u32>,
+}
+
+/// Applies the module function `f` to the states `(a, b)`: the oracle's way into a tuple combine.
+pub(super) type ApplyTuple<'a> =
+    dyn FnMut(u32, &[Val], &[Val]) -> Result<Vec<Val>, KernelTrap> + 'a;
+
+/// Every lane's state after a tuple collective, in lane order: the left fold of the lanes' states under the combine
+/// (every lane gets the last state for a reduce, lane `i` the fold of `0..=i` for a scan).
+pub(super) fn tuple_results(
+    lanes: &[TupleContribution],
+    apply: &mut ApplyTuple<'_>,
+) -> Result<Vec<Vec<Val>>, KernelTrap> {
+    let f = lanes[0].combine;
+    let mut acc = lanes[0].values.clone();
+    let mut prefixes = vec![acc.clone()];
+    for l in &lanes[1..] {
+        acc = apply(f, &acc, &l.values)?;
+        prefixes.push(acc.clone());
+    }
+    Ok(if lanes[0].scan {
+        prefixes
+    } else {
+        vec![acc; lanes.len()]
+    })
+}
+
+impl Machine<'_> {
+    /// This thread's contribution to a `Stmt::CollectiveTuple`: its component values evaluated.
+    pub(super) fn tuple_contribution(
+        &self,
+        st: &crate::kernel::Stmt,
+    ) -> Result<TupleContribution, KernelTrap> {
+        let crate::kernel::Stmt::CollectiveTuple {
+            kind,
+            values,
+            results,
+            ..
+        } = st
+        else {
+            unreachable!("tuple_contribution is called for a CollectiveTuple");
+        };
+        let (combine, scan) = match kind {
+            CollectiveKind::ReduceWith { combine } => (*combine, false),
+            CollectiveKind::ScanWith { combine } => (*combine, true),
+            _ => {
+                return Err(KernelTrap::Unsupported(
+                    "a tuple collective other than ReduceWith or ScanWith",
+                ));
+            }
+        };
+        Ok(TupleContribution {
+            combine,
+            scan,
+            values: values
+                .iter()
+                .map(|v| self.eval_expr(v))
+                .collect::<Result<_, _>>()?,
+            results: results.clone(),
+        })
+    }
+}
+
 impl Machine<'_> {
     /// This thread's contribution to the collective `kind`: `value` and the operand evaluated, the type of `value`
     /// resolved. (The checker has already typed everything, so an odd type is a bug and a typed trap.)

@@ -120,8 +120,8 @@ pub(crate) struct Emitter<'a> {
     pub(crate) thread_loops: u32,
     /// The module a `Call` resolves in (`module.rs`); `None` for a lone kernel.
     pub(crate) module: Option<&'a ModuleCtx<'a>>,
-    /// In a callee: the result local, declared up front and stored through `res` on every exit.
-    pub(crate) result: Option<u32>,
+    /// In a callee: the result locals, declared up front and stored through `res`, `res1`, ... on every exit.
+    pub(crate) results: Vec<u32>,
 }
 
 /// The functions of the module being lowered and the C name of each.
@@ -171,7 +171,7 @@ impl Emitter<'_> {
     /// when it is launched (the array is declared once, up front).
     fn bind_local(&mut self, local: u32, value: &str) -> Result<(), LowerError> {
         let t = self.local_ctype(local)?;
-        if self.launch.is_some() || self.result == Some(local) {
+        if self.launch.is_some() || self.results.contains(&local) {
             let r = self.local_ref(local);
             self.line(&format!("{r} = ({t})({value});"));
         } else {
@@ -262,7 +262,9 @@ impl Emitter<'_> {
                     "for (int cp_ = 0; cp_ < {elems}; cp_++) (&({d}))[cp_] = (&({s}))[cp_];"
                 ));
             }
-            Stmt::Collective { .. } => return Err(refuse("a Collective is block-level only")),
+            Stmt::Collective { .. } | Stmt::CollectiveTuple { .. } => {
+                return Err(refuse("a Collective is block-level only"));
+            }
             Stmt::ExternCall {
                 decl,
                 args,
@@ -273,7 +275,12 @@ impl Emitter<'_> {
                 callee,
                 args,
                 result,
-            } => self.call_stmt(*callee, args, *result)?,
+            } => self.call_stmt(*callee, args, result.as_slice())?,
+            Stmt::CallTuple {
+                callee,
+                args,
+                results,
+            } => self.call_stmt(*callee, args, results)?,
         }
         Ok(())
     }
@@ -304,7 +311,7 @@ impl Emitter<'_> {
             )));
         };
         let call_args: Vec<CallArg> = args.iter().cloned().map(CallArg::Scalar).collect();
-        self.call_stmt(reference, &call_args, results.first().copied())
+        self.call_stmt(reference, &call_args, &results[..results.len().min(1)])
     }
 
     /// `Break` or `Continue`. In a launch it must target a loop inside the current thread run: one that
@@ -324,21 +331,31 @@ impl Emitter<'_> {
     fn ret(&mut self) -> Result<(), LowerError> {
         if self.launch.is_some() {
             self.line("goto thread_end;");
-        } else if let Some(r) = self.result {
-            self.line(&format!("{{ *res = l{r}; return 0; }}"));
+        } else if !self.results.is_empty() {
+            let stores = self.result_stores();
+            self.line(&format!("{{ {stores}return 0; }}"));
         } else {
             self.line("return 0;");
         }
         Ok(())
     }
 
-    /// `result = callee(args...)` as a C call: the arguments forwarded or cast, a nonzero status returned at
-    /// once, the callee's result bound to the caller's local.
+    /// The statements that store every result local through its out-pointer: `*res = l<a>; *res1 = l<b>; ...`.
+    fn result_stores(&self) -> String {
+        self.results
+            .iter()
+            .enumerate()
+            .map(|(i, r)| format!("*{} = l{r}; ", res_name(i)))
+            .collect()
+    }
+
+    /// `results = callee(args...)` as a C call: the arguments forwarded or cast, a nonzero status returned at
+    /// once, each of the callee's values bound to the caller's local of the same position.
     fn call_stmt(
         &mut self,
         callee: u32,
         args: &[CallArg],
-        result: Option<u32>,
+        results: &[u32],
     ) -> Result<(), LowerError> {
         let Some(m) = self.module else {
             return Err(refuse("a Call outside a module (use lower_module)"));
@@ -348,13 +365,14 @@ impl Emitter<'_> {
         actuals.extend(self.id_actuals(m)?);
         let n = self.fresh;
         self.fresh += 1;
-        let rtype = match f.result {
-            Some(r) => Some(ctype(f.locals[r as usize].elem, "a callee result")?),
-            None => None,
-        };
-        if let Some(t) = rtype {
-            self.line(&format!("{t} r{n} = 0;"));
-            actuals.push(format!("&r{n}"));
+        let rtypes = f
+            .all_results()
+            .map(|r| ctype(f.locals[r as usize].elem, "a callee result"))
+            .collect::<Result<Vec<_>, _>>()?;
+        for (i, t) in rtypes.iter().enumerate() {
+            let r = ret_name(n, i);
+            self.line(&format!("{t} {r} = 0;"));
+            actuals.push(format!("&{r}"));
         }
         self.line(&format!(
             "int st{n} = {}({});",
@@ -362,8 +380,8 @@ impl Emitter<'_> {
             actuals.join(", ")
         ));
         self.line(&format!("if (st{n}) return st{n};"));
-        if let (Some(dst), Some(_)) = (result, rtype) {
-            self.bind_local(dst, &format!("r{n}"))?;
+        for (i, dst) in results.iter().take(rtypes.len()).enumerate() {
+            self.bind_local(*dst, &ret_name(n, i))?;
         }
         Ok(())
     }
@@ -523,11 +541,29 @@ impl Emitter<'_> {
     }
 }
 
+/// The out-pointer parameter of a callee's `i`-th value: `res`, then `res1`, `res2`, ...
+fn res_name(i: usize) -> String {
+    if i == 0 {
+        "res".to_string()
+    } else {
+        format!("res{i}")
+    }
+}
+
+/// The caller's temporary for call `n`'s `i`-th value: `r<n>`, then `r<n>_1`, ...
+fn ret_name(n: u32, i: usize) -> String {
+    if i == 0 {
+        format!("r{n}")
+    } else {
+        format!("r{n}_{i}")
+    }
+}
+
 /// The signature, with one line per C argument.
 fn signature(
     k: &KernelFn,
     name: &str,
-    (ids, result): (bool, Option<&'static str>),
+    (ids, results): (bool, &[&'static str]),
 ) -> Result<String, LowerError> {
     let mut args = Vec::new();
     for (i, p) in k.params.iter().enumerate() {
@@ -557,8 +593,8 @@ fn signature(
             args.push(format!("unsigned int {n}"));
         }
     }
-    if let Some(t) = result {
-        args.push(format!("{t}* res"));
+    for (i, t) in results.iter().enumerate() {
+        args.push(format!("{t}* {}", res_name(i)));
     }
     Ok(format!("int {name}(\n    {})", args.join(",\n    ")))
 }
@@ -670,7 +706,11 @@ fn emit(
     lo: &Lowering<'_>,
     (module, name, callee): (Option<&ModuleCtx<'_>>, &str, bool),
 ) -> Result<String, LowerError> {
-    let result = if callee { k.result } else { None };
+    let results: Vec<u32> = if callee {
+        k.all_results().collect()
+    } else {
+        Vec::new()
+    };
     let mut e = Emitter {
         k,
         lo,
@@ -680,20 +720,22 @@ fn emit(
         launch: LaunchInfo::of(k),
         thread_loops: 0,
         module,
-        result,
+        results,
     };
-    let res_type = match result {
-        Some(r) => Some(e.local_ctype(r)?),
-        None => None,
-    };
-    if let (Some(r), Some(t)) = (result, res_type) {
+    let mut res_types = Vec::new();
+    for r in e.results.clone() {
+        let t = e.local_ctype(r)?;
         e.line(&format!("{t} l{r} = 0;"));
+        res_types.push(t);
     }
     match e.launch {
         Some(info) => e.launched_body(info)?,
         None => e.body()?,
     }
-    let store = result.map_or(String::new(), |r| format!("    *res = l{r};\n"));
+    let store = match e.result_stores() {
+        s if s.is_empty() => String::new(),
+        s => format!("    {}\n", s.trim_end()),
+    };
     Ok(format!(
         "{} {{\n{}{store}    return 0;\n}}\n",
         signature(
@@ -701,7 +743,7 @@ fn emit(
             name,
             (
                 callee && module.is_some_and(|m| m.launch.is_some()),
-                res_type
+                &res_types
             )
         )?,
         e.out

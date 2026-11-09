@@ -19,9 +19,9 @@ use unpopped_vocab::ElementKind;
 use crate::kernel::{Emitter, ctype, refuse};
 
 /// The C function a combining collective folds with, and the extra id arguments it takes.
-struct Combine {
-    name: String,
-    ids: Vec<String>,
+pub(crate) struct Combine {
+    pub(crate) name: String,
+    pub(crate) ids: Vec<String>,
 }
 
 impl Combine {
@@ -112,7 +112,7 @@ impl Emitter<'_> {
     /// The C function of the combine function `callee` and the id actuals it takes: a combine function runs on the
     /// group, not on a thread, so a launched module's id parameters are passed as `0` (a combine that reads an id is
     /// not a combine; the oracle traps on it).
-    fn combine_call(&self, callee: u32) -> Result<Combine, LowerError> {
+    pub(crate) fn combine_call(&self, callee: u32) -> Result<Combine, LowerError> {
         let Some(m) = self.module else {
             return Err(refuse(
                 "a combining collective outside a module (use lower_module)",

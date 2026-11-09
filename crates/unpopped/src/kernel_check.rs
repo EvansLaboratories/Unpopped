@@ -48,6 +48,8 @@ pub(crate) struct ExternSig {
 pub(crate) struct CalleeSig {
     pub(crate) params: Vec<ParamKind>,
     pub(crate) result: Option<Ty>,
+    /// The types of the values after `result` (`KernelFn::results`), for a `CallTuple`.
+    pub(crate) extra: Vec<Ty>,
     /// The function reaches a `Barrier`, directly or through its own calls: a call of it is a barrier site.
     pub(crate) barrier: bool,
 }
@@ -223,6 +225,9 @@ fn check_sync_stmt(
             }
         }
         Stmt::Collective { .. } => collective::check_collective(k, st, sc, declared_here)?,
+        Stmt::CollectiveTuple { .. } => {
+            collective::check_collective_tuple(k, st, sc, declared_here)?;
+        }
         Stmt::Mma { .. } => mma::check_mma(k, st)?,
         Stmt::CopyAsync { .. } | Stmt::AsyncCommit | Stmt::AsyncWait { .. } => {
             async_copy::check_async(k, st, sc)?;
@@ -237,6 +242,11 @@ fn check_sync_stmt(
             args,
             result,
         } => check_call(k, (*callee, args, *result), sc, declared_here)?,
+        Stmt::CallTuple {
+            callee,
+            args,
+            results,
+        } => check_call_tuple(k, (*callee, args, results), sc, declared_here)?,
         Stmt::Barrier { scope, kind } => {
             let BarrierKind::Full = kind;
             if !scope_ok(k, *scope) {
@@ -269,6 +279,46 @@ fn check_call(
     sc: &mut Scope,
     declared_here: &mut Vec<usize>,
 ) -> Result<(), KernelError> {
+    let sig = check_callee_args(k, (callee, args), sc)?;
+    match (result, sig.result) {
+        (Some(local), Some(ty)) => declare(k, local, ty, sc, declared_here)?,
+        (Some(_), None) => {
+            return Err(KernelError::CallResult {
+                what: "a result is asked of a callee that has none",
+            });
+        }
+        (None, _) => {}
+    }
+    Ok(())
+}
+
+/// A `CallTuple`: the same argument checks as a `Call`, and one result local per value the callee returns, each of
+/// the value's type.
+fn check_call_tuple(
+    k: &KernelFn,
+    (callee, args, results): (u32, &[CallArg], &[u32]),
+    sc: &mut Scope,
+    declared_here: &mut Vec<usize>,
+) -> Result<(), KernelError> {
+    let sig = check_callee_args(k, (callee, args), sc)?;
+    let tys: Vec<Ty> = sig.result.into_iter().chain(sig.extra).collect();
+    if results.len() != tys.len() {
+        return Err(KernelError::CallResult {
+            what: "a CallTuple that does not name one local per value its callee returns",
+        });
+    }
+    for (local, ty) in results.iter().zip(tys) {
+        declare(k, *local, ty, sc, declared_here)?;
+    }
+    Ok(())
+}
+
+/// Resolve the callee and check the arguments against its parameters (arity, kind, type, buffer role).
+fn check_callee_args(
+    k: &KernelFn,
+    (callee, args): (u32, &[CallArg]),
+    sc: &Scope,
+) -> Result<CalleeSig, KernelError> {
     if sc.callees.is_empty() {
         return Err(KernelError::CallUnsupported {
             what: "a Call outside a module: check it with check_module",
@@ -286,16 +336,7 @@ fn check_call(
     for (i, (a, p)) in args.iter().zip(&sig.params).enumerate() {
         check_call_arg(k, i, (a, p), sc)?;
     }
-    match (result, sig.result) {
-        (Some(local), Some(ty)) => declare(k, local, ty, sc, declared_here)?,
-        (Some(_), None) => {
-            return Err(KernelError::CallResult {
-                what: "a result is asked of a callee that has none",
-            });
-        }
-        (None, _) => {}
-    }
-    Ok(())
+    Ok(sig)
 }
 
 /// One argument against the parameter in its position.
@@ -407,11 +448,13 @@ fn check_stmt(
         | Stmt::AtomicCas { .. }
         | Stmt::Fence { .. }
         | Stmt::Collective { .. }
+        | Stmt::CollectiveTuple { .. }
         | Stmt::Mma { .. }
         | Stmt::CopyAsync { .. }
         | Stmt::AsyncCommit
         | Stmt::AsyncWait { .. }
         | Stmt::Call { .. }
+        | Stmt::CallTuple { .. }
         | Stmt::ExternCall { .. }
         | Stmt::Barrier { .. } => check_sync_stmt(k, st, sc, declared_here)?,
         Stmt::If { cond, then, els } => {
