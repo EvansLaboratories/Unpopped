@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.29` — feature, a collective folded with a user combine function (CollectiveKind::ReduceWith and ScanWith), ROADMAP R5.7 D4
+
+`kernel::CollectiveKind::{ReduceWith { combine }, ScanWith { combine }}` (the enum is `#[non_exhaustive]`): every lane of a `Subgroup` or `Block` receives the fold (or the inclusive prefix fold) of the scope's values under a plain module function `(a: T, b: T) -> T` with no barrier, left to right in lane order. The author asserts the function is associative, so a device may reassociate it. `check_module` resolves the function (the collective is a call edge, so a cycle is refused) and `check_kernel` alone refuses it; the oracle runs it; `unpopped-cpu-c` spells a call per lane. Not built: an exclusive scan (no identity) and a tuple (packed) state.
+
+---
+
 ## `0.44.28` — feature, AccumSpec::Int32 and Int32Sat (s8/u8 into an s32 accumulator) for a contraction, ROADMAP U7 S1b integer part
 
 `ir::AccumSpec::{Int32, Int32Sat { k_step }}` (`AccumSpec` is `#[non_exhaustive]`): `I8`/`U8` operands, exact products, an `i32` accumulator that wraps (`Int32`, the exact sum modulo 2^32) or clamps into the `i32` range after every `k_step` elements (`Int32Sat`, PTX `.satfinite`). The oracle models both; the plan gate admits them only for an `I8`/`U8` cell with an `I32` accumulator and output in the key, `out_dtype = Some(I32)` and the identity epilogue, else the new `ContractionDecline::IntegerPolicyMismatch { detail }`. No `StructureKey` change (the key already carries `wdt`/`acc`/`out`). The kernel lift declines them as it does every policy but `WideFloat`. `Fp8FastAccum` is not built (no documented hardware model).
