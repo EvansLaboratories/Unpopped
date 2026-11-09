@@ -254,8 +254,10 @@ impl<'a> Machine<'a> {
         match st {
             Stmt::Let { .. }
             | Stmt::Load { .. }
+            | Stmt::MaskedLoad { .. }
             | Stmt::Assign { .. }
             | Stmt::Store { .. }
+            | Stmt::MaskedStore { .. }
             | Stmt::AtomicRmw { .. }
             | Stmt::AtomicCas { .. }
             | Stmt::Fence { .. } => {
@@ -320,6 +322,21 @@ impl<'a> Machine<'a> {
                 let v = self.load(place)?;
                 self.locals[*local as usize] = Some(v);
             }
+            Stmt::MaskedLoad {
+                local,
+                place,
+                mask,
+                fill,
+            } => {
+                // a false mask never reaches the memory: no bounds check, no race record
+                let v = if self.truthy(mask)? {
+                    self.load(place)?
+                } else {
+                    let f = self.eval_expr(fill)?;
+                    self.settle(*local, f)
+                };
+                self.locals[*local as usize] = Some(v);
+            }
             Stmt::Assign { local, value } => {
                 let v = self.eval_expr(value)?;
                 self.locals[*local as usize] = Some(self.settle(*local, v));
@@ -327,6 +344,12 @@ impl<'a> Machine<'a> {
             Stmt::Store { place, value } => {
                 let v = self.eval_expr(value)?;
                 self.store(place, v)?;
+            }
+            Stmt::MaskedStore { place, value, mask } => {
+                if self.truthy(mask)? {
+                    let v = self.eval_expr(value)?;
+                    self.store(place, v)?;
+                }
             }
             Stmt::AtomicRmw { .. } | Stmt::AtomicCas { .. } => self.exec_atomic(st)?,
             Stmt::Fence { scope, order } => self.fence(*order, *scope),

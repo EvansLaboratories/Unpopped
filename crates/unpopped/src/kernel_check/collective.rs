@@ -12,7 +12,7 @@ use unpopped_vocab::ElementKind;
 use super::{Scope, check_expr, declare};
 use crate::exec::Scope as ExecScope;
 use crate::ir::{ReduceOp, ScalarExpr};
-use crate::kernel::{CollectiveKind, KernelError, KernelFn, Stmt, VoteKind};
+use crate::kernel::{CollectiveKind, KernelError, KernelFn, ParamKind, Stmt, VoteKind};
 use crate::types::{self, Ty};
 
 /// Check a `Stmt::Collective` and declare its result local.
@@ -54,8 +54,37 @@ pub(super) fn check_collective(
         }
         CollectiveKind::Reduce(op) => fold_op(*op, t, false).map(|()| t)?,
         CollectiveKind::Scan { op, exclusive } => fold_op(*op, t, *exclusive).map(|()| t)?,
+        CollectiveKind::ReduceWith { combine } | CollectiveKind::ScanWith { combine } => {
+            check_combine(sc, *combine, t).map(|()| t)?
+        }
     };
     declare(k, *result, Ty::Scalar(result_ty), sc, declared_here)
+}
+
+/// The function a combining collective names is a plain function `(a: T, b: T) -> T` of the module, with no barrier.
+/// Alone (`check_kernel`) there is no module to resolve it in.
+fn check_combine(sc: &Scope, callee: u32, t: ElementKind) -> Result<(), KernelError> {
+    if sc.callees.is_empty() {
+        return Err(KernelError::CallUnsupported {
+            what: "a combining collective outside a module (check_module resolves its function)",
+        });
+    }
+    let Some(sig) = sc.callees.get(callee as usize) else {
+        return Err(KernelError::BadCallee { callee });
+    };
+    let scalar_t = |p: &ParamKind| matches!(p, ParamKind::Scalar { ty, .. } if *ty == t);
+    if sig.params.len() != 2
+        || !sig.params.iter().all(scalar_t)
+        || sig.result != Some(Ty::Scalar(t))
+    {
+        return Err(refuse(
+            "a combine function that is not (a: T, b: T) -> T over the collective's value type",
+        ));
+    }
+    if sig.barrier {
+        return Err(refuse("a combine function that reaches a barrier"));
+    }
+    Ok(())
 }
 
 fn refuse(what: &'static str) -> KernelError {

@@ -2778,6 +2778,16 @@ fn eval_contraction(
                     let b = read_strided(inputs, operands, 1, &rc, ViewRead::Direct).f64();
                     (a, b)
                 };
+                // an integer policy stores its i32 accumulator directly (the epilogue is the identity, checked by the gate)
+                if let Some(v) = accum_policy::contract_int(accum, k, pair) {
+                    let off = if batched {
+                        bi * out.strides[0] + mi * out.strides[1] + ni * out.strides[2]
+                    } else {
+                        mi * out.strides[0] + ni * out.strides[1]
+                    };
+                    store_val(Val::Int(v), out_dt, &mut out.bytes, off as usize);
+                    continue;
+                }
                 // a reduced-precision policy states its own conversion and rounding; the default accumulates in f64
                 let acc = accum_policy::contract(accum, k, pair).unwrap_or_else(|| {
                     (0..k).fold(0.0f64, |acc, kk| {

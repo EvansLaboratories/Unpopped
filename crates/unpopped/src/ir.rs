@@ -2419,6 +2419,16 @@ pub enum AccumSpec {
         /// Contracted elements per accumulator rounding (at least 1).
         k_step: u32,
     },
+    /// An integer tensor-core model (`mma ... s8/u8 ... s32`): `I8` or `U8` operands, exact products, an `i32`
+    /// accumulator that wraps (two's complement). The result is the exact sum modulo 2^32, whatever the order. The op's
+    /// `out_dtype` is `I32` and its epilogue is the identity (`Reduced(0)`).
+    Int32,
+    /// As [`Self::Int32`] with a saturating accumulator (PTX `.satfinite`): after every `k_step` contracted elements
+    /// the accumulator is clamped into the `i32` range, so a later negative product can bring a saturated value down.
+    Int32Sat {
+        /// Contracted elements per accumulator clamp (the atom's K; at least 1).
+        k_step: u32,
+    },
 }
 
 /// Accumulator policy for a **non-contraction reduction** ([`Access::Reduction`])
@@ -4532,7 +4542,9 @@ mod reduction_axes_tests {
                 | AccumSpec::Tf32 { .. }
                 | AccumSpec::Tf32x3 { .. }
                 | AccumSpec::Bf16x3 { .. }
-                | AccumSpec::F16Accum { .. } => true,
+                | AccumSpec::F16Accum { .. }
+                | AccumSpec::Int32
+                | AccumSpec::Int32Sat { .. } => true,
             }
         }
 

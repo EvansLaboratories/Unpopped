@@ -177,6 +177,7 @@ impl Walk<'_> {
         match st {
             Stmt::Let { .. }
             | Stmt::Load { .. }
+            | Stmt::MaskedLoad { .. }
             | Stmt::Assign { .. }
             | Stmt::AtomicRmw { .. }
             | Stmt::AtomicCas { .. }
@@ -187,6 +188,7 @@ impl Walk<'_> {
                 self.control(st, div, poisoned)?;
             }
             Stmt::Store { .. }
+            | Stmt::MaskedStore { .. }
             | Stmt::Fence { .. }
             | Stmt::CopyAsync { .. }
             | Stmt::AsyncCommit
@@ -219,6 +221,16 @@ impl Walk<'_> {
             }
             Stmt::Load { local, place } => {
                 if self.load_divergent(place) {
+                    self.mark(*local);
+                }
+            }
+            Stmt::MaskedLoad {
+                local,
+                place,
+                mask,
+                fill,
+            } => {
+                if self.load_divergent(place) || self.expr(mask) || self.expr(fill) {
                     self.mark(*local);
                 }
             }

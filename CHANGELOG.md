@@ -15,6 +15,38 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.32` — docs-only, options note for a tuple state in a combining collective (R5.7 D4 slice b)
+
+Adds `docs/options-d4b-tuple-state-combine.md`: why the tuple state cannot be a packed local today (the kernel evaluator refuses a packed value; a callee has one result), three representations, and a recommendation (a struct of scalars: multi-result callees and a `CollectiveTuple` statement). No code.
+
+---
+
+## `0.44.31` — tests, the implicit-GEMM convolution family (forward, data gradient, filter gradient) with stride, dilation and padding at the kernel layer, ROADMAP R5.7 F7
+
+`kernel_conv_family` (oracle, against a host scatter reference) and `kernel_conv_family_emit_agrees` (`unpopped-cpu-c` against the oracle): an NHWC convolution with stride (3, 1), dilation (2, 3), padding (1, 1), a non-square image and filter and taps off the image at both ends of both axes, as three kernel-layer kernels with the im2col index math in the loops and no staged matrix: `fprop`, `dgrad` (each input element gathers the taps that reach it, with the divisibility and range test of a strided convolution) and `wgrad`. No IR change: U9 K7 was the stride-1, dilation-1 forward kernel; this generalises it and adds the two backward convolutions CUTLASS names beside it.
+
+---
+
+## `0.44.30` — feature, Stmt::MaskedLoad and Stmt::MaskedStore (predicated access with a user fill value), ROADMAP R5.7 C4
+
+`kernel::Stmt::{MaskedLoad { local, place, mask, fill }, MaskedStore { place, value, mask }}` (`Stmt` is `#[non_exhaustive]`): a load declares its local as the element where `mask != 0` and as `fill` (any value of the element type, not only zero) where the mask is zero; a store writes only where the mask holds. Where a mask is false the memory is not touched: no bounds check and no race record, so an index outside the buffer under a false mask is legal and a false lane cannot race a true one. The checker types the fill and the mask; the uniformity analysis treats a value as divergent when its mask or fill is; the oracle and `unpopped-cpu-c` run it (the C is a bounds-checked access inside `if ((mask) != 0)`).
+
+`kernel_padding_modes` (oracle, hand-worked rows) and `kernel_padding_modes_emit_agrees` (`unpopped-cpu-c` against the oracle): a 1-D window read at positions -2..7 of a five-element array in each padding mode. Zero, NaN, constant and -inf fill are a `Stmt::MaskedLoad`; replicate (clamp) and reflect are an index remap (Min, Max) in front of a load. No IR change: no language in the survey has reflect or replicate as a built-in load mode, so the modes are expressible and this is the evidence.
+
+---
+
+## `0.44.29` — feature, a collective folded with a user combine function (CollectiveKind::ReduceWith and ScanWith), ROADMAP R5.7 D4
+
+`kernel::CollectiveKind::{ReduceWith { combine }, ScanWith { combine }}` (the enum is `#[non_exhaustive]`): every lane of a `Subgroup` or `Block` receives the fold (or the inclusive prefix fold) of the scope's values under a plain module function `(a: T, b: T) -> T` with no barrier, left to right in lane order. The author asserts the function is associative, so a device may reassociate it. `check_module` resolves the function (the collective is a call edge, so a cycle is refused) and `check_kernel` alone refuses it; the oracle runs it; `unpopped-cpu-c` spells a call per lane. Not built: an exclusive scan (no identity) and a tuple (packed) state.
+
+---
+
+## `0.44.28` — feature, AccumSpec::Int32 and Int32Sat (s8/u8 into an s32 accumulator) for a contraction, ROADMAP U7 S1b integer part
+
+`ir::AccumSpec::{Int32, Int32Sat { k_step }}` (`AccumSpec` is `#[non_exhaustive]`): `I8`/`U8` operands, exact products, an `i32` accumulator that wraps (`Int32`, the exact sum modulo 2^32) or clamps into the `i32` range after every `k_step` elements (`Int32Sat`, PTX `.satfinite`). The oracle models both; the plan gate admits them only for an `I8`/`U8` cell with an `I32` accumulator and output in the key, `out_dtype = Some(I32)` and the identity epilogue, else the new `ContractionDecline::IntegerPolicyMismatch { detail }`. No `StructureKey` change (the key already carries `wdt`/`acc`/`out`). The kernel lift declines them as it does every policy but `WideFloat`. `Fp8FastAccum` is not built (no documented hardware model).
+
+---
+
 ## `0.44.27` — feature, RoundMode::NearestAway (ties away from zero) for Cast; arithmetic qualifiers refuse it
 
 `ir::RoundMode::NearestAway` (PTX `.rna`, C `round`): a `Cast` rounds to nearest with ties away from zero, in the oracle for every inexact conversion (float to integer, f64 to f32, integer to f32/f64, 16-bit floats, MX elements). `unpopped-cpu-c` spells it for float to integer (`round`) and declines the other inexact conversions with a reason. A `Qualified` arithmetic operation takes only the four IEEE directions, so `NearestAway` there is a new `TypeError::IllegalQualifier` and a plan-gate decline. Stochastic rounding is still not here. The enum is `#[non_exhaustive]`.

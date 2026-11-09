@@ -203,6 +203,30 @@ pub enum Stmt {
         /// The value (the buffer's element type).
         value: ScalarExpr,
     },
+    /// Declare `local` as the element at `place` where `mask != 0`, and as `fill` where it is zero (ROADMAP R5.7 C4;
+    /// PTX predicated `ld`, Triton `tl.load(mask, other)`, Mojo `masked_load(.., passthrough)`). Where the mask is false
+    /// the memory is **not touched**: no bounds check, no race record, so an out-of-range index under a false mask is
+    /// legal. `fill` has the element's type, and any value, not only zero.
+    MaskedLoad {
+        /// The local id.
+        local: u32,
+        /// Where to read when the mask holds.
+        place: Place,
+        /// The predicate: any scalar type, tested `!= 0`.
+        mask: ScalarExpr,
+        /// The value the local takes where the mask is false (the buffer's element type).
+        fill: ScalarExpr,
+    },
+    /// Write one element where `mask != 0`; where it is zero nothing happens and the memory is not touched (no bounds
+    /// check, no race record).
+    MaskedStore {
+        /// Where to write when the mask holds.
+        place: Place,
+        /// The value (the buffer's element type).
+        value: ScalarExpr,
+        /// The predicate: any scalar type, tested `!= 0`.
+        mask: ScalarExpr,
+    },
     /// Branch on `cond != 0`.
     If {
         /// Condition, any scalar type.
@@ -624,6 +648,22 @@ pub enum CollectiveKind {
     Broadcast {
         /// The source lane.
         lane: ScalarExpr,
+    },
+    /// Every lane receives the fold of the scope's values under a **user combine function**: the function `combine`
+    /// of the [`Module`] (`fns[combine]`), a plain function `(a: T, b: T) -> T` over the collective's value type, with
+    /// no barrier (ROADMAP R5.7 D4; PM ruling 2026-11-09: the custom combine stays at the kernel layer, as a callee).
+    /// The oracle folds left to right in lane order. The author asserts the function is **associative**, which lets
+    /// a device reassociate it (a shuffle tree); a float combine is therefore compared within a tolerance, not bytes.
+    /// It needs a module: `check_kernel` alone refuses it, `check_module` resolves the function.
+    ReduceWith {
+        /// Index of the combine function in [`Module::fns`].
+        combine: u32,
+    },
+    /// Every lane receives the prefix fold up to itself (inclusive) under the combine function `combine`; see
+    /// [`Self::ReduceWith`]. There is no exclusive form: a user combine has no identity to hand lane 0.
+    ScanWith {
+        /// Index of the combine function in [`Module::fns`].
+        combine: u32,
     },
 }
 

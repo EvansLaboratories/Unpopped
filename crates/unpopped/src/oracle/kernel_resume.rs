@@ -131,8 +131,10 @@ impl<'a> Machine<'a> {
         match st {
             Stmt::Let { .. }
             | Stmt::Load { .. }
+            | Stmt::MaskedLoad { .. }
             | Stmt::Assign { .. }
             | Stmt::Store { .. }
+            | Stmt::MaskedStore { .. }
             | Stmt::AtomicRmw { .. }
             | Stmt::AtomicCas { .. }
             | Stmt::CopyAsync { .. }

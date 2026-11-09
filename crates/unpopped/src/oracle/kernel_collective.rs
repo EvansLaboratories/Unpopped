@@ -34,7 +34,14 @@ pub(super) enum Plan {
     Reduce(ReduceOp),
     Scan(ReduceOp, bool),
     Broadcast,
+    /// The left fold under the module function with this index.
+    ReduceWith(u32),
+    /// The inclusive prefix fold under the module function with this index.
+    ScanWith(u32),
 }
+
+/// Applies the module function `f` to `(a, b)`: the oracle's way into a user combine.
+pub(super) type Apply<'a> = dyn FnMut(u32, Val, Val) -> Result<Val, KernelTrap> + 'a;
 
 /// One lane's contribution: its value, the operand of a shuffle or broadcast, and where the result goes.
 #[derive(Clone, Copy, Debug)]
@@ -49,7 +56,10 @@ pub(super) struct Contribution {
 }
 
 /// Every lane's result, in lane order.
-pub(super) fn results(lanes: &[Contribution]) -> Result<Vec<Val>, KernelTrap> {
+pub(super) fn results(
+    lanes: &[Contribution],
+    apply: &mut Apply<'_>,
+) -> Result<Vec<Val>, KernelTrap> {
     let n = lanes.len() as i128;
     let (plan, ty) = (lanes[0].plan, lanes[0].ty);
     Ok(match plan {
@@ -65,6 +75,22 @@ pub(super) fn results(lanes: &[Contribution]) -> Result<Vec<Val>, KernelTrap> {
             vec![all; lanes.len()]
         }
         Plan::Scan(op, exclusive) => scan(op, ty, exclusive, lanes)?,
+        Plan::ReduceWith(f) => {
+            let mut acc = lanes[0].value;
+            for l in &lanes[1..] {
+                acc = apply(f, acc, l.value)?;
+            }
+            vec![acc; lanes.len()]
+        }
+        Plan::ScanWith(f) => {
+            let mut acc = lanes[0].value;
+            let mut out = vec![acc];
+            for l in &lanes[1..] {
+                acc = apply(f, acc, l.value)?;
+                out.push(acc);
+            }
+            out
+        }
     })
 }
 
@@ -223,6 +249,8 @@ impl Machine<'_> {
             CollectiveKind::Vote(v) => (Plan::Vote(*v), 0),
             CollectiveKind::Reduce(op) => (Plan::Reduce(*op), 0),
             CollectiveKind::Scan { op, exclusive } => (Plan::Scan(*op, *exclusive), 0),
+            CollectiveKind::ReduceWith { combine } => (Plan::ReduceWith(*combine), 0),
+            CollectiveKind::ScanWith { combine } => (Plan::ScanWith(*combine), 0),
         };
         Ok(Contribution {
             plan,
