@@ -384,6 +384,25 @@ fn check_stmt(
         Stmt::Load { local, place } => check_load(k, *local, place, sc, declared_here)?,
         Stmt::Assign { local, value } => check_assign(k, *local, value, sc)?,
         Stmt::Store { place, value } => check_store(k, place, value, sc)?,
+        Stmt::MaskedLoad {
+            local,
+            place,
+            mask,
+            fill,
+        } => {
+            check_mask(k, mask, sc)?;
+            let elem = check_load_elem(k, place, sc)?;
+            if check_expr(k, fill, sc)? != Ty::Scalar(elem) {
+                return Err(KernelError::TypeMismatch {
+                    what: "MaskedLoad fill",
+                });
+            }
+            declare(k, *local, Ty::Scalar(elem), sc, declared_here)?;
+        }
+        Stmt::MaskedStore { place, value, mask } => {
+            check_mask(k, mask, sc)?;
+            check_store(k, place, value, sc)?;
+        }
         Stmt::AtomicRmw { .. }
         | Stmt::AtomicCas { .. }
         | Stmt::Fence { .. }
@@ -429,6 +448,12 @@ fn check_load(
     sc: &mut Scope,
     declared_here: &mut Vec<usize>,
 ) -> Result<(), KernelError> {
+    let elem = check_load_elem(k, place, sc)?;
+    declare(k, local, Ty::Scalar(elem), sc, declared_here)
+}
+
+/// The element type of a readable `place`.
+fn check_load_elem(k: &KernelFn, place: &Place, sc: &Scope) -> Result<ElementKind, KernelError> {
     let (elem, role) = check_place(k, place, sc)?;
     if !role.reads() {
         return Err(match place {
@@ -436,7 +461,17 @@ fn check_load(
             Place::Alloc { alloc, .. } => KernelError::BadPlace { buffer: *alloc },
         });
     }
-    declare(k, local, Ty::Scalar(elem), sc, declared_here)
+    Ok(elem)
+}
+
+/// A mask is a scalar of any type (tested `!= 0`, as a `Select` condition is).
+fn check_mask(k: &KernelFn, mask: &ScalarExpr, sc: &Scope) -> Result<(), KernelError> {
+    match check_expr(k, mask, sc)? {
+        Ty::Scalar(_) => Ok(()),
+        Ty::Packed(..) => Err(KernelError::TypeMismatch {
+            what: "a packed mask",
+        }),
+    }
 }
 
 fn check_store(
