@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.28` — feature, AccumSpec::Int32 and Int32Sat (s8/u8 into an s32 accumulator) for a contraction, ROADMAP U7 S1b integer part
+
+`ir::AccumSpec::{Int32, Int32Sat { k_step }}` (`AccumSpec` is `#[non_exhaustive]`): `I8`/`U8` operands, exact products, an `i32` accumulator that wraps (`Int32`, the exact sum modulo 2^32) or clamps into the `i32` range after every `k_step` elements (`Int32Sat`, PTX `.satfinite`). The oracle models both; the plan gate admits them only for an `I8`/`U8` cell with an `I32` accumulator and output in the key, `out_dtype = Some(I32)` and the identity epilogue, else the new `ContractionDecline::IntegerPolicyMismatch { detail }`. No `StructureKey` change (the key already carries `wdt`/`acc`/`out`). The kernel lift declines them as it does every policy but `WideFloat`. `Fp8FastAccum` is not built (no documented hardware model).
+
+---
+
 ## `0.44.27` — feature, RoundMode::NearestAway (ties away from zero) for Cast; arithmetic qualifiers refuse it
 
 `ir::RoundMode::NearestAway` (PTX `.rna`, C `round`): a `Cast` rounds to nearest with ties away from zero, in the oracle for every inexact conversion (float to integer, f64 to f32, integer to f32/f64, 16-bit floats, MX elements). `unpopped-cpu-c` spells it for float to integer (`round`) and declines the other inexact conversions with a reason. A `Qualified` arithmetic operation takes only the four IEEE directions, so `NearestAway` there is a new `TypeError::IllegalQualifier` and a plan-gate decline. Stochastic rounding is still not here. The enum is `#[non_exhaustive]`.
