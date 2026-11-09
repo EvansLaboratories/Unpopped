@@ -1,0 +1,3 @@
+kind: tests, out-of-bounds padding modes at the kernel layer (zero, NaN, constant, replicate, reflect), ROADMAP R5.7 C4b
+---
+`kernel_padding_modes` (oracle, hand-worked rows) and `kernel_padding_modes_emit_agrees` (`unpopped-cpu-c` against the oracle): a 1-D window read at positions -2..7 of a five-element array in each padding mode. Zero, NaN, constant and -inf fill are a `Stmt::MaskedLoad`; replicate (clamp) and reflect are an index remap (Min, Max) in front of a load. No IR change: no language in the survey has reflect or replicate as a built-in load mode, so the modes are expressible and this is the evidence.
