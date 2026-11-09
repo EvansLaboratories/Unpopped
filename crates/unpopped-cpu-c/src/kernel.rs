@@ -262,7 +262,9 @@ impl Emitter<'_> {
                     "for (int cp_ = 0; cp_ < {elems}; cp_++) (&({d}))[cp_] = (&({s}))[cp_];"
                 ));
             }
-            Stmt::Collective { .. } => return Err(refuse("a Collective is block-level only")),
+            Stmt::Collective { .. } | Stmt::CollectiveTuple { .. } => {
+                return Err(refuse("a Collective is block-level only"));
+            }
             Stmt::ExternCall {
                 decl,
                 args,
