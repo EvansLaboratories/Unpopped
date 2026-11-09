@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//! **The implicit-GEMM convolution family in the oracle** (ROADMAP R5.7 F7): forward, data gradient and filter gradient of an
+//! NHWC convolution with stride `(2, 1)`, dilation `(1, 2)` and padding `(1, 1)`, written with the kernel layer alone (the
+//! kernels are `support/conv_family.rs`). Each is checked against a host **scatter** reference, whose loop order differs
+//! from the kernel's gather, on data where an index mix-up changes the answer.
+
+use unpopped::kernel::check_kernel;
+use unpopped::oracle::TypedBuffer;
+use unpopped::oracle::kernel_eval::KernelArg;
+use unpopped::oracle::kernel_launch::run_launch;
+
+#[path = "support/conv_family.rs"]
+mod conv_family;
+use conv_family::{C, H, I32, K, N, P, Q, R, S, W, data, dgrad, fprop, reference, wgrad};
+
+fn buf(shape: &[i64], v: &[i32]) -> KernelArg {
+    let strides: Vec<i64> = (0..shape.len())
+        .map(|d| shape[d + 1..].iter().product())
+        .collect();
+    KernelArg::Buffer(TypedBuffer::new(
+        I32,
+        shape.to_vec(),
+        strides,
+        v.iter().flat_map(|x| x.to_le_bytes()).collect(),
+    ))
+}
+
+fn words(a: &KernelArg) -> Vec<i32> {
+    let KernelArg::Buffer(b) = a else {
+        unreachable!("a buffer")
+    };
+    b.bytes
+        .chunks(4)
+        .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
+        .collect()
+}
+
+const IN: [i64; 4] = [N, H, W, C];
+const FILT: [i64; 4] = [R, S, C, K];
+const OUT: [i64; 4] = [N, P, Q, K];
+
+fn zeros(shape: &[i64]) -> KernelArg {
+    buf(shape, &vec![0; shape.iter().product::<i64>() as usize])
+}
+
+#[test]
+fn the_forward_convolution_matches_the_scatter_reference() {
+    let (input, filter, d_out) = data();
+    let (want, _, _) = reference(&input, &filter, &d_out);
+    let k = fprop();
+    assert_eq!(check_kernel(&k), Ok(()));
+    let mut args = vec![buf(&IN, &input), buf(&FILT, &filter), zeros(&OUT)];
+    run_launch(&k, &mut args).unwrap();
+    assert_eq!(words(&args[2]), want);
+    assert!(want.iter().any(|v| *v != 0) && want.windows(2).any(|w| w[0] != w[1]));
+}
+
+#[test]
+fn the_data_gradient_matches_the_scatter_reference() {
+    let (input, filter, d_out) = data();
+    let (_, want, _) = reference(&input, &filter, &d_out);
+    let k = dgrad();
+    assert_eq!(check_kernel(&k), Ok(()));
+    let mut args = vec![buf(&OUT, &d_out), buf(&FILT, &filter), zeros(&IN)];
+    run_launch(&k, &mut args).unwrap();
+    assert_eq!(words(&args[2]), want);
+    assert!(want.iter().any(|v| *v != 0) && want.windows(2).any(|w| w[0] != w[1]));
+}
+
+#[test]
+fn the_filter_gradient_matches_the_scatter_reference() {
+    let (input, filter, d_out) = data();
+    let (_, _, want) = reference(&input, &filter, &d_out);
+    let k = wgrad();
+    assert_eq!(check_kernel(&k), Ok(()));
+    let mut args = vec![buf(&IN, &input), buf(&OUT, &d_out), zeros(&FILT)];
+    run_launch(&k, &mut args).unwrap();
+    assert_eq!(words(&args[2]), want);
+    assert!(want.iter().any(|v| *v != 0) && want.windows(2).any(|w| w[0] != w[1]));
+}
+
+#[test]
+fn the_geometry_exercises_stride_dilation_and_padding_at_both_ends() {
+    // the output is 3 x 6 from a 5 x 6 image: a stride of 2 on H shrinks it, a dilation of 2 on W with padding 1 keeps it
+    assert_eq!((P, Q), (3, 6));
+    // a tap that falls off the image exists at both ends of each axis, so a dropped bounds check changes the answer
+    let off = |o: i64, t: i64, stride: i64, dil: i64, pad: i64, limit: i64| {
+        let i = o * stride + t * dil - pad;
+        i < 0 || i >= limit
+    };
+    let rows = |side: bool| {
+        (0..P).any(|p| (0..R).any(|r| off(p, r, 2, 1, 1, H) && ((p * 2 + r - 1 < 0) == side)))
+    };
+    assert!(
+        rows(true) && rows(false),
+        "taps off the top and off the bottom"
+    );
+    let cols = |side: bool| {
+        (0..Q).any(|q| (0..S).any(|s| off(q, s, 1, 2, 1, W) && ((q + 2 * s - 1 < 0) == side)))
+    };
+    assert!(
+        cols(true) && cols(false),
+        "taps off the left and off the right"
+    );
+}
