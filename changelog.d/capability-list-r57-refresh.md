@@ -1,3 +1,0 @@
-kind: docs, the master capability list's Unpopped column refreshed for the R5.7 rows (F3, D4, C4, C4b, F7)
----
-`docs/ir-union-master-capabilities.md`: the Unpopped column is re-read at `origin/main` 5c12a76b now that R5.7 PRs #319 to #326 have merged. D4 (a combine function and a tuple state: `ReduceWith`/`ScanWith`, `CallTuple`, `CollectiveTuple`) and C4 (`MaskedLoad`/`MaskedStore` with a user fill) go 🟡 to ✅. F3 (Int32 accumulators landed; TF32, 3xTF32 and fp8 fast-accumulate absent), C4b (clamp and reflect are an index remap, not a named mode) and F7 (the convolution family is kernels, no fused conv op) stay 🟡, and their per-row notes say what landed and what is still missing. G3 and G4 are unchanged. No code change; the other seven columns are untouched.
