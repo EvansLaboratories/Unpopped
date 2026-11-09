@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.32` — docs-only, options note for a tuple state in a combining collective (R5.7 D4 slice b)
+
+Adds `docs/options-d4b-tuple-state-combine.md`: why the tuple state cannot be a packed local today (the kernel evaluator refuses a packed value; a callee has one result), three representations, and a recommendation (a struct of scalars: multi-result callees and a `CollectiveTuple` statement). No code.
+
+---
+
 ## `0.44.31` — tests, the implicit-GEMM convolution family (forward, data gradient, filter gradient) with stride, dilation and padding at the kernel layer, ROADMAP R5.7 F7
 
 `kernel_conv_family` (oracle, against a host scatter reference) and `kernel_conv_family_emit_agrees` (`unpopped-cpu-c` against the oracle): an NHWC convolution with stride (3, 1), dilation (2, 3), padding (1, 1), a non-square image and filter and taps off the image at both ends of both axes, as three kernel-layer kernels with the im2col index math in the loops and no staged matrix: `fprop`, `dgrad` (each input element gathers the taps that reach it, with the divisibility and range test of a strided convolution) and `wgrad`. No IR change: U9 K7 was the stride-1, dilation-1 forward kernel; this generalises it and adds the two backward convolutions CUTLASS names beside it.
