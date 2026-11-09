@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.30` — feature, Stmt::MaskedLoad and Stmt::MaskedStore (predicated access with a user fill value), ROADMAP R5.7 C4
+
+`kernel::Stmt::{MaskedLoad { local, place, mask, fill }, MaskedStore { place, value, mask }}` (`Stmt` is `#[non_exhaustive]`): a load declares its local as the element where `mask != 0` and as `fill` (any value of the element type, not only zero) where the mask is zero; a store writes only where the mask holds. Where a mask is false the memory is not touched: no bounds check and no race record, so an index outside the buffer under a false mask is legal and a false lane cannot race a true one. The checker types the fill and the mask; the uniformity analysis treats a value as divergent when its mask or fill is; the oracle and `unpopped-cpu-c` run it (the C is a bounds-checked access inside `if ((mask) != 0)`).
+
+`kernel_padding_modes` (oracle, hand-worked rows) and `kernel_padding_modes_emit_agrees` (`unpopped-cpu-c` against the oracle): a 1-D window read at positions -2..7 of a five-element array in each padding mode. Zero, NaN, constant and -inf fill are a `Stmt::MaskedLoad`; replicate (clamp) and reflect are an index remap (Min, Max) in front of a load. No IR change: no language in the survey has reflect or replicate as a built-in load mode, so the modes are expressible and this is the evidence.
+
+---
+
 ## `0.44.29` — feature, a collective folded with a user combine function (CollectiveKind::ReduceWith and ScanWith), ROADMAP R5.7 D4
 
 `kernel::CollectiveKind::{ReduceWith { combine }, ScanWith { combine }}` (the enum is `#[non_exhaustive]`): every lane of a `Subgroup` or `Block` receives the fold (or the inclusive prefix fold) of the scope's values under a plain module function `(a: T, b: T) -> T` with no barrier, left to right in lane order. The author asserts the function is associative, so a device may reassociate it. `check_module` resolves the function (the collective is a call edge, so a cycle is refused) and `check_kernel` alone refuses it; the oracle runs it; `unpopped-cpu-c` spells a call per lane. Not built: an exclusive scan (no identity) and a tuple (packed) state.
