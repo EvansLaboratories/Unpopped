@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 
 use crate::exec::MemorySpace;
-use crate::kernel::{Block, ExternDecl, KernelError, KernelFn, Module, Stmt};
+use crate::kernel::{Block, CollectiveKind, ExternDecl, KernelError, KernelFn, Module, Stmt};
 use crate::kernel_check::{CalleeSig, ExternSig, check_kernel_with};
 
 /// Check every function of `m`, with `entry` the function a launch starts at.
@@ -79,6 +79,11 @@ fn collect_calls(b: &Block, out: &mut Vec<u32>) {
     for st in &b.0 {
         match st {
             Stmt::Call { callee, .. } => out.push(*callee),
+            // a combining collective calls its combine function once per lane
+            Stmt::Collective {
+                kind: CollectiveKind::ReduceWith { combine } | CollectiveKind::ScanWith { combine },
+                ..
+            } => out.push(*combine),
             Stmt::If { then, els, .. } => {
                 collect_calls(then, out);
                 collect_calls(els, out);

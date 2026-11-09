@@ -30,6 +30,41 @@ pub fn run_module(m: &Module, entry: u32, args: &mut [KernelArg]) -> Result<(), 
     Machine::new(k, args, None).with_module(m, entry).run_body()
 }
 
+/// `f(a, b)` for the module function `callee`, on a machine of its own with no threads, memory or launch: what a
+/// combining collective folds with. The function is a plain `(a: T, b: T) -> T`, so a read of an execution id
+/// traps (there is no thread to ask).
+pub(super) fn eval_combine(
+    m: &Module,
+    callee: u32,
+    a: super::Val,
+    b: super::Val,
+) -> Result<super::Val, KernelTrap> {
+    let f = m.fns.get(callee as usize).ok_or(KernelTrap::Unsupported(
+        "a combine function outside the module",
+    ))?;
+    let mut no_args: [KernelArg; 0] = [];
+    let mut mc = Machine::new(f, &mut no_args, None).with_module(m, callee);
+    for (p, v) in f.params.iter().zip([a, b]) {
+        let ParamKind::Scalar { local, ty } = &p.kind else {
+            return Err(KernelTrap::ArgMismatch(
+                "a combine function takes two scalars",
+            ));
+        };
+        // a float argument is held in the parameter's own type, as a C call converts it
+        let v = match v {
+            super::Val::Float(x) => super::Val::Float(crate::oracle::round_to_compute(x, *ty)),
+            other => other,
+        };
+        mc.locals[*local as usize] = Some(v);
+    }
+    mc.exec_block(&f.body)?;
+    f.result
+        .and_then(|l| mc.locals[l as usize])
+        .ok_or(KernelTrap::Unsupported(
+            "a combine function returned without setting its result local",
+        ))
+}
+
 /// The reference kernel of the extern declaration `decl` and the call arguments that pass `args` to it (the reference
 /// is a plain function with the declared scalar parameters, so an `ExternCall` is a `Call` of it). Traps when the
 /// call is outside a module or the declaration has no reference.

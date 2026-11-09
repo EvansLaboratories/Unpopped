@@ -456,6 +456,13 @@ pub enum ContractionDecline {
         /// The policy's `k_step` (zero is refused).
         k_step: u32,
     },
+    /// An integer accumulation policy (`Int32`, `Int32Sat`) does not fit the cell: it needs `I8`/`U8` operands, an `I32`
+    /// accumulator and output in the key, `out_dtype = Some(I32)` on the op, the identity epilogue, and (for the
+    /// saturating form) a `k_step` of at least 1 (`docs/accum-policies.md`).
+    IntegerPolicyMismatch {
+        /// What is wrong, verbatim.
+        detail: String,
+    },
     /// The op has a `Batch` axis and the key declares no batch (or the reverse): the
     /// key and the op describe different cells. A rank-3 key whose caller declared
     /// no batch axis is the usual way to reach this.
@@ -491,6 +498,12 @@ impl std::fmt::Display for ContractionDecline {
                 f,
                 "contraction: the accumulation policy needs F32 operands (TF32, 3xTF32, bf16x3) or F16 (an f16                  accumulator) and a k_step of at least 1; got operands {dtype:?}, k_step {k_step}"
             ),
+            Self::IntegerPolicyMismatch { detail } => {
+                write!(
+                    f,
+                    "contraction: the integer accumulation policy does not fit: {detail}"
+                )
+            }
             Self::BatchDisagrees {
                 op_batched,
                 key_batched,
@@ -1078,6 +1091,34 @@ fn check_contraction(op: &OpDef, key: &StructureKey) -> Result<(), PlanError> {
     let Some(c) = key.contraction else {
         return decline(ContractionDecline::KeyHasNoContractionFacts);
     };
+    if let Some(step) = accum_integer_step(accum) {
+        let int8 = |t| matches!(t, ElementKind::I8 | ElementKind::U8);
+        let why = if !int8(key.dtype) || !int8(c.wdt) {
+            Some(format!(
+                "operands must be I8 or U8, got {:?} and {:?}",
+                key.dtype, c.wdt
+            ))
+        } else if c.acc != ElementKind::I32 || c.out != ElementKind::I32 {
+            Some(format!(
+                "the key must carry an I32 accumulator and output (CellFacts::accumulator), got {:?} and {:?}",
+                c.acc, c.out
+            ))
+        } else if op.out_dtype != Some(ElementKind::I32) {
+            Some(format!(
+                "the op's out_dtype must be Some(I32), got {:?}",
+                op.out_dtype
+            ))
+        } else if step == Some(0) {
+            Some("k_step must be at least 1".to_string())
+        } else if !matches!(epilogue, crate::ir::ScalarExpr::Reduced(0)) {
+            Some("the epilogue must be the identity Reduced(0)".to_string())
+        } else {
+            None
+        };
+        if let Some(detail) = why {
+            return decline(ContractionDecline::IntegerPolicyMismatch { detail });
+        }
+    }
     if !contraction_epilogue_admissible(epilogue, op.n_inputs) {
         return decline(ContractionDecline::EpilogueInadmissible);
     }
@@ -1098,6 +1139,16 @@ fn check_contraction(op: &OpDef, key: &StructureKey) -> Result<(), PlanError> {
         }
     }
     Ok(())
+}
+
+/// For an integer accumulation policy: `Some(None)` for [`AccumSpec::Int32`], `Some(Some(k_step))` for
+/// [`AccumSpec::Int32Sat`]; `None` for every other policy.
+pub(crate) fn accum_integer_step(accum: &AccumSpec) -> Option<Option<u32>> {
+    match *accum {
+        AccumSpec::Int32 => Some(None),
+        AccumSpec::Int32Sat { k_step } => Some(Some(k_step)),
+        _ => None,
+    }
 }
 
 /// The operand dtype a reduced-precision accumulation policy needs and its `k_step`; `None` for [`AccumSpec::WideFloat`].
@@ -2348,7 +2399,12 @@ pub(crate) fn check_int_op_admissibility_for(
                     ));
                 }
             }
-            ScalarExpr::Qualified(x, _) => {
+            ScalarExpr::Qualified(x, n) => {
+                if n.round == crate::ir::RoundMode::NearestAway {
+                    return Err(format!(
+                        "op '{op_name}': Qualified under RoundMode::NearestAway is rejected, an arithmetic operation takes only the four IEEE directions (ties-away is a Cast's mode)"
+                    ));
+                }
                 if int_dt {
                     return Err(format!(
                         "op '{op_name}': Qualified at int compute dtype {dtype:?} is                          rejected, rounding/ftz/approx qualifiers are f32-compute only in v1"
@@ -3837,6 +3893,9 @@ fn assert_valid_out_dtype(op: &OpDef) {
                 op.name
             ),
         },
+        // An integer accumulation policy stores its `i32` accumulator (`try_build_plan` has checked the rest).
+        Access::Contraction { accum, .. }
+            if od == ElementKind::I32 && accum_integer_step(accum).is_some() => {}
         Access::RowReduce { .. } | Access::Contraction { .. } => panic!(
             "OpDef '{}': out_dtype = Some({od:?}) is rejected under \
              RowReduce/Contraction — a fused reduction/contraction stores its \

@@ -44,7 +44,8 @@ re-plumbed from `ev.dtype` to the inferred node type.
 
 `Cast { x, to, round, sat }`: convert the VALUE of `x` to type `to`.
 
-- `round: RoundMode` in `{NearestEven, TowardZero, TowardNegInf, TowardPosInf}`; consulted only when
+- `round: RoundMode` in `{NearestEven, TowardZero, TowardNegInf, TowardPosInf, NearestAway}` (`NearestAway` is ties away from
+  zero, PTX `.rna`, C `round`; a `Cast` takes it, an arithmetic `Qualified` does not); consulted only when
   the conversion loses precision (float to narrower float, float to int, int to float). Stochastic
   rounding (needs a random-bits operand) is its own follow-up; the enum is `#[non_exhaustive]`.
 - `sat: Saturation` in `{Wrap, Clamp, ClampFinite}`.

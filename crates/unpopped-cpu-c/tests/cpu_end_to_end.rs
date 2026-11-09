@@ -2241,6 +2241,7 @@ fn float_to_integer_casts_agree_with_the_oracle_in_every_rounding_mode() {
             ("rn", RoundMode::NearestEven),
             ("rm", RoundMode::TowardNegInf),
             ("rp", RoundMode::TowardPosInf),
+            ("rna", RoundMode::NearestAway),
         ] {
             cases.push((
                 format!("f2i_{t:?}_{name}"),
@@ -2470,6 +2471,40 @@ fn a_u64_cast_is_declined_by_cpu_c_with_a_reason() {
     let err =
         unpopped::try_generate(&u64_op, &key(U64), &CpuC).expect_err("f64 -> u64 must decline");
     assert!(format!("{err:?}").contains("u64"), "{err:?}");
+}
+
+/// Ties-away rounding of an inexact float narrowing or integer-to-float conversion is declined, not approximated:
+/// C has no per-conversion rounding mode (`fesetround` is global state), so only `NearestEven` (the host default)
+/// is spelled; float to integer is the one place C has ties-away (`round`), pinned by the agreement test above.
+#[test]
+fn ties_away_is_declined_for_a_float_narrowing_and_an_int_to_float_by_cpu_c() {
+    use ElementKind::*;
+    // (compute dtype, an integer to pass through or None, destination)
+    let gen_cast = |from: ElementKind, via: Option<ElementKind>, to: ElementKind, round| {
+        let src = match via {
+            Some(v) => input(0).cast(v, RoundMode::TowardZero, Saturation::Clamp),
+            None => input(0),
+        };
+        let mut op = OpDef::elementwise("conv", 1, &[from], src.cast(to, round, Saturation::Wrap));
+        op.out_dtype = Some(to);
+        let a = OperandDesc::new(1, &[7], &[1], from, 256);
+        let o = OperandDesc::new(1, &[7], &[1], to, 256);
+        let key = structure_key(OpCategory::UnaryElementwise, &[a, o], ArchSku::Sm89);
+        unpopped::try_generate(&op, &key, &CpuC)
+    };
+    for (from, via, to) in [
+        (F64, None, F32),
+        (F32, Some(I32), F32),
+        (F64, Some(I64), F64),
+    ] {
+        gen_cast(from, via, to, RoundMode::NearestEven).unwrap_or_else(|e| {
+            panic!("control: {from:?} via {via:?} -> {to:?} nearest-even generates: {e:?}")
+        });
+        let err = gen_cast(from, via, to, RoundMode::NearestAway).expect_err(&format!(
+            "{from:?} via {via:?} -> {to:?} ties-away must decline"
+        ));
+        assert!(format!("{err:?}").contains("NearestAway"), "{err:?}");
+    }
 }
 
 #[test]
