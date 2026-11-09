@@ -1,6 +1,6 @@
 # Accumulation policies for a contraction (ROADMAP U7 S1a)
 
-Status: **built in the oracle** (0.42.23): `AccumSpec::{Tf32, Tf32x3, Bf16x3, F16Accum}`, each with a `k_step`. Rulings: PM, 2026-11-03
+Status: **built in the oracle** (0.42.23): `AccumSpec::{Tf32, Tf32x3, Bf16x3, F16Accum}`, each with a `k_step`; and the integer pair `Int32` / `Int32Sat { k_step }` (U7 S1b, PM 2026-11-09). Rulings: PM, 2026-11-03
 (`docs/options-u7-mma-atoms.md`, all six as recommended). **Unpopped extension, not KISS**: KISS pins no accumulator width
 (KISS-OPS-6.0-0004 makes a float contraction order-invariant, compared under a tolerance) and has no policy beyond the two-valued
 `MathFidelity`. To be proposed upstream, as KISS#768/#769 were.
@@ -22,6 +22,10 @@ in `ir.rs` pins that). A policy states how a tensor core differs from an `f64` s
 | `Tf32x3 { k_step }` | `F32` | head `h = tf32(x)`, remainder `l = tf32(x - h)` | `ah*bh + ah*bl + al*bh` (the `al*bl` term is dropped) | `f32` |
 | `Bf16x3 { k_step }` | `F32` | as `Tf32x3` with `bf16` (nearest even) for head and remainder | same | `f32` |
 | `F16Accum { k_step }` | `F16` | none (the operands are `f16`) | `a * b` | `f16` (`2^-11`), nearest even, overflow beyond 65520 is infinite |
+| `Int32` | `I8` or `U8` (each operand its own signedness) | none | `a * b`, exact | `i32`, wrapping: the exact sum modulo `2^32`, in any order |
+| `Int32Sat { k_step }` | `I8` or `U8` | none | `a * b`, exact | `i32`, clamped into `[-2^31, 2^31-1]` after every `k_step` elements (PTX `.satfinite` per `mma`), so a later negative product lowers a saturated value |
+
+The integer policies need the cell to say so: the key carries `wdt` (the weight dtype, `I8` or `U8`), an `I32` accumulator (`CellFacts::accumulator`) and an `I32` output, the op's `out_dtype` is `Some(I32)`, and the epilogue is the identity `Reduced(0)` (a bias or a C would be added in a type the epilogue cannot hold). Anything else is `ContractionDecline::IntegerPolicyMismatch` with the reason. The structure key already carried `wdt`/`acc`/`out`, so **no key change was needed**: the S1b premise ("mixed dtypes need a key bump") held for the weight dtype of a float cell, not for this integer path. Integer results are exact, so an emitter is compared byte for byte (bound 0).
 
 `k_step` is the atom's K (8 for an `m16n8k8` TF32 atom, 16 for `m16n8k16` in `f16`); at least 1 (the plan gate refuses 0, and a policy
 whose operand dtype does not fit the key: `ContractionDecline::AccumPolicyMismatch`). `WideFloat` (the default) is unchanged.
@@ -32,8 +36,7 @@ accumulator that overflows its type is infinite; a value that rounds up past the
 
 **Accumulate-into-C (S1a-2, 0.42.24):** a contraction's extra input may be a full `[M,N]` C, read at `[m,n]` in the epilogue, after the K-sum, in the wide type; under a policy that is *not* the hardware's `D = A.B + C` with C as the initial accumulator (that form, with its `u*|C|` bound, is `Stmt::Mma`'s, S2).
 
-**Not here yet (S1b, with the mixed-dtype `StructureKey` change the PM deferred):** `Int32`/`Int32Sat` accumulation (an `s8` input with an `s32`
-output has two dtypes) and `Fp8FastAccum`. **Not modelled by the kernel lift**: `lift_contraction_opdef` declines every policy but `WideFloat`
+**Not here yet:** `Fp8FastAccum` (PM 2026-11-09: no hardware model is documented, so none is built). **Not modelled by the kernel lift**: `lift_contraction_opdef` declines every policy but `WideFloat`
 (typed), so `unpopped-cpu-c` has no policy reference yet.
 
 ## The declared bound, per emitter (PM, 2026-11-03: stated before any emitter claims conformance)
