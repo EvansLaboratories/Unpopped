@@ -83,6 +83,10 @@ fn collect_calls(b: &Block, out: &mut Vec<u32>) {
             Stmt::Collective {
                 kind: CollectiveKind::ReduceWith { combine } | CollectiveKind::ScanWith { combine },
                 ..
+            }
+            | Stmt::CollectiveTuple {
+                kind: CollectiveKind::ReduceWith { combine } | CollectiveKind::ScanWith { combine },
+                ..
             } => out.push(*combine),
             Stmt::If { then, els, .. } => {
                 collect_calls(then, out);
@@ -141,7 +145,10 @@ fn plain_function(f: &KernelFn) -> Result<(), KernelError> {
 /// that reaches one is a barrier site).
 fn holds_barrier(b: &Block, externs: &[ExternDecl]) -> bool {
     b.0.iter().any(|st| match st {
-        Stmt::Barrier { .. } | Stmt::Collective { .. } | Stmt::Mma { .. } => true,
+        Stmt::Barrier { .. }
+        | Stmt::Collective { .. }
+        | Stmt::CollectiveTuple { .. }
+        | Stmt::Mma { .. } => true,
         Stmt::ExternCall { decl, .. } => externs
             .get(*decl as usize)
             .is_some_and(|d| d.effects.sync.is_some()),

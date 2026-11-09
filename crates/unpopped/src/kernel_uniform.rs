@@ -182,6 +182,7 @@ impl Walk<'_> {
             | Stmt::AtomicRmw { .. }
             | Stmt::AtomicCas { .. }
             | Stmt::Collective { .. }
+            | Stmt::CollectiveTuple { .. }
             | Stmt::Call { .. }
             | Stmt::CallTuple { .. }
             | Stmt::ExternCall { .. } => self.defines(st, div || *poisoned)?,
@@ -259,6 +260,14 @@ impl Walk<'_> {
             // result differs from another's.
             Stmt::Collective { result, .. } => {
                 self.mark(*result);
+                if self.check && skipped {
+                    return Err(KernelError::BarrierDivergent);
+                }
+            }
+            Stmt::CollectiveTuple { results, .. } => {
+                for r in results {
+                    self.mark(*r);
+                }
                 if self.check && skipped {
                     return Err(KernelError::BarrierDivergent);
                 }

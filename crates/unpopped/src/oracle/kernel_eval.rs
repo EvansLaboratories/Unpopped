@@ -263,7 +263,9 @@ impl<'a> Machine<'a> {
             | Stmt::Fence { .. } => {
                 self.exec_simple(st)?;
             }
-            Stmt::Collective { .. } => return Err(KernelTrap::Unsupported("Collective")),
+            Stmt::Collective { .. } | Stmt::CollectiveTuple { .. } => {
+                return Err(KernelTrap::Unsupported("Collective"));
+            }
             Stmt::Mma { .. } => return Err(KernelTrap::Unsupported("Mma")),
             Stmt::ExternCall {
                 decl,

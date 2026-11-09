@@ -225,6 +225,9 @@ fn check_sync_stmt(
             }
         }
         Stmt::Collective { .. } => collective::check_collective(k, st, sc, declared_here)?,
+        Stmt::CollectiveTuple { .. } => {
+            collective::check_collective_tuple(k, st, sc, declared_here)?;
+        }
         Stmt::Mma { .. } => mma::check_mma(k, st)?,
         Stmt::CopyAsync { .. } | Stmt::AsyncCommit | Stmt::AsyncWait { .. } => {
             async_copy::check_async(k, st, sc)?;
@@ -445,6 +448,7 @@ fn check_stmt(
         | Stmt::AtomicCas { .. }
         | Stmt::Fence { .. }
         | Stmt::Collective { .. }
+        | Stmt::CollectiveTuple { .. }
         | Stmt::Mma { .. }
         | Stmt::CopyAsync { .. }
         | Stmt::AsyncCommit

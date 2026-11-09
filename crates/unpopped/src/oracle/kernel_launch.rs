@@ -26,7 +26,7 @@
 use std::ops::Range;
 
 use super::Val;
-use super::kernel_collective::{Contribution, results};
+use super::kernel_collective::{Contribution, TupleContribution, results, tuple_results};
 use super::kernel_eval::{KernelArg, KernelTrap, Machine, STEP_LIMIT};
 use super::kernel_mem::{AllocMem, AsyncQueue, BlockMem, Log, ThreadCtx, cluster_of};
 use super::kernel_mma::{MmaContribution, compute};
@@ -310,6 +310,8 @@ struct ThreadRun<'a> {
     contrib: Option<Contribution>,
     /// What the thread handed over to the `Stmt::Mma` it waits at.
     mma: Option<Box<MmaContribution>>,
+    /// What the thread contributed to the tuple collective it waits at.
+    tuple: Option<Box<TupleContribution>>,
 }
 
 /// One block between `Device` barriers: its threads and its memory.
@@ -349,6 +351,7 @@ fn start_block<'a>(b: &BlockRun<'a>) -> BlockState<'a> {
             bufmap: Vec::new(),
             contrib: None,
             mma: None,
+            tuple: None,
         })
         .collect();
     BlockState { threads, mem }
@@ -458,6 +461,10 @@ fn status_after(stop: Stop, t: &mut ThreadRun<'_>) -> Status {
             t.contrib = Some(c);
             Status::Waiting { scope, at }
         }
+        Stop::Tuple { scope, at, c } => {
+            t.tuple = Some(c);
+            Status::Waiting { scope, at }
+        }
         Stop::Mma { at, c } => {
             t.mma = Some(c);
             Status::Waiting {
@@ -487,6 +494,30 @@ fn deliver(
     for ((t, c), v) in members.iter_mut().zip(&lanes).zip(out) {
         t.locals[c.result as usize] = Some(v);
         t.contrib = None;
+    }
+    Ok(())
+}
+
+/// A tuple collective whose every lane has arrived: fold the lanes' states under the combine function and put each
+/// lane's state in its result locals.
+fn deliver_tuple(
+    members: &mut [ThreadRun<'_>],
+    module: Option<(&Module, u32)>,
+) -> Result<(), KernelTrap> {
+    let lanes: Vec<TupleContribution> = members
+        .iter_mut()
+        .map(|t| *t.tuple.take().expect("every lane contributed"))
+        .collect();
+    let out = tuple_results(&lanes, &mut |f, a, b| match module {
+        Some((m, _)) => super::kernel_call::eval_combine_tuple(m, f, a, b),
+        None => Err(KernelTrap::Unsupported(
+            "a combining collective outside a module (check_kernel refuses it)",
+        )),
+    })?;
+    for ((t, c), state) in members.iter_mut().zip(&lanes).zip(out) {
+        for (local, v) in c.results.iter().zip(state) {
+            t.locals[*local as usize] = Some(v);
+        }
     }
     Ok(())
 }
@@ -560,6 +591,8 @@ fn release(
         let members = &mut threads[group.start as usize..group.end as usize];
         if members.iter().all(|t| t.mma.is_some()) {
             deliver_mma(members)?;
+        } else if members.iter().all(|t| t.tuple.is_some()) {
+            deliver_tuple(members, b.module)?;
         } else if members.iter().all(|t| t.contrib.is_some()) {
             deliver(members, b.module)?;
         } else if scope == Scope::Subgroup {
@@ -625,6 +658,7 @@ mod tests {
                 bufmap: Vec::new(),
                 contrib: None,
                 mma: None,
+                tuple: None,
             })
             .collect();
         let mut mem = BlockMem {

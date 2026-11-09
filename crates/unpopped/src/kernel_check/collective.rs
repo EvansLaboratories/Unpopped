@@ -87,6 +87,87 @@ fn check_combine(sc: &Scope, callee: u32, t: ElementKind) -> Result<(), KernelEr
     Ok(())
 }
 
+/// Check a `Stmt::CollectiveTuple` and declare its result locals (R5.7 D4b): the launch and scope rules of a
+/// collective, a `ReduceWith` or `ScanWith` kind, numeric component values, and a combine function over the
+/// component types.
+pub(super) fn check_collective_tuple(
+    k: &KernelFn,
+    st: &Stmt,
+    sc: &mut Scope,
+    declared_here: &mut Vec<usize>,
+) -> Result<(), KernelError> {
+    let Stmt::CollectiveTuple {
+        kind,
+        values,
+        results,
+        scope,
+    } = st
+    else {
+        unreachable!("check_collective_tuple is called for a CollectiveTuple");
+    };
+    if k.launch.is_none() {
+        return Err(KernelError::ExecWithoutLaunch);
+    }
+    if !matches!(scope, ExecScope::Subgroup | ExecScope::Block) {
+        return Err(KernelError::BadBarrierScope);
+    }
+    let (CollectiveKind::ReduceWith { combine } | CollectiveKind::ScanWith { combine }) = kind
+    else {
+        return Err(refuse(
+            "a tuple collective other than ReduceWith or ScanWith",
+        ));
+    };
+    if values.is_empty() || values.len() != results.len() {
+        return Err(refuse(
+            "a tuple collective with no values, or not one result local per value",
+        ));
+    }
+    let mut tys = Vec::with_capacity(values.len());
+    for v in values {
+        let Ty::Scalar(t) = check_expr(k, v, sc)? else {
+            return Err(refuse("a packed collective value"));
+        };
+        if types::int_range(t).is_none() && !matches!(t, ElementKind::F32 | ElementKind::F64) {
+            return Err(refuse("a collective value outside integers, F32 and F64"));
+        }
+        tys.push(t);
+    }
+    check_tuple_combine(sc, *combine, &tys)?;
+    for (local, t) in results.iter().zip(&tys) {
+        declare(k, *local, Ty::Scalar(*t), sc, declared_here)?;
+    }
+    Ok(())
+}
+
+/// The function a tuple collective names is a plain function `(a0.., b0..) -> (r0..)` over the component types `tys`.
+fn check_tuple_combine(sc: &Scope, callee: u32, tys: &[ElementKind]) -> Result<(), KernelError> {
+    if sc.callees.is_empty() {
+        return Err(KernelError::CallUnsupported {
+            what: "a combining collective outside a module (check_module resolves its function)",
+        });
+    }
+    let Some(sig) = sc.callees.get(callee as usize) else {
+        return Err(KernelError::BadCallee { callee });
+    };
+    let scalar_of =
+        |p: &ParamKind, t: ElementKind| matches!(p, ParamKind::Scalar { ty, .. } if *ty == t);
+    let params_ok = sig.params.len() == 2 * tys.len()
+        && tys.iter().enumerate().all(|(i, t)| {
+            scalar_of(&sig.params[i], *t) && scalar_of(&sig.params[tys.len() + i], *t)
+        });
+    let want: Vec<Ty> = tys.iter().map(|t| Ty::Scalar(*t)).collect();
+    let got: Vec<Ty> = sig.result.iter().chain(&sig.extra).copied().collect();
+    if !params_ok || got != want {
+        return Err(refuse(
+            "a combine function that is not (a0.., b0..) -> (r0..) over the collective's component types",
+        ));
+    }
+    if sig.barrier {
+        return Err(refuse("a combine function that reaches a barrier"));
+    }
+    Ok(())
+}
+
 fn refuse(what: &'static str) -> KernelError {
     KernelError::CollectiveUnsupported { what }
 }

@@ -65,6 +65,45 @@ pub(super) fn eval_combine(
         ))
 }
 
+/// `f(a, b)` for a function of `2k` scalar parameters that returns `k` values: what a tuple collective folds with.
+/// Like [`eval_combine`], on a machine of its own.
+pub(super) fn eval_combine_tuple(
+    m: &Module,
+    callee: u32,
+    a: &[super::Val],
+    b: &[super::Val],
+) -> Result<Vec<super::Val>, KernelTrap> {
+    let f = m.fns.get(callee as usize).ok_or(KernelTrap::Unsupported(
+        "a combine function outside the module",
+    ))?;
+    let mut no_args: [KernelArg; 0] = [];
+    let mut mc = Machine::new(f, &mut no_args, None).with_module(m, callee);
+    if f.params.len() != a.len() + b.len() {
+        return Err(KernelTrap::ArgMismatch(
+            "a tuple combine takes twice as many scalars as the state has components",
+        ));
+    }
+    for (p, v) in f.params.iter().zip(a.iter().chain(b)) {
+        let ParamKind::Scalar { local, ty } = &p.kind else {
+            return Err(KernelTrap::ArgMismatch(
+                "a tuple combine function takes scalars",
+            ));
+        };
+        let v = match *v {
+            super::Val::Float(x) => super::Val::Float(crate::oracle::round_to_compute(x, *ty)),
+            other => other,
+        };
+        mc.locals[*local as usize] = Some(v);
+    }
+    mc.exec_block(&f.body)?;
+    f.all_results()
+        .map(|l| mc.locals[l as usize])
+        .collect::<Option<Vec<_>>>()
+        .ok_or(KernelTrap::Unsupported(
+            "a tuple combine function returned without setting a result local",
+        ))
+}
+
 /// The reference kernel of the extern declaration `decl` and the call arguments that pass `args` to it (the reference
 /// is a plain function with the declared scalar parameters, so an `ExternCall` is a `Call` of it). Traps when the
 /// call is outside a module or the declaration has no reference.

@@ -346,6 +346,25 @@ pub enum Stmt {
         /// The group that takes part.
         scope: Scope,
     },
+    /// A combining collective over a **tuple** state (ROADMAP R5.7 D4b, `docs/options-d4b-tuple-state-combine.md`,
+    /// option B): Triton's `tl.reduce` and `tl.associative_scan` over a tuple, such as `(value, index)` for an argmax
+    /// or `(mean, m2, count)` for Welford. Every thread of `scope` contributes `values` (one scalar per state
+    /// component, each its own type) and receives the folded state in the locals `results`, one per component. `kind`
+    /// is [`CollectiveKind::ReduceWith`] or [`CollectiveKind::ScanWith`], and its `combine` names a module function of
+    /// `2k` scalar parameters (`a0..a(k-1)` then `b0..b(k-1)`, the component types twice) that returns `k` values (its
+    /// [`KernelFn::result`] then [`KernelFn::results`]), with no barrier. As for the scalar form the author asserts
+    /// associativity, the oracle folds left to right in lane order, a float component is compared within a tolerance
+    /// and there is no exclusive scan. A rendezvous like [`Stmt::Collective`], and a barrier site.
+    CollectiveTuple {
+        /// [`CollectiveKind::ReduceWith`] or [`CollectiveKind::ScanWith`].
+        kind: CollectiveKind,
+        /// The state components this thread contributes.
+        values: Vec<ScalarExpr>,
+        /// The locals that receive this thread's state, one per component, declared by this statement.
+        results: Vec<u32>,
+        /// The group that takes part.
+        scope: Scope,
+    },
     /// A warp-level matrix multiply-accumulate (ROADMAP U7 S2): every lane of `atom`'s scope contributes its
     /// fragments and receives its share of `D = A.B + C`. The fragments are the `Private` arrays `a`, `b`, `c` and
     /// `d` (indices into [`KernelFn::allocs`]; `d` may be `c`), each `atom.values(..)` elements of the atom's type.

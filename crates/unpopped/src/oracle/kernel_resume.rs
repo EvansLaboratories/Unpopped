@@ -8,7 +8,7 @@
 //! through both (`the_two_evaluators_agree`) so a drift in loop semantics shows.
 
 use super::int_val;
-use super::kernel_collective::Contribution;
+use super::kernel_collective::{Contribution, TupleContribution};
 use super::kernel_eval::{KernelTrap, Machine};
 use super::kernel_mma::MmaContribution;
 use crate::exec::Scope;
@@ -66,6 +66,12 @@ pub(super) enum Stop {
         scope: Scope,
         at: usize,
         c: Contribution,
+    },
+    /// At a tuple collective, having contributed its components, waiting for the rest of `scope`.
+    Tuple {
+        scope: Scope,
+        at: usize,
+        c: Box<TupleContribution>,
     },
     /// At an MMA statement, having handed over its fragments, waiting for the rest of the subgroup.
     Mma { at: usize, c: Box<MmaContribution> },
@@ -144,6 +150,13 @@ impl<'a> Machine<'a> {
                 self.exec_simple(st)?;
             }
             Stmt::Collective { .. } => return self.collective_stop(st).map(Some),
+            Stmt::CollectiveTuple { scope, .. } => {
+                return Ok(Some(Stop::Tuple {
+                    scope: *scope,
+                    at: std::ptr::from_ref(st) as usize,
+                    c: Box::new(self.tuple_contribution(st)?),
+                }));
+            }
             Stmt::ExternCall {
                 decl,
                 args,
