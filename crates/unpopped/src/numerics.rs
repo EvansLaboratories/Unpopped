@@ -208,6 +208,10 @@ fn sqrt_directed(a: f32, round: RoundMode) -> f32 {
 #[must_use]
 pub fn eval_qualified_f32(op: QualOp, n: Numerics, args: &[f32]) -> f32 {
     assert_eq!(args.len(), op.arity(), "qualified operand count");
+    assert!(
+        n.round != RoundMode::NearestAway,
+        "numerics: an arithmetic operation takes no ties-away rounding (the type check rejects this)"
+    );
     let a: Vec<f32> = args
         .iter()
         .map(|&x| if n.ftz { ftz_f32(x) } else { x })

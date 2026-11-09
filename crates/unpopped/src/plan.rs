@@ -2399,7 +2399,12 @@ pub(crate) fn check_int_op_admissibility_for(
                     ));
                 }
             }
-            ScalarExpr::Qualified(x, _) => {
+            ScalarExpr::Qualified(x, n) => {
+                if n.round == crate::ir::RoundMode::NearestAway {
+                    return Err(format!(
+                        "op '{op_name}': Qualified under RoundMode::NearestAway is rejected, an arithmetic operation takes only the four IEEE directions (ties-away is a Cast's mode)"
+                    ));
+                }
                 if int_dt {
                     return Err(format!(
                         "op '{op_name}': Qualified at int compute dtype {dtype:?} is                          rejected, rounding/ftz/approx qualifiers are f32-compute only in v1"

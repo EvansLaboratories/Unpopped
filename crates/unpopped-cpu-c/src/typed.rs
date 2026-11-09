@@ -170,6 +170,8 @@ pub(crate) fn cpu_cast(
                 RoundMode::NearestEven => "nearbyint",
                 RoundMode::TowardNegInf => "floor",
                 RoundMode::TowardPosInf => "ceil",
+                // C `round`: nearest, ties away from zero.
+                RoundMode::NearestAway => "round",
                 other => {
                     return decline(
                         DeclinedOp::Cast,
