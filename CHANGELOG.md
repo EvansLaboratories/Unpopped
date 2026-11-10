@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.37` — docs, the Slang sizing docs and corpus harness moved to fishstringer
+
+`docs/slang-corpus-sizing.md`, `docs/slang-naming-convention-note.md`, `docs/slang-second-blocker-sizing.md` and `crates/unpopped/examples/slang_corpus_report.rs` (with its `[[example]]` entry) are deleted: fishstringer#13 (main 255f66f) holds them verbatim with a provenance header, the harness as `fishstringer-slang-parse/examples/slang_corpus_report.rs`. `ROADMAP.md` E12 and a `convert.rs` comment now point there; the other mentions (`docs/groupshared-sizing.md`, `docs/ir-union-design.md`, the Slang survey, CHANGELOG) are dated history and keep the old file names. `docs/ir-union-surveys/slang.md` and `docs/ir-union-evidence/slang-wave*.md` stay (IR-union evidence). No behaviour change.
+
+---
+
 ## `0.44.36` — docs, options note for peer and multicast scopes and multimem ops (ROADMAP U12)
 
 `docs/options-u12-peer-multicast.md`: what the seven languages have for cluster-peer shared memory, peer device buffers and `multimem` (evidence in the wave-2c files, ThunderKittens `multimem.cuh` read for the dtype and order table), what Unpopped lacks at 8ad1f43 (one address space per launch, no device rank, `Scope` ends at `Device`, no pointer values), three options (A places plus one `Stmt`, B statements for every form, C defer) and a recommendation: A in four slices (cluster-peer places, devices and peer buffers, multicast stores and reductions, then the one breaking `MulticastLoadReduce`). Four rulings are asked of the PM. Docs only; no code.
