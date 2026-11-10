@@ -57,6 +57,15 @@ fn kernels() -> Vec<(&'static str, KernelFn)> {
             "peer_handoff",
             fixture::handoff(MemoryOrder::Release, MemoryOrder::Acquire),
         ),
+        (
+            "peer_flag",
+            fixture::peer_flag(MemoryOrder::Release, MemoryOrder::Acquire),
+        ),
+        // a two-dimensional cluster: the rank order of every rank
+        ("peer_rank0", fixture::rank_probe(0)),
+        ("peer_rank1", fixture::rank_probe(1)),
+        ("peer_rank2", fixture::rank_probe(2)),
+        ("peer_rank3", fixture::rank_probe(3)),
     ]
 }
 
@@ -90,6 +99,13 @@ fn mutants() -> Vec<Mutant> {
             kernel: fixture::exchange(),
             from: "(blk0 / 2 * 2 + ",
             to: "(",
+        },
+        // the row of the cluster is ignored: a rank on the second row of a two-dimensional cluster lands on the first
+        Mutant {
+            tag: "peer_mut_row",
+            kernel: fixture::rank_probe(2),
+            from: "(blk1 / 2 * 2 + (pr1 / 2) % 2)",
+            to: "(blk1 / 2 * 2 + pr1 % 2)",
         },
         // the index is taken from the wrong place: always element 0 of the peer's array
         Mutant {
