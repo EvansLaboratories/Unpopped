@@ -1,0 +1,3 @@
+kind: docs, options note for peer and multicast scopes and multimem ops (ROADMAP U12)
+---
+`docs/options-u12-peer-multicast.md`: what the seven languages have for cluster-peer shared memory, peer device buffers and `multimem` (evidence in the wave-2c files, ThunderKittens `multimem.cuh` read for the dtype and order table), what Unpopped lacks at 8ad1f43 (one address space per launch, no device rank, `Scope` ends at `Device`, no pointer values), three options (A places plus one `Stmt`, B statements for every form, C defer) and a recommendation: A in four slices (cluster-peer places, devices and peer buffers, multicast stores and reductions, then the one breaking `MulticastLoadReduce`). Four rulings are asked of the PM. Docs only; no code.
