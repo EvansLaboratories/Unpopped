@@ -67,6 +67,11 @@ pub enum KernelTrap {
     },
     /// A construct this interpreter does not evaluate (named), by design not guessed at.
     Unsupported(&'static str),
+    /// A `Place::ClusterPeer` names a block rank outside the cluster.
+    ClusterRankOutOfRange {
+        /// The rank the kernel computed.
+        rank: i128,
+    },
     /// An index outside a launched kernel's allocation (never wrapped, never silent).
     AllocOutOfBounds {
         /// The allocation index.
@@ -482,6 +487,14 @@ impl<'a> Machine<'a> {
         if let Place::Alloc { alloc, index } = place {
             return self.alloc_load(*alloc, index);
         }
+        if let Place::ClusterPeer {
+            alloc,
+            block,
+            index,
+        } = place
+        {
+            return self.on_peer(block, |m| m.alloc_load(*alloc, index));
+        }
         if let Some((alloc, index)) = self.alloc_bound(place) {
             return self.alloc_load(alloc, index);
         }
@@ -535,6 +548,14 @@ impl<'a> Machine<'a> {
         if let Place::Alloc { alloc, index } = place {
             return self.alloc_atomic(*alloc, index, step);
         }
+        if let Place::ClusterPeer {
+            alloc,
+            block,
+            index,
+        } = place
+        {
+            return self.on_peer(block, |m| m.alloc_atomic(*alloc, index, step));
+        }
         if let Some((alloc, index)) = self.alloc_bound(place) {
             return self.alloc_atomic(alloc, index, step);
         }
@@ -553,6 +574,14 @@ impl<'a> Machine<'a> {
     fn store(&mut self, place: &Place, v: Val) -> Result<(), KernelTrap> {
         if let Place::Alloc { alloc, index } = place {
             return self.alloc_store(*alloc, index, v);
+        }
+        if let Place::ClusterPeer {
+            alloc,
+            block,
+            index,
+        } = place
+        {
+            return self.on_peer(block, |m| m.alloc_store(*alloc, index, v));
         }
         if let Some((alloc, index)) = self.alloc_bound(place) {
             return self.alloc_store(alloc, index, v);

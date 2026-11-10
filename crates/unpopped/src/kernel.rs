@@ -165,6 +165,20 @@ pub enum Place {
         /// An integer expression: the flat element index.
         index: ScalarExpr,
     },
+    /// The element at flat `index` of the `Shared` allocation `alloc` **of another block of this block's cluster**
+    /// (distributed shared memory: PTX `mapa`, ROADMAP U12 slice 1). `block` is an integer expression: the rank of
+    /// the block inside its cluster, `x` fastest (`%cluster_ctarank`), so `0..cluster x * y * z`; the rank of this very
+    /// block names its own array. The kernel's launch must name cluster dimensions. A peer access is ordered like any
+    /// other access to `Shared` memory: by a `Cluster` barrier or a cluster-scope release/acquire pair; unordered, it is
+    /// a data race. `Load`, `Store`, `AtomicRmw` and `AtomicCas` take it; `CopyAsync` does not.
+    ClusterPeer {
+        /// Index into [`KernelFn::allocs`]; a `Shared` allocation.
+        alloc: u32,
+        /// An integer expression: the rank of the owning block inside the cluster.
+        block: ScalarExpr,
+        /// An integer expression: the flat element index in that block's array.
+        index: ScalarExpr,
+    },
 }
 
 /// A sequence of statements; a block opens a scope.
@@ -1050,6 +1064,12 @@ pub enum KernelError {
     SharedWithoutLaunch {
         /// The allocation index.
         alloc: u32,
+    },
+    /// A [`Place::ClusterPeer`] in a kernel whose launch names no cluster dimensions, or on an allocation that is not
+    /// `Shared`.
+    ClusterPeerUnsupported {
+        /// What is wrong.
+        what: &'static str,
     },
     /// A `Barrier` whose scope is not `Subgroup` or `Block`.
     BadBarrierScope,

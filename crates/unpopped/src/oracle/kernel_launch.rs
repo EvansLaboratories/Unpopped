@@ -28,7 +28,7 @@ use std::ops::Range;
 use super::Val;
 use super::kernel_collective::{Contribution, TupleContribution, results, tuple_results};
 use super::kernel_eval::{KernelArg, KernelTrap, Machine, STEP_LIMIT};
-use super::kernel_mem::{AllocMem, AsyncQueue, BlockMem, Log, ThreadCtx, cluster_of};
+use super::kernel_mem::{AllocMem, AsyncQueue, BlockMem, Log, Peers, ThreadCtx, cluster_of};
 use super::kernel_mma::{MmaContribution, compute};
 use super::kernel_resume::{Frame, Stop, initial_stack};
 use super::kernel_sync::Edges;
@@ -132,6 +132,8 @@ fn launch_checked(
         }
     }
     let mut states: Vec<BlockState<'_>> = runs.iter().map(start_block).collect();
+    // every block's memory, apart from its threads, so a block can reach a peer's `Shared` arrays
+    let mut mems: Vec<BlockMem> = runs.iter().map(start_mem).collect();
     let mut stops: Vec<Option<BlockStop>> = vec![None; runs.len()];
     let clusters: Vec<u32> = runs.iter().map(|b| cluster_of(&launch, b.idx)).collect();
     edges.cluster_epoch = vec![0; clusters.iter().max().map_or(1, |m| *m as usize + 1)];
@@ -142,13 +144,18 @@ fn launch_checked(
             if stops[i].is_some() {
                 continue;
             }
-            stops[i] = Some(match advance(b, st, args, &mut global, &mut edges) {
-                // a runaway after an acquire, with blocks still to run, is a wait on one of them
-                Err(KernelTrap::StepLimit) if edges.acquired && i + 1 < runs.len() => {
-                    return Err(KernelTrap::CrossBlockWait);
-                }
-                r => r?,
-            });
+            let (before, rest) = mems.split_at_mut(i);
+            let (own, after) = rest.split_first_mut().expect("block i has memory");
+            let peers = Peers { before, after };
+            stops[i] = Some(
+                match advance(b, (st, own, peers), args, &mut global, &mut edges) {
+                    // a runaway after an acquire, with blocks still to run, is a wait on one of them
+                    Err(KernelTrap::StepLimit) if edges.acquired && i + 1 < runs.len() => {
+                        return Err(KernelTrap::CrossBlockWait);
+                    }
+                    r => r?,
+                },
+            );
         }
         let go = match grid_release(&stops, &clusters)? {
             Released::Finished => return Ok(()),
@@ -317,7 +324,6 @@ struct ThreadRun<'a> {
 /// One block between `Device` barriers: its threads and its memory.
 struct BlockState<'a> {
     threads: Vec<ThreadRun<'a>>,
-    mem: BlockMem,
 }
 
 /// Where a block stopped: it finished, or all its threads wait at the `Device` or `Cluster` barrier `at`.
@@ -327,15 +333,20 @@ enum BlockStop {
     Wait { scope: Scope, at: usize },
 }
 
-fn start_block<'a>(b: &BlockRun<'a>) -> BlockState<'a> {
+/// A block's memory at the start: its `Shared` arrays, an empty access log and no barrier released.
+fn start_mem(b: &BlockRun<'_>) -> BlockMem {
     let [bx, by, bz] = b.launch.block;
-    let n = bx * by * bz;
-    let mem = BlockMem {
+    BlockMem {
         shared: instances(b.k, b.lens, MemorySpace::Shared),
         log: Log::new(),
         block_epoch: 0,
-        sub_epoch: vec![0; n.div_ceil(b.sg) as usize],
-    };
+        sub_epoch: vec![0; (bx * by * bz).div_ceil(b.sg) as usize],
+    }
+}
+
+fn start_block<'a>(b: &BlockRun<'a>) -> BlockState<'a> {
+    let [bx, by, bz] = b.launch.block;
+    let n = bx * by * bz;
     let threads: Vec<ThreadRun<'_>> = (0..n)
         .map(|lin| ThreadRun {
             idx: [lin % bx, (lin / bx) % by, lin / (bx * by)],
@@ -354,13 +365,13 @@ fn start_block<'a>(b: &BlockRun<'a>) -> BlockState<'a> {
             tuple: None,
         })
         .collect();
-    BlockState { threads, mem }
+    BlockState { threads }
 }
 
 /// Run a block until it finishes or all its threads wait at one `Device` barrier.
 fn advance<'a>(
     b: &BlockRun<'a>,
-    st: &mut BlockState<'a>,
+    (st, own, peers): (&mut BlockState<'a>, &mut BlockMem, Peers<'_>),
     args: &mut [KernelArg],
     global: &mut Log,
     edges: &mut Edges,
@@ -371,7 +382,11 @@ fn advance<'a>(
             .iter_mut()
             .filter(|t| t.status == Status::Runnable)
         {
-            run_phase(b, t, (&mut st.mem, global, &mut *edges), args)?;
+            let peers = Peers {
+                before: &mut *peers.before,
+                after: &mut *peers.after,
+            };
+            run_phase(b, t, ((&mut *own, peers), global, &mut *edges), args)?;
         }
         if st.threads.iter().all(|t| t.status == Status::Done) {
             return Ok(BlockStop::Done);
@@ -379,7 +394,7 @@ fn advance<'a>(
         if let Some((scope, at)) = at_grid_barrier(&st.threads) {
             return Ok(BlockStop::Wait { scope, at });
         }
-        release(b, &mut st.threads, &mut st.mem)?;
+        release(b, &mut st.threads, own)?;
     }
 }
 
@@ -401,7 +416,7 @@ fn at_grid_barrier(threads: &[ThreadRun<'_>]) -> Option<(Scope, usize)> {
 fn run_phase<'a>(
     b: &BlockRun<'a>,
     t: &mut ThreadRun<'a>,
-    (mem, global, edges): (&mut BlockMem, &mut Log, &mut Edges),
+    ((mem, peers), global, edges): ((&mut BlockMem, Peers<'_>), &mut Log, &mut Edges),
     args: &mut [KernelArg],
 ) -> Result<(), KernelTrap> {
     let ctx = ThreadCtx {
@@ -414,6 +429,8 @@ fn run_phase<'a>(
         private: std::mem::take(&mut t.private),
         asyncq: std::mem::take(&mut t.asyncq),
         block: mem,
+        peers,
+        peer: None,
         global,
         sync: edges,
         site: (MemoryOrder::Relaxed, Scope::Device),

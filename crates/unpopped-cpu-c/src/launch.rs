@@ -96,8 +96,8 @@ pub(crate) fn admit_launch(k: &KernelFn) -> Result<(), LowerError> {
     }
     let barriers = has_barrier_block(&k.body.0);
     let segments = device_segments(&k.body.0);
-    if segments.len() > 1 {
-        // blocks stay resident across a Device barrier: their locals and Shared memory are per block
+    if segments.len() > 1 || reaches_peer(&k.body.0) {
+        // blocks stay resident across a Device barrier, or while one reaches another's Shared memory
         let resident = u64::from(info.grid.iter().product::<u32>()) * u64::from(info.threads());
         if resident > MAX_RESIDENT {
             return Err(refuse(format!(
@@ -128,6 +128,21 @@ fn device_segments(body: &[Stmt]) -> Vec<&[Stmt]> {
     }
     out.push(&body[start..]);
     out
+}
+
+/// Whether `b` reaches another block's `Shared` memory through a `Place::ClusterPeer` (ROADMAP U12 slice 1). The blocks
+/// then stay resident, one array of the grid per `Shared` allocation, like a launch with a `Device` barrier.
+fn reaches_peer(b: &[Stmt]) -> bool {
+    let peer = |p: &Place| matches!(p, Place::ClusterPeer { .. });
+    b.iter().any(|s| match s {
+        Stmt::Load { place, .. } | Stmt::Store { place, .. } | Stmt::AtomicRmw { place, .. } => {
+            peer(place)
+        }
+        Stmt::AtomicCas { place, .. } => peer(place),
+        Stmt::If { then, els, .. } => reaches_peer(&then.0) || reaches_peer(&els.0),
+        Stmt::For { body, .. } | Stmt::While { body, .. } => reaches_peer(&body.0),
+        _ => false,
+    })
 }
 
 fn admit_alloc(a: &AllocDecl) -> Result<(), LowerError> {
@@ -265,7 +280,7 @@ impl Emitter<'_> {
     pub(crate) fn launched_body(&mut self, info: LaunchInfo) -> Result<(), LowerError> {
         let body = &self.k.body;
         let segments = device_segments(&body.0);
-        if segments.len() > 1 {
+        if segments.len() > 1 || reaches_peer(&body.0) {
             return self.device_body(info, &segments);
         }
         let nt = info.threads();
@@ -526,6 +541,14 @@ impl Emitter<'_> {
 
     /// The address of a `Shared` allocation element, bounds checked like a buffer access.
     pub(crate) fn alloc_address(&mut self, place: &Place) -> Result<String, LowerError> {
+        if let Place::ClusterPeer {
+            alloc,
+            block,
+            index,
+        } = place
+        {
+            return self.peer_address(*alloc, (block, index));
+        }
         let Place::Alloc { alloc, index } = place else {
             return Err(refuse("an address this emitter does not spell"));
         };
@@ -550,6 +573,43 @@ impl Emitter<'_> {
         } else {
             format!("sh{alloc}[o{n}]")
         })
+    }
+
+    /// The address of element `index` of `Shared` allocation `alloc` in the block of this block's cluster with rank
+    /// `block` (`x` fastest, as `%cluster_ctarank`): the block is found from this block's cluster origin, and its array
+    /// is a slice of the grid's (`sh<alloc>_all`, which a kernel reaching a peer keeps resident). A rank or an index out
+    /// of range returns status 1, as every bounds check here does.
+    fn peer_address(
+        &mut self,
+        alloc: u32,
+        (block, index): (&ScalarExpr, &ScalarExpr),
+    ) -> Result<String, LowerError> {
+        let Some(info) = self.k.launch else {
+            return Err(refuse("a Place::ClusterPeer without a launch shape"));
+        };
+        let Some([cx, cy, cz]) = info.cluster else {
+            return Err(refuse("a Place::ClusterPeer without cluster dimensions"));
+        };
+        let [gx, gy, _] = info.grid;
+        let decl = &self.k.allocs[alloc as usize];
+        let Extent::Static(extent) = decl.extent else {
+            return Err(refuse("a dynamic extent"));
+        };
+        let n = self.fresh;
+        self.fresh += 1;
+        let (r, i) = (self.expr(block)?, self.expr(index)?);
+        let size = u64::from(cx) * u64::from(cy) * u64::from(cz);
+        self.line(&format!(
+            "long long pr{n} = (long long)({r}); if (pr{n} < 0 || pr{n} >= {size}) return 1;"
+        ));
+        self.line(&format!(
+            "long long pb{n} = ((blk2 / {cz} * {cz} + pr{n} / {}) * {gy} + (blk1 / {cy} * {cy} + (pr{n} / {cx}) % {cy})) * {gx} + (blk0 / {cx} * {cx} + pr{n} % {cx});",
+            u64::from(cx) * u64::from(cy)
+        ));
+        self.line(&format!(
+            "long long o{n} = (long long)({i}); if (o{n} < 0 || o{n} >= {extent}) return 1;"
+        ));
+        Ok(format!("sh{alloc}_all[pb{n} * {extent} + o{n}]"))
     }
 
     /// An `AtomicRmw` as a plain read-modify-write: serial, hence atomic. `old` receives the value read.
@@ -635,7 +695,9 @@ impl Emitter<'_> {
                 ParamKind::Buffer { elem, .. } => Ok(*elem),
                 _ => Err(refuse("an atomic on a parameter that is not a buffer")),
             },
-            Place::Alloc { alloc, .. } => Ok(self.k.allocs[*alloc as usize].elem),
+            Place::Alloc { alloc, .. } | Place::ClusterPeer { alloc, .. } => {
+                Ok(self.k.allocs[*alloc as usize].elem)
+            }
             _ => Err(refuse("a place this emitter does not spell")),
         }
     }
