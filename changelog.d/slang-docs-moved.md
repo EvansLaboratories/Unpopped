@@ -1,0 +1,3 @@
+kind: docs, the Slang sizing docs and corpus harness moved to fishstringer
+---
+`docs/slang-corpus-sizing.md`, `docs/slang-naming-convention-note.md`, `docs/slang-second-blocker-sizing.md` and `crates/unpopped/examples/slang_corpus_report.rs` (with its `[[example]]` entry) are deleted: fishstringer#13 (main 255f66f) holds them verbatim with a provenance header, the harness as `fishstringer-slang-parse/examples/slang_corpus_report.rs`. `ROADMAP.md` E12 and a `convert.rs` comment now point there; the other mentions (`docs/groupshared-sizing.md`, `docs/ir-union-design.md`, the Slang survey, CHANGELOG) are dated history and keep the old file names. `docs/ir-union-surveys/slang.md` and `docs/ir-union-evidence/slang-wave*.md` stay (IR-union evidence). No behaviour change.

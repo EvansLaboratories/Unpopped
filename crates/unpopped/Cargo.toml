@@ -71,9 +71,5 @@ kiss-classify-vocab = "0.4.0"
 # checked first against a codec it was not derived from.
 half = { workspace = true }
 
-[[example]]
-name = "slang_corpus_report"
-required-features = ["convert"]
-
 [lints]
 workspace = true
