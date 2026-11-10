@@ -152,6 +152,10 @@ fn the_checker_refuses_a_peer_place_without_cluster_dimensions_or_outside_shared
         check_kernel(&k),
         Err(KernelError::ClusterPeerUnsupported { .. })
     ));
+}
+
+#[test]
+fn the_checker_refuses_a_peer_rank_that_is_not_an_integer_and_an_unknown_allocation() {
     // a rank that is not an integer
     let float = unpopped::ir::ScalarExpr::Cast(
         Box::new(rank()),
