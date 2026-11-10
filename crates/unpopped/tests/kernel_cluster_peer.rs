@@ -234,3 +234,53 @@ fn an_own_array_read_by_rank_is_not_a_peer_access_of_another_block() {
     );
     let _ = block();
 }
+
+#[test]
+fn a_release_and_acquire_on_a_peers_own_flag_orders_a_peer_write() {
+    // the flag is an element of the peer's Shared array: rank 0 releases on it through the peer place, rank 1 acquires on
+    // it through its own place; the two spell one element, so the edge reaches the read
+    let mut want = [0; N];
+    want[4] = 1;
+    want[12] = 9;
+    assert_eq!(
+        run(&fixture::peer_flag(
+            MemoryOrder::Release,
+            MemoryOrder::Acquire
+        ))
+        .unwrap(),
+        want
+    );
+    for (rel, acq) in [
+        (MemoryOrder::Relaxed, MemoryOrder::Acquire),
+        (MemoryOrder::Release, MemoryOrder::Relaxed),
+    ] {
+        assert_eq!(
+            run(&fixture::peer_flag(rel, acq)).unwrap_err(),
+            KernelTrap::DataRace,
+            "{rel:?} / {acq:?}"
+        );
+    }
+}
+
+#[test]
+fn ranks_count_x_fastest_across_a_two_dimensional_cluster() {
+    // 8 blocks of one thread in a 4 by 2 grid, clusters of 2 by 2 blocks: block `x + 4y`; the block of rank `r` in a
+    // cluster is at x = 2 * (x / 2) + r % 2, y = r / 2, so it holds the id 2 * (x / 2) + r % 2 + 4 * (r / 2)
+    for (rank, per_cluster) in [(0, [0, 2]), (1, [1, 3]), (2, [4, 6]), (3, [5, 7])] {
+        let k = fixture::rank_probe(rank);
+        assert_eq!(check_kernel(&k), Ok(()), "well formed");
+        let mut args = vec![buffer(&[0; N]), buffer(&[0; N])];
+        run_launch(&k, &mut args).unwrap();
+        let KernelArg::Buffer(out) = &args[1] else {
+            unreachable!()
+        };
+        let got: Vec<i32> = out
+            .bytes
+            .chunks(4)
+            .take(8)
+            .map(|w| i32::from_le_bytes(w.try_into().unwrap()))
+            .collect();
+        let want: Vec<i32> = (0..8).map(|b| per_cluster[(b % 4) / 2]).collect();
+        assert_eq!(got, want, "rank {rank}");
+    }
+}

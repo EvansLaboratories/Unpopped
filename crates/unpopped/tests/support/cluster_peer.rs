@@ -265,3 +265,73 @@ pub(crate) fn handoff(release: MemoryOrder, acquire: MemoryOrder) -> KernelFn {
     };
     kernel("handoff", launch(), 3, vec![producer])
 }
+
+/// The flag lives in the peer's `Shared` array: after a first `Cluster` barrier (the owners have cleared `sh[0]` and
+/// `sh[1]`), thread 0 of rank 0 writes `inp[gid]` into the peer's `sh[1]` and releases by adding 1 to the peer's
+/// `sh[0]` (a `Cluster`-scope atomic with order `release`); thread 0 of rank 1 acquires by adding 0 to its own `sh[0]`
+/// (order `acquire`) and reads its own `sh[1]` into `out[gid]`. No barrier follows the first. Locals: 0 the input, 1 the
+/// flag's old value, 2 the value read.
+pub(crate) fn peer_flag(release: MemoryOrder, acquire: MemoryOrder) -> KernelFn {
+    let t0 = |then: Vec<Stmt>, els: Vec<Stmt>| Stmt::If {
+        cond: ScalarExpr::Binary(BinaryOp::CmpEq, Box::new(thread()), Box::new(c(0))),
+        then: Block(then),
+        els: Block(els),
+    };
+    let rank0 = |then: Vec<Stmt>, els: Vec<Stmt>| Stmt::If {
+        cond: ScalarExpr::Binary(BinaryOp::CmpEq, Box::new(rank()), Box::new(c(0))),
+        then: Block(then),
+        els: Block(els),
+    };
+    let add_flag = |place: Place, value: i64, order: MemoryOrder| Stmt::AtomicRmw {
+        op: AtomicOp::Add,
+        place,
+        value: c(value),
+        old: Some(1),
+        order,
+        scope: Scope::Cluster,
+    };
+    let producer = vec![
+        load(0, at(0, gid())),
+        store(peer(c(1), c(1)), local(0)),
+        add_flag(peer(c(1), c(0)), 1, release),
+    ];
+    let consumer = vec![
+        add_flag(sh(c(0)), 0, acquire),
+        load(2, sh(c(1))),
+        store(at(1, gid()), local(2)),
+    ];
+    kernel(
+        "peer_flag",
+        launch(),
+        3,
+        vec![
+            t0(vec![store(sh(c(0)), c(0)), store(sh(c(1)), c(0))], vec![]),
+            cluster_barrier(),
+            t0(vec![rank0(producer, consumer)], vec![]),
+        ],
+    )
+}
+
+/// 8 single-thread blocks in a grid of 4 by 2 with clusters of 2 by 2 blocks (clusters `{x 0..2}` and `{x 2..4}`, each
+/// over both rows; rank = `x % 2 + 2 * (y % 2)`): each block stores its linear id `x + 4y` in its own `sh[0]`, the cluster
+/// meets, and each block stores the id held by the block of rank `rank` in its cluster in `out[x + 4y]`. Locals: 0 the id,
+/// 1 the value read. The buffers are those of `kernel` (the first element count is not used).
+pub(crate) fn rank_probe(rank: i64) -> KernelFn {
+    let by = to_i32(ScalarExpr::Exec(ExecId::BlockIdx(1)));
+    let lin = add(block(), mul(by, c(4)));
+    kernel(
+        "rank_probe",
+        LaunchShape::new([1, 1, 1], [4, 2, 1]).with_cluster([2, 2, 1]),
+        2,
+        vec![
+            Stmt::Let {
+                local: 0,
+                init: lin.clone(),
+            },
+            store(sh(c(0)), local(0)),
+            cluster_barrier(),
+            load(1, peer(c(rank), c(0))),
+            store(at(1, lin), local(1)),
+        ],
+    )
+}
