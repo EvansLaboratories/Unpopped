@@ -159,6 +159,13 @@ struct Mutant {
 }
 
 fn mutants() -> Vec<Mutant> {
+    let mut all = store_and_red_mutants();
+    all.extend(ld_reduce_mutants());
+    all
+}
+
+/// Mutants of a multicast `Store` and `AtomicRmw` (slice 3).
+fn store_and_red_mutants() -> Vec<Mutant> {
     let sys = Some(Scope::System);
     let red = |tag, from, to| Mutant {
         tag,
@@ -174,8 +181,30 @@ fn mutants() -> Vec<Mutant> {
         from,
         to,
     };
-    // `ld_reduce` of the devices' inputs by `Add` (60 + 3 * i) and by `Min` (device 0 holds the minimum, so a mutant that
-    // reads only device 0 would go unnoticed by `Min`: the data of each mutant has to tell it apart)
+    vec![
+        // the reduction reaches the first device's copy only
+        red("mc_mut_red_one", "md1 < 3; ++md1", "md1 < 1; ++md1"),
+        // every device combines into the running device's own copy
+        red(
+            "mc_mut_red_self",
+            "btab1[md1][o1] = (int)",
+            "btab1[dev][o1] = (int)",
+        ),
+        // the store reaches the first device's copy only
+        st("mc_mut_st_one", "md1 < 3; ++md1", "md1 < 1; ++md1"),
+        // the store writes the running device's copy, not each in turn
+        st(
+            "mc_mut_st_self",
+            "btab1[md1][o1] = mv1;",
+            "btab1[dev][o1] = mv1;",
+        ),
+    ]
+}
+
+/// Mutants of a `MulticastLoadReduce` (slice 4): the devices' inputs reduced by `Add` (60 + 3 * i) and by `Min` (device 0
+/// holds the minimum, so a mutant that reads only device 0 would go unnoticed by `Min`: each mutant's data has to tell it
+/// apart).
+fn ld_reduce_mutants() -> Vec<Mutant> {
     let ld = |tag, op, order, from, to| Mutant {
         tag,
         kernel: reduce_inputs(I32, (op, order)),
@@ -219,22 +248,6 @@ fn mutants() -> Vec<Mutant> {
             add.1,
             "x0 = btab0[md0][o0];",
             "x0 = btab0[dev][o0];",
-        ),
-        // the reduction reaches the first device's copy only
-        red("mc_mut_red_one", "md1 < 3; ++md1", "md1 < 1; ++md1"),
-        // every device combines into the running device's own copy
-        red(
-            "mc_mut_red_self",
-            "btab1[md1][o1] = (int)",
-            "btab1[dev][o1] = (int)",
-        ),
-        // the store reaches the first device's copy only
-        st("mc_mut_st_one", "md1 < 3; ++md1", "md1 < 1; ++md1"),
-        // the store writes the running device's copy, not each in turn
-        st(
-            "mc_mut_st_self",
-            "btab1[md1][o1] = mv1;",
-            "btab1[dev][o1] = mv1;",
         ),
     ]
 }
