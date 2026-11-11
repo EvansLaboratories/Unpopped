@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.41` — docs, ROADMAP E16 and the integer semantics note record that Vulkane opted in to the total integer ops
+
+`vulkane-spirv-emit` now returns `Backend::total_integer_ops() = true` (vulkane#152): guarded `Div`, `Rem`, `Select`, comparison and `ConstInt`, with 288 device results matching the host rule. This was reported by the PM; this lane did not re-run it. `ROADMAP.md` row E16 and `docs/int-div-shift-semantics.md` ("Opted in so far") say so; Baracuda and openclownfish are still to opt in. No code changes.
+
+---
+
 ## `0.44.39` — feature, a launch that spans several devices with peer buffers (ROADMAP U12 slice 2)
 
 `LaunchShape::devices` (default 1; `with_devices(n)`) makes a launch span `n` devices. Every device runs the whole grid on its own copy of each buffer; `ExecId::DeviceRank` and `ExecId::DeviceCount` tell them apart. `Place::Peer { buffer, device, coords }` names the copy of `buffer` that device `device` holds (the running device's own rank names its own copy); `Load`, `Store`, `AtomicRmw` and `AtomicCas` take it, `CopyAsync` does not. `Scope::System` orders across devices: a `System` barrier, atomic or fence. `check_kernel` refuses a peer place or a `System` scope in a launch of one device (`KernelError::PeerUnsupported`, `BadBarrierScope`) and a launch of zero devices (`BadLaunch`). A value read from a peer and `DeviceRank` are divergent in the uniformity analysis; `DeviceCount` is uniform; a `System` barrier makes `BlockIdx` divergent as a `Device` barrier does. **Additive:** `Scope`, `ExecId`, `Place`, `KernelError`, `KernelTrap` and `LaunchShape` are `#[non_exhaustive]`; `Stmt` is untouched, so no external match breaks. New trap: `KernelTrap::DeviceRankOutOfRange`.
