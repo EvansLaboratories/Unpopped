@@ -22,7 +22,7 @@ use crate::exec::Scope;
 use crate::kernel::MemoryOrder;
 
 /// One thread's identity: block, thread in block, subgroup in block, cluster of the block.
-type Tid = (u32, u32, u32, u32);
+type Tid = (u32, u32, u32, u32, u32);
 
 /// For each thread, the latest access (by sequence number) of it that the owner has acquired from.
 type Clock = HashMap<Tid, u64>;
@@ -48,9 +48,11 @@ pub(super) struct Edges {
     pending: HashMap<Tid, Vec<Record>>,
     /// A thread's latest release fence: its scope and what it knew then.
     fence_rel: HashMap<Tid, (Scope, Clock)>,
-    /// `Device` barriers released so far: every access before one is ordered before every access after it, whatever
-    /// the blocks.
-    pub(super) dev_epoch: u32,
+    /// `Device` barriers released so far, per device: every access before one is ordered before every access after it
+    /// on that device, whatever the blocks.
+    pub(super) dev_epoch: Vec<u32>,
+    /// `System` barriers released so far: they order every access of every device.
+    pub(super) sys_epoch: u32,
     /// `Cluster` barriers released so far, per cluster: they order the accesses of that cluster's blocks only.
     pub(super) cluster_epoch: Vec<u32>,
     /// Whether any acquire-class atomic has run: a block that then runs away may be waiting on a later block.
@@ -58,7 +60,7 @@ pub(super) struct Edges {
 }
 
 pub(super) fn tid(s: Stamp) -> Tid {
-    (s.block, s.thread, s.sub, s.cluster)
+    (s.block, s.thread, s.sub, s.cluster, s.device)
 }
 
 /// How wide a scope is: a thread, a subgroup, a block, a cluster, the device.
@@ -68,7 +70,8 @@ pub(super) fn width(s: Scope) -> u8 {
         Scope::Subgroup => 1,
         Scope::Block => 2,
         Scope::Cluster => 3,
-        _ => 4,
+        Scope::Device => 4,
+        _ => 5,
     }
 }
 
@@ -83,6 +86,7 @@ pub(super) fn contains(scope: Scope, a: Tid, b: Tid) -> bool {
         Scope::Subgroup => a.0 == b.0 && a.2 == b.2,
         Scope::Block => a.0 == b.0,
         Scope::Cluster => a.3 == b.3,
+        Scope::Device => a.4 == b.4,
         _ => true,
     }
 }

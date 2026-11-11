@@ -179,6 +179,20 @@ pub enum Place {
         /// An integer expression: the flat element index in that block's array.
         index: ScalarExpr,
     },
+    /// The element of buffer parameter `buffer` at `coords` **on another device** of a multi-device launch (ROADMAP
+    /// U12 slice 2): every device holds its own copy of each buffer, and this names the copy of device `device`, an
+    /// integer expression in `0..LaunchShape::devices` (the rank of the running device names its own copy). The
+    /// launch must span more than one device. A cross-device access is ordered only by a `System`-scope barrier or a
+    /// `System`-scope release/acquire pair; unordered, it is a data race. `Load`, `Store`, `AtomicRmw` and `AtomicCas`
+    /// take it; `CopyAsync` does not.
+    Peer {
+        /// Index into [`KernelFn::params`]; a buffer.
+        buffer: u32,
+        /// An integer expression: the rank of the device that owns the copy.
+        device: ScalarExpr,
+        /// One integer expression per axis.
+        coords: Vec<ScalarExpr>,
+    },
 }
 
 /// A sequence of statements; a block opens a scope.
@@ -1068,6 +1082,11 @@ pub enum KernelError {
     /// A [`Place::ClusterPeer`] in a kernel whose launch names no cluster dimensions, or on an allocation that is not
     /// `Shared`.
     ClusterPeerUnsupported {
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// A [`Place::Peer`] in a launch that spans one device.
+    PeerUnsupported {
         /// What is wrong.
         what: &'static str,
     },

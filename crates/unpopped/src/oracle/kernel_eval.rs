@@ -67,6 +67,11 @@ pub enum KernelTrap {
     },
     /// A construct this interpreter does not evaluate (named), by design not guessed at.
     Unsupported(&'static str),
+    /// A `Place::Peer` names a device rank outside the launch.
+    DeviceRankOutOfRange {
+        /// The rank the kernel computed.
+        rank: i128,
+    },
     /// A `Place::ClusterPeer` names a block rank outside the cluster.
     ClusterRankOutOfRange {
         /// The rank the kernel computed.
@@ -201,7 +206,38 @@ impl<'a> Machine<'a> {
         self.bufmap
             .get(buffer as usize)
             .copied()
-            .unwrap_or(buffer as usize)
+            .unwrap_or(buffer as usize + self.dev_base())
+    }
+
+    /// Where this device's arguments start in `args`: a multi-device launch lays the devices' arguments end to end.
+    pub(super) fn dev_base(&self) -> usize {
+        self.ctx
+            .as_ref()
+            .map_or(0, |c| c.device as usize * c.stride)
+    }
+
+    /// The root argument of the copy that device `device` (an integer expression) holds of the buffer whose root on
+    /// this device is `root` (a `Place::Peer`).
+    fn peer_root(&mut self, root: usize, device: &ScalarExpr) -> Result<usize, KernelTrap> {
+        let Ty::Scalar(t) = types::infer_ty_in(device, self.k.compute, &self.local_tys)
+            .map_err(|_| KernelTrap::Unsupported("device rank type"))?
+        else {
+            return Err(KernelTrap::Unsupported("packed device rank"));
+        };
+        let rank = self.eval_int(device, t)?;
+        let (base, stride, devices) = match &self.ctx {
+            Some(c) => (self.dev_base(), c.stride, c.launch.devices),
+            None => return Err(KernelTrap::Unsupported("a peer access outside run_launch")),
+        };
+        if rank < 0 || rank >= i128::from(devices) {
+            return Err(KernelTrap::DeviceRankOutOfRange { rank });
+        }
+        if root < base || root >= base + stride {
+            return Err(KernelTrap::Unsupported(
+                "a peer place on a buffer bound to an allocation",
+            ));
+        }
+        Ok(root - base + usize::try_from(rank).unwrap_or(0) * stride)
     }
 
     /// Bind the arguments and run the body to completion (one logical thread).
@@ -212,7 +248,8 @@ impl<'a> Machine<'a> {
     }
 
     pub(super) fn bind_args(&mut self) -> Result<(), KernelTrap> {
-        for (p, a) in self.k.params.iter().zip(self.args.iter()) {
+        let base = self.dev_base();
+        for (p, a) in self.k.params.iter().zip(self.args[base..].iter()) {
             match (&p.kind, a) {
                 (ParamKind::Buffer { elem, .. }, KernelArg::Buffer(b)) if b.dtype == *elem => {}
                 (ParamKind::Scalar { ty, local }, KernelArg::Int(v))
@@ -455,8 +492,14 @@ impl<'a> Machine<'a> {
 
     /// The element offset of `place` through the buffer's view, bounds-checked against its shape.
     pub(super) fn offset(&mut self, place: &Place) -> Result<(usize, usize), KernelTrap> {
-        let Place::Logical { buffer, coords } = place else {
-            return Err(KernelTrap::Unsupported("Place::Alloc (U3 row 4 PR 2)"));
+        let (buffer, coords, device) = match place {
+            Place::Logical { buffer, coords } => (buffer, coords, None),
+            Place::Peer {
+                buffer,
+                device,
+                coords,
+            } => (buffer, coords, Some(device)),
+            _ => return Err(KernelTrap::Unsupported("Place::Alloc (U3 row 4 PR 2)")),
         };
         let mut cs = Vec::with_capacity(coords.len());
         for c in coords {
@@ -467,7 +510,11 @@ impl<'a> Machine<'a> {
             };
             cs.push(self.eval_int(c, t)?);
         }
-        let KernelArg::Buffer(tb) = &self.args[self.root(*buffer)] else {
+        let mut root = self.root(*buffer);
+        if let Some(d) = device {
+            root = self.peer_root(root, d)?;
+        }
+        let KernelArg::Buffer(tb) = &self.args[root] else {
             return Err(KernelTrap::ArgMismatch(
                 "a Place names a non-buffer argument",
             ));
@@ -480,7 +527,7 @@ impl<'a> Machine<'a> {
             off += c * i128::from(tb.strides[d]);
         }
         let off = usize::try_from(off).map_err(|_| KernelTrap::OutOfBounds { buffer: *buffer })?;
-        Ok((self.root(*buffer), off))
+        Ok((root, off))
     }
 
     fn load(&mut self, place: &Place) -> Result<Val, KernelTrap> {

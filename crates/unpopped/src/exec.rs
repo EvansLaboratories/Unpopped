@@ -22,8 +22,10 @@ pub enum Scope {
     Block,
     /// The blocks of one cluster.
     Cluster,
-    /// The whole launch.
+    /// The whole launch on one device.
     Device,
+    /// Every device of a multi-device launch (`LaunchShape::devices`, ROADMAP U12 slice 2).
+    System,
 }
 
 /// Which execution id a [`crate::ir::ScalarExpr::Exec`] leaf reads. Its type is `U32`
@@ -45,6 +47,10 @@ pub enum ExecId {
     SubgroupId,
     /// Lanes per subgroup.
     SubgroupSize,
+    /// Index of the device the thread runs on, `0..devices` (`0` in a launch of one device).
+    DeviceRank,
+    /// Devices of the launch (`LaunchShape::devices`; `1` for a launch of one device).
+    DeviceCount,
 }
 
 impl ExecId {
@@ -55,7 +61,11 @@ impl ExecId {
             Self::ThreadIdx(a) | Self::BlockIdx(a) | Self::BlockDim(a) | Self::GridDim(a) => {
                 Some(a)
             }
-            Self::LaneId | Self::SubgroupId | Self::SubgroupSize => None,
+            Self::LaneId
+            | Self::SubgroupId
+            | Self::SubgroupSize
+            | Self::DeviceRank
+            | Self::DeviceCount => None,
         }
     }
 
@@ -76,6 +86,8 @@ impl ExecId {
             Self::LaneId => "LaneId",
             Self::SubgroupId => "SubgroupId",
             Self::SubgroupSize => "SubgroupSize",
+            Self::DeviceRank => "DeviceRank",
+            Self::DeviceCount => "DeviceCount",
         }
     }
 }
@@ -112,6 +124,15 @@ pub struct LaunchShape {
     /// axis. A `Cluster` barrier, atomic scope or fence needs it (since 0.42.18).
     #[serde(default)]
     pub cluster: Option<[u32; 3]>,
+    /// Devices the launch spans (at least 1). With more than one, every device runs the whole grid on its own copy of
+    /// the buffers, `ExecId::DeviceRank` tells them apart, and a `Place::Peer` reaches another device's copy; a
+    /// `System`-scope barrier, atomic or fence orders accesses across devices (ROADMAP U12 slice 2, since 0.44.39).
+    #[serde(default = "one_device")]
+    pub devices: u32,
+}
+
+const fn one_device() -> u32 {
+    1
 }
 
 impl LaunchShape {
@@ -123,6 +144,7 @@ impl LaunchShape {
             grid,
             subgroup: None,
             cluster: None,
+            devices: 1,
         }
     }
 
@@ -130,6 +152,13 @@ impl LaunchShape {
     #[must_use]
     pub const fn with_cluster(mut self, dims: [u32; 3]) -> Self {
         self.cluster = Some(dims);
+        self
+    }
+
+    /// The same launch spanning `n` devices (at least 1).
+    #[must_use]
+    pub const fn with_devices(mut self, n: u32) -> Self {
+        self.devices = n;
         self
     }
 
