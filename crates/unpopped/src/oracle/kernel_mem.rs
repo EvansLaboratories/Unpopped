@@ -186,6 +186,50 @@ pub(super) fn cluster_of(launch: &LaunchShape, idx: [u32; 3]) -> u32 {
     ((idx[2] / c[2]) * across(1) + idx[1] / c[1]) * across(0) + idx[0] / c[0]
 }
 
+/// The linear index (`x` fastest over the grid) of the block with rank `rank` in the cluster that holds the block at
+/// `idx`, or `None` when the rank is outside the cluster (`rank` counts `x` fastest, as `%cluster_ctarank` does).
+pub(super) fn peer_block(launch: &LaunchShape, idx: [u32; 3], rank: i128) -> Option<u32> {
+    let c = launch.cluster?;
+    let size = i128::from(c[0]) * i128::from(c[1]) * i128::from(c[2]);
+    if rank < 0 || rank >= size {
+        return None;
+    }
+    let r = u32::try_from(rank).ok()?;
+    let at = [r % c[0], (r / c[0]) % c[1], r / (c[0] * c[1])];
+    let b = |a: usize| (idx[a] / c[a]) * c[a] + at[a];
+    Some(b(0) + launch.grid[0] * (b(1) + launch.grid[1] * b(2)))
+}
+
+/// The memory of every block but the running one: those before it in linear order, then those after it. A peer access
+/// reaches another block's `Shared` arrays and their access log through it.
+pub(super) struct Peers<'a> {
+    pub(super) before: &'a mut [BlockMem],
+    pub(super) after: &'a mut [BlockMem],
+}
+
+impl Peers<'_> {
+    /// The memory of block `lin` (never the running block itself).
+    fn get(&mut self, lin: u32) -> &mut BlockMem {
+        let me = self.before.len();
+        let lin = lin as usize;
+        if lin < me {
+            &mut self.before[lin]
+        } else {
+            &mut self.after[lin - me - 1]
+        }
+    }
+
+    fn get_ref(&self, lin: u32) -> &BlockMem {
+        let me = self.before.len();
+        let lin = lin as usize;
+        if lin < me {
+            &self.before[lin]
+        } else {
+            &self.after[lin - me - 1]
+        }
+    }
+}
+
 /// Everything a running thread needs to know about the launch.
 pub(super) struct ThreadCtx<'a> {
     pub(super) launch: LaunchShape,
@@ -198,6 +242,10 @@ pub(super) struct ThreadCtx<'a> {
     /// This thread's `CopyAsync` copies that have not landed.
     pub(super) asyncq: AsyncQueue,
     pub(super) block: &'a mut BlockMem,
+    /// The other blocks' memory, for a [`crate::kernel::Place::ClusterPeer`] access.
+    pub(super) peers: Peers<'a>,
+    /// The block whose `Shared` memory the access now running reaches, when it is another block's.
+    pub(super) peer: Option<u32>,
     pub(super) global: &'a mut Log,
     /// The launch-wide release/acquire state, and the order and scope of the atomic statement now running.
     pub(super) sync: &'a mut Edges,
@@ -272,7 +320,10 @@ impl ThreadCtx<'_> {
 
     pub(super) fn mem(&self, alloc: u32, space: MemorySpace) -> Option<&AllocMem> {
         match space {
-            MemorySpace::Shared => self.block.shared[alloc as usize].as_ref(),
+            MemorySpace::Shared => match self.peer {
+                Some(o) => self.peers.get_ref(o).shared[alloc as usize].as_ref(),
+                None => self.block.shared[alloc as usize].as_ref(),
+            },
             MemorySpace::Private => self.private[alloc as usize].as_ref(),
             _ => None,
         }
@@ -280,7 +331,10 @@ impl ThreadCtx<'_> {
 
     fn mem_mut(&mut self, alloc: u32, space: MemorySpace) -> Option<&mut AllocMem> {
         match space {
-            MemorySpace::Shared => self.block.shared[alloc as usize].as_mut(),
+            MemorySpace::Shared => match self.peer {
+                Some(o) => self.peers.get(o).shared[alloc as usize].as_mut(),
+                None => self.block.shared[alloc as usize].as_mut(),
+            },
             MemorySpace::Private => self.private[alloc as usize].as_mut(),
             _ => None,
         }
@@ -296,8 +350,13 @@ impl ThreadCtx<'_> {
     ) -> Result<(), KernelTrap> {
         if space == MemorySpace::Shared {
             let now = self.stamp(kind);
-            touch(&mut self.block.log, (alloc, i), now, kind, self.sync)?;
-            self.after(now, kind, (1, self.block_lin, alloc, i));
+            let owner = self.peer.unwrap_or(self.block_lin);
+            let log = match self.peer {
+                Some(o) => &mut self.peers.get(o).log,
+                None => &mut self.block.log,
+            };
+            touch(log, (alloc, i), now, kind, self.sync)?;
+            self.after(now, kind, (1, owner, alloc, i));
         }
         Ok(())
     }
@@ -377,10 +436,38 @@ impl Machine<'_> {
             .ok()
             .filter(|i| *i < len)
             .ok_or(KernelTrap::AllocOutOfBounds { alloc })?;
-        if c.asyncq.covers(alloc, i) {
+        if c.peer.is_none() && c.asyncq.covers(alloc, i) {
             return Err(KernelTrap::AsyncRace { alloc });
         }
         Ok(i)
+    }
+
+    /// Run `access` on the `Shared` memory of the block of this cluster with rank `block` (a
+    /// [`crate::kernel::Place::ClusterPeer`]): the rank is evaluated and checked, the access then reaches that block's
+    /// array and log, and the running block's own memory is used again afterwards.
+    pub(super) fn on_peer<T>(
+        &mut self,
+        block: &ScalarExpr,
+        access: impl FnOnce(&mut Self) -> Result<T, KernelTrap>,
+    ) -> Result<T, KernelTrap> {
+        let Ty::Scalar(t) = types::infer_ty_in(block, self.k.compute, &self.local_tys)
+            .map_err(|_| KernelTrap::Unsupported("cluster rank type"))?
+        else {
+            return Err(KernelTrap::Unsupported("packed cluster rank"));
+        };
+        let rank = self.eval_int(block, t)?;
+        let c = self.ctx.as_mut().ok_or(KernelTrap::Unsupported(
+            "a cluster-peer access outside run_launch",
+        ))?;
+        let owner = peer_block(&c.launch, c.block_idx, rank)
+            .ok_or(KernelTrap::ClusterRankOutOfRange { rank })?;
+        // the rank of the running block names its own array
+        c.peer = (owner != c.block_lin).then_some(owner);
+        let r = access(self);
+        if let Some(c) = self.ctx.as_mut() {
+            c.peer = None;
+        }
+        r
     }
 
     /// Every element of this thread's `Private` allocation `alloc`, in order. A trap if any was never stored.

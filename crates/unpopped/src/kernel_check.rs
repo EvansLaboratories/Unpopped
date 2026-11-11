@@ -501,7 +501,9 @@ fn check_load_elem(k: &KernelFn, place: &Place, sc: &Scope) -> Result<ElementKin
     if !role.reads() {
         return Err(match place {
             Place::Logical { buffer, .. } => KernelError::ReadFromWriteOnly { buffer: *buffer },
-            Place::Alloc { alloc, .. } => KernelError::BadPlace { buffer: *alloc },
+            Place::Alloc { alloc, .. } | Place::ClusterPeer { alloc, .. } => {
+                KernelError::BadPlace { buffer: *alloc }
+            }
         });
     }
     Ok(elem)
@@ -527,7 +529,9 @@ fn check_store(
     if !role.writes() {
         return Err(match place {
             Place::Logical { buffer, .. } => KernelError::WriteToReadOnly { buffer: *buffer },
-            Place::Alloc { alloc, .. } => KernelError::WriteToConstant { alloc: *alloc },
+            Place::Alloc { alloc, .. } | Place::ClusterPeer { alloc, .. } => {
+                KernelError::WriteToConstant { alloc: *alloc }
+            }
         });
     }
     if types::is_subbyte_int(elem) {
@@ -758,6 +762,11 @@ fn check_place(
     let (buffer, coords) = match p {
         Place::Logical { buffer, coords } => (buffer, coords),
         Place::Alloc { alloc, index } => return check_alloc_place(k, *alloc, index, sc),
+        Place::ClusterPeer {
+            alloc,
+            block,
+            index,
+        } => return check_peer_place(k, *alloc, (block, index), sc),
     };
     let bad = KernelError::BadPlace { buffer: *buffer };
     let Some(Param {
@@ -777,6 +786,36 @@ fn check_place(
         }
     }
     Ok((*elem, *role))
+}
+
+/// A `ClusterPeer` place (ROADMAP U12 slice 1): a `Shared` allocation, a launch that names cluster dimensions, and an
+/// integer rank and index. It reads and writes like the allocation's own element.
+fn check_peer_place(
+    k: &KernelFn,
+    alloc: u32,
+    (block, index): (&ScalarExpr, &ScalarExpr),
+    sc: &Scope,
+) -> Result<(ElementKind, BufferRole), KernelError> {
+    let Some(a) = k.allocs.get(alloc as usize) else {
+        return Err(KernelError::BadPlace { buffer: alloc });
+    };
+    if a.space != MemorySpace::Shared {
+        return Err(KernelError::ClusterPeerUnsupported {
+            what: "a cluster-peer place on an allocation outside Shared memory",
+        });
+    }
+    if !k.launch.is_some_and(|l| l.cluster.is_some()) {
+        return Err(KernelError::ClusterPeerUnsupported {
+            what: "a cluster-peer place in a launch that names no cluster dimensions",
+        });
+    }
+    for e in [block, index] {
+        let int = matches!(check_expr(k, e, sc)?, Ty::Scalar(t) if types::int_range(t).is_some());
+        if !int {
+            return Err(KernelError::BadPlace { buffer: alloc });
+        }
+    }
+    Ok((a.elem, BufferRole::ReadWrite))
 }
 
 /// An `Alloc` place: the allocation exists, `Shared` has a launch, the index is an integer. A

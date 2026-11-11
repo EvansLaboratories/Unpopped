@@ -165,6 +165,20 @@ pub enum Place {
         /// An integer expression: the flat element index.
         index: ScalarExpr,
     },
+    /// The element at flat `index` of the `Shared` allocation `alloc` **of another block of this block's cluster**
+    /// (distributed shared memory: PTX `mapa`, ROADMAP U12 slice 1). `block` is an integer expression: the rank of
+    /// the block inside its cluster, `x` fastest (`%cluster_ctarank`), so `0..cluster x * y * z`; the rank of this very
+    /// block names its own array. The kernel's launch must name cluster dimensions. A peer access is ordered like any
+    /// other access to `Shared` memory: by a `Cluster` barrier or a cluster-scope release/acquire pair; unordered, it is
+    /// a data race. `Load`, `Store`, `AtomicRmw` and `AtomicCas` take it; `CopyAsync` does not.
+    ClusterPeer {
+        /// Index into [`KernelFn::allocs`]; a `Shared` allocation.
+        alloc: u32,
+        /// An integer expression: the rank of the owning block inside the cluster.
+        block: ScalarExpr,
+        /// An integer expression: the flat element index in that block's array.
+        index: ScalarExpr,
+    },
 }
 
 /// A sequence of statements; a block opens a scope.
@@ -286,7 +300,7 @@ pub enum Stmt {
     /// unspecified, so a float sum is defined only inside a band: section 5a). `order` must be
     /// any [`MemoryOrder`] (since 0.42.7 a release-class atomic and an acquire-class one on one element order the
     /// plain accesses around them in the oracle; `SeqCst` is treated as `AcqRel`) and `scope` `Subgroup`, `Block` or
-    /// `Device` (`Thread` and `Cluster` are a typed refusal).
+    /// `Device`, or `Cluster` in a launch that names cluster dimensions (`Thread` is a typed refusal).
     AtomicRmw {
         /// The combine.
         op: AtomicOp,
@@ -298,7 +312,7 @@ pub enum Stmt {
         old: Option<u32>,
         /// The memory order.
         order: MemoryOrder,
-        /// The scope the atomicity holds at: `Subgroup`, `Block` or `Device`.
+        /// The scope the atomicity holds at: `Subgroup`, `Block`, `Device`, or `Cluster` in a launch that names cluster dimensions.
         scope: Scope,
     },
     /// Compare-and-exchange: if the element equals `expected`, set it to `desired`; `old` receives the
@@ -321,7 +335,7 @@ pub enum Stmt {
     /// A memory fence of `scope` with `order`. Since 0.42.8 the oracle runs it as the C++ fence rules do: a release
     /// fence (`Release`, `AcqRel`, `SeqCst`) before a relaxed atomic publishes what the thread knew; an acquire fence
     /// (`Acquire`, `AcqRel`, `SeqCst`) after a relaxed atomic read takes in what that read saw. `check_kernel` refuses a
-    /// `Relaxed` fence and the scopes `Thread` and `Cluster`.
+    /// `Relaxed` fence and the scope `Thread`, and `Cluster` outside a launch that names cluster dimensions.
     Fence {
         /// The group the fence orders.
         scope: Scope,
@@ -1050,6 +1064,12 @@ pub enum KernelError {
     SharedWithoutLaunch {
         /// The allocation index.
         alloc: u32,
+    },
+    /// A [`Place::ClusterPeer`] in a kernel whose launch names no cluster dimensions, or on an allocation that is not
+    /// `Shared`.
+    ClusterPeerUnsupported {
+        /// What is wrong.
+        what: &'static str,
     },
     /// A `Barrier` whose scope is not `Subgroup` or `Block`.
     BadBarrierScope,
