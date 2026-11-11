@@ -226,20 +226,24 @@ fn the_checker_refuses_what_multimem_cannot_do() {
     )));
 }
 
+/// Whether the checker refuses `red_at(0)` after `change` edits its `AtomicRmw`.
+fn red_refused_with(change: impl Fn(&mut Stmt)) -> bool {
+    let mut st = red_at(0);
+    change(&mut st);
+    refused(&one(I32, st))
+}
+
 #[test]
-fn the_checker_admits_only_the_red_forms_multimem_has() {
+fn the_checker_admits_a_red_and_refuses_an_old_value_or_another_order() {
     assert_eq!(check_kernel(&one(I32, red_at(0))), Ok(()));
-    let with = |f: &dyn Fn(&mut Stmt)| {
-        let mut st = red_at(0);
-        f(&mut st);
-        refused(&one(I32, st))
-    };
-    let set_old = |s: &mut Stmt| {
-        if let Stmt::AtomicRmw { old, .. } = s {
-            *old = Some(0);
-        }
-    };
-    assert!(with(&set_old), "an old value");
+    assert!(
+        red_refused_with(|s| {
+            if let Stmt::AtomicRmw { old, .. } = s {
+                *old = Some(0);
+            }
+        }),
+        "an old value"
+    );
     for order in [
         MemoryOrder::Relaxed,
         MemoryOrder::Acquire,
@@ -247,7 +251,7 @@ fn the_checker_admits_only_the_red_forms_multimem_has() {
         MemoryOrder::SeqCst,
     ] {
         assert!(
-            with(&|s| {
+            red_refused_with(|s| {
                 if let Stmt::AtomicRmw { order: o, .. } = s {
                     *o = order;
                 }
@@ -255,9 +259,13 @@ fn the_checker_admits_only_the_red_forms_multimem_has() {
             "{order:?}"
         );
     }
+}
+
+#[test]
+fn the_checker_refuses_a_red_below_system_scope_or_with_a_bitwise_op() {
     for scope in [Scope::Block, Scope::Device] {
         assert!(
-            with(&|s| {
+            red_refused_with(|s| {
                 if let Stmt::AtomicRmw { scope: sc, .. } = s {
                     *sc = scope;
                 }
@@ -272,7 +280,7 @@ fn the_checker_admits_only_the_red_forms_multimem_has() {
         AtomicOp::Exchange,
     ] {
         assert!(
-            with(&|s| {
+            red_refused_with(|s| {
                 if let Stmt::AtomicRmw { op: o, .. } = s {
                     *o = op;
                 }
