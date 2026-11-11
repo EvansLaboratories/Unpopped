@@ -193,6 +193,22 @@ pub enum Place {
         /// One integer expression per axis.
         coords: Vec<ScalarExpr>,
     },
+    /// The element of buffer parameter `buffer` at `coords` **on every device at once** (ROADMAP U12 slice 3; PTX
+    /// `multimem`, one multicast address for the same buffer on all devices). Only two statements take it: a `Store`
+    /// (`multimem.st`) writes the value to every device's copy, and an `AtomicRmw` (`multimem.red`) combines the value
+    /// into every device's copy. The launch must span more than one device. A `Store` is admitted for `I32`, `U32`,
+    /// `F32`, `F16` and `Bf16`. An `AtomicRmw` must have `scope: System`, `order: Release` (the hardware always
+    /// releases at system scope) and no `old` (a reduction has no single old value); its op and element are `Add`,
+    /// `Min` or `Max` on `I32`/`U32`, or `Add` on `F32` (`F16`/`Bf16` `Add` is refused until the oracle has a 16-bit
+    /// float atomic). A `Load`, `AtomicCas` or `CopyAsync` is refused (`ld_reduce` is slice 4). Each device's copy is
+    /// ordered like any cross-device access: by a `System` barrier or a `System`-scope release/acquire pair, and an
+    /// unordered access is a data race. Float `Add` order across devices is unspecified in a band, as a float atomic's.
+    Multicast {
+        /// Index into [`KernelFn::params`]; a buffer.
+        buffer: u32,
+        /// One integer expression per axis.
+        coords: Vec<ScalarExpr>,
+    },
 }
 
 /// A sequence of statements; a block opens a scope.
@@ -1087,6 +1103,11 @@ pub enum KernelError {
     },
     /// A [`Place::Peer`] in a launch that spans one device.
     PeerUnsupported {
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// A [`Place::Multicast`] that a `Load`, `AtomicCas` or `AtomicRmw` form, element or scope does not admit.
+    MulticastUnsupported {
         /// What is wrong.
         what: &'static str,
     },

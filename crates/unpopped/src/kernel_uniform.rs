@@ -98,7 +98,10 @@ impl Walk<'_> {
     fn load_divergent(&self, place: &Place) -> bool {
         match place {
             // another block's array differs from this block's, so the value may differ between threads
-            Place::Logical { .. } | Place::ClusterPeer { .. } | Place::Peer { .. } => true,
+            Place::Logical { .. }
+            | Place::ClusterPeer { .. }
+            | Place::Peer { .. }
+            | Place::Multicast { .. } => true,
             Place::Alloc { alloc, index } => {
                 let constant = self
                     .k
