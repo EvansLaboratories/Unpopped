@@ -66,6 +66,8 @@ pub(crate) struct LaunchInfo {
     /// The subgroup size a `Subgroup` collective groups by: the launch's required minimum (the oracle's default),
     /// or `1` when the launch states none.
     pub(crate) subgroup: u32,
+    /// Devices the launch spans (`1`: one device). Every device runs the whole grid on its own buffers.
+    pub(crate) devices: u32,
 }
 
 impl LaunchInfo {
@@ -74,6 +76,7 @@ impl LaunchInfo {
             block: l.block,
             grid: l.grid,
             subgroup: l.subgroup.map_or(1, |s| s.min.max(1)),
+            devices: l.devices,
         })
     }
 
@@ -95,10 +98,19 @@ pub(crate) fn admit_launch(k: &KernelFn) -> Result<(), LowerError> {
         admit_alloc(a)?;
     }
     let barriers = has_barrier_block(&k.body.0);
+    if info.devices > 1
+        && k.params
+            .iter()
+            .any(|p| matches!(p.kind, ParamKind::Scalar { .. }))
+    {
+        return Err(refuse("a scalar parameter in a launch of several devices"));
+    }
     let segments = device_segments(&k.body.0);
-    if segments.len() > 1 || reaches_peer(&k.body.0) {
-        // blocks stay resident across a Device barrier, or while one reaches another's Shared memory
-        let resident = u64::from(info.grid.iter().product::<u32>()) * u64::from(info.threads());
+    if segments.len() > 1 || reaches_peer(&k.body.0) || info.devices > 1 {
+        // blocks stay resident across a Device barrier, while one reaches another's Shared memory, or on several devices
+        let resident = u64::from(info.devices)
+            * u64::from(info.grid.iter().product::<u32>())
+            * u64::from(info.threads());
         if resident > MAX_RESIDENT {
             return Err(refuse(format!(
                 "{resident} resident threads across a Device barrier (at most {MAX_RESIDENT} are spelled)"
@@ -118,7 +130,7 @@ fn device_segments(body: &[Stmt]) -> Vec<&[Stmt]> {
         if matches!(
             s,
             Stmt::Barrier {
-                scope: Scope::Device | Scope::Cluster,
+                scope: Scope::Device | Scope::Cluster | Scope::System,
                 ..
             }
         ) {
@@ -259,6 +271,8 @@ pub(crate) fn exec_c(info: LaunchInfo, id: ExecId) -> Result<String, LowerError>
         ExecId::BlockIdx(a @ 0..=2) => format!("((unsigned int)blk{a})"),
         ExecId::BlockDim(a @ 0..=2) => format!("{}u", info.block[a as usize]),
         ExecId::GridDim(a @ 0..=2) => format!("{}u", info.grid[a as usize]),
+        ExecId::DeviceRank => "((unsigned int)dev)".to_string(),
+        ExecId::DeviceCount => format!("{}u", info.devices),
         other => return Err(refuse(format!("the execution id {other:?}"))),
     })
 }
@@ -280,7 +294,7 @@ impl Emitter<'_> {
     pub(crate) fn launched_body(&mut self, info: LaunchInfo) -> Result<(), LowerError> {
         let body = &self.k.body;
         let segments = device_segments(&body.0);
-        if segments.len() > 1 || reaches_peer(&body.0) {
+        if segments.len() > 1 || reaches_peer(&body.0) || info.devices > 1 {
             return self.device_body(info, &segments);
         }
         let nt = info.threads();
@@ -324,13 +338,14 @@ impl Emitter<'_> {
     /// oracle, which runs each block to the barrier before the next starts.
     fn device_body(&mut self, info: LaunchInfo, segments: &[&[Stmt]]) -> Result<(), LowerError> {
         self.declare_grid_storage(info)?;
+        self.declare_device_tables(info)?;
         for (si, segment) in segments.iter().enumerate() {
             self.line(&format!(
-                "// phase {si}: every block, up to the next Device barrier"
+                "// phase {si}: every block of every device, up to the next Device, Cluster or System barrier"
             ));
             self.open_block_view(info, si == 0)?;
             self.phases(segment)?;
-            for _ in 0..3 {
+            for _ in 0..3 + usize::from(info.devices > 1) {
                 self.depth -= 1;
                 self.line("}");
             }
@@ -338,10 +353,64 @@ impl Emitter<'_> {
         Ok(())
     }
 
+    /// A launch of several devices receives every device's buffers (`b<i>_d<d>`, with `_shape`, `_stride` and `_base`):
+    /// the tables `btab<i>` index them by device, for a `Place::Peer` and for the aliases `b<i>` of the running device.
+    fn declare_device_tables(&mut self, info: LaunchInfo) -> Result<(), LowerError> {
+        if info.devices < 2 {
+            return Ok(());
+        }
+        let nd = info.devices;
+        for (i, p) in self.k.params.iter().enumerate() {
+            let ParamKind::Buffer { elem, role, .. } = &p.kind else {
+                continue;
+            };
+            let ptr = crate::kernel::buffer_ptr(*elem, *role)?;
+            let per = |suffix: &str| {
+                (0..nd)
+                    .map(|d| format!("b{i}_d{d}{suffix}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            self.line(&format!("{ptr} btab{i}[{nd}] = {{{}}};", per("")));
+            self.line(&format!(
+                "const long long* btab{i}_shape[{nd}] = {{{}}};",
+                per("_shape")
+            ));
+            self.line(&format!(
+                "const long long* btab{i}_stride[{nd}] = {{{}}};",
+                per("_stride")
+            ));
+            self.line(&format!(
+                "long long btab{i}_base[{nd}] = {{{}}};",
+                per("_base")
+            ));
+        }
+        Ok(())
+    }
+
+    /// Inside the device loop, name the running device's buffers as a single-device kernel names its own.
+    fn alias_device_buffers(&mut self) -> Result<(), LowerError> {
+        for (i, p) in self.k.params.iter().enumerate() {
+            let ParamKind::Buffer { elem, role, .. } = &p.kind else {
+                continue;
+            };
+            let ptr = crate::kernel::buffer_ptr(*elem, *role)?;
+            self.line(&format!("{ptr} b{i} = btab{i}[dev];"));
+            self.line(&format!(
+                "const long long* b{i}_shape = btab{i}_shape[dev];"
+            ));
+            self.line(&format!(
+                "const long long* b{i}_stride = btab{i}_stride[dev];"
+            ));
+            self.line(&format!("long long b{i}_base = btab{i}_base[dev];"));
+        }
+        Ok(())
+    }
+
     /// The arrays of the whole grid: every block's locals and `Shared` memory.
     fn declare_grid_storage(&mut self, info: LaunchInfo) -> Result<(), LowerError> {
         let nt = info.threads();
-        let nb: u32 = info.grid.iter().product();
+        let nb: u32 = info.grid.iter().product::<u32>() * info.devices;
         for (i, d) in self.k.locals.iter().enumerate() {
             let t = ctype(d.elem, &format!("local {i}"))?;
             self.line(&format!("{t} l{i}_all[{}];", nb * nt));
@@ -361,6 +430,14 @@ impl Emitter<'_> {
     /// copies the scalar parameters into the locals.
     fn open_block_view(&mut self, info: LaunchInfo, first: bool) -> Result<(), LowerError> {
         let nt = info.threads();
+        if info.devices > 1 {
+            self.line(&format!(
+                "for (long long dev = 0; dev < {}; ++dev) {{",
+                info.devices
+            ));
+            self.depth += 1;
+            self.alias_device_buffers()?;
+        }
         for a in [2usize, 1, 0] {
             self.line(&format!(
                 "for (long long blk{a} = 0; blk{a} < {}; ++blk{a}) {{",
@@ -368,9 +445,14 @@ impl Emitter<'_> {
             ));
             self.depth += 1;
         }
-        let [gx, gy, _] = info.grid;
+        let [gx, gy, gz] = info.grid;
+        let first_of_device = if info.devices > 1 {
+            format!("dev * {} + ", gx * gy * gz)
+        } else {
+            String::new()
+        };
         self.line(&format!(
-            "const long long bl = (blk2 * {gy} + blk1) * {gx} + blk0; (void)bl;"
+            "const long long bl = {first_of_device}(blk2 * {gy} + blk1) * {gx} + blk0; (void)bl;"
         ));
         for (i, d) in self.k.locals.iter().enumerate() {
             let t = ctype(d.elem, &format!("local {i}"))?;
@@ -549,6 +631,14 @@ impl Emitter<'_> {
         {
             return self.peer_address(*alloc, (block, index));
         }
+        if let Place::Peer {
+            buffer,
+            device,
+            coords,
+        } = place
+        {
+            return self.device_peer_address(*buffer, (device, coords));
+        }
         let Place::Alloc { alloc, index } = place else {
             return Err(refuse("an address this emitter does not spell"));
         };
@@ -590,7 +680,12 @@ impl Emitter<'_> {
         let Some([cx, cy, cz]) = info.cluster else {
             return Err(refuse("a Place::ClusterPeer without cluster dimensions"));
         };
-        let [gx, gy, _] = info.grid;
+        let [gx, gy, gz] = info.grid;
+        let first_of_device = if info.devices > 1 {
+            format!("dev * {} + ", gx * gy * gz)
+        } else {
+            String::new()
+        };
         let decl = &self.k.allocs[alloc as usize];
         let Extent::Static(extent) = decl.extent else {
             return Err(refuse("a dynamic extent"));
@@ -603,13 +698,52 @@ impl Emitter<'_> {
             "long long pr{n} = (long long)({r}); if (pr{n} < 0 || pr{n} >= {size}) return 1;"
         ));
         self.line(&format!(
-            "long long pb{n} = ((blk2 / {cz} * {cz} + pr{n} / {}) * {gy} + (blk1 / {cy} * {cy} + (pr{n} / {cx}) % {cy})) * {gx} + (blk0 / {cx} * {cx} + pr{n} % {cx});",
+            "long long pb{n} = {first_of_device}((blk2 / {cz} * {cz} + pr{n} / {}) * {gy} + (blk1 / {cy} * {cy} + (pr{n} / {cx}) % {cy})) * {gx} + (blk0 / {cx} * {cx} + pr{n} % {cx});",
             u64::from(cx) * u64::from(cy)
         ));
         self.line(&format!(
             "long long o{n} = (long long)({i}); if (o{n} < 0 || o{n} >= {extent}) return 1;"
         ));
         Ok(format!("sh{alloc}_all[pb{n} * {extent} + o{n}]"))
+    }
+
+    /// The address of the element at `coords` of the copy of buffer `buffer` that device `device` holds (a
+    /// `Place::Peer`): looked up in the tables of every device's buffers, with the shape and strides of that device's
+    /// copy. A device or a coordinate out of range returns status 1, as every bounds check here does.
+    fn device_peer_address(
+        &mut self,
+        buffer: u32,
+        (device, coords): (&ScalarExpr, &[ScalarExpr]),
+    ) -> Result<String, LowerError> {
+        let Some(info) = LaunchInfo::of(self.k) else {
+            return Err(refuse("a Place::Peer without a launch shape"));
+        };
+        if info.devices < 2 {
+            return Err(refuse("a Place::Peer in a launch of one device"));
+        }
+        match &self.k.params[buffer as usize].kind {
+            ParamKind::Buffer { elem, .. } if !unpopped::types::is_subbyte_int(*elem) => {}
+            _ => {
+                return Err(refuse(
+                    "a Place::Peer on a sub-byte or non-buffer parameter",
+                ));
+            }
+        }
+        let n = self.fresh;
+        self.fresh += 1;
+        let d = self.expr(device)?;
+        self.line(&format!(
+            "long long pd{n} = (long long)({d}); if (pd{n} < 0 || pd{n} >= {}) return 1;",
+            info.devices
+        ));
+        self.line(&format!("long long o{n} = btab{buffer}_base[pd{n}];"));
+        for (a, c) in coords.iter().enumerate() {
+            let v = self.expr(c)?;
+            self.line(&format!(
+                "{{ long long c = (long long)({v}); if (c < 0 || c >= btab{buffer}_shape[pd{n}][{a}]) return 1; o{n} += c * btab{buffer}_stride[pd{n}][{a}]; }}"
+            ));
+        }
+        Ok(format!("btab{buffer}[pd{n}][o{n}]"))
     }
 
     /// An `AtomicRmw` as a plain read-modify-write: serial, hence atomic. `old` receives the value read.
@@ -691,10 +825,12 @@ impl Emitter<'_> {
 
     fn place_elem(&self, place: &Place) -> Result<ElementKind, LowerError> {
         match place {
-            Place::Logical { buffer, .. } => match &self.k.params[*buffer as usize].kind {
-                ParamKind::Buffer { elem, .. } => Ok(*elem),
-                _ => Err(refuse("an atomic on a parameter that is not a buffer")),
-            },
+            Place::Logical { buffer, .. } | Place::Peer { buffer, .. } => {
+                match &self.k.params[*buffer as usize].kind {
+                    ParamKind::Buffer { elem, .. } => Ok(*elem),
+                    _ => Err(refuse("an atomic on a parameter that is not a buffer")),
+                }
+            }
             Place::Alloc { alloc, .. } | Place::ClusterPeer { alloc, .. } => {
                 Ok(self.k.allocs[*alloc as usize].elem)
             }

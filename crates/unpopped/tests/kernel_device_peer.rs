@@ -220,6 +220,21 @@ fn a_value_read_from_a_peer_device_and_the_device_rank_are_divergent_but_the_cou
     assert_eq!(check_kernel(&k), Err(KernelError::BarrierDivergent));
     let k = guarded(fixture::rank(), vec![load(0, fixture::at(0, c(0)))]);
     assert_eq!(check_kernel(&k), Err(KernelError::BarrierDivergent));
+    // a System barrier spans blocks, so a condition on the block index is divergent for it
+    let k = kernel(
+        "block_guard",
+        LaunchShape::new([1, 1, 1], [2, 1, 1]).with_devices(2),
+        &["inp", "out"],
+        (
+            0,
+            vec![unpopped::kernel::Stmt::If {
+                cond: fixture::block(),
+                then: unpopped::kernel::Block(vec![fixture::barrier(Scope::System)]),
+                els: unpopped::kernel::Block(vec![]),
+            }],
+        ),
+    );
+    assert_eq!(check_kernel(&k), Err(KernelError::BarrierDivergent));
     // the count is the same for every thread
     let k = guarded(fixture::count(), vec![load(0, fixture::at(0, c(0)))]);
     assert_eq!(check_kernel(&k), Ok(()));
