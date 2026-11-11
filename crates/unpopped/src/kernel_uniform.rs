@@ -53,7 +53,9 @@ pub(crate) fn check_barriers(
 /// differs between them (the conservative rule for a `Cluster` barrier, whose blocks differ within the cluster).
 fn holds_device_barrier(b: &Block) -> bool {
     b.0.iter().any(|st| match st {
-        Stmt::Barrier { scope, .. } => matches!(scope, Scope::Device | Scope::Cluster),
+        Stmt::Barrier { scope, .. } => {
+            matches!(scope, Scope::Device | Scope::Cluster | Scope::System)
+        }
         Stmt::If { then, els, .. } => holds_device_barrier(then) || holds_device_barrier(els),
         Stmt::For { body, .. } | Stmt::While { body, .. } => holds_device_barrier(body),
         _ => false,
@@ -83,7 +85,10 @@ impl Walk<'_> {
     fn expr(&self, e: &ScalarExpr) -> bool {
         match e {
             ScalarExpr::Exec(ExecId::BlockIdx(_)) => self.device,
-            ScalarExpr::Exec(id) => !matches!(id, ExecId::BlockDim(_) | ExecId::GridDim(_)),
+            ScalarExpr::Exec(id) => !matches!(
+                id,
+                ExecId::BlockDim(_) | ExecId::GridDim(_) | ExecId::DeviceCount
+            ),
             ScalarExpr::Local(i) => self.divergent[*i as usize],
             _ => operands(e).into_iter().any(|x| self.expr(x)),
         }
@@ -93,7 +98,7 @@ impl Walk<'_> {
     fn load_divergent(&self, place: &Place) -> bool {
         match place {
             // another block's array differs from this block's, so the value may differ between threads
-            Place::Logical { .. } | Place::ClusterPeer { .. } => true,
+            Place::Logical { .. } | Place::ClusterPeer { .. } | Place::Peer { .. } => true,
             Place::Alloc { alloc, index } => {
                 let constant = self
                     .k

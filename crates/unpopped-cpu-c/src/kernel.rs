@@ -559,6 +559,26 @@ fn ret_name(n: u32, i: usize) -> String {
     }
 }
 
+/// The C element type a buffer pointer points to, `const` unless the kernel writes the buffer.
+fn buffer_ptr_base(elem: ElementKind, role: BufferRole) -> Result<String, LowerError> {
+    let t = if unpopped::types::is_subbyte_int(elem) {
+        "unsigned char" // packed two elements to a byte, low nibble first
+    } else {
+        ctype(elem, "a buffer")?
+    };
+    let q = if matches!(role, BufferRole::Write | BufferRole::ReadWrite) {
+        ""
+    } else {
+        "const "
+    };
+    Ok(format!("{q}{t}"))
+}
+
+/// The C type of a buffer pointer: `const T*` unless the kernel writes the buffer.
+pub(crate) fn buffer_ptr(elem: ElementKind, role: BufferRole) -> Result<String, LowerError> {
+    Ok(format!("{}*", buffer_ptr_base(elem, role)?))
+}
+
 /// The signature, with one line per C argument.
 fn signature(
     k: &KernelFn,
@@ -566,26 +586,27 @@ fn signature(
     (ids, results): (bool, &[&'static str]),
 ) -> Result<String, LowerError> {
     let mut args = Vec::new();
-    for (i, p) in k.params.iter().enumerate() {
-        match &p.kind {
-            ParamKind::Buffer { elem, role, .. } => {
-                let t = if unpopped::types::is_subbyte_int(*elem) {
-                    "unsigned char" // packed two elements to a byte, low nibble first
-                } else {
-                    ctype(*elem, "a buffer")?
-                };
-                let q = if matches!(role, BufferRole::Write | BufferRole::ReadWrite) {
-                    ""
-                } else {
-                    "const "
-                };
-                args.push(format!("{q}{t}* b{i}"));
-                args.push(format!("const long long* b{i}_shape"));
-                args.push(format!("const long long* b{i}_stride"));
-                args.push(format!("long long b{i}_base"));
+    // a launch of several devices takes every device's buffers, device after device, named `b<i>_d<device>`
+    let devices = k.launch.map_or(1, |l| l.devices);
+    for d in 0..devices {
+        let sfx = if devices > 1 {
+            format!("_d{d}")
+        } else {
+            String::new()
+        };
+        for (i, p) in k.params.iter().enumerate() {
+            match &p.kind {
+                ParamKind::Buffer { elem, role, .. } => {
+                    args.push(format!("{}* b{i}{sfx}", buffer_ptr_base(*elem, *role)?));
+                    args.push(format!("const long long* b{i}{sfx}_shape"));
+                    args.push(format!("const long long* b{i}{sfx}_stride"));
+                    args.push(format!("long long b{i}{sfx}_base"));
+                }
+                ParamKind::Scalar { ty, .. } => {
+                    args.push(format!("{} p{i}", ctype(*ty, "a scalar")?));
+                }
+                _ => return Err(refuse("a parameter kind this emitter has not been taught")),
             }
-            ParamKind::Scalar { ty, .. } => args.push(format!("{} p{i}", ctype(*ty, "a scalar")?)),
-            _ => return Err(refuse("a parameter kind this emitter has not been taught")),
         }
     }
     if ids {

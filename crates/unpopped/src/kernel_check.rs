@@ -112,6 +112,9 @@ fn check_launch(k: &KernelFn) -> Result<(), KernelError> {
     let Some(l) = &k.launch else { return Ok(()) };
     let sg_ok = l.subgroup.is_none_or(|s| s.min >= 1 && s.min <= s.max);
     // clusters tile the grid: every cluster extent is positive and divides the grid's
+    if l.devices == 0 {
+        return Err(KernelError::BadLaunch);
+    }
     let cluster_ok = l
         .cluster
         .is_none_or(|c| (0..3).all(|a| c[a] >= 1 && l.grid[a] % c[a] == 0));
@@ -267,6 +270,7 @@ fn scope_ok(k: &KernelFn, scope: ExecScope) -> bool {
     match scope {
         ExecScope::Subgroup | ExecScope::Block | ExecScope::Device => true,
         ExecScope::Cluster => k.launch.is_some_and(|l| l.cluster.is_some()),
+        ExecScope::System => k.launch.is_some_and(|l| l.devices > 1),
         _ => false,
     }
 }
@@ -500,7 +504,9 @@ fn check_load_elem(k: &KernelFn, place: &Place, sc: &Scope) -> Result<ElementKin
     let (elem, role) = check_place(k, place, sc)?;
     if !role.reads() {
         return Err(match place {
-            Place::Logical { buffer, .. } => KernelError::ReadFromWriteOnly { buffer: *buffer },
+            Place::Logical { buffer, .. } | Place::Peer { buffer, .. } => {
+                KernelError::ReadFromWriteOnly { buffer: *buffer }
+            }
             Place::Alloc { alloc, .. } | Place::ClusterPeer { alloc, .. } => {
                 KernelError::BadPlace { buffer: *alloc }
             }
@@ -528,7 +534,9 @@ fn check_store(
     let (elem, role) = check_place(k, place, sc)?;
     if !role.writes() {
         return Err(match place {
-            Place::Logical { buffer, .. } => KernelError::WriteToReadOnly { buffer: *buffer },
+            Place::Logical { buffer, .. } | Place::Peer { buffer, .. } => {
+                KernelError::WriteToReadOnly { buffer: *buffer }
+            }
             Place::Alloc { alloc, .. } | Place::ClusterPeer { alloc, .. } => {
                 KernelError::WriteToConstant { alloc: *alloc }
             }
@@ -759,8 +767,13 @@ fn check_place(
     p: &Place,
     sc: &Scope,
 ) -> Result<(ElementKind, BufferRole), KernelError> {
-    let (buffer, coords) = match p {
-        Place::Logical { buffer, coords } => (buffer, coords),
+    let (buffer, coords, device) = match p {
+        Place::Logical { buffer, coords } => (buffer, coords, None),
+        Place::Peer {
+            buffer,
+            device,
+            coords,
+        } => (buffer, coords, Some(device)),
         Place::Alloc { alloc, index } => return check_alloc_place(k, *alloc, index, sc),
         Place::ClusterPeer {
             alloc,
@@ -778,6 +791,17 @@ fn check_place(
     };
     if rank.is_some_and(|r| usize::from(r) != coords.len()) {
         return Err(bad);
+    }
+    if let Some(d) = device {
+        if !k.launch.is_some_and(|l| l.devices > 1) {
+            return Err(KernelError::PeerUnsupported {
+                what: "a peer place in a launch that spans one device",
+            });
+        }
+        let int = matches!(check_expr(k, d, sc)?, Ty::Scalar(e) if types::int_range(e).is_some());
+        if !int {
+            return Err(bad);
+        }
     }
     for c in coords {
         let int = matches!(check_expr(k, c, sc)?, Ty::Scalar(e) if types::int_range(e).is_some());

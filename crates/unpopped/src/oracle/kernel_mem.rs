@@ -37,12 +37,18 @@ pub(super) struct Stamp {
     pub(super) dev_epoch: u32,
     pub(super) cluster: u32,
     pub(super) cluster_epoch: u32,
+    /// The device the thread runs on, and the `System` barriers released before the access.
+    pub(super) device: u32,
+    pub(super) sys_epoch: u32,
 }
 
 /// Whether `prev` and `now` are unordered, so a conflict between them is a race: no barrier orders them and `now`
 /// has not acquired from `prev` through a release/acquire atomic.
 fn unordered(prev: Stamp, now: Stamp, sync: &Edges) -> bool {
-    if prev.dev_epoch < now.dev_epoch {
+    if prev.sys_epoch < now.sys_epoch {
+        return false;
+    }
+    if prev.device == now.device && prev.dev_epoch < now.dev_epoch {
         return false;
     }
     if prev.cluster == now.cluster && prev.cluster_epoch < now.cluster_epoch {
@@ -235,9 +241,16 @@ pub(super) struct ThreadCtx<'a> {
     pub(super) launch: LaunchShape,
     pub(super) block_idx: [u32; 3],
     pub(super) thread_idx: [u32; 3],
+    /// The block's index in the launch, devices laid end to end (`device * blocks per device + linear grid index`).
     pub(super) block_lin: u32,
     pub(super) thread_lin: u32,
     pub(super) subgroup: u32,
+    /// The device this thread runs on, the launch-wide id of its cluster, the index of its device's first block, and
+    /// the arguments each device owns (the stride of `args`).
+    pub(super) device: u32,
+    pub(super) cluster: u32,
+    pub(super) block_base: u32,
+    pub(super) stride: usize,
     pub(super) private: Vec<Option<AllocMem>>,
     /// This thread's `CopyAsync` copies that have not landed.
     pub(super) asyncq: AsyncQueue,
@@ -286,7 +299,7 @@ impl ThreadCtx<'_> {
     /// atomic) the scope it is issued at.
     fn stamp(&mut self, kind: AccessKind) -> Stamp {
         let sub = self.thread_lin / self.subgroup;
-        let cluster = cluster_of(&self.launch, self.block_idx);
+        let cluster = self.cluster;
         Stamp {
             block: self.block_lin,
             thread: self.thread_lin,
@@ -294,7 +307,14 @@ impl ThreadCtx<'_> {
             block_epoch: self.block.block_epoch,
             sub_epoch: self.block.sub_epoch[sub as usize],
             seq: self.sync.next(),
-            dev_epoch: self.sync.dev_epoch,
+            dev_epoch: self
+                .sync
+                .dev_epoch
+                .get(self.device as usize)
+                .copied()
+                .unwrap_or(0),
+            device: self.device,
+            sys_epoch: self.sync.sys_epoch,
             cluster,
             cluster_epoch: self
                 .sync
@@ -377,6 +397,8 @@ impl Machine<'_> {
             ExecId::LaneId => c.thread_lin % c.subgroup,
             ExecId::SubgroupId => c.thread_lin / c.subgroup,
             ExecId::SubgroupSize => c.subgroup,
+            ExecId::DeviceRank => c.device,
+            ExecId::DeviceCount => c.launch.devices,
         }))
     }
 
@@ -460,7 +482,8 @@ impl Machine<'_> {
             "a cluster-peer access outside run_launch",
         ))?;
         let owner = peer_block(&c.launch, c.block_idx, rank)
-            .ok_or(KernelTrap::ClusterRankOutOfRange { rank })?;
+            .ok_or(KernelTrap::ClusterRankOutOfRange { rank })?
+            + c.block_base;
         // the rank of the running block names its own array
         c.peer = (owner != c.block_lin).then_some(owner);
         let r = access(self);

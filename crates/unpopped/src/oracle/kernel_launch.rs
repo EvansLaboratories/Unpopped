@@ -91,6 +91,37 @@ pub fn run_launch_module(m: &Module, entry: u32, args: &mut [KernelArg]) -> Resu
     )
 }
 
+/// Run a launch that spans several devices (`LaunchShape::devices`, ROADMAP U12 slice 2): `devices[d]` holds device `d`'s
+/// arguments, one per parameter, so every device has its own copy of each buffer. The grids of all devices run under one
+/// schedule (devices in order, the blocks of each in order), so a cross-device access is checked like a cross-block one:
+/// ordered by a `System`-scope barrier or release/acquire pair, or a data race. The oracle runs one block to its end
+/// before the next, so a block that waits on a flag a later device sets is a [`KernelTrap::CrossBlockWait`].
+///
+/// # Errors
+///
+/// A [`KernelTrap`]; [`KernelTrap::ArgMismatch`] when `devices` is not one argument vector per device of the launch.
+pub fn run_launch_devices(k: &KernelFn, devices: &mut [Vec<KernelArg>]) -> Result<(), KernelTrap> {
+    check_kernel(k).map_err(KernelTrap::Malformed)?;
+    let Some(launch) = k.launch else {
+        return Err(KernelTrap::ArgMismatch(
+            "run_launch_devices needs a kernel with a launch shape",
+        ));
+    };
+    let np = k.params.len();
+    if devices.len() != launch.devices as usize || devices.iter().any(|d| d.len() != np) {
+        return Err(KernelTrap::ArgMismatch(
+            "one argument vector per device, one argument per parameter",
+        ));
+    }
+    let mut flat: Vec<KernelArg> = devices.iter_mut().flat_map(|d| d.drain(..)).collect();
+    let r = launch_checked(k, None, &mut flat, (None, STEP_LIMIT));
+    let mut rest = flat.into_iter();
+    for d in devices.iter_mut() {
+        d.extend(rest.by_ref().take(np));
+    }
+    r
+}
+
 /// Run a checked launched kernel; `module` is the module its calls resolve in and the entry's index.
 fn launch_checked(
     k: &KernelFn,
@@ -103,31 +134,47 @@ fn launch_checked(
             "run_launch needs a kernel with a launch shape",
         ));
     };
-    if args.len() != k.params.len() {
-        return Err(KernelTrap::ArgMismatch("one argument per parameter"));
+    // a multi-device launch lays the devices' arguments end to end: device `d` owns `args[d * np..][..np]`
+    let np = k.params.len();
+    if args.len() != np * launch.devices as usize {
+        return Err(KernelTrap::ArgMismatch(
+            "one argument per parameter, for every device of the launch",
+        ));
     }
     let sg = pick_subgroup(&launch, subgroup)?;
     let lens = k
         .allocs
         .iter()
-        .map(|a| alloc_len(k, args, a))
+        .map(|a| alloc_len(k, &args[..np], a))
         .collect::<Result<Vec<_>, _>>()?;
     let mut global = Log::new();
     let mut edges = Edges::default();
     let mut runs = Vec::new();
-    for gz in 0..launch.grid[2] {
-        for gy in 0..launch.grid[1] {
-            for gx in 0..launch.grid[0] {
-                runs.push(BlockRun {
-                    k,
-                    module,
-                    launch,
-                    lens: &lens,
-                    sg,
-                    idx: [gx, gy, gz],
-                    lin: gx + launch.grid[0] * (gy + launch.grid[1] * gz),
-                    limit,
-                });
+    let per_device = launch.grid[0] * launch.grid[1] * launch.grid[2];
+    let clusters_per = launch.cluster.map_or(1, |c| {
+        (0..3).map(|a| launch.grid[a] / c[a]).product::<u32>()
+    });
+    for dev in 0..launch.devices {
+        for gz in 0..launch.grid[2] {
+            for gy in 0..launch.grid[1] {
+                for gx in 0..launch.grid[0] {
+                    runs.push(BlockRun {
+                        k,
+                        module,
+                        launch,
+                        lens: &lens,
+                        sg,
+                        idx: [gx, gy, gz],
+                        lin: dev * per_device + gx + launch.grid[0] * (gy + launch.grid[1] * gz),
+                        limit,
+                        place: DevicePlace {
+                            device: dev,
+                            block_base: dev * per_device,
+                            cluster: dev * clusters_per + cluster_of(&launch, [gx, gy, gz]),
+                            stride: np,
+                        },
+                    });
+                }
             }
         }
     }
@@ -135,8 +182,9 @@ fn launch_checked(
     // every block's memory, apart from its threads, so a block can reach a peer's `Shared` arrays
     let mut mems: Vec<BlockMem> = runs.iter().map(start_mem).collect();
     let mut stops: Vec<Option<BlockStop>> = vec![None; runs.len()];
-    let clusters: Vec<u32> = runs.iter().map(|b| cluster_of(&launch, b.idx)).collect();
-    edges.cluster_epoch = vec![0; clusters.iter().max().map_or(1, |m| *m as usize + 1)];
+    let clusters: Vec<u32> = runs.iter().map(|b| b.place.cluster).collect();
+    edges.cluster_epoch = vec![0; (clusters_per * launch.devices) as usize];
+    edges.dev_epoch = vec![0; launch.devices as usize];
     loop {
         // Blocks run in order, each to its end or to a `Device` barrier. With no device barrier this is one block
         // after another; with one, every block is resident and the barrier is a rendezvous of the whole grid.
@@ -157,21 +205,24 @@ fn launch_checked(
                 },
             );
         }
-        let go = match grid_release(&stops, &clusters)? {
-            Released::Finished => return Ok(()),
-            Released::Grid => {
-                edges.dev_epoch += 1;
-                None
-            }
-            Released::Clusters(ids) => {
-                for id in &ids {
-                    edges.cluster_epoch[*id as usize] += 1;
-                }
-                Some(ids)
-            }
+        let Some(go) = release_devices(&stops, &clusters, per_device as usize)? else {
+            return Ok(());
         };
-        for ((st, stop), cluster) in states.iter_mut().zip(stops.iter_mut()).zip(&clusters) {
-            if go.as_ref().is_some_and(|ids| !ids.contains(cluster)) {
+        edges.sys_epoch += u32::from(go.system);
+        for d in &go.devices {
+            edges.dev_epoch[*d as usize] += 1;
+        }
+        for id in &go.clusters {
+            edges.cluster_epoch[*id as usize] += 1;
+        }
+        for (i, ((st, stop), cluster)) in states
+            .iter_mut()
+            .zip(stops.iter_mut())
+            .zip(&clusters)
+            .enumerate()
+        {
+            let device = (i / per_device as usize) as u32;
+            if !(go.system || go.devices.contains(&device) || go.clusters.contains(cluster)) {
                 continue;
             }
             *stop = None;
@@ -180,6 +231,61 @@ fn launch_checked(
             }
         }
     }
+}
+
+/// What may go on in a launch of several devices once every block has stopped: every block of the launch (a `System`
+/// barrier), the blocks of these devices (a `Device` barrier), and the blocks of these clusters (a `Cluster` barrier).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Go {
+    system: bool,
+    devices: Vec<u32>,
+    clusters: Vec<u32>,
+}
+
+/// [`grid_release`] per device, after the `System` barrier: `None` when every block finished. A `System` barrier needs
+/// every block of every device at it; the devices otherwise release independently, as the clusters of one device do,
+/// and a device that finished strands none of the others (`per_device` blocks each, devices end to end).
+fn release_devices(
+    stops: &[Option<BlockStop>],
+    clusters: &[u32],
+    per_device: usize,
+) -> Result<Option<Go>, KernelTrap> {
+    let stop = |i: usize| stops[i].expect("every block has stopped");
+    if (0..stops.len()).all(|i| stop(i) == BlockStop::Done) {
+        return Ok(None);
+    }
+    let on_system = |i: usize| {
+        matches!(
+            stop(i),
+            BlockStop::Wait {
+                scope: Scope::System,
+                ..
+            }
+        )
+    };
+    if (0..stops.len()).any(on_system) {
+        return if (0..stops.len()).all(|i| stop(i) == stop(0)) {
+            Ok(Some(Go {
+                system: true,
+                ..Go::default()
+            }))
+        } else {
+            Err(KernelTrap::BarrierMismatch)
+        };
+    }
+    let mut go = Go::default();
+    for (d, (s, c)) in stops
+        .chunks(per_device)
+        .zip(clusters.chunks(per_device))
+        .enumerate()
+    {
+        match grid_release(s, c)? {
+            Released::Finished => {}
+            Released::Grid => go.devices.push(d as u32),
+            Released::Clusters(ids) => go.clusters.extend(ids),
+        }
+    }
+    Ok(Some(go))
 }
 
 /// What the blocks that have all stopped may do next.
@@ -286,8 +392,22 @@ struct BlockRun<'a> {
     lens: &'a [usize],
     sg: u32,
     idx: [u32; 3],
+    /// The block's index in the launch, devices end to end.
     lin: u32,
     limit: u64,
+    place: DevicePlace,
+}
+
+/// Where a block sits in a multi-device launch.
+#[derive(Clone, Copy)]
+struct DevicePlace {
+    device: u32,
+    /// The index of the device's first block.
+    block_base: u32,
+    /// The launch-wide id of the block's cluster.
+    cluster: u32,
+    /// The arguments each device owns.
+    stride: usize,
 }
 
 /// Where a thread is.
@@ -403,7 +523,7 @@ fn at_grid_barrier(threads: &[ThreadRun<'_>]) -> Option<(Scope, usize)> {
     let Status::Waiting { scope, at } = threads.first()?.status else {
         return None;
     };
-    if !matches!(scope, Scope::Device | Scope::Cluster) {
+    if !matches!(scope, Scope::Device | Scope::Cluster | Scope::System) {
         return None;
     }
     threads
@@ -426,6 +546,10 @@ fn run_phase<'a>(
         block_lin: b.lin,
         thread_lin: t.lin,
         subgroup: b.sg,
+        device: b.place.device,
+        cluster: b.place.cluster,
+        block_base: b.place.block_base,
+        stride: b.place.stride,
         private: std::mem::take(&mut t.private),
         asyncq: std::mem::take(&mut t.asyncq),
         block: mem,
@@ -657,6 +781,12 @@ mod tests {
             idx: [0; 3],
             lin: 0,
             limit: STEP_LIMIT,
+            place: DevicePlace {
+                device: 0,
+                block_base: 0,
+                cluster: 0,
+                stride: 0,
+            },
         };
         let mut threads: Vec<ThreadRun<'_>> = statuses
             .iter()
