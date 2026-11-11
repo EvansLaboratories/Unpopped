@@ -923,7 +923,7 @@ fn flat_index_text(n: Node, src: &str) -> Option<String> {
 /// those look for `{out_name}[i] = <ident>` and `acc <op>= <expr>` by
 /// structural shape, never through this map, so a scan/reduction
 /// accumulator's own name cannot be silently resolved out from under them
-/// the way a global text substitution did (`docs/slang-second-blocker-sizing.md`).
+/// the way a global text substitution did (sized in fishstringer's `docs/slang-second-blocker-sizing.md`).
 fn local_bindings<'t>(root: Node<'t>, src: &str) -> Vec<(String, Node<'t>)> {
     let mut sites: Vec<(String, Node<'t>)> = Vec::new();
     let mut mutations: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
