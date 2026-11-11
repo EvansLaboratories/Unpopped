@@ -308,3 +308,19 @@ fn the_checker_refuses_an_ld_reduce_off_a_multicast_place_or_in_one_device() {
         Err(KernelError::PeerUnsupported { .. })
     ));
 }
+
+#[test]
+fn the_checker_refuses_an_ld_reduce_of_a_write_only_buffer() {
+    assert_eq!(
+        check_kernel(&mc::ld_reduce_of_a_write_only_buffer()),
+        Err(KernelError::ReadFromWriteOnly { buffer: 0 })
+    );
+}
+
+#[test]
+fn an_ld_reduce_result_is_divergent_so_a_barrier_under_it_is_refused() {
+    assert_eq!(
+        check_kernel(&mc::barrier_on_a_reduced_value()),
+        Err(KernelError::BarrierDivergent)
+    );
+}

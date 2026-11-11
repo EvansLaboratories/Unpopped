@@ -201,6 +201,35 @@ pub(crate) fn red_then_ld_reduce(elem: ElementKind) -> KernelFn {
     kernel_of(elem, "red_then_ld_reduce", (2, body))
 }
 
+/// An `ld_reduce` of buffer 0, which this kernel declares `Write` only.
+pub(crate) fn ld_reduce_of_a_write_only_buffer() -> KernelFn {
+    let elem = ElementKind::I32;
+    KernelFn::new(
+        "ld_reduce_write_only",
+        elem,
+        vec![Param::buffer("out", elem, BufferRole::Write, Some(1))],
+        vec![LocalDecl::scalar(elem)],
+        Block(vec![ld_reduce(0, 0, (AtomicOp::Add, MemoryOrder::Acquire))]),
+    )
+    .with_launch(gather_launch())
+}
+
+/// A `Block` barrier under a condition on an `ld_reduce` result: the value may differ between the threads of a block, so
+/// the barrier is divergent. Locals: 0 the reduced value.
+pub(crate) fn barrier_on_a_reduced_value() -> KernelFn {
+    use unpopped::ir::{BinaryOp, ScalarExpr};
+    let cond = ScalarExpr::Binary(BinaryOp::CmpGt, Box::new(local(0)), Box::new(c(0)));
+    let body = vec![
+        ld_reduce(0, 0, (AtomicOp::Add, MemoryOrder::Acquire)),
+        Stmt::If {
+            cond,
+            then: Block(vec![barrier(Scope::Block)]),
+            els: Block(vec![]),
+        },
+    ];
+    kernel_of(ElementKind::I32, "barrier_on_reduced", (1, body))
+}
+
 /// A kernel whose one statement is `st`, over the buffers of `all_reduce` (for the checker's refusals).
 pub(crate) fn one(elem: ElementKind, st: Stmt) -> KernelFn {
     kernel_of(elem, "multicast_one", (1, vec![st]))
