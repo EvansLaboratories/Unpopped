@@ -715,20 +715,7 @@ impl Emitter<'_> {
         buffer: u32,
         (device, coords): (&ScalarExpr, &[ScalarExpr]),
     ) -> Result<String, LowerError> {
-        let Some(info) = LaunchInfo::of(self.k) else {
-            return Err(refuse("a Place::Peer without a launch shape"));
-        };
-        if info.devices < 2 {
-            return Err(refuse("a Place::Peer in a launch of one device"));
-        }
-        match &self.k.params[buffer as usize].kind {
-            ParamKind::Buffer { elem, .. } if !unpopped::types::is_subbyte_int(*elem) => {}
-            _ => {
-                return Err(refuse(
-                    "a Place::Peer on a sub-byte or non-buffer parameter",
-                ));
-            }
-        }
+        let info = self.peer_info(buffer, "a Place::Peer")?;
         let n = self.fresh;
         self.fresh += 1;
         let d = self.expr(device)?;
@@ -736,14 +723,108 @@ impl Emitter<'_> {
             "long long pd{n} = (long long)({d}); if (pd{n} < 0 || pd{n} >= {}) return 1;",
             info.devices
         ));
-        self.line(&format!("long long o{n} = btab{buffer}_base[pd{n}];"));
+        self.btab_address(buffer, &format!("pd{n}"), (coords, n))
+    }
+
+    /// The launch of `buffer`'s kernel, once it is known that a launch of several devices holds `buffer` as a byte-addressable
+    /// buffer on each (`what` names the place in the refusals).
+    fn peer_info(&self, buffer: u32, what: &str) -> Result<LaunchInfo, LowerError> {
+        let Some(info) = LaunchInfo::of(self.k) else {
+            return Err(refuse(format!("{what} without a launch shape")));
+        };
+        if info.devices < 2 {
+            return Err(refuse(format!("{what} in a launch of one device")));
+        }
+        match &self.k.params[buffer as usize].kind {
+            ParamKind::Buffer { elem, .. } if !unpopped::types::is_subbyte_int(*elem) => Ok(info),
+            _ => Err(refuse(format!(
+                "{what} on a sub-byte or non-buffer parameter"
+            ))),
+        }
+    }
+
+    /// The element at `coords` of the copy of `buffer` that the device named by the C expression `pd` holds, after the
+    /// statements that bounds-check the coordinates against that copy's shape. `n` numbers the offset variable.
+    fn btab_address(
+        &mut self,
+        buffer: u32,
+        pd: &str,
+        (coords, n): (&[ScalarExpr], u32),
+    ) -> Result<String, LowerError> {
+        self.line(&format!("long long o{n} = btab{buffer}_base[{pd}];"));
         for (a, c) in coords.iter().enumerate() {
             let v = self.expr(c)?;
             self.line(&format!(
-                "{{ long long c = (long long)({v}); if (c < 0 || c >= btab{buffer}_shape[pd{n}][{a}]) return 1; o{n} += c * btab{buffer}_stride[pd{n}][{a}]; }}"
+                "{{ long long c = (long long)({v}); if (c < 0 || c >= btab{buffer}_shape[{pd}][{a}]) return 1; o{n} += c * btab{buffer}_stride[{pd}][{a}]; }}"
             ));
         }
-        Ok(format!("btab{buffer}[pd{n}][o{n}]"))
+        Ok(format!("btab{buffer}[{pd}][o{n}]"))
+    }
+
+    /// `multimem.st`: a `Store` on a `Place::Multicast` writes the value to the element of every device's copy.
+    pub(crate) fn multicast_store(
+        &mut self,
+        place: &Place,
+        value: &ScalarExpr,
+    ) -> Result<(), LowerError> {
+        let Place::Multicast { buffer, coords } = place else {
+            unreachable!("multicast_store is called for a Place::Multicast");
+        };
+        let info = self.peer_info(*buffer, "a Place::Multicast")?;
+        let t = ctype(self.place_elem(place)?, "a multicast element")?;
+        let v = self.expr(value)?;
+        let n = self.fresh;
+        self.fresh += 1;
+        self.line("{");
+        self.depth += 1;
+        self.line(&format!("{t} mv{n} = ({t})({v});"));
+        self.line(&format!(
+            "for (long long md{n} = 0; md{n} < {}; ++md{n}) {{",
+            info.devices
+        ));
+        self.depth += 1;
+        let at = self.btab_address(*buffer, &format!("md{n}"), (coords, n))?;
+        self.line(&format!("{at} = mv{n};"));
+        self.depth -= 1;
+        self.line("}");
+        self.depth -= 1;
+        self.line("}");
+        Ok(())
+    }
+
+    /// `multimem.red`: an `AtomicRmw` on a `Place::Multicast` combines the value into the element of every device's copy
+    /// (the checker admits no `old`).
+    fn multicast_red(
+        &mut self,
+        op: AtomicOp,
+        place: &Place,
+        value: &ScalarExpr,
+    ) -> Result<(), LowerError> {
+        let Place::Multicast { buffer, coords } = place else {
+            unreachable!("multicast_red is called for a Place::Multicast");
+        };
+        let info = self.peer_info(*buffer, "a Place::Multicast")?;
+        let elem = self.place_elem(place)?;
+        let t = ctype(elem, "a multicast element")?;
+        let v = self.expr(value)?;
+        let n = self.fresh;
+        self.fresh += 1;
+        self.line("{");
+        self.depth += 1;
+        self.line(&format!("{t} a{n} = ({t})({v});"));
+        self.line(&format!(
+            "for (long long md{n} = 0; md{n} < {}; ++md{n}) {{",
+            info.devices
+        ));
+        self.depth += 1;
+        let at = self.btab_address(*buffer, &format!("md{n}"), (coords, n))?;
+        let new = atomic_new(op, elem, &at, &format!("a{n}"))?;
+        self.line(&format!("{at} = ({t})({new});"));
+        self.depth -= 1;
+        self.line("}");
+        self.depth -= 1;
+        self.line("}");
+        Ok(())
     }
 
     /// An `AtomicRmw` as a plain read-modify-write: serial, hence atomic. `old` receives the value read.
@@ -760,6 +841,9 @@ impl Emitter<'_> {
         };
         if self.launch.is_none() {
             return Err(refuse("an AtomicRmw without a launch shape"));
+        }
+        if matches!(place, Place::Multicast { .. }) {
+            return self.multicast_red(*op, place, value);
         }
         let elem = self.place_elem(place)?;
         let t = ctype(elem, "an atomic element")?;
@@ -825,12 +909,12 @@ impl Emitter<'_> {
 
     fn place_elem(&self, place: &Place) -> Result<ElementKind, LowerError> {
         match place {
-            Place::Logical { buffer, .. } | Place::Peer { buffer, .. } => {
-                match &self.k.params[*buffer as usize].kind {
-                    ParamKind::Buffer { elem, .. } => Ok(*elem),
-                    _ => Err(refuse("an atomic on a parameter that is not a buffer")),
-                }
-            }
+            Place::Logical { buffer, .. }
+            | Place::Peer { buffer, .. }
+            | Place::Multicast { buffer, .. } => match &self.k.params[*buffer as usize].kind {
+                ParamKind::Buffer { elem, .. } => Ok(*elem),
+                _ => Err(refuse("an atomic on a parameter that is not a buffer")),
+            },
             Place::Alloc { alloc, .. } | Place::ClusterPeer { alloc, .. } => {
                 Ok(self.k.allocs[*alloc as usize].elem)
             }

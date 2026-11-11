@@ -196,6 +196,10 @@ impl Emitter<'_> {
                 let at = self.unpack_nibble(place, at)?;
                 self.bind_local(*local, &at)?;
             }
+            Stmt::Store {
+                place: place @ Place::Multicast { .. },
+                value,
+            } => self.multicast_store(place, value)?,
             Stmt::Store { place, value } => {
                 let (at, v) = (self.address(place)?, self.expr(value)?);
                 self.line(&format!("{at} = {v};"));
