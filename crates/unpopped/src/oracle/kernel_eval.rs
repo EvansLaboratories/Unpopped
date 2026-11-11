@@ -240,6 +240,59 @@ impl<'a> Machine<'a> {
         Ok(root - base + usize::try_from(rank).unwrap_or(0) * stride)
     }
 
+    /// Every device's copy of the element a `Place::Multicast` names: `(root argument, element offset)` per device, in
+    /// rank order, each bounds-checked against that device's own copy (ROADMAP U12 slice 3).
+    fn multicast_targets(&mut self, place: &Place) -> Result<Vec<(usize, usize)>, KernelTrap> {
+        let Place::Multicast { buffer, coords } = place else {
+            unreachable!("multicast_targets is called for a Place::Multicast");
+        };
+        let mut cs = Vec::with_capacity(coords.len());
+        for c in coords {
+            let Ty::Scalar(t) = types::infer_ty_in(c, self.k.compute, &self.local_tys)
+                .map_err(|_| KernelTrap::Unsupported("coordinate type"))?
+            else {
+                return Err(KernelTrap::Unsupported("packed coordinate"));
+            };
+            cs.push(self.eval_int(c, t)?);
+        }
+        let (stride, devices) = match &self.ctx {
+            Some(c) => (c.stride, c.launch.devices),
+            None => {
+                return Err(KernelTrap::Unsupported(
+                    "a multicast access outside run_launch",
+                ));
+            }
+        };
+        let root = self.root(*buffer);
+        let base = self.dev_base();
+        if root < base || root >= base + stride {
+            return Err(KernelTrap::Unsupported(
+                "a multicast place on a buffer bound to an allocation",
+            ));
+        }
+        let first = root - base;
+        let mut out = Vec::new();
+        for d in 0..usize::try_from(devices).unwrap_or(0) {
+            let at = first + d * stride;
+            let KernelArg::Buffer(tb) = &self.args[at] else {
+                return Err(KernelTrap::ArgMismatch(
+                    "a Place names a non-buffer argument",
+                ));
+            };
+            let mut off = i128::from(tb.base_offset);
+            for (a, &c) in cs.iter().enumerate() {
+                if c < 0 || c >= i128::from(tb.shape[a]) {
+                    return Err(KernelTrap::OutOfBounds { buffer: *buffer });
+                }
+                off += c * i128::from(tb.strides[a]);
+            }
+            let off =
+                usize::try_from(off).map_err(|_| KernelTrap::OutOfBounds { buffer: *buffer })?;
+            out.push((at, off));
+        }
+        Ok(out)
+    }
+
     /// Bind the arguments and run the body to completion (one logical thread).
     pub(super) fn run_body(&mut self) -> Result<(), KernelTrap> {
         self.bind_args()?;
@@ -603,6 +656,9 @@ impl<'a> Machine<'a> {
         {
             return self.on_peer(block, |m| m.alloc_atomic(*alloc, index, step));
         }
+        if matches!(place, Place::Multicast { .. }) {
+            return self.multicast_atomic(place, step);
+        }
         if let Some((alloc, index)) = self.alloc_bound(place) {
             return self.alloc_atomic(alloc, index, step);
         }
@@ -618,9 +674,43 @@ impl<'a> Machine<'a> {
         Ok(Val::Raw(before, dt))
     }
 
+    /// `multimem.red`: the step applied to every device's copy, each logged as an atomic access. The value before on
+    /// the first device comes back (the checker admits no `old`, so nothing reads it).
+    fn multicast_atomic(
+        &mut self,
+        place: &Place,
+        step: &dyn Fn(u128, ElementKind) -> Result<Val, KernelTrap>,
+    ) -> Result<Val, KernelTrap> {
+        let mut first = None;
+        for (b, off) in self.multicast_targets(place)? {
+            self.note_global(b, off, AccessKind::Atomic)?;
+            let KernelArg::Buffer(tb) = &mut self.args[b] else {
+                unreachable!("multicast_targets returned a buffer");
+            };
+            let dt = tb.dtype;
+            let before = read_elem(&tb.bytes, off, dt);
+            let r = step(before, dt)?;
+            store_val(r, dt, &mut tb.bytes, off);
+            first.get_or_insert(Val::Raw(before, dt));
+        }
+        first.ok_or(KernelTrap::Unsupported("a multicast place on no device"))
+    }
+
     fn store(&mut self, place: &Place, v: Val) -> Result<(), KernelTrap> {
         if let Place::Alloc { alloc, index } = place {
             return self.alloc_store(*alloc, index, v);
+        }
+        if matches!(place, Place::Multicast { .. }) {
+            // `multimem.st`: the value lands in every device's copy, each a write for the race detector
+            for (b, off) in self.multicast_targets(place)? {
+                self.note_global(b, off, AccessKind::Write)?;
+                let KernelArg::Buffer(tb) = &mut self.args[b] else {
+                    unreachable!("multicast_targets returned a buffer");
+                };
+                let dt = tb.dtype;
+                store_val(v, dt, &mut tb.bytes, off);
+            }
+            return Ok(());
         }
         if let Place::ClusterPeer {
             alloc,
