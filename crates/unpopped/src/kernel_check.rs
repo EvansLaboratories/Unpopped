@@ -173,9 +173,18 @@ fn check_atomic_stmt(
             place,
             value,
             old,
+            order,
             scope,
-            ..
         } => {
+            if matches!(place, Place::Multicast { .. }) {
+                let red = MulticastRed {
+                    op: *op,
+                    old: *old,
+                    order: *order,
+                    scope: *scope,
+                };
+                return check_multicast_red(k, place, value, red, sc);
+            }
             let form = AtomicForm {
                 op: *op,
                 site: AtomicSite {
@@ -193,6 +202,11 @@ fn check_atomic_stmt(
             scope,
             ..
         } => {
+            if matches!(place, Place::Multicast { .. }) {
+                return Err(KernelError::MulticastUnsupported {
+                    what: "an AtomicCas on a multicast place (multimem has no compare-and-swap)",
+                });
+            }
             let site = AtomicSite {
                 old: *old,
                 scope: *scope,
@@ -445,6 +459,11 @@ fn check_stmt(
             declare(k, *local, Ty::Scalar(elem), sc, declared_here)?;
         }
         Stmt::MaskedStore { place, value, mask } => {
+            if matches!(place, Place::Multicast { .. }) {
+                return Err(KernelError::MulticastUnsupported {
+                    what: "a MaskedStore on a multicast place (guard a Store with an If)",
+                });
+            }
             check_mask(k, mask, sc)?;
             check_store(k, place, value, sc)?;
         }
@@ -501,12 +520,17 @@ fn check_load(
 
 /// The element type of a readable `place`.
 fn check_load_elem(k: &KernelFn, place: &Place, sc: &Scope) -> Result<ElementKind, KernelError> {
+    if matches!(place, Place::Multicast { .. }) {
+        return Err(KernelError::MulticastUnsupported {
+            what: "a Load of a multicast place (a reducing read, multimem.ld_reduce, is slice 4)",
+        });
+    }
     let (elem, role) = check_place(k, place, sc)?;
     if !role.reads() {
         return Err(match place {
-            Place::Logical { buffer, .. } | Place::Peer { buffer, .. } => {
-                KernelError::ReadFromWriteOnly { buffer: *buffer }
-            }
+            Place::Logical { buffer, .. }
+            | Place::Peer { buffer, .. }
+            | Place::Multicast { buffer, .. } => KernelError::ReadFromWriteOnly { buffer: *buffer },
             Place::Alloc { alloc, .. } | Place::ClusterPeer { alloc, .. } => {
                 KernelError::BadPlace { buffer: *alloc }
             }
@@ -534,12 +558,17 @@ fn check_store(
     let (elem, role) = check_place(k, place, sc)?;
     if !role.writes() {
         return Err(match place {
-            Place::Logical { buffer, .. } | Place::Peer { buffer, .. } => {
-                KernelError::WriteToReadOnly { buffer: *buffer }
-            }
+            Place::Logical { buffer, .. }
+            | Place::Peer { buffer, .. }
+            | Place::Multicast { buffer, .. } => KernelError::WriteToReadOnly { buffer: *buffer },
             Place::Alloc { alloc, .. } | Place::ClusterPeer { alloc, .. } => {
                 KernelError::WriteToConstant { alloc: *alloc }
             }
+        });
+    }
+    if matches!(place, Place::Multicast { .. }) && !multicast_store_elem(elem) {
+        return Err(KernelError::MulticastUnsupported {
+            what: "a multicast Store of an element other than I32, U32, F32, F16 or Bf16",
         });
     }
     if types::is_subbyte_int(elem) {
@@ -552,6 +581,75 @@ fn check_store(
         return Err(KernelError::TypeMismatch { what: "Store" });
     }
     Ok(())
+}
+
+/// The parts of an `AtomicRmw` on a multicast place other than its place and operand.
+#[derive(Clone, Copy)]
+struct MulticastRed {
+    op: AtomicOp,
+    old: Option<u32>,
+    order: MemoryOrder,
+    scope: ExecScope,
+}
+
+/// An `AtomicRmw` on a `Place::Multicast` (`multimem.red`, ROADMAP U12 slice 3): a `ReadWrite` buffer in a launch of
+/// several devices, `System` scope, `Release` order, no old value, and an op and element `multicast_red_ok` admits.
+fn check_multicast_red(
+    k: &KernelFn,
+    place: &Place,
+    value: &ScalarExpr,
+    red: MulticastRed,
+    sc: &Scope,
+) -> Result<(), KernelError> {
+    let refuse = |what| Err(KernelError::MulticastUnsupported { what });
+    let (elem, role) = check_place(k, place, sc)?;
+    if !(role.reads() && role.writes()) {
+        return Err(KernelError::AtomicUnsupported {
+            what: "an atomic on a buffer that is not ReadWrite",
+        });
+    }
+    if red.scope != ExecScope::System {
+        return refuse("a multicast AtomicRmw at a scope other than System");
+    }
+    if red.order != MemoryOrder::Release {
+        return refuse("a multicast AtomicRmw with an order other than Release");
+    }
+    if red.old.is_some() {
+        return refuse(
+            "a multicast AtomicRmw with an old value (a reduction has no single old value)",
+        );
+    }
+    if !multicast_red_ok(red.op, elem) {
+        return refuse("a multicast AtomicRmw other than Add, Min or Max on I32/U32 or Add on F32");
+    }
+    if check_expr(k, value, sc)? != Ty::Scalar(elem) {
+        return Err(KernelError::TypeMismatch { what: "AtomicRmw" });
+    }
+    Ok(())
+}
+
+/// The elements `multimem.st` writes (ROADMAP U12 slice 3).
+fn multicast_store_elem(e: ElementKind) -> bool {
+    matches!(
+        e,
+        ElementKind::I32
+            | ElementKind::U32
+            | ElementKind::F32
+            | ElementKind::F16
+            | ElementKind::Bf16
+    )
+}
+
+/// The ops and elements `multimem.red` combines (ROADMAP U12 slice 3): `Add`, `Min`, `Max` on a 32-bit integer, `Add`
+/// on `F32`. A 16-bit float `Add` is a real instruction the oracle's atomic form does not model yet.
+fn multicast_red_ok(op: AtomicOp, e: ElementKind) -> bool {
+    match e {
+        ElementKind::I32 | ElementKind::U32 => {
+            matches!(op, AtomicOp::Add | AtomicOp::Min | AtomicOp::Max)
+        }
+        ElementKind::F32 => matches!(op, AtomicOp::Add),
+        _ => false,
+    }
 }
 
 /// The parts of an `AtomicRmw` other than its place and operand.
@@ -774,6 +872,14 @@ fn check_place(
             device,
             coords,
         } => (buffer, coords, Some(device)),
+        Place::Multicast { buffer, coords } => {
+            if !k.launch.is_some_and(|l| l.devices > 1) {
+                return Err(KernelError::PeerUnsupported {
+                    what: "a multicast place in a launch that spans one device",
+                });
+            }
+            (buffer, coords, None)
+        }
         Place::Alloc { alloc, index } => return check_alloc_place(k, *alloc, index, sc),
         Place::ClusterPeer {
             alloc,
