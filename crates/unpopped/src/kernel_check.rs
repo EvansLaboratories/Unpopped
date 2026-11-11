@@ -441,6 +441,12 @@ fn check_stmt(
             declare(k, *local, ty, sc, declared_here)?;
         }
         Stmt::Load { local, place } => check_load(k, *local, place, sc, declared_here)?,
+        Stmt::MulticastLoadReduce {
+            local,
+            place,
+            op,
+            order,
+        } => check_multicast_load_reduce(k, (*local, place, *op, *order), sc, declared_here)?,
         Stmt::Assign { local, value } => check_assign(k, *local, value, sc)?,
         Stmt::Store { place, value } => check_store(k, place, value, sc)?,
         Stmt::MaskedLoad {
@@ -522,7 +528,7 @@ fn check_load(
 fn check_load_elem(k: &KernelFn, place: &Place, sc: &Scope) -> Result<ElementKind, KernelError> {
     if matches!(place, Place::Multicast { .. }) {
         return Err(KernelError::MulticastUnsupported {
-            what: "a Load of a multicast place (a reducing read, multimem.ld_reduce, is slice 4)",
+            what: "a Load of a multicast place (a reducing read is a MulticastLoadReduce)",
         });
     }
     let (elem, role) = check_place(k, place, sc)?;
@@ -626,6 +632,50 @@ fn check_multicast_red(
         return Err(KernelError::TypeMismatch { what: "AtomicRmw" });
     }
     Ok(())
+}
+
+/// A `MulticastLoadReduce` (`multimem.ld_reduce`, ROADMAP U12 slice 4): a readable [`Place::Multicast`] in a launch of
+/// several devices, a `Relaxed` or `Acquire` order, and an op and element `multicast_ld_reduce_ok` admits; it declares
+/// `local` with the element's type.
+fn check_multicast_load_reduce(
+    k: &KernelFn,
+    (local, place, op, order): (u32, &Place, AtomicOp, MemoryOrder),
+    sc: &mut Scope,
+    declared_here: &mut Vec<usize>,
+) -> Result<(), KernelError> {
+    let refuse = |what| Err(KernelError::MulticastUnsupported { what });
+    if !matches!(place, Place::Multicast { .. }) {
+        return refuse("a MulticastLoadReduce on a place other than a multicast one");
+    }
+    let (elem, role) = check_place(k, place, sc)?;
+    if !role.reads() {
+        return Err(KernelError::ReadFromWriteOnly {
+            buffer: match place {
+                Place::Multicast { buffer, .. } => *buffer,
+                _ => unreachable!("checked to be a multicast place"),
+            },
+        });
+    }
+    if !matches!(order, MemoryOrder::Relaxed | MemoryOrder::Acquire) {
+        return refuse("a MulticastLoadReduce with an order other than Relaxed or Acquire");
+    }
+    if !multicast_ld_reduce_ok(op, elem) {
+        return refuse(
+            "a MulticastLoadReduce other than Add, Min or Max on I32/U32/F16/Bf16 or Add on F32",
+        );
+    }
+    declare(k, local, Ty::Scalar(elem), sc, declared_here)
+}
+
+/// The ops and elements `multimem.ld_reduce` combines: `Add`, `Min`, `Max` on `I32`, `U32`, `F16`, `Bf16`; `Add` on `F32`.
+fn multicast_ld_reduce_ok(op: AtomicOp, e: ElementKind) -> bool {
+    match e {
+        ElementKind::I32 | ElementKind::U32 | ElementKind::F16 | ElementKind::Bf16 => {
+            matches!(op, AtomicOp::Add | AtomicOp::Min | AtomicOp::Max)
+        }
+        ElementKind::F32 => matches!(op, AtomicOp::Add),
+        _ => false,
+    }
 }
 
 /// The elements `multimem.st` writes (ROADMAP U12 slice 3).

@@ -196,6 +196,7 @@ impl Emitter<'_> {
                 let at = self.unpack_nibble(place, at)?;
                 self.bind_local(*local, &at)?;
             }
+            Stmt::MulticastLoadReduce { .. } => self.multicast_load_reduce(s)?,
             Stmt::Store {
                 place: place @ Place::Multicast { .. },
                 value,

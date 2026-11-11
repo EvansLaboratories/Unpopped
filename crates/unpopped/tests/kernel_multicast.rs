@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! ROADMAP U12 slice 3 (`docs/options-u12-peer-multicast.md`): `Place::Multicast` names one element on every device at
 //! once. A `Store` writes all copies (`multimem.st`), an `AtomicRmw` at `System` scope with `Release` order combines
-//! into all copies (`multimem.red`); a `Load` is refused (`ld_reduce` is slice 4). The expected arrays are worked by
+//! into all copies (`multimem.red`); a `Load` is refused (`MulticastLoadReduce` reads it). The expected arrays are worked by
 //! hand; the fixtures are `tests/support/multicast.rs`, on `tests/support/device_peer.rs`.
 
 use unpopped::exec::{LaunchShape, Scope};
@@ -202,7 +202,7 @@ fn refused(k: &KernelFn) -> bool {
 
 #[test]
 fn the_checker_refuses_what_multimem_cannot_do() {
-    // ld_reduce is slice 4; there is no compare-and-swap on a multicast address
+    // a reducing read is a MulticastLoadReduce; there is no compare-and-swap on a multicast address
     assert!(refused(&one(I32, load(0, multicast(1, c(0))))));
     assert!(refused(&one(
         I32,

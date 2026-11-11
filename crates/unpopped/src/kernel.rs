@@ -200,7 +200,7 @@ pub enum Place {
     /// `F32`, `F16` and `Bf16`. An `AtomicRmw` must have `scope: System`, `order: Release` (the hardware always
     /// releases at system scope) and no `old` (a reduction has no single old value); its op and element are `Add`,
     /// `Min` or `Max` on `I32`/`U32`, or `Add` on `F32` (`F16`/`Bf16` `Add` is refused until the oracle has a 16-bit
-    /// float atomic). A `Load`, `AtomicCas` or `CopyAsync` is refused (`ld_reduce` is slice 4). Each device's copy is
+    /// float atomic). A `Load`, `AtomicCas` or `CopyAsync` is refused (a reducing read is a [`Stmt::MulticastLoadReduce`]). Each device's copy is
     /// ordered like any cross-device access: by a `System` barrier or a `System`-scope release/acquire pair, and an
     /// unordered access is a data race. Float `Add` order across devices is unspecified in a band, as a float atomic's.
     Multicast {
@@ -361,6 +361,26 @@ pub enum Stmt {
         order: MemoryOrder,
         /// The scope the atomicity holds at.
         scope: Scope,
+    },
+    /// Declare `local` as the **reduction over every device's copy** of the element a [`Place::Multicast`] names (PTX
+    /// `multimem.ld_reduce`, ROADMAP U12 slice 4; the one `Stmt` U12 adds, so a breaking change). `op` combines the
+    /// devices' values: `Add`, `Min` or `Max` on `I32`/`U32` (exact; `Add` wraps), `Add` on `F32`, and `Add`, `Min`
+    /// or `Max` on `F16`/`Bf16`, whose sum is accumulated in `f32` and rounded to the element type once. A float `Add`
+    /// has unspecified order across devices (a band, as a float atomic's; the oracle adds in device order); a NaN
+    /// operand of a float `Min`/`Max` is unspecified. `order` is `Relaxed` or `Acquire` (the hardware's `weak` form is
+    /// `Relaxed`); the access is at `System` scope. Each device's copy is read as an atomic access, so the read races
+    /// only with a plain write, and `Acquire` takes in what a `System`-scope release (a `multimem.red`, an atomic or a
+    /// barrier) published. The place must be a [`Place::Multicast`], in a launch of several devices, on a buffer the
+    /// kernel can read; `local` has the element's type.
+    MulticastLoadReduce {
+        /// The local id.
+        local: u32,
+        /// The element on every device; a [`Place::Multicast`].
+        place: Place,
+        /// The combine.
+        op: AtomicOp,
+        /// The memory order: `Relaxed` or `Acquire`.
+        order: MemoryOrder,
     },
     /// A memory fence of `scope` with `order`. Since 0.42.8 the oracle runs it as the C++ fence rules do: a release
     /// fence (`Release`, `AcqRel`, `SeqCst`) before a relaxed atomic publishes what the thread knew; an acquire fence
