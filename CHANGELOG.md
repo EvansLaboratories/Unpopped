@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.45.5` — feature, `unpopped-cpu-c` spells a dynamic-extent `Shared` or `Private` allocation (ROADMAP U16)
+
+`unpopped_cpu_c::CpuC::lower_kernel` now lowers a kernel with an `Extent::Param` allocation (CUDA's `extern __shared__`, sized by a scalar launch argument), which it used to refuse. C cannot size an automatic array at run time (MSVC has no VLAs), so the kernel becomes two functions: a body `<name>_impl` that takes each dynamic array as a pointer parameter (`sh<i>_dyn`), and the entry point, which reads the scalar, returns status 2 for a count that is not positive, `calloc`s one zeroed copy per block of the grid (status 3 if that fails), calls the body and frees the arrays whatever it returns, so every bounds check inside the body is still a plain `return 1`. `#include <stdlib.h>` is emitted only for such a kernel; every other kernel's C is unchanged. An index past the count is status 1, as the interpreter's `AllocOutOfBounds`; a cluster peer (`Place::ClusterPeer`) reads a dynamic array. Still typed refusals: a dynamic extent in a launch of several devices and in a callee of a module (each a ROADMAP U16 remainder). No public API changed.
+
+**Tests:** `kernel_dynamic_shared_emit_agrees` (7: counts 4 and 9, a `Private` array, a cluster exchange, an index past the count, a non-positive count, the emitted text), 2 seeded mutants of the emitted C caught.
+
+---
+
 ## `0.45.4` — feature, `unpopped-cpu-c` spells `F16` and `Bf16` in a kernel (ROADMAP U14); the oracle converts a float to an integer
 
 `unpopped_cpu_c::CpuC::lower_kernel` now lowers a kernel with `F16` or `Bf16` buffers, parameters, locals and shared allocations. A narrow float is its 16-bit pattern in C (an `unsigned short`) and moves unchanged through `Load`, `Store`, `Select`, `MaskedLoad`/`MaskedStore`, `CopyAsync` and `Place::Multicast` (`multimem.st`); a `Cast` to or from it uses the `cfamily::half_helpers` codec (decode to `float`, encode once to nearest even, overflow to infinity); `multimem.ld_reduce` on a narrow element decodes every device's copy, combines in `float` (`Add`, `Min`, `Max`) and encodes once, as the oracle does. What stays refused, with a typed error that says to `Cast` to `F32` first: arithmetic or a comparison on a narrow value, a narrow compute dtype, a `Cast` from `F64`, `I32`, `U32`, `I64` or `U64` to a narrow float (it would round twice), `Saturation::ClampFinite` and a directed rounding mode into a narrow float (ROADMAP U26). No public API changed.
