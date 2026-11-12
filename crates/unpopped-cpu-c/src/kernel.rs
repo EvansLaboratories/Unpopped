@@ -660,7 +660,8 @@ fn infix(
 pub(crate) fn lower_kernel(k: &KernelFn) -> Result<GeneratedKernel, LowerError> {
     let name = format!("unpopped_cpu_kernel_{}", ident(&k.name));
     let text = function_text(k, (None, &name, false))?;
-    Ok(GeneratedKernel::new(name, with_prelude(&k.name, &text)))
+    Ok(GeneratedKernel::new(name, with_prelude(&k.name, &text))
+        .with_interface(unpopped::kernel_interface::KernelInterface::of(k)))
 }
 
 /// The file header and the shared helpers, then `body` (one or more C functions).
