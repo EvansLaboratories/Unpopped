@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.45.3` — fix, the C reference's test harness: `-ffp-contract=off` and correctly typed 8/16-bit buffers
+
+`crates/unpopped-cpu-c/tests/support/cc.rs` now passes `-ffp-contract=off` to GCC and Clang. The emitted C promises one rounding per operation; a compiler that fuses `a * b + c` into a fused multiply-add rounds once, a ulp away, and the CI runner's compiler began doing so: a rerun of main's own commit failed `kernel_emit_agrees::f32_arithmetic_rounds_every_operation_like_float` and `elementwise_binary_with_constants_agrees_f32_and_f64` on `verify`, `msrv` and `all-features`, where the same commit had passed hours earlier. Test harness only; no crate source changed.
+
+The harness's C driver also declared every buffer of an integer narrower than 32 bits as `int*` (and sized it by four bytes); the runner's newer GCC treats the mismatch with the kernel's `const signed char*` parameters as an error (`-Wincompatible-pointer-types`), so the sparse and block-scaled MMA suites (`mma_chain_sp_*`) failed to compile. `kernel_run.rs` now declares `I8`/`U8`/`I16`/`U16` buffers with their own C types and widths.
+
+---
+
 ## `0.45.2` — docs, ROADMAP rows U13-U24 for the IR gaps found by the paged-decode coverage check; U9c and U12b updated
 
 Every gap the FlashInfer paged-decode coverage check and baracuda#356 found is now a ROADMAP row with an owner and a size (CireSnave's full-union standard: "refused" is a gap). New rows: U13 `CopyAsync` predicated/zero-fill/cache-hint/pipeline, U14 cpu-c `F16`/`Bf16`, U15 8/16-lane packed values, U16 cpu-c dynamic `Shared`, U17 PDL `griddepcontrol`, U18 `Stmt::For` unroll hint (0.46.0, BREAKING), U19 C-family frontend (XL), U20 `lower_kernel` for the CUDA and Slang emitters, U21 texture/surface, U22 expression-valued grid, U23 struct parameters, U24 the `multimem` refusals. U9c records that its trigger (pointer values) is met; U12b widens to a plain `AtomicRmw` on 16-bit floats. Docs only; no code changed.

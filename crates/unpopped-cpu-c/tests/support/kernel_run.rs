@@ -25,7 +25,10 @@ pub(crate) fn ctype(t: ElementKind) -> &'static str {
         ElementKind::I64 => "long long",
         ElementKind::U32 => "unsigned int",
         ElementKind::U64 => "unsigned long long",
-        ElementKind::I4 | ElementKind::U4 => "unsigned char",
+        ElementKind::I4 | ElementKind::U4 | ElementKind::U8 => "unsigned char",
+        ElementKind::I8 => "signed char",
+        ElementKind::I16 => "short",
+        ElementKind::U16 => "unsigned short",
         _ => "int",
     }
 }
@@ -34,7 +37,8 @@ pub(crate) fn ctype(t: ElementKind) -> &'static str {
 pub(crate) fn width(t: ElementKind) -> usize {
     match t {
         ElementKind::F64 | ElementKind::I64 | ElementKind::U64 => 8,
-        ElementKind::I4 | ElementKind::U4 => 1, // the packed byte
+        ElementKind::I4 | ElementKind::U4 | ElementKind::I8 | ElementKind::U8 => 1, // I4/U4: the packed byte
+        ElementKind::I16 | ElementKind::U16 => 2,
         _ => 4,
     }
 }
