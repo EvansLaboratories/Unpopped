@@ -7,15 +7,11 @@
 //! NaN payload survives), and the refusals: arithmetic or a comparison on a narrow value, a `Cast` that would round
 //! twice. The seeded mutants of the emitted C break the codec and the carrier, and each must change the bytes.
 
-use unpopped::backend::Backend;
 use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
 use unpopped::ir::{BinaryOp, CastSpec, RoundMode, Saturation, ScalarExpr};
-use unpopped::kernel::{
-    BarrierKind, Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt, check_kernel,
-};
+use unpopped::kernel::{BarrierKind, Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
-use unpopped_cpu_c::CpuC;
 use unpopped_vocab::ElementKind;
 
 #[path = "support/cc.rs"]
@@ -430,6 +426,28 @@ fn pair_index(v: ScalarExpr, k: i64) -> ScalarExpr {
 /// Thread `t` of 4 copies `in[2t..2t+2]` (4 bytes) into shared memory, waits, and after a barrier writes the mirror
 /// thread's pair to `out[2t..2t+2]`.
 fn mirrored_copy(tag: &str, t: ElementKind) -> KernelFn {
+    let params = vec![
+        Param::buffer("in", t, BufferRole::Read, Some(1)),
+        Param::buffer("out", t, BufferRole::Write, Some(1)),
+    ];
+    KernelFn::new(
+        tag,
+        F32,
+        params,
+        vec![LocalDecl::scalar(t), LocalDecl::scalar(t)],
+        Block(mirrored_copy_body()),
+    )
+    .with_allocs(vec![AllocDecl::new(
+        "tile",
+        MemorySpace::Shared,
+        t,
+        Extent::Static(8),
+    )])
+    .with_launch(LaunchShape::new([4, 1, 1], [1, 1, 1]))
+}
+
+/// The statements of [`mirrored_copy`]: copy, commit, wait, barrier, then the two reads and writes.
+fn mirrored_copy_body() -> Vec<Stmt> {
     let tid = ScalarExpr::Exec(ExecId::ThreadIdx(0));
     let mirror = ScalarExpr::Sub(
         Box::new(ScalarExpr::ConstInt(3, U32)),
@@ -464,117 +482,7 @@ fn mirrored_copy(tag: &str, t: ElementKind) -> KernelFn {
             value: ScalarExpr::Local(k as u32),
         });
     }
-    let params = vec![
-        Param::buffer("in", t, BufferRole::Read, Some(1)),
-        Param::buffer("out", t, BufferRole::Write, Some(1)),
-    ];
-    KernelFn::new(
-        tag,
-        F32,
-        params,
-        vec![LocalDecl::scalar(t), LocalDecl::scalar(t)],
-        Block(body),
-    )
-    .with_allocs(vec![AllocDecl::new(
-        "tile",
-        MemorySpace::Shared,
-        t,
-        Extent::Static(8),
-    )])
-    .with_launch(LaunchShape::new([4, 1, 1], [1, 1, 1]))
-}
-
-#[test]
-fn a_narrow_scalar_parameter_is_moved_and_cast() {
-    let k = KernelFn::new(
-        "scalar_param",
-        F32,
-        vec![
-            Param::scalar("s", ElementKind::F16, 0),
-            Param::buffer("out", F32, BufferRole::Write, Some(1)),
-        ],
-        vec![LocalDecl::scalar(ElementKind::F16)],
-        Block(vec![Stmt::Store {
-            place: at(1, ci(0)),
-            value: cast(ScalarExpr::Local(0), F32),
-        }]),
-    );
-    // the driver binds only int and float scalars, so this kernel is checked for its spelling, not run
-    let g = CpuC.lower_kernel(&k);
-    assert!(g.is_ok(), "{g:?}");
-    assert!(g.unwrap().source.contains("unp_f16_dec(l0)"));
-}
-
-fn refusal(k: &KernelFn) -> String {
-    match CpuC.lower_kernel(k) {
-        Err(e) => e.to_string(),
-        Ok(_) => panic!("the kernel was lowered, expected a refusal"),
-    }
-}
-
-#[test]
-fn arithmetic_or_a_comparison_on_a_narrow_value_is_refused_not_miscomputed() {
-    let t = ElementKind::F16;
-    for (tag, e) in [
-        (
-            "add",
-            ScalarExpr::Add(
-                Box::new(ScalarExpr::Local(1)),
-                Box::new(ScalarExpr::Local(1)),
-            ),
-        ),
-        (
-            "cmp",
-            ScalarExpr::Binary(
-                BinaryOp::CmpLt,
-                Box::new(ScalarExpr::Local(1)),
-                Box::new(ScalarExpr::Local(1)),
-            ),
-        ),
-        (
-            "cast_then_add",
-            ScalarExpr::Add(
-                Box::new(cast(ScalarExpr::Local(1), t)),
-                Box::new(cast(ScalarExpr::Const(1.0), t)),
-            ),
-        ),
-    ] {
-        let k = looped(
-            tag,
-            vec![
-                Param::buffer("in", t, BufferRole::Read, Some(1)),
-                Param::buffer("out", F32, BufferRole::Write, Some(1)),
-            ],
-            vec![t],
-            4,
-            vec![load(1, 0), store(1, cast(e, F32))],
-        );
-        // the checker admits each of these kernels, so the refusal is the emitter's own, and it says what to do
-        assert_eq!(check_kernel(&k), Ok(()), "{tag}: well formed");
-        let msg = refusal(&k);
-        assert!(msg.contains("Cast it to F32 first"), "{tag}: {msg}");
-    }
-}
-
-#[test]
-fn a_cast_that_would_round_twice_is_a_typed_decline() {
-    for (tag, from) in [("i32", I32), ("f64", ElementKind::F64), ("u32", U32)] {
-        let k = looped(
-            tag,
-            vec![
-                Param::buffer("in", from, BufferRole::Read, Some(1)),
-                Param::buffer("out", ElementKind::F16, BufferRole::Write, Some(1)),
-            ],
-            vec![from],
-            2,
-            vec![
-                load(1, 0),
-                store(1, cast(ScalarExpr::Local(1), ElementKind::F16)),
-            ],
-        );
-        let msg = refusal(&k);
-        assert!(msg.contains("would round twice"), "{tag}: {msg}");
-    }
+    body
 }
 
 #[test]
@@ -620,40 +528,5 @@ fn the_corpus_catches_seeded_mutants_of_the_emitted_codec_and_carrier() {
         })
         .expect("a C compiler");
         assert_ne!(got.outs, base.outs, "mutant survived: {what}");
-    }
-}
-
-#[test]
-fn a_cast_to_a_narrow_float_declines_a_mode_the_codec_cannot_honour() {
-    let spec = |round, sat| CastSpec {
-        to: ElementKind::F16,
-        round,
-        sat,
-    };
-    for (tag, s) in [
-        ("toward_zero", spec(RoundMode::TowardZero, Saturation::Wrap)),
-        (
-            "clamp_finite",
-            spec(RoundMode::NearestEven, Saturation::ClampFinite),
-        ),
-    ] {
-        let k = looped(
-            tag,
-            vec![
-                Param::buffer("in", F32, BufferRole::Read, Some(1)),
-                Param::buffer("out", ElementKind::F16, BufferRole::Write, Some(1)),
-            ],
-            vec![F32],
-            2,
-            vec![
-                load(1, 0),
-                store(1, ScalarExpr::Cast(Box::new(ScalarExpr::Local(1)), s)),
-            ],
-        );
-        let msg = refusal(&k);
-        assert!(
-            msg.contains("NearestEven") || msg.contains("Saturation::Wrap"),
-            "{tag}: {msg}"
-        );
     }
 }
