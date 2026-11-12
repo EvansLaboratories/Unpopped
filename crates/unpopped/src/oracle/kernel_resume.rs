@@ -143,6 +143,7 @@ impl<'a> Machine<'a> {
             | Stmt::MaskedStore { .. }
             | Stmt::AtomicRmw { .. }
             | Stmt::AtomicCas { .. }
+            | Stmt::MulticastLoadReduce { .. }
             | Stmt::CopyAsync { .. }
             | Stmt::AsyncCommit
             | Stmt::AsyncWait { .. }

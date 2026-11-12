@@ -190,6 +190,7 @@ impl Walk<'_> {
             | Stmt::Assign { .. }
             | Stmt::AtomicRmw { .. }
             | Stmt::AtomicCas { .. }
+            | Stmt::MulticastLoadReduce { .. }
             | Stmt::Collective { .. }
             | Stmt::CollectiveTuple { .. }
             | Stmt::Call { .. }
@@ -250,6 +251,8 @@ impl Walk<'_> {
                     self.mark(*local);
                 }
             }
+            // read at different moments by different threads, so the value may differ between them
+            Stmt::MulticastLoadReduce { local, .. } => self.mark(*local),
             Stmt::Call {
                 callee,
                 args,

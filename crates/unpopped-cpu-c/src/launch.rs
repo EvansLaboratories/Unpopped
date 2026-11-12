@@ -861,6 +861,47 @@ impl Emitter<'_> {
         Ok(())
     }
 
+    /// `multimem.ld_reduce`: a `MulticastLoadReduce` folds the element of every device's copy, in device order, with the
+    /// op of the statement, then binds the result. A 16-bit float element is not spelled by this emitter at all.
+    pub(crate) fn multicast_load_reduce(&mut self, s: &Stmt) -> Result<(), LowerError> {
+        let Stmt::MulticastLoadReduce {
+            local,
+            place: place @ Place::Multicast { buffer, coords },
+            op,
+            ..
+        } = s
+        else {
+            return Err(refuse(
+                "a MulticastLoadReduce on a place that is not multicast",
+            ));
+        };
+        let info = self.peer_info(*buffer, "a Place::Multicast")?;
+        let elem = self.place_elem(place)?;
+        let t = ctype(elem, "a multicast element")?;
+        let n = self.fresh;
+        self.fresh += 1;
+        self.line("{");
+        self.depth += 1;
+        self.line(&format!("{t} r{n}v = 0;"));
+        self.line(&format!(
+            "for (long long md{n} = 0; md{n} < {}; ++md{n}) {{",
+            info.devices
+        ));
+        self.depth += 1;
+        let at = self.btab_address(*buffer, &format!("md{n}"), (coords, n))?;
+        self.line(&format!("{t} x{n} = {at};"));
+        let new = atomic_new(*op, elem, &format!("r{n}v"), &format!("x{n}"))?;
+        self.line(&format!("r{n}v = md{n} == 0 ? x{n} : ({t})({new});"));
+        self.depth -= 1;
+        self.line("}");
+        let r = self.local_ref(*local);
+        let lt = self.local_ctype(*local)?;
+        self.line(&format!("{r} = ({lt})r{n}v;"));
+        self.depth -= 1;
+        self.line("}");
+        Ok(())
+    }
+
     /// An `AtomicCas` as a plain compare and store: serial, hence atomic. `old` receives the value found.
     pub(crate) fn atomic_cas(&mut self, s: &Stmt) -> Result<(), LowerError> {
         let Stmt::AtomicCas {
