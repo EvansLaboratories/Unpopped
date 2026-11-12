@@ -58,6 +58,7 @@ use unpopped_vocab::{ElementKind, TargetId};
 
 mod collective;
 mod collective_tuple;
+mod dynamic;
 mod kernel;
 mod launch;
 mod mma;

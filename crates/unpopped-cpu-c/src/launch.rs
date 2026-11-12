@@ -50,6 +50,7 @@ use unpopped::ir::ScalarExpr;
 use unpopped::kernel::{AtomicOp, KernelFn, ParamKind, Place, Stmt};
 use unpopped_vocab::ElementKind;
 
+use crate::dynamic::{extent_expr, len_expr};
 use crate::kernel::{Emitter, ctype, refuse};
 
 /// A block with more threads than this is refused: its per-thread local arrays live on the C stack.
@@ -164,12 +165,6 @@ fn admit_alloc(a: &AllocDecl) -> Result<(), LowerError> {
             a.name, a.space
         )));
     }
-    if !matches!(a.extent, Extent::Static(_)) {
-        return Err(refuse(format!(
-            "allocation `{}` has a dynamic extent",
-            a.name
-        )));
-    }
     ctype(a.elem, &format!("allocation `{}`", a.name)).map(|_| ())
 }
 
@@ -278,13 +273,6 @@ pub(crate) fn exec_c(info: LaunchInfo, id: ExecId) -> Result<String, LowerError>
 }
 
 /// Elements of storage for an allocation of `n`: a `Private` array has its own copy per thread of the block.
-fn alloc_len(space: MemorySpace, n: u32, threads: u32) -> u64 {
-    match space {
-        MemorySpace::Private => u64::from(n) * u64::from(threads),
-        _ => u64::from(n),
-    }
-}
-
 impl Emitter<'_> {
     fn info_threads(&self) -> u32 {
         LaunchInfo::of(self.k).map_or(1, LaunchInfo::threads)
@@ -416,12 +404,14 @@ impl Emitter<'_> {
             self.line(&format!("{t} l{i}_all[{}];", nb * nt));
         }
         for (i, a) in self.k.allocs.iter().enumerate() {
-            let Extent::Static(n) = a.extent else {
-                return Err(refuse("a dynamic extent"));
-            };
             let t = ctype(a.elem, "an allocation")?;
-            let len = alloc_len(a.space, n, nt);
-            self.line(&format!("{t} sh{i}_all[{}] = {{0}};", u64::from(nb) * len));
+            if matches!(a.extent, Extent::Param(_)) {
+                // the entry point allocated it, zeroed, one copy per block (`dynamic.rs`)
+                self.line(&format!("{t} *sh{i}_all = sh{i}_dyn;"));
+                continue;
+            }
+            let len = len_expr(self.k, a, nt)?;
+            self.line(&format!("{t} sh{i}_all[{nb} * {len}] = {{0}};"));
         }
         Ok(())
     }
@@ -475,11 +465,9 @@ impl Emitter<'_> {
     /// Point `sh<i>` at this block's slice of `sh<i>_all`.
     fn view_shared_of_block(&mut self) -> Result<(), LowerError> {
         for (i, a) in self.k.allocs.iter().enumerate() {
-            let Extent::Static(n) = a.extent else {
-                return Err(refuse("a dynamic extent"));
-            };
+            let n = extent_expr(self.k, a)?;
             let t = ctype(a.elem, "an allocation")?;
-            let len = alloc_len(a.space, n, self.info_threads());
+            let len = len_expr(self.k, a, self.info_threads())?;
             self.line(&format!("{t} *sh{i} = &sh{i}_all[bl * {len}];"));
             if self.module.is_some() {
                 self.line(&format!(
@@ -492,12 +480,18 @@ impl Emitter<'_> {
 
     fn declare_shared(&mut self) -> Result<(), LowerError> {
         for (i, a) in self.k.allocs.iter().enumerate() {
-            let Extent::Static(n) = a.extent else {
-                return Err(refuse("a dynamic extent"));
-            };
+            let n = extent_expr(self.k, a)?;
             let t = ctype(a.elem, "an allocation")?;
-            let len = alloc_len(a.space, n, self.info_threads());
-            self.line(&format!("{t} sh{i}[{len}] = {{0}};"));
+            let len = len_expr(self.k, a, self.info_threads())?;
+            if matches!(a.extent, Extent::Param(_)) {
+                // one block's copy, zeroed for every block as a static array's initializer would
+                self.line(&format!("{t} *sh{i} = sh{i}_dyn;"));
+                self.line(&format!(
+                    "for (long long z = 0; z < {len}; ++z) sh{i}[z] = 0;"
+                ));
+            } else {
+                self.line(&format!("{t} sh{i}[{len}] = {{0}};"));
+            }
             if self.module.is_some() {
                 // the shape and stride a callee's buffer parameter is bound to when the array is passed
                 self.line(&format!(
@@ -646,10 +640,7 @@ impl Emitter<'_> {
             return Err(refuse("a Place::Alloc without a launch shape"));
         }
         let decl = &self.k.allocs[*alloc as usize];
-        let extent = match decl.extent {
-            Extent::Static(n) => n,
-            _ => return Err(refuse("a dynamic extent")),
-        };
+        let extent = extent_expr(self.k, decl)?;
         let private = decl.space == MemorySpace::Private;
         let n = self.fresh;
         self.fresh += 1;
@@ -687,9 +678,7 @@ impl Emitter<'_> {
             String::new()
         };
         let decl = &self.k.allocs[alloc as usize];
-        let Extent::Static(extent) = decl.extent else {
-            return Err(refuse("a dynamic extent"));
-        };
+        let extent = extent_expr(self.k, decl)?;
         let n = self.fresh;
         self.fresh += 1;
         let (r, i) = (self.expr(block)?, self.expr(index)?);
