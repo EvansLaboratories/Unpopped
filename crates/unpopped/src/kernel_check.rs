@@ -441,12 +441,7 @@ fn check_stmt(
             declare(k, *local, ty, sc, declared_here)?;
         }
         Stmt::Load { local, place } => check_load(k, *local, place, sc, declared_here)?,
-        Stmt::MulticastLoadReduce {
-            local,
-            place,
-            op,
-            order,
-        } => check_multicast_load_reduce(k, (*local, place, *op, *order), sc, declared_here)?,
+        Stmt::MulticastLoadReduce { .. } => check_multicast_load_reduce(k, st, sc, declared_here)?,
         Stmt::Assign { local, value } => check_assign(k, *local, value, sc)?,
         Stmt::Store { place, value } => check_store(k, place, value, sc)?,
         Stmt::MaskedLoad {
@@ -639,10 +634,20 @@ fn check_multicast_red(
 /// `local` with the element's type.
 fn check_multicast_load_reduce(
     k: &KernelFn,
-    (local, place, op, order): (u32, &Place, AtomicOp, MemoryOrder),
+    stmt: &Stmt,
     sc: &mut Scope,
     declared_here: &mut Vec<usize>,
 ) -> Result<(), KernelError> {
+    let Stmt::MulticastLoadReduce {
+        local,
+        place,
+        op,
+        order,
+    } = stmt
+    else {
+        unreachable!("called for a MulticastLoadReduce");
+    };
+    let (local, op, order) = (*local, *op, *order);
     let refuse = |what| Err(KernelError::MulticastUnsupported { what });
     if !matches!(place, Place::Multicast { .. }) {
         return refuse("a MulticastLoadReduce on a place other than a multicast one");
