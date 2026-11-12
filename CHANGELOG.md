@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.45.2` — docs, ROADMAP rows U13-U24 for the IR gaps found by the paged-decode coverage check; U9c and U12b updated
+
+Every gap the FlashInfer paged-decode coverage check and baracuda#356 found is now a ROADMAP row with an owner and a size (CireSnave's full-union standard: "refused" is a gap). New rows: U13 `CopyAsync` predicated/zero-fill/cache-hint/pipeline, U14 cpu-c `F16`/`Bf16`, U15 8/16-lane packed values, U16 cpu-c dynamic `Shared`, U17 PDL `griddepcontrol`, U18 `Stmt::For` unroll hint (0.46.0, BREAKING), U19 C-family frontend (XL), U20 `lower_kernel` for the CUDA and Slang emitters, U21 texture/surface, U22 expression-valued grid, U23 struct parameters, U24 the `multimem` refusals. U9c records that its trigger (pointer values) is met; U12b widens to a plain `AtomicRmw` on 16-bit floats. Docs only; no code changed.
+
+---
+
 ## `0.45.1` — feature, `GeneratedKernel::interface`, a `KernelInterface` for a lowered kernel (PM ruling 2026-11-11 on fishstringer#17)
 
 `Backend::lower_kernel` now has somewhere to say how its result is launched. **`GeneratedKernel::with_interface(KernelInterface)` and `GeneratedKernel::interface() -> Option<&KernelInterface>`** (new module `unpopped::kernel_interface`). **Additive:** `GeneratedKernel` is `#[non_exhaustive]`, the new field is `None` by default, and `KernelInterface` and every type in it are `#[non_exhaustive]` with constructors and `with_*` builders. The interface is **not** part of `revision_hash` (the emitter-set fields follow from the source the emitter wrote).
