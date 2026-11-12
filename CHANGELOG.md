@@ -15,6 +15,16 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.45.4` — feature, `unpopped-cpu-c` spells `F16` and `Bf16` in a kernel (ROADMAP U14); the oracle converts a float to an integer
+
+`unpopped_cpu_c::CpuC::lower_kernel` now lowers a kernel with `F16` or `Bf16` buffers, parameters, locals and shared allocations. A narrow float is its 16-bit pattern in C (an `unsigned short`) and moves unchanged through `Load`, `Store`, `Select`, `MaskedLoad`/`MaskedStore`, `CopyAsync` and `Place::Multicast` (`multimem.st`); a `Cast` to or from it uses the `cfamily::half_helpers` codec (decode to `float`, encode once to nearest even, overflow to infinity); `multimem.ld_reduce` on a narrow element decodes every device's copy, combines in `float` (`Add`, `Min`, `Max`) and encodes once, as the oracle does. What stays refused, with a typed error that says to `Cast` to `F32` first: arithmetic or a comparison on a narrow value, a narrow compute dtype, a `Cast` from `F64`, `I32`, `U32`, `I64` or `U64` to a narrow float (it would round twice), `Saturation::ClampFinite` and a directed rounding mode into a narrow float (ROADMAP U26). No public API changed.
+
+**Oracle fix (found by the differential):** a `Cast` of a float to an integer in a kernel trapped with "integer expression outside the v0 subset" although the checker admitted it; the oracle's integer evaluator read the operand as an integer. A float-to-integer `Cast` now goes through the float node (rounded by the mode, saturated into the destination, NaN to 0).
+
+**Tests:** `kernel_narrow_float_emit_agrees` (11: a decode of all 65536 patterns of each type, an encode on and between the patterns and at the overflow edge, narrow-to-narrow and 16-bit-integer sources, a float-to-integer cast, bit moves with NaN payloads, a launched copy through shared memory, the refusals, 4 seeded mutants of the emitted codec), `kernel_multicast_emit_agrees` (narrow `multimem.st` and `ld_reduce`, 2 more mutants) and `kernel_cast_float_to_int` (2); 6 of 6 seeded mutants of the source caught. The multicast fixture computes a narrow element in `f32` (it does no arithmetic on it).
+
+---
+
 ## `0.45.3` — fix, the C reference's test harness: `-ffp-contract=off` and correctly typed 8/16-bit buffers
 
 `crates/unpopped-cpu-c/tests/support/cc.rs` now passes `-ffp-contract=off` to GCC and Clang. The emitted C promises one rounding per operation; a compiler that fuses `a * b + c` into a fused multiply-add rounds once, a ulp away, and the CI runner's compiler began doing so: a rerun of main's own commit failed `kernel_emit_agrees::f32_arithmetic_rounds_every_operation_like_float` and `elementwise_binary_with_constants_agrees_f32_and_f64` on `verify`, `msrv` and `all-features`, where the same commit had passed hours earlier. Test harness only; no crate source changed.

@@ -51,6 +51,8 @@ pub(crate) fn ctype(t: ElementKind, what: &str) -> Result<&'static str, LowerErr
     match t {
         ElementKind::I4 => return Ok("signed char"),
         ElementKind::U4 => return Ok("unsigned char"),
+        // a narrow float is its 16-bit pattern in C (`narrow.rs`)
+        ElementKind::F16 | ElementKind::Bf16 => return Ok("unsigned short"),
         _ => {}
     }
     typed::c_type(t).ok_or_else(|| {
@@ -144,6 +146,13 @@ impl Emitter<'_> {
     }
 
     pub(crate) fn expr(&self, e: &ScalarExpr) -> Result<String, LowerError> {
+        crate::narrow::guard(self.k, e, false)?;
+        lower_expr(e, self.lo)?.spelled().map_err(LowerError::from)
+    }
+
+    /// A value that is bound, assigned or stored: a narrow float's bit pattern may be this whole expression.
+    pub(crate) fn value_expr(&self, e: &ScalarExpr) -> Result<String, LowerError> {
+        crate::narrow::guard(self.k, e, true)?;
         lower_expr(e, self.lo)?.spelled().map_err(LowerError::from)
     }
 
@@ -183,11 +192,11 @@ impl Emitter<'_> {
     pub(crate) fn stmt(&mut self, s: &Stmt) -> Result<(), LowerError> {
         match s {
             Stmt::Let { local, init } => {
-                let v = self.expr(init)?;
+                let v = self.value_expr(init)?;
                 self.bind_local(*local, &v)?;
             }
             Stmt::Assign { local, value } => {
-                let (t, v) = (self.local_ctype(*local)?, self.expr(value)?);
+                let (t, v) = (self.local_ctype(*local)?, self.value_expr(value)?);
                 let r = self.local_ref(*local);
                 self.line(&format!("{r} = ({t})({v});"));
             }
@@ -202,7 +211,7 @@ impl Emitter<'_> {
                 value,
             } => self.multicast_store(place, value)?,
             Stmt::Store { place, value } => {
-                let (at, v) = (self.address(place)?, self.expr(value)?);
+                let (at, v) = (self.address(place)?, self.value_expr(value)?);
                 self.line(&format!("{at} = {v};"));
             }
             Stmt::MaskedLoad {
@@ -217,7 +226,7 @@ impl Emitter<'_> {
                 let (t, m, f) = (
                     self.local_ctype(*local)?,
                     self.expr(mask)?,
-                    self.expr(fill)?,
+                    self.value_expr(fill)?,
                 );
                 self.line(&format!("{t} mv{n} = ({t})({f});"));
                 self.line(&format!("if (({m}) != 0) {{"));
@@ -233,7 +242,7 @@ impl Emitter<'_> {
                 let m = self.expr(mask)?;
                 self.line(&format!("if (({m}) != 0) {{"));
                 self.depth += 1;
-                let (at, v) = (self.address(place)?, self.expr(value)?);
+                let (at, v) = (self.address(place)?, self.value_expr(value)?);
                 self.line(&format!("{at} = {v};"));
                 self.depth -= 1;
                 self.line("}");
@@ -677,6 +686,7 @@ pub(crate) fn with_prelude(kernel_name: &str, body: &str) -> String {
     src.push('\n');
     src.push_str(qualified::FTZ_HELPER);
     src.push('\n');
+    src.push_str(&crate::narrow::helpers_for(body));
     src.push_str(body);
     src
 }

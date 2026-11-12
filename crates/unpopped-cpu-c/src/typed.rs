@@ -119,6 +119,9 @@ pub(crate) fn cpu_cast(
     if unpopped::types::is_subbyte_int(from) || unpopped::types::is_subbyte_int(to) {
         return cpu_subbyte_cast(x, from, to);
     }
+    if crate::narrow::is_narrow(from) || crate::narrow::is_narrow(to) {
+        return cpu_narrow_cast(x, from, spec);
+    }
     // The conversion helpers (`unp_clamp_ll`, `unp_sat_f2ll`) are `long long` based, which
     // cannot hold a `u64` above `i64::MAX` or its range: decline rather than approximate.
     if from == ElementKind::U64 || to == ElementKind::U64 {
@@ -203,6 +206,59 @@ pub(crate) fn cpu_cast(
         },
     };
     Ok(Spelling::Spelled(spelled))
+}
+
+/// Spell a `Cast` with an `F16` or `Bf16` endpoint (ROADMAP U14) through the codec of `cfamily::half_helpers`: a narrow
+/// source is decoded to a `float` exactly, a narrow destination is encoded from a `float`, rounded once to nearest even.
+/// Only the sources that reach `float` without a first rounding are spelled (`F32`, a narrow float, an integer of 16 bits
+/// or fewer); an `F64` or a 32/64-bit integer would round twice, so they decline. Overflow goes to infinity
+/// (`Saturation::Wrap`); `ClampFinite` and a directed rounding mode decline.
+fn cpu_narrow_cast(x: String, from: ElementKind, spec: CastSpec) -> Result<Spelling, LowerError> {
+    use crate::narrow::{is_narrow, load_fn, store_fn};
+    let to = spec.to;
+    if let Some(enc) = store_fn(to).filter(|_| is_narrow(to)) {
+        if spec.sat != Saturation::Wrap {
+            return decline(
+                DeclinedOp::Cast,
+                format!(
+                    "cpu_c spells a Cast to {to:?} only with Saturation::Wrap (overflow to infinity), got {:?}",
+                    spec.sat
+                ),
+            );
+        }
+        if rounding_matters(from, to) && spec.round != RoundMode::NearestEven {
+            return decline(
+                DeclinedOp::Cast,
+                format!(
+                    "cpu_c spells {from:?} -> {to:?} only for RoundMode::NearestEven, got {:?}",
+                    spec.round
+                ),
+            );
+        }
+        let as_float = match (load_fn(from), from) {
+            (Some(dec), _) => format!("{dec}({x})"),
+            (None, ElementKind::F32) => x,
+            (None, ElementKind::I8 | ElementKind::I16 | ElementKind::U8 | ElementKind::U16) => {
+                format!("((float)({x}))")
+            }
+            _ => {
+                return decline(
+                    DeclinedOp::Cast,
+                    format!(
+                        "cpu_c has no single-rounding spelling for the Cast {from:?} -> {to:?} (it would round twice through float)"
+                    ),
+                );
+            }
+        };
+        return Ok(Spelling::Spelled(format!("{enc}({as_float})")));
+    }
+    let Some(dec) = load_fn(from) else {
+        return decline(
+            DeclinedOp::Cast,
+            format!("cpu_c has no C type for the Cast {from:?} -> {to:?}"),
+        );
+    };
+    cpu_cast(format!("{dec}({x})"), ElementKind::F32, spec)
 }
 
 /// Spell a `Cast` with a sub-byte endpoint (the checker allows only `Saturation::Wrap` and an integer on the other side).
