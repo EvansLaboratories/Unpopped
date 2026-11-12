@@ -355,6 +355,7 @@ impl<'a> Machine<'a> {
             | Stmt::MaskedStore { .. }
             | Stmt::AtomicRmw { .. }
             | Stmt::AtomicCas { .. }
+            | Stmt::MulticastLoadReduce { .. }
             | Stmt::Fence { .. } => {
                 self.exec_simple(st)?;
             }
@@ -422,6 +423,16 @@ impl<'a> Machine<'a> {
             }
             Stmt::Load { local, place } => {
                 let v = self.load(place)?;
+                self.locals[*local as usize] = Some(v);
+            }
+            Stmt::MulticastLoadReduce {
+                local,
+                place,
+                op,
+                order,
+            } => {
+                self.set_site(*order, crate::exec::Scope::System);
+                let v = self.multicast_load_reduce(*op, place)?;
                 self.locals[*local as usize] = Some(v);
             }
             Stmt::MaskedLoad {
@@ -694,6 +705,26 @@ impl<'a> Machine<'a> {
             first.get_or_insert(Val::Raw(before, dt));
         }
         first.ok_or(KernelTrap::Unsupported("a multicast place on no device"))
+    }
+
+    /// `multimem.ld_reduce`: the reduction by `op` of every device's copy of the element, each read logged as an atomic
+    /// access (it races with a plain write only, and an `Acquire` site takes in a `System` release).
+    fn multicast_load_reduce(&mut self, op: AtomicOp, place: &Place) -> Result<Val, KernelTrap> {
+        let mut seen = Vec::new();
+        for (b, off) in self.multicast_targets(place)? {
+            self.note_global(b, off, AccessKind::Atomic)?;
+            let KernelArg::Buffer(tb) = &self.args[b] else {
+                unreachable!("multicast_targets returned a buffer");
+            };
+            seen.push(read_elem(&tb.bytes, off, tb.dtype));
+        }
+        let KernelArg::Buffer(tb) = &self.args[self.root(match place {
+            Place::Multicast { buffer, .. } => *buffer,
+            _ => unreachable!("multicast_targets accepted a multicast place"),
+        })] else {
+            unreachable!("multicast_targets returned a buffer");
+        };
+        reduce_devices(op, tb.dtype, &seen)
     }
 
     fn store(&mut self, place: &Place, v: Val) -> Result<(), KernelTrap> {
@@ -1021,6 +1052,42 @@ pub(super) fn atomic_apply(
             ))
         }
         _ => Err(KernelTrap::Unsupported("an atomic outside the v1 form")),
+    }
+}
+
+/// The reduction by `op` of the raw values `seen` (one per device, in device order) of an element of type `dt`
+/// (`multimem.ld_reduce`). Integers and `F32` fold through [`atomic_apply`] (an integer `Add` wraps; `F32` `Add` is one
+/// rounded add per device, in order: the order is unspecified in a band). `F16` and `Bf16` accumulate in `f32` and round
+/// to the element once (`Add`, `Min`, `Max`; a NaN operand of `Min`/`Max` is unspecified).
+fn reduce_devices(op: AtomicOp, dt: ElementKind, seen: &[u128]) -> Result<Val, KernelTrap> {
+    let (&first, rest) = seen
+        .split_first()
+        .ok_or(KernelTrap::Unsupported("a multicast place on no device"))?;
+    match dt {
+        ElementKind::F16 | ElementKind::Bf16 => {
+            let of = |b: u128| super::raw_to_f64(b, dt) as f32;
+            let mut acc = of(first);
+            for &b in rest {
+                let x = of(b);
+                acc = match op {
+                    AtomicOp::Add => acc + x,
+                    AtomicOp::Min => acc.min(x),
+                    AtomicOp::Max => acc.max(x),
+                    _ => return Err(KernelTrap::Unsupported("a multicast reduce op")),
+                };
+            }
+            Ok(Val::Raw(super::encode_float(f64::from(acc), dt), dt))
+        }
+        _ => {
+            let mut acc = Val::Raw(first, dt);
+            for &b in rest {
+                let Val::Raw(a, _) = acc else {
+                    unreachable!("atomic_apply returns a raw value");
+                };
+                acc = atomic_apply(op, dt, a, b, dt)?;
+            }
+            Ok(acc)
+        }
     }
 }
 

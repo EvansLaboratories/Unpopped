@@ -84,6 +84,152 @@ pub(crate) fn broadcast(elem: ElementKind, sync: Option<Scope>) -> KernelFn {
     kernel_of(elem, "broadcast_st", (2, body))
 }
 
+/// `multimem.ld_reduce` of element `buffer[gid]` over the devices into local `local`.
+pub(crate) fn ld_reduce(local: u32, buffer: u32, (op, order): (AtomicOp, MemoryOrder)) -> Stmt {
+    Stmt::MulticastLoadReduce {
+        local,
+        place: multicast(buffer, gid()),
+        op,
+        order,
+    }
+}
+
+/// `if rank == 0 { then }`.
+fn on_device_zero(then: Vec<Stmt>) -> Stmt {
+    Stmt::If {
+        cond: unpopped::ir::ScalarExpr::Binary(
+            unpopped::ir::BinaryOp::CmpEq,
+            Box::new(rank()),
+            Box::new(c(0)),
+        ),
+        then: Block(then),
+        els: Block(vec![]),
+    }
+}
+
+/// Every device reduces the devices' `inp[gid]` by `ld_reduce` into its own `res[gid]`. Locals: 0 the reduced value.
+pub(crate) fn reduce_inputs(elem: ElementKind, form: (AtomicOp, MemoryOrder)) -> KernelFn {
+    let body = vec![ld_reduce(0, 0, form), store(at(2, gid()), local(0))];
+    kernel_of(elem, "ld_reduce_inputs", (1, body))
+}
+
+/// Device 0 writes its `inp[gid]` into `acc[gid]` of every device by `multimem.st`; after `sync` every device reduces
+/// the devices' `acc[gid]` by `ld_reduce` into its `res[gid]`. Locals: 0 the input, 1 the reduced value.
+pub(crate) fn st_then_ld_reduce(
+    elem: ElementKind,
+    form: (AtomicOp, MemoryOrder),
+    sync: Option<Scope>,
+) -> KernelFn {
+    let mut body = vec![
+        load(0, at(0, gid())),
+        on_device_zero(vec![store(multicast(1, gid()), local(0))]),
+    ];
+    body.extend(sync.map(barrier));
+    body.push(ld_reduce(1, 1, form));
+    body.push(store(at(2, gid()), local(1)));
+    kernel_of(elem, "st_then_ld_reduce", (2, body))
+}
+
+/// The second all-reduce form: device 0 reduces the devices' `inp[gid]` by `ld_reduce` and writes the result into
+/// `acc[gid]` of every device by `multimem.st`; after a `System` barrier every device reads its own copy into `res[gid]`.
+/// Locals: 0 the reduced value, 1 the copy read back.
+pub(crate) fn ld_reduce_then_st(elem: ElementKind, form: (AtomicOp, MemoryOrder)) -> KernelFn {
+    let body = vec![
+        on_device_zero(vec![
+            ld_reduce(0, 0, form),
+            store(multicast(1, gid()), local(0)),
+        ]),
+        barrier(Scope::System),
+        load(1, at(1, gid())),
+        store(at(2, gid()), local(1)),
+    ];
+    kernel_of(elem, "ld_reduce_then_st", (2, body))
+}
+
+/// A hand-off across devices ordered by the `ld_reduce`'s `order`. Thread 0 of device 0 writes 7 into its own `res[0]`,
+/// then publishes with `multimem.red` (`Release`, `System`) on `acc[0]`; thread 0 of every other device `ld_reduce`s
+/// `acc[0]` with `order` and, having seen the flag, reads device 0's `res[0]` and keeps it in its own `res[0]`. With an
+/// `Acquire` the read is ordered after the write; with a `Relaxed` it is a data race. Locals: 0 the flag, 1 the value.
+pub(crate) fn acquire_handoff(order: MemoryOrder) -> KernelFn {
+    use unpopped::ir::{BinaryOp, ScalarExpr};
+    let cmp = |op, a, b| ScalarExpr::Binary(op, Box::new(a), Box::new(b));
+    let when = |cond, then| Stmt::If {
+        cond,
+        then: Block(then),
+        els: Block(vec![]),
+    };
+    let first_thread = || cmp(BinaryOp::CmpEq, gid(), c(0));
+    let publish = vec![
+        store(at(2, c(0)), c(7)),
+        Stmt::AtomicRmw {
+            op: AtomicOp::Add,
+            place: multicast(1, c(0)),
+            value: c(1),
+            old: None,
+            order: MemoryOrder::Release,
+            scope: Scope::System,
+        },
+    ];
+    let consume = vec![
+        ld_reduce(0, 1, (AtomicOp::Add, order)),
+        load(1, super::fixture::peer(2, c(0), c(0))),
+        store(at(2, c(0)), local(1)),
+    ];
+    let body = vec![
+        when(
+            cmp(BinaryOp::CmpEq, rank(), c(0)),
+            vec![when(first_thread(), publish)],
+        ),
+        when(
+            cmp(BinaryOp::CmpGt, rank(), c(0)),
+            vec![when(first_thread(), consume)],
+        ),
+    ];
+    kernel_of(ElementKind::I32, "acquire_handoff", (2, body))
+}
+
+/// Every device adds its `inp[gid]` into `acc[gid]` of every device by `multimem.red`, then, with nothing between,
+/// reduces the devices' `acc[gid]` by `ld_reduce` into its `res[gid]`: atomics do not race with each other, so the
+/// launch runs (the value read depends on the schedule). Locals: 0 the input, 1 the reduced value.
+pub(crate) fn red_then_ld_reduce(elem: ElementKind) -> KernelFn {
+    let body = vec![
+        load(0, at(0, gid())),
+        red(AtomicOp::Add, local(0)),
+        ld_reduce(1, 1, (AtomicOp::Add, MemoryOrder::Acquire)),
+        store(at(2, gid()), local(1)),
+    ];
+    kernel_of(elem, "red_then_ld_reduce", (2, body))
+}
+
+/// An `ld_reduce` of buffer 0, which this kernel declares `Write` only.
+pub(crate) fn ld_reduce_of_a_write_only_buffer() -> KernelFn {
+    let elem = ElementKind::I32;
+    KernelFn::new(
+        "ld_reduce_write_only",
+        elem,
+        vec![Param::buffer("out", elem, BufferRole::Write, Some(1))],
+        vec![LocalDecl::scalar(elem)],
+        Block(vec![ld_reduce(0, 0, (AtomicOp::Add, MemoryOrder::Acquire))]),
+    )
+    .with_launch(gather_launch())
+}
+
+/// A `Block` barrier under a condition on an `ld_reduce` result: the value may differ between the threads of a block, so
+/// the barrier is divergent. Locals: 0 the reduced value.
+pub(crate) fn barrier_on_a_reduced_value() -> KernelFn {
+    use unpopped::ir::{BinaryOp, ScalarExpr};
+    let cond = ScalarExpr::Binary(BinaryOp::CmpGt, Box::new(local(0)), Box::new(c(0)));
+    let body = vec![
+        ld_reduce(0, 0, (AtomicOp::Add, MemoryOrder::Acquire)),
+        Stmt::If {
+            cond,
+            then: Block(vec![barrier(Scope::Block)]),
+            els: Block(vec![]),
+        },
+    ];
+    kernel_of(ElementKind::I32, "barrier_on_reduced", (1, body))
+}
+
 /// A kernel whose one statement is `st`, over the buffers of `all_reduce` (for the checker's refusals).
 pub(crate) fn one(elem: ElementKind, st: Stmt) -> KernelFn {
     kernel_of(elem, "multicast_one", (1, vec![st]))

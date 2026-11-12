@@ -6,7 +6,7 @@
 //! written bytes of every device with the interpreter's. The seeded mutants of the emitted C each have to change them.
 
 use unpopped::exec::Scope;
-use unpopped::kernel::{AtomicOp, KernelFn};
+use unpopped::kernel::{AtomicOp, KernelFn, MemoryOrder};
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
 use unpopped::oracle::kernel_launch::run_launch_devices;
@@ -33,7 +33,7 @@ mod fixture;
 mod mc;
 use devices_run::{run_c_devices, written_devices};
 use fixture::{D, I32};
-use mc::{all_reduce, broadcast};
+use mc::{all_reduce, broadcast, ld_reduce_then_st, reduce_inputs, st_then_ld_reduce};
 
 const F32: ElementKind = ElementKind::F32;
 /// Elements of every buffer: one per thread of a device (2 blocks of 2).
@@ -104,9 +104,47 @@ fn kernels() -> Vec<(&'static str, KernelFn, Vec<Vec<KernelArg>>)> {
     ]
 }
 
+/// The `ld_reduce` kernels (ROADMAP U12 slice 4) with their devices' arguments, by name. A 16-bit element is not spelled
+/// by this emitter, so those are the oracle's alone (`kernel_multicast_load_reduce`).
+fn reduce_kernels() -> Vec<(&'static str, KernelFn, Vec<Vec<KernelArg>>)> {
+    let acq = MemoryOrder::Acquire;
+    vec![
+        (
+            "mc_ld_add",
+            reduce_inputs(I32, (AtomicOp::Add, acq)),
+            int_devices(0),
+        ),
+        (
+            "mc_ld_min",
+            reduce_inputs(I32, (AtomicOp::Min, MemoryOrder::Relaxed)),
+            int_devices(0),
+        ),
+        (
+            "mc_ld_max",
+            reduce_inputs(I32, (AtomicOp::Max, acq)),
+            int_devices(0),
+        ),
+        (
+            "mc_ld_f32",
+            reduce_inputs(F32, (AtomicOp::Add, acq)),
+            float_devices(),
+        ),
+        (
+            "mc_st_ld",
+            st_then_ld_reduce(I32, (AtomicOp::Add, acq), Some(Scope::System)),
+            int_devices(0),
+        ),
+        (
+            "mc_ld_st",
+            ld_reduce_then_st(I32, (AtomicOp::Add, acq)),
+            int_devices(0),
+        ),
+    ]
+}
+
 #[test]
 fn a_multicast_store_and_reduction_agree_with_the_launch_interpreter() {
-    for (tag, k, args) in kernels() {
+    for (tag, k, args) in kernels().into_iter().chain(reduce_kernels()) {
         devices_run::agree_devices(tag, &k, args);
     }
 }
@@ -121,6 +159,13 @@ struct Mutant {
 }
 
 fn mutants() -> Vec<Mutant> {
+    let mut all = store_and_red_mutants();
+    all.extend(ld_reduce_mutants());
+    all
+}
+
+/// Mutants of a multicast `Store` and `AtomicRmw` (slice 3).
+fn store_and_red_mutants() -> Vec<Mutant> {
     let sys = Some(Scope::System);
     let red = |tag, from, to| Mutant {
         tag,
@@ -152,6 +197,57 @@ fn mutants() -> Vec<Mutant> {
             "mc_mut_st_self",
             "btab1[md1][o1] = mv1;",
             "btab1[dev][o1] = mv1;",
+        ),
+    ]
+}
+
+/// Mutants of a `MulticastLoadReduce` (slice 4): the devices' inputs reduced by `Add` (60 + 3 * i) and by `Min` (device 0
+/// holds the minimum, so a mutant that reads only device 0 would go unnoticed by `Min`: each mutant's data has to tell it
+/// apart).
+fn ld_reduce_mutants() -> Vec<Mutant> {
+    let ld = |tag, op, order, from, to| Mutant {
+        tag,
+        kernel: reduce_inputs(I32, (op, order)),
+        args: int_devices(0),
+        from,
+        to,
+    };
+    let (add, min) = (
+        (AtomicOp::Add, MemoryOrder::Acquire),
+        (AtomicOp::Min, MemoryOrder::Relaxed),
+    );
+    vec![
+        // the reduction reads the first device's copy only
+        ld(
+            "mc_mut_ld_one",
+            add.0,
+            add.1,
+            "md0 < 3; ++md0",
+            "md0 < 1; ++md0",
+        ),
+        // the first device's value is combined with the zero it starts from
+        ld(
+            "mc_mut_ld_seed",
+            min.0,
+            min.1,
+            "md0 == 0 ? x0",
+            "md0 < 0 ? x0",
+        ),
+        // a minimum becomes a maximum
+        ld(
+            "mc_mut_ld_op",
+            min.0,
+            min.1,
+            "r0v < x0 ? r0v : x0",
+            "r0v > x0 ? r0v : x0",
+        ),
+        // every device reads the running device's own copy
+        ld(
+            "mc_mut_ld_self",
+            add.0,
+            add.1,
+            "x0 = btab0[md0][o0];",
+            "x0 = btab0[dev][o0];",
         ),
     ]
 }
