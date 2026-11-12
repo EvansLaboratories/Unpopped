@@ -38,6 +38,17 @@ fn id_table(atom: &MmaAtom, which: usize, name: &str) -> Result<String, LowerErr
     ))
 }
 
+/// The C type of an MMA fragment element. A narrow float has a C type now (its bit pattern), but the product and the sum
+/// here are computed on `double` and `long long` values, so a fragment of one is still refused.
+fn fragment_ctype(t: ElementKind, what: &str) -> Result<&'static str, LowerError> {
+    if crate::narrow::is_narrow(t) {
+        return Err(refuse(format!(
+            "{what} has dtype {t:?}, which this emitter does not spell as a fragment (ROADMAP U26)"
+        )));
+    }
+    ctype(t, what)
+}
+
 fn is_float(t: ElementKind) -> bool {
     matches!(
         t,
@@ -73,12 +84,12 @@ impl Emitter<'_> {
         }
         let (ta, tb, tacc) = atom.dtypes();
         for (t, what) in [(ta, "an MMA A fragment"), (tb, "an MMA B fragment")] {
-            ctype(t, what)?;
+            fragment_ctype(t, what)?;
         }
         for (_, t) in &roles {
-            ctype(*t, "an MMA extra fragment")?;
+            fragment_ctype(*t, "an MMA extra fragment")?;
         }
-        let td = ctype(tacc, "an MMA accumulator fragment")?;
+        let td = fragment_ctype(tacc, "an MMA accumulator fragment")?;
         let wide = if is_float(tacc) {
             "double"
         } else {

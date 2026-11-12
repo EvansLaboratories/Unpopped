@@ -62,6 +62,7 @@ mod kernel;
 mod launch;
 mod mma;
 mod module;
+mod narrow;
 pub use module::lower_module;
 mod qualified;
 mod typed;

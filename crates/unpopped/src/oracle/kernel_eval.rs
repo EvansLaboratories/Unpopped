@@ -787,9 +787,25 @@ impl<'a> Machine<'a> {
             Ty::Scalar(t) if types::is_subbyte_int(t) => {
                 Ok(Val::Raw((self.eval_subbyte(e, t)? as u128) & 0xf, t))
             }
+            // a float-to-integer `Cast` (round, saturate, NaN to 0) is a float node producing an integer: the node-by-node
+            // evaluation reads the operand at its own type and the oracle's cast does the conversion
+            Ty::Scalar(t) if types::int_range(t).is_some() && self.is_float_to_int_cast(e) => {
+                self.eval_mixed(e)
+            }
             Ty::Scalar(t) if types::int_range(t).is_some() => Ok(int_val(self.eval_int(e, t)?, t)),
             Ty::Scalar(t) => self.eval_float(e, t),
         }
+    }
+
+    /// Whether `e` is a `Cast` whose operand is a float (a value the integer evaluator cannot read).
+    fn is_float_to_int_cast(&self, e: &ScalarExpr) -> bool {
+        let ScalarExpr::Cast(x, _) = e else {
+            return false;
+        };
+        matches!(
+            types::infer_ty_in(x, self.k.compute, &self.local_tys),
+            Ok(Ty::Scalar(from)) if types::is_cast_float(from)
+        )
     }
 
     /// An integer expression at type `t`. `Div` is the total definition of
