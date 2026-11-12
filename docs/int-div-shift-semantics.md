@@ -26,8 +26,9 @@ saying its `arith`/`binary`/`const_int` seams spell the rules above, and only th
 integer `Div` at `I32`/`I64`/`U32`/`U64`, a `ConstInt` leaf at an integer compute dtype and (0.40.10) an Elementwise `Select` and comparison at those dtypes, so the integer `Rem` composition below plans. A backend that does not override it is
 refused exactly as before (`tests/integer_div_gate_is_opt_in.rs`). This document stays the single source of the semantics; the
 method's docs and the CHANGELOG point here rather than restate them. `Shl`/`Shr` were already legal at `I32`/`I64` (8- and
-16-bit operands stay leaf-only) and are unchanged. Opted in so far: Rockfish (first); Baracuda, Vulkane and openclownfish are
-unaffected and opt in separately.
+16-bit operands stay leaf-only) and are unchanged. Opted in so far: Rockfish (first) and Vulkane (2026-11-11: `vulkane-spirv-emit`
+returns `total_integer_ops() = true`, with guarded `Div`/`Rem`/`Select`/comparison/`ConstInt`, vulkane#152; its 288 device
+results match the host rule, as reported by the PM); Baracuda and openclownfish are unaffected and opt in separately.
 
 _The note below is the measured design as written before the ruling._
 

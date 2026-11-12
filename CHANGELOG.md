@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.44.41` — docs, ROADMAP E16 and the integer semantics note record that Vulkane opted in to the total integer ops
+
+`vulkane-spirv-emit` now returns `Backend::total_integer_ops() = true` (vulkane#152): guarded `Div`, `Rem`, `Select`, comparison and `ConstInt`, with 288 device results matching the host rule. This was reported by the PM; this lane did not re-run it. `ROADMAP.md` row E16 and `docs/int-div-shift-semantics.md` ("Opted in so far") say so; Baracuda and openclownfish are still to opt in. No code changes.
+
+---
+
 ## `0.44.40` — feature, `Place::Multicast`, a store and a reduction into one element on every device (ROADMAP U12 slice 3)
 
 `Place::Multicast { buffer, coords }` names one element of a buffer **on every device of a multi-device launch at once** (PTX `multimem`). A `Store` on it writes the value to every device's copy (`multimem.st`; `I32`, `U32`, `F32`, `F16`, `Bf16`). An `AtomicRmw` on it combines the value into every device's copy (`multimem.red`): it must have `scope: System`, `order: Release` (the hardware always releases at system scope) and no `old` value, and its op and element are `Add`, `Min` or `Max` on `I32`/`U32`, or `Add` on `F32`. A `Load`, `AtomicCas` and `MaskedStore` on a multicast place, and a multicast place in a launch of one device, are refused: `KernelError::MulticastUnsupported` (new) and `PeerUnsupported`. A `Load` that reduces across devices (`multimem.ld_reduce`) is slice 4. **A 16-bit float `red` (`F16`/`Bf16` `Add`) is refused for now**: it is a real instruction, but the oracle's atomic form has no 16-bit float step yet. **Additive:** `Place` and `KernelError` are `#[non_exhaustive]` and `Stmt` is untouched, so no external match breaks.
