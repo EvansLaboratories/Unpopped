@@ -1,3 +1,5 @@
-kind: fix, the C reference's test harness compiles with `-ffp-contract=off`
+kind: fix, the C reference's test harness: `-ffp-contract=off` and correctly typed 8/16-bit buffers
 ---
 `crates/unpopped-cpu-c/tests/support/cc.rs` now passes `-ffp-contract=off` to GCC and Clang. The emitted C promises one rounding per operation; a compiler that fuses `a * b + c` into a fused multiply-add rounds once, a ulp away, and the CI runner's compiler began doing so: a rerun of main's own commit failed `kernel_emit_agrees::f32_arithmetic_rounds_every_operation_like_float` and `elementwise_binary_with_constants_agrees_f32_and_f64` on `verify`, `msrv` and `all-features`, where the same commit had passed hours earlier. Test harness only; no crate source changed.
+
+The harness's C driver also declared every buffer of an integer narrower than 32 bits as `int*` (and sized it by four bytes); the runner's newer GCC treats the mismatch with the kernel's `const signed char*` parameters as an error (`-Wincompatible-pointer-types`), so the sparse and block-scaled MMA suites (`mma_chain_sp_*`) failed to compile. `kernel_run.rs` now declares `I8`/`U8`/`I16`/`U16` buffers with their own C types and widths.
