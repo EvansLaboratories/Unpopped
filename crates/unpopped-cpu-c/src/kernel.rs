@@ -585,7 +585,7 @@ pub(crate) fn buffer_ptr(elem: ElementKind, role: BufferRole) -> Result<String, 
 }
 
 /// The signature, with one line per C argument.
-fn signature(
+pub(crate) fn signature(
     k: &KernelFn,
     name: &str,
     (ids, results): (bool, &[&'static str]),
@@ -778,17 +778,9 @@ fn emit(
     if crate::dynamic::dynamic_allocs(k).is_empty() {
         return Ok(format!("{sig} {{\n{}{store}    return 0;\n}}\n", e.out));
     }
-    if callee {
-        return Err(refuse("a callee with a dynamic-extent allocation"));
-    }
     // a dynamic-extent allocation: the body takes its arrays, the entry point makes them (`dynamic.rs`)
-    let body_sig = signature(k, &format!("{name}_impl"), (false, &res_types))?;
-    Ok(format!(
-        "{} {{\n{}{store}    return 0;\n}}\n\n{}",
-        crate::dynamic::impl_signature(k, &body_sig)?,
-        e.out,
-        crate::dynamic::entry(k, &sig, name)?
-    ))
+    let body = format!("{}{store}", e.out);
+    crate::dynamic::compose(k, (name, callee), (&sig, &body), &res_types)
 }
 
 impl Emitter<'_> {

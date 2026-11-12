@@ -134,3 +134,22 @@ pub(crate) fn entry(k: &KernelFn, signature: &str, name: &str) -> Result<String,
     text.push_str("    return st;\n}\n");
     Ok(text)
 }
+
+/// The two functions of a kernel with a dynamic-extent allocation: the body (`<name>_impl`) and the entry point.
+/// `sig` is the entry point's signature and `body` the statements of the body.
+pub(crate) fn compose(
+    k: &KernelFn,
+    (name, callee): (&str, bool),
+    (sig, body): (&str, &str),
+    res_types: &[&'static str],
+) -> Result<String, LowerError> {
+    if callee {
+        return Err(refuse("a callee with a dynamic-extent allocation"));
+    }
+    let body_sig = crate::kernel::signature(k, &format!("{name}_impl"), (false, res_types))?;
+    Ok(format!(
+        "{} {{\n{body}    return 0;\n}}\n\n{}",
+        impl_signature(k, &body_sig)?,
+        entry(k, sig, name)?
+    ))
+}
