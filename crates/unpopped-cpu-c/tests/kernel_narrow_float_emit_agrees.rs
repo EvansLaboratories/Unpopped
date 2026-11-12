@@ -7,11 +7,13 @@
 //! NaN payload survives), and the refusals: arithmetic or a comparison on a narrow value, a `Cast` that would round
 //! twice. The seeded mutants of the emitted C break the codec and the carrier, and each must change the bytes.
 
+use unpopped::backend::Backend;
 use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
 use unpopped::ir::{BinaryOp, CastSpec, RoundMode, Saturation, ScalarExpr};
 use unpopped::kernel::{BarrierKind, Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
+use unpopped_cpu_c::CpuC;
 use unpopped_vocab::ElementKind;
 
 #[path = "support/cc.rs"]
@@ -529,4 +531,37 @@ fn the_corpus_catches_seeded_mutants_of_the_emitted_codec_and_carrier() {
         .expect("a C compiler");
         assert_ne!(got.outs, base.outs, "mutant survived: {what}");
     }
+}
+
+#[test]
+fn the_emitted_c_carries_exactly_the_codec_it_calls() {
+    // a decode of one type carries that type's decoder and not the other's, and a kernel with no narrow float none
+    let f16 = CpuC
+        .lower_kernel(&decode(ElementKind::F16, 4))
+        .expect("lowers");
+    assert!(f16.source.contains("unp_f16_dec"), "{}", f16.source);
+    assert!(!f16.source.contains("unpopped_bf16_load"), "{}", f16.source);
+    assert!(
+        !f16.source.contains("unp_f16_enc"),
+        "a decode needs no encoder:
+{}",
+        f16.source
+    );
+    let bf16 = CpuC
+        .lower_kernel(&decode(ElementKind::Bf16, 4))
+        .expect("lowers");
+    assert!(
+        bf16.source.contains("unpopped_bf16_load"),
+        "{}",
+        bf16.source
+    );
+    assert!(
+        !bf16.source.contains("unpopped_f16_load"),
+        "{}",
+        bf16.source
+    );
+    let enc = CpuC
+        .lower_kernel(&encode(ElementKind::F16, 4))
+        .expect("lowers");
+    assert!(enc.source.contains("unp_f16_enc"), "{}", enc.source);
 }
