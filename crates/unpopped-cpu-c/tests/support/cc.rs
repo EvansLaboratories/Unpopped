@@ -164,7 +164,10 @@ impl CCompiler {
             c.arg(src)
                 .arg("-o")
                 .arg(exe)
-                .arg(if optimize { "-O2" } else { "-O0" });
+                .arg(if optimize { "-O2" } else { "-O0" })
+                // the reference rounds every operation: a compiler that fuses `a * b + c` into one fused
+                // multiply-add (GCC's default on a target with the instruction) rounds once, a ulp away
+                .arg("-ffp-contract=off");
             if self.needs_libm {
                 c.arg("-lm");
             }
