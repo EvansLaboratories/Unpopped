@@ -772,7 +772,7 @@ impl Emitter<'_> {
         };
         let info = self.peer_info(*buffer, "a Place::Multicast")?;
         let t = ctype(self.place_elem(place)?, "a multicast element")?;
-        let v = self.expr(value)?;
+        let v = self.value_expr(value)?;
         let n = self.fresh;
         self.fresh += 1;
         self.line("{");
@@ -878,6 +878,9 @@ impl Emitter<'_> {
         let info = self.peer_info(*buffer, "a Place::Multicast")?;
         let elem = self.place_elem(place)?;
         let t = ctype(elem, "a multicast element")?;
+        if crate::narrow::is_narrow(elem) {
+            return self.multicast_load_reduce_narrow(s, elem);
+        }
         let n = self.fresh;
         self.fresh += 1;
         self.line("{");
@@ -897,6 +900,57 @@ impl Emitter<'_> {
         let r = self.local_ref(*local);
         let lt = self.local_ctype(*local)?;
         self.line(&format!("{r} = ({lt})r{n}v;"));
+        self.depth -= 1;
+        self.line("}");
+        Ok(())
+    }
+
+    /// `multimem.ld_reduce` on `F16` or `Bf16`: every device's pattern is decoded to `float`, combined there (the
+    /// oracle accumulates in `f32` and rounds to the element once; a NaN operand of `Min`/`Max` is unspecified), and the
+    /// result encoded once.
+    fn multicast_load_reduce_narrow(
+        &mut self,
+        s: &Stmt,
+        elem: ElementKind,
+    ) -> Result<(), LowerError> {
+        let Stmt::MulticastLoadReduce {
+            local,
+            place: Place::Multicast { buffer, coords },
+            op,
+            ..
+        } = s
+        else {
+            unreachable!("called for a multicast MulticastLoadReduce");
+        };
+        let info = self.peer_info(*buffer, "a Place::Multicast")?;
+        let (Some(dec), Some(enc)) = (crate::narrow::load_fn(elem), crate::narrow::store_fn(elem))
+        else {
+            unreachable!("a narrow element has a codec");
+        };
+        let combine = |acc: &str, x: &str| match op {
+            AtomicOp::Add => Ok(format!("{acc} + {x}")),
+            AtomicOp::Min => Ok(format!("fminf({acc}, {x})")),
+            AtomicOp::Max => Ok(format!("fmaxf({acc}, {x})")),
+            other => Err(refuse(format!("the combine {other:?} on {elem:?}"))),
+        };
+        let n = self.fresh;
+        self.fresh += 1;
+        self.line("{");
+        self.depth += 1;
+        self.line(&format!("float r{n}v = 0.0f;"));
+        self.line(&format!(
+            "for (long long md{n} = 0; md{n} < {}; ++md{n}) {{",
+            info.devices
+        ));
+        self.depth += 1;
+        let at = self.btab_address(*buffer, &format!("md{n}"), (coords, n))?;
+        self.line(&format!("float x{n} = {dec}({at});"));
+        let new = combine(&format!("r{n}v"), &format!("x{n}"))?;
+        self.line(&format!("r{n}v = md{n} == 0 ? x{n} : ({new});"));
+        self.depth -= 1;
+        self.line("}");
+        let r = self.local_ref(*local);
+        self.line(&format!("{r} = {enc}(r{n}v);"));
         self.depth -= 1;
         self.line("}");
         Ok(())
@@ -966,6 +1020,11 @@ impl Emitter<'_> {
 
 /// The new element value `old (op) v` in C, both operands already of the element type.
 fn atomic_new(op: AtomicOp, t: ElementKind, old: &str, v: &str) -> Result<String, LowerError> {
+    if crate::narrow::is_narrow(t) {
+        return Err(refuse(format!(
+            "an atomic combine on {t:?}: the C operators would act on the bit pattern"
+        )));
+    }
     let float = matches!(t, ElementKind::F32 | ElementKind::F64);
     let u = match t {
         ElementKind::I32 | ElementKind::U32 => "unsigned int",

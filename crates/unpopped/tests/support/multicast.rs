@@ -30,9 +30,15 @@ fn kernel_of(elem: ElementKind, name: &str, (locals, body): (usize, Vec<Stmt>)) 
     .into_iter()
     .map(|(n, role)| Param::buffer(n, elem, role, Some(1)))
     .collect();
+    // a narrow float is stored and moved as itself but computed in `f32` (the kernels below do no arithmetic on it)
+    let compute = if matches!(elem, ElementKind::F16 | ElementKind::Bf16) {
+        ElementKind::F32
+    } else {
+        elem
+    };
     KernelFn::new(
         name,
-        elem,
+        compute,
         params,
         (0..locals).map(|_| LocalDecl::scalar(elem)).collect(),
         Block(body),

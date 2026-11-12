@@ -75,6 +75,57 @@ fn float_devices() -> Vec<Vec<KernelArg>> {
         .collect()
 }
 
+/// The 16-bit pattern of `x`, which must be exactly representable (a normal number with at most 10 or 7 fraction bits
+/// and an exponent in the narrow format's range).
+fn narrow_bits(x: f32, dt: ElementKind) -> u16 {
+    let bits = x.to_bits();
+    if dt == ElementKind::Bf16 {
+        assert_eq!(bits & 0xFFFF, 0, "{x} is not a bfloat16");
+        return (bits >> 16) as u16;
+    }
+    assert_eq!(bits & 0x1FFF, 0, "{x} is not a binary16");
+    let sign = (bits >> 16) & 0x8000;
+    let exp = ((bits >> 23) & 0xFF) as i32 - 127 + 15;
+    assert!(
+        x == 0.0 || (1..31).contains(&exp),
+        "{x} is outside the normal binary16 range"
+    );
+    if x == 0.0 {
+        return sign as u16;
+    }
+    (sign | ((exp as u32) << 10) | ((bits & 0x7F_FFFF) >> 13)) as u16
+}
+
+/// Per device, a 16-bit float's `inp`, `acc` and `res`: values chosen so that device 0 holds `2048` (or `256` for
+/// bfloat16) and the others `1`, where adding the devices in turn at 16 bits would round away what one `f32` sum keeps.
+fn narrow_devices(dt: ElementKind) -> Vec<Vec<KernelArg>> {
+    let le = |v: &[f32]| {
+        v.iter()
+            .flat_map(|x| narrow_bits(*x, dt).to_le_bytes())
+            .collect::<Vec<u8>>()
+    };
+    let big = if dt == ElementKind::F16 {
+        2048.0
+    } else {
+        256.0
+    };
+    (0..D as i32)
+        .map(|d| {
+            let inp = [
+                if d == 0 { big } else { 1.0 },
+                0.5 * (d + 1) as f32,
+                -1.5 * d as f32,
+                3.0 - d as f32,
+            ];
+            vec![
+                buffer(dt, le(&inp)),
+                buffer(dt, le(&[0.0; N])),
+                buffer(dt, le(&[0.0; N])),
+            ]
+        })
+        .collect()
+}
+
 /// Every kernel of the fixture with its devices' arguments, by name.
 fn kernels() -> Vec<(&'static str, KernelFn, Vec<Vec<KernelArg>>)> {
     let sys = Some(Scope::System);
@@ -101,11 +152,21 @@ fn kernels() -> Vec<(&'static str, KernelFn, Vec<Vec<KernelArg>>)> {
         ),
         ("mc_st", broadcast(I32, sys), int_devices(-1)),
         ("mc_st_f32", broadcast(F32, sys), float_devices()),
+        (
+            "mc_st_f16",
+            broadcast(ElementKind::F16, sys),
+            narrow_devices(ElementKind::F16),
+        ),
+        (
+            "mc_st_bf16",
+            broadcast(ElementKind::Bf16, sys),
+            narrow_devices(ElementKind::Bf16),
+        ),
     ]
 }
 
-/// The `ld_reduce` kernels (ROADMAP U12 slice 4) with their devices' arguments, by name. A 16-bit element is not spelled
-/// by this emitter, so those are the oracle's alone (`kernel_multicast_load_reduce`).
+/// The `ld_reduce` kernels (ROADMAP U12 slice 4) with their devices' arguments, by name. A 16-bit element is decoded to
+/// `float`, combined there and encoded once (ROADMAP U14), as the oracle does.
 fn reduce_kernels() -> Vec<(&'static str, KernelFn, Vec<Vec<KernelArg>>)> {
     let acq = MemoryOrder::Acquire;
     vec![
@@ -140,6 +201,39 @@ fn reduce_kernels() -> Vec<(&'static str, KernelFn, Vec<Vec<KernelArg>>)> {
             int_devices(0),
         ),
     ]
+    .into_iter()
+    .chain(narrow_reduce_kernels())
+    .collect()
+}
+
+/// `ld_reduce` of `F16` and `Bf16` for `Add`, `Min` and `Max`, and the store-then-reduce form.
+fn narrow_reduce_kernels() -> Vec<(&'static str, KernelFn, Vec<Vec<KernelArg>>)> {
+    let mut out = Vec::new();
+    for (name, dt) in [("f16", ElementKind::F16), ("bf16", ElementKind::Bf16)] {
+        for (op_name, op) in [
+            ("add", AtomicOp::Add),
+            ("min", AtomicOp::Min),
+            ("max", AtomicOp::Max),
+        ] {
+            let tag: &'static str = Box::leak(format!("mc_ld_{op_name}_{name}").into_boxed_str());
+            out.push((
+                tag,
+                reduce_inputs(dt, (op, MemoryOrder::Acquire)),
+                narrow_devices(dt),
+            ));
+        }
+        let tag: &'static str = Box::leak(format!("mc_st_ld_{name}").into_boxed_str());
+        out.push((
+            tag,
+            st_then_ld_reduce(
+                dt,
+                (AtomicOp::Add, MemoryOrder::Acquire),
+                Some(Scope::System),
+            ),
+            narrow_devices(dt),
+        ));
+    }
+    out
 }
 
 #[test]
@@ -161,6 +255,7 @@ struct Mutant {
 fn mutants() -> Vec<Mutant> {
     let mut all = store_and_red_mutants();
     all.extend(ld_reduce_mutants());
+    all.extend(narrow_ld_reduce_mutants());
     all
 }
 
@@ -204,6 +299,32 @@ fn store_and_red_mutants() -> Vec<Mutant> {
 /// Mutants of a `MulticastLoadReduce` (slice 4): the devices' inputs reduced by `Add` (60 + 3 * i) and by `Min` (device 0
 /// holds the minimum, so a mutant that reads only device 0 would go unnoticed by `Min`: each mutant's data has to tell it
 /// apart).
+/// The mutants of the 16-bit `ld_reduce` spelling (ROADMAP U14).
+fn narrow_ld_reduce_mutants() -> Vec<Mutant> {
+    let (add, min) = (
+        (AtomicOp::Add, MemoryOrder::Acquire),
+        (AtomicOp::Min, MemoryOrder::Relaxed),
+    );
+    vec![
+        // a 16-bit minimum becomes a maximum
+        Mutant {
+            tag: "mc_mut_ld_min_f16",
+            kernel: reduce_inputs(ElementKind::F16, (min.0, min.1)),
+            args: narrow_devices(ElementKind::F16),
+            from: "fminf(r0v, x0)",
+            to: "fmaxf(r0v, x0)",
+        },
+        // a 16-bit sum rounds to the element after every device instead of once
+        Mutant {
+            tag: "mc_mut_ld_round_each_f16",
+            kernel: reduce_inputs(ElementKind::F16, (add.0, add.1)),
+            args: narrow_devices(ElementKind::F16),
+            from: "r0v + x0",
+            to: "unp_f16_dec(unp_f16_enc(r0v + x0))",
+        },
+    ]
+}
+
 fn ld_reduce_mutants() -> Vec<Mutant> {
     let ld = |tag, op, order, from, to| Mutant {
         tag,
