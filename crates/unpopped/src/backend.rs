@@ -112,6 +112,9 @@ pub struct GeneratedKernel {
     provenance: Option<Provenance>,
     /// The compiled binary (a SPIR-V word stream), for a target whose artifact is not text.
     words: Option<Vec<u32>>,
+    /// What a consumer needs to launch the kernel, when the backend states it (a kernel from
+    /// [`Backend::lower_kernel`]); `None` for an op kernel and for a backend that does not.
+    interface: Option<crate::kernel_interface::KernelInterface>,
 }
 
 impl GeneratedKernel {
@@ -128,7 +131,22 @@ impl GeneratedKernel {
             source,
             provenance: None,
             words: None,
+            interface: None,
         }
+    }
+
+    /// The same kernel carrying its launch interface (see [`crate::kernel_interface`]). Not part of
+    /// [`revision_hash`](Self::revision_hash): the emitter-set fields follow from the source the emitter wrote.
+    #[must_use]
+    pub fn with_interface(mut self, interface: crate::kernel_interface::KernelInterface) -> Self {
+        self.interface = Some(interface);
+        self
+    }
+
+    /// The launch interface, if the backend stated one.
+    #[must_use]
+    pub fn interface(&self) -> Option<&crate::kernel_interface::KernelInterface> {
+        self.interface.as_ref()
     }
 
     /// The same kernel carrying the binary the target runs (a SPIR-V `[u32]` word stream).
