@@ -10,7 +10,9 @@
 use unpopped::backend::Backend;
 use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
 use unpopped::ir::{BinaryOp, CastSpec, RoundMode, Saturation, ScalarExpr};
-use unpopped::kernel::{BarrierKind, Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
+use unpopped::kernel::{
+    BarrierKind, Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt, check_kernel,
+};
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
 use unpopped_cpu_c::CpuC;
@@ -547,14 +549,10 @@ fn arithmetic_or_a_comparison_on_a_narrow_value_is_refused_not_miscomputed() {
             4,
             vec![load(1, 0), store(1, cast(e, F32))],
         );
-        // a kernel the checker already refuses never reaches the emitter; one it admits must be refused here
-        let msg = std::panic::catch_unwind(|| refusal(&k));
-        if let Ok(m) = msg {
-            assert!(
-                m.contains("narrow") || m.contains("Cast it to F32") || m.contains("ill-formed"),
-                "{tag}: {m}"
-            );
-        }
+        // the checker admits each of these kernels, so the refusal is the emitter's own, and it says what to do
+        assert_eq!(check_kernel(&k), Ok(()), "{tag}: well formed");
+        let msg = refusal(&k);
+        assert!(msg.contains("Cast it to F32 first"), "{tag}: {msg}");
     }
 }
 
@@ -575,10 +573,7 @@ fn a_cast_that_would_round_twice_is_a_typed_decline() {
             ],
         );
         let msg = refusal(&k);
-        assert!(
-            msg.contains("round") || msg.contains("Cast"),
-            "{tag}: {msg}"
-        );
+        assert!(msg.contains("would round twice"), "{tag}: {msg}");
     }
 }
 
@@ -625,5 +620,40 @@ fn the_corpus_catches_seeded_mutants_of_the_emitted_codec_and_carrier() {
         })
         .expect("a C compiler");
         assert_ne!(got.outs, base.outs, "mutant survived: {what}");
+    }
+}
+
+#[test]
+fn a_cast_to_a_narrow_float_declines_a_mode_the_codec_cannot_honour() {
+    let spec = |round, sat| CastSpec {
+        to: ElementKind::F16,
+        round,
+        sat,
+    };
+    for (tag, s) in [
+        ("toward_zero", spec(RoundMode::TowardZero, Saturation::Wrap)),
+        (
+            "clamp_finite",
+            spec(RoundMode::NearestEven, Saturation::ClampFinite),
+        ),
+    ] {
+        let k = looped(
+            tag,
+            vec![
+                Param::buffer("in", F32, BufferRole::Read, Some(1)),
+                Param::buffer("out", ElementKind::F16, BufferRole::Write, Some(1)),
+            ],
+            vec![F32],
+            2,
+            vec![
+                load(1, 0),
+                store(1, ScalarExpr::Cast(Box::new(ScalarExpr::Local(1)), s)),
+            ],
+        );
+        let msg = refusal(&k);
+        assert!(
+            msg.contains("NearestEven") || msg.contains("Saturation::Wrap"),
+            "{tag}: {msg}"
+        );
     }
 }
