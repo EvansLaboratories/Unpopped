@@ -98,6 +98,7 @@ fn near_ties(to: ElementKind, step: usize) -> Vec<f64> {
         65520.0,
         f64::INFINITY,
         f64::NAN,
+        -f64::NAN,
     ];
     for p in (0..top).step_by(step) {
         let mid = (value(to, p) + value(to, p + 1)) / 2.0;
