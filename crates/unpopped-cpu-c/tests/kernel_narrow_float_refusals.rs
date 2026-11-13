@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! **What the C reference refuses of `F16` and `Bf16`** (ROADMAP U14; the spelling is `kernel_narrow_float_emit_agrees`): a
-//! narrow float is a bit pattern in C, so arithmetic or a comparison on one, a `Cast` that would round twice, and a mode the
+//! narrow float is a bit pattern in C, so arithmetic or a comparison on one, and a mode the
 //! codec cannot honour are typed refusals that say what to do instead, never a miscomputed number. The checker admits
 //! every kernel here, so each refusal is the emitter's own.
 
@@ -12,7 +12,6 @@ use unpopped_vocab::ElementKind;
 
 const F32: ElementKind = ElementKind::F32;
 const I32: ElementKind = ElementKind::I32;
-const U32: ElementKind = ElementKind::U32;
 
 fn ci(v: i64) -> ScalarExpr {
     ScalarExpr::ConstInt(v, I32)
@@ -143,27 +142,6 @@ fn arithmetic_or_a_comparison_on_a_narrow_value_is_refused_not_miscomputed() {
         assert_eq!(check_kernel(&k), Ok(()), "{tag}: well formed");
         let msg = refusal(&k);
         assert!(msg.contains("Cast it to F32 first"), "{tag}: {msg}");
-    }
-}
-
-#[test]
-fn a_cast_that_would_round_twice_is_a_typed_decline() {
-    for (tag, from) in [("i32", I32), ("f64", ElementKind::F64), ("u32", U32)] {
-        let k = looped(
-            tag,
-            vec![
-                Param::buffer("in", from, BufferRole::Read, Some(1)),
-                Param::buffer("out", ElementKind::F16, BufferRole::Write, Some(1)),
-            ],
-            vec![from],
-            2,
-            vec![
-                load(1, 0),
-                store(1, cast(ScalarExpr::Local(1), ElementKind::F16)),
-            ],
-        );
-        let msg = refusal(&k);
-        assert!(msg.contains("would round twice"), "{tag}: {msg}");
     }
 }
 

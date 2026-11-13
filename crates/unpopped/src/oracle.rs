@@ -2044,6 +2044,25 @@ fn store_val(v: Val, out: ElementKind, buf: &mut [u8], off: usize) {
     write_elem(buf, off, out, bits);
 }
 
+/// `f` as an `f32` rounded **to odd** (the magnitude truncated, its last bit set when anything was dropped). A 16-bit float
+/// narrowed from this rounds exactly as it would from `f` itself (the `f32` keeps at least two bits more than either
+/// format, so the sticky bit is all the second rounding needs), where the nearest-even `f as f32` first can land on a tie
+/// and double-round (ROADMAP U26). NaN, infinities and zero pass through with their sign.
+fn f64_to_f32_odd(f: f64) -> f32 {
+    let r = f as f32;
+    if !f.is_finite() || f == 0.0 || f64::from(r) == f {
+        return r;
+    }
+    // toward zero: step the nearest result back when it went up in magnitude (`r` may be infinite, whose step is MAX)
+    let bits = r.to_bits();
+    let t = if f64::from(r).abs() > f.abs() {
+        f32::from_bits(bits - 1)
+    } else {
+        r
+    };
+    f32::from_bits(t.to_bits() | 1)
+}
+
 /// Encode an `f64` compute value to `out` (RNE halves; U8 narrows a 0/1
 /// predicate; I64 widens a count).
 fn encode_float(f: f64, out: ElementKind) -> u128 {
@@ -2052,8 +2071,8 @@ fn encode_float(f: f64, out: ElementKind) -> u128 {
         ElementKind::F32 | ElementKind::F32Strict => u128::from((f as f32).to_bits()),
         ElementKind::Fp8E4M3FN => u128::from(f64_to_fp8_e4m3fn_bits(f)),
         ElementKind::Fp8E5M2 => u128::from(f64_to_fp8_e5m2_bits(f)),
-        ElementKind::F16 => u128::from(f32_to_f16_bits(f as f32)),
-        ElementKind::Bf16 => u128::from(f32_to_bf16_bits(f as f32)),
+        ElementKind::F16 => u128::from(f32_to_f16_bits(f64_to_f32_odd(f))),
+        ElementKind::Bf16 => u128::from(f32_to_bf16_bits(f64_to_f32_odd(f))),
         ElementKind::U8 | ElementKind::Bool => u128::from(f as u8),
         ElementKind::I64 => (f as i64) as u128,
         ElementKind::I32 => u128::from((f as i32) as u32),
@@ -5033,6 +5052,28 @@ mod tests {
         // NaN stays NaN in both codecs.
         assert!(f16_to_f64(f32_to_f16_bits(f32::NAN)).is_nan());
         assert!(bf16_to_f64(f32_to_bf16_bits(f32::NAN)).is_nan());
+    }
+
+    /// ROADMAP U26: an `f64` is rounded to a 16-bit float once. `1 + 2^-11` is the tie between `0x3C00` and `0x3C01`;
+    /// a hair above it must round up, which a first rounding to `f32` (landing on the tie, then to even) got wrong.
+    #[test]
+    fn an_f64_rounds_once_to_a_16_bit_float() {
+        let tie = 1.0 + 2f64.powi(-11);
+        assert_eq!(encode_float(tie, ElementKind::F16), 0x3C00); // the tie itself goes to even
+        assert_eq!(encode_float(tie + 1e-12, ElementKind::F16), 0x3C01);
+        assert_eq!(encode_float(tie - 1e-12, ElementKind::F16), 0x3C00);
+        assert_eq!(encode_float(-(tie + 1e-12), ElementKind::F16), 0xBC01);
+        // Bf16: `1 + 2^-8` is the tie between `0x3F80` and `0x3F81`
+        let bt = 1.0 + 2f64.powi(-8);
+        assert_eq!(encode_float(bt, ElementKind::Bf16), 0x3F80);
+        assert_eq!(encode_float(bt + 1e-15, ElementKind::Bf16), 0x3F81);
+        // beyond `f32`'s range both ends still saturate / underflow with their sign
+        assert_eq!(encode_float(1e300, ElementKind::F16), 0x7C00);
+        assert_eq!(encode_float(-1e300, ElementKind::Bf16), 0xFF80);
+        assert_eq!(encode_float(-1e-300, ElementKind::F16), 0x8000);
+        assert_eq!(encode_float(f64::MAX, ElementKind::Bf16), 0x7F80);
+        // a NaN keeps its sign
+        assert_eq!(encode_float(-f64::NAN, ElementKind::F16) & 0x8000, 0x8000);
     }
 
     /// ROADMAP U25: a 16-bit float NaN keeps its sign bit through the decode and every narrow-to-narrow re-encode, as
