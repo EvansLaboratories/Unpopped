@@ -4,6 +4,8 @@
 
 [architecture]
 style = "layered"
+# The number of waivers may only fall; there are none today. (Not read by coderipper 0.43.59: kept so the declaration is whole.)
+ratchet = true
 
 # The vocabulary: dtypes, layouts, plan keys and the manifest data every other crate and every adopter reads. It depends on
 # nothing of ours and changes least.
