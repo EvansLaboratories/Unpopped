@@ -1,3 +1,0 @@
-kind: docs: patent risk notes for the async-copy statements and Collective (hits 22, 23)
----
-CireSnave ruled hit 22 of `docs/PATENT-SWEEP.md` (US11294713B2, US12118382B2) on board 431: publish with a risk note. The sweep row now records the ruling (claims 1, 9, 17 and 23 of US12118382B2 read, our crates only describe the statements, the exposure is an emitter's output), and the rustdoc of `Stmt::CopyAsync`, `Stmt::AsyncCommit` and `Stmt::AsyncWait` carries the note. CireSnave also ruled hit 23 (US8539204B2) A: the sweep row and the rustdoc of `Stmt::Collective` carry the same kind of note. No code change.
