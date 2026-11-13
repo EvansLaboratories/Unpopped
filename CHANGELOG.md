@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.45.8` — docs, PATENT-SWEEP re-sweep for the families built since 0.34 (cp.async, extern, MMA atoms, collectives, masked access, cluster-peer, multi-device, multimem); two hits uncleared
+
+**Docs only; no code, API or behaviour change.** `docs/PATENT-SWEEP.md` gains the re-sweep its own rule asks for at each new family (the last text is 2026-10-29/31): eight ideas (23-30), the queries with the patents each returned, and hit rows 22-31 with every independent claim read in full from Google Patents' claim text (`tools/patent-claims.py`). Eight of the ten hits are **outside as read**: every independent claim needs hardware or a network device (cores, datapaths, a work distributor, a decoder and mask register, a switch, credits and packets) the crates are not. **Two are uncleared and go to the PM before a release**: hit 22 (NVIDIA US11294713B2 and US12118382B2, an API that blocks a thread's first instructions while its second instructions run, until asynchronous copies reach shared memory; the nearest thing here is `Stmt::AsyncWait`, not yet published) and hit 23 (NVIDIA US8539204B2 claims 1 and 12, a barrier aggregation instruction that combines the threads' values and waits for all; the nearest thing is `Stmt::Collective`, whose oracle and C reference are already in 0.43.2). The section lists what was not read and what the pass cannot establish.
+
+**Tests:** none (docs only).
+
+---
+
 ## `0.45.7` — fix, an `F16` NaN keeps its sign in the oracle, and `unpopped-cpu-c` decodes it that way (ROADMAP U25)
 
 The oracle's binary16 decode (`f16_to_f64`) returned a NaN of unspecified sign for every NaN pattern, so an `F16` NaN lost its sign bit the moment it was read (`0xFE00` re-encoded as `Bf16` gave a positive NaN) while `F32` and `Bf16` NaNs kept theirs. One rule now covers all three, the one hardware follows: a narrow float NaN keeps its sign bit through a decode and every re-encode (the payload is still canonicalised: the binary16 codec writes `0x7E00`). `unpopped-cpu-c` drops its positive-NaN `F16` decode wrapper (`unp_f16_dec`) and calls the codec's `unpopped_f16_load` directly, which already carries the sign. Only a NaN's sign bit of an `F16` value changes; no finite value, no infinity and no `Bf16`/`F32` result does.
