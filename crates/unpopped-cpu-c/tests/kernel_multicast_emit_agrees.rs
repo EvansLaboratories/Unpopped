@@ -320,7 +320,7 @@ fn narrow_ld_reduce_mutants() -> Vec<Mutant> {
             kernel: reduce_inputs(ElementKind::F16, (add.0, add.1)),
             args: narrow_devices(ElementKind::F16),
             from: "r0v + x0",
-            to: "unp_f16_dec(unp_f16_enc(r0v + x0))",
+            to: "unpopped_f16_load(unp_f16_enc(r0v + x0))",
         },
     ]
 }

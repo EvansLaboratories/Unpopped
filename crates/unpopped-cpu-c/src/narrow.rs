@@ -23,7 +23,7 @@ pub(crate) const fn is_narrow(t: ElementKind) -> bool {
 /// The decode helper (`float` from the pattern) of a narrow float, or `None` for any other element.
 pub(crate) const fn load_fn(t: ElementKind) -> Option<&'static str> {
     match t {
-        ElementKind::F16 => Some("unp_f16_dec"),
+        ElementKind::F16 => Some("unpopped_f16_load"),
         ElementKind::Bf16 => Some("unpopped_bf16_load"),
         _ => None,
     }
@@ -38,13 +38,6 @@ pub(crate) const fn store_fn(t: ElementKind) -> Option<&'static str> {
         _ => None,
     }
 }
-
-/// The decode of a binary16 pattern with a NaN positive: the oracle's `F16` NaN carries no sign, so neither does C
-/// (the codec's `load` would give a negative pattern a negative NaN).
-const F16_DECODER: &str = "static float unp_f16_dec(unsigned short h) {
-    return ((h & 0x7C00u) == 0x7C00u && (h & 0x3FFu) != 0u) ? (float)NAN : unpopped_f16_load(h);
-}
-";
 
 /// The wrapper [`store_fn`] names for a narrow float: the codec's `store`, then the sign of a NaN.
 const fn encoder(t: ElementKind) -> Option<&'static str> {
@@ -77,9 +70,6 @@ pub(crate) fn helpers_for(body: &str) -> String {
         out.push_str(codec);
         if let (true, Some(wrapper)) = (encodes, encoder(t)) {
             out.push_str(wrapper);
-        }
-        if let (true, ElementKind::F16) = (decodes, t) {
-            out.push_str(F16_DECODER);
         }
     }
     out

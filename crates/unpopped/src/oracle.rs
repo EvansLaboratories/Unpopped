@@ -802,6 +802,10 @@ fn f16_to_f64(bits: u16) -> f64 {
     } else {
         (1.0 + f64::from(mant) / 1024.0) * 2f64.powi(i32::from(exp) - 15)
     };
+    // `sign * NaN` is a NaN of unspecified sign; a binary16 NaN carries its sign bit (ROADMAP U25), as hardware keeps it
+    if mag.is_nan() {
+        return mag.copysign(sign);
+    }
     sign * mag
 }
 
@@ -5029,6 +5033,34 @@ mod tests {
         // NaN stays NaN in both codecs.
         assert!(f16_to_f64(f32_to_f16_bits(f32::NAN)).is_nan());
         assert!(bf16_to_f64(f32_to_bf16_bits(f32::NAN)).is_nan());
+    }
+
+    /// ROADMAP U25: a 16-bit float NaN keeps its sign bit through the decode and every narrow-to-narrow re-encode, as
+    /// hardware does, so a negative NaN is not silently turned positive.
+    #[test]
+    fn a_narrow_float_nan_keeps_its_sign() {
+        for (pos, neg) in [(0x7E00u16, 0xFE00u16), (0x7C01, 0xFC01), (0x7FFF, 0xFFFF)] {
+            assert!(
+                f16_to_f64(pos).is_nan() && f16_to_f64(pos).is_sign_positive(),
+                "{pos:#06x}"
+            );
+            assert!(
+                f16_to_f64(neg).is_nan() && f16_to_f64(neg).is_sign_negative(),
+                "{neg:#06x}"
+            );
+            // F16 to F16 and F16 to Bf16 through the compute domain keep the sign bit
+            let (h, b) = (
+                f32_to_f16_bits(f16_to_f64(neg) as f32),
+                f32_to_bf16_bits(f16_to_f64(neg) as f32),
+            );
+            assert_eq!(h & 0x8000, 0x8000, "{neg:#06x} -> f16");
+            assert_eq!(b & 0x8000, 0x8000, "{neg:#06x} -> bf16");
+            assert_eq!(
+                f32_to_bf16_bits(f16_to_f64(pos) as f32) & 0x8000,
+                0,
+                "{pos:#06x} -> bf16"
+            );
+        }
     }
 
     /// The f32 inputs that decide a 16-bit encoder: every finite value of the
