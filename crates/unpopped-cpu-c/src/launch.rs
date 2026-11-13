@@ -795,7 +795,7 @@ impl Emitter<'_> {
         let info = self.peer_info(*buffer, "a Place::Multicast")?;
         let elem = self.place_elem(place)?;
         let t = ctype(elem, "a multicast element")?;
-        let v = self.expr(value)?;
+        let v = self.value_expr(value)?;
         let n = self.fresh;
         self.fresh += 1;
         self.line("{");
@@ -836,7 +836,7 @@ impl Emitter<'_> {
         }
         let elem = self.place_elem(place)?;
         let t = ctype(elem, "an atomic element")?;
-        let (at, v) = (self.address(place)?, self.expr(value)?);
+        let (at, v) = (self.address(place)?, self.value_expr(value)?);
         let n = self.fresh;
         self.fresh += 1;
         self.line("{");
@@ -1009,10 +1009,13 @@ impl Emitter<'_> {
 
 /// The new element value `old (op) v` in C, both operands already of the element type.
 fn atomic_new(op: AtomicOp, t: ElementKind, old: &str, v: &str) -> Result<String, LowerError> {
-    if crate::narrow::is_narrow(t) {
-        return Err(refuse(format!(
-            "an atomic combine on {t:?}: the C operators would act on the bit pattern"
-        )));
+    if let (Some(dec), Some(enc)) = (crate::narrow::load_fn(t), crate::narrow::store_fn(t)) {
+        // a narrow float is its bit pattern: decode both, add in `float`, round once (the oracle adds exactly, rounds once)
+        return match op {
+            AtomicOp::Add => Ok(format!("{enc}({dec}({old}) + {dec}({v}))")),
+            AtomicOp::Exchange => Ok(v.to_string()),
+            other => Err(refuse(format!("the atomic combine {other:?} on {t:?}"))),
+        };
     }
     let float = matches!(t, ElementKind::F32 | ElementKind::F64);
     let u = match t {
