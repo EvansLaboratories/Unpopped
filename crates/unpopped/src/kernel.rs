@@ -400,6 +400,11 @@ pub enum Stmt {
     /// (`unpopped::kernel_check`'s collective checker); the shape came in the 0.42.0 break. Since 0.42.4
     /// `unpopped-cpu-c` emits it as a block-level construct between two thread loops. A call that reaches a
     /// collective is a barrier site, as one that reaches a `Barrier` is.
+    ///
+    /// **Patent risk note (`docs/PATENT-SWEEP.md` hit 23, ruled 2026-11-13):** US8539204B2 (NVIDIA) claims 1 and 12 recite a barrier aggregation
+    /// instruction that combines a thread's value with an aggregation result, communicates the result to each thread and waits until all
+    /// threads have received it. The oracle and `unpopped-cpu-c` perform this statement over simulated threads (shipped since 0.43.2);
+    /// an emitter that lowers it to a hardware barrier instruction carries that exposure. Not a clearance.
     Collective {
         /// Which collective.
         kind: CollectiveKind,
@@ -460,6 +465,11 @@ pub enum Stmt {
     /// logged writes, as the hardware may write any time after issue), so reading or
     /// overwriting those elements in between is the typed `KernelTrap::AsyncRace`; a copy never waited for is
     /// `KernelTrap::AsyncUnwaited`. `unpopped-cpu-c` performs the copy at issue (a correct kernel cannot tell).
+    ///
+    /// **Patent risk note (`docs/PATENT-SWEEP.md` hit 22, ruled 2026-11-13):** US11294713B2 and US12118382B2 (NVIDIA) claim an API that blocks
+    /// a thread's instructions while other instructions of the same thread run, around an asynchronous shared-memory copy. This crate only
+    /// describes the statement and its oracle runs a thread in order; an emitter that lowers it to a device wait carries that exposure.
+    /// Not a clearance.
     CopyAsync {
         /// The first destination element: a `Shared` allocation place.
         dst: Place,
@@ -470,9 +480,19 @@ pub enum Stmt {
     },
     /// Close this thread's open [`Stmt::CopyAsync`] copies into one group (`cp.async.commit_group`). A commit with
     /// no open copy still makes a group, as on hardware, so that wait counts line up.
+    ///
+    /// **Patent risk note (`docs/PATENT-SWEEP.md` hit 22, ruled 2026-11-13):** US11294713B2 and US12118382B2 (NVIDIA) claim an API that blocks
+    /// a thread's instructions while other instructions of the same thread run, around an asynchronous shared-memory copy. This crate only
+    /// describes the statement and its oracle runs a thread in order; an emitter that lowers it to a device wait carries that exposure.
+    /// Not a clearance.
     AsyncCommit,
     /// Wait until at most `pending` of this thread's committed groups are still in flight
     /// (`cp.async.wait_group`); the older ones land. Copies not yet committed are not waited for.
+    ///
+    /// **Patent risk note (`docs/PATENT-SWEEP.md` hit 22, ruled 2026-11-13):** US11294713B2 and US12118382B2 (NVIDIA) claim an API that blocks
+    /// a thread's instructions while other instructions of the same thread run, around an asynchronous shared-memory copy. This crate only
+    /// describes the statement and its oracle runs a thread in order; an emitter that lowers it to a device wait carries that exposure.
+    /// Not a clearance.
     AsyncWait {
         /// How many of the newest groups may stay in flight.
         pending: u32,
