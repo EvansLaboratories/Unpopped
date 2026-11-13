@@ -210,8 +210,9 @@ pub(crate) fn cpu_cast(
 
 /// Spell a `Cast` with an `F16` or `Bf16` endpoint (ROADMAP U14) through the codec of `cfamily::half_helpers`: a narrow
 /// source is decoded to a `float` exactly, a narrow destination is encoded from a `float`, rounded once to nearest even.
-/// Only the sources that reach `float` without a first rounding are spelled (`F32`, a narrow float, an integer of 16 bits
-/// or fewer); an `F64` or a 32/64-bit integer would round twice, so they decline. Overflow goes to infinity
+/// A source that reaches `float` exactly (`F32`, a narrow float, an integer of 16 bits or fewer) is encoded from the
+/// `float`; an `F64` or a 32/64-bit integer would round twice through it, so it is encoded from a `double` instead
+/// (`narrow::exact_store_fn`, ROADMAP U26). Overflow goes to infinity
 /// (`Saturation::Wrap`); `ClampFinite` and a directed rounding mode decline.
 fn cpu_narrow_cast(x: String, from: ElementKind, spec: CastSpec) -> Result<Spelling, LowerError> {
     use crate::narrow::{is_narrow, load_fn, store_fn};
@@ -241,12 +242,22 @@ fn cpu_narrow_cast(x: String, from: ElementKind, spec: CastSpec) -> Result<Spell
             (None, ElementKind::I8 | ElementKind::I16 | ElementKind::U8 | ElementKind::U16) => {
                 format!("((float)({x}))")
             }
+            // a source `float` cannot hold exactly: round once, from a `double`
+            (
+                None,
+                ElementKind::F64
+                | ElementKind::I32
+                | ElementKind::U32
+                | ElementKind::I64
+                | ElementKind::U64,
+            ) => {
+                let exact = crate::narrow::exact_store_fn(to).unwrap_or(enc);
+                return Ok(Spelling::Spelled(format!("{exact}((double)({x}))")));
+            }
             _ => {
                 return decline(
                     DeclinedOp::Cast,
-                    format!(
-                        "cpu_c has no single-rounding spelling for the Cast {from:?} -> {to:?} (it would round twice through float)"
-                    ),
+                    format!("cpu_c has no spelling for the Cast {from:?} -> {to:?}"),
                 );
             }
         };

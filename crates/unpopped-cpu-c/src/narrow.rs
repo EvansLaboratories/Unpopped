@@ -39,6 +39,55 @@ pub(crate) const fn store_fn(t: ElementKind) -> Option<&'static str> {
     }
 }
 
+/// The encode helper that rounds a `double` to a narrow float once (nearest even), for a source `float` cannot hold
+/// without a first rounding: an `F64`, or a 32/64-bit integer (ROADMAP U26). A NaN keeps its sign.
+pub(crate) const fn exact_store_fn(t: ElementKind) -> Option<&'static str> {
+    match t {
+        ElementKind::F16 => Some("unp_d_to_f16"),
+        ElementKind::Bf16 => Some("unp_d_to_bf16"),
+        _ => None,
+    }
+}
+
+/// The C of [`exact_store_fn`]: the codec's algorithm in `double`, where every scaled significand is exact.
+const fn exact_encoder(t: ElementKind) -> Option<&'static str> {
+    match t {
+        ElementKind::F16 => Some(
+            "static unsigned short unp_d_to_f16(double x) {
+    unsigned short sign = signbit(x) ? 0x8000u : 0u;
+    double a = fabs(x), q, f;
+    int e = 0, sub;
+    if (x != x) { return (unsigned short)(sign | 0x7E00u); }
+    if (a >= 65520.0) { return (unsigned short)(sign | 0x7C00u); }
+    sub = a < 6.103515625e-05;
+    if (sub) { q = ldexp(a, 24); } else { frexp(a, &e); q = ldexp(a, 11 - e); }
+    f = floor(q);
+    if (q - f > 0.5 || (q - f == 0.5 && ((long)f & 1))) { f += 1.0; }
+    if (sub) { return (unsigned short)(sign | (unsigned short)f); }
+    return (unsigned short)(sign | (((e + 14) << 10) + ((int)f - 1024)));
+}
+",
+        ),
+        ElementKind::Bf16 => Some(
+            "static unsigned short unp_d_to_bf16(double x) {
+    unsigned short sign = signbit(x) ? 0x8000u : 0u;
+    double a = fabs(x), q, f;
+    int e = 0, sub;
+    if (x != x) { return (unsigned short)(sign | 0x7FC0u); }
+    if (a >= ldexp(511.0, 119)) { return (unsigned short)(sign | 0x7F80u); }
+    sub = a < ldexp(1.0, -126);
+    if (sub) { q = ldexp(a, 133); } else { frexp(a, &e); q = ldexp(a, 8 - e); }
+    f = floor(q);
+    if (q - f > 0.5 || (q - f == 0.5 && ((long)f & 1))) { f += 1.0; }
+    if (sub) { return (unsigned short)(sign | (unsigned short)f); }
+    return (unsigned short)(sign | (((e + 126) << 7) + ((int)f - 128)));
+}
+",
+        ),
+        _ => None,
+    }
+}
+
 /// The wrapper [`store_fn`] names for a narrow float: the codec's `store`, then the sign of a NaN.
 const fn encoder(t: ElementKind) -> Option<&'static str> {
     match t {
@@ -70,6 +119,14 @@ pub(crate) fn helpers_for(body: &str) -> String {
         out.push_str(codec);
         if let (true, Some(wrapper)) = (encodes, encoder(t)) {
             out.push_str(wrapper);
+        }
+    }
+    // the exact encoders need only <math.h>, not the codec
+    for t in [ElementKind::F16, ElementKind::Bf16] {
+        if let (Some(name), Some(text)) = (exact_store_fn(t), exact_encoder(t)) {
+            if body.contains(name) {
+                out.push_str(text);
+            }
         }
     }
     out
