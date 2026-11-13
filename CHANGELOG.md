@@ -15,6 +15,16 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.45.13` — `unpopped-cpu-c` computes arithmetic and comparisons on `F16`/`Bf16` (ROADMAP U26 second slice)
+
+`unpopped-cpu-c` no longer refuses `Add`, `Sub`, `Mul`, `Div`, a comparison or another operator on a narrow float. A narrow operand (a local, a scalar parameter, a `Cast` to a narrow type) is decoded to `float` through the codec, the whole expression computes in `float` with no rounding between nodes, and a narrow result is encoded once at the store, the bind or the assignment. That is the oracle's contract (`unit_roundoff`: a narrow float computes at `f32` precision inside a tolerance band and rounds once at the store). A comparison yields 1.0 or 0.0 in its operands' dtype, as the IR says. `narrow::guard` is replaced by `narrow::moved` and `narrow::operand`, which rewrite the expression before lowering.
+
+Verified: `kernel_narrow_float_arith_agrees` compiles the C and compares it byte for byte with the oracle for `Add`, `Sub`, `Mul` and `CmpLt` on 6,000-odd finite patterns of each type; a mutant that skips the decode and a mutant that skips the encode each fail it. The old refusal test is removed because the refusal is gone.
+
+Still refused or open under U26: a narrow compute dtype, the narrow atomic combine (`launch.rs::atomic_new`) and the MMA fragments (`mma.rs::fragment_ctype`). `Div` and the transcendental ops are computed in `float` and rounded once, so they can differ from the oracle's `f64` evaluation by a double rounding on a tie; the new test does not cover them.
+
+---
+
 ## `0.45.12` — docs: patent risk notes for the async-copy statements and Collective (hits 22, 23)
 
 CireSnave ruled hit 22 of `docs/PATENT-SWEEP.md` (US11294713B2, US12118382B2) on board 431: publish with a risk note. The sweep row now records the ruling (claims 1, 9, 17 and 23 of US12118382B2 read, our crates only describe the statements, the exposure is an emitter's output), and the rustdoc of `Stmt::CopyAsync`, `Stmt::AsyncCommit` and `Stmt::AsyncWait` carries the note. CireSnave also ruled hit 23 (US8539204B2) A: the sweep row and the rustdoc of `Stmt::Collective` carry the same kind of note. No code change.

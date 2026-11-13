@@ -8,12 +8,9 @@
 //! operator applied to the pattern itself would compute on integers, so [`guard`] refuses it with a typed error
 //! (`Cast` to `F32` first) instead of emitting it.
 
-use unpopped::backend::LowerError;
-use unpopped::ir::ScalarExpr;
+use unpopped::ir::{CastSpec, RoundMode, Saturation, ScalarExpr};
 use unpopped::kernel::{KernelFn, ParamKind};
 use unpopped_vocab::ElementKind;
-
-use crate::kernel::refuse;
 
 /// `F16` or `Bf16`: a value C carries as a bare 16-bit pattern.
 pub(crate) const fn is_narrow(t: ElementKind) -> bool {
@@ -159,11 +156,40 @@ fn children(e: &ScalarExpr) -> Vec<&ScalarExpr> {
     }
 }
 
-/// Refuse `e` when a narrow float's bit pattern is the operand of anything but a `Cast`, a `Select` arm or (when `moved`
-/// holds, the expression being a stored, bound or assigned value) the whole expression. `moved` is true exactly where
-/// the pattern is copied rather than computed on.
-pub(crate) fn guard(k: &KernelFn, e: &ScalarExpr, moved: bool) -> Result<(), LowerError> {
-    let narrow = match e {
+fn spec(to: ElementKind) -> CastSpec {
+    CastSpec {
+        to,
+        round: RoundMode::NearestEven,
+        sat: Saturation::Wrap,
+    }
+}
+
+/// `e` with its children replaced, in the order [`children`] lists them.
+fn rebuild(e: &ScalarExpr, mut kids: Vec<ScalarExpr>) -> ScalarExpr {
+    let mut next = || Box::new(kids.remove(0));
+    match e {
+        ScalarExpr::Add(..) => ScalarExpr::Add(next(), next()),
+        ScalarExpr::Sub(..) => ScalarExpr::Sub(next(), next()),
+        ScalarExpr::Mul(..) => ScalarExpr::Mul(next(), next()),
+        ScalarExpr::Div(..) => ScalarExpr::Div(next(), next()),
+        ScalarExpr::Binary(op, ..) => ScalarExpr::Binary(*op, next(), next()),
+        ScalarExpr::Unary(op, _) => ScalarExpr::Unary(*op, next()),
+        ScalarExpr::Cast(_, s) => ScalarExpr::Cast(next(), *s),
+        ScalarExpr::Bitcast(_, t) => ScalarExpr::Bitcast(next(), *t),
+        ScalarExpr::Qualified(_, q) => ScalarExpr::Qualified(next(), *q),
+        ScalarExpr::Extract(_, i) => ScalarExpr::Extract(next(), *i),
+        ScalarExpr::BitcastPacked(_, t, n) => ScalarExpr::BitcastPacked(next(), *t, *n),
+        ScalarExpr::Fma(..) => ScalarExpr::Fma(next(), next(), next()),
+        ScalarExpr::Select(..) => ScalarExpr::Select(next(), next(), next()),
+        ScalarExpr::Pack(_) => ScalarExpr::Pack(kids),
+        leaf => leaf.clone(),
+    }
+}
+
+/// The narrow float `e` is typed as, or `None`: a narrow local or parameter, a `Cast` to one, and any arithmetic,
+/// comparison or `Select` over one (a comparison yields 1.0 or 0.0 in its operands' dtype).
+fn narrow_ty(k: &KernelFn, e: &ScalarExpr) -> Option<ElementKind> {
+    match e {
         ScalarExpr::Local(i) => k
             .locals
             .get(*i as usize)
@@ -173,22 +199,56 @@ pub(crate) fn guard(k: &KernelFn, e: &ScalarExpr, moved: bool) -> Result<(), Low
             Some(ParamKind::Scalar { ty, .. }) if is_narrow(*ty) => Some(*ty),
             _ => None,
         },
-        ScalarExpr::Cast(_, spec) if is_narrow(spec.to) => Some(spec.to),
-        _ => None,
-    };
-    if let (Some(t), false) = (narrow, moved) {
-        return Err(refuse(format!(
-            "arithmetic or a comparison on a {t:?} value; Cast it to F32 first (the narrow float is a bit pattern in C)"
-        )));
+        ScalarExpr::Cast(_, s) => Some(s.to).filter(|t| is_narrow(*t)),
+        ScalarExpr::Select(_, a, b) => narrow_ty(k, a).or_else(|| narrow_ty(k, b)),
+        ScalarExpr::Bitcast(..) | ScalarExpr::Extract(..) | ScalarExpr::BitcastPacked(..) => None,
+        _ => children(e).into_iter().find_map(|c| narrow_ty(k, c)),
     }
-    match e {
-        // a Cast reads its operand as a pattern and decodes it: the one place a pattern is consumed
-        ScalarExpr::Cast(x, _) => guard(k, x, true),
-        ScalarExpr::Select(c, a, b) => {
-            guard(k, c, false)?;
-            guard(k, a, moved)?;
-            guard(k, b, moved)
-        }
-        _ => children(e).into_iter().try_for_each(|c| guard(k, c, false)),
+}
+
+/// A leaf or cast whose C value already is the narrow float's bit pattern.
+fn is_pattern(e: &ScalarExpr) -> bool {
+    matches!(
+        e,
+        ScalarExpr::Local(_) | ScalarExpr::Param(_) | ScalarExpr::Cast(..)
+    )
+}
+
+/// `e` as a value C can compute on: every narrow operand is decoded to `float`, so arithmetic runs in `float` with no
+/// rounding between nodes (the oracle's `f64` and the device's `f32` differ from this by the tolerance band, rounded once
+/// at the store).
+fn wide(k: &KernelFn, e: &ScalarExpr) -> ScalarExpr {
+    if let ScalarExpr::Cast(x, sp) = e {
+        let inner = ScalarExpr::Cast(Box::new(moved(k, x)), *sp);
+        return if is_narrow(sp.to) {
+            ScalarExpr::Cast(Box::new(inner), spec(ElementKind::F32))
+        } else {
+            inner
+        };
     }
+    if narrow_ty(k, e).is_some() && is_pattern(e) {
+        return ScalarExpr::Cast(Box::new(e.clone()), spec(ElementKind::F32));
+    }
+    rebuild(e, children(e).into_iter().map(|c| wide(k, c)).collect())
+}
+
+/// `e` as a value that is moved, bound or stored: a bare pattern stays one; narrow arithmetic is computed wide and encoded
+/// once; a `Cast` reads its operand wide.
+pub(crate) fn moved(k: &KernelFn, e: &ScalarExpr) -> ScalarExpr {
+    match (narrow_ty(k, e), e) {
+        (_, ScalarExpr::Cast(x, sp)) => ScalarExpr::Cast(Box::new(moved(k, x)), *sp),
+        (Some(_), e) if is_pattern(e) => e.clone(),
+        (Some(_), ScalarExpr::Select(c, a, b)) => ScalarExpr::Select(
+            Box::new(wide(k, c)),
+            Box::new(moved(k, a)),
+            Box::new(moved(k, b)),
+        ),
+        (Some(t), e) => ScalarExpr::Cast(Box::new(wide(k, e)), spec(t)),
+        (None, e) => wide(k, e),
+    }
+}
+
+/// `e` as an operand (a condition, an index): decoded wide.
+pub(crate) fn operand(k: &KernelFn, e: &ScalarExpr) -> ScalarExpr {
+    wide(k, e)
 }

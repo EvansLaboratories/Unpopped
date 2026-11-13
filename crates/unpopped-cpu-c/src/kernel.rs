@@ -146,14 +146,14 @@ impl Emitter<'_> {
     }
 
     pub(crate) fn expr(&self, e: &ScalarExpr) -> Result<String, LowerError> {
-        crate::narrow::guard(self.k, e, false)?;
-        lower_expr(e, self.lo)?.spelled().map_err(LowerError::from)
+        let e = crate::narrow::operand(self.k, e);
+        lower_expr(&e, self.lo)?.spelled().map_err(LowerError::from)
     }
 
     /// A value that is bound, assigned or stored: a narrow float's bit pattern may be this whole expression.
     pub(crate) fn value_expr(&self, e: &ScalarExpr) -> Result<String, LowerError> {
-        crate::narrow::guard(self.k, e, true)?;
-        lower_expr(e, self.lo)?.spelled().map_err(LowerError::from)
+        let e = crate::narrow::moved(self.k, e);
+        lower_expr(&e, self.lo)?.spelled().map_err(LowerError::from)
     }
 
     pub(crate) fn local_ctype(&self, id: u32) -> Result<&'static str, LowerError> {
