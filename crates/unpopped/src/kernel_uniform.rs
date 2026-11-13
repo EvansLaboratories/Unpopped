@@ -16,7 +16,7 @@
 use crate::exec::{ExecId, MemorySpace, Scope};
 use crate::ir::ScalarExpr;
 use crate::kernel::{Block, CallArg, KernelError, KernelFn, Place, Stmt};
-use crate::kernel_check::ExternSig;
+use crate::kernel_extern::ExternSig;
 use crate::types::operands;
 
 /// Reject a `Barrier` that may not be reached by every thread of its scope.

@@ -15,6 +15,7 @@ use crate::kernel::{
     AtomicOp, BarrierKind, Block, BufferRole, CallArg, KernelError, KernelFn, MemoryOrder, Param,
     ParamKind, Place, Stmt,
 };
+use crate::kernel_extern::ExternSig;
 use crate::types::{self, Ty};
 
 /// Per-walk state: which locals are in scope, which are protected from `Assign`.
@@ -29,18 +30,6 @@ struct Scope {
     callees: Vec<CalleeSig>,
     /// The signatures of the module's extern declarations.
     externs: Vec<ExternSig>,
-}
-
-/// What an `ExternCall` is checked against: a declaration's parameter and result types and the effects the checker
-/// and the uniformity rule read.
-#[derive(Clone)]
-pub(crate) struct ExternSig {
-    pub(crate) params: Vec<ElementKind>,
-    pub(crate) results: Vec<ElementKind>,
-    /// No effect: the results are as uniform as the arguments. Otherwise they may differ between threads.
-    pub(crate) pure: bool,
-    /// The scope of a rendezvous, making a call a barrier site.
-    pub(crate) sync: Option<ExecScope>,
 }
 
 /// What a `Call` is checked against: a callee's parameters and the type of its result local.

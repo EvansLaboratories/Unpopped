@@ -7,7 +7,8 @@ use std::collections::BTreeSet;
 
 use crate::exec::MemorySpace;
 use crate::kernel::{Block, CollectiveKind, ExternDecl, KernelError, KernelFn, Module, Stmt};
-use crate::kernel_check::{CalleeSig, ExternSig, check_kernel_with};
+use crate::kernel_check::{CalleeSig, check_kernel_with};
+use crate::kernel_extern::ExternSig;
 
 /// Check every function of `m`, with `entry` the function a launch starts at.
 ///
