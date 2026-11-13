@@ -444,7 +444,7 @@ fn the_emitted_c_carries_exactly_the_codec_it_calls() {
     let f16 = CpuC
         .lower_kernel(&decode(ElementKind::F16, 4))
         .expect("lowers");
-    assert!(f16.source.contains("unp_f16_dec"), "{}", f16.source);
+    assert!(f16.source.contains("unpopped_f16_load"), "{}", f16.source);
     assert!(!f16.source.contains("unpopped_bf16_load"), "{}", f16.source);
     assert!(
         !f16.source.contains("unp_f16_enc"),
