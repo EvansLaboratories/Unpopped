@@ -84,7 +84,10 @@ fn narrow_atomic_add_and_exchange_agree() {
     for (i, (t, op, inp, acc)) in cases.into_iter().enumerate() {
         let tag = format!("atomic_{i}");
         let k = kernel(&tag, t, op);
-        let src = CpuC.lower_kernel(&k).expect("the combine is spelled").source;
+        let src = CpuC
+            .lower_kernel(&k)
+            .expect("the combine is spelled")
+            .source;
         assert!(!src.is_empty());
         agree_launch(&tag, &k, vec![one(t, inp), one(t, acc)]);
     }
