@@ -134,9 +134,9 @@ fn an_f64_source_rounds_once_near_every_tie() {
     }
 }
 
-#[test]
-fn a_32_or_64_bit_integer_source_rounds_once() {
-    let ints: Vec<i64> = vec![
+/// Integers on and around the rounding edges of both formats, and past `f32`'s and `f64`'s exact range.
+fn edge_ints() -> Vec<i64> {
+    vec![
         0,
         1,
         -1,
@@ -157,7 +157,12 @@ fn a_32_or_64_bit_integer_source_rounds_once() {
         i64::MIN,
         33_554_433,
         8_388_609,
-    ];
+    ]
+}
+
+#[test]
+fn a_32_or_64_bit_integer_source_rounds_once() {
+    let ints = edge_ints();
     for to in [ElementKind::F16, ElementKind::Bf16] {
         let tag = |s: &str| format!("int_{s}_{to:?}");
         let wide = |t, f: &dyn Fn(i64) -> Vec<u8>, keep: &dyn Fn(i64) -> bool| {
