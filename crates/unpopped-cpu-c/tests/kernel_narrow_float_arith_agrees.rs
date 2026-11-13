@@ -3,10 +3,12 @@
 //! node computes in `float`, and the result is encoded once at the store. Compiled with a host C compiler, run, and
 //! compared byte for byte with the oracle (which evaluates at `f64` and rounds once), over finite patterns.
 
+use unpopped::backend::Backend;
 use unpopped::ir::{BinaryOp, ScalarExpr};
 use unpopped::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
+use unpopped_cpu_c::CpuC;
 use unpopped_vocab::ElementKind;
 
 #[path = "support/cc.rs"]
@@ -154,9 +156,13 @@ fn add_sub_mul_and_compare_on_narrow_floats_agree() {
         let n = a.len().min(b.len());
         for (name, f) in &ops {
             let tag = format!("{name}_{t:?}");
+            let kernel = bin(&tag, t, n, f);
+            // the arithmetic is spelled, not refused (it was a typed refusal before ROADMAP U26)
+            let lowered = CpuC.lower_kernel(&kernel);
+            assert!(lowered.is_ok(), "{tag}: {lowered:?}");
             agree(
                 &tag,
-                &bin(&tag, t, n, f),
+                &kernel,
                 vec![
                     narrow(t, &a[..n]),
                     narrow(t, &b[..n]),
