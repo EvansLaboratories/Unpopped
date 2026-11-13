@@ -155,10 +155,6 @@ fn the_checker_admits_only_the_v1_form() {
         bad(I32, BufferRole::Write),
         Err(KernelError::AtomicUnsupported { .. })
     ));
-    assert!(matches!(
-        bad(ElementKind::F16, BufferRole::ReadWrite),
-        Err(KernelError::AtomicUnsupported { .. })
-    ));
     let wrong_value = kernel(
         I32,
         BufferRole::ReadWrite,

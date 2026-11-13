@@ -696,13 +696,13 @@ fn multicast_store_elem(e: ElementKind) -> bool {
 }
 
 /// The ops and elements `multimem.red` combines (ROADMAP U12 slice 3): `Add`, `Min`, `Max` on a 32-bit integer, `Add`
-/// on `F32`. A 16-bit float `Add` is a real instruction the oracle's atomic form does not model yet.
+/// on `F32`, `F16` and `Bf16` (ROADMAP U12b: the oracle sums exactly and rounds once).
 fn multicast_red_ok(op: AtomicOp, e: ElementKind) -> bool {
     match e {
         ElementKind::I32 | ElementKind::U32 => {
             matches!(op, AtomicOp::Add | AtomicOp::Min | AtomicOp::Max)
         }
-        ElementKind::F32 => matches!(op, AtomicOp::Add),
+        ElementKind::F32 | ElementKind::F16 | ElementKind::Bf16 => matches!(op, AtomicOp::Add),
         _ => false,
     }
 }
@@ -728,10 +728,13 @@ fn check_atomic(
     let AtomicForm { op, site } = form;
     let elem = check_atomic_site(k, place, site, sc)?;
     let float_ok = matches!(op, AtomicOp::Add | AtomicOp::Exchange)
-        && matches!(elem, ElementKind::F32 | ElementKind::F64);
+        && matches!(
+            elem,
+            ElementKind::F32 | ElementKind::F64 | ElementKind::F16 | ElementKind::Bf16
+        );
     if crate::types::int_range(elem).is_none() && !float_ok {
         return Err(KernelError::AtomicUnsupported {
-            what: "an atomic on a non-integer element (only an F32/F64 Add or Exchange is admitted)",
+            what: "an atomic on a non-integer element (only an F16/Bf16/F32/F64 Add or Exchange is admitted)",
         });
     }
     if check_expr(k, value, sc)? != Ty::Scalar(elem) {
