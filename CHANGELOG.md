@@ -15,6 +15,16 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.45.10` — fix, the oracle rounds an `f64` to `F16`/`Bf16` once; `unpopped-cpu-c` spells a wide-source `Cast` to them (ROADMAP U26, first slice)
+
+The oracle encoded an `f64` compute value to `F16` or `Bf16` by rounding to `f32` first (`f as f32`), so a value a hair above a tie of the 16-bit format landed on the tie in `f32` and then went to even: `1 + 2^-11 + 1e-12` gave `0x3C00` where the correctly rounded result is `0x3C01`. `encode_float` now narrows through an `f32` rounded to odd (`f64_to_f32_odd`), which makes the second rounding exact; every `F16`/`Bf16` result the oracle produces from an `f64` (a store, a `Cast`, the 16-bit atomic `Add`) is rounded once. Results differ only for inputs within an `f32` ulp of a 16-bit tie.
+
+`unpopped_cpu_c::CpuC::lower_kernel` now spells a `Cast` from `F64`, `I32`, `U32`, `I64` or `U64` to `F16`/`Bf16` (it used to decline, since a `float` detour rounds twice) through two `double` encoders, `unp_d_to_f16` and `unp_d_to_bf16`, emitted only when a body calls them; a NaN keeps its sign. A directed rounding mode and `ClampFinite` still decline. Narrow arithmetic and a narrow compute dtype are still refused (the rest of U26).
+
+**Tests:** `kernel_narrow_float_wide_cast_agrees` (3: an `F64` a hair either side of every 11th tie for both formats, the 32/64-bit integer sources, the encoder's presence), `an_f64_rounds_once_to_a_16_bit_float` (oracle); 6 seeded mutants of the C encoder and its spelling caught (tie rounding, both overflow guards, a `float` detour, a NaN's sign; the two overflow-edge `>=`/`>` mutants are equivalent: the carry already gives infinity).
+
+---
+
 ## `0.45.9` — refactor, `ExternSig` moves to `kernel_extern`; ROADMAP rows U27-U30 for the coderipper ARC/MOD findings
 
 First step of the architecture programme (CireSnave 2026-11-12: "start fixing the issues they find"). coderipper 0.43.59 (`MOD-002`, `MOD-005`, `MOD-008`, `ARC-011`, `--profile extended`, at 4b0bd4a9) reports six findings above Info for this workspace; one is fixed here and four are scheduled as rows. The `crate::kernel_check` <-> `crate::kernel_uniform` cycle came from one type: `ExternSig` (what an `ExternCall` is checked against) lived in `kernel_check`, which calls `kernel_uniform`, which needed the type back. It now lives in `kernel_extern`, next to the declarations it describes; `kernel_check`, `kernel_uniform` and `kernel_module` import it from there, and the cycle is gone (the same check at the new head lists the other five cycles, so it still finds them). No behaviour or public API changed: `ExternSig` is `pub(crate)`.
