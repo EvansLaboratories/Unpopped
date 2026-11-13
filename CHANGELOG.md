@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.45.6` — feature, a 16-bit float `AtomicRmw` `Add`/`Exchange` and `multimem.red` `Add` on `F16`/`Bf16` (ROADMAP U12b)
+
+The oracle's atomic combine (`atomic_apply`) now handles `F16` and `Bf16`: `Add` is the exact sum of the old and new values rounded once to the element (nearest, ties to even, so `2048 + 1` stays `2048` in `F16`); `Exchange` moves the bits unchanged. The checker admits an `AtomicRmw` `Add`/`Exchange` on a global or `Shared` `F16`/`Bf16` element (`Max`, `Min` and the bitwise ops stay refused) and a `Place::Multicast` `AtomicRmw` `Add` on them (`multicast_red_ok`, `multimem.red.add.f16`/`bf16`). The float order of a `multimem.red` stays unspecified inside a band. `unpopped-cpu-c` still refuses a narrow atomic combine with a typed error (its C operators would act on the pattern: ROADMAP U26); the packed `half2`/`bf16x2` forms are not added. No public API changed.
+
+**Tests:** `kernel_atomic_half` (3: twelve tie-rounded adds, exact adds and an exchange keeping a NaN payload, Max/Min/And refused), `kernel_multicast` (the 3-device all-reduce on `F16`/`Bf16`, exact and tie-rounded).
+
+---
+
 ## `0.45.5` — feature, `unpopped-cpu-c` spells a dynamic-extent `Shared` or `Private` allocation (ROADMAP U16)
 
 `unpopped_cpu_c::CpuC::lower_kernel` now lowers a kernel with an `Extent::Param` allocation (CUDA's `extern __shared__`, sized by a scalar launch argument), which it used to refuse. C cannot size an automatic array at run time (MSVC has no VLAs), so the kernel becomes two functions: a body `<name>_impl` that takes each dynamic array as a pointer parameter (`sh<i>_dyn`), and the entry point, which reads the scalar, returns status 2 for a count that is not positive, `calloc`s one zeroed copy per block of the grid (status 3 if that fails), calls the body and frees the arrays whatever it returns, so every bounds check inside the body is still a plain `return 1`. `#include <stdlib.h>` is emitted only for such a kernel; every other kernel's C is unchanged. An index past the count is status 1, as the interpreter's `AllocOutOfBounds`; a cluster peer (`Place::ClusterPeer`) reads a dynamic array. Still typed refusals: a dynamic extent in a launch of several devices and in a callee of a module (each a ROADMAP U16 remainder). No public API changed.

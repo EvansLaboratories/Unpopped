@@ -1,5 +1,0 @@
-kind: feature, a 16-bit float `AtomicRmw` `Add`/`Exchange` and `multimem.red` `Add` on `F16`/`Bf16` (ROADMAP U12b)
----
-The oracle's atomic combine (`atomic_apply`) now handles `F16` and `Bf16`: `Add` is the exact sum of the old and new values rounded once to the element (nearest, ties to even, so `2048 + 1` stays `2048` in `F16`); `Exchange` moves the bits unchanged. The checker admits an `AtomicRmw` `Add`/`Exchange` on a global or `Shared` `F16`/`Bf16` element (`Max`, `Min` and the bitwise ops stay refused) and a `Place::Multicast` `AtomicRmw` `Add` on them (`multicast_red_ok`, `multimem.red.add.f16`/`bf16`). The float order of a `multimem.red` stays unspecified inside a band. `unpopped-cpu-c` still refuses a narrow atomic combine with a typed error (its C operators would act on the pattern: ROADMAP U26); the packed `half2`/`bf16x2` forms are not added. No public API changed.
-
-**Tests:** `kernel_atomic_half` (3: twelve tie-rounded adds, exact adds and an exchange keeping a NaN payload, Max/Min/And refused), `kernel_multicast` (the 3-device all-reduce on `F16`/`Bf16`, exact and tie-rounded).
