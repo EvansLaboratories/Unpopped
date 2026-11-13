@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.45.12` — docs: patent risk notes for the async-copy statements and Collective (hits 22, 23)
+
+CireSnave ruled hit 22 of `docs/PATENT-SWEEP.md` (US11294713B2, US12118382B2) on board 431: publish with a risk note. The sweep row now records the ruling (claims 1, 9, 17 and 23 of US12118382B2 read, our crates only describe the statements, the exposure is an emitter's output), and the rustdoc of `Stmt::CopyAsync`, `Stmt::AsyncCommit` and `Stmt::AsyncWait` carries the note. CireSnave also ruled hit 23 (US8539204B2) A: the sweep row and the rustdoc of `Stmt::Collective` carry the same kind of note. No code change.
+
+---
+
 ## `0.45.11` — refactor, `ExternSig` moves to `kernel_extern`; ROADMAP rows U27-U30 for the coderipper ARC/MOD findings
 
 First step of the architecture programme (CireSnave 2026-11-12: "start fixing the issues they find"). coderipper 0.43.59 (`MOD-002`, `MOD-005`, `MOD-008`, `ARC-011`, `--profile extended`, at 4b0bd4a9) reports six findings above Info for this workspace; one is fixed here and four are scheduled as rows. The `crate::kernel_check` <-> `crate::kernel_uniform` cycle came from one type: `ExternSig` (what an `ExternCall` is checked against) lived in `kernel_check`, which calls `kernel_uniform`, which needed the type back. It now lives in `kernel_extern`, next to the declarations it describes; `kernel_check`, `kernel_uniform` and `kernel_module` import it from there, and the cycle is gone (the same check at the new head lists the other five cycles, so it still finds them). No behaviour or public API changed: `ExternSig` is `pub(crate)`.
