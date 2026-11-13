@@ -12,6 +12,19 @@ use std::collections::BTreeSet;
 use crate::exec::Scope;
 use crate::kernel::{Block, BodyText, ExternDecl, KernelError, KernelFn, Module, ParamKind, Stmt};
 use crate::types::Ty;
+use unpopped_vocab::ElementKind;
+
+/// What an `ExternCall` is checked against: a declaration's parameter and result types and the effects the checker
+/// and the uniformity rule read.
+#[derive(Clone)]
+pub(crate) struct ExternSig {
+    pub(crate) params: Vec<ElementKind>,
+    pub(crate) results: Vec<ElementKind>,
+    /// No effect: the results are as uniform as the arguments. Otherwise they may differ between threads.
+    pub(crate) pure: bool,
+    /// The scope of a rendezvous, making a call a barrier site.
+    pub(crate) sync: Option<Scope>,
+}
 
 fn refuse(what: &'static str) -> KernelError {
     KernelError::ExternUnsupported { what }
