@@ -1,7 +1,0 @@
-kind: refactor, `ExternSig` moves to `kernel_extern`; ROADMAP rows U27-U30 for the coderipper ARC/MOD findings
----
-First step of the architecture programme (CireSnave 2026-11-12: "start fixing the issues they find"). coderipper 0.43.59 (`MOD-002`, `MOD-005`, `MOD-008`, `ARC-011`, `--profile extended`, at 4b0bd4a9) reports six findings above Info for this workspace; one is fixed here and four are scheduled as rows. The `crate::kernel_check` <-> `crate::kernel_uniform` cycle came from one type: `ExternSig` (what an `ExternCall` is checked against) lived in `kernel_check`, which calls `kernel_uniform`, which needed the type back. It now lives in `kernel_extern`, next to the declarations it describes; `kernel_check`, `kernel_uniform` and `kernel_module` import it from there, and the cycle is gone (the same check at the new head lists the other five cycles, so it still finds them). No behaviour or public API changed: `ExternSig` is `pub(crate)`.
-
-Rows U27 (`backend`/`contract`/`pattern`/`plan` cycle), U28 (`unpopped-cpu-c` `dynamic`/`kernel`/`launch`/`narrow`/`typed`, which U14 and U16 introduced), U29 (`unpopped-vocab` `plan`/`sku`) and U30 (the `oracle.rs` and `plan.rs` size and coupling outliers) record each finding's edges and a size. The 23 Info findings and the `[architecture]` declaration follow in their own PRs.
-
-**Tests:** none added (a move of a `pub(crate)` type); `cargo test --workspace` unchanged.
