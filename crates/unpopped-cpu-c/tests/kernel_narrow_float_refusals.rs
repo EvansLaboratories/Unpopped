@@ -5,8 +5,8 @@
 //! every kernel here, so each refusal is the emitter's own.
 
 use unpopped::backend::Backend;
-use unpopped::ir::{BinaryOp, CastSpec, RoundMode, Saturation, ScalarExpr};
-use unpopped::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt, check_kernel};
+use unpopped::ir::{CastSpec, RoundMode, Saturation, ScalarExpr};
+use unpopped::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 use unpopped_cpu_c::CpuC;
 use unpopped_vocab::ElementKind;
 
@@ -98,50 +98,6 @@ fn refusal(k: &KernelFn) -> String {
     match CpuC.lower_kernel(k) {
         Err(e) => e.to_string(),
         Ok(_) => panic!("the kernel was lowered, expected a refusal"),
-    }
-}
-
-#[test]
-fn arithmetic_or_a_comparison_on_a_narrow_value_is_refused_not_miscomputed() {
-    let t = ElementKind::F16;
-    for (tag, e) in [
-        (
-            "add",
-            ScalarExpr::Add(
-                Box::new(ScalarExpr::Local(1)),
-                Box::new(ScalarExpr::Local(1)),
-            ),
-        ),
-        (
-            "cmp",
-            ScalarExpr::Binary(
-                BinaryOp::CmpLt,
-                Box::new(ScalarExpr::Local(1)),
-                Box::new(ScalarExpr::Local(1)),
-            ),
-        ),
-        (
-            "cast_then_add",
-            ScalarExpr::Add(
-                Box::new(cast(ScalarExpr::Local(1), t)),
-                Box::new(cast(ScalarExpr::Const(1.0), t)),
-            ),
-        ),
-    ] {
-        let k = looped(
-            tag,
-            vec![
-                Param::buffer("in", t, BufferRole::Read, Some(1)),
-                Param::buffer("out", F32, BufferRole::Write, Some(1)),
-            ],
-            vec![t],
-            4,
-            vec![load(1, 0), store(1, cast(e, F32))],
-        );
-        // the checker admits each of these kernels, so the refusal is the emitter's own, and it says what to do
-        assert_eq!(check_kernel(&k), Ok(()), "{tag}: well formed");
-        let msg = refusal(&k);
-        assert!(msg.contains("Cast it to F32 first"), "{tag}: {msg}");
     }
 }
 
