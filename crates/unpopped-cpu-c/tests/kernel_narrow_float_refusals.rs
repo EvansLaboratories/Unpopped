@@ -92,7 +92,7 @@ fn a_narrow_scalar_parameter_is_moved_and_cast() {
     // the driver binds only int and float scalars, so this kernel is checked for its spelling, not run
     let g = CpuC.lower_kernel(&k);
     assert!(g.is_ok(), "{g:?}");
-    assert!(g.unwrap().source.contains("unp_f16_dec(l0)"));
+    assert!(g.unwrap().source.contains("unpopped_f16_load(l0)"));
 }
 
 fn refusal(k: &KernelFn) -> String {

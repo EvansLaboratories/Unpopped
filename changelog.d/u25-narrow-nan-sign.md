@@ -1,0 +1,5 @@
+kind: fix, an `F16` NaN keeps its sign in the oracle, and `unpopped-cpu-c` decodes it that way (ROADMAP U25)
+---
+The oracle's binary16 decode (`f16_to_f64`) returned a NaN of unspecified sign for every NaN pattern, so an `F16` NaN lost its sign bit the moment it was read (`0xFE00` re-encoded as `Bf16` gave a positive NaN) while `F32` and `Bf16` NaNs kept theirs. One rule now covers all three, the one hardware follows: a narrow float NaN keeps its sign bit through a decode and every re-encode (the payload is still canonicalised: the binary16 codec writes `0x7E00`). `unpopped-cpu-c` drops its positive-NaN `F16` decode wrapper (`unp_f16_dec`) and calls the codec's `unpopped_f16_load` directly, which already carries the sign. Only a NaN's sign bit of an `F16` value changes; no finite value, no infinity and no `Bf16`/`F32` result does.
+
+**Tests:** the decode-of-every-pattern differential (`kernel_narrow_float_emit_agrees`) now compares NaN sign bytes for all 65536 `F16` patterns against the C; `a_narrow_float_nan_keeps_its_sign` (oracle).
