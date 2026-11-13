@@ -50,3 +50,11 @@ components = ["emitters"]
 [[architecture.layer]]
 name = "verification"
 components = ["conformance"]
+
+# What the stable components should not lean on (ARC-003/ARC-004). `tree_sitter` is the optional source-language frontend
+# behind the `convert` feature; `feature_cfg_in_policy` counts a `cfg(feature = ...)` in a stable component as the real
+# dependency it is.
+[architecture.volatile]
+names = ["tree_sitter"]
+namespaces = ["tree_sitter", "cc"]
+feature_cfg_in_policy = true
