@@ -1,13 +1,75 @@
-# CodeRipper configuration for this workspace (read from the workspace root by every member's run).
-#
-# `reachability` cannot see a consumer: a published library's `pub` items are called by other programs, not by the
-# crate itself. These two crates are published (no `publish = false`), and every `pub` item reachable from the crate
-# root is the API, in the semver promise (CHANGELOG.md). `unpopped-cpu-c` needs no entry: the
-# 2026-10-24 sweep found nothing else in them once their own tests were counted. `unpopped-conformance` is never
-# published and has no library surface.
+# The architecture Unpopped declares for itself (ROADMAP U27 and the ARC/MOD programme: CireSnave 2026-11-12, "start fixing the
+# issues they find"). Normative: coderipper's ARC rules report where the code disagrees. Crate level only; the module groups of
+# `unpopped` follow once the MOD-002 cycles (ROADMAP U27) are gone, since a group declared today would start as a violation.
 
-[reachability]
-public_api_crates = [
-  { crate = "unpopped", reason = "Published library crate: every pub item reachable from the crate root is the API, called by adopters and by this workspace's test crates, which a per-crate check cannot see." },
-  { crate = "unpopped-vocab", reason = "Published library crate: every pub item reachable from the crate root is the API, called by adopters and by `unpopped`, which a per-crate check cannot see." },
-]
+[architecture]
+style = "layered"
+# The number of waivers may only fall; there are none today. (Not read by coderipper 0.43.59: kept so the declaration is whole.)
+ratchet = true
+
+# The vocabulary: dtypes, layouts, plan keys and the manifest data every other crate and every adopter reads. It depends on
+# nothing of ours and changes least.
+[[architecture.component]]
+name = "vocab"
+paths = ["crates/unpopped-vocab"]
+role = "policy"
+volatility = "stable"
+owns_data = ["dtype_manifest"]
+
+# The core: the neutral IR, the checker, the oracle and the `Backend` trait. It depends only on the vocabulary and holds no
+# target's spelling.
+[[architecture.component]]
+name = "core"
+paths = ["crates/unpopped"]
+role = "policy"
+volatility = "stable"
+
+# The reference emitters. Each depends on the core, never the reverse: a target holds its own spelling.
+[[architecture.component]]
+name = "emitters"
+paths = ["crates/unpopped-cpu-c"]
+role = "adapter"
+volatility = "volatile"
+
+# The conformance suite: tests that read the other crates and are read by none.
+[[architecture.component]]
+name = "conformance"
+paths = ["crates/unpopped-conformance"]
+role = "test-support"
+
+# Bottom first: a component may depend on its own layer or any layer below it.
+[[architecture.layer]]
+name = "vocabulary"
+components = ["vocab"]
+
+[[architecture.layer]]
+name = "core"
+components = ["core"]
+
+[[architecture.layer]]
+name = "emitters"
+components = ["emitters"]
+
+[[architecture.layer]]
+name = "verification"
+components = ["conformance"]
+
+# What the stable components should not lean on (ARC-003/ARC-004). `tree_sitter` is the optional source-language frontend
+# behind the `convert` feature; `feature_cfg_in_policy` counts a `cfg(feature = ...)` in a stable component as the real
+# dependency it is.
+[architecture.volatile]
+names = ["tree_sitter"]
+namespaces = ["tree_sitter", "cc"]
+feature_cfg_in_policy = true
+
+# The most public items (and members of public types) each library may offer; a PR that grows past one raises it on purpose.
+# Measured 2026-11-13 with ARC-006 at 4b0bd4a9+: core 1572, vocab 1028, emitters 2; about 8% headroom.
+[architecture.api_budget]
+core = 1700
+vocab = 1100
+emitters = 8
+
+# Where concrete adapters are built. The libraries never construct an emitter; the conformance suite does, to hold an emitter's
+# output against the oracle.
+[architecture.composition]
+roots = ["crates/unpopped-conformance/**"]
