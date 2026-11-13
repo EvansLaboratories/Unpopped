@@ -292,13 +292,13 @@ fn the_checker_refuses_a_red_below_system_scope_or_with_a_bitwise_op() {
 
 #[test]
 fn the_checker_admits_only_the_elements_multimem_has() {
-    // a 16-bit float Add is a real multimem.red the oracle does not model yet: refused, named
+    // a float Max is no multimem.red the oracle models, and nothing narrower than 32 bits but a 16-bit float `Add`
     for elem in [ElementKind::F16, ElementKind::Bf16, ElementKind::I8, F32] {
         let st = Stmt::AtomicRmw {
-            op: if elem == F32 {
-                AtomicOp::Max
-            } else {
+            op: if elem == ElementKind::I8 {
                 AtomicOp::Add
+            } else {
+                AtomicOp::Max
             },
             place: multicast(1, c(0)),
             value: c(0),
@@ -323,4 +323,52 @@ fn a_multicast_place_needs_a_launch_of_several_devices() {
         check_kernel(&k),
         Err(KernelError::PeerUnsupported { .. })
     ));
+}
+
+/// Per device: `inp[i] = inp_bits`, `acc` filled with `init_bits`, `res` zeros (all of the 16-bit float `t`).
+fn half_devices(t: ElementKind, inp: [u16; 3], init_bits: u16) -> Vec<Vec<KernelArg>> {
+    let bytes = |bits: &[u16]| {
+        bits.iter()
+            .flat_map(|b| b.to_le_bytes())
+            .collect::<Vec<u8>>()
+    };
+    (0..3)
+        .map(|d| {
+            vec![
+                buffer(t, bytes(&[inp[d]; N])),
+                buffer(t, bytes(&[init_bits; N])),
+                buffer(t, bytes(&[0; N])),
+            ]
+        })
+        .collect()
+}
+
+fn acc_bits(a: &KernelArg) -> Vec<u16> {
+    let KernelArg::Buffer(b) = a else {
+        unreachable!()
+    };
+    b.bytes
+        .chunks(2)
+        .map(|w| u16::from_le_bytes(w.try_into().unwrap()))
+        .collect()
+}
+
+#[test]
+fn a_red_add_on_a_16_bit_float_sums_every_device_and_rounds_each_add() {
+    // ROADMAP U12b. F16: 0.5 + 1.0 + 1.5 = 3.0 exactly; then 2048 + 1 + 1 + 1: each add of 1 to 2048 is a tie (the
+    // spacing is 2) that rounds to the even mantissa, 2048, so three adds leave 2048 (an exact sum, 2051, would not).
+    // Bf16: the same at 256, whose spacing is 2.
+    let k = |t| all_reduce(t, AtomicOp::Add, Some(Scope::System));
+    for (t, inp, init, want) in [
+        (ElementKind::F16, [0x3800, 0x3C00, 0x3E00], 0, 0x4200),
+        (ElementKind::F16, [0x3C00; 3], 0x6800, 0x6800),
+        (ElementKind::Bf16, [0x3F80; 3], 0x4380, 0x4380),
+        (ElementKind::Bf16, [0x3F00, 0x3F80, 0x3FC0], 0, 0x4040),
+    ] {
+        let out = run(&k(t), half_devices(t, inp, init)).unwrap();
+        for dev in &out {
+            assert_eq!(acc_bits(&dev[1]), [want; N], "{t:?} acc");
+            assert_eq!(acc_bits(&dev[2]), [want; N], "{t:?} res");
+        }
+    }
 }

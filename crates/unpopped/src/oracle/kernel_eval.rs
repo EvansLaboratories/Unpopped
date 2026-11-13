@@ -1032,6 +1032,7 @@ impl<'a> Machine<'a> {
 /// `x`; so does `MIN / -1` (the wrapping result); otherwise the quotient truncated toward zero.
 /// `old (op) new` at the element type `t`, from the raw bits of both. Integers: `Add` wraps,
 /// `Max`/`Min` select, `And`/`Or`/`Xor` are the bitwise operations, `Exchange` takes the new value.
+/// `F16`/`Bf16` `Add`: the exact sum, rounded once to the element (ROADMAP U12b); `Exchange` moves the bits.
 /// `F32`/`F64` `Add`: one correctly rounded add in the element type (an `f32` sum of two `f32` is
 /// exact in an `f64`, so adding there and rounding once is the same number); `F32`/`F64` `Exchange`
 /// moves the bits unchanged.
@@ -1043,7 +1044,16 @@ pub(super) fn atomic_apply(
     new_ty: ElementKind,
 ) -> Result<Val, KernelTrap> {
     match (t, op) {
-        (ElementKind::F32 | ElementKind::F64, AtomicOp::Exchange) => Ok(Val::Raw(new, t)),
+        (
+            ElementKind::F32 | ElementKind::F64 | ElementKind::F16 | ElementKind::Bf16,
+            AtomicOp::Exchange,
+        ) => Ok(Val::Raw(new, t)),
+        (ElementKind::F16 | ElementKind::Bf16, AtomicOp::Add) => {
+            // the sum of two 16-bit floats is exact in an `f64` for `F16` (and rounds like the exact sum for `Bf16`,
+            // whose far-apart operands differ by far more than a `Bf16` half-ulp), so one rounding to `t` is the result
+            let of = |b: u128| super::raw_to_f64(b, t);
+            Ok(Val::Raw(super::encode_float(of(old) + of(new), t), t))
+        }
         (ElementKind::F32, AtomicOp::Add) => {
             let sum = f32::from_bits(old as u32) + f32::from_bits(new as u32);
             Ok(Val::Raw(u128::from(sum.to_bits()), t))
