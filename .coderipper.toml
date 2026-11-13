@@ -14,6 +14,7 @@ name = "vocab"
 paths = ["crates/unpopped-vocab"]
 role = "policy"
 volatility = "stable"
+owns_data = ["dtype_manifest"]
 
 # The core: the neutral IR, the checker, the oracle and the `Backend` trait. It depends only on the vocabulary and holds no
 # target's spelling.
@@ -60,3 +61,15 @@ components = ["conformance"]
 names = ["tree_sitter"]
 namespaces = ["tree_sitter", "cc"]
 feature_cfg_in_policy = true
+
+# The most public items (and members of public types) each library may offer; a PR that grows past one raises it on purpose.
+# Measured 2026-11-13 with ARC-006 at 4b0bd4a9+: core 1572, vocab 1028, emitters 2; about 8% headroom.
+[architecture.api_budget]
+core = 1700
+vocab = 1100
+emitters = 8
+
+# Where concrete adapters are built. The libraries never construct an emitter; the conformance suite does, to hold an emitter's
+# output against the oracle.
+[architecture.composition]
+roots = ["crates/unpopped-conformance/**"]
