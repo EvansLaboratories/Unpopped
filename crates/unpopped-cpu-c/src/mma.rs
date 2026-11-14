@@ -38,15 +38,19 @@ fn id_table(atom: &MmaAtom, which: usize, name: &str) -> Result<String, LowerErr
     ))
 }
 
-/// The C type of an MMA fragment element. A narrow float has a C type now (its bit pattern), but the product and the sum
-/// here are computed on `double` and `long long` values, so a fragment of one is still refused.
+/// The C type of an MMA fragment element: a narrow float is its bit pattern. The product and the sum run on `double`, so
+/// the gather decodes a narrow operand (ROADMAP U26). A narrow accumulator is refused: no atom has one, so nothing could
+/// check its encode against the oracle.
 fn fragment_ctype(t: ElementKind, what: &str) -> Result<&'static str, LowerError> {
-    if crate::narrow::is_narrow(t) {
-        return Err(refuse(format!(
-            "{what} has dtype {t:?}, which this emitter does not spell as a fragment (ROADMAP U26)"
-        )));
-    }
     ctype(t, what)
+}
+
+/// `value` read from a fragment element of type `t` as the `wide` value the product works on.
+fn read_element(t: ElementKind, wide: &str, value: &str) -> String {
+    match crate::narrow::load_fn(t) {
+        Some(dec) => format!("({wide}){dec}({value})"),
+        None => format!("({wide}){value}"),
+    }
 }
 
 fn is_float(t: ElementKind) -> bool {
@@ -89,6 +93,11 @@ impl Emitter<'_> {
         for (_, t) in &roles {
             fragment_ctype(*t, "an MMA extra fragment")?;
         }
+        if crate::narrow::is_narrow(tacc) {
+            return Err(refuse(format!(
+                "an MMA accumulator of dtype {tacc:?}: no atom has one, so its encode is unchecked (ROADMAP U26)"
+            )));
+        }
         let td = fragment_ctype(tacc, "an MMA accumulator fragment")?;
         let wide = if is_float(tacc) {
             "double"
@@ -110,7 +119,9 @@ impl Emitter<'_> {
         self.depth += 1;
         let mut allocs = vec![*a, *b, *c];
         allocs.extend(extra.iter().copied());
-        self.mma_gather(atom, &allocs, id, wide);
+        let mut dtypes = vec![ta, tb, tacc];
+        dtypes.extend(roles.iter().map(|(_, t)| *t));
+        self.mma_gather(atom, &allocs, &dtypes, id, wide);
         let mut a_name = "ma";
         if let Some(w) = atom.extra_which(ExtraRole::Metadata) {
             self.mma_expand_sparse(atom, w, wide);
@@ -126,8 +137,9 @@ impl Emitter<'_> {
         };
         self.mma_product(atom, wide, a_name, block);
         let vd = atom.values(2);
+        let stored = format!("({td})md[mi{id}o2[l * {vd} + v]]");
         self.line(&format!(
-            "for (int l = 0; l < {lanes}; ++l) for (int v = 0; v < {vd}; ++v) sh{d}[(long long)(g + l) * {vd} + v] = ({td})md[mi{id}o2[l * {vd} + v]];"
+            "for (int l = 0; l < {lanes}; ++l) for (int v = 0; v < {vd}; ++v) sh{d}[(long long)(g + l) * {vd} + v] = {stored};"
         ));
         self.depth -= 1;
         self.line("}");
@@ -137,7 +149,14 @@ impl Emitter<'_> {
     }
 
     /// Declare the logical matrices of one subgroup and fill every operand from the lanes' fragments.
-    fn mma_gather(&mut self, atom: &MmaAtom, allocs: &[u32], id: u32, wide: &str) {
+    fn mma_gather(
+        &mut self,
+        atom: &MmaAtom,
+        allocs: &[u32],
+        dtypes: &[ElementKind],
+        id: u32,
+        wide: &str,
+    ) {
         let (m, n, _) = atom.mnk();
         let lanes = atom.lanes();
         self.line(&format!("{wide} md[{}];", m * n));
@@ -154,8 +173,13 @@ impl Emitter<'_> {
                 .get(w)
                 .map_or_else(|| format!("me{w}"), |s| (*s).to_string());
             self.line(&format!("{ty} {nm}[{}];", rows * cols));
+            let read = read_element(
+                dtypes[w],
+                ty,
+                &format!("sh{alloc}[(long long)(g + l) * {vals} + v]"),
+            );
             self.line(&format!(
-                "for (int l = 0; l < {lanes}; ++l) for (int v = 0; v < {vals}; ++v) {nm}[mi{id}o{w}[l * {vals} + v]] = ({ty})sh{alloc}[(long long)(g + l) * {vals} + v];"
+                "for (int l = 0; l < {lanes}; ++l) for (int v = 0; v < {vals}; ++v) {nm}[mi{id}o{w}[l * {vals} + v]] = {read};"
             ));
         }
     }

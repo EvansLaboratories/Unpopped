@@ -165,6 +165,24 @@ fn val(seed: u32, i: u32) -> i32 {
         - 4
 }
 
+/// The `F16` pattern of a small multiple of 0.125 (exactly representable, so no rounding is needed).
+fn f16_bits(x: f32) -> u16 {
+    if x == 0.0 {
+        return 0;
+    }
+    let b = x.to_bits();
+    let (sign, exp, mant) = (
+        (b >> 16) & 0x8000,
+        ((b >> 23) & 0xFF) as i32 - 127 + 15,
+        b & 0x7F_FFFF,
+    );
+    assert!(
+        exp > 0 && mant & 0x1FFF == 0,
+        "{x} is not a normal F16 value"
+    );
+    (sign | ((exp as u32) << 10) | (mant >> 13)) as u16
+}
+
 fn buffer(ty: ElementKind, seed: u32, len: u32) -> TypedBuffer {
     let bytes: Vec<u8> = (0..len)
         .flat_map(|i| {
@@ -173,6 +191,10 @@ fn buffer(ty: ElementKind, seed: u32, len: u32) -> TypedBuffer {
                 ElementKind::I8 => (v as i8).to_le_bytes().to_vec(),
                 ElementKind::I32 => v.to_le_bytes().to_vec(),
                 ElementKind::F32 => (v as f32 * 0.125).to_le_bytes().to_vec(),
+                ElementKind::F16 => f16_bits(v as f32 * 0.125).to_le_bytes().to_vec(),
+                ElementKind::Bf16 => {
+                    ((v as f32 * 0.125).to_bits() >> 16).to_le_bytes()[..2].to_vec()
+                }
                 other => panic!("no host encoder for {other:?}"),
             }
         })
@@ -246,14 +268,14 @@ fn a_float_atom_that_rounds_agrees_with_the_oracle() {
     agree_launch("mma_f32_round", &kernel(&atom), a);
 }
 
+/// A narrow-float atom (`F16` or `Bf16` operands, `F32` accumulator): the gather decodes each fragment element, the
+/// product and the sum run in `double`, and the accumulator is rounded once (ROADMAP U26; the C refused it before).
 #[test]
-fn the_f16_atom_is_refused_with_a_typed_error() {
-    use unpopped::backend::{Backend, LowerError};
-    let atom = MmaAtom::nvidia_m16n8k16_f16_f32();
-    match unpopped_cpu_c::CpuC.lower_kernel(&kernel(&atom)) {
-        Err(LowerError::UnsupportedKernel { detail }) => {
-            assert!(detail.contains("F16"), "{detail}");
-        }
-        other => panic!("expected a typed refusal, got {other:?}"),
+fn the_narrow_float_atoms_agree_with_the_oracle() {
+    for (tag, atom) in [
+        ("mma_f16", MmaAtom::nvidia_m16n8k16_f16_f32()),
+        ("mma_bf16", MmaAtom::nvidia_m16n8k16_bf16_f32()),
+    ] {
+        agree_launch(tag, &kernel(&atom), args(&atom));
     }
 }
