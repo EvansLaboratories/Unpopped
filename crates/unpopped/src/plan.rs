@@ -610,10 +610,10 @@ pub fn try_build_plan_for<'a, B: IntegerOpsGate + ?Sized>(
 /// # Panics
 /// Where [`build_plan`] does.
 #[must_use]
-pub fn build_plan_for<'a>(
+pub fn build_plan_for<'a, B: IntegerOpsGate + ?Sized>(
     op: &'a OpDef,
     key: &'a StructureKey,
-    backend: &dyn crate::backend::Backend,
+    backend: &B,
 ) -> KernelPlan<'a> {
     try_build_plan_for(op, key, backend).unwrap_or_else(|e| panic!("{e}"))
 }
