@@ -4700,7 +4700,7 @@ fn attribute_bad_contraction(field: &str, operands: &str) -> Result<(), TokenDec
     let carried = carried_dtypes(operands);
     let named = [dtype_from_code(prec[0]), dtype_from_code(prec[2])]
         .into_iter()
-        .chain(comps_scale.map(dtype_from_code).into_iter())
+        .chain(comps_scale.map(dtype_from_code))
         .flatten();
     for dt in named {
         if !carried
