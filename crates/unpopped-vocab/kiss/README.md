@@ -16,7 +16,7 @@ for all three files, so the table cannot name two different spec states.
 
 ### Re-vendored 2026-11-14 from KISS `11407f7` (0.18.0, `sk8`, unpopped-vocab 0.47.0)
 
-KISS boards 430, 443 and 444 (PR KISS#822, `docs/plan-sk8-batch.md`): `sk7` to `sk8`. Every operand sub-key ends in its operand's dtype (`co/00/v4/d16/f` becomes `co/00/v4/d16/f/f32`, `dl`/`dc` after it) and the first sub-key's dtype is the cell's primary dtype; a quantized contraction's field ends `/q<sdt>/g16` or `/g32` (the product of the weight's `block_shape`, axis implied); `x<n>` is gone; Vulkan vocabulary 6. The three vendored files changed (every prefix and sub-key, nine new vectors, four new decline names). Verified after writing: each `git hash-object` equals the KISS blob at `11407f7`, 0 CR bytes.
+KISS boards 430, 443 and 444 (PR KISS#822, `docs/plan-sk8-batch.md`): `sk7` to `sk8`. Every operand sub-key ends in its operand's dtype (`co/00/v4/d16/f` becomes `co/00/v4/d16/f/f32`, `dl`/`dc` after it) and the first sub-key's dtype is the cell's primary dtype; a quantized contraction's field ends `/q<sdt>/g16` or `/g32` (the product of the weight's `block_shape`, axis implied); `x<n>` is gone; Vulkan vocabulary 6. The three vendored files changed (every prefix and sub-key, nine new decline vectors in the key corpus, four new derivation vectors, three new typed decline names). Verified after writing: each `git hash-object` equals the KISS blob at `11407f7`, 0 CR bytes.
 
 | File | KISS blob | sha256 | bytes |
 |---|---|---|---|
