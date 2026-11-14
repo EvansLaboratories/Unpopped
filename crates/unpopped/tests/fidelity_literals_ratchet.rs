@@ -19,8 +19,13 @@ use std::process::Command;
 const ALLOWED: &[(&str, usize, &str)] = &[
     (
         "crates/unpopped/src/oracle.rs",
-        12,
-        "the comparator and `required_fidelity` themselves, and their unit tests",
+        5,
+        "the unit tests of the comparator and `required_fidelity` (the code moved to `oracle/fidelity.rs`, ROADMAP U30)",
+    ),
+    (
+        "crates/unpopped/src/oracle/fidelity.rs",
+        7,
+        "the comparator and `required_fidelity` themselves",
     ),
     (
         "crates/unpopped/tests/compare_for_plan.rs",
