@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.46.2` — `unpopped-cpu-c` narrow-float `Div`, transcendentals and a compound expression are now checked against the oracle (ROADMAP U34)
+
+No emitter change: this adds the corpus U26 left open. `Div`, `Sqrt`, `Rsqrt` and `Tanh` on `F16` and `Bf16` agree with the oracle byte for byte (exhaustively measured over every finite pattern), `Bf16` `Exp`/`Log`/`Sin`/`Cos` likewise; the `F16` forms of those four differ in at most 4 of 63,488 patterns, by one narrow ulp (the C evaluates in `float` through the host libm, which is not correctly rounded; the oracle evaluates at `f64`). `tests/kernel_narrow_float_div_transc_agrees.rs` holds the exact ones exact and the four transcendentals and a two-deep expression to one narrow ulp, the oracle's tolerance band; a seeded perturbation of the encode fails the exact cases.
+
+---
+
 ## `0.46.1` — `plan.rs` is split into twelve section modules, no behaviour or path change (ROADMAP U30, part 2)
 
 `crates/unpopped/src/plan.rs` held about 3,060 code lines and was named by ten files (CodeRipper `MOD-005`). Its non-test code now lives in `src/plan/`: `types` (`Schedule`, `KernelPlan`, `PlanError` and the declines), `build` (`build_plan` and its entry points), `contraction`, `roles` (`rr_role` and the multi-output gate), `views` (views, gather, scatter, offsets), `dtype_float`, `dtype_int`, `dtype_misc` (the per-dtype op gates), `admissibility` (coord, typed, qualified, fma), `out_post` (`out_dtype` and reduction-post gates) and `geometry` (row reduce, scan) and `window` (window, im2col, row sort). The text of each item moved verbatim; private functions became `pub(super)`, and `plan.rs` keeps its documentation, the in-file tests, and a glob re-export of each section, so every public and crate-visible path is unchanged.
