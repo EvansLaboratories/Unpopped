@@ -84,6 +84,11 @@ fn sel(dtype: ElementKind) -> OpDef {
     OpDef::elementwise("sel", 2, &[dtype], Expr(body))
 }
 
+/// An elementwise integer `Max` or `Min` (ROADMAP U33).
+fn maxmin(dtype: ElementKind, op: BinaryOp) -> OpDef {
+    OpDef::elementwise("maxmin", 2, &[dtype], input(0).binary(op, input(1)))
+}
+
 fn with_const(dtype: ElementKind) -> OpDef {
     let c = Expr(ScalarExpr::ConstInt(3, dtype));
     OpDef::elementwise("addc", 1, &[dtype], input(0) + c)
@@ -97,7 +102,14 @@ fn a_backend_that_does_not_opt_in_is_refused_exactly_as_before() {
         ElementKind::U32,
         ElementKind::U64,
     ] {
-        for op in [idiv(dt), with_const(dt), cmp(dt), sel(dt)] {
+        for op in [
+            idiv(dt),
+            with_const(dt),
+            cmp(dt),
+            sel(dt),
+            maxmin(dt, BinaryOp::Max),
+            maxmin(dt, BinaryOp::Min),
+        ] {
             let k = key(dt);
             let plain = try_build_plan(&op, &k).map(|_| ());
             assert!(
@@ -129,7 +141,14 @@ fn an_opted_in_backend_gets_int_div_and_const_int_at_the_defined_dtypes() {
         ElementKind::U32,
         ElementKind::U64,
     ] {
-        for op in [idiv(dt), with_const(dt), cmp(dt), sel(dt)] {
+        for op in [
+            idiv(dt),
+            with_const(dt),
+            cmp(dt),
+            sel(dt),
+            maxmin(dt, BinaryOp::Max),
+            maxmin(dt, BinaryOp::Min),
+        ] {
             let k = key(dt);
             try_build_plan_for(&op, &k, &Total).expect("admitted for an opted-in backend");
             try_generate(&op, &k, &Total).expect("lowers through try_generate");
