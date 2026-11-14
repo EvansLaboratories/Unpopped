@@ -1,5 +1,0 @@
-kind: `plan.rs` is split into twelve section modules, no behaviour or path change (ROADMAP U30, part 2)
----
-`crates/unpopped/src/plan.rs` held about 3,060 code lines and was named by ten files (CodeRipper `MOD-005`). Its non-test code now lives in `src/plan/`: `types` (`Schedule`, `KernelPlan`, `PlanError` and the declines), `build` (`build_plan` and its entry points), `contraction`, `roles` (`rr_role` and the multi-output gate), `views` (views, gather, scatter, offsets), `dtype_float`, `dtype_int`, `dtype_misc` (the per-dtype op gates), `admissibility` (coord, typed, qualified, fma), `out_post` (`out_dtype` and reduction-post gates) and `geometry` (row reduce, scan) and `window` (window, im2col, row sort). The text of each item moved verbatim; private functions became `pub(super)`, and `plan.rs` keeps its documentation, the in-file tests, and a glob re-export of each section, so every public and crate-visible path is unchanged.
-
-Verified: the workspace builds and the workspace tests are unchanged. Not here: the oracle-internal cycles (U35) and the module groups in `[architecture]` (U32).
