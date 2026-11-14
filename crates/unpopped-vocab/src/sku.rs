@@ -12,9 +12,8 @@
 //! `KernelSku::from(GemmSku)` projection) without disturbing existing
 //! callers.
 
-use crate::element::ElementKind;
+use crate::element::{ElementKind, MathPrecision};
 use crate::layout::{ArchSku, EpilogueKind, LayoutSku};
-use crate::plan::PrecisionGuarantee;
 
 /// Op category — the top-level taxonomy a kernel SKU belongs to.
 ///
@@ -283,4 +282,33 @@ pub struct KernelSku {
     pub backend: BackendKind,
     /// Numerical guarantees this SKU provides.
     pub precision_guarantee: PrecisionGuarantee,
+}
+
+/// Numerical guarantees a kernel provides.
+///
+/// Surfaces the salient numerical properties consumers need to decide
+/// whether a kernel SKU satisfies an op's precision contract — without
+/// having to re-derive them from documentation per kernel.
+///
+/// All fields are intentionally cheap to compare so this struct can be
+/// hashed into selection / autotuner caches.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct PrecisionGuarantee {
+    /// Bit-precision used inside the math instruction.
+    pub math_precision: MathPrecision,
+    /// Element type of the multiply-accumulate accumulator.
+    pub accumulator: ElementKind,
+    /// Whether the kernel produces bit-identical results across runs on
+    /// the same hardware with the same inputs.
+    ///
+    /// `false` for tensor-core kernels (F16, BF16, TF32) because the
+    /// warp-level reduction order isn't fixed by the spec — adjacent
+    /// runs can differ in the last bit even with the same inputs.
+    /// `true` for SIMT F32 and for integer kernels.
+    pub bit_stable_on_same_hardware: bool,
+    /// Whether the kernel produces bit-identical results across runs
+    /// from a single thread within a process — i.e. it has no internal
+    /// nondeterminism (no atomic accumulation across blocks, no random
+    /// tile-schedule decisions).
+    pub deterministic: bool,
 }
