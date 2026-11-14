@@ -393,11 +393,12 @@ fn a_kernel_outside_the_emitters_coverage_is_the_typed_kernel_decline() {
         );
         k
     };
-    let f16 = KernelFn::new("h", ElementKind::F16, vec![], vec![], Block(vec![]));
+    // F16 and Bf16 compute dtypes are spelled since ROADMAP U26; an FP8 compute dtype is still outside the coverage
+    let fp8 = KernelFn::new("h", ElementKind::Fp8E4M3FN, vec![], vec![], Block(vec![]));
     let ill_formed = KernelFn::new("bad", F32, vec![], vec![], Block(vec![Stmt::Break]));
     for (what, k) in [
         ("device barrier", barrier),
-        ("f16", f16),
+        ("fp8 compute", fp8),
         ("ill-formed", ill_formed),
     ] {
         let e = CpuC.lower_kernel(&k).expect_err(what);
