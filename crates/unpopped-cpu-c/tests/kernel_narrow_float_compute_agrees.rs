@@ -144,6 +144,14 @@ fn a_narrow_compute_dtype_with_constants_and_unary_ops_agrees() {
             "lt_const_inexact",
             Box::new(move |x| ScalarExpr::Binary(BinaryOp::CmpLt, b(x), b(ScalarExpr::Const(0.1)))),
         ),
+        // no narrow leaf at all: the expression is narrow only because the compute dtype is
+        ("const_only", Box::new(move |_| ScalarExpr::Const(0.1))),
+        (
+            "const_sum",
+            Box::new(move |_| {
+                ScalarExpr::Add(b(ScalarExpr::Const(0.1)), b(ScalarExpr::Const(0.2)))
+            }),
+        ),
         (
             "sqr",
             Box::new(move |x| ScalarExpr::Mul(b(x.clone()), b(x))),
