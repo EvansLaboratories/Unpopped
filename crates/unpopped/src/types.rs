@@ -947,3 +947,41 @@ pub(crate) fn map_children<E>(
         S::BitcastPacked(x, t, n) => S::BitcastPacked(bx(f(x))?, *t, *n),
     })
 }
+
+/// Storage width in **bits**, which is the only width that describes every §6.1
+/// dtype.
+///
+/// `elem_size` is bytes and cannot express `i4`/`u4` (4 bits) or `b1` (1 bit).
+/// Those are not stored one-per-byte: KISS-CLASSIFY §6.1 pins their packing
+/// normatively, and packing is part of what a dtype *is* there (§6.0-0001 makes
+/// the packing convention normative alongside the token and the width).
+pub(crate) fn elem_bits(dt: ElementKind) -> usize {
+    match dt {
+        ElementKind::I4 | ElementKind::U4 => 4,
+        ElementKind::B1 => 1,
+        other => elem_size(other) * 8,
+    }
+}
+
+/// Element byte size for the v1-supported dtypes (the CONTAINER width for a sub-byte dtype).
+pub(crate) fn elem_size(dt: ElementKind) -> usize {
+    match dt {
+        ElementKind::F16 | ElementKind::Bf16 | ElementKind::I16 | ElementKind::U16 => 2,
+        ElementKind::F32 | ElementKind::F32Strict | ElementKind::I32 | ElementKind::U32 => 4,
+        ElementKind::F64 | ElementKind::I64 | ElementKind::U64 => 8,
+        ElementKind::I8
+        | ElementKind::U8
+        | ElementKind::Bool
+        | ElementKind::Fp8E4M3FN
+        | ElementKind::Fp8E5M2 => 1,
+        // A complex element is a PAIR: c64 is two f32, c128 is two f64. The
+        // §6.1 token names the total width, so the name already says this.
+        ElementKind::Complex64 => 8,
+        ElementKind::Complex128 => 16,
+        // Sub-byte dtypes share a byte. `elem_size` is the CONTAINER width here,
+        // not the element width — use `elem_bits` for the latter and
+        // `packed_bytes` for allocation.
+        ElementKind::I4 | ElementKind::U4 | ElementKind::B1 => 1,
+        other => panic!("oracle: unsupported dtype {other:?} (v1)"),
+    }
+}
