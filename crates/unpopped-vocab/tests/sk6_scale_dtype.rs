@@ -21,7 +21,7 @@ fn od(shape: &[i64], strides: &[i64], dt: ElementKind) -> OperandDesc {
 fn cell() -> [OperandDesc; 3] {
     [
         od(&[64, 128], &[128, 1], ElementKind::Bf16),
-        od(&[128, 32], &[32, 1], ElementKind::I4),
+        od(&[128, 32], &[32, 1], ElementKind::I4).with_block_shape(&[1, 32]),
         od(&[64, 32], &[32, 1], ElementKind::Bf16),
     ]
 }
@@ -56,7 +56,7 @@ fn tail(token: &str) -> String {
 #[test]
 fn a_cell_with_no_designated_scale_omits_the_coordinate() {
     let t = derive_structure_key_token(&cell(), &facts(None), ArchSku::Sm90).unwrap();
-    assert!(t.starts_with("sk7|ctr|"), "{t}");
+    assert!(t.starts_with("sk8|ctr|"), "{t}");
     assert_eq!(tail(&t), "csss/d16/i4/f32/bf16/st", "{t}");
 }
 
@@ -66,8 +66,8 @@ fn the_designated_scale_operands_dtype_is_the_last_coordinate() {
     // two operands of different dtype must differ, and only in the tail.
     let mut seen = Vec::new();
     for (dt, want) in [
-        (ElementKind::F8E8M0, "csss/d16/i4/f32/bf16/st/qf8e8m0"),
-        (ElementKind::F16, "csss/d16/i4/f32/bf16/st/qf16"),
+        (ElementKind::F8E8M0, "csss/d16/i4/f32/bf16/st/qf8e8m0/g32"),
+        (ElementKind::F16, "csss/d16/i4/f32/bf16/st/qf16/g32"),
     ] {
         let ops = cell_with_column_operand(dt);
         let t = derive_structure_key_token(&ops, &facts(Some(2)), ArchSku::Sm90);
@@ -106,10 +106,12 @@ fn a_scale_role_past_the_operand_list_is_a_decline_not_a_silent_omission() {
 
 #[test]
 fn a_reserved_scale_dtype_declines_instead_of_keying_what_the_codec_would_refuse() {
+    // From sk8 every operand's sub-key carries its dtype, so a reserved scale dtype is the general reserved-operand decline.
     let ops = cell_with_column_operand(ElementKind::F8E6M2);
     assert_eq!(
         derive_structure_key(&ops, &facts(Some(2)), ArchSku::Sm90),
-        Err(DeriveDecline::ReservedScaleDtype {
+        Err(DeriveDecline::ReservedOperandDtype {
+            index: 2,
             dtype: ElementKind::F8E6M2
         })
     );
@@ -117,27 +119,28 @@ fn a_reserved_scale_dtype_declines_instead_of_keying_what_the_codec_would_refuse
 
 #[test]
 fn the_reader_declines_what_the_clause_forbids() {
-    let base = "sk7|ctr|i4|cuda:sm90|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-|ctll/d16/i4/f32/bf16/st";
+    // Operands: the weight (primary), an f16 scale sibling and the bf16 output, so every dtype the field names is carried.
+    let base = "sk8|ctr|i4|cuda:sm90|ix32|grid|r2|co/00/v4/d16/f/i4;co/00/v4/d16/f/f16;co/00/v4/d16/f/bf16|-|ctll/d16/i4/f32/bf16/st";
     // Controls: the bare and the well-formed spellings parse.
     assert!(StructureKey::parse_token(base).is_ok());
-    assert!(StructureKey::parse_token(&format!("{base}/qf16")).is_ok());
+    assert!(StructureKey::parse_token(&format!("{base}/qf16/g32")).is_ok());
 
     assert_eq!(
-        StructureKey::parse_token(&format!("{base}/qzzz")),
+        StructureKey::parse_token(&format!("{base}/qzzz/g32")),
         Err(TokenDecline::UnknownDtype)
     );
     assert!(matches!(
-        StructureKey::parse_token(&format!("{base}/qf8e6m2")),
+        StructureKey::parse_token(&format!("{base}/qf8e6m2/g32")),
         Err(TokenDecline::ReservedDtype { .. })
     ));
     // A second coordinate in the same field.
-    assert!(StructureKey::parse_token(&format!("{base}/qf16/qf16")).is_err());
+    assert!(StructureKey::parse_token(&format!("{base}/qf16/qf16/g32")).is_err());
     // Outside a contraction field.
-    let ew = "sk7|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-|f32/st/qf16";
+    let ew = "sk8|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f/f32;co/00/v4/d16/f/f32;co/00/v4/d16/f/f32|-|f32/st/qf16";
     assert!(StructureKey::parse_token(ew).is_err());
     // The retired schema is a versioned decline, not a parse.
     assert_eq!(
-        StructureKey::parse_token(&base.replacen("sk7", "sk5", 1)),
+        StructureKey::parse_token(&base.replacen("sk8", "sk5", 1)),
         Err(TokenDecline::UnsupportedSchemaVersion { version: 5 })
     );
 }

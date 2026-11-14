@@ -129,15 +129,29 @@ fn a_reserved_dtype_at_operand_0_declines() {
 }
 
 #[test]
-fn a_reserved_dtype_at_a_non_primary_operand_still_keys() {
-    // §6.6-0015: only operand 0 is a key position. KISS ruled this case on
-    // 2026-10-14: our keyer was right, and a "fix" would be the defect.
+fn a_reserved_dtype_at_a_non_primary_operand_declines_from_sk8() {
+    // Through sk7 only operand 0 was a key position (§6.6-0015) and this case keyed: KISS ruled it on 2026-10-14. From sk8 every
+    // operand's sub-key carries its own dtype (board 444), so a reserved dtype at operand 1 is a dtype position and declines
+    // (KISS vector `decline_reserved_dtype_in_nonprimary_operand`, which replaced `reserved_dtype_at_non_primary_operand_derives`).
     let ops = [
         od(&[8], &[1], ElementKind::F16),
         od(&[8], &[1], ElementKind::Fp8E4M3FNUZ),
         od(&[8], &[1], ElementKind::F16),
     ];
-    assert!(try_structure_key(OpCategory::BinaryElementwise, &ops, ArchSku::Sm89).is_ok());
+    assert_eq!(
+        try_structure_key(OpCategory::BinaryElementwise, &ops, ArchSku::Sm89),
+        Err(DeriveDecline::ReservedOperandDtype {
+            index: 1,
+            dtype: ElementKind::Fp8E4M3FNUZ
+        })
+    );
+    // Control: the same operands with a usable dtype at operand 1 key.
+    let ok = [
+        od(&[8], &[1], ElementKind::F16),
+        od(&[8], &[1], ElementKind::F16),
+        od(&[8], &[1], ElementKind::F16),
+    ];
+    assert!(try_structure_key(OpCategory::BinaryElementwise, &ok, ArchSku::Sm89).is_ok());
 }
 
 // ---- the class is derived, and roles reorder --------------------------------

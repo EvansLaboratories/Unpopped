@@ -14,6 +14,18 @@ vendoring better than retyping.
 `bafbe07` is KISS `main` as read on 2026-10-28 (KISS#713). It is a single commit
 for all three files, so the table cannot name two different spec states.
 
+### Re-vendored 2026-11-14 from KISS `11407f7` (0.18.0, `sk8`, unpopped-vocab 0.47.0)
+
+KISS boards 430, 443 and 444 (PR KISS#822, `docs/plan-sk8-batch.md`): `sk7` to `sk8`. Every operand sub-key ends in its operand's dtype (`co/00/v4/d16/f` becomes `co/00/v4/d16/f/f32`, `dl`/`dc` after it) and the first sub-key's dtype is the cell's primary dtype; a quantized contraction's field ends `/q<sdt>/g16` or `/g32` (the product of the weight's `block_shape`, axis implied); `x<n>` is gone; Vulkan vocabulary 6. The three vendored files changed (every prefix and sub-key, nine new decline vectors in the key corpus, four new derivation vectors, three new typed decline names). Verified after writing: each `git hash-object` equals the KISS blob at `11407f7`, 0 CR bytes.
+
+| File | KISS blob | sha256 | bytes |
+|---|---|---|---|
+| `dtype_manifest.json` | `195db1a26fb7c557ed8defbaa084be8e5ba670db` | `fadbd56a55ae69de4a53d77df6ae8985083aa107261429ce97919bc3d19eca3a` | 3650 |
+| `structure_key_vectors.json` | `8422a0420c3d929beaacbdc1f4219da3c544d624` | `b0347293cfe4c4be8c1e52cb8ccc4b884b85151a5a50d5dd34f9ed1482aff578` | 42772 |
+| `structure_key_derivation_vectors.json` | `e28bb6b29ed809580e46132a331754ee2aa2e498` | `c146b450398d36992b6c21727f8c911723bf139d91d3d0336b018ce3b86b9868` | 66612 |
+
+What it required here: `STRUCTURE_KEY_VERSION` 8; `OperandKey::dtype`; `ContractionKey::block` with `BlockLength` (`g16`, `g32`) and `OperandDesc::with_block_shape`; `TokenDecline::{PrimaryDtypeMismatch, OperandDtypeDisagrees, BadBlockLength}` and `DeriveDecline::{BlockLengthUnsupported, BlockLengthMissing, ReservedOperandDtype}` (a reserved dtype at any operand now declines); the reserved-dtype atom scan also splits on `;`; the strict decode refuses what `parse_token` attributes. Vectors: 36 positive and 38 decline in the byte-match leg, 75 derivation vectors all matching (the KNOWN RESIDUAL of `tests/scale_sibling_model.rs`, an e8m0 and an f16 scale keying alike, is closed by the per-operand dtype). Not vendored: `opattrs_vectors.json`, `opattrs_value_vectors.json`, `announce_vectors.json` and the matmul blob: nothing here reads or writes an op-attributes blob (`git grep -i opattrs` finds only a doc comment). The three files above supersede the rows below.
+
 ### Re-vendored 2026-11-14 from KISS `cc67e48` (0.17.1, `sk7`, unpopped-vocab 0.46.0)
 
 KISS#811 (padding_lo/hi), #812 (matmul accumulator/math_fidelity/precision_tag, packed reductions) and #813 (Contract 6.5-0009 pins) changed no key byte but the schema event itself: `sk6` to `sk7`, `MAX_OPERANDS` 8 to 16 (Classify 6.4-0002; KISS `docs/sk7-vector-changes.md`). Every token prefix moved `sk6|` to `sk7|`; four vectors were added (`operand_count_9_above_the_sk6_limit`, `operand_count_16_at_max_operands`, `operand_count_17_over_max_operands`, `retired_sk6_token`). `dtype_manifest.json` changed two members (`structure_key_schema_version` 7, `token_prefix` `sk7`). Verified after writing: each `git hash-object` equals the KISS blob at `cc67e48`, 0 CR bytes.

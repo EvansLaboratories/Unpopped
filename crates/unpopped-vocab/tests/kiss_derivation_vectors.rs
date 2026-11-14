@@ -134,6 +134,12 @@ fn operands_of(name: &str, v: &Value) -> Vec<OperandDesc> {
             Some("dc") => d = d.with_dequant_form(DequantForm::Codebook),
             Some(other) => panic!("{name}: unknown dequant_form {other}"),
         }
+        // sk8: the quantization block's extents; their product is the weight's block length (§6.6-0022).
+        let block: Vec<u64> = o["block_shape"]
+            .as_array()
+            .map(|a| a.iter().map(|e| e.as_u64().unwrap()).collect())
+            .unwrap_or_default();
+        d = d.with_block_shape(&block);
         ops.push(d);
     }
     ops
@@ -219,7 +225,7 @@ fn the_artifact_is_the_one_this_leg_claims() {
     );
     assert_eq!(
         v["vectors"].as_array().unwrap().len(),
-        71,
+        75,
         "vector count changed"
     );
 }

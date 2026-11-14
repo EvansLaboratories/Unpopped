@@ -75,7 +75,7 @@ pub const MAX_OPERANDS: usize = 16;
 /// extent 1 counts as stride 0 for the broadcast mask. None of the three is
 /// additive, so this is a schema event. `StructureKey::op` is replaced by
 /// [`StructureKey::cell_class`].
-pub const STRUCTURE_KEY_VERSION: u16 = 7;
+pub const STRUCTURE_KEY_VERSION: u16 = 8;
 
 // ===========================================================================
 // Predicate axes
@@ -395,6 +395,49 @@ pub struct ContractionKey {
     /// decode the same stored values to different numbers, so they are
     /// different cells.
     pub scale: Option<ElementKind>,
+    /// The weight's block length (`sk8`, KISS-CLASSIFY-6.6-0022): the last coordinate `g16` or `g32`, the product of the weight's
+    /// `block_shape` (the group axis is implied, not keyed). Present iff a [`scale`](Self::scale) is designated.
+    pub block: Option<BlockLength>,
+}
+
+/// The closed set of block lengths a quantized weight may key (`sk8`): `16` or `32` elements.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
+pub enum BlockLength {
+    /// A 16-element block (`g16`).
+    G16,
+    /// A 32-element block (`g32`).
+    G32,
+}
+
+impl BlockLength {
+    /// The element count of the block.
+    #[must_use]
+    pub const fn elements(self) -> u64 {
+        match self {
+            Self::G16 => 16,
+            Self::G32 => 32,
+        }
+    }
+
+    /// The block length of `elements` elements, or `None` outside the closed set `{16, 32}`.
+    #[must_use]
+    pub const fn from_elements(elements: u64) -> Option<Self> {
+        match elements {
+            16 => Some(Self::G16),
+            32 => Some(Self::G32),
+            _ => None,
+        }
+    }
+
+    /// The token spelling (`g16`, `g32`).
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::G16 => "g16",
+            Self::G32 => "g32",
+        }
+    }
 }
 
 impl ContractionKey {
@@ -435,7 +478,15 @@ impl ContractionKey {
             out,
             mp,
             scale: None,
+            block: None,
         }
+    }
+
+    /// Key the weight's block length (`/g16` or `/g32`, `sk8`): required beside a designated scale, refused without one.
+    #[must_use]
+    pub const fn with_block(mut self, block: BlockLength) -> Self {
+        self.block = Some(block);
+        self
     }
 
     /// Key the dtype of the quantized weight's scale operand (`/q<dtype>`,
@@ -965,7 +1016,7 @@ impl Default for CellFacts {
 /// `#[non_exhaustive]` so a future axis can be added without a breaking release.
 /// See the note on [`ContractionKey`] for why that reservation is worth the
 /// constructor.
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 #[non_exhaustive]
 pub struct OperandKey {
     /// Memory-layout class.
@@ -978,13 +1029,30 @@ pub struct OperandKey {
     pub inner_div: DivBucket,
     /// `true` if any axis has a negative stride (a flipped / reversed view).
     pub flipped: bool,
+    /// The operand's own dtype, canonical (never `F32Strict`): the sixth sub-key component from `sk8` (KISS-CLASSIFY-6.5,
+    /// board 444). The first operand's equals the cell's primary dtype.
+    pub dtype: ElementKind,
     /// The operand's dequantization form, iff it carries a `quant` record
     /// (keyed from sk5, §6.3-0009a); `None` for every other operand.
     pub dequant: Option<DequantForm>,
 }
 
+impl Default for OperandKey {
+    /// A contiguous, unbroadcast, scalar-access `f32` sub-key (the first variant of every axis).
+    fn default() -> Self {
+        Self::new(
+            Contiguity::default(),
+            AxisMask::default(),
+            VecWidth::default(),
+            DivBucket::default(),
+            false,
+            ElementKind::F32,
+        )
+    }
+}
+
 impl OperandKey {
-    /// An operand sub-key from its four classified axes plus the flip flag.
+    /// An operand sub-key from its four classified axes, the flip flag and the operand's dtype.
     #[must_use]
     pub const fn new(
         contig: Contiguity,
@@ -992,6 +1060,7 @@ impl OperandKey {
         vec_width: VecWidth,
         inner_div: DivBucket,
         flipped: bool,
+        dtype: ElementKind,
     ) -> Self {
         Self {
             contig,
@@ -999,6 +1068,7 @@ impl OperandKey {
             vec_width,
             inner_div,
             flipped,
+            dtype,
             dequant: None,
         }
     }
@@ -1191,6 +1261,9 @@ pub struct OperandDesc {
     /// The operand's `dequant_form`, iff it carries a `quant` record
     /// (§6.3-0009a). Keyed from sk5.
     pub dequant_form: Option<DequantForm>,
+    /// The element count of one quantization block (the product of the operand's `block_shape`), iff it carries one. Keyed from
+    /// `sk8` as the weight's `g16`/`g32` beside a designated scale (§6.6-0022).
+    pub block_len: Option<u64>,
 }
 
 impl OperandDesc {
@@ -1242,6 +1315,7 @@ impl OperandDesc {
             symbolic: None,
             role: OperandRole::Unspecified,
             dequant_form: None,
+            block_len: None,
         })
     }
 
@@ -1257,6 +1331,22 @@ impl OperandDesc {
     #[must_use]
     pub const fn with_dequant_form(mut self, form: DequantForm) -> Self {
         self.dequant_form = Some(form);
+        self
+    }
+
+    /// This operand with a quantization `block_shape`: the key spells the product of its extents as the weight's block length
+    /// (`g16`/`g32`, `sk8`). An empty shape leaves the operand with no block.
+    #[must_use]
+    pub fn with_block_shape(mut self, block_shape: &[u64]) -> Self {
+        self.block_len = if block_shape.is_empty() {
+            None
+        } else {
+            Some(
+                block_shape
+                    .iter()
+                    .fold(1u64, |acc, &e| acc.saturating_mul(e)),
+            )
+        };
         self
     }
 
@@ -1526,6 +1616,19 @@ fn contraction_from_axes(
         out: canonical_dtype(out.dtype),
         mp: facts.math_fidelity,
         scale: scale_od.map(|od| od.dtype),
+        // sk8 (§6.6-0022): the weight's block length (the product of its `block_shape`) rides beside a designated scale and
+        // is a closed set; an operand that declares none, or another length, is a typed decline.
+        block: if scale_od.is_some() {
+            let len = weight_od
+                .block_len
+                .ok_or(DeriveDecline::BlockLengthMissing)?;
+            Some(
+                BlockLength::from_elements(len)
+                    .ok_or(DeriveDecline::BlockLengthUnsupported { len })?,
+            )
+        } else {
+            None
+        },
     })
 }
 
@@ -1800,6 +1903,7 @@ fn derive_contraction(
                 out: out_dt,
                 mp,
                 scale: None,
+                block: None,
             })
         }
         3 => {
@@ -1853,6 +1957,7 @@ fn derive_contraction(
                 out: out_dt,
                 mp,
                 scale: None,
+                block: None,
             })
         }
         _ => None,
@@ -1909,7 +2014,7 @@ fn derive_reduce_axes(op: OpCategory, operands: &[OperandDesc]) -> AxisMask {
 /// // a [128, 256] row-major f32 (in, in, out) triple for a binary elementwise add.
 /// let a = OperandDesc::new(2, &[128, 256], &[256, 1], ElementKind::F32, 256);
 /// let token = structure_key_token(OpCategory::BinaryElementwise, &[a, a, a], ArchSku::Sm89);
-/// assert!(token.starts_with("sk7|ew2|f32|cuda:sm89|"));
+/// assert!(token.starts_with("sk8|ew2|f32|cuda:sm89|"));
 /// ```
 ///
 /// ⚠️ **Not conformant for one input; prefer [`try_structure_key_token`].** This
@@ -1985,6 +2090,24 @@ pub enum DeriveDecline {
     },
     /// KISS-CLASSIFY §6.1-0001 at the `q<dtype>` position: the declared scale
     /// operand has a **reserved** dtype, which the codec refuses to spell.
+    /// The weight's block length (the product of its `block_shape`) is outside the closed set `{16, 32}` the key can spell
+    /// (`sk8`, §6.6-0022).
+    BlockLengthUnsupported {
+        /// The block length in elements.
+        len: u64,
+    },
+    /// A scale operand is designated but the weight declares no `block_shape`, so its block length cannot be keyed (`sk8`,
+    /// §6.6-0022).
+    BlockLengthMissing,
+    /// A non-primary operand has a reserved dtype: from `sk8` each operand's own sub-key carries its dtype, so it declines
+    /// (§6.1-0001, §6.6-0007).
+    ReservedOperandDtype {
+        /// The operand's index.
+        index: usize,
+        /// The reserved dtype.
+        dtype: ElementKind,
+    },
+    /// A reserved dtype is the designated scale operand's.
     ReservedScaleDtype {
         /// The reserved dtype found at the scale operand.
         dtype: ElementKind,
@@ -2030,6 +2153,9 @@ impl DeriveDecline {
     pub const fn wire_name(&self) -> &'static str {
         match self {
             Self::ScaleDtypeAtOperand0 { .. } => "ScaleDtypeAtOperand0",
+            Self::BlockLengthUnsupported { .. } => "BlockLengthUnsupported",
+            Self::BlockLengthMissing => "BlockLengthMissing",
+            Self::ReservedOperandDtype { .. } => "ReservedDtype",
             Self::ReservedDtypeAtOperand0 { .. } => "ReservedDtype",
             Self::CollapsedReduction => "CollapsedReduction",
             Self::ReducedAxisOutOfRange { .. } => "ReducedAxisOutOfRange",
@@ -2086,6 +2212,18 @@ impl core::fmt::Display for DeriveDecline {
             Self::ScaleRoleOutOfRange { index } => write!(
                 f,
                 "the declared scale operand {index} names no operand (KISS-CLASSIFY §6.6-0022)"
+            ),
+            Self::BlockLengthMissing => write!(
+                f,
+                "a scale operand is designated but the weight declares no block_shape (KISS-CLASSIFY §6.6-0022)"
+            ),
+            Self::ReservedOperandDtype { index, dtype } => write!(
+                f,
+                "operand {index} has reserved dtype {dtype:?}, which must typed-decline (KISS-CLASSIFY §6.1-0001)"
+            ),
+            Self::BlockLengthUnsupported { len } => write!(
+                f,
+                "the weight's block length is {len} elements, outside the closed set {{16, 32}} (KISS-CLASSIFY §6.6-0022)"
             ),
             Self::ReservedScaleDtype { dtype } => write!(
                 f,
@@ -2144,6 +2282,16 @@ fn check_declines(operands: &[OperandDesc], facts: &CellFacts) -> Result<(), Der
         .filter(|d| d.is_reserved())
     {
         return Err(DeriveDecline::ReservedDtypeAtOperand0 { dtype });
+    }
+    // sk8: every operand's sub-key carries its own dtype, so a reserved one anywhere declines.
+    if let Some((index, dtype)) = operands
+        .iter()
+        .enumerate()
+        .skip(1)
+        .map(|(i, o)| (i, o.dtype))
+        .find(|(_, d)| d.is_reserved())
+    {
+        return Err(DeriveDecline::ReservedOperandDtype { index, dtype });
     }
     let frame = Frame::of(operands);
     let rank_bits = all_axes_mask(frame.rank as u8);
@@ -2310,6 +2458,7 @@ fn derive_operand_key(
         vec_width,
         inner_div,
         flipped,
+        dtype: canonical_dtype(od.dtype),
         dequant: od.dequant_form,
     }
 }
@@ -2711,6 +2860,12 @@ pub enum TokenDecline {
         /// How many operands the token listed.
         got: usize,
     },
+    /// The first operand sub-key's dtype is not the cell's primary dtype (field 2), from `sk8`.
+    PrimaryDtypeMismatch,
+    /// A contraction's weight, output or scale dtype is not one any operand sub-key carries (`sk8`).
+    OperandDtypeDisagrees,
+    /// The weight's block length is missing beside a scale, present without one, or outside `{16, 32}` (`sk8`, §6.6-0022).
+    BadBlockLength,
 }
 
 impl TokenDecline {
@@ -2766,6 +2921,9 @@ impl TokenDecline {
             Self::ContractionPresenceMismatch => "ContractionPresenceMismatch",
             Self::BadContractionField => "BadContractionField",
             Self::TooManyOperands { .. } => "TooManyOperands",
+            Self::PrimaryDtypeMismatch => "PrimaryDtypeMismatch",
+            Self::OperandDtypeDisagrees => "OperandDtypeDisagrees",
+            Self::BadBlockLength => "BadBlockLength",
         }
     }
 }
@@ -2796,14 +2954,15 @@ impl StructureKey {
                 ops.push(';');
             }
             ops.push_str(&format!(
-                "{}/{:02x}/{}/{}/{}",
+                "{}/{:02x}/{}/{}/{}/{}",
                 contig_code(o.contig),
                 o.bcast.0,
                 vec_code(o.vec_width),
                 div_code(o.inner_div),
                 if o.flipped { 'r' } else { 'f' },
+                dtype_code(o.dtype),
             ));
-            // §6.7-0004: the optional sixth component, iff the operand carries
+            // §6.7-0004: the optional seventh component, iff the operand carries
             // a `quant` record.
             if let Some(d) = o.dequant {
                 ops.push('/');
@@ -2888,6 +3047,11 @@ impl StructureKey {
             if let Some(s) = c.scale {
                 token.push_str(&format!("/q{}", dtype_code(s)));
             }
+            // sk8 (§6.6-0022): the block length, last, beside the scale only.
+            if let (Some(_), Some(b)) = (c.scale, c.block) {
+                token.push('/');
+                token.push_str(b.code());
+            }
         }
         token
     }
@@ -2930,7 +3094,7 @@ impl StructureKey {
         // legitimate anywhere in a token, so finding one as a whole atom is
         // sufficient and cannot false-positive on a substring (`e4m3fn` is a
         // different atom from `e4m3fnuz`, and atom equality keeps them apart).
-        for atom in token.split(['|', '/']) {
+        for atom in token.split(['|', '/', ';']) {
             if dtype_from_code(atom).is_some_and(ElementKind::is_reserved) {
                 return Err(TokenDecline::ReservedDtype {
                     spelling: atom.to_string(),
@@ -2990,7 +3154,7 @@ impl StructureKey {
                 .get(2)
                 .and_then(|s| dtype_from_code(s))
                 .ok_or(TokenDecline::UnknownDtype)?;
-            check_subkeys(parts.get(7).copied().unwrap_or(""))?;
+            check_subkeys(parts.get(7).copied().unwrap_or(""), dt)?;
             // §6.6-0017: the reduce field is non-`-` iff the class is `rdc`.
             let reduces = parts.get(8).is_some_and(|f| *f != "-");
             if reduces && class != CellClass::Rdc {
@@ -3016,7 +3180,7 @@ impl StructureKey {
 
             if let Some(tenth) = parts.get(10 - 1).filter(|_| parts.len() == 10) {
                 if carries_contraction_field(class) {
-                    attribute_bad_contraction(tenth)?;
+                    attribute_bad_contraction(tenth, parts.get(7).copied().unwrap_or(""))?;
                 } else {
                     parse_acc_mp(tenth, dt)?;
                 }
@@ -3128,6 +3292,18 @@ impl StructureKey {
                 // sk6 (§6.6-0022): the optional LAST component `q<dtype>`. At
                 // most one is taken; a second one is left behind in the
                 // precision group, where it is not an `<mp>` and declines.
+                // sk8: the block length `g16`/`g32` is LAST and rides beside the scale only.
+                let block = match comps.last().and_then(|c| c.strip_prefix('g')) {
+                    Some(n) => {
+                        let b = BlockLength::from_elements(n.parse::<u64>().ok()?)?;
+                        if n != b.elements().to_string() {
+                            return None;
+                        }
+                        comps.pop();
+                        Some(b)
+                    }
+                    None => None,
+                };
                 let scale = match comps.last().and_then(|c| c.strip_prefix('q')) {
                     Some(s) => {
                         let dt = reject_reserved(dtype_from_code(s)?)?;
@@ -3136,6 +3312,9 @@ impl StructureKey {
                     }
                     None => None,
                 };
+                if scale.is_some() != block.is_some() {
+                    return None;
+                }
                 if comps.len() < 6 {
                     return None;
                 }
@@ -3216,9 +3395,27 @@ impl StructureKey {
                     out: reject_reserved(dtype_from_code(prec[2])?)?,
                     mp: mp_from_code(prec[3])?,
                     scale,
+                    block,
                 })
             }
         };
+
+        // sk8: the first operand's dtype is the cell's primary dtype, and a contraction's weight, output and scale dtypes are
+        // each one some operand sub-key carries. `parse_token` attributes both before reaching here; the strict decode must
+        // refuse the same tokens.
+        let carries = |dt: ElementKind| {
+            operands[..n_operands as usize]
+                .iter()
+                .any(|o| canonical_dtype(o.dtype) == canonical_dtype(dt))
+        };
+        if n_operands > 0 && operands[0].dtype != dtype {
+            return None;
+        }
+        if let Some(c) = contraction {
+            if !carries(c.wdt) || !carries(c.out) || c.scale.is_some_and(|s| !carries(s)) {
+                return None;
+            }
+        }
 
         Some(StructureKey {
             version,
@@ -3418,8 +3615,8 @@ mod contraction_key_tests {
 
     #[test]
     fn from_token_declines_reordered_and_duplicated_layout_order_components() {
-        let base = "sk7|ctr|f32|cuda:sm89|ix32|grid|r2|\
-                    co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
+        let base = "sk8|ctr|f32|cuda:sm89|ix32|grid|r2|\
+                    co/00/v4/d16/f/f32;co/00/v4/d16/f/f32;co/00/v4/d16/f/f32|-";
         // `/or...` before `/ol...` violates the fixed emission order (batch,
         // then lhs_order, then rhs_order) the position-driven parser walks —
         // it must decline rather than silently accept an out-of-order
@@ -3444,8 +3641,8 @@ mod contraction_key_tests {
         // contraction's `0..rank`. `from_token` parses an untrusted wire token, so
         // malformed digits must decline rather than build an inconsistent key that
         // panics when the emitter indexes `perm()[d]`.
-        let r2 = "sk7|ctr|f32|cuda:sm89|ix32|grid|r2|\
-                  co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
+        let r2 = "sk8|ctr|f32|cuda:sm89|ix32|grid|r2|\
+                  co/00/v4/d16/f/f32;co/00/v4/d16/f/f32;co/00/v4/d16/f/f32|-";
         // out-of-range digit (7 >= rank 2)
         assert_eq!(
             StructureKey::from_token(&format!("{r2}|ctll/d16/or77/f32/f32/f32/rm")),
@@ -3467,8 +3664,8 @@ mod contraction_key_tests {
         // A rank-3 (batched) cell with a rank-2 (2-digit) order — the `/bt/ol10`
         // case: a rank-2 LayoutOrder inside a rank-3 contraction would later panic
         // at `perm()[2]`. Must decline on the digit-count/rank mismatch.
-        let r3 = "sk7|ctr|f32|cuda:sm89|ix32|grid|r3|\
-                  co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
+        let r3 = "sk8|ctr|f32|cuda:sm89|ix32|grid|r3|\
+                  co/00/v4/d16/f/f32;co/00/v4/d16/f/f32;co/00/v4/d16/f/f32|-";
         assert_eq!(
             StructureKey::from_token(&format!("{r3}|ctll/d16/bt/ol10/f32/f32/f32/rm")),
             None,
@@ -3728,7 +3925,7 @@ mod contraction_key_tests {
         let (st_tok, rm_tok) = (strict.to_token(), tf32.to_token());
         assert!(!st_tok.contains("f32s"), "no f32s spelling: {st_tok}");
         assert!(
-            st_tok.starts_with("sk7|ctr|f32|"),
+            st_tok.starts_with("sk8|ctr|f32|"),
             "strict cell spells the canonical f32 dtype: {st_tok}"
         );
         assert!(
@@ -3780,7 +3977,7 @@ mod contraction_key_tests {
         );
         let (mt, ht) = (mixed.to_token(), homog.to_token());
         assert!(
-            mt.starts_with("sk7|ctr|f8e4m3fn|"),
+            mt.starts_with("sk8|ctr|f8e4m3fn|"),
             "variant-explicit: {mt}"
         );
         assert!(
@@ -3798,8 +3995,8 @@ mod contraction_key_tests {
 
     #[test]
     fn from_token_declines_sk2_shaped_and_malformed_gem_precision_groups() {
-        let base = "sk7|ctr|f32|cuda:sm89|ix32|grid|r2|\
-                    co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
+        let base = "sk8|ctr|f32|cuda:sm89|ix32|grid|r2|\
+                    co/00/v4/d16/f/f32;co/00/v4/d16/f/f32;co/00/v4/d16/f/f32|-";
         // The precision group is REQUIRED for an sk3 gem cell: the sk2 shapes
         // (`c<mnk>/<kdiv>` and `c<mnk>/<kdiv>/b<class>`) are typed declines.
         assert_eq!(StructureKey::from_token(&format!("{base}|ctll/d16")), None);
@@ -3828,8 +4025,8 @@ mod contraction_key_tests {
             None
         );
         // The `f32s` retirement also holds at the token's DTYPE field.
-        let f32s_dtype = "sk7|ctr|f32s|cuda:sm89|ix32|grid|r2|\
-                          co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-|ctll/d16/f32/f32/f32/st";
+        let f32s_dtype = "sk8|ctr|f32s|cuda:sm89|ix32|grid|r2|\
+                          co/00/v4/d16/f/f32;co/00/v4/d16/f/f32;co/00/v4/d16/f/f32|-|ctll/d16/f32/f32/f32/st";
         assert_eq!(StructureKey::from_token(f32s_dtype), None);
     }
 
@@ -4055,11 +4252,13 @@ mod contraction_key_tests {
 
 fn parse_operand(field: &str) -> Option<OperandKey> {
     let f: Vec<&str> = field.split('/').collect();
-    if f.len() != 5 && f.len() != 6 {
+    if f.len() != 6 && f.len() != 7 {
         return None;
     }
-    // §6.7-0004: a sixth part must be `dl` or `dc`.
-    let dequant = match f.get(5) {
+    // From `sk8` the sixth part is the operand's dtype (a reserved one is refused here, as everywhere).
+    let dtype = reject_reserved(dtype_from_code(f[5])?)?;
+    // §6.7-0004: a seventh part must be `dl` or `dc`.
+    let dequant = match f.get(6) {
         None => None,
         Some(&"dl") => Some(DequantForm::Linear),
         Some(&"dc") => Some(DequantForm::Codebook),
@@ -4099,27 +4298,42 @@ fn parse_operand(field: &str) -> Option<OperandKey> {
         vec_width,
         inner_div,
         flipped,
+        dtype,
         dequant,
     })
 }
 
-/// The per-sub-key verdicts `parse_operand` collapses into `None`: a part count
-/// other than five or six is [`TokenDecline::BadOperandSubKey`], and a sixth
-/// part outside `{dl, dc}` is [`TokenDecline::BadDequantForm`] (§6.7-0004).
-fn check_subkeys(field: &str) -> Result<(), TokenDecline> {
+/// The per-sub-key verdicts `parse_operand` collapses into `None`: a sub-key without its dtype, or with more parts than the
+/// grammar has, is [`TokenDecline::BadOperandSubKey`]; a part after the dtype outside `{dl, dc}` is
+/// [`TokenDecline::BadDequantForm`] (§6.7-0004); a dtype spelling outside the closed vocabulary is
+/// [`TokenDecline::UnknownDtype`]; and the first sub-key's dtype must equal the cell's primary dtype, else
+/// [`TokenDecline::PrimaryDtypeMismatch`] (a reserved dtype keeps its own verdict, found earlier).
+fn check_subkeys(field: &str, primary: ElementKind) -> Result<(), TokenDecline> {
     if field.is_empty() {
         return Ok(());
     }
-    for sub in field.split(';') {
+    for (i, sub) in field.split(';').enumerate() {
         let f: Vec<&str> = sub.split('/').collect();
         match f.len() {
-            5 => {}
-            6 if matches!(f[5], "dl" | "dc") => {}
-            6 => return Err(TokenDecline::BadDequantForm),
+            6 => {}
+            7 if matches!(f[6], "dl" | "dc") => {}
+            7 => return Err(TokenDecline::BadDequantForm),
             _ => return Err(TokenDecline::BadOperandSubKey),
+        }
+        let dtype = dtype_from_code(f[5]).ok_or(TokenDecline::UnknownDtype)?;
+        if i == 0 && dtype != primary {
+            return Err(TokenDecline::PrimaryDtypeMismatch);
         }
     }
     Ok(())
+}
+
+/// The dtypes the sub-keys of operand field `field` carry (those that parse).
+fn carried_dtypes(field: &str) -> Vec<ElementKind> {
+    field
+        .split(';')
+        .filter_map(|sub| sub.split('/').nth(5).and_then(dtype_from_code))
+        .collect()
 }
 
 const fn idx_code(v: IdxWidth) -> &'static str {
@@ -4427,12 +4641,26 @@ fn parse_reduce_field(field: &str, rank: u8) -> Result<AxisMask, TokenDecline> {
 /// dtype slots — §6.1-0001 governs every dtype position, and these are dtype
 /// positions; [`TokenDecline::BadContractionField`] for a malformed shape or an
 /// unrecognized `<mp>` code.
-fn attribute_bad_contraction(field: &str) -> Result<(), TokenDecline> {
+fn attribute_bad_contraction(field: &str, operands: &str) -> Result<(), TokenDecline> {
     let Some(rest) = field.strip_prefix('c') else {
         return Err(TokenDecline::BadContractionField);
     };
     let mut comps: Vec<&str> = rest.split('/').collect();
+    // The sk8 block length (§6.6-0022) is the LAST coordinate, `g16` or `g32`, and rides beside the scale only.
+    let block = match comps.last().and_then(|c| c.strip_prefix('g')) {
+        Some(n) => {
+            comps.pop();
+            Some(n)
+        }
+        None => None,
+    };
+    let has_scale = comps.last().is_some_and(|c| c.starts_with('q'));
+    match (block, has_scale) {
+        (Some("16" | "32"), true) | (None, false) => {}
+        _ => return Err(TokenDecline::BadBlockLength),
+    }
     // The sk6 scale coordinate (§6.6-0022) is a dtype position like the others.
+    let mut comps_scale: Option<&str> = None;
     if let Some(s) = comps.last().and_then(|c| c.strip_prefix('q')) {
         match dtype_from_code(s) {
             None => return Err(TokenDecline::UnknownDtype),
@@ -4443,6 +4671,7 @@ fn attribute_bad_contraction(field: &str) -> Result<(), TokenDecline> {
             }
             Some(_) => {}
         }
+        comps_scale = Some(s);
         comps.pop();
     }
     if comps.len() < 6 {
@@ -4466,6 +4695,20 @@ fn attribute_bad_contraction(field: &str) -> Result<(), TokenDecline> {
     // §6.1-0016: an MX element is never an accumulator (`prec[1]` is `<acc>`).
     if dtype_from_code(prec[1]).is_some_and(ElementKind::is_mx_element) {
         return Err(TokenDecline::ElementDtypeAsAccumulator);
+    }
+    // sk8: the weight, the output and the scale dtypes must each be one some operand sub-key carries.
+    let carried = carried_dtypes(operands);
+    let named = [dtype_from_code(prec[0]), dtype_from_code(prec[2])]
+        .into_iter()
+        .chain(comps_scale.map(dtype_from_code))
+        .flatten();
+    for dt in named {
+        if !carried
+            .iter()
+            .any(|c| canonical_dtype(*c) == canonical_dtype(dt))
+        {
+            return Err(TokenDecline::OperandDtypeDisagrees);
+        }
     }
     Ok(())
 }
@@ -4672,7 +4915,7 @@ mod tests {
     /// exercising the code it names.
     #[test]
     fn redundant_acc_mp_is_omitted_not_emitted() {
-        let g = "sk7|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
+        let g = "sk8|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f/f32;co/00/v1/da/f/f32|rall";
         let mut key = StructureKey::from_token(g).unwrap();
 
         // In-crate, the struct literal is permitted — so a redundant value can
@@ -4860,7 +5103,7 @@ mod tests {
         let parsed = StructureKey::from_token(&token).expect("round-trip parse");
         assert_eq!(k, parsed);
         // Token is human-greppable.
-        assert!(token.starts_with("sk7|ew2|f32|cuda:sm89|"));
+        assert!(token.starts_with("sk8|ew2|f32|cuda:sm89|"));
     }
 
     #[test]
@@ -4870,11 +5113,11 @@ mod tests {
         // otherwise two distinct operand lists collapse to the same parsed key,
         // violating the KISS-Classify closed-membership / never-silently-accept
         // discipline (an untrusted peer supplies these tokens over the wire).
-        let op = "co/00/v4/d16/f";
+        let op = "co/00/v4/d16/f/f32";
         let too_many = std::iter::repeat_n(op, MAX_OPERANDS + 1)
             .collect::<Vec<_>>()
             .join(";");
-        let token = format!("sk7|ew2|f32|cuda:sm89|ix32|grid|r2|{too_many}|-");
+        let token = format!("sk8|ew2|f32|cuda:sm89|ix32|grid|r2|{too_many}|-");
         assert_eq!(
             StructureKey::from_token(&token),
             None,
@@ -4888,7 +5131,7 @@ mod tests {
         // malformed and MUST be a typed decline, not silently accepted (downstream
         // consumers index MAX_RANK-sized arrays with it).
         let token = format!(
-            "sk7|ew2|f32|cuda:sm89|ix32|grid|r{}|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
+            "sk8|ew2|f32|cuda:sm89|ix32|grid|r{}|co/00/v4/d16/f/f32;co/00/v4/d16/f/f32;co/00/v4/d16/f/f32|-",
             MAX_RANK + 1
         );
         assert_eq!(
@@ -4938,14 +5181,14 @@ mod tests {
         // required no bump.) Pin the canonical f32 token verbatim so a future
         // reshuffle that perturbs it is caught.
         assert_eq!(
-            STRUCTURE_KEY_VERSION, 7,
-            "codec sits at the KISS-aligned schema version 7 (sk7 schema event)"
+            STRUCTURE_KEY_VERSION, 8,
+            "codec sits at the KISS-aligned schema version 8 (sk8 schema event)"
         );
         let a = od(&[128, 256], &[256, 1], ElementKind::F32, 256);
         let k = structure_key(OpCategory::BinaryElementwise, &[a, a, a], ArchSku::Sm89);
         assert_eq!(
             k.to_token(),
-            "sk7|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
+            "sk8|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f/f32;co/00/v4/d16/f/f32;co/00/v4/d16/f/f32|-",
             "the canonical f32 cell serializes to the KISS-aligned sk3 token"
         );
     }
@@ -4968,7 +5211,7 @@ mod tests {
         );
         let token = k.to_token();
         assert!(
-            token.starts_with("sk7|ew1|u32|"),
+            token.starts_with("sk8|ew1|u32|"),
             "the token spells u32: {token}"
         );
         let parsed = StructureKey::from_token(&token).expect("u32 token round-trips");
@@ -5019,8 +5262,8 @@ mod tests {
     /// identity — which is the only reason to have a `structure_key` at all.
     #[test]
     fn field_8_admits_exactly_one_spelling_per_reduced_set() {
-        let base = "sk7|rdc|f32|cuda:sm89|ix32|grid|r3|\
-                    co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f";
+        let base = "sk8|rdc|f32|cuda:sm89|ix32|grid|r3|\
+                    co/00/v4/d16/f/f32;co/00/v4/d16/f/f32;co/00/v4/d16/f/f32";
 
         // The two sentinels resolve against `rank`.
         let k_all = StructureKey::from_token(&format!("{base}|rall")).expect("rall accepted");
@@ -5052,7 +5295,7 @@ mod tests {
 
         // Neither sentinel has a referent in a rank-0 space: `rlast` has no
         // trailing axis, and `rall` would name the empty set that `-` owns.
-        let r0 = "sk7|ew1|f32|cuda:sm89|ix32|grid|r0|co/00/v1/d16/f;co/00/v1/d16/f";
+        let r0 = "sk8|ew1|f32|cuda:sm89|ix32|grid|r0|co/00/v1/d16/f/f32;co/00/v1/d16/f/f32";
         assert_eq!(StructureKey::from_token(&format!("{r0}|rlast")), None);
         assert_eq!(StructureKey::from_token(&format!("{r0}|rall")), None);
         assert!(
@@ -5205,14 +5448,14 @@ mod tests {
         let _ = StructureKey::from_token(&"a".repeat(200_000));
         // Over-MAX_RANK rank — declines at the rank guard (never reaches operands).
         let _ = StructureKey::from_token(&format!(
-            "sk7|ew2|f32|cuda:sm89|ix32|grid|r250|{}|-",
-            "co/00/v4/d16/f;".repeat(50)
+            "sk8|ew2|f32|cuda:sm89|ix32|grid|r250|{}|-",
+            "co/00/v4/d16/f/f32;".repeat(50)
         ));
         // In-range rank + over-MAX_OPERANDS operand list — MUST reach parse_operand,
         // then decline gracefully.
         let _ = StructureKey::from_token(&format!(
-            "sk7|ew2|f32|cuda:sm89|ix32|grid|r2|{}|-",
-            "co/00/v1/d16/f;".repeat(50)
+            "sk8|ew2|f32|cuda:sm89|ix32|grid|r2|{}|-",
+            "co/00/v1/d16/f/f32;".repeat(50)
         ));
         // A valid gemm base with only its 10th (contraction) field corrupted —
         // reaches the contraction sub-parser with everything else well-formed.
@@ -5459,7 +5702,7 @@ mod codec_and_helper_pins {
         // `ic`, `st` or `d2` there rejects a field the writer emits.
         for contig in ["co", "ic", "st", "br"] {
             for div in ["d16", "d8", "d4", "d2", "da"] {
-                let field = format!("{contig}/00/v1/{div}/f");
+                let field = format!("{contig}/00/v1/{div}/f/f32");
                 assert!(parse_operand(&field).is_some(), "{field}");
             }
         }
@@ -5618,7 +5861,7 @@ mod codec_and_helper_pins {
     #[test]
     fn a_64_bit_index_cell_and_a_rank_8_cell_round_trip_through_a_token() {
         // Deleting the `ix64` arm; `rank > MAX_RANK` -> `>=`.
-        let t = "sk7|ew1|f32|cuda:sm89|ix64|grid|r1|co/00/v1/da/f|-";
+        let t = "sk8|ew1|f32|cuda:sm89|ix64|grid|r1|co/00/v1/da/f/f32|-";
         let k = StructureKey::from_token(t).expect("ix64 parses");
         assert_eq!(k.to_token(), t);
         let shape = [2i64; 8];
@@ -5648,7 +5891,7 @@ mod codec_attribution_pins {
             "ca/b/f32/f32/f8e4m3fnuz/st",
         ] {
             assert_eq!(
-                attribute_bad_contraction(field),
+                attribute_bad_contraction(field, "co/00/v4/d16/f/f32"),
                 Err(TokenDecline::ReservedDtype {
                     spelling: "f8e4m3fnuz".to_string()
                 }),
@@ -5656,7 +5899,10 @@ mod codec_attribution_pins {
             );
         }
         // Control: the same field with no reserved dtype is not attributed.
-        assert_eq!(attribute_bad_contraction("ca/b/f32/f32/f32/st"), Ok(()));
+        assert_eq!(
+            attribute_bad_contraction("ca/b/f32/f32/f32/st", "co/00/v4/d16/f/f32"),
+            Ok(())
+        );
     }
 
     #[test]
