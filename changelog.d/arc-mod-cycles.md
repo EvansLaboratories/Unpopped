@@ -1,0 +1,9 @@
+kind: module cycles dissolved in `unpopped`, `unpopped-cpu-c` and `unpopped-vocab`; `plan::IntegerOpsGate` (ROADMAP U27, U28, U29)
+---
+CodeRipper's `MOD-002` (extended profile) found a cycle between top-level modules in each of three crates. All three are gone, with no behaviour change.
+
+`unpopped` (U27): `plan` no longer names a backend type. `try_build_plan_for` and `build_plan_for` are generic over a one-method trait, `plan::IntegerOpsGate`, that every `Backend` implements through a blanket impl in `backend.rs`, so a concrete backend and a `&dyn Backend` are both accepted exactly as before (a source-compatible widening of the parameter; `integer_div_gate_is_opt_in` gains a test that a `&dyn Backend` decides the gate as the concrete one does). The kernel revision hash (`revision_hash_of`, FNV-1a) moves from `contract` to a leaf module `revision`, so `backend` and `contract` no longer call each other for it.
+
+`unpopped-cpu-c` (U28): the helpers every module shares (`refuse`, `ctype`, `buffer_ptr`, `signature`, `ident`, `Emitter`, `ModuleCtx`, `LaunchInfo`) move to a leaf module `base`; `kernel`, `launch`, `dynamic`, `collective`, `module` and `mma` depend on it instead of on each other. `unpopped-vocab` (U29): `PrecisionGuarantee` moves from `plan` to `sku`, where `KernelSku` uses it, and `plan` re-exports it, so `unpopped_vocab::plan::PrecisionGuarantee` and the crate-root path are unchanged.
+
+Verified: `coderipper check MOD-002 --profile extended` reports no cycle across top-level modules in any of the three crates (on `main` it reports the four-module cycle in `unpopped`, the three-module cycle in `unpopped-cpu-c` and the two-module cycle in `unpopped-vocab`); the workspace builds and its tests pass unchanged. Not here: two Info-severity cycles inside `unpopped::oracle` (`kernel_call`/`kernel_resume`, and `kernel_eval`/`kernel_mem`/`kernel_sync`) remain and are ROADMAP U35.
