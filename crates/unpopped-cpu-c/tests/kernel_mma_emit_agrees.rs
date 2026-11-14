@@ -276,6 +276,10 @@ fn the_narrow_float_atoms_agree_with_the_oracle() {
         ("mma_f16", MmaAtom::nvidia_m16n8k16_f16_f32()),
         ("mma_bf16", MmaAtom::nvidia_m16n8k16_bf16_f32()),
     ] {
-        agree_launch(tag, &kernel(&atom), args(&atom));
+        use unpopped::backend::Backend;
+        let k = kernel(&atom);
+        let lowered = unpopped_cpu_c::CpuC.lower_kernel(&k);
+        assert!(lowered.is_ok(), "{tag}: {lowered:?}");
+        agree_launch(tag, &k, args(&atom));
     }
 }
