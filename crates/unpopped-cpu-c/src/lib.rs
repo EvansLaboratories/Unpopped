@@ -56,6 +56,7 @@ use unpopped::ir::{BinaryOp, ExprDag, UnaryOp, is_bit_or_sign_move};
 use unpopped::plan::{KernelPlan, Schedule};
 use unpopped_vocab::{ElementKind, TargetId};
 
+mod base;
 mod collective;
 mod collective_tuple;
 mod dynamic;
