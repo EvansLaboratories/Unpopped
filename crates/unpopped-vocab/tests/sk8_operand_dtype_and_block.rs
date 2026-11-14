@@ -99,3 +99,17 @@ fn a_block_length_is_spelled_canonically() {
         );
     }
 }
+
+#[test]
+fn the_first_sub_key_dtype_must_be_the_primary_dtype_in_both_decoders() {
+    // A non-contraction cell, so nothing but the primary-dtype rule can refuse it (the control parses).
+    let ok = "sk8|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f/f32;co/00/v4/d16/f/f16;co/00/v4/d16/f/f32|-";
+    assert!(StructureKey::parse_token(ok).is_ok());
+    assert!(StructureKey::from_token(ok).is_some());
+    let bad = ok.replacen("f/f32;co/00/v4/d16/f/f16", "f/f16;co/00/v4/d16/f/f16", 1);
+    assert_eq!(
+        StructureKey::parse_token(&bad),
+        Err(TokenDecline::PrimaryDtypeMismatch)
+    );
+    assert_eq!(StructureKey::from_token(&bad), None);
+}
