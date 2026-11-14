@@ -30,7 +30,7 @@ pub enum LiftError {
     /// read it. (not-a-kernel)
     ///
     /// Which marker that is belongs to the frontend, not to this enum:
-    /// `convert::Frontend`'s `kernel_marker` field carries it (`__global__` for
+    /// `unpopped_convert::Frontend`'s `kernel_marker` field carries it (`__global__` for
     /// CUDA, `numthreads` for Slang, whatever a caller's own frontend declares).
     /// This doc named `__global__` outright, which put one vendor's spelling in
     /// a neutral public API and became simply wrong once the marker moved into
@@ -133,6 +133,20 @@ pub struct Lifted {
     /// The resource map the lift resolved names through; `None` exactly when
     /// [`provenance`](Self::provenance) is [`LiftProvenance::Inferred`].
     pub resources: Option<crate::resource_map::ResourceMap>,
+}
+
+impl Lifted {
+    /// A lift whose buffers were found by the frontend's naming convention: [`LiftProvenance::Inferred`] and no resource map.
+    /// (`Lifted` is `#[non_exhaustive]`, so a converter in another crate builds it here.)
+    #[must_use]
+    pub fn inferred(op: OpDef, n_inputs: u8) -> Self {
+        Self {
+            op,
+            n_inputs,
+            provenance: LiftProvenance::Inferred,
+            resources: None,
+        }
+    }
 }
 
 /// How a lift found its buffers. A kernel lifted by name inference must be countable as
@@ -477,7 +491,7 @@ impl Parser {
 /// `expf`/`logf`. Lifting them to `Exp`/`Log` would strip a numerics-changing
 /// optimization silently (`docs/idiom-lifting-design.md` §2, rule 2), so they
 /// refuse until an `Approx` qualifier can carry the source's choice.
-pub(crate) fn unary_fn(name: &str) -> Option<UnaryOp> {
+pub fn unary_fn(name: &str) -> Option<UnaryOp> {
     Some(match name {
         "expf" => UnaryOp::Exp,
         "logf" => UnaryOp::Log,
@@ -498,7 +512,7 @@ pub(crate) fn unary_fn(name: &str) -> Option<UnaryOp> {
 /// CUDA binary math intrinsic → [`BinaryOp`], or `None`. Note `fmaxf`/`fminf`
 /// are IEEE NaN-**suppressing** ([`BinaryOp::FmaxIeee`]/`FminIeee`), distinct
 /// from the NaN-propagating `Max`/`Min`.
-pub(crate) fn binary_fn(name: &str) -> Option<BinaryOp> {
+pub fn binary_fn(name: &str) -> Option<BinaryOp> {
     Some(match name {
         "fmaxf" | "fmax" => BinaryOp::FmaxIeee,
         "fminf" | "fmin" => BinaryOp::FminIeee,

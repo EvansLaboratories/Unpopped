@@ -14,6 +14,18 @@ vendoring better than retyping.
 `bafbe07` is KISS `main` as read on 2026-10-28 (KISS#713). It is a single commit
 for all three files, so the table cannot name two different spec states.
 
+### Re-vendored 2026-11-14 from KISS `cc67e48` (0.17.1, `sk7`, unpopped-vocab 0.46.0)
+
+KISS#811 (padding_lo/hi), #812 (matmul accumulator/math_fidelity/precision_tag, packed reductions) and #813 (Contract 6.5-0009 pins) changed no key byte but the schema event itself: `sk6` to `sk7`, `MAX_OPERANDS` 8 to 16 (Classify 6.4-0002; KISS `docs/sk7-vector-changes.md`). Every token prefix moved `sk6|` to `sk7|`; four vectors were added (`operand_count_9_above_the_sk6_limit`, `operand_count_16_at_max_operands`, `operand_count_17_over_max_operands`, `retired_sk6_token`). `dtype_manifest.json` changed two members (`structure_key_schema_version` 7, `token_prefix` `sk7`). Verified after writing: each `git hash-object` equals the KISS blob at `cc67e48`, 0 CR bytes.
+
+| File | KISS blob | sha256 | bytes |
+|---|---|---|---|
+| `dtype_manifest.json` | `5bd3a9a4970395d4acd3b44cdc135be73bc5d23c` | `e2b6e02ce1634bea98bc988d5035f45638f4300fffae7ec378c665671efc2497` | 3650 |
+| `structure_key_vectors.json` | `9da4afee01bda52b2a38dfe51f13a92c74ed1750` | `50ee07a6ba724b69b8a6859ddde613faa6de85eed526cf675e15049682beb5a8` | 38194 |
+| `structure_key_derivation_vectors.json` | `2f214312c12912715679727b6f9229d0d1b9eb8f` | `2213f9d280df90b73e1fc3c0699ecba894641f0870d093d73b568cf4b6384101` | 58638 |
+
+What it required here: `STRUCTURE_KEY_VERSION` 7, `MAX_OPERANDS` 16, a typed decline `TokenDecline::TooManyOperands { got }` (the 17-operand vector), and the pins in `tests/kiss_byte_match.rs` (positive 34 to 36, decline 27 to 29, the content pins of the two files it hashes). The derivation vectors (71) all match. The three files above supersede the rows in the older sections below.
+
 ### `dtype_manifest.json` re-vendored 2026-11-05 from KISS `e786097` (KISS#772, 0.7.11)
 
 KISS noticed (board KISS#218) that only the `generated_from` member changed: it now names the emitting program
