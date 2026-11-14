@@ -3400,6 +3400,23 @@ impl StructureKey {
             }
         };
 
+        // sk8: the first operand's dtype is the cell's primary dtype, and a contraction's weight, output and scale dtypes are
+        // each one some operand sub-key carries. `parse_token` attributes both before reaching here; the strict decode must
+        // refuse the same tokens.
+        let carries = |dt: ElementKind| {
+            operands[..n_operands as usize]
+                .iter()
+                .any(|o| canonical_dtype(o.dtype) == canonical_dtype(dt))
+        };
+        if n_operands > 0 && operands[0].dtype != dtype {
+            return None;
+        }
+        if let Some(c) = contraction {
+            if !carries(c.wdt) || !carries(c.out) || c.scale.is_some_and(|s| !carries(s)) {
+                return None;
+            }
+        }
+
         Some(StructureKey {
             version,
             cell_class: class,
