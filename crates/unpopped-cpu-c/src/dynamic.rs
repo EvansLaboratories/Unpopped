@@ -12,7 +12,7 @@ use unpopped::backend::LowerError;
 use unpopped::exec::{AllocDecl, Extent, MemorySpace};
 use unpopped::kernel::{KernelFn, ParamKind};
 
-use crate::kernel::{ctype, refuse};
+use crate::base::{ctype, refuse};
 
 /// The index of the scalar parameter bound to local `local`, if there is one.
 fn param_of_local(k: &KernelFn, local: u32) -> Option<usize> {
@@ -97,7 +97,7 @@ pub(crate) fn impl_signature(k: &KernelFn, signature: &str) -> Result<String, Lo
 
 /// The entry point around the body `<name>_impl`: sizes, allocates, calls, frees.
 pub(crate) fn entry(k: &KernelFn, signature: &str, name: &str) -> Result<String, LowerError> {
-    let Some(info) = crate::launch::LaunchInfo::of(k) else {
+    let Some(info) = crate::base::LaunchInfo::of(k) else {
         return Err(refuse("a dynamic extent without a launch shape"));
     };
     if info.devices > 1 {
@@ -146,7 +146,7 @@ pub(crate) fn compose(
     if callee {
         return Err(refuse("a callee with a dynamic-extent allocation"));
     }
-    let body_sig = crate::kernel::signature(k, &format!("{name}_impl"), (false, res_types))?;
+    let body_sig = crate::base::signature(k, &format!("{name}_impl"), (false, res_types))?;
     Ok(format!(
         "{} {{\n{body}    return 0;\n}}\n\n{}",
         impl_signature(k, &body_sig)?,

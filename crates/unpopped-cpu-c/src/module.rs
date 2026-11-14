@@ -28,7 +28,8 @@
 use unpopped::backend::{GeneratedKernel, LowerError};
 use unpopped::kernel::{Block, ExternDecl, Module, Stmt, check_module};
 
-use crate::kernel::{ModuleCtx, function_text, ident, refuse, with_prelude};
+use crate::base::{ModuleCtx, ident, refuse};
+use crate::kernel::{function_text, with_prelude};
 
 /// Lower function `entry` of `m`, and every function it calls, to one C source whose entry point is
 /// [`GeneratedKernel::name`].
@@ -59,7 +60,7 @@ pub fn lower_module(m: &Module, entry: u32) -> Result<GeneratedKernel, LowerErro
         fns: &m.fns,
         externs: &m.externs,
         names,
-        launch: crate::launch::LaunchInfo::of(k),
+        launch: crate::base::LaunchInfo::of(k),
     };
     let mut body = String::new();
     for i in postorder(m, entry) {
