@@ -15,6 +15,16 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.45.14` — `unpopped-cpu-c` spells an atomic `Add`/`Exchange` on `F16`/`Bf16` (ROADMAP U26 third slice)
+
+A launched `AtomicRmw` `Add` or `Exchange` on a narrow float is no longer a typed refusal in `unpopped-cpu-c`. `Add` decodes the stored pattern and the operand to `float`, adds, and encodes once, so every add rounds once to the element (ties to even) exactly as the interpreter does; `Exchange` moves the operand's bits, a NaN payload included. `Max`, `Min` and the bitwise combines on a narrow float stay refused (the checker admits none). The atomic and multicast-reduce operand now goes through `value_expr`, so a narrow operand is the pattern and not a widened `float`.
+
+Verified: `kernel_narrow_float_atomic_agrees` compiles the C and compares a 4 x 3 launch with the interpreter for the tie case (`2048 + 1` leaves 2048), exact adds and exchanges carrying NaN payloads, on both types; a mutant that adds the raw patterns and a mutant that round-trips the exchange through the codec each fail it.
+
+Open under U26: a narrow compute dtype and the MMA fragments. The packed `half2`/`bf16x2` atomic forms (U12b) are not spelled.
+
+---
+
 ## `0.45.13` — `unpopped-cpu-c` computes arithmetic and comparisons on `F16`/`Bf16` (ROADMAP U26 second slice)
 
 `unpopped-cpu-c` no longer refuses `Add`, `Sub`, `Mul`, `Div`, a comparison or another operator on a narrow float. A narrow operand (a local, a scalar parameter, a `Cast` to a narrow type) is decoded to `float` through the codec, the whole expression computes in `float` with no rounding between nodes, and a narrow result is encoded once at the store, the bind or the assignment. That is the oracle's contract (`unit_roundoff`: a narrow float computes at `f32` precision inside a tolerance band and rounds once at the store). A comparison yields 1.0 or 0.0 in its operands' dtype, as the IR says. `narrow::guard` is replaced by `narrow::moved` and `narrow::operand`, which rewrite the expression before lowering.
