@@ -23,67 +23,62 @@ fn a_mixed_dtype_key_round_trips_byte_for_byte() {
     assert_eq!(c.block.map(|b| b.elements()), Some(32));
 }
 
+/// `token` is declined by `parse_token` with `verdict` and refused by the strict decode.
+fn both_refuse(token: &str, verdict: TokenDecline) {
+    assert_eq!(
+        StructureKey::parse_token(token),
+        Err(verdict),
+        "typed verdict: {token}"
+    );
+    assert_eq!(
+        StructureKey::from_token(token),
+        None,
+        "the strict decode accepted what the typed one declines: {token}"
+    );
+}
+
 #[test]
-fn the_strict_decode_refuses_what_parse_token_attributes() {
-    // (token, the typed verdict parse_token must give). Each is the control above with exactly one thing broken.
-    let cases: Vec<(String, TokenDecline)> = vec![
-        // the weight dtype named in the field is carried by no sub-key
-        (
-            ctr(OPS, "ctll/d16/u8/f32/bf16/st/qf16/g32"),
-            TokenDecline::OperandDtypeDisagrees,
-        ),
-        // the output dtype is carried by no sub-key
-        (
-            ctr(OPS, "ctll/d16/i4/f32/f64/st/qf16/g32"),
-            TokenDecline::OperandDtypeDisagrees,
-        ),
-        // the scale dtype is carried by no sub-key
-        (
-            ctr(OPS, "ctll/d16/i4/f32/bf16/st/qf8e8m0/g32"),
-            TokenDecline::OperandDtypeDisagrees,
-        ),
-        // a scale with no block length, a block length with no scale, and a length outside {16, 32}
-        (
-            ctr(OPS, "ctll/d16/i4/f32/bf16/st/qf16"),
-            TokenDecline::BadBlockLength,
-        ),
-        (
-            ctr(OPS, "ctll/d16/i4/f32/bf16/st/g32"),
-            TokenDecline::BadBlockLength,
-        ),
-        (
-            ctr(OPS, "ctll/d16/i4/f32/bf16/st/qf16/g64"),
-            TokenDecline::BadBlockLength,
-        ),
-        // the first sub-key's dtype is not the cell's primary dtype
-        (
-            ctr(
-                "co/00/v4/d16/f/f32/dl;co/00/v4/d16/f/f16;co/00/v4/d16/f/bf16",
-                "ctll/d16/i4/f32/bf16/st/qf16/g32",
-            ),
-            TokenDecline::PrimaryDtypeMismatch,
-        ),
-        // a sub-key without its dtype
-        (
-            ctr(
-                "co/00/v4/d16/f;co/00/v4/d16/f/f16;co/00/v4/d16/f/bf16",
-                "ctll/d16/i4/f32/bf16/st/qf16/g32",
-            ),
-            TokenDecline::BadOperandSubKey,
-        ),
-    ];
-    for (token, verdict) in cases {
-        assert_eq!(
-            StructureKey::parse_token(&token),
-            Err(verdict),
-            "typed verdict: {token}"
-        );
-        assert_eq!(
-            StructureKey::from_token(&token),
-            None,
-            "the strict decode accepted what the typed one declines: {token}"
-        );
+fn a_dtype_the_field_names_but_no_sub_key_carries_is_refused_by_both_decoders() {
+    // Each is the control above with exactly one dtype changed to one no sub-key carries.
+    for field in [
+        "ctll/d16/u8/f32/bf16/st/qf16/g32",    // the weight
+        "ctll/d16/i4/f32/f64/st/qf16/g32",     // the output
+        "ctll/d16/i4/f32/bf16/st/qf8e8m0/g32", // the scale
+    ] {
+        both_refuse(&ctr(OPS, field), TokenDecline::OperandDtypeDisagrees);
     }
+}
+
+#[test]
+fn a_missing_stray_or_out_of_set_block_length_is_refused_by_both_decoders() {
+    for field in [
+        "ctll/d16/i4/f32/bf16/st/qf16",     // a scale with no block length
+        "ctll/d16/i4/f32/bf16/st/g32",      // a block length with no scale
+        "ctll/d16/i4/f32/bf16/st/qf16/g64", // outside {16, 32}
+    ] {
+        both_refuse(&ctr(OPS, field), TokenDecline::BadBlockLength);
+    }
+}
+
+#[test]
+fn a_sub_key_that_disagrees_with_the_cell_on_its_dtype_is_refused_by_both_decoders() {
+    let field = "ctll/d16/i4/f32/bf16/st/qf16/g32";
+    // the first sub-key's dtype is not the cell's primary dtype
+    both_refuse(
+        &ctr(
+            "co/00/v4/d16/f/f32/dl;co/00/v4/d16/f/f16;co/00/v4/d16/f/bf16",
+            field,
+        ),
+        TokenDecline::PrimaryDtypeMismatch,
+    );
+    // a sub-key without its dtype
+    both_refuse(
+        &ctr(
+            "co/00/v4/d16/f;co/00/v4/d16/f/f16;co/00/v4/d16/f/bf16",
+            field,
+        ),
+        TokenDecline::BadOperandSubKey,
+    );
 }
 
 #[test]
