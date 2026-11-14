@@ -13,7 +13,7 @@
 //! lands where it should: the dev part must contain what the shipped part must not.
 
 const MANIFEST: &str = include_str!("../Cargo.toml");
-const CONVERT: &str = include_str!("../src/convert.rs");
+const CONVERT: &str = include_str!("../src/lib.rs");
 
 /// The manifest before `[dev-dependencies]`, and the dev part.
 fn manifest_parts() -> (&'static str, &'static str) {
@@ -22,12 +22,12 @@ fn manifest_parts() -> (&'static str, &'static str) {
         .expect("the manifest has a dev-dependencies table")
 }
 
-/// `convert.rs` before its test module, and the test module.
+/// `lib.rs` before its test module, and the test module.
 fn convert_parts() -> (&'static str, &'static str) {
     CONVERT
         .split_once("#[cfg(test)]\nmod tests")
         .or_else(|| CONVERT.split_once("#[cfg(test)]\r\nmod tests"))
-        .expect("convert.rs has a test module")
+        .expect("lib.rs has a test module")
 }
 
 #[test]
@@ -72,7 +72,7 @@ fn the_shipped_manifest_does_not_depend_on_the_slang_grammar() {
 }
 
 #[test]
-fn convert_rs_does_not_bind_a_grammar_or_define_a_frontend() {
+fn lib_rs_does_not_bind_a_grammar_or_define_a_frontend() {
     assert!(!CONVERT.contains("tree_sitter_cuda"));
     assert!(!CONVERT.contains("pub fn parse_cuda"));
     assert!(!CONVERT.contains("pub const CUDA"));
