@@ -12,7 +12,7 @@ use unpopped::exec::Scope;
 use unpopped::kernel::{CollectiveKind, Stmt};
 use unpopped::types::{self, Ty};
 
-use crate::kernel::{Emitter, ctype, refuse};
+use crate::base::{Emitter, ctype, refuse};
 
 /// One component of the state: the C types of its value and its result local, the result local, and the C of its value.
 struct Component {
