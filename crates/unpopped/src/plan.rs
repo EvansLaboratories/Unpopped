@@ -2606,6 +2606,26 @@ pub(crate) fn check_int_op_admissibility_for(
                         false,
                         total,
                     )?;
+                } else if matches!(bop, crate::ir::BinaryOp::Max | crate::ir::BinaryOp::Min)
+                    && total
+                    && elementwise
+                    && is_total_int_dtype(dtype)
+                {
+                    // `Backend::total_integer_ops` (ROADMAP U33): an Elementwise integer `Max`/`Min` at a 32/64-bit
+                    // dtype. It is exact and total (the larger or smaller operand, no NaN, no overflow), the plan
+                    // oracle evaluates it exactly (0.40.10), and an emitter spells it as a compare-select.
+                    for operand in [&**a, &**b] {
+                        walk(
+                            operand,
+                            op_name,
+                            dtype,
+                            int_dt,
+                            elementwise,
+                            in_reduction,
+                            false,
+                            total,
+                        )?;
+                    }
                 } else if bop.is_cmp() && total && elementwise && is_total_int_dtype(dtype) {
                     // `Backend::total_integer_ops` (0.40.10): an Elementwise comparison at a 32/64-bit
                     // integer dtype, which an integer `Rem` (`Select(b == 0, 0, ..)`) needs.
@@ -3156,6 +3176,34 @@ mod int_reduction_predicate_gate_validate {
             assert!(off.is_err(), "{}: refused without the flag", op.name);
             check_int_op_admissibility_for(op, ElementKind::I32, true)
                 .unwrap_or_else(|e| panic!("{}: admitted with the flag: {e}", op.name));
+        }
+    }
+
+    // ROADMAP U33: the flag admits an Elementwise integer `Max`/`Min` at the 32/64-bit dtypes and nothing else:
+    // without it the gate still refuses it, and a narrower integer dtype stays refused even with it.
+    #[test]
+    fn total_ints_flag_admits_int_max_min_at_32_and_64_bit_only() {
+        for bop in [BinaryOp::Max, BinaryOp::Min] {
+            for t in [
+                ElementKind::I32,
+                ElementKind::I64,
+                ElementKind::U32,
+                ElementKind::U64,
+            ] {
+                let op = OpDef::elementwise("mm", 2, &[t], input(0).binary(bop, input(1)));
+                assert!(
+                    check_int_op_admissibility_for(&op, t, false).is_err(),
+                    "{bop:?} {t:?}: refused without the flag"
+                );
+                check_int_op_admissibility_for(&op, t, true)
+                    .unwrap_or_else(|e| panic!("{bop:?} {t:?}: admitted with the flag: {e}"));
+            }
+            let op =
+                OpDef::elementwise("mm8", 2, &[ElementKind::I8], input(0).binary(bop, input(1)));
+            assert!(
+                check_int_op_admissibility_for(&op, ElementKind::I8, true).is_err(),
+                "{bop:?} I8: stays refused with the flag"
+            );
         }
     }
 
