@@ -15,6 +15,20 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.46.0` — Breaking: re-vendor KISS 0.17.1, `structure_key` schema `sk7`, `MAX_OPERANDS` 16 (unpopped-vocab 0.46.0)
+
+The vendored KISS corpus moves to 0.17.1 (`cc67e48`). The only key change is the schema event: `STRUCTURE_KEY_VERSION` 6 to 7 (every token now begins `sk7|`; an `sk6` token declines as `UnsupportedSchemaVersion { version: 6 }`) and `MAX_OPERANDS` 8 to 16 (Classify 6.4-0002). `StructureKey::operands` is therefore a 16-element array. A token that lists more than `MAX_OPERANDS` operands now declines as the new `TokenDecline::TooManyOperands { got }` (the enum is `#[non_exhaustive]`), where it declined as `Unrecognized` before.
+
+Verified: the three vendored files equal the KISS blobs (`git hash-object`); the 71 derivation vectors match; the byte-match leg's pins moved (36 positive and 29 decline vectors). Nothing else in KISS 0.17.0/0.17.1 reaches the key: the window `padding_lo`/`padding_hi` split and the matmul fields live in op attributes this crate does not parse, and no key byte moves for them.
+
+`unpopped`'s optional `convert` feature (the tree-sitter walkers `Frontend`, `lift`, `lift_elementwise`, `lift_reduction`, `lift_scan` and the `*_with` forms that take a `ResourceMap`) is now the crate `unpopped-convert`, which carries Unpopped's version number. `unpopped` no longer depends on `tree-sitter` and has no `convert` feature or `unpopped::convert` module, so the stable core no longer names its parser technology (CodeRipper `ARC-003`, `ARC-004`).
+
+Migrating: replace `unpopped = { version = "0.46", features = ["convert"] }` with an additional `unpopped-convert = "0.46"` dependency, and `unpopped::convert::` with `unpopped_convert::`. The two crates.io dependents using the feature are `baracuda-cuda-parse` and `fishstringer-slang-parse`; both were notified. Added to the core for the split: `Lifted::inferred` (`Lifted` is `#[non_exhaustive]`), and `lift::unary_fn`, `lift::binary_fn` and `ResourceMap::{output_name, input_names, param_names}` became public.
+
+Verified: the 37 tests of the moved files pass in the new crate (12 unit, 4 + 12 + 9 integration), the workspace builds, `cargo doc` and `cargo clippy -D warnings` are clean, and `coderipper check ARC-003` and `ARC-004` pass on the branch where main reports the two findings each.
+
+---
+
 ## `0.45.19` — `oracle.rs` is split into ten section modules, no behaviour or path change (ROADMAP U30, part 1)
 
 `crates/unpopped/src/oracle.rs` held 2,859 code lines and named ten other modules (CodeRipper `MOD-005`, thresholds 2,234 lines and seven modules). Its evaluators now live in `src/oracle/`: `buffers` (`TypedBuffer`), `elem` (element-type facts and raw element access), `float_codec` (the half and FP8 codecs and raw byte access), `value` (the `Val` domain and the raw-bits decoders), `scalar_ops` (independent op semantics), `expr_eval` (the `ScalarExpr` evaluator and the store), `plan_eval` (the entry point, layout math, row sort, elementwise and reduction), `plan_contract` (contraction, the fold steps and row reduce), `plan_window` (scan, window and im2col) and `fidelity` (`compare` and the fidelity a plan is entitled to). The text of each section moved verbatim; the items became `pub(super)` (and `Eval`'s fields, and the methods of `Val`) so the sections and the existing `kernel_*` modules reach each other as they did in one file. `oracle.rs` keeps its documentation, the existing `kernel_*` module list, the in-file tests, and `pub use` of every public item (`TypedBuffer`, `evaluate`, `Fidelity`, `required_fidelity`, `required_fidelity_with_exactness`, `compare_for_plan`, `compare_for_plan_with_exactness`, `compare_for_plan_within`, `compare`, and the crate-visible `elem_bits`), so no public path changes.
