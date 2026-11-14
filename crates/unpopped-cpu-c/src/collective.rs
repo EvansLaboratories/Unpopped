@@ -16,7 +16,7 @@ use unpopped::kernel::{CollectiveKind, ShuffleMode, Stmt, VoteKind};
 use unpopped::types::{self, Ty};
 use unpopped_vocab::ElementKind;
 
-use crate::kernel::{Emitter, ctype, refuse};
+use crate::base::{Emitter, ctype, refuse};
 
 /// The C function a combining collective folds with, and the extra id arguments it takes.
 pub(crate) struct Combine {

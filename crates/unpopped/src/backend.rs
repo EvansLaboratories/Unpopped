@@ -171,7 +171,7 @@ impl GeneratedKernel {
     /// without words hashes exactly as it did before 0.37.1.
     #[must_use]
     pub fn revision_hash(&self) -> u64 {
-        crate::contract::revision_hash_of(&self.source, self.words())
+        crate::revision::revision_hash_of(&self.source, self.words())
     }
 
     /// What this kernel was baked against, or `None` if it is a raw fragment.
@@ -2029,4 +2029,11 @@ fn lower_node(
     };
     refs[id as usize] = Some(r.clone());
     Ok(Spelling::Spelled(r))
+}
+
+/// Every backend gates the plan by its `total_integer_ops` (`plan::try_build_plan_for`).
+impl<B: Backend + ?Sized> crate::plan::IntegerOpsGate for B {
+    fn declares_total_integer_ops(&self) -> bool {
+        self.total_integer_ops()
+    }
 }

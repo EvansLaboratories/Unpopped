@@ -50,41 +50,14 @@ use unpopped::ir::ScalarExpr;
 use unpopped::kernel::{AtomicOp, KernelFn, ParamKind, Place, Stmt};
 use unpopped_vocab::ElementKind;
 
+use crate::base::{Emitter, LaunchInfo, ctype, refuse};
 use crate::dynamic::{extent_expr, len_expr};
-use crate::kernel::{Emitter, ctype, refuse};
 
 /// A block with more threads than this is refused: its per-thread local arrays live on the C stack.
 const MAX_THREADS: u32 = 1024;
 
 /// Blocks times threads that may be resident at once across a `Device` barrier.
 const MAX_RESIDENT: u64 = 1 << 16;
-
-/// The launch geometry an [`Emitter`] spells ids from.
-#[derive(Clone, Copy)]
-pub(crate) struct LaunchInfo {
-    pub(crate) block: [u32; 3],
-    pub(crate) grid: [u32; 3],
-    /// The subgroup size a `Subgroup` collective groups by: the launch's required minimum (the oracle's default),
-    /// or `1` when the launch states none.
-    pub(crate) subgroup: u32,
-    /// Devices the launch spans (`1`: one device). Every device runs the whole grid on its own buffers.
-    pub(crate) devices: u32,
-}
-
-impl LaunchInfo {
-    pub(crate) fn of(k: &KernelFn) -> Option<Self> {
-        k.launch.as_ref().map(|l| Self {
-            block: l.block,
-            grid: l.grid,
-            subgroup: l.subgroup.map_or(1, |s| s.min.max(1)),
-            devices: l.devices,
-        })
-    }
-
-    pub(crate) fn threads(self) -> u32 {
-        self.block.iter().product()
-    }
-}
 
 /// Everything about a launched `k` this emitter cannot spell, refused before any text is written.
 pub(crate) fn admit_launch(k: &KernelFn) -> Result<(), LowerError> {
@@ -352,7 +325,7 @@ impl Emitter<'_> {
             let ParamKind::Buffer { elem, role, .. } = &p.kind else {
                 continue;
             };
-            let ptr = crate::kernel::buffer_ptr(*elem, *role)?;
+            let ptr = crate::base::buffer_ptr(*elem, *role)?;
             let per = |suffix: &str| {
                 (0..nd)
                     .map(|d| format!("b{i}_d{d}{suffix}"))
@@ -382,7 +355,7 @@ impl Emitter<'_> {
             let ParamKind::Buffer { elem, role, .. } = &p.kind else {
                 continue;
             };
-            let ptr = crate::kernel::buffer_ptr(*elem, *role)?;
+            let ptr = crate::base::buffer_ptr(*elem, *role)?;
             self.line(&format!("{ptr} b{i} = btab{i}[dev];"));
             self.line(&format!(
                 "const long long* b{i}_shape = btab{i}_shape[dev];"
