@@ -350,7 +350,7 @@ mod multi_output_validate {
     //! Increment-1 multi-output gate-rejection tests + the hetero (dropout-class)
     //! per-output-dtype gates (G1/G3/G4). Per the house rule these call
     //! `build_plan` DIRECTLY (an emitter panic would mask a gate mutation).
-    use super::{Schedule, build_plan};
+    use super::{MAX_OPERANDS, Schedule, build_plan};
     use crate::ir::{Access, BinaryOp, OpDef, ReduceOp, ScalarExpr, input, konst, param};
     use unpopped_vocab::{
         ArchSku, ElementKind, OpCategory, OperandDesc, StructureKey, structure_key,
@@ -438,14 +438,15 @@ mod multi_output_validate {
     #[test]
     #[should_panic(expected = "exceeds MAX_OPERANDS")]
     fn n_outputs_overflow_max_operands_rejected() {
-        // 6 inputs + 3 outputs = 9 > MAX_OPERANDS(8).
+        // (MAX_OPERANDS - 2) inputs + 3 outputs = MAX_OPERANDS + 1 operands.
+        let n_inputs = u8::try_from(MAX_OPERANDS - 2).expect("MAX_OPERANDS fits u8");
         let op = OpDef::elementwise_multi(
             "over",
-            6,
+            n_inputs,
             &[ElementKind::F32],
             vec![input(0), input(1), input(2)],
         );
-        let _ = build_plan(&op, &key(8));
+        let _ = build_plan(&op, &key(MAX_OPERANDS));
     }
 
     #[test]

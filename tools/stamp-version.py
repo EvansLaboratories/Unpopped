@@ -22,7 +22,7 @@ import os
 import re
 import sys
 
-CRATES = ["unpopped", "unpopped-conformance", "unpopped-cpu-c", "unpopped-vocab"]
+CRATES = ["unpopped", "unpopped-conformance", "unpopped-convert", "unpopped-cpu-c", "unpopped-vocab"]
 EM = "—"
 
 

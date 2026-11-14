@@ -147,8 +147,7 @@ impl ResourceMap {
     }
 
     /// The output buffer's name. Only meaningful after [`check`](Self::check).
-    #[cfg(feature = "convert")]
-    pub(crate) fn output_name(&self) -> Option<&str> {
+    pub fn output_name(&self) -> Option<&str> {
         self.buffers
             .iter()
             .find(|b| b.role != BindingRole::Read)
@@ -156,8 +155,7 @@ impl ResourceMap {
     }
 
     /// Operand names, in operand order (`Read` buffers in declaration order).
-    #[cfg(feature = "convert")]
-    pub(crate) fn input_names(&self) -> Vec<&str> {
+    pub fn input_names(&self) -> Vec<&str> {
         self.buffers
             .iter()
             .filter(|b| b.role == BindingRole::Read)
@@ -166,8 +164,7 @@ impl ResourceMap {
     }
 
     /// `Params` field names, in `ScalarExpr::Param` order.
-    #[cfg(feature = "convert")]
-    pub(crate) fn param_names(&self) -> Vec<&str> {
+    pub fn param_names(&self) -> Vec<&str> {
         self.params
             .iter()
             .flat_map(|p| p.fields.iter().map(|f| f.name.as_str()))

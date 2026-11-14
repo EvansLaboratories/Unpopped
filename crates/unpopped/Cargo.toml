@@ -1,6 +1,6 @@
 [package]
 name = "unpopped"
-version = "0.45.18"
+version = "0.46.0"
 description = "A vendor-neutral kernel generator: the backend-agnostic IR, plan, transform pipeline, contracts and dispatch artifacts, plus the `Backend` and `Compiler` traits a target implements. Ships a portable-C99 reference backend and a CPU oracle, so it builds and self-tests with no device, no driver, and no vendor dependency. Device backends live under their own vendor identity and depend on this crate — the CUDA emitter, its NVRTC compiler and the Fuel synthesizer live in `baracuda-cuda-emit`. Pre-1.0 and moving; pin exact versions."
 edition.workspace = true
 rust-version.workspace = true
@@ -18,13 +18,6 @@ readme = "README.md"
 # expression above stays authoritative; `license-file` is deliberately NOT set,
 # since it names a single file and this crate is dual-licensed.
 
-[features]
-# The source-language CONVERTERS (IR-hub Phase 4): tree-sitter frontends that lift
-# existing Slang kernels into the neutral IR (CUDA's frontend is Baracuda's `baracuda-cuda-parse`). Optional so the published
-# default build stays lean — the grammars compile C via the `cc` crate; enable with
-# `--features convert`.
-convert = ["dep:tree-sitter"]
-
 [dependencies]
 unpopped-vocab = { workspace = true }
 # Accurate f64 transcendentals (erf/erfc) for the CPU oracle reference — a pure-Rust
@@ -39,19 +32,8 @@ libm = "0.2"
 # `--lib` tests exercise it under the default feature set.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Converter walkers (`convert` feature): lift C-family kernels through a `Frontend` the
-# caller supplies (CUDA: `baracuda-cuda-parse`; Slang: `vulkane-slang-parse`). This crate
-# carries no grammar. Error-tolerant CSTs — unrecognized constructs stay as residue (the
-# "keep the rest in the source language" contract).
-tree-sitter = { version = "0.27", optional = true }
 
 [dev-dependencies]
-# Only the tests and the corpus example: a Slang `Frontend` to drive the shared walkers.
-# The shipped crate names no grammar (`tests/neutral_core_names_no_cuda_grammar.rs`).
-tree-sitter-slang = "0.3"
-# The OpenCL C idiom tests (ROADMAP E18) parse with the C++ grammar openclownfish uses, because `in` and `out`
-# are keywords in the Slang one.
-tree-sitter-cpp = "0.23"
 # kiss-ref: the spec-exact KISS reference impl — the single source of truth this
 # crate's numerical tests assert against (the oracle.rs consolidation). DEV-only,
 # so it is NOT in the published lib's dependency graph and `cargo publish` stays
