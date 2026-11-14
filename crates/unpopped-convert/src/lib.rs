@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! Source-language → IR converters (IR-hub Phase 4, `convert` feature) — the
-//! source-language side of the translation hub, built on **tree-sitter**.
+//! Source-language → IR converters (IR-hub Phase 4) — the source-language side of the translation hub,
+//! built on **tree-sitter**. This crate was the `convert` feature of `unpopped` until 0.46.0 (ROADMAP U31).
 //!
 //! Instead of a hand-written parser (the pilot in `lift.rs`), these frontends
 //! reuse mature tree-sitter grammars (none is bundled here: CUDA's lives in
@@ -46,10 +46,10 @@
 //! parser are Vulkane's: `vulkane-slang-emit`, `vulkane-slang-parse`). The tests build their own
 //! Slang `Frontend` from a dev-dependency.
 
-use crate::ir::{BinaryOp, Expr, OpDef, ReduceOp, ScalarExpr, UnaryOp};
-use crate::lift::{LiftError, LiftProvenance, Lifted};
-use crate::resource_map::ResourceMap;
 use tree_sitter::{Node, Tree};
+use unpopped::ir::{BinaryOp, Expr, OpDef, ReduceOp, ScalarExpr, UnaryOp};
+use unpopped::lift::{LiftError, LiftProvenance, Lifted};
+use unpopped::resource_map::ResourceMap;
 use unpopped_vocab::ElementKind;
 
 /// What a source language contributes to lifting — everything that is NOT the
@@ -141,8 +141,8 @@ impl Frontend {
             out_name,
             in_prefix,
             parse,
-            unary_fn: crate::lift::unary_fn,
-            binary_fn: crate::lift::binary_fn,
+            unary_fn: unpopped::lift::unary_fn,
+            binary_fn: unpopped::lift::binary_fn,
         }
     }
 
@@ -402,12 +402,10 @@ fn lift_store(
     };
     let body = w.expr(rhs)?;
     let n_inputs = w.max_input.map_or(0, |m| m + 1);
-    Ok(Lifted {
-        op: OpDef::elementwise(name, n_inputs, dtypes, Expr(body)),
+    Ok(Lifted::inferred(
+        OpDef::elementwise(name, n_inputs, dtypes, Expr(body)),
         n_inputs,
-        provenance: LiftProvenance::Inferred,
-        resources: None,
-    })
+    ))
 }
 
 /// Shared scan tail: find the in-loop `{out_name}[i] = acc` running store, find
@@ -443,8 +441,8 @@ fn lift_scan_store(
     };
     let pre = w.expr(pre_node)?;
     let n_inputs = w.max_input.map_or(0, |m| m + 1);
-    Ok(Lifted {
-        op: OpDef::scan(
+    Ok(Lifted::inferred(
+        OpDef::scan(
             name,
             n_inputs,
             dtypes,
@@ -453,12 +451,10 @@ fn lift_scan_store(
             reverse,
             exclusive,
             Expr(pre),
-            crate::ir::reduced(0),
+            unpopped::ir::reduced(0),
         ),
         n_inputs,
-        provenance: LiftProvenance::Inferred,
-        resources: None,
-    })
+    ))
 }
 
 /// Find an in-loop `{out_name}[<identifier>] = <identifier>` store (the running
@@ -576,12 +572,10 @@ fn lift_reduce_store(
     };
     let body = w.expr(body_node)?;
     let n_inputs = w.max_input.map_or(0, |m| m + 1);
-    Ok(Lifted {
-        op: OpDef::reduction(name, n_inputs, dtypes, Expr(body), op),
+    Ok(Lifted::inferred(
+        OpDef::reduction(name, n_inputs, dtypes, Expr(body), op),
         n_inputs,
-        provenance: LiftProvenance::Inferred,
-        resources: None,
-    })
+    ))
 }
 
 /// Find a `{out_name}[<number>] = <ident>` store and return the stored accumulator
@@ -1319,7 +1313,7 @@ mod tests {
         }";
 
     fn reduce_op(l: &Lifted) -> Option<ReduceOp> {
-        if let crate::ir::Access::Reduction { op, .. } = &l.op.access {
+        if let unpopped::ir::Access::Reduction { op, .. } = &l.op.access {
             Some(*op)
         } else {
             None
@@ -1327,7 +1321,7 @@ mod tests {
     }
 
     fn scan_info(l: &Lifted) -> Option<(ReduceOp, &ScalarExpr, bool, bool)> {
-        if let crate::ir::Access::Scan {
+        if let unpopped::ir::Access::Scan {
             op,
             pre,
             reverse,
@@ -1435,7 +1429,7 @@ mod tests {
         assert!(lift_elementwise(&SLANG, SLANG_CSUM, "x", F32).is_err());
         assert!(matches!(
             lift(&SLANG, SLANG_CSUM, "x", F32).unwrap().op.access,
-            crate::ir::Access::Scan { .. }
+            unpopped::ir::Access::Scan { .. }
         ));
     }
 
@@ -1500,7 +1494,7 @@ mod tests {
             lifted.op.body,
             ScalarExpr::Select(
                 Box::new(ScalarExpr::Binary(
-                    crate::ir::BinaryOp::CmpGt,
+                    unpopped::ir::BinaryOp::CmpGt,
                     Box::new(ScalarExpr::Input(0)),
                     Box::new(ScalarExpr::Const(0.0)),
                 )),

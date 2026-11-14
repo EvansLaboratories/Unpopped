@@ -1,0 +1,35 @@
+[package]
+name = "unpopped-convert"
+version = "0.45.18"
+description = "The shared tree-sitter walkers that lift C-family kernel source into Unpopped's neutral IR: a `Frontend` value carries what a language contributes (kernel marker, residue list, buffer naming, a `parse` function) and `lift_elementwise`, `lift_reduction`, `lift_scan` and `lift` do the one CST walk for every language. No grammar is bundled: CUDA's parser is `baracuda-cuda-parse`, Slang's is `vulkane-slang-parse`. Split out of `unpopped` (its former `convert` feature) so the stable core no longer names the parser technology."
+readme = "README.md"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["kernel", "codegen", "compiler", "tree-sitter", "parser"]
+categories = ["compilers", "development-tools", "parsing"]
+# License texts are duplicated into this crate directory so they ship inside the
+# published tarball — Cargo cannot package files above the crate root. Same
+# reasoning as the `unpopped` crate; see its manifest.
+
+[dependencies]
+unpopped = { workspace = true }
+unpopped-vocab = { workspace = true }
+# Converter walkers: lift C-family kernels through a `Frontend` the caller supplies (CUDA:
+# `baracuda-cuda-parse`; Slang: `vulkane-slang-parse`). This crate carries no grammar. Error-tolerant
+# CSTs — unrecognized constructs stay as residue (the "keep the rest in the source language" contract).
+tree-sitter = "0.27"
+
+[dev-dependencies]
+# Only the tests: a Slang `Frontend` to drive the shared walkers. The shipped crate names no grammar
+# (`tests/neutral_core_names_no_cuda_grammar.rs`).
+tree-sitter-slang = "0.3"
+# The OpenCL C idiom tests (ROADMAP E18) parse with the C++ grammar openclownfish uses, because `in` and `out`
+# are keywords in the Slang one.
+tree-sitter-cpp = "0.23"
+
+[lints]
+workspace = true

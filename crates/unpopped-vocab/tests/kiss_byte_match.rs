@@ -57,7 +57,7 @@ const SUBSTITUTE_TARGET: &str = "cuda:sm89";
 fn the_artifact_is_the_one_this_leg_claims() {
     for (key, want) in [
         ("\"schema\"", "kiss-structure-key-vectors-v1"),
-        ("\"token_prefix\"", "sk6"),
+        ("\"token_prefix\"", "sk7"),
         ("\"clause\"", "KISS-CLASSIFY-6.7"),
     ] {
         assert_eq!(
@@ -119,14 +119,14 @@ fn the_vendored_artifacts_are_the_revisions_this_leg_was_written_against() {
         (
             "structure_key_vectors.json",
             VECTORS,
-            36_129_usize,
-            0x14cd_3d65_b5d0_2e78_u64,
+            38_194_usize,
+            0xa86a_7ac2_adf0_a127_u64,
         ),
         (
             "dtype_manifest.json",
             MANIFEST,
             3_650_usize,
-            0x7592_d207_5f07_6940_u64,
+            0x57e6_8358_0af1_ca00_u64,
         ),
     ] {
         assert_eq!(
@@ -279,7 +279,7 @@ fn the_artifact_shape_is_pinned_so_any_new_field_is_loud() {
 #[test]
 fn positive_vectors_round_trip_byte_exact() {
     let vectors = positives();
-    assert_eq!(vectors.len(), 34, "artifact positive-vector count changed");
+    assert_eq!(vectors.len(), 36, "artifact positive-vector count changed");
 
     let mut matched = Vec::new();
     let mut skipped = Vec::new();
@@ -364,7 +364,7 @@ fn skips_fall_only_on_unimplemented_targets() {
 #[test]
 fn decline_vectors_produce_the_same_verdict() {
     let vectors = declines();
-    assert_eq!(vectors.len(), 27, "artifact decline-vector count changed");
+    assert_eq!(vectors.len(), 29, "artifact decline-vector count changed");
 
     let mut exact = 0;
     let mut failed = Vec::new();
@@ -386,6 +386,10 @@ fn decline_vectors_produce_the_same_verdict() {
                         i64::from(*version) == g
                     }
                     (TokenDecline::UnsupportedSchemaVersion { .. }, None) => false,
+                    (TokenDecline::TooManyOperands { got }, Some(g)) => {
+                        i64::try_from(*got).is_ok_and(|n| n == g)
+                    }
+                    (TokenDecline::TooManyOperands { .. }, None) => false,
                     (_, Some(_)) => false,
                     (_, None) => true,
                 };
@@ -401,6 +405,7 @@ fn decline_vectors_produce_the_same_verdict() {
                         match &e {
                             TokenDecline::UnsupportedSchemaVersion { version } =>
                                 format!(" got={version}"),
+                            TokenDecline::TooManyOperands { got } => format!(" got={got}"),
                             _ => String::new(),
                         },
                         v.token
@@ -545,7 +550,7 @@ fn earn_skip(v: &Positive) -> Result<(), String> {
 #[test]
 fn the_skip_control_can_fail() {
     // The substitute must itself be implemented.
-    let real = "sk6|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f|-";
+    let real = "sk7|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f|-";
     assert!(
         StructureKey::parse_token(real).is_ok(),
         "control target `{SUBSTITUTE_TARGET}` must be implemented, or every skip is free"
@@ -558,7 +563,7 @@ fn the_skip_control_can_fail() {
         target: "vulkan:whatever".into(),
         namespace: "vulkan".into(),
         // `zz` is not a valid `<mp>` code — broken independently of the target.
-        token: "sk6|ctr|f32|vulkan:whatever|ix32|grid|r2|\
+        token: "sk7|ctr|f32|vulkan:whatever|ix32|grid|r2|\
                 co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-|ctll/d16/f32/f32/f32/zz"
             .into(),
     };
@@ -739,19 +744,19 @@ fn target_match_vectors_are_byte_exact() {
 fn the_artifact_scanner_actually_reads_the_vectors() {
     let pos = positives();
     let dec = declines();
-    assert_eq!(pos.len(), 34);
-    assert_eq!(dec.len(), 27);
+    assert_eq!(pos.len(), 36);
+    assert_eq!(dec.len(), 29);
 
     // Namespaces are tagged and split the way the artifact says.
     let vulkan = pos.iter().filter(|p| p.namespace == "vulkan").count();
     let cuda = pos.iter().filter(|p| p.namespace == "cuda").count();
-    assert_eq!((cuda, vulkan), (33, 1), "namespace split changed");
+    assert_eq!((cuda, vulkan), (35, 1), "namespace split changed");
 
     // Tokens and targets are non-empty and internally consistent: the tag must
     // agree with the token's own field 3, or the skip axis is being read from a
     // label rather than from the data.
     for p in &pos {
-        assert!(p.token.starts_with("sk6|"), "{}: token malformed", p.name);
+        assert!(p.token.starts_with("sk7|"), "{}: token malformed", p.name);
         let field3 = p.token.split('|').nth(3).expect("target field");
         assert_eq!(field3, p.target, "{}: tag disagrees with token", p.name);
         assert!(
@@ -763,8 +768,8 @@ fn the_artifact_scanner_actually_reads_the_vectors() {
 
     // The payload-carrying declines are present and parsed as numbers.
     let with_payload: Vec<_> = dec.iter().filter(|d| d.got.is_some()).collect();
-    assert_eq!(with_payload.len(), 3, "expected three versioned declines");
+    assert_eq!(with_payload.len(), 5, "expected five payload declines");
     let mut versions: Vec<i64> = with_payload.iter().filter_map(|d| d.got).collect();
     versions.sort_unstable();
-    assert_eq!(versions, [3, 5, 9]);
+    assert_eq!(versions, [3, 5, 6, 9, 17]);
 }

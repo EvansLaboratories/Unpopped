@@ -1,0 +1,5 @@
+kind: Breaking: re-vendor KISS 0.17.1, `structure_key` schema `sk7`, `MAX_OPERANDS` 16 (unpopped-vocab 0.46.0)
+---
+The vendored KISS corpus moves to 0.17.1 (`cc67e48`). The only key change is the schema event: `STRUCTURE_KEY_VERSION` 6 to 7 (every token now begins `sk7|`; an `sk6` token declines as `UnsupportedSchemaVersion { version: 6 }`) and `MAX_OPERANDS` 8 to 16 (Classify 6.4-0002). `StructureKey::operands` is therefore a 16-element array. A token that lists more than `MAX_OPERANDS` operands now declines as the new `TokenDecline::TooManyOperands { got }` (the enum is `#[non_exhaustive]`), where it declined as `Unrecognized` before.
+
+Verified: the three vendored files equal the KISS blobs (`git hash-object`); the 71 derivation vectors match; the byte-match leg's pins moved (36 positive and 29 decline vectors). Nothing else in KISS 0.17.0/0.17.1 reaches the key: the window `padding_lo`/`padding_hi` split and the matmul fields live in op attributes this crate does not parse, and no key byte moves for them.

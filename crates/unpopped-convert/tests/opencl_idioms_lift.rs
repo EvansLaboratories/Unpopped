@@ -4,13 +4,11 @@
 //! thing; a near-miss of each (a divisor that is not the loop bound, a store that is neither
 //! before nor after the update) must still decline rather than lift as the wrong op.
 
-#![cfg(feature = "convert")]
-
 use unpopped::LiftError;
 use unpopped::artifact::{BindingRole, Packing};
-use unpopped::convert::{Frontend, lift_elementwise_with, lift_reduction_with, lift_scan_with};
 use unpopped::ir::{OpDef, ReduceOp, input, reduced};
 use unpopped::resource_map::{DeclaredBuffer, ResourceMap};
+use unpopped_convert::{Frontend, lift_elementwise_with, lift_reduction_with, lift_scan_with};
 use unpopped_vocab::ElementKind as K;
 
 const F32: &[K] = &[K::F32];

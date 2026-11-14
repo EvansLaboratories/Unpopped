@@ -31,6 +31,15 @@ paths = ["crates/unpopped-cpu-c"]
 role = "adapter"
 volatility = "volatile"
 
+# The source-language walkers: tree-sitter frontends that lift C-family kernels into the IR (the former `convert` feature of the
+# core, split out under ROADMAP U31 so the stable core no longer names the parser technology). It depends on the core and the
+# vocabulary; the per-language parsers (`baracuda-cuda-parse`, `vulkane-slang-parse`) depend on it.
+[[architecture.component]]
+name = "convert"
+paths = ["crates/unpopped-convert"]
+role = "adapter"
+volatility = "volatile"
+
 # The conformance suite: tests that read the other crates and are read by none.
 [[architecture.component]]
 name = "conformance"
@@ -48,14 +57,14 @@ components = ["core"]
 
 [[architecture.layer]]
 name = "emitters"
-components = ["emitters"]
+components = ["emitters", "convert"]
 
 [[architecture.layer]]
 name = "verification"
 components = ["conformance"]
 
-# What the stable components should not lean on (ARC-003/ARC-004). `tree_sitter` is the optional source-language frontend
-# behind the `convert` feature; `feature_cfg_in_policy` counts a `cfg(feature = ...)` in a stable component as the real
+# What the stable components should not lean on (ARC-003/ARC-004). `tree_sitter` is the source-language parser, now confined to
+# `unpopped-convert` (ROADMAP U31); `feature_cfg_in_policy` counts a `cfg(feature = ...)` in a stable component as the real
 # dependency it is.
 [architecture.volatile]
 names = ["tree_sitter"]
@@ -68,6 +77,7 @@ feature_cfg_in_policy = true
 core = 1700
 vocab = 1100
 emitters = 8
+convert = 60
 
 # Where concrete adapters are built. The libraries never construct an emitter; the conformance suite does, to hold an emitter's
 # output against the oracle.
