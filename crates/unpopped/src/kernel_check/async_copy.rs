@@ -8,7 +8,7 @@
 use super::{Scope, check_place};
 use crate::exec::MemorySpace;
 use crate::kernel::{KernelError, KernelFn, Place, Stmt};
-use crate::oracle::elem_bits;
+use crate::types::elem_bits;
 
 fn refuse(what: &'static str) -> KernelError {
     KernelError::AsyncUnsupported { what }
