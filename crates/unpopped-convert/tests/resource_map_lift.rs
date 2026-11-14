@@ -6,17 +6,14 @@
 //! frontend's convention, operand order that differs from source order, a `Params` field,
 //! and a name the map does not declare (which must be loud, not a silent fallback).
 
-// `convert` is an optional feature (the tree-sitter grammars); the default build has no frontends.
-#![cfg(feature = "convert")]
-
 use unpopped::artifact::{BindingRole, LayoutRule, Packing, ParamField, ParamsLayout};
-use unpopped::convert::{
-    Frontend, lift, lift_elementwise, lift_elementwise_with, lift_reduction_with, lift_scan_with,
-    lift_with,
-};
 use unpopped::ir::ScalarExpr;
 use unpopped::resource_map::{DeclaredBuffer, ResourceMap, ResourceMapError};
 use unpopped::{LiftError, LiftProvenance};
+use unpopped_convert::{
+    Frontend, lift, lift_elementwise, lift_elementwise_with, lift_reduction_with, lift_scan_with,
+    lift_with,
+};
 use unpopped_vocab::ElementKind as K;
 
 const F32: &[K] = &[K::F32];

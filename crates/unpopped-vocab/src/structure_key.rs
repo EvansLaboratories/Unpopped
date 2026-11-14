@@ -48,7 +48,7 @@ use crate::{ElementKind, OpCategory, TargetId};
 pub const MAX_RANK: usize = 8;
 
 /// Maximum number of operands (inputs + output) a single key describes.
-pub const MAX_OPERANDS: usize = 8;
+pub const MAX_OPERANDS: usize = 16;
 
 /// Structure-key schema version. Bumped when a predicate axis is added or
 /// altered; old-version tokens stay distinguishable by this field.
@@ -75,7 +75,7 @@ pub const MAX_OPERANDS: usize = 8;
 /// extent 1 counts as stride 0 for the broadcast mask. None of the three is
 /// additive, so this is a schema event. `StructureKey::op` is replaced by
 /// [`StructureKey::cell_class`].
-pub const STRUCTURE_KEY_VERSION: u16 = 6;
+pub const STRUCTURE_KEY_VERSION: u16 = 7;
 
 // ===========================================================================
 // Predicate axes
@@ -1909,7 +1909,7 @@ fn derive_reduce_axes(op: OpCategory, operands: &[OperandDesc]) -> AxisMask {
 /// // a [128, 256] row-major f32 (in, in, out) triple for a binary elementwise add.
 /// let a = OperandDesc::new(2, &[128, 256], &[256, 1], ElementKind::F32, 256);
 /// let token = structure_key_token(OpCategory::BinaryElementwise, &[a, a, a], ArchSku::Sm89);
-/// assert!(token.starts_with("sk6|ew2|f32|cuda:sm89|"));
+/// assert!(token.starts_with("sk7|ew2|f32|cuda:sm89|"));
 /// ```
 ///
 /// ⚠️ **Not conformant for one input; prefer [`try_structure_key_token`].** This
@@ -2704,6 +2704,13 @@ pub enum TokenDecline {
     /// reporting them under one name would undo the distinction the dispatch
     /// exists to make.
     BadContractionField,
+    /// The operand field lists more than [`MAX_OPERANDS`] operands (§6.4-0002).
+    /// A typed decline, never a truncation: two distinct operand lists must not
+    /// collapse onto one key.
+    TooManyOperands {
+        /// How many operands the token listed.
+        got: usize,
+    },
 }
 
 impl TokenDecline {
@@ -2758,6 +2765,7 @@ impl TokenDecline {
             Self::RdcWithoutReduce => "RdcWithoutReduce",
             Self::ContractionPresenceMismatch => "ContractionPresenceMismatch",
             Self::BadContractionField => "BadContractionField",
+            Self::TooManyOperands { .. } => "TooManyOperands",
         }
     }
 }
@@ -2992,6 +3000,16 @@ impl StructureKey {
                 return Err(TokenDecline::RdcWithoutReduce);
             }
             // §6.6-0010: the contraction field is present iff the class is `ctr`.
+            let got = parts.get(7).map_or(0, |f| {
+                if f.is_empty() {
+                    0
+                } else {
+                    f.split(';').count()
+                }
+            });
+            if got > MAX_OPERANDS {
+                return Err(TokenDecline::TooManyOperands { got });
+            }
             if class == CellClass::Ctr && parts.len() == 9 {
                 return Err(TokenDecline::ContractionPresenceMismatch);
             }
@@ -3400,7 +3418,7 @@ mod contraction_key_tests {
 
     #[test]
     fn from_token_declines_reordered_and_duplicated_layout_order_components() {
-        let base = "sk6|ctr|f32|cuda:sm89|ix32|grid|r2|\
+        let base = "sk7|ctr|f32|cuda:sm89|ix32|grid|r2|\
                     co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
         // `/or...` before `/ol...` violates the fixed emission order (batch,
         // then lhs_order, then rhs_order) the position-driven parser walks —
@@ -3426,7 +3444,7 @@ mod contraction_key_tests {
         // contraction's `0..rank`. `from_token` parses an untrusted wire token, so
         // malformed digits must decline rather than build an inconsistent key that
         // panics when the emitter indexes `perm()[d]`.
-        let r2 = "sk6|ctr|f32|cuda:sm89|ix32|grid|r2|\
+        let r2 = "sk7|ctr|f32|cuda:sm89|ix32|grid|r2|\
                   co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
         // out-of-range digit (7 >= rank 2)
         assert_eq!(
@@ -3449,7 +3467,7 @@ mod contraction_key_tests {
         // A rank-3 (batched) cell with a rank-2 (2-digit) order — the `/bt/ol10`
         // case: a rank-2 LayoutOrder inside a rank-3 contraction would later panic
         // at `perm()[2]`. Must decline on the digit-count/rank mismatch.
-        let r3 = "sk6|ctr|f32|cuda:sm89|ix32|grid|r3|\
+        let r3 = "sk7|ctr|f32|cuda:sm89|ix32|grid|r3|\
                   co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
         assert_eq!(
             StructureKey::from_token(&format!("{r3}|ctll/d16/bt/ol10/f32/f32/f32/rm")),
@@ -3710,7 +3728,7 @@ mod contraction_key_tests {
         let (st_tok, rm_tok) = (strict.to_token(), tf32.to_token());
         assert!(!st_tok.contains("f32s"), "no f32s spelling: {st_tok}");
         assert!(
-            st_tok.starts_with("sk6|ctr|f32|"),
+            st_tok.starts_with("sk7|ctr|f32|"),
             "strict cell spells the canonical f32 dtype: {st_tok}"
         );
         assert!(
@@ -3762,7 +3780,7 @@ mod contraction_key_tests {
         );
         let (mt, ht) = (mixed.to_token(), homog.to_token());
         assert!(
-            mt.starts_with("sk6|ctr|f8e4m3fn|"),
+            mt.starts_with("sk7|ctr|f8e4m3fn|"),
             "variant-explicit: {mt}"
         );
         assert!(
@@ -3780,7 +3798,7 @@ mod contraction_key_tests {
 
     #[test]
     fn from_token_declines_sk2_shaped_and_malformed_gem_precision_groups() {
-        let base = "sk6|ctr|f32|cuda:sm89|ix32|grid|r2|\
+        let base = "sk7|ctr|f32|cuda:sm89|ix32|grid|r2|\
                     co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-";
         // The precision group is REQUIRED for an sk3 gem cell: the sk2 shapes
         // (`c<mnk>/<kdiv>` and `c<mnk>/<kdiv>/b<class>`) are typed declines.
@@ -3810,7 +3828,7 @@ mod contraction_key_tests {
             None
         );
         // The `f32s` retirement also holds at the token's DTYPE field.
-        let f32s_dtype = "sk6|ctr|f32s|cuda:sm89|ix32|grid|r2|\
+        let f32s_dtype = "sk7|ctr|f32s|cuda:sm89|ix32|grid|r2|\
                           co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-|ctll/d16/f32/f32/f32/st";
         assert_eq!(StructureKey::from_token(f32s_dtype), None);
     }
@@ -4654,7 +4672,7 @@ mod tests {
     /// exercising the code it names.
     #[test]
     fn redundant_acc_mp_is_omitted_not_emitted() {
-        let g = "sk6|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
+        let g = "sk7|rdc|f32|cuda:sm89|ix32|warp|r2|co/00/v1/d8/f;co/00/v1/da/f|rall";
         let mut key = StructureKey::from_token(g).unwrap();
 
         // In-crate, the struct literal is permitted — so a redundant value can
@@ -4842,7 +4860,7 @@ mod tests {
         let parsed = StructureKey::from_token(&token).expect("round-trip parse");
         assert_eq!(k, parsed);
         // Token is human-greppable.
-        assert!(token.starts_with("sk6|ew2|f32|cuda:sm89|"));
+        assert!(token.starts_with("sk7|ew2|f32|cuda:sm89|"));
     }
 
     #[test]
@@ -4856,7 +4874,7 @@ mod tests {
         let too_many = std::iter::repeat_n(op, MAX_OPERANDS + 1)
             .collect::<Vec<_>>()
             .join(";");
-        let token = format!("sk6|ew2|f32|cuda:sm89|ix32|grid|r2|{too_many}|-");
+        let token = format!("sk7|ew2|f32|cuda:sm89|ix32|grid|r2|{too_many}|-");
         assert_eq!(
             StructureKey::from_token(&token),
             None,
@@ -4870,7 +4888,7 @@ mod tests {
         // malformed and MUST be a typed decline, not silently accepted (downstream
         // consumers index MAX_RANK-sized arrays with it).
         let token = format!(
-            "sk6|ew2|f32|cuda:sm89|ix32|grid|r{}|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
+            "sk7|ew2|f32|cuda:sm89|ix32|grid|r{}|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
             MAX_RANK + 1
         );
         assert_eq!(
@@ -4920,14 +4938,14 @@ mod tests {
         // required no bump.) Pin the canonical f32 token verbatim so a future
         // reshuffle that perturbs it is caught.
         assert_eq!(
-            STRUCTURE_KEY_VERSION, 6,
-            "codec sits at the KISS-aligned schema version 6 (sk6 schema event)"
+            STRUCTURE_KEY_VERSION, 7,
+            "codec sits at the KISS-aligned schema version 7 (sk7 schema event)"
         );
         let a = od(&[128, 256], &[256, 1], ElementKind::F32, 256);
         let k = structure_key(OpCategory::BinaryElementwise, &[a, a, a], ArchSku::Sm89);
         assert_eq!(
             k.to_token(),
-            "sk6|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
+            "sk7|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-",
             "the canonical f32 cell serializes to the KISS-aligned sk3 token"
         );
     }
@@ -4950,7 +4968,7 @@ mod tests {
         );
         let token = k.to_token();
         assert!(
-            token.starts_with("sk6|ew1|u32|"),
+            token.starts_with("sk7|ew1|u32|"),
             "the token spells u32: {token}"
         );
         let parsed = StructureKey::from_token(&token).expect("u32 token round-trips");
@@ -5001,7 +5019,7 @@ mod tests {
     /// identity — which is the only reason to have a `structure_key` at all.
     #[test]
     fn field_8_admits_exactly_one_spelling_per_reduced_set() {
-        let base = "sk6|rdc|f32|cuda:sm89|ix32|grid|r3|\
+        let base = "sk7|rdc|f32|cuda:sm89|ix32|grid|r3|\
                     co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f";
 
         // The two sentinels resolve against `rank`.
@@ -5034,7 +5052,7 @@ mod tests {
 
         // Neither sentinel has a referent in a rank-0 space: `rlast` has no
         // trailing axis, and `rall` would name the empty set that `-` owns.
-        let r0 = "sk6|ew1|f32|cuda:sm89|ix32|grid|r0|co/00/v1/d16/f;co/00/v1/d16/f";
+        let r0 = "sk7|ew1|f32|cuda:sm89|ix32|grid|r0|co/00/v1/d16/f;co/00/v1/d16/f";
         assert_eq!(StructureKey::from_token(&format!("{r0}|rlast")), None);
         assert_eq!(StructureKey::from_token(&format!("{r0}|rall")), None);
         assert!(
@@ -5187,13 +5205,13 @@ mod tests {
         let _ = StructureKey::from_token(&"a".repeat(200_000));
         // Over-MAX_RANK rank — declines at the rank guard (never reaches operands).
         let _ = StructureKey::from_token(&format!(
-            "sk6|ew2|f32|cuda:sm89|ix32|grid|r250|{}|-",
+            "sk7|ew2|f32|cuda:sm89|ix32|grid|r250|{}|-",
             "co/00/v4/d16/f;".repeat(50)
         ));
         // In-range rank + over-MAX_OPERANDS operand list — MUST reach parse_operand,
         // then decline gracefully.
         let _ = StructureKey::from_token(&format!(
-            "sk6|ew2|f32|cuda:sm89|ix32|grid|r2|{}|-",
+            "sk7|ew2|f32|cuda:sm89|ix32|grid|r2|{}|-",
             "co/00/v1/d16/f;".repeat(50)
         ));
         // A valid gemm base with only its 10th (contraction) field corrupted —
@@ -5600,7 +5618,7 @@ mod codec_and_helper_pins {
     #[test]
     fn a_64_bit_index_cell_and_a_rank_8_cell_round_trip_through_a_token() {
         // Deleting the `ix64` arm; `rank > MAX_RANK` -> `>=`.
-        let t = "sk6|ew1|f32|cuda:sm89|ix64|grid|r1|co/00/v1/da/f|-";
+        let t = "sk7|ew1|f32|cuda:sm89|ix64|grid|r1|co/00/v1/da/f|-";
         let k = StructureKey::from_token(t).expect("ix64 parses");
         assert_eq!(k.to_token(), t);
         let shape = [2i64; 8];

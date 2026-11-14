@@ -56,7 +56,7 @@ fn tail(token: &str) -> String {
 #[test]
 fn a_cell_with_no_designated_scale_omits_the_coordinate() {
     let t = derive_structure_key_token(&cell(), &facts(None), ArchSku::Sm90).unwrap();
-    assert!(t.starts_with("sk6|ctr|"), "{t}");
+    assert!(t.starts_with("sk7|ctr|"), "{t}");
     assert_eq!(tail(&t), "csss/d16/i4/f32/bf16/st", "{t}");
 }
 
@@ -117,7 +117,7 @@ fn a_reserved_scale_dtype_declines_instead_of_keying_what_the_codec_would_refuse
 
 #[test]
 fn the_reader_declines_what_the_clause_forbids() {
-    let base = "sk6|ctr|i4|cuda:sm90|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-|ctll/d16/i4/f32/bf16/st";
+    let base = "sk7|ctr|i4|cuda:sm90|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-|ctll/d16/i4/f32/bf16/st";
     // Controls: the bare and the well-formed spellings parse.
     assert!(StructureKey::parse_token(base).is_ok());
     assert!(StructureKey::parse_token(&format!("{base}/qf16")).is_ok());
@@ -133,11 +133,11 @@ fn the_reader_declines_what_the_clause_forbids() {
     // A second coordinate in the same field.
     assert!(StructureKey::parse_token(&format!("{base}/qf16/qf16")).is_err());
     // Outside a contraction field.
-    let ew = "sk6|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-|f32/st/qf16";
+    let ew = "sk7|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-|f32/st/qf16";
     assert!(StructureKey::parse_token(ew).is_err());
     // The retired schema is a versioned decline, not a parse.
     assert_eq!(
-        StructureKey::parse_token(&base.replacen("sk6", "sk5", 1)),
+        StructureKey::parse_token(&base.replacen("sk7", "sk5", 1)),
         Err(TokenDecline::UnsupportedSchemaVersion { version: 5 })
     );
 }

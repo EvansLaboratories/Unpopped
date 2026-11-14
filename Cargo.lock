@@ -304,9 +304,6 @@ dependencies = [
  "libm",
  "serde",
  "serde_json",
- "tree-sitter",
- "tree-sitter-cpp",
- "tree-sitter-slang",
  "unpopped-vocab",
 ]
 
@@ -316,6 +313,17 @@ version = "0.45.18"
 dependencies = [
  "unpopped",
  "unpopped-cpu-c",
+ "unpopped-vocab",
+]
+
+[[package]]
+name = "unpopped-convert"
+version = "0.45.18"
+dependencies = [
+ "tree-sitter",
+ "tree-sitter-cpp",
+ "tree-sitter-slang",
+ "unpopped",
  "unpopped-vocab",
 ]
 

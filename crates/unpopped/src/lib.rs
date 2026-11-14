@@ -71,8 +71,6 @@ pub mod capset;
 mod cast_ref;
 pub mod cfamily;
 pub mod contract;
-#[cfg(feature = "convert")]
-pub mod convert;
 pub mod dispatch_artifact;
 pub mod exactness;
 pub mod exec;
