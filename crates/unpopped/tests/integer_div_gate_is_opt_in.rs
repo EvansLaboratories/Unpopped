@@ -133,6 +133,21 @@ fn a_backend_that_does_not_opt_in_is_refused_exactly_as_before() {
     }
 }
 
+/// ROADMAP U27: the plan gate reads a backend through `IntegerOpsGate`, which every `Backend` implements, so a
+/// `&dyn Backend` (what the entry point took before the trait) is still accepted and decides the same way.
+#[test]
+fn a_dyn_backend_decides_the_gate_as_the_concrete_one_does() {
+    let (on, off): (&dyn Backend, &dyn Backend) = (&Total, &Default_);
+    let k = key(ElementKind::I32);
+    let op = idiv(ElementKind::I32);
+    try_build_plan_for(&op, &k, on).expect("an opted-in dyn backend is admitted");
+    assert!(
+        try_build_plan_for(&op, &k, off).is_err(),
+        "a default dyn backend is refused"
+    );
+    let _plan = unpopped::plan::build_plan_for(&op, &k, on);
+}
+
 #[test]
 fn an_opted_in_backend_gets_int_div_and_const_int_at_the_defined_dtypes() {
     for dt in [

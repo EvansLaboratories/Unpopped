@@ -19,7 +19,7 @@ use unpopped::kernel::Stmt;
 use unpopped::mma::{ExtraRole, MmaAtom};
 use unpopped_vocab::ElementKind;
 
-use crate::kernel::{Emitter, ctype, refuse};
+use crate::base::{Emitter, ctype, refuse};
 
 /// `static const int <name>[] = {...};` of the logical id of every (lane, value) slot of operand `which`.
 fn id_table(atom: &MmaAtom, which: usize, name: &str) -> Result<String, LowerError> {
