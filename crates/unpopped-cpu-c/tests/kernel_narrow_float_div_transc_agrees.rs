@@ -140,7 +140,7 @@ fn un_all(tag: &str, t: ElementKind, n: usize, ops: &[UnaryOp]) -> KernelFn {
     let mut body = vec![load(1, 0)];
     for (k, op) in ops.iter().enumerate() {
         params.push(Param::buffer(
-            &format!("out{k}"),
+            format!("out{k}"),
             t,
             BufferRole::Write,
             Some(1),
