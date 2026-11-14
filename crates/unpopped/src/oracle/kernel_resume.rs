@@ -16,6 +16,30 @@ use crate::ir::ScalarExpr;
 use crate::kernel::{Block, CallArg, KernelFn, Module, Stmt};
 use crate::types::{self, Ty};
 
+/// The reference kernel of the extern declaration `decl` and the call arguments that pass `args` to it (the reference
+/// is a plain function with the declared scalar parameters, so an `ExternCall` is a `Call` of it). Traps when the
+/// call is outside a module or the declaration has no reference.
+pub(super) fn extern_reference(
+    module: Option<&Module>,
+    decl: u32,
+    args: &[ScalarExpr],
+) -> Result<(u32, Vec<CallArg>), KernelTrap> {
+    let Some(m) = module else {
+        return Err(KernelTrap::Unsupported(
+            "an ExternCall outside a module run (check_kernel refuses it)",
+        ));
+    };
+    let Some(reference) = m.externs.get(decl as usize).and_then(|d| d.reference) else {
+        return Err(KernelTrap::Unsupported(
+            "an Extern with no reference body (the oracle cannot run asm)",
+        ));
+    };
+    Ok((
+        reference,
+        args.iter().cloned().map(CallArg::Scalar).collect(),
+    ))
+}
+
 /// One level of the control stack.
 pub(super) enum Frame<'a> {
     /// The statements of a block, `pc` of them done.
@@ -247,7 +271,7 @@ impl<'a> Machine<'a> {
         module: Option<&'k Module>,
         (decl, args, results): (u32, &[ScalarExpr], &[u32]),
     ) -> Result<(), KernelTrap> {
-        let (reference, call_args) = super::kernel_call::extern_reference(module, decl, args)?;
+        let (reference, call_args) = extern_reference(module, decl, args)?;
         let Some(m) = module else {
             return Err(KernelTrap::Unsupported(
                 "an ExternCall outside a module run",
