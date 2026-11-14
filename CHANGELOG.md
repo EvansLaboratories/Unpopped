@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.46.1` — `plan.rs` is split into twelve section modules, no behaviour or path change (ROADMAP U30, part 2)
+
+`crates/unpopped/src/plan.rs` held about 3,060 code lines and was named by ten files (CodeRipper `MOD-005`). Its non-test code now lives in `src/plan/`: `types` (`Schedule`, `KernelPlan`, `PlanError` and the declines), `build` (`build_plan` and its entry points), `contraction`, `roles` (`rr_role` and the multi-output gate), `views` (views, gather, scatter, offsets), `dtype_float`, `dtype_int`, `dtype_misc` (the per-dtype op gates), `admissibility` (coord, typed, qualified, fma), `out_post` (`out_dtype` and reduction-post gates) and `geometry` (row reduce, scan) and `window` (window, im2col, row sort). The text of each item moved verbatim; private functions became `pub(super)`, and `plan.rs` keeps its documentation, the in-file tests, and a glob re-export of each section, so every public and crate-visible path is unchanged.
+
+Verified: the workspace builds and the workspace tests are unchanged. Not here: the oracle-internal cycles (U35) and the module groups in `[architecture]` (U32).
+
+---
+
 ## `0.46.0` — Breaking: re-vendor KISS 0.17.1, `structure_key` schema `sk7`, `MAX_OPERANDS` 16 (unpopped-vocab 0.46.0)
 
 The vendored KISS corpus moves to 0.17.1 (`cc67e48`). The only key change is the schema event: `STRUCTURE_KEY_VERSION` 6 to 7 (every token now begins `sk7|`; an `sk6` token declines as `UnsupportedSchemaVersion { version: 6 }`) and `MAX_OPERANDS` 8 to 16 (Classify 6.4-0002). `StructureKey::operands` is therefore a 16-element array. A token that lists more than `MAX_OPERANDS` operands now declines as the new `TokenDecline::TooManyOperands { got }` (the enum is `#[non_exhaustive]`), where it declined as `Unrecognized` before.
