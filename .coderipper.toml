@@ -16,11 +16,40 @@ role = "policy"
 volatility = "stable"
 owns_data = ["dtype_manifest"]
 
-# The core: the neutral IR, the checker, the oracle and the `Backend` trait. It depends only on the vocabulary and holds no
-# target's spelling.
+# The core (crates/unpopped), as module groups (ROADMAP U32): it depends only on the vocabulary and holds no target's spelling.
+# Layers bottom first below; `lib.rs` is in no group.
+# The kernel and expression IR: the dtype and shape helpers, the IR, the kernel language and its checker, the matrix-atom table and the reference decoders every other group reads. It names none of the groups above it.
 [[architecture.component]]
-name = "core"
-paths = ["crates/unpopped"]
+name = "core-ir"
+paths = ["crates/unpopped/src/types.rs", "crates/unpopped/src/types/**", "crates/unpopped/src/text.rs", "crates/unpopped/src/text/**", "crates/unpopped/src/shape.rs", "crates/unpopped/src/shape/**", "crates/unpopped/src/view_layout.rs", "crates/unpopped/src/view_layout/**", "crates/unpopped/src/numerics.rs", "crates/unpopped/src/numerics/**", "crates/unpopped/src/optimize.rs", "crates/unpopped/src/optimize/**", "crates/unpopped/src/ir.rs", "crates/unpopped/src/ir/**", "crates/unpopped/src/exec.rs", "crates/unpopped/src/exec/**", "crates/unpopped/src/kernel.rs", "crates/unpopped/src/kernel/**", "crates/unpopped/src/kernel_check.rs", "crates/unpopped/src/kernel_check/**", "crates/unpopped/src/kernel_extern.rs", "crates/unpopped/src/kernel_extern/**", "crates/unpopped/src/kernel_interface.rs", "crates/unpopped/src/kernel_interface/**", "crates/unpopped/src/kernel_module.rs", "crates/unpopped/src/kernel_module/**", "crates/unpopped/src/kernel_uniform.rs", "crates/unpopped/src/kernel_uniform/**", "crates/unpopped/src/mma.rs", "crates/unpopped/src/mma/**", "crates/unpopped/src/window_taps.rs", "crates/unpopped/src/window_taps/**", "crates/unpopped/src/cast_ref.rs", "crates/unpopped/src/cast_ref/**", "crates/unpopped/src/recipe.rs", "crates/unpopped/src/recipe/**"]
+role = "policy"
+volatility = "stable"
+
+# The plan gate: what an op may do and the schedule chosen for it.
+[[architecture.component]]
+name = "core-plan"
+paths = ["crates/unpopped/src/plan.rs", "crates/unpopped/src/plan/**", "crates/unpopped/src/capability.rs", "crates/unpopped/src/capability/**", "crates/unpopped/src/pattern.rs", "crates/unpopped/src/pattern/**"]
+role = "policy"
+volatility = "stable"
+
+# The lowering contract: the `Backend` trait, the contract and its predicate, the JIT, the artifacts a backend produces and the C-family helpers.
+[[architecture.component]]
+name = "core-lowering"
+paths = ["crates/unpopped/src/backend.rs", "crates/unpopped/src/backend/**", "crates/unpopped/src/contract.rs", "crates/unpopped/src/contract/**", "crates/unpopped/src/exactness.rs", "crates/unpopped/src/exactness/**", "crates/unpopped/src/jit.rs", "crates/unpopped/src/jit/**", "crates/unpopped/src/link.rs", "crates/unpopped/src/link/**", "crates/unpopped/src/cfamily.rs", "crates/unpopped/src/cfamily/**", "crates/unpopped/src/dispatch_artifact.rs", "crates/unpopped/src/dispatch_artifact/**", "crates/unpopped/src/capset.rs", "crates/unpopped/src/capset/**", "crates/unpopped/src/kisc.rs", "crates/unpopped/src/kisc/**", "crates/unpopped/src/telemetry.rs", "crates/unpopped/src/telemetry/**", "crates/unpopped/src/revision.rs", "crates/unpopped/src/revision/**", "crates/unpopped/src/artifact.rs", "crates/unpopped/src/artifact/**"]
+role = "policy"
+volatility = "stable"
+
+# The oracle: the independent evaluator and its differential against the reference decoders.
+[[architecture.component]]
+name = "core-oracle"
+paths = ["crates/unpopped/src/oracle.rs", "crates/unpopped/src/oracle/**", "crates/unpopped/src/kiss_ref_diff.rs", "crates/unpopped/src/kiss_ref_diff/**"]
+role = "policy"
+volatility = "stable"
+
+# The source lifts: they read the IR, the plan gate and the artifact descriptions, and nothing reads them.
+[[architecture.component]]
+name = "core-lift"
+paths = ["crates/unpopped/src/lift.rs", "crates/unpopped/src/lift/**", "crates/unpopped/src/kernel_lift.rs", "crates/unpopped/src/kernel_lift/**", "crates/unpopped/src/resource_map.rs", "crates/unpopped/src/resource_map/**"]
 role = "policy"
 volatility = "stable"
 
@@ -52,8 +81,24 @@ name = "vocabulary"
 components = ["vocab"]
 
 [[architecture.layer]]
-name = "core"
-components = ["core"]
+name = "core-ir"
+components = ["core-ir"]
+
+[[architecture.layer]]
+name = "core-plan"
+components = ["core-plan"]
+
+[[architecture.layer]]
+name = "core-lowering"
+components = ["core-lowering"]
+
+[[architecture.layer]]
+name = "core-oracle"
+components = ["core-oracle"]
+
+[[architecture.layer]]
+name = "core-lift"
+components = ["core-lift"]
 
 [[architecture.layer]]
 name = "emitters"
@@ -73,8 +118,9 @@ feature_cfg_in_policy = true
 
 # The most public items (and members of public types) each library may offer; a PR that grows past one raises it on purpose.
 # Measured 2026-11-13 with ARC-006 at 4b0bd4a9+: core 1572, vocab 1028, emitters 2; about 8% headroom.
+# ARC-006 counts public items per crate-level component: the core (crates/unpopped) is split into module groups (ROADMAP U32), so it has
+# no budget today (it was 1700, measured 1572, while it was one component); the module groups are not counted by the rule.
 [architecture.api_budget]
-core = 1700
 vocab = 1100
 emitters = 8
 convert = 60
@@ -83,3 +129,25 @@ convert = 60
 # output against the oracle.
 [architecture.composition]
 roots = ["crates/unpopped-conformance/**"]
+
+# The crate `unpopped` is split into the module groups above, so the dependencies between workspace crates that name it are
+# allowed by name (a group is judged by the module graph, the crate edge by this list).
+[[architecture.allow]]
+from = "emitters"
+to = "unpopped"
+reason = "an emitter crate lowers the core's plan through the core's Backend trait; the core never depends on it"
+
+[[architecture.allow]]
+from = "convert"
+to = "unpopped"
+reason = "the source walkers lift into the core's IR; the core never depends on them"
+
+[[architecture.allow]]
+from = "conformance"
+to = "unpopped"
+reason = "the conformance suite reads the core and is read by none"
+
+[[architecture.allow]]
+from = "unpopped"
+to = "vocab"
+reason = "the core builds on the vocabulary, the lowest layer"

@@ -6,7 +6,7 @@
 //! caller's buffer). Unlaunched entries only; a launched module is the resumable evaluator's (slice M4).
 
 use super::kernel_eval::{ALLOC_BIND, KernelArg, KernelTrap, Machine};
-use super::kernel_resume::Frame;
+use super::kernel_resume::{Frame, extern_reference};
 use crate::ir::ScalarExpr;
 use crate::kernel::{CallArg, KernelFn, Module, ParamKind, check_module};
 use crate::types::Ty;
@@ -102,30 +102,6 @@ pub(super) fn eval_combine_tuple(
         .ok_or(KernelTrap::Unsupported(
             "a tuple combine function returned without setting a result local",
         ))
-}
-
-/// The reference kernel of the extern declaration `decl` and the call arguments that pass `args` to it (the reference
-/// is a plain function with the declared scalar parameters, so an `ExternCall` is a `Call` of it). Traps when the
-/// call is outside a module or the declaration has no reference.
-pub(super) fn extern_reference(
-    module: Option<&Module>,
-    decl: u32,
-    args: &[ScalarExpr],
-) -> Result<(u32, Vec<CallArg>), KernelTrap> {
-    let Some(m) = module else {
-        return Err(KernelTrap::Unsupported(
-            "an ExternCall outside a module run (check_kernel refuses it)",
-        ));
-    };
-    let Some(reference) = m.externs.get(decl as usize).and_then(|d| d.reference) else {
-        return Err(KernelTrap::Unsupported(
-            "an Extern with no reference body (the oracle cannot run asm)",
-        ));
-    };
-    Ok((
-        reference,
-        args.iter().cloned().map(CallArg::Scalar).collect(),
-    ))
 }
 
 /// The caller's frame while a callee runs.

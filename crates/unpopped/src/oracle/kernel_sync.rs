@@ -17,9 +17,29 @@
 
 use std::collections::HashMap;
 
-use super::kernel_mem::Stamp;
 use crate::exec::Scope;
 use crate::kernel::MemoryOrder;
+
+/// One access: the thread, and the barrier counts it saw.
+#[derive(Clone, Copy)]
+pub(super) struct Stamp {
+    pub(super) block: u32,
+    pub(super) thread: u32,
+    pub(super) sub: u32,
+    pub(super) block_epoch: u32,
+    pub(super) sub_epoch: u32,
+    /// The access's place in the launch's sequence (`kernel_sync`), and the scope an atomic was issued at.
+    pub(super) seq: u64,
+    pub(super) scope: Scope,
+    /// The `Device` barriers released before this access, the cluster the block is in, and the `Cluster` barriers of
+    /// that cluster released before it.
+    pub(super) dev_epoch: u32,
+    pub(super) cluster: u32,
+    pub(super) cluster_epoch: u32,
+    /// The device the thread runs on, and the `System` barriers released before the access.
+    pub(super) device: u32,
+    pub(super) sys_epoch: u32,
+}
 
 /// One thread's identity: block, thread in block, subgroup in block, cluster of the block.
 type Tid = (u32, u32, u32, u32, u32);
