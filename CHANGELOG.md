@@ -15,6 +15,16 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.45.16` — `unpopped-cpu-c` accepts a kernel whose compute dtype is `F16` or `Bf16` (ROADMAP U26 fifth slice)
+
+A `KernelFn` whose compute dtype is `F16` or `Bf16` is no longer refused by `unpopped-cpu-c`. The unary, binary, select, fused and literal seams are keyed to `float`, so the arithmetic runs in `float`; a narrow operand decodes through the codec and a narrow result is encoded once at the store, as for a narrow operand under an `F32` compute dtype. A constant has the kernel's compute dtype, so an expression of constants alone is a narrow value and is encoded when stored. Arithmetic keeps the exact constant and rounds once at the store, which is what the oracle does; a comparison rounds each constant operand to the narrow float first, because the oracle decides a comparison on the compute dtype's value of each operand (`round_to_compute`), so `x < 0.1` is false for the F16 nearest 0.1.
+
+Verified: `kernel_narrow_float_compute_agrees` compiles the C and compares it byte for byte with the oracle for a constant add and multiply, a comparison against an exact and an inexact constant, a square, a constant alone and a sum of constants, on 6,000-odd finite patterns of each type plus the three patterns at the nearest-0.1 value. A mutant that leaves the comparison constant unrounded and a mutant that does not treat a constant as narrow each fail it. Not covered: `Div`, transcendental unary ops and a compound expression, where `float` evaluation can differ from the oracle's `f64` by a double rounding on a tie (the tolerance band `unit_roundoff` is `f32`'s).
+
+This closes ROADMAP U26.
+
+---
+
 ## `0.45.15` — `unpopped-cpu-c` spells an MMA with `F16`/`Bf16` operand fragments (ROADMAP U26 fourth slice)
 
 A `Stmt::Mma` whose `A`, `B` or extra fragments are `F16` or `Bf16` (the `nvidia.mma.sync.m16n8k16` f16 and bf16 atoms, `F32` accumulator) is no longer a typed refusal in `unpopped-cpu-c`. The gather decodes each narrow fragment element through the codec into the `double` the product and the ascending-`k` sum already run on, and the accumulator is rounded once to `F32` as before. A narrow accumulator stays refused: no atom has one, so its encode could not be checked against the oracle.

@@ -75,6 +75,8 @@ fn admit(k: &KernelFn, in_module: bool) -> Result<(), LowerError> {
     if !matches!(
         k.compute,
         ElementKind::F32
+            | ElementKind::F16
+            | ElementKind::Bf16
             | ElementKind::F64
             | ElementKind::I32
             | ElementKind::I64
@@ -82,7 +84,7 @@ fn admit(k: &KernelFn, in_module: bool) -> Result<(), LowerError> {
             | ElementKind::U64
     ) {
         return Err(refuse(format!(
-            "compute dtype {:?}; only F32, F64, I32, I64, U32 and U64",
+            "compute dtype {:?}; only F32, F16, Bf16, F64, I32, I64, U32 and U64",
             k.compute
         )));
     }
@@ -698,7 +700,12 @@ pub(crate) fn function_text(
     (module, name, callee): (Option<&ModuleCtx<'_>>, &str, bool),
 ) -> Result<String, LowerError> {
     admit(k, module.is_some())?;
-    let dtype = k.compute;
+    // a narrow compute dtype computes in `float` (operands decoded, one encode at the store: `narrow.rs`)
+    let dtype = if crate::narrow::is_narrow(k.compute) {
+        ElementKind::F32
+    } else {
+        k.compute
+    };
     let tys: Vec<Ty> = k.locals.iter().map(|d| d.ty()).collect();
     let un = |op, x: String| cpu_unary(op, x, dtype);
     let bin = |op, a: String, b: String| {

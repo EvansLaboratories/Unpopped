@@ -190,6 +190,8 @@ fn rebuild(e: &ScalarExpr, mut kids: Vec<ScalarExpr>) -> ScalarExpr {
 /// comparison or `Select` over one (a comparison yields 1.0 or 0.0 in its operands' dtype).
 fn narrow_ty(k: &KernelFn, e: &ScalarExpr) -> Option<ElementKind> {
     match e {
+        // a constant has the kernel's compute dtype
+        ScalarExpr::Const(_) => Some(k.compute).filter(|t| is_narrow(*t)),
         ScalarExpr::Local(i) => k
             .locals
             .get(*i as usize)
@@ -228,6 +230,20 @@ fn wide(k: &KernelFn, e: &ScalarExpr) -> ScalarExpr {
     }
     if narrow_ty(k, e).is_some() && is_pattern(e) {
         return ScalarExpr::Cast(Box::new(e.clone()), spec(ElementKind::F32));
+    }
+    if let ScalarExpr::Binary(op, ..) = e {
+        if op.is_cmp() && is_narrow(k.compute) {
+            // the oracle decides a comparison on the compute dtype's value of each operand: a constant is rounded to it
+            // (arithmetic keeps the exact constant and rounds once at the store)
+            let kids = children(e).into_iter().map(|c| match c {
+                ScalarExpr::Const(_) => ScalarExpr::Cast(
+                    Box::new(ScalarExpr::Cast(Box::new(c.clone()), spec(k.compute))),
+                    spec(ElementKind::F32),
+                ),
+                _ => wide(k, c),
+            });
+            return rebuild(e, kids.collect());
+        }
     }
     rebuild(e, children(e).into_iter().map(|c| wide(k, c)).collect())
 }
