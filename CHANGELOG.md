@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.46.4` — the core's module groups are declared in `[architecture]` and judged by CodeRipper (ROADMAP U32)
+
+`.coderipper.toml` now declares `unpopped` as five module groups with layers, bottom first: `core-ir`, `core-plan`, `core-lowering`, `core-oracle`, `core-lift`, so `ARC-001` and `ARC-002` judge the module graph of the core, not only the crate edges. Declaring them found one real upward dependency, fixed here: the kernel checker (`kernel_check/async_copy`) named the oracle for `elem_bits`, so `elem_bits` and `elem_size` moved from `oracle/elem.rs` into `types.rs` (the oracle re-exports them; no path or behaviour changes). The crate-level edges that name `unpopped` are `[[architecture.allow]]` entries with reasons, and the 1700 core API budget is dropped because `ARC-006` counts crate-level components only (stated in the file).
+
+Verified: `coderipper check ARC-001` to `ARC-012` pass (`ARC-010` does not report); a seeded `ir.rs -> plan` edge fails `ARC-001` (`core-ir depends on core-plan`) and the clean tree passes.
+
+---
+
 ## `0.46.3` — the module cycles inside `unpopped::oracle` are dissolved, no behaviour or path change (ROADMAP U35)
 
 CodeRipper `MOD-002` reported two Info cycles inside `oracle`: `kernel_call` and `kernel_resume`, and `kernel_eval`, `kernel_mem` and `kernel_sync`. The edges ran back through four things, now moved to where they point: `KernelTrap` is the leaf module `kernel_trap` (still `oracle::kernel_eval::KernelTrap` by re-export), `Stamp` lives in `kernel_sync`, the `impl Machine` block of `kernel_mem` is the new module `kernel_mem_ops` (so `kernel_mem` holds the race rules and the memory types and no longer names the machine), and `extern_reference` moved into `kernel_resume`. Text moved verbatim; items that crossed a module boundary became `pub(super)`.
