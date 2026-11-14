@@ -27,6 +27,7 @@ mod out_post;
 mod roles;
 mod types;
 mod views;
+mod window;
 
 pub(crate) use self::admissibility::*;
 pub use self::build::*;
@@ -39,6 +40,7 @@ use self::out_post::*;
 pub use self::roles::*;
 pub use self::types::*;
 pub use self::views::*;
+use self::window::*;
 
 #[cfg(test)]
 mod reduce_class_tests {
