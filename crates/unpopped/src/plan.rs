@@ -587,13 +587,21 @@ pub fn try_build_plan<'a>(
 /// override it gets exactly [`try_build_plan`]'s refusals. [`crate::try_generate`] calls this.
 ///
 /// # Errors
+/// The one fact the plan gate reads of a backend: whether it declares the total integer rule. Every
+/// [`Backend`](crate::backend::Backend) implements it (`backend.rs`), so a `&dyn Backend` and a concrete backend both
+/// satisfy [`try_build_plan_for`]; `plan` names no backend type (ROADMAP U27).
+pub trait IntegerOpsGate {
+    /// The backend's `total_integer_ops`.
+    fn declares_total_integer_ops(&self) -> bool;
+}
+
 /// As [`try_build_plan`].
-pub fn try_build_plan_for<'a>(
+pub fn try_build_plan_for<'a, B: IntegerOpsGate + ?Sized>(
     op: &'a OpDef,
     key: &'a StructureKey,
-    backend: &dyn crate::backend::Backend,
+    backend: &B,
 ) -> Result<KernelPlan<'a>, PlanError> {
-    try_build_plan_with(op, key, backend.total_integer_ops())
+    try_build_plan_with(op, key, backend.declares_total_integer_ops())
 }
 
 /// [`build_plan`] for a backend that declares [`Backend::total_integer_ops`](crate::backend::Backend::total_integer_ops); see
