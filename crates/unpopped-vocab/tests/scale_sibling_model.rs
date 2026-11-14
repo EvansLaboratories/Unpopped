@@ -70,43 +70,33 @@ fn a_scale_sibling_makes_a_quantized_operand_a_different_cell() {
     assert_eq!(quant_k.n_operands, 3);
 }
 
-/// **The scale's DTYPE does not reach the key** — measured, not assumed.
+/// **The scale's DTYPE reaches the key from `sk8`** — the residual this file recorded at `sk5` is closed.
 ///
-/// An MX block scale (`f8e8m0`, a power-of-two exponent) and an NF4-style absmax
-/// scale (`f16`) are different dequantization arithmetic, and they produce
-/// byte-identical tokens. The per-operand sub-key carries contiguity, vector
-/// width and a divisibility bucket — **not** the operand's dtype. Only operand
-/// 0's dtype reaches the token, as the key's primary dtype field.
-///
-/// I wrote this test asserting the opposite and it failed, which is the reason
-/// it is worth having: "the sibling model closes the collision" is true for
-/// *presence* and false for *scale dtype*, and the difference is not visible
-/// from the design description.
+/// An MX block scale (`f8e8m0`, a power-of-two exponent) and an NF4-style absmax scale (`f16`) are different dequantization
+/// arithmetic. Through `sk7` they produced byte-identical tokens, because the per-operand sub-key carried contiguity, vector
+/// width and a divisibility bucket but not the operand's dtype. From `sk8` (KISS board 444, "every input section carries its
+/// dtype") each sub-key ends in its operand's dtype, so the two cells differ in the scale operand's sub-key.
 ///
 /// Measured sub-keys at 32 blocks over a 1024-element `i4` weight:
 ///
 /// ```text
-/// f8e8m0 -> co/00/v1/d16/f;co/00/v8/d16/f;co/00/v1/d16/f
-/// f16    -> co/00/v1/d16/f;co/00/v8/d16/f;co/00/v1/d16/f   (identical)
-/// f32    -> co/00/v1/d16/f;co/00/v4/d16/f;co/00/v1/d16/f   (differs — but see below)
+/// f8e8m0 -> co/00/v1/d16/f/i4;co/00/v8/d16/f/f8e8m0;co/00/v1/d16/f/i4
+/// f16    -> co/00/v1/d16/f/i4;co/00/v8/d16/f/f16;co/00/v1/d16/f/i4
 /// ```
-///
-/// `f32` differing is **not** the dtype being keyed: it is the vector-width
-/// bucket moving because a 4-byte element vectorizes differently at the same
-/// alignment. `f8e8m0` (1 byte) and `f16` (2 bytes) both saturate at `v8`, so
-/// even the width leak does not separate the pair that matters.
 #[test]
-fn the_scale_dtype_does_not_reach_the_key_sk5_item() {
+fn the_scale_dtype_reaches_the_key_from_sk8() {
     let mx = token(&[packed_i4(1024), scale_sibling(32), packed_i4(1024)]);
     let absmax = token(&[
         packed_i4(1024),
         OperandDesc::new(1, &[32], &[1], ElementKind::F16, 256),
         packed_i4(1024),
     ]);
-    assert_eq!(
+    assert_ne!(
         mx, absmax,
-        "KNOWN RESIDUAL (sk5): an e8m0 block scale and an f16 absmax scale are          different dequant math and must eventually differ. If this now FAILS,          the gap closed — update this test rather than deleting it, and say which          schema event closed it."
+        "an e8m0 block scale and an f16 absmax scale are different dequant math and must differ in the key"
     );
+    assert!(mx.contains("/f8e8m0;"), "{mx}");
+    assert!(absmax.contains("/f16;"), "{absmax}");
 }
 
 /// **Block granularity collides once the counts are large enough**, which is the
@@ -120,13 +110,13 @@ fn the_scale_dtype_does_not_reach_the_key_sk5_item() {
 /// Measured over a 1024-element `i4` weight with an `f8e8m0` scale:
 ///
 /// ```text
-/// blocks=  4 -> co/00/v4/d4/f      distinct
-/// blocks=  8 -> co/00/v8/d8/f      distinct
-/// blocks= 16 -> co/00/v8/d16/f  ┐
-/// blocks= 32 -> co/00/v8/d16/f  │
-/// blocks= 64 -> co/00/v8/d16/f  ├ all identical
-/// blocks=128 -> co/00/v8/d16/f  │
-/// blocks=256 -> co/00/v8/d16/f  ┘
+/// blocks=  4 -> co/00/v4/d4/f/f32      distinct
+/// blocks=  8 -> co/00/v8/d8/f/f32      distinct
+/// blocks= 16 -> co/00/v8/d16/f/f32  ┐
+/// blocks= 32 -> co/00/v8/d16/f/f32  │
+/// blocks= 64 -> co/00/v8/d16/f/f32  ├ all identical
+/// blocks=128 -> co/00/v8/d16/f/f32  │
+/// blocks=256 -> co/00/v8/d16/f/f32  ┘
 /// ```
 ///
 /// My first version of this test compared 32 against 8 and PASSED — the one pair

@@ -57,7 +57,7 @@ const SUBSTITUTE_TARGET: &str = "cuda:sm89";
 fn the_artifact_is_the_one_this_leg_claims() {
     for (key, want) in [
         ("\"schema\"", "kiss-structure-key-vectors-v1"),
-        ("\"token_prefix\"", "sk7"),
+        ("\"token_prefix\"", "sk8"),
         ("\"clause\"", "KISS-CLASSIFY-6.7"),
     ] {
         assert_eq!(
@@ -119,14 +119,14 @@ fn the_vendored_artifacts_are_the_revisions_this_leg_was_written_against() {
         (
             "structure_key_vectors.json",
             VECTORS,
-            38_194_usize,
-            0xa86a_7ac2_adf0_a127_u64,
+            42_772_usize,
+            0x0517_fe9e_9a02_757a_u64,
         ),
         (
             "dtype_manifest.json",
             MANIFEST,
             3_650_usize,
-            0x57e6_8358_0af1_ca00_u64,
+            0x8a87_bddb_bc4f_c100_u64,
         ),
     ] {
         assert_eq!(
@@ -179,7 +179,7 @@ fn the_vendored_artifacts_are_the_revisions_this_leg_was_written_against() {
 fn the_namespace_vocabulary_versions_are_asserted() {
     // Object-valued, so the scalar reader does not apply — match the whole
     // block byte-exactly, which is also the strictest thing available.
-    for (ns, ver) in [("cuda", 1), ("vulkan", 5)] {
+    for (ns, ver) in [("cuda", 1), ("vulkan", 6)] {
         let needle = format!("\"{ns}\": {ver}");
         assert!(
             VECTORS.contains(&needle),
@@ -364,7 +364,7 @@ fn skips_fall_only_on_unimplemented_targets() {
 #[test]
 fn decline_vectors_produce_the_same_verdict() {
     let vectors = declines();
-    assert_eq!(vectors.len(), 29, "artifact decline-vector count changed");
+    assert_eq!(vectors.len(), 38, "artifact decline-vector count changed");
 
     let mut exact = 0;
     let mut failed = Vec::new();
@@ -550,7 +550,7 @@ fn earn_skip(v: &Positive) -> Result<(), String> {
 #[test]
 fn the_skip_control_can_fail() {
     // The substitute must itself be implemented.
-    let real = "sk7|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f|-";
+    let real = "sk8|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f/f32;co/00/v4/d16/f/f32|-";
     assert!(
         StructureKey::parse_token(real).is_ok(),
         "control target `{SUBSTITUTE_TARGET}` must be implemented, or every skip is free"
@@ -745,7 +745,7 @@ fn the_artifact_scanner_actually_reads_the_vectors() {
     let pos = positives();
     let dec = declines();
     assert_eq!(pos.len(), 36);
-    assert_eq!(dec.len(), 29);
+    assert_eq!(dec.len(), 38);
 
     // Namespaces are tagged and split the way the artifact says.
     let vulkan = pos.iter().filter(|p| p.namespace == "vulkan").count();
@@ -756,7 +756,7 @@ fn the_artifact_scanner_actually_reads_the_vectors() {
     // agree with the token's own field 3, or the skip axis is being read from a
     // label rather than from the data.
     for p in &pos {
-        assert!(p.token.starts_with("sk7|"), "{}: token malformed", p.name);
+        assert!(p.token.starts_with("sk8|"), "{}: token malformed", p.name);
         let field3 = p.token.split('|').nth(3).expect("target field");
         assert_eq!(field3, p.target, "{}: tag disagrees with token", p.name);
         assert!(
@@ -768,8 +768,8 @@ fn the_artifact_scanner_actually_reads_the_vectors() {
 
     // The payload-carrying declines are present and parsed as numbers.
     let with_payload: Vec<_> = dec.iter().filter(|d| d.got.is_some()).collect();
-    assert_eq!(with_payload.len(), 5, "expected five payload declines");
+    assert_eq!(with_payload.len(), 6, "expected six payload declines");
     let mut versions: Vec<i64> = with_payload.iter().filter_map(|d| d.got).collect();
     versions.sort_unstable();
-    assert_eq!(versions, [3, 5, 6, 9, 17]);
+    assert_eq!(versions, [3, 5, 6, 7, 9, 17]);
 }

@@ -45,7 +45,7 @@ fn a_trailing_unit_axis_is_still_the_innermost_axis() {
     let x = od(&[4, 1], &[1, 1]);
     assert_eq!(
         tok(OpCategory::UnaryElementwise, &[x, x]),
-        "sk7|ew1|f32|cuda:sm89|ix32|warp|r2|co/00/v1/da/f;co/00/v1/da/f|-"
+        "sk8|ew1|f32|cuda:sm89|ix32|warp|r2|co/00/v1/da/f/f32;co/00/v1/da/f/f32|-"
     );
 }
 
@@ -57,7 +57,7 @@ fn a_zero_extent_innermost_axis_is_da_v1() {
     let x = od(&[8, 0], &[1, 1]);
     assert_eq!(
         tok(OpCategory::UnaryElementwise, &[x, x]),
-        "sk7|ew1|f32|cuda:sm89|ix32|warp|r2|co/00/v1/da/f;co/00/v1/da/f|-"
+        "sk8|ew1|f32|cuda:sm89|ix32|warp|r2|co/00/v1/da/f/f32;co/00/v1/da/f/f32|-"
     );
 }
 
@@ -92,7 +92,7 @@ fn same_rank_operands_are_unchanged() {
     let a = od(&[128, 256], &[256, 1]);
     assert_eq!(
         tok(OpCategory::BinaryElementwise, &[a, a, a]),
-        "sk7|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f;co/00/v4/d16/f;co/00/v4/d16/f|-"
+        "sk8|ew2|f32|cuda:sm89|ix32|grid|r2|co/00/v4/d16/f/f32;co/00/v4/d16/f/f32;co/00/v4/d16/f/f32|-"
     );
 }
 
@@ -103,7 +103,7 @@ fn a_leading_unit_axis_does_not_change_the_innermost() {
     let x = od(&[1, 8], &[8, 1]);
     assert_eq!(
         tok(OpCategory::UnaryElementwise, &[x, x]),
-        "sk7|ew1|f32|cuda:sm89|ix32|warp|r2|co/00/v4/d8/f;co/00/v4/d8/f|-"
+        "sk8|ew1|f32|cuda:sm89|ix32|warp|r2|co/00/v4/d8/f/f32;co/00/v4/d8/f/f32|-"
     );
 }
 
@@ -115,8 +115,8 @@ fn the_mask_is_over_the_frame_but_the_layout_is_own_axes() {
     let row = od(&[256], &[1]);
     let full = od(&[128, 256], &[256, 1]);
     let t = tok(OpCategory::BinaryElementwise, &[row, full, full]);
-    assert_eq!(sub(&t, 0), "co/01/v4/d16/f", "token was {t}");
-    assert_eq!(sub(&t, 1), "co/00/v4/d16/f", "token was {t}");
+    assert_eq!(sub(&t, 0), "co/01/v4/d16/f/f32", "token was {t}");
+    assert_eq!(sub(&t, 1), "co/00/v4/d16/f/f32", "token was {t}");
 }
 
 /// KISS#519 golden. `[1, 256]` with stride `[0, 1]`: its own extent-1 axis 0 is
@@ -127,7 +127,7 @@ fn an_own_unit_axis_of_stride_zero_sets_its_bit_when_the_frame_is_wider() {
     let row = od(&[1, 256], &[0, 1]);
     let full = od(&[128, 256], &[256, 1]);
     let t = tok(OpCategory::BinaryElementwise, &[row, full, full]);
-    assert_eq!(sub(&t, 0), "co/01/v4/d16/f", "token was {t}");
+    assert_eq!(sub(&t, 0), "co/01/v4/d16/f/f32", "token was {t}");
 }
 
 /// KISS#519 goldens, the case that forced the amendment: a rank-3 operand in a
@@ -140,8 +140,8 @@ fn dense_and_strided_rank_deficient_operands_no_longer_collide() {
     let strided = od(&[4, 16, 64], &[2048, 128, 2]);
     let td = tok(OpCategory::BinaryElementwise, &[frame, dense, frame]);
     let ts = tok(OpCategory::BinaryElementwise, &[frame, strided, frame]);
-    assert_eq!(sub(&td, 1), "co/01/v4/d16/f", "token was {td}");
-    assert_eq!(sub(&ts, 1), "st/01/v1/d16/f", "token was {ts}");
+    assert_eq!(sub(&td, 1), "co/01/v4/d16/f/f32", "token was {td}");
+    assert_eq!(sub(&ts, 1), "st/01/v1/d16/f/f32", "token was {ts}");
 }
 
 /// The operand sub-key at position `i` of a token.

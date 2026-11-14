@@ -682,6 +682,7 @@ mod rowreduce_role_validate {
             VecWidth::Scalar,
             DivBucket::Any,
             flipped,
+            ElementKind::F32,
         )
     }
 
