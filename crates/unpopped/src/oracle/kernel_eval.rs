@@ -20,11 +20,12 @@
 //!   expression that reads a non-compute local) is [`KernelTrap::Unsupported`], never a guess.
 
 use super::kernel_mem::{AccessKind, ThreadCtx};
+pub use super::kernel_trap::KernelTrap;
 use super::{
     Eval, TypedBuffer, Val, eval, int_val, panic_reduced, raw_to_i128, read_elem, store_val,
 };
 use crate::ir::{BinaryOp, Saturation, ScalarExpr};
-use crate::kernel::{AtomicOp, Block, KernelError, KernelFn, ParamKind, Place, Stmt, check_kernel};
+use crate::kernel::{AtomicOp, Block, KernelFn, ParamKind, Place, Stmt, check_kernel};
 use crate::types::{self, Ty, map_children};
 use unpopped_vocab::ElementKind;
 
@@ -46,72 +47,6 @@ pub enum KernelArg {
     Int(i128),
     /// A floating-point scalar parameter.
     Float(f64),
-}
-
-/// Why a run stopped without finishing.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum KernelTrap {
-    /// [`check_kernel`] refuses the kernel; the interpreter never runs a malformed one.
-    Malformed(KernelError),
-    /// The arguments do not match the parameters.
-    ArgMismatch(&'static str),
-    /// A `For` with `step == 0`.
-    ZeroStep,
-    /// More than [`STEP_LIMIT`] statements.
-    StepLimit,
-    /// A coordinate outside its buffer's logical shape.
-    OutOfBounds {
-        /// The buffer parameter index.
-        buffer: u32,
-    },
-    /// A construct this interpreter does not evaluate (named), by design not guessed at.
-    Unsupported(&'static str),
-    /// A `Place::Peer` names a device rank outside the launch.
-    DeviceRankOutOfRange {
-        /// The rank the kernel computed.
-        rank: i128,
-    },
-    /// A `Place::ClusterPeer` names a block rank outside the cluster.
-    ClusterRankOutOfRange {
-        /// The rank the kernel computed.
-        rank: i128,
-    },
-    /// An index outside a launched kernel's allocation (never wrapped, never silent).
-    AllocOutOfBounds {
-        /// The allocation index.
-        alloc: u32,
-    },
-    /// A block ran past the step limit after an acquire-class atomic while later blocks had not yet run. The
-    /// oracle runs blocks in order, so a wait on a later block's write can never be satisfied: this is that wait, named,
-    /// not a hang (`docs/question-u4-memory-model.md`, sub-question 1; the `Device` barrier model of S6 would run it).
-    CrossBlockWait,
-    /// A read of a `Shared` element no thread has stored. Shared memory is not zero-filled: a
-    /// zero would hide the missing-barrier bug the memory space exists to catch.
-    UninitializedShared {
-        /// The allocation index.
-        alloc: u32,
-    },
-    /// A read of a `Private` element this thread has not stored.
-    UninitializedPrivate {
-        /// The allocation index.
-        alloc: u32,
-    },
-    /// Threads of one barrier's scope did not all reach the same barrier: one finished while
-    /// peers waited, or they waited at different barriers and none could be released.
-    BarrierMismatch,
-    /// Two threads touched one element with no ordering between them and at least one wrote it:
-    /// a store racing a store, or a read of another thread's store.
-    DataRace,
-    /// A thread touched a `Shared` element that one of its own `CopyAsync` copies has not yet landed on (read it,
-    /// stored it, or copied onto it again before the `AsyncWait` that covers the copy). Hardware gives the old or
-    /// the new value; a reference should not.
-    AsyncRace {
-        /// The allocation index.
-        alloc: u32,
-    },
-    /// A thread finished with `CopyAsync` copies it never waited for (committed or not).
-    AsyncUnwaited,
 }
 
 pub(super) enum Flow {
