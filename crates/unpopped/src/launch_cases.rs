@@ -38,7 +38,7 @@
 //! }
 //! ```
 
-use crate::ir::{Expr, OpDef, ScalarExpr, input};
+use crate::ir::{Expr, OpDef, ScalarExpr, UnaryOp, input};
 use crate::kernel::KernelFn;
 use crate::kernel_lift::lift_elementwise_opdef_launched;
 use crate::oracle::TypedBuffer;
@@ -128,19 +128,21 @@ fn bx(e: ScalarExpr) -> Box<ScalarExpr> {
     Box::new(e)
 }
 
+fn abs(e: &ScalarExpr) -> ScalarExpr {
+    ScalarExpr::Unary(UnaryOp::Abs, bx(e.clone()))
+}
+
 /// The corpus, in a fixed order. Each call rebuilds it (the oracle runs once per case; the cases are small).
 #[must_use]
 pub fn launch_cases() -> Vec<LaunchCase> {
     let (a, b) = (input(0).0, input(1).0);
     vec![
-        // `a * b + a`: the oracle rounds once, per-operation C twice, so this case carries 3 ULPs.
+        // `|a| * |b| + |a|`: the oracle rounds once, per-operation C three times, so this case carries 3 ULPs. `Abs` keeps
+        // both addends positive: a cancelling sum has an unbounded ULP error (the data, not the emitter, would be measured).
         case(
             "fma_shape",
             ElementKind::F32,
-            ScalarExpr::Add(
-                bx(ScalarExpr::Mul(bx(a.clone()), bx(b.clone()))),
-                bx(a.clone()),
-            ),
+            ScalarExpr::Add(bx(ScalarExpr::Mul(bx(abs(&a)), bx(abs(&b)))), bx(abs(&a))),
             &[5, 7],
             (4, 2),
             3,

@@ -11,8 +11,11 @@ use unpopped_cpu_c::CpuC;
 
 #[path = "support/cc.rs"]
 mod cc;
+// The shared compile-and-run driver; this file uses the part that runs a launch.
+#[allow(dead_code)]
 #[path = "support/kernel_run.rs"]
 mod kernel_run;
+#[allow(dead_code)]
 #[path = "support/launch_run.rs"]
 mod launch_run;
 
