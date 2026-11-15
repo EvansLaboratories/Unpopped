@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.47.2` — docs: ROADMAP U20 sized for the lower_kernel launch-case harness
+
+Sizing of the launch-case conformance corpus and the Vulkan host glue; no code change.
+
+— lane: unpopped
+
+---
+
 ## `0.47.1` — docs: ROADMAP U36 deferred with two triggers
 
 U36 (asymmetric im2col padding) is deferred per PM ruling; it starts when a consumer needs it or with the next breaking release. No code change.
