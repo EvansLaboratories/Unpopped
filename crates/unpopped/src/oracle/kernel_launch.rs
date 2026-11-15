@@ -141,6 +141,7 @@ fn launch_checked(
             "one argument per parameter, for every device of the launch",
         ));
     }
+    let launch = resolve_launch(k, &args[..np], launch)?;
     let sg = pick_subgroup(&launch, subgroup)?;
     let lens = k
         .allocs
@@ -340,6 +341,34 @@ fn grid_release(stops: &[Option<BlockStop>], clusters: &[u32]) -> Result<Release
         }
     }
     Ok(Released::Clusters(go))
+}
+
+/// The launch with its grid made concrete: a grid read from scalar arguments (`LaunchShape::grid_dims`, ROADMAP U22) is
+/// resolved from `args` (device 0's, the same on every device), so the rest of the run sees a static grid.
+fn resolve_launch(
+    k: &KernelFn,
+    args: &[KernelArg],
+    mut launch: LaunchShape,
+) -> Result<LaunchShape, KernelTrap> {
+    if launch.grid_dims.is_none() {
+        return Ok(launch);
+    }
+    let value = |local: u32| {
+        let at = k
+            .params
+            .iter()
+            .position(|p| matches!(p.kind, ParamKind::Scalar { local: l, .. } if l == local))?;
+        match args.get(at)? {
+            KernelArg::Int(v) => Some(*v),
+            _ => None,
+        }
+    };
+    let grid = launch.resolve_grid(value).ok_or(KernelTrap::ArgMismatch(
+        "a grid extent needs a positive integer argument that fits a u32",
+    ))?;
+    launch.grid = grid;
+    launch.grid_dims = None;
+    Ok(launch)
 }
 
 fn pick_subgroup(launch: &LaunchShape, want: Option<u32>) -> Result<u32, KernelTrap> {
