@@ -15,12 +15,12 @@ use unpopped_cpu_c::CpuC;
 )]
 #[path = "support/attention.rs"]
 mod attention;
-// The kernels are written once, in the oracle crate's support file, so the two tests cannot drift.
+// A copy of the oracle crate's support file of the same name: change both.
 #[expect(
     dead_code,
     reason = "the host reference and loss belong to the oracle test"
 )]
-#[path = "../../unpopped/tests/support/attention_backward.rs"]
+#[path = "support/attention_backward.rs"]
 mod attention_backward;
 #[path = "support/cc.rs"]
 mod cc;
