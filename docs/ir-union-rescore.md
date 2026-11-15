@@ -1,6 +1,79 @@
 # The IR union, re-scored: where the seven surveys stand now
 
-Status: **a dated measurement**, taken at `origin/main` `a634b09` (Unpopped 0.42.14, 2026-11-03; 0.42.15, the `Cluster` scope, is in review and is counted here only where stated). Docs only; no code changed. Asked by CireSnave (2026-11-03: "Are we getting closer to a proper union of the kernel languages in our IR?"), approved by the PM.
+## Second measurement (2026-11-15, `origin/main` `78c7d38e`, Unpopped 0.47.3)
+
+Asked by CireSnave via the PM on 2026-11-15 ("how close are we to the full union"). **A dated measurement; docs only, no code changed.** The first measurement (2026-11-03, `a634b09`, 0.42.14) is kept below, unedited, as the baseline.
+
+**Union coverage index (Yes + half Partial, over applicable rows): 35% -> 50%** (Yes 93 -> 149, Partial 168 -> 208, No 246 -> 150, n/a 12; of the same 519 rows the first measurement counted).
+
+| Survey | Rows | Yes | Partial | No | n/a | Rows changed |
+|---|---|---|---|---|---|---|
+| CUDA C++ | 95 | 18 -> **27** | 30 -> **40** | 47 -> **28** | 0 | 24 |
+| CuTe / CuTe DSL | 66 | 7 -> **10** | 29 -> **35** | 29 -> **20** | 1 | 9 |
+| CUTLASS | 96 | 10 -> **25** | 23 -> **40** | 61 -> **29** | 2 | 37 |
+| Mojo / MAX | 73 | 19 -> **26** | 27 -> **27** | 24 -> **17** | 3 | 11 |
+| Slang | 61 | 17 -> **22** | 19 -> **21** | 22 -> **15** | 3 | 11 |
+| ThunderKittens | 58 | 8 -> **15** | 19 -> **24** | 29 -> **17** | 2 | 14 |
+| Triton | 70 | 14 -> **24** | 21 -> **21** | 34 -> **24** | 1 | 16 |
+| **All seven** | 519 | 93 -> **149** | 168 -> **208** | 246 -> **150** | 12 | 122 |
+
+The "before" column is the first measurement's number, except where this pass found the first one wrong (below). Per-row evidence for every changed row is in `docs/ir-union-evidence/rescore-2026-11-15/<survey>.md`; each carries the code symbol and the test that runs it.
+
+### What this number does NOT mean
+
+- **It is not "an emitter exists".** "Yes" means the IR can express the capability and the **oracle runs it**. The only emitter in this repository is the serial C reference (`unpopped-cpu-c`). Baracuda's, fishstringer's and openclownfish's emitters spell some of it and not the rest; a `Yes` here is not a promise that any vendor's source comes out. `unpopped::launch_cases` (0.47.3) is the first corpus those emitters can all run against the oracle, and it holds four elementwise cases.
+- **It is not performance and not a measurement of generated code.** No row was scored on the speed of anything.
+- **About 20 of the 37 CUTLASS moves, and some CUDA ones, rest on kernel-layer conformance kernels** (split-K, grouped GEMM, aux outputs, the implicit-GEMM convolution family, attention), tagged `(kernel layer)` in the evidence files. They show the kernel IR can express the kernel, not that the plan layer has a node for it. If the index is read plan-layer-only, those rows revert; rolling back only the twelve CUTLASS rows the agent tagged gives **about 48%**, so the real floor is a little lower still. This note does not say which reading CireSnave means.
+- **Some `Yes` rows are compositions**, not a node of their own (Slang product/CountBits as `ReduceWith`/`Reduce(Sum)`: no test uses a literal multiply combine). And a few rest on emitter-set metadata (`KernelInterface::cooperative`, CUDA row 12) that the kernel itself does not determine.
+- **Equal weight per row.** A `Partial` counts as half a `Yes`; rows are not weighted by how much work a consumer needs. Eight rows that need a descriptor operand kind count the same as one that needs a flag.
+
+### What was NOT re-verified
+
+- **Nothing was run.** No `cargo` build or test was executed for this measurement (read-only, and the box's C compiler setup hangs). Every status rests on reading a code symbol and the name of the test that exercises it. A lead check confirmed that all 42 test files the evidence cites, and the 98 test or function names it cites, exist in the tree at `78c7d38e` (a name present is not a proof the test asserts the claim).
+- **Rows that were already `Yes` were not re-checked for a downward move** beyond the tests the first measurement cited; no row was found to have moved down, and none was looked for exhaustively.
+- **Rows the 89 commits since `a634b09` cannot touch** (host-side concerns, build tooling) were skipped, by reason class, in each survey file.
+- **Several moves are judgement calls**: CuTe 45 (DSMEM store plus global-to-shared element copies counted as `Partial` for "bulk copies"), CUDA 12 and 14 (emitter-set interface fields), ThunderKittens 15 (warp-level MMA to `Yes`; transposes are an atom layout, not a flag), Slang 18 and 23, CUTLASS 7, and Triton 70 (the agent said `Yes`; this note lowered it to `Partial`, because `tl.target_info` has no IR node).
+
+### Where the first measurement was wrong
+
+The agents found rows the first measurement under-scored (its pieces predate `a634b09`), so part of the jump is correction, not twelve days of work: **CUDA 49, 54, 68**; **CUTLASS 7**; **Slang 3, 23, 37**; **Mojo 18**; **ThunderKittens 45** (cluster launch, already in the tree) and 5 (should have been `Partial`). Rows where the agents say the first score may have been **too high** (not changed): CuTe 1, 2, 4, 5 (the `Layout` is a vocab value whose only IR consumer is `MmaAtom`), Mojo 42 and 45.
+
+### Row counts: 13 rows the first measurement did not count
+
+The first measurement numbered 519 rows. Its generator skipped every survey row whose status cell carried a parenthetical (`Yes (3-pass)`, `No (UNVERIFIED API)`, `No (...)`, `--`, `n/a (frontend)`). By file order the surveys hold **532** rows. This pass keeps the 519 so the two numbers are comparable, and states the 13 here instead: ThunderKittens 2 (tril/triu, `Yes (tensor level)`; cross-device signal-wait, **No -> Yes**: `Scope::System` barrier, fence and atomic, `tests/kernel_device_peer.rs`), Mojo 3 (`Yes (2 reserved)`, `n/a (frontend)`, `Yes (single axis, inner only v1)`), Triton 3 (all `Yes`-like), Slang 5 (cp.async/TMA/cluster **No -> Partial**; denormal handling `Partial`; generics, autodiff limits and ray tracing unchanged `No`). Scoring all 532 (the 13 at the status the agents gave them, the three Triton ones taken as `Yes`: Yes 156, Partial 210, No 153, n/a 13) gives an index of about 50% as well. Row numbers in the evidence files follow the survey's file order for CUDA, CuTe, CUTLASS, Mojo and ThunderKittens, and the first measurement's numbering for Triton and Slang; each file says which.
+
+### The biggest remaining groups (the 150 `No` rows)
+
+The agents listed what each remaining `No` row would take; this regroups them by theme across the seven surveys. Counts are rows, so one capability can appear several times, and the regrouping is mine and approximate (the sum is within a couple of rows of 150):
+
+1. **Bulk async movement, `mbarrier`, named barriers, TMA and tensor-map descriptors, block-pointer and descriptor memory models: about 32 rows.** ROADMAP U8c and U4 S6b-2/S7; scheduled, not declined; trigger: Baracuda's sm_90 emitter asks, or a descriptor operand kind lands.
+2. **Scheduling, roles, launch policy and compiler facts** (persistent and stream-K schedulers, warp specialization and `setmaxnreg`, PDL, a schedule language, `constexpr`/autotune inputs): **about 32 rows.** Mostly P9 (parked) and U17; many are plan-level hints, not IR statements.
+3. **Warpgroup, `tcgen05`, tensor memory and `ldmatrix`/`stmatrix` matrix units: about 24 rows.** U7 later slices and U8b (needs a second lane-table source; held with the `mma.sp` hold).
+4. **Tile and tensor value types, operand packing and scale layouts, contraction generalisation: about 19 rows.** Includes CUTLASS's five plan-layer contraction rows, which are D2 (held on Fuel and KISS).
+5. **Cache and access hints, hints, and debug effects** (`CopyAsync` cache and zero-fill forms, unroll, `printf`/`assert`, RNG, global scratch): **about 19 rows.** U13, U18.
+6. **Slang's resource and pipeline types** (textures and samplers, pointer values, spec constants, autodiff, byte-offset load/store): **about 11 rows.** U9c, U21, U23.
+7. **Wide dtypes and numerics modes** (`I128`/`F128`, `F8E3M4`, `Fp8FastAccum`, NaN/Inf mode, bit-count nodes): **about 7 rows.**
+8. **Host-side or out of scope** (multi-kernel graphs, copy-engine runtimes, target tables): about 5 rows.
+
+### Unblocked next rows, by size
+
+All are ROADMAP rows owned by Unpopped that are scheduled, not held; none is started. Breaking ones batch into one release so emitters break once (the U36 ruling).
+
+- **S:** U24 (`multimem` refusals as gaps; one PR when a consumer asks, low rank).
+- **S-M:** U18 (unroll hint on `Stmt::For`; BREAKING, batches with U13 and U36).
+- **M:** U13 (`CopyAsync` predicated, zero-fill and cache-hint forms; BREAKING field), U15 (8- and 16-lane packed values; additive if new forms), U17 (programmatic dependent launch), U22 (launch grid as an expression of parameters; additive beside the static form), U23 (struct-typed scalar parameters).
+- **L:** U21 (texture and surface memory; waits on a consumer under the 2026-11-02 ruling).
+- **XL:** U19 (C-family kernel-body frontend).
+- **Open, trigger-gated:** U7 later slices (`wgmma`/`tcgen05`), U8b, U8c, U9c (trigger met 2026-11-12 by Baracuda's CUDA frontend).
+- **Deferred by the PM:** U36 (asymmetric im2col padding), until a consumer needs it or the next release that breaks anyway.
+
+Held and not startable here: A5 backward attention, stochastic rounding, `Fp8FastAccum`, accumulate-into-C and a precision recipe list (CireSnave, boards 443/444), I1 and I5.
+
+## First measurement (2026-11-03, `a634b09`, Unpopped 0.42.14)
+
+Kept unedited below as the baseline; its totals are superseded by the table above. One correction to it is stated above ("Where the first measurement was wrong").
+
+Status: **a dated measurement (the first of two)**, taken at `origin/main` `a634b09` (Unpopped 0.42.14, 2026-11-03; 0.42.15, the `Cluster` scope, is in review and is counted here only where stated). Docs only; no code changed. Asked by CireSnave (2026-11-03: "Are we getting closer to a proper union of the kernel languages in our IR?"), approved by the PM.
 
 ## What was measured, and what was not
 
