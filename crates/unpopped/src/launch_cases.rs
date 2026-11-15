@@ -147,14 +147,13 @@ pub fn launch_cases() -> Vec<LaunchCase> {
             (4, 2),
             3,
         ),
-        // One F32 operation: correctly rounded in the oracle, so 0 ULPs (a non-IEEE device divide fails here).
+        // ONE F32 operation: correctly rounded in the oracle, so 0 ULPs (a non-IEEE device divide fails here). It must stay one
+        // operation: `b / (a + 11)` was tried first and CI showed 1-ULP differences, because the oracle keeps `a + 11` at f64
+        // while C rounds it to f32 first. Zero denominators are in the data: inf and the canonical NaN agree on both sides.
         case(
             "div",
             ElementKind::F32,
-            ScalarExpr::Div(
-                bx(b.clone()),
-                bx(ScalarExpr::Add(bx(a.clone()), bx(ScalarExpr::Const(11.0)))),
-            ),
+            ScalarExpr::Div(bx(a.clone()), bx(b.clone())),
             &[6, 5],
             (8, 2),
             0,
