@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.47.1` — docs: ROADMAP U36 deferred with two triggers
+
+U36 (asymmetric im2col padding) is deferred per PM ruling; it starts when a consumer needs it or with the next breaking release. No code change.
+
+— lane: unpopped
+
+---
+
 ## `0.47.0` — Breaking: re-vendor KISS 0.18.0, `structure_key` schema `sk8`: each operand sub-key carries its dtype, a quantized contraction keys its block length (unpopped-vocab 0.47.0)
 
 The vendored KISS corpus moves to 0.18.0 (`11407f7`, boards 430, 443, 444). The key changes: `STRUCTURE_KEY_VERSION` 7 to 8 (every token begins `sk8|`; an `sk7` token declines as `UnsupportedSchemaVersion { version: 7 }`); each operand sub-key ends in the operand's own dtype (`co/00/v4/d16/f/f32`, a quant form after it as `/dl` or `/dc`) and the first sub-key's dtype must equal the cell's primary dtype; a quantized contraction field ends `/q<scale dtype>/g16` or `/g32`, the weight's block length. Two cells that differed only in an operand's dtype (an `f8e8m0` and an `f16` block scale, which the corpus kept as a known residual since `sk5`) now key differently.
