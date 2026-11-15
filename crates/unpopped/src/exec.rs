@@ -129,6 +129,58 @@ pub struct LaunchShape {
     /// `System`-scope barrier, atomic or fence orders accesses across devices (ROADMAP U12 slice 2, since 0.44.39).
     #[serde(default = "one_device")]
     pub devices: u32,
+    /// A grid derived from scalar parameters (ROADMAP U22). `Some`: these three extents are the grid and `grid` is **not
+    /// meaningful** (it is `[1, 1, 1]`); a consumer reads the grid through [`LaunchShape::resolve_grid`] with the launch's
+    /// scalar arguments. `None` (the default): `grid` is the grid.
+    #[serde(default)]
+    pub grid_dims: Option<[GridDim; 3]>,
+}
+
+/// One extent of a launch grid that is not a number fixed in the kernel (ROADMAP U22).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum GridDim {
+    /// A fixed number of blocks (at least 1).
+    Static(u32),
+    /// The value of scalar parameter local `.0` (an integer parameter, at least 1 at launch).
+    Param(u32),
+    /// `ceil(param / by)`: the blocks that cover `param` elements `by` at a time (`by` at least 1; the value of the
+    /// parameter at least 1 at launch).
+    CeilDiv {
+        /// The scalar parameter local holding the element count.
+        param: u32,
+        /// Elements per block along this axis.
+        by: u32,
+    },
+}
+
+impl GridDim {
+    /// The scalar parameter local this extent reads, if any.
+    #[must_use]
+    pub const fn param(self) -> Option<u32> {
+        match self {
+            Self::Static(_) => None,
+            Self::Param(p) | Self::CeilDiv { param: p, .. } => Some(p),
+        }
+    }
+
+    /// The number of blocks, given the value of each scalar parameter local (`None` if it has none). `None` when a value is
+    /// missing, is below 1, or the result does not fit a `u32`.
+    #[must_use]
+    pub fn resolve(self, mut value: impl FnMut(u32) -> Option<i128>) -> Option<u32> {
+        let n = match self {
+            Self::Static(n) => i128::from(n),
+            Self::Param(p) => value(p)?,
+            Self::CeilDiv { param, by } => {
+                if by == 0 {
+                    return None;
+                }
+                let v = value(param)?;
+                (v + i128::from(by) - 1).div_euclid(i128::from(by)) * i128::from(v >= 1)
+            }
+        };
+        u32::try_from(n).ok().filter(|n| *n >= 1)
+    }
 }
 
 const fn one_device() -> u32 {
@@ -145,7 +197,31 @@ impl LaunchShape {
             subgroup: None,
             cluster: None,
             devices: 1,
+            grid_dims: None,
         }
+    }
+
+    /// The same launch with a grid derived from scalar parameters (ROADMAP U22). `grid` becomes `[1, 1, 1]` and is not
+    /// meaningful; read the grid through [`LaunchShape::resolve_grid`].
+    #[must_use]
+    pub const fn with_grid_dims(mut self, dims: [GridDim; 3]) -> Self {
+        self.grid = [1, 1, 1];
+        self.grid_dims = Some(dims);
+        self
+    }
+
+    /// The grid of this launch given the value of each scalar parameter local: `grid` itself when it is static, else each
+    /// [`GridDim`] resolved. `None` when a parameter has no value, a grid extent resolves to less than 1, or overflows.
+    #[must_use]
+    pub fn resolve_grid(&self, mut value: impl FnMut(u32) -> Option<i128>) -> Option<[u32; 3]> {
+        let Some(d) = self.grid_dims else {
+            return Some(self.grid);
+        };
+        Some([
+            d[0].resolve(&mut value)?,
+            d[1].resolve(&mut value)?,
+            d[2].resolve(&mut value)?,
+        ])
     }
 
     /// The same launch with clusters of `dims` blocks (the grid must be a multiple of it on every axis).

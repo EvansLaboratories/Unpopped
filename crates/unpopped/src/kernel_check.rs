@@ -9,7 +9,7 @@ mod mma;
 
 use unpopped_vocab::ElementKind;
 
-use crate::exec::{Extent, MemorySpace, Scope as ExecScope};
+use crate::exec::{Extent, GridDim, MemorySpace, Scope as ExecScope};
 use crate::ir::ScalarExpr;
 use crate::kernel::{
     AtomicOp, BarrierKind, Block, BufferRole, CallArg, KernelError, KernelFn, MemoryOrder, Param,
@@ -109,6 +109,27 @@ fn check_launch(k: &KernelFn) -> Result<(), KernelError> {
         .is_none_or(|c| (0..3).all(|a| c[a] >= 1 && l.grid[a] % c[a] == 0));
     if l.block.contains(&0) || l.grid.contains(&0) || !sg_ok || !cluster_ok {
         return Err(KernelError::BadLaunch);
+    }
+    if let Some(dims) = &l.grid_dims {
+        // a grid read from scalar arguments: each extent names an integer scalar parameter, a divisor is positive, and a
+        // cluster cannot be checked against a grid that is not known until launch
+        let ok = l.cluster.is_none()
+            && dims.iter().all(|d| {
+                let by_ok = match *d {
+                    GridDim::Static(n) => n >= 1,
+                    GridDim::CeilDiv { by, .. } => by >= 1,
+                    _ => false,
+                };
+                let param_ok = d.param().is_none_or(|p| {
+                    k.params.iter().any(|q| {
+                        matches!(q.kind, ParamKind::Scalar { ty, local } if local == p && types::int_range(ty).is_some())
+                    })
+                });
+                (by_ok || matches!(d, GridDim::Param(_))) && param_ok
+            });
+        if !ok {
+            return Err(KernelError::BadLaunch);
+        }
     }
     Ok(())
 }

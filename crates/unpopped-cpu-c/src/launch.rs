@@ -72,6 +72,18 @@ pub(crate) fn admit_launch(k: &KernelFn) -> Result<(), LowerError> {
         admit_alloc(a)?;
     }
     let barriers = has_barrier_block(&k.body.0);
+    if info.grid_dims.is_some()
+        && (info.devices > 1
+            || device_segments(&k.body.0).len() > 1
+            || reaches_peer(&k.body.0)
+            || k.allocs
+                .iter()
+                .any(|a| matches!(a.extent, Extent::Param(_))))
+    {
+        return Err(refuse(
+            "a grid read from scalar arguments together with a Device barrier, a peer access, several devices or a dynamic extent",
+        ));
+    }
     if info.devices > 1
         && k.params
             .iter()
@@ -223,6 +235,9 @@ pub(crate) fn exec_param(info: LaunchInfo, id: ExecId) -> Result<Spelling, Lower
         ExecId::ThreadIdx(a @ 0..=2) => format!("ti{a}"),
         ExecId::BlockIdx(a @ 0..=2) => format!("bi{a}"),
         ExecId::BlockDim(a @ 0..=2) => format!("{}u", info.block[a as usize]),
+        ExecId::GridDim(0..=2) if info.grid_dims.is_some() => {
+            return Err(refuse("gridDim in a callee of a grid read from arguments"));
+        }
         ExecId::GridDim(a @ 0..=2) => format!("{}u", info.grid[a as usize]),
         other => return Err(refuse(format!("the execution id {other:?}"))),
     };
@@ -238,6 +253,9 @@ pub(crate) fn exec_c(info: LaunchInfo, id: ExecId) -> Result<String, LowerError>
         ExecId::ThreadIdx(2) => format!("((unsigned int)(t / {}))", bx * by),
         ExecId::BlockIdx(a @ 0..=2) => format!("((unsigned int)blk{a})"),
         ExecId::BlockDim(a @ 0..=2) => format!("{}u", info.block[a as usize]),
+        ExecId::GridDim(a @ 0..=2) if info.grid_dims.is_some() => {
+            format!("((unsigned int)gd{a})")
+        }
         ExecId::GridDim(a @ 0..=2) => format!("{}u", info.grid[a as usize]),
         ExecId::DeviceRank => "((unsigned int)dev)".to_string(),
         ExecId::DeviceCount => format!("{}u", info.devices),
@@ -271,6 +289,20 @@ impl Emitter<'_> {
                 ));
             }
         }
+        let bound = |a: usize| {
+            if info.grid_dims.is_some() {
+                format!("gd{a}")
+            } else {
+                info.grid[a].to_string()
+            }
+        };
+        if let Some(dims) = info.grid_dims {
+            for (a, d) in dims.iter().enumerate() {
+                let expr = self.grid_dim_expr(*d)?;
+                self.line(&format!("long long gd{a} = {expr};"));
+                self.line(&format!("if (gd{a} < 1 || gd{a} > 4294967295LL) return 3;"));
+            }
+        }
         for d in ["z", "y", "x"] {
             let a = match d {
                 "x" => 0,
@@ -279,7 +311,7 @@ impl Emitter<'_> {
             };
             self.line(&format!(
                 "for (long long blk{a} = 0; blk{a} < {}; ++blk{a}) {{",
-                info.grid[a]
+                bound(a)
             ));
             self.depth += 1;
         }
@@ -291,6 +323,28 @@ impl Emitter<'_> {
             self.line("}");
         }
         Ok(())
+    }
+
+    /// The C expression (`long long`) of one extent of a grid read from scalar arguments; a value below 1 is checked by the
+    /// caller, so a `CeilDiv` of a non-positive argument is left below 1 rather than rounded up to a block.
+    fn grid_dim_expr(&self, d: unpopped::exec::GridDim) -> Result<String, LowerError> {
+        use unpopped::exec::GridDim;
+        let param = |local: u32| -> Result<usize, LowerError> {
+            self.k
+                .params
+                .iter()
+                .position(|p| matches!(p.kind, ParamKind::Scalar { local: l, .. } if l == local))
+                .ok_or_else(|| refuse("a grid extent names no scalar parameter"))
+        };
+        Ok(match d {
+            GridDim::Static(n) => format!("{n}LL"),
+            GridDim::Param(p) => format!("(long long)p{}", param(p)?),
+            GridDim::CeilDiv { param: p, by } => {
+                let i = param(p)?;
+                format!("((long long)p{i} >= 1 ? ((long long)p{i} + {by}LL - 1) / {by}LL : 0LL)")
+            }
+            _ => return Err(refuse("a grid extent form this emitter does not spell")),
+        })
     }
 
     /// A kernel with `Device` barriers: one pass over all the blocks per phase. Every block's locals and `Shared`

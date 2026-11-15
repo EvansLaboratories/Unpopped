@@ -141,6 +141,8 @@ pub(crate) struct ModuleCtx<'a> {
 pub(crate) struct LaunchInfo {
     pub(crate) block: [u32; 3],
     pub(crate) grid: [u32; 3],
+    /// A grid read from scalar arguments (`LaunchShape::grid_dims`, ROADMAP U22); `grid` is then not meaningful.
+    pub(crate) grid_dims: Option<[unpopped::exec::GridDim; 3]>,
     /// The subgroup size a `Subgroup` collective groups by: the launch's required minimum (the oracle's default),
     /// or `1` when the launch states none.
     pub(crate) subgroup: u32,
@@ -153,6 +155,7 @@ impl LaunchInfo {
         k.launch.as_ref().map(|l| Self {
             block: l.block,
             grid: l.grid,
+            grid_dims: l.grid_dims,
             subgroup: l.subgroup.map_or(1, |s| s.min.max(1)),
             devices: l.devices,
         })
