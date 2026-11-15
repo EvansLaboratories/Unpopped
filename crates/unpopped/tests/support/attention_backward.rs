@@ -152,12 +152,29 @@ pub(crate) fn backward_dq() -> KernelFn {
 /// `dK[j] = SCALE * sum_i dS[i][j] * Q[i]` and `dV[j] = sum_i P[i][j] * dout[i]`, one thread per key row.
 /// Output buffers 6 `dk` `[LK*D]` and 7 `dv` `[LK*DV]`.
 pub(crate) fn backward_dkv() -> KernelFn {
-    let pair = |tail: Vec<Stmt>| {
-        let mut s = pair_gradients(local(1), row());
-        s.extend(tail);
-        s
-    };
-    let dk = counted(
+    let mut params = reads();
+    params.push(Param::buffer("dk", F32, BufferRole::ReadWrite, Some(1)));
+    params.push(Param::buffer("dv", F32, BufferRole::ReadWrite, Some(1)));
+    KernelFn::new(
+        "attention_backward_dkv",
+        F32,
+        params,
+        locals(),
+        Block(vec![dk_columns(), dv_columns()]),
+    )
+    .with_launch(LaunchShape::new([LK as u32, 1, 1], [1, 1, 1]))
+}
+
+/// The pair gradients for (query row `local 1`, key row `row()`), then `tail`.
+fn key_pair(tail: Vec<Stmt>) -> Vec<Stmt> {
+    let mut s = pair_gradients(local(1), row());
+    s.extend(tail);
+    s
+}
+
+/// `dK[row][e] = SCALE * sum_i dS[i][row] * Q[i][e]` for every `e`.
+fn dk_columns() -> Stmt {
+    counted(
         2,
         D,
         vec![
@@ -165,7 +182,7 @@ pub(crate) fn backward_dkv() -> KernelFn {
             counted(
                 1,
                 LQ,
-                pair(vec![
+                key_pair(vec![
                     load(12, 0, add(mul(local(1), cu(D)), local(2))),
                     Stmt::Assign {
                         local: 0,
@@ -178,8 +195,12 @@ pub(crate) fn backward_dkv() -> KernelFn {
                 value: mul(local(0), ScalarExpr::Const(SCALE)),
             },
         ],
-    );
-    let dv = counted(
+    )
+}
+
+/// `dV[row][c] = sum_i P[i][row] * dout[i][c]` for every `c`.
+fn dv_columns() -> Stmt {
+    counted(
         2,
         DV,
         vec![
@@ -187,7 +208,7 @@ pub(crate) fn backward_dkv() -> KernelFn {
             counted(
                 1,
                 LQ,
-                pair(vec![
+                key_pair(vec![
                     load(12, 4, add(mul(local(1), cu(DV)), local(2))),
                     Stmt::Assign {
                         local: 0,
@@ -200,18 +221,7 @@ pub(crate) fn backward_dkv() -> KernelFn {
                 value: local(0),
             },
         ],
-    );
-    let mut params = reads();
-    params.push(Param::buffer("dk", F32, BufferRole::ReadWrite, Some(1)));
-    params.push(Param::buffer("dv", F32, BufferRole::ReadWrite, Some(1)));
-    KernelFn::new(
-        "attention_backward_dkv",
-        F32,
-        params,
-        locals(),
-        Block(vec![dk, dv]),
     )
-    .with_launch(LaunchShape::new([LK as u32, 1, 1], [1, 1, 1]))
 }
 
 /// The upstream gradient: small integers, different per row and column, so no gradient is symmetric by accident.
@@ -252,17 +262,8 @@ pub(crate) fn loss_f64(q: &[f64], k: &[f64], v: &[f64], dout: &[f64]) -> f64 {
     l
 }
 
-/// `(dQ, dK, dV)` in `f64`, written as whole matrices (`P`, `dP = dout V^T`, `dS`, then three products), a different
-/// organisation from the kernels' per-pair recompute.
-pub(crate) fn backward_reference() -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-    let (q, k, v) = attention_data();
-    let dout = dout_data();
-    let (q, k, v, dout): (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) = (
-        q.iter().map(|&x| x as f64).collect(),
-        k.iter().map(|&x| x as f64).collect(),
-        v.iter().map(|&x| x as f64).collect(),
-        dout.iter().map(|&x| x as f64).collect(),
-    );
+/// `(P, O)` in `f64`: the row softmax of the scaled scores and its product with `V`.
+fn softmax_and_output(q: &[f64], k: &[f64], v: &[f64]) -> ([f64; LQ * LK], [f64; LQ * DV]) {
     let mut p = [0f64; LQ * LK];
     let mut o = [0f64; LQ * DV];
     for i in 0..LQ {
@@ -278,6 +279,21 @@ pub(crate) fn backward_reference() -> (Vec<f64>, Vec<f64>, Vec<f64>) {
             o[i * DV + d] = (0..LK).map(|j| p[i * LK + j] * v[j * DV + d]).sum();
         }
     }
+    (p, o)
+}
+
+/// `(dQ, dK, dV)` in `f64`, written as whole matrices (`P`, `dP = dout V^T`, `dS`, then three products), a different
+/// organisation from the kernels' per-pair recompute.
+pub(crate) fn backward_reference() -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    let (q, k, v) = attention_data();
+    let dout = dout_data();
+    let (q, k, v, dout): (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) = (
+        q.iter().map(|&x| x as f64).collect(),
+        k.iter().map(|&x| x as f64).collect(),
+        v.iter().map(|&x| x as f64).collect(),
+        dout.iter().map(|&x| x as f64).collect(),
+    );
+    let (p, o) = softmax_and_output(&q, &k, &v);
     let mut ds = [0f64; LQ * LK];
     for i in 0..LQ {
         let delta: f64 = (0..DV).map(|d| dout[i * DV + d] * o[i * DV + d]).sum();
