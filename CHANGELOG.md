@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.47.3` — feat: `unpopped::launch_cases`, the shared cross-emitter conformance corpus for `Backend::lower_kernel`
+
+Additive. `launch_cases()` returns launched elementwise `KernelFn`s (F32, I32, U32) with their arguments and the oracle's expected output bytes, so every emitter repo runs the same cases (ROADMAP U20 part a).
+
+— lane: unpopped
+
+---
+
 ## `0.47.2` — docs: ROADMAP U20 sized for the lower_kernel launch-case harness
 
 Sizing of the launch-case conformance corpus and the Vulkan host glue; no code change.
