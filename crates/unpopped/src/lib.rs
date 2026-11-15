@@ -84,6 +84,7 @@ pub mod kernel_lift;
 mod kernel_module;
 mod kernel_uniform;
 pub mod kisc;
+pub mod launch_cases;
 pub mod lift;
 pub mod link;
 pub mod mma;
