@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! The dynamic-grid kernels of ROADMAP U22, shared by the oracle test (`kernel_grid_dynamic.rs`) and the C test
-//! (`unpopped-cpu-c/tests/kernel_grid_dynamic_emit_agrees.rs`, which includes this file).
+//! (`unpopped-cpu-c/tests/kernel_grid_dynamic_emit_agrees.rs`, which keeps a copy: change both).
 
 use unpopped::exec::{ExecId, GridDim, LaunchShape};
 use unpopped::ir::{BinaryOp, CastSpec, RoundMode, Saturation, ScalarExpr};

@@ -11,7 +11,7 @@ use unpopped_cpu_c::CpuC;
 
 #[path = "support/cc.rs"]
 mod cc;
-#[path = "../../unpopped/tests/support/grid_dynamic.rs"]
+#[path = "support/grid_dynamic.rs"]
 mod grid_dynamic;
 #[expect(
     dead_code,
