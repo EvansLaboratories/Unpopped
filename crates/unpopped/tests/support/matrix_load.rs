@@ -53,34 +53,7 @@ fn counted(var: u32, end: i64, body: Vec<Stmt>) -> Stmt {
 /// stores its `2 * count` fragment elements at `out[l * 8 ..]`. Without `barrier` the kernel also stages the row of its
 /// mirrored lane (`8 * count - 1 - l`), so each lane reads a row another lane wrote with nothing between: a data race.
 pub(crate) fn matrix_load_kernel(count: u32, trans: bool, barrier: bool) -> KernelFn {
-    let staged = if barrier {
-        lane()
-    } else {
-        ScalarExpr::Sub(Box::new(u(i64::from(8 * count) - 1)), Box::new(lane()))
-    };
-    let stage = Stmt::If {
-        cond: ScalarExpr::Binary(
-            BinaryOp::CmpLt,
-            Box::new(lane()),
-            Box::new(u(i64::from(8 * count))),
-        ),
-        then: Block(vec![counted(
-            1,
-            8,
-            vec![
-                Stmt::Load {
-                    local: 0,
-                    place: buf(0, add(mul(staged.clone(), u(8)), local(1))),
-                },
-                Stmt::Store {
-                    place: alloc(0, add(mul(staged, u(8)), local(1))),
-                    value: local(0),
-                },
-            ],
-        )]),
-        els: Block(vec![]),
-    };
-    let mut body = vec![stage];
+    let mut body = vec![stage_rows(count, barrier)];
     if barrier {
         body.push(Stmt::barrier(unpopped::exec::Scope::Block));
     }
@@ -90,20 +63,7 @@ pub(crate) fn matrix_load_kernel(count: u32, trans: bool, barrier: bool) -> Kern
         src: alloc(0, mul(lane(), u(8))),
         dst: 1,
     });
-    body.push(counted(
-        2,
-        i64::from(2 * count),
-        vec![
-            Stmt::Load {
-                local: 0,
-                place: alloc(1, local(2)),
-            },
-            Stmt::Store {
-                place: buf(1, add(mul(lane(), u(8)), local(2))),
-                value: local(0),
-            },
-        ],
-    ));
+    body.push(write_fragment(count));
     let mut k = KernelFn::new(
         "matrix_load",
         ElementKind::F32,
@@ -129,6 +89,55 @@ pub(crate) fn matrix_load_kernel(count: u32, trans: bool, barrier: bool) -> Kern
         AllocDecl::new("frag", MemorySpace::Private, H16, Extent::Static(2 * count)),
     ];
     k
+}
+
+/// Lanes below `8 * count` copy one row of `src` into `tiles` (the mirrored lane's row when `barrier` is false).
+fn stage_rows(count: u32, barrier: bool) -> Stmt {
+    let staged = if barrier {
+        lane()
+    } else {
+        ScalarExpr::Sub(Box::new(u(i64::from(8 * count) - 1)), Box::new(lane()))
+    };
+    Stmt::If {
+        cond: ScalarExpr::Binary(
+            BinaryOp::CmpLt,
+            Box::new(lane()),
+            Box::new(u(i64::from(8 * count))),
+        ),
+        then: Block(vec![counted(
+            1,
+            8,
+            vec![
+                Stmt::Load {
+                    local: 0,
+                    place: buf(0, add(mul(staged.clone(), u(8)), local(1))),
+                },
+                Stmt::Store {
+                    place: alloc(0, add(mul(staged, u(8)), local(1))),
+                    value: local(0),
+                },
+            ],
+        )]),
+        els: Block(vec![]),
+    }
+}
+
+/// Every lane writes its `2 * count` fragment elements to `out[lane * 8 ..]`.
+fn write_fragment(count: u32) -> Stmt {
+    counted(
+        2,
+        i64::from(2 * count),
+        vec![
+            Stmt::Load {
+                local: 0,
+                place: alloc(1, local(2)),
+            },
+            Stmt::Store {
+                place: buf(1, add(mul(lane(), u(8)), local(2))),
+                value: local(0),
+            },
+        ],
+    )
 }
 
 /// The staged data: element `i` is `i + 1`, so every tile cell is distinct and non-zero.
