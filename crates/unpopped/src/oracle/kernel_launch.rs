@@ -445,6 +445,8 @@ struct DevicePlace {
 enum Status {
     Runnable,
     Waiting { scope: Scope, at: usize },
+    /// Blocked at a `Stmt::MbarWait` until the barrier's phase of that parity has completed.
+    MbarWait { alloc: u32, index: usize, parity: u32 },
     Done,
 }
 
@@ -493,6 +495,7 @@ fn start_mem(b: &BlockRun<'_>) -> BlockMem {
         log: Log::new(),
         block_epoch: 0,
         sub_epoch: vec![0; (bx * by * bz).div_ceil(b.sg) as usize],
+        mbar: Default::default(),
     }
 }
 
@@ -544,11 +547,44 @@ fn advance<'a>(
         if st.threads.iter().all(|t| t.status == Status::Done) {
             return Ok(BlockStop::Done);
         }
+        if wake_mbar_waiters(&mut st.threads, own) {
+            continue;
+        }
         if let Some((scope, at)) = at_grid_barrier(&st.threads) {
             return Ok(BlockStop::Wait { scope, at });
         }
-        release(b, &mut st.threads, own)?;
+        let blocked = st
+            .threads
+            .iter()
+            .any(|t| matches!(t.status, Status::MbarWait { .. }));
+        match release(b, &mut st.threads, own) {
+            Err(KernelTrap::BarrierMismatch) if blocked => {
+                return Err(KernelTrap::MbarrierDeadlock);
+            }
+            r => r?,
+        }
     }
+}
+
+/// Make runnable every thread blocked at a `Stmt::MbarWait` whose phase has completed; whether any was.
+fn wake_mbar_waiters(threads: &mut [ThreadRun<'_>], mem: &BlockMem) -> bool {
+    let mut woke = false;
+    for t in threads {
+        if let Status::MbarWait {
+            alloc,
+            index,
+            parity,
+        } = t.status
+            && mem
+                .mbar
+                .get(&(alloc, index))
+                .is_some_and(|s| s.complete(parity))
+        {
+            t.status = Status::Runnable;
+            woke = true;
+        }
+    }
+    woke
 }
 
 /// The `Device` or `Cluster` barrier every thread of the block waits at, if they all wait at the same one.
@@ -646,6 +682,15 @@ fn status_after(stop: Stop, t: &mut ThreadRun<'_>) -> Status {
                 at,
             }
         }
+        Stop::MbarWait {
+            alloc,
+            index,
+            parity,
+        } => Status::MbarWait {
+            alloc,
+            index,
+            parity,
+        },
         Stop::Matrix { at, c } => {
             t.matrix = Some(c);
             Status::Waiting {
@@ -877,6 +922,7 @@ mod tests {
             log: Log::new(),
             block_epoch: 0,
             sub_epoch: vec![0; n.div_ceil(sg) as usize],
+            mbar: Default::default(),
         };
         let r = release(&b, &mut threads, &mut mem);
         let now = threads.iter().map(|t| t.status).collect();

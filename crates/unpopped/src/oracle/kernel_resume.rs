@@ -100,6 +100,12 @@ pub(super) enum Stop {
     },
     /// At an MMA statement, having handed over its fragments, waiting for the rest of the subgroup.
     Mma { at: usize, c: Box<MmaContribution> },
+    /// At a `Stmt::MbarWait` whose phase has not completed.
+    MbarWait {
+        alloc: u32,
+        index: usize,
+        parity: u32,
+    },
     /// At a `Stmt::MatrixLoad`, holding the lane's row.
     Matrix {
         at: usize,
@@ -199,6 +205,10 @@ impl<'a> Machine<'a> {
                     c: Box::new(self.mma_contribution(st)?),
                 }));
             }
+            Stmt::MbarInit { .. }
+            | Stmt::MbarArrive { .. }
+            | Stmt::MbarCompleteTx { .. }
+            | Stmt::MbarWait { .. } => return self.mbar_stmt(st, stack),
             Stmt::MatrixLoad { .. } => {
                 return Ok(Some(Stop::Matrix {
                     at: std::ptr::from_ref(st) as usize,

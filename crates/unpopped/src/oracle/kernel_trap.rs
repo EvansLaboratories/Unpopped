@@ -69,4 +69,13 @@ pub enum KernelTrap {
     },
     /// A thread finished with `CopyAsync` copies it never waited for (committed or not).
     AsyncUnwaited,
+    /// An `mbarrier` used outside its contract: arriving at or waiting on one never initialised, initialised with an
+    /// arrival count below 1, more arrivals than are pending, or a parity other than 0 or 1.
+    MbarrierMisuse {
+        /// What was wrong.
+        what: &'static str,
+    },
+    /// Every thread that has not finished waits on an `mbarrier` phase (or at a barrier) that no running thread can
+    /// complete.
+    MbarrierDeadlock,
 }
