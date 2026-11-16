@@ -298,6 +298,9 @@ impl<'a> Machine<'a> {
                 return Err(KernelTrap::Unsupported("Collective"));
             }
             Stmt::Mma { .. } => return Err(KernelTrap::Unsupported("Mma")),
+            Stmt::Tcgen05Mma { .. } | Stmt::Tcgen05Commit { .. } | Stmt::Tcgen05Ld { .. } => {
+                return Err(KernelTrap::Unsupported("a tcgen05 statement"));
+            }
             Stmt::Wgmma { .. } | Stmt::WgmmaCommit | Stmt::WgmmaWait { .. } => {
                 return Err(KernelTrap::Unsupported("a wgmma statement"));
             }
@@ -427,6 +430,13 @@ impl<'a> Machine<'a> {
                 elems,
                 bar,
             } => self.copy_bulk(dst, src, *elems, bar)?,
+            Stmt::Tcgen05Mma { .. } => self.tcgen05_mma(st)?,
+            Stmt::Tcgen05Ld {
+                src,
+                col,
+                count,
+                dst,
+            } => self.tcgen05_ld(*src, col, *count, *dst)?,
             Stmt::AsyncCommit => self.async_commit()?,
             Stmt::AsyncWait { pending } => self.async_wait(*pending)?,
             _ => unreachable!("exec_simple is called for straight-line statements only"),

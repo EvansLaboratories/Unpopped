@@ -148,7 +148,7 @@ impl Machine<'_> {
             .as_mut()
             .expect("alloc_index found a launch context");
         c.log_shared(alloc, i, space, AccessKind::Read)?;
-        let trap = if space == MemorySpace::Shared {
+        let trap = if space != MemorySpace::Private {
             KernelTrap::UninitializedShared { alloc }
         } else {
             KernelTrap::UninitializedPrivate { alloc }

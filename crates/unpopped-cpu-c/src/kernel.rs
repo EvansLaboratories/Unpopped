@@ -264,6 +264,11 @@ impl Emitter<'_> {
                     "a wgmma is a warpgroup-wide asynchronous operation the serial C does not spell",
                 ));
             }
+            Stmt::Tcgen05Mma { .. } | Stmt::Tcgen05Commit { .. } | Stmt::Tcgen05Ld { .. } => {
+                return Err(refuse(
+                    "tcgen05 works on tensor memory, which the serial C does not spell",
+                ));
+            }
             Stmt::CopyBulk { .. } => {
                 return Err(refuse(
                     "a bulk copy completes on an mbarrier, which the serial C cannot block a thread on",

@@ -117,6 +117,7 @@ mod kernel_mem_ops;
 mod kernel_named;
 mod kernel_resume;
 mod kernel_sync;
+mod kernel_tcgen05;
 mod kernel_trap;
 mod kernel_wgmma;
 

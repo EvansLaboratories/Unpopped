@@ -72,6 +72,7 @@ pub(super) fn check_mbar(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), Kern
     let (bar, operands): (&Place, Vec<&ScalarExpr>) = match st {
         Stmt::MbarInit { bar, count } => (bar, vec![count]),
         Stmt::MbarArrive { bar, tx } => (bar, tx.iter().collect()),
+        Stmt::Tcgen05Commit { bar } => (bar, vec![]),
         Stmt::MbarCompleteTx { bar, bytes } => (bar, vec![bytes]),
         Stmt::MbarWait { bar, parity } => (bar, vec![parity]),
         _ => unreachable!("check_mbar is called for an mbarrier statement"),

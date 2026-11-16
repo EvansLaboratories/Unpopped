@@ -206,6 +206,9 @@ impl Walk<'_> {
             | Stmt::CopyBulk { .. }
             | Stmt::WgmmaCommit
             | Stmt::WgmmaWait { .. }
+            | Stmt::Tcgen05Mma { .. }
+            | Stmt::Tcgen05Commit { .. }
+            | Stmt::Tcgen05Ld { .. }
             | Stmt::AsyncCommit
             | Stmt::AsyncWait { .. }
             | Stmt::MbarInit { .. }

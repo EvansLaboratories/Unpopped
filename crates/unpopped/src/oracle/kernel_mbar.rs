@@ -72,15 +72,9 @@ impl Machine<'_> {
             }
             Stmt::MbarArrive { bar, tx } => {
                 let tx = tx.as_ref().map(|e| self.mbar_operand(e)).transpose()?;
-                let key = self.mbar_key(bar, AccessKind::Atomic, Some(MemoryOrder::Release))?;
-                let s = self.mbar_state(key)?;
-                if s.pending == 0 {
-                    return Err(misuse("an arrival with none pending"));
-                }
-                s.tx += tx.unwrap_or(0);
-                s.pending -= 1;
-                s.settle();
+                self.arrive(bar, tx.unwrap_or(0))?;
             }
+            Stmt::Tcgen05Commit { bar } => self.arrive(bar, 0)?,
             Stmt::MbarCompleteTx { bar, bytes } => {
                 let bytes = self.mbar_operand(bytes)?;
                 self.complete_tx(bar, bytes)?;
@@ -89,6 +83,19 @@ impl Machine<'_> {
             _ => unreachable!("mbar_stmt is called for an mbarrier statement"),
         }
         Ok(None)
+    }
+
+    /// A release-class arrival at `bar`, first adding `tx` bytes to its transaction count.
+    fn arrive(&mut self, bar: &Place, tx: i128) -> Result<(), KernelTrap> {
+        let key = self.mbar_key(bar, AccessKind::Atomic, Some(MemoryOrder::Release))?;
+        let s = self.mbar_state(key)?;
+        if s.pending == 0 {
+            return Err(misuse("an arrival with none pending"));
+        }
+        s.tx += tx;
+        s.pending -= 1;
+        s.settle();
+        Ok(())
     }
 
     /// Subtract `bytes` from the transaction count of the barrier at `bar` (a release-class access) and settle it.
