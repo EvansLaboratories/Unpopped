@@ -244,5 +244,6 @@ Unpopped holds neither the parser nor the emitter for any target above; it keeps
 | `Stmt::MbarCompleteTx` | may lower, with the risk note in the sweep | decline by name |
 | `Stmt::MbarWait` | may lower, with the risk note in the sweep | decline by name |
 | `Stmt::CopyBulk (completing on an mbarrier)` | may lower, with the risk note in the sweep | decline by name |
+| `Stmt::Tcgen05Commit` (arrives on an mbarrier) | may lower, with the risk note in the sweep | decline by name |
 
 Why: claims 1, 6, 18 and 20 of US11803380B2 require hardware by their words; claim 15 is open. A decline here is by statement name, so the refusal text should contain the variant name. Not a legal opinion; the sweep holds the reading.

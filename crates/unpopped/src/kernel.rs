@@ -678,6 +678,9 @@ pub enum Stmt {
     /// `tcgen05.commit`: arrive (a release-class arrival, like [`Stmt::MbarArrive`] without a transaction count) on the
     /// `mbarrier` at `bar` once the thread's earlier [`Stmt::Tcgen05Mma`] have completed. In the oracle they completed at
     /// issue.
+    ///
+    /// **Patent note (CireSnave 2026-11-16):** lowering this to a hardware operation on non-NVIDIA hardware may implicate
+    /// NVIDIA's US11803380B2; see `docs/PATENT-SWEEP.md`. Emitters for other manufacturers decline it.
     Tcgen05Commit {
         /// The barrier: a `Place::Alloc` of a `Shared` 64-bit element.
         bar: Place,
