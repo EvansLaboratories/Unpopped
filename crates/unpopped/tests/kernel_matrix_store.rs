@@ -26,10 +26,7 @@ fn buf(v: &[u16]) -> KernelArg {
 fn run(count: u32, trans: bool, barrier: bool) -> Result<Vec<u16>, KernelTrap> {
     let k = matrix_store_kernel(count, trans, barrier);
     assert_eq!(check_kernel(&k), Ok(()));
-    let mut args = [
-        buf(&fragment_input()),
-        buf(&vec![0; 64 * count as usize]),
-    ];
+    let mut args = [buf(&fragment_input()), buf(&vec![0; 64 * count as usize])];
     run_launch(&k, &mut args)?;
     let KernelArg::Buffer(b) = &args[1] else {
         unreachable!("a buffer")

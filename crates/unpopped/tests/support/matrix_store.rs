@@ -114,7 +114,10 @@ fn copy_out(count: u32, barrier: bool) -> Stmt {
     let from = if barrier {
         cell.clone()
     } else {
-        ScalarExpr::Sub(Box::new(u(i64::from(64 * count) - 1)), Box::new(cell.clone()))
+        ScalarExpr::Sub(
+            Box::new(u(i64::from(64 * count) - 1)),
+            Box::new(cell.clone()),
+        )
     };
     counted(
         1,

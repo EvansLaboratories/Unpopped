@@ -914,8 +914,6 @@ mod tests {
                 matrix: None,
                 matrix_store: None,
                 pending: Vec::new(),
-            matrix_store: None,
-            pending: Vec::new(),
                 tuple: None,
             })
             .collect();

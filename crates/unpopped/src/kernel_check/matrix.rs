@@ -62,13 +62,17 @@ fn check_matrix(
         return Err(refuse("a tile count other than 1, 2 or 4"));
     }
     let Place::Alloc { alloc, .. } = place else {
-        return Err(refuse("a matrix place that is not a Shared allocation place"));
+        return Err(refuse(
+            "a matrix place that is not a Shared allocation place",
+        ));
     };
     if k.allocs
         .get(*alloc as usize)
         .is_none_or(|a| a.space != MemorySpace::Shared)
     {
-        return Err(refuse("a matrix place that is not a Shared allocation place"));
+        return Err(refuse(
+            "a matrix place that is not a Shared allocation place",
+        ));
     }
     let (elem, _) = check_place(k, place, sc)?;
     if elem_bits(elem) != 16 {
@@ -81,9 +85,7 @@ fn check_matrix(
         return Err(refuse("a fragment outside Private memory"));
     }
     if d.elem != elem {
-        return Err(refuse(
-            "a fragment whose element type is not the place's",
-        ));
+        return Err(refuse("a fragment whose element type is not the place's"));
     }
     if d.extent != Extent::Static(2 * count) {
         return Err(refuse("a fragment whose length is not 2 * count"));
