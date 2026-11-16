@@ -15,7 +15,7 @@ use super::kernel_mma::MmaContribution;
 use super::kernel_wgmma::WgmmaContribution;
 use crate::exec::Scope;
 use crate::ir::ScalarExpr;
-use crate::kernel::{Block, CallArg, KernelFn, Module, Stmt};
+use crate::kernel::{BarrierKind, Block, CallArg, KernelFn, Module, Stmt};
 use crate::types::{self, Ty};
 
 /// The reference kernel of the extern declaration `decl` and the call arguments that pass `args` to it (the reference
@@ -87,6 +87,8 @@ pub(super) enum Stop {
     Done,
     /// At a barrier statement (`at` identifies it) waiting for the rest of `scope`.
     Barrier { scope: Scope, at: usize },
+    /// Arrived at the named barrier `id` in its phase `phase`, waiting for it to open.
+    NamedWait { id: u32, phase: u32 },
     /// At a collective statement, having contributed `c`, waiting for the rest of `scope`.
     Collective {
         scope: Scope,
@@ -279,6 +281,14 @@ impl<'a> Machine<'a> {
             Stmt::Break => break_loop(stack),
             Stmt::Continue => unwind_to_loop(stack),
             Stmt::Return => unwind_to_call(stack),
+            Stmt::Barrier {
+                kind: BarrierKind::Named { id, count },
+                ..
+            } => return self.named_barrier(*id, *count, true),
+            Stmt::Barrier {
+                kind: BarrierKind::NamedArrive { id, count },
+                ..
+            } => return self.named_barrier(*id, *count, false),
             Stmt::Barrier { scope, .. } => {
                 return Ok(Some(Stop::Barrier {
                     scope: *scope,

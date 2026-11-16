@@ -114,6 +114,7 @@ pub use kernel_call::run_module;
 pub mod kernel_launch;
 mod kernel_mem;
 mod kernel_mem_ops;
+mod kernel_named;
 mod kernel_resume;
 mod kernel_sync;
 mod kernel_trap;
