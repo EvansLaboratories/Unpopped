@@ -28,12 +28,15 @@ use std::ops::Range;
 use super::Val;
 use super::kernel_collective::{Contribution, TupleContribution, results, tuple_results};
 use super::kernel_eval::{KernelArg, KernelTrap, Machine, STEP_LIMIT};
-use super::kernel_matrix::{MatrixContribution, distribute};
+use super::kernel_matrix::{
+    MatrixContribution, PendingStore, StoreContribution, assemble, distribute,
+};
 use super::kernel_mem::{AllocMem, AsyncQueue, BlockMem, Log, Peers, ThreadCtx, cluster_of};
 use super::kernel_mma::{MmaContribution, compute};
 use super::kernel_resume::{Frame, Stop, initial_stack};
 use super::kernel_sync::Edges;
 use crate::exec::{AllocDecl, Extent, LaunchShape, MemorySpace, Scope};
+use crate::ir::ScalarExpr;
 use crate::kernel::{KernelFn, MemoryOrder, Module, ParamKind, check_kernel, check_module};
 
 /// Run every thread of `k`'s launch on `args` (one per parameter), choosing the smallest subgroup
@@ -478,6 +481,10 @@ struct ThreadRun<'a> {
     mma: Option<Box<MmaContribution>>,
     /// What the thread handed over to the `Stmt::MatrixLoad` it waits at.
     matrix: Option<Box<MatrixContribution>>,
+    /// What the thread handed over to the `Stmt::MatrixStore` it waits at.
+    matrix_store: Option<Box<StoreContribution>>,
+    /// `Shared` writes a completed matrix store left for this thread, performed when it next runs.
+    pending: Vec<PendingStore>,
     /// What the thread contributed to the tuple collective it waits at.
     tuple: Option<Box<TupleContribution>>,
 }
@@ -525,6 +532,8 @@ fn start_block<'a>(b: &BlockRun<'a>) -> BlockState<'a> {
             contrib: None,
             mma: None,
             matrix: None,
+            matrix_store: None,
+            pending: Vec::new(),
             tuple: None,
         })
         .collect();
@@ -650,8 +659,10 @@ fn run_phase<'a>(
     m.locals = std::mem::take(&mut t.locals);
     m.steps = t.steps;
     m.limit = b.limit;
+    let pending = std::mem::take(&mut t.pending);
     let stop = if t.started {
-        m.resume(&mut t.stack, module)
+        m.perform_pending(pending)
+            .and_then(|()| m.resume(&mut t.stack, module))
     } else {
         t.started = true;
         t.stack = initial_stack(b.k);
@@ -701,6 +712,13 @@ fn status_after(stop: Stop, t: &mut ThreadRun<'_>) -> Status {
             index,
             parity,
         },
+        Stop::MatrixStore { at, c } => {
+            t.matrix_store = Some(c);
+            Status::Waiting {
+                scope: Scope::Subgroup,
+                at,
+            }
+        }
         Stop::Matrix { at, c } => {
             t.matrix = Some(c);
             Status::Waiting {
@@ -800,6 +818,29 @@ fn deliver_matrix(members: &mut [ThreadRun<'_>]) -> Result<(), KernelTrap> {
     Ok(())
 }
 
+/// A matrix store whose every lane has arrived: assemble the tiles and leave each supplying lane the 8 writes of its row,
+/// which it performs (and logs) when it next runs, so a race with another lane's access is the usual `DataRace`.
+fn deliver_matrix_store(members: &mut [ThreadRun<'_>]) -> Result<(), KernelTrap> {
+    let lanes: Vec<StoreContribution> = members
+        .iter_mut()
+        .map(|t| *t.matrix_store.take().expect("every lane handed over"))
+        .collect();
+    let rows = assemble(&lanes)?;
+    for ((t, c), row) in members.iter_mut().zip(&lanes).zip(rows) {
+        let (Some((alloc, first, ty)), Some(vals)) = (c.row, row) else {
+            continue;
+        };
+        for (j, value) in vals.into_iter().enumerate() {
+            t.pending.push(PendingStore {
+                alloc,
+                index: ScalarExpr::ConstInt((first + j as i128) as i64, ty),
+                value,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// The threads a barrier of `scope` reached by thread `lin` synchronizes.
 fn group_of(b: &BlockRun<'_>, scope: Scope, lin: u32, total: u32) -> Range<u32> {
     match scope {
@@ -850,6 +891,8 @@ fn release(
             deliver_mma(members)?;
         } else if members.iter().all(|t| t.matrix.is_some()) {
             deliver_matrix(members)?;
+        } else if members.iter().all(|t| t.matrix_store.is_some()) {
+            deliver_matrix_store(members)?;
         } else if members.iter().all(|t| t.tuple.is_some()) {
             deliver_tuple(members, b.module)?;
         } else if members.iter().all(|t| t.contrib.is_some()) {
@@ -924,6 +967,8 @@ mod tests {
                 contrib: None,
                 mma: None,
                 matrix: None,
+                matrix_store: None,
+                pending: Vec::new(),
                 tuple: None,
             })
             .collect();

@@ -305,6 +305,7 @@ impl<'a> Machine<'a> {
             | Stmt::MbarWait { .. } => {
                 return Err(KernelTrap::Unsupported("an mbarrier statement"));
             }
+            Stmt::MatrixStore { .. } => return Err(KernelTrap::Unsupported("MatrixStore")),
             Stmt::ExternCall {
                 decl,
                 args,

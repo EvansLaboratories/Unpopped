@@ -239,6 +239,9 @@ impl Emitter<'_> {
                     "an mbarrier waits for another thread, and the serial C runs the threads of a block one after another",
                 ));
             }
+            Stmt::MatrixStore { .. } => {
+                return Err(refuse("a Stmt::MatrixStore is block-level only"));
+            }
             Stmt::Call {
                 callee,
                 args,

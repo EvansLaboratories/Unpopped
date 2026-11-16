@@ -52,7 +52,7 @@ the same independent source the MMA tables used. `MatrixStore` is the mirror.
 **Built 2026-11-15 (U8b, slice 1: `MatrixLoad` only).** `Stmt::MatrixLoad { count, trans, src, dst }`: lane `8t + r` supplies the
 address of row `r` of tile `t` (8 contiguous `b16` elements); lane `l` receives, per tile, row `l/4` columns `2(l%4)`, `+1`
 (transposed: rows `2(l%4)`, `+1`, column `l/4`). The checker needs a 32-lane subgroup, `count` 1, 2 or 4, a `Shared` source and a
-`Private` destination of `2*count` elements of the same 16-bit type. `MatrixStore` (`stmatrix`) is the next slice. **Sources for the
+`Private` destination of `2*count` elements of the same 16-bit type. `MatrixStore` is built (slice 2, below). **Sources for the
 distribution:** my reading of the PTX ISA's `ldmatrix` section, and, as a second source found 2026-11-15, the TVM project's
 `ldstmatrix` tile-primitive documentation (lane `i` holds row `i // 4`, column pair `i % 4`) and NVIDIA's libcudacxx PTX pages
 (`.m8n8`, `.x1/.x2/.x4`, `.trans`, `b16` only). **Address rule (lanes `8t..8t+7` own tile `t`):** the baracuda lane (2026-11-16) found it consistent with a working kernel, not the
@@ -62,6 +62,8 @@ for tiles laid out that way. That is evidence for the address half, from one ker
 receive half rests on the TVM page above. The test pins both; a device run is the check. This is a standard web search, not a read of the ISA. *Open:* the second lane-table source
 (U7's `mma.sp` hold has the same need, a source other than our own memory of the PTX manual); S2 should not start before one is
 found, so the two holds are cleared together. *Oracle and cpu-c:* gather and scatter by the table. One breaking minor.
+
+**Built 2026-11-15 (U8b, slice 2: `MatrixStore`).** `Stmt::MatrixStore { count, trans, dst, src }`, the inverse of the load: lane `l` holds the fragment a load of the same `count` and `trans` would have given it (`src`, a `Private` allocation of `2*count` 16-bit elements) and lane `8t + r` supplies in `dst` the address of row `r` of tile `t` and **writes** that row's 8 elements (tile cell `(r, c)` is, without `trans`, element `2t + c%2` of lane `4r + c/2`; transposed, element `2t + r%2` of lane `r/2 + 4c`). The oracle assembles the tiles when the warp has arrived and leaves each supplying lane its 8 writes, which that lane performs (as ordinary logged `Shared` writes) when it next runs, so a reader that skips the barrier is the usual `DataRace` (or `UninitializedShared`). **Sources, stated honestly:** the data distribution (lane `4r + c/2`, element `c%2`) is the same fragment the TVM `ldstmatrix` page and the mlc.ai layout chapter give for the 8x8 b16 fragment, and `stmatrix` is the documented reverse of `ldmatrix` (libcudacxx PTX page: forms `.x1/.x2/.x4`, `.trans`, PTX ISA 78, `sm_90`). **Not independently confirmed:** that for `stmatrix` too lanes `8t..8t+7` supply the row addresses of tile `t`; it is taken by symmetry with `ldmatrix` (the same open point as slice 1, flagged there). The ISA text itself was not read.
 
 ### S3, `mbarrier`, TMA and descriptors (wait for a consumer)
 

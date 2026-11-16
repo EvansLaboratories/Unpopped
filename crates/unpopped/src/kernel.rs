@@ -528,6 +528,27 @@ pub enum Stmt {
         /// Which phase parity to wait for: 0 or 1.
         parity: ScalarExpr,
     },
+    /// A warp-level matrix store (`stmatrix`; ROADMAP U8b slice 2): the inverse of [`Stmt::MatrixLoad`]. Lane `l` holds
+    /// in `src` (a `Private` allocation of `2 * count` 16-bit elements) the fragment it would have received from a load
+    /// of the same `count` and `trans`; lane `8 * t + r` (`t < count`, `r < 8`) supplies in `dst` (a place of a
+    /// `Shared` allocation of the same element type) the first of the **8 contiguous elements of row `r` of tile `t`**
+    /// and **writes** them, so the elements the warp assembled land where the supplying lanes point (the other lanes'
+    /// `dst` is not evaluated). The writes are ordinary logged `Shared` writes by the supplying lane, ordered by the
+    /// next barrier like any other store; this statement orders no memory itself. A rendezvous like
+    /// [`Stmt::MatrixLoad`], reached in uniform control by the whole warp. `stmatrix` exists from `sm_90`.
+    ///
+    /// **Patent:** see `docs/PATENT-SWEEP.md` (U8b section, the same read as `MatrixLoad`; claims of adjacent hits
+    /// unread): this describes the published instruction behaviour and does not claim an implementation.
+    MatrixStore {
+        /// How many 8 x 8 tiles: 1, 2 or 4.
+        count: u32,
+        /// Whether each tile is stored transposed (`stmatrix .trans`).
+        trans: bool,
+        /// The first element of this lane's row, when it supplies one: a `Place::Alloc` of a `Shared` allocation.
+        dst: Place,
+        /// The `Private` allocation (index into [`KernelFn::allocs`]) holding this lane's `2 * count` elements.
+        src: u32,
+    },
     /// An asynchronous copy of `elems` contiguous elements from the global buffer place `src` to the `Shared`
     /// allocation place `dst`, issued by one thread (`cp.async`; ROADMAP U8 S1, `docs/options-u8-copy-atoms.md`). It
     /// lands only when a later [`Stmt::AsyncWait`] covers its group: `elems` times the element size is 4, 8 or 16
@@ -1131,6 +1152,11 @@ pub enum KernelError {
     },
     /// A `Stmt::MatrixLoad` the checker refuses: what is wrong with the launch, the source or the destination.
     MatrixLoadUnsupported {
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// A `Stmt::MatrixStore` the checker refuses: what is wrong with the launch, the fragment or the destination.
+    MatrixStoreUnsupported {
         /// What is wrong.
         what: &'static str,
     },

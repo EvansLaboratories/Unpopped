@@ -263,6 +263,7 @@ fn check_sync_stmt(
         | Stmt::MbarArrive { .. }
         | Stmt::MbarCompleteTx { .. }
         | Stmt::MbarWait { .. } => mbar::check_mbar(k, st, sc)?,
+        Stmt::MatrixStore { .. } => matrix::check_matrix_store(k, st, sc)?,
         Stmt::CopyAsync { .. } | Stmt::AsyncCommit | Stmt::AsyncWait { .. } => {
             async_copy::check_async(k, st, sc)?;
         }
@@ -496,6 +497,7 @@ fn check_stmt(
         | Stmt::MbarArrive { .. }
         | Stmt::MbarCompleteTx { .. }
         | Stmt::MbarWait { .. }
+        | Stmt::MatrixStore { .. }
         | Stmt::CopyAsync { .. }
         | Stmt::AsyncCommit
         | Stmt::AsyncWait { .. }
