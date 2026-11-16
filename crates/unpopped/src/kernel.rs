@@ -528,6 +528,9 @@ pub enum Stmt {
     ///
     /// **Patent:** `mbarrier` is the published PTX synchronisation object; this describes its behaviour and claims no
     /// implementation. No patent search specific to it was run (`docs/PATENT-SWEEP.md`, U8c section).
+    ///
+    /// **Patent note (CireSnave 2026-11-16):** lowering this to a hardware operation on non-NVIDIA hardware may implicate
+    /// NVIDIA's US11803380B2; see `docs/PATENT-SWEEP.md`. Emitters for other manufacturers decline it.
     MbarInit {
         /// The `Shared` 64-bit element holding the object.
         bar: Place,
@@ -540,6 +543,9 @@ pub enum Stmt {
     /// A release-class atomic access at `Block` scope: what the thread wrote before it is visible to a thread whose
     /// [`Stmt::MbarWait`] later sees the phase complete. Arriving at an uninitialised barrier is
     /// `KernelTrap::MbarrierMisuse`.
+    ///
+    /// **Patent note (CireSnave 2026-11-16):** lowering this to a hardware operation on non-NVIDIA hardware may implicate
+    /// NVIDIA's US11803380B2; see `docs/PATENT-SWEEP.md`. Emitters for other manufacturers decline it.
     MbarArrive {
         /// The barrier.
         bar: Place,
@@ -549,6 +555,9 @@ pub enum Stmt {
     /// Subtract `bytes` from the transaction count of the `mbarrier` at `bar` (`mbarrier.complete_tx`): what an
     /// asynchronous copy does as its data lands. Completes the phase when it brings the count to 0 with no arrival
     /// pending. A release-class atomic access like [`Stmt::MbarArrive`].
+    ///
+    /// **Patent note (CireSnave 2026-11-16):** lowering this to a hardware operation on non-NVIDIA hardware may implicate
+    /// NVIDIA's US11803380B2; see `docs/PATENT-SWEEP.md`. Emitters for other manufacturers decline it.
     MbarCompleteTx {
         /// The barrier.
         bar: Place,
@@ -561,6 +570,9 @@ pub enum Stmt {
     /// the first one is complete by convention). The thread blocks; it resumes when some other thread's arrival
     /// completes the phase, and a block in which every remaining thread waits is `KernelTrap::MbarrierDeadlock`. An
     /// acquire-class atomic access at `Block` scope. Not a rendezvous: any subset of the block's threads may wait.
+    ///
+    /// **Patent note (CireSnave 2026-11-16):** lowering this to a hardware operation on non-NVIDIA hardware may implicate
+    /// NVIDIA's US11803380B2; see `docs/PATENT-SWEEP.md`. Emitters for other manufacturers decline it.
     MbarWait {
         /// The barrier.
         bar: Place,
@@ -728,6 +740,9 @@ pub enum Stmt {
     ///
     /// **Patent:** see `docs/PATENT-SWEEP.md` (U8c section): this describes the published instruction behaviour and does
     /// not claim an implementation.
+    ///
+    /// **Patent note (CireSnave 2026-11-16):** lowering this to a hardware operation on non-NVIDIA hardware may implicate
+    /// NVIDIA's US11803380B2; see `docs/PATENT-SWEEP.md`. Emitters for other manufacturers decline it.
     CopyBulk {
         /// The first destination element: a `Shared` allocation place.
         dst: Place,
