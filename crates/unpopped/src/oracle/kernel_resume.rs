@@ -200,6 +200,8 @@ impl<'a> Machine<'a> {
             | Stmt::MulticastLoadReduce { .. }
             | Stmt::CopyAsync { .. }
             | Stmt::CopyBulk { .. }
+            | Stmt::Tcgen05Mma { .. }
+            | Stmt::Tcgen05Ld { .. }
             | Stmt::AsyncCommit
             | Stmt::AsyncWait { .. }
             | Stmt::Fence { .. } => {
@@ -236,6 +238,7 @@ impl<'a> Machine<'a> {
             }
             Stmt::MbarInit { .. }
             | Stmt::MbarArrive { .. }
+            | Stmt::Tcgen05Commit { .. }
             | Stmt::MbarCompleteTx { .. }
             | Stmt::MbarWait { .. } => return self.mbar_stmt(st, stack),
             Stmt::MatrixStore { .. } => {

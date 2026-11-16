@@ -171,7 +171,7 @@ impl Machine<'_> {
         })
     }
 
-    fn wgmma_int(&mut self, e: &ScalarExpr) -> Result<i128, KernelTrap> {
+    pub(super) fn wgmma_int(&mut self, e: &ScalarExpr) -> Result<i128, KernelTrap> {
         let Ty::Scalar(t) = types::infer_ty_in(e, self.k.compute, &self.local_tys)
             .map_err(|_| KernelTrap::Unsupported("a wgmma operand type"))?
         else {
@@ -181,7 +181,7 @@ impl Machine<'_> {
     }
 
     /// Row `row` (16 elements) of the tile whose first element is `place`, as logged `Shared` loads.
-    fn wgmma_row(&mut self, place: &Place, row: usize) -> Result<Vec<Val>, KernelTrap> {
+    pub(super) fn wgmma_row(&mut self, place: &Place, row: usize) -> Result<Vec<Val>, KernelTrap> {
         let Place::Alloc { alloc, index } = place else {
             return Err(KernelTrap::Unsupported(
                 "a wgmma tile that is not an allocation place",

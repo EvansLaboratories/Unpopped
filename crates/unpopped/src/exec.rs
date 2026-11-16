@@ -261,6 +261,10 @@ pub enum MemorySpace {
     Private,
     /// Read-only after launch.
     Constant,
+    /// Tensor memory (`tcgen05`; ROADMAP U7 S5): one instance per block, 128 lanes of 32-bit cells, declared as
+    /// `128 * columns` elements and addressed `lane * columns + column`. Only the `tcgen05` statements reach it: an
+    /// ordinary load, store or atomic on it is refused.
+    Tensor,
 }
 
 /// How many elements an allocation holds.

@@ -621,6 +621,61 @@ pub enum Stmt {
         /// How many of the newest groups may stay in flight.
         pending: u32,
     },
+    /// One thread issues a `tcgen05.mma`: `D = A.B + scale_d * D`, a 128 x 16 `A` tile times an `n x 16` `B` tile (both
+    /// K-major, row-major, in `Shared` allocations of the 16-bit float type `ab`), into the `128 x n` block of the
+    /// **tensor-memory** allocation `d` (`MemorySpace::Tensor`) starting at column `d_col`: row `m` of `D` is lane `m`.
+    /// Products are exact in `f64`, summed in ascending `k` from the old `D` (or from zero when `scale_d` is 0) and
+    /// rounded once to `F32`, as for [`Stmt::Mma`]. The oracle reads the tiles and writes `D` at issue as logged accesses
+    /// by the issuing thread, so a thread that reads `D` without an acquire that follows a [`Stmt::Tcgen05Commit`] is a
+    /// `DataRace`. **Not modelled, and so not to be counted as covered:** instruction and shared-memory descriptors and
+    /// swizzle modes (no ISA text was read), `tcgen05.alloc`/`dealloc` (the allocation is static), tensor-memory `A`,
+    /// `cta_group::2` pairs, transposed operands, 8-bit/`tf32`/sparse/block-scaled kinds, half-precision accumulate,
+    /// `tcgen05.st`/`cp`/`shift`, and ordering of an in-flight product against a later product.
+    ///
+    /// **Patent:** see `docs/PATENT-SWEEP.md` (U7 S5 section): this describes the published instruction behaviour and
+    /// does not claim an implementation.
+    Tcgen05Mma {
+        /// Columns of `B` and `D`: a multiple of 8, 8 to 256.
+        n: u32,
+        /// The input element type: `F16` or `Bf16`.
+        #[serde(with = "crate::text::ek")]
+        ab: ElementKind,
+        /// The accumulator element type: `F32`.
+        #[serde(with = "crate::text::ek")]
+        acc: ElementKind,
+        /// The first element of the `A` tile: a `Place::Alloc` of a `Shared` allocation.
+        a: Place,
+        /// The first element of the `B` tile: a `Place::Alloc` of a `Shared` allocation.
+        b: Place,
+        /// The `Tensor` allocation (index into [`KernelFn::allocs`]) holding `D`.
+        d: u32,
+        /// The first column of `D` in tensor memory. An integer expression.
+        d_col: ScalarExpr,
+        /// Zero: `D = A.B`; nonzero: `D = A.B + D`. An integer expression.
+        scale_d: ScalarExpr,
+    },
+    /// `tcgen05.commit`: arrive (a release-class arrival, like [`Stmt::MbarArrive`] without a transaction count) on the
+    /// `mbarrier` at `bar` once the thread's earlier [`Stmt::Tcgen05Mma`] have completed. In the oracle they completed at
+    /// issue.
+    Tcgen05Commit {
+        /// The barrier: a `Place::Alloc` of a `Shared` 64-bit element.
+        bar: Place,
+    },
+    /// `tcgen05.ld.32x32b`: each thread reads `count` consecutive columns from `col` of its tensor-memory lane into
+    /// elements `0..count` of its `Private` allocation `dst`. Warp `w` of the block reaches lanes `32 * (w % 4)` ..
+    /// `+ 32`, and its lane `l` reads lane `32 * (w % 4) + l`. Not a rendezvous in the oracle (the reads are logged
+    /// accesses, ordered by the barrier the consumer waited on); `tcgen05.wait::ld`, `.16x64b` and the other shapes are not
+    /// modelled.
+    Tcgen05Ld {
+        /// The `Tensor` allocation read.
+        src: u32,
+        /// The first column. An integer expression.
+        col: ScalarExpr,
+        /// How many columns: a power of two, 1 to 128.
+        count: u32,
+        /// The `Private` allocation receiving them (at least `count` elements of the tensor element type).
+        dst: u32,
+    },
     /// An asynchronous copy of `elems` contiguous elements from the global buffer place `src` to the `Shared`
     /// allocation place `dst`, issued by one thread (`cp.async`; ROADMAP U8 S1, `docs/options-u8-copy-atoms.md`). It
     /// lands only when a later [`Stmt::AsyncWait`] covers its group: `elems` times the element size is 4, 8 or 16
@@ -1270,6 +1325,14 @@ pub enum KernelError {
     /// A `Stmt::Wgmma` the checker refuses: a launch that is not whole warpgroups of 32-lane subgroups, an `n` or element
     /// type outside the modelled set, a tile that is not a `Shared` place, or a fragment of the wrong space or length.
     WgmmaUnsupported {
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// A `Stmt::Tcgen05Mma`, `Tcgen05Commit` or `Tcgen05Ld` the checker refuses, or an ordinary access to a `Tensor`
+    /// allocation: a launch whose subgroup is not 32 lanes, an `n` or element type outside the modelled set, a tile that
+    /// is not a `Shared` place, a tensor allocation that is not a multiple of 128 32-bit elements, or a fragment of the
+    /// wrong space or length.
+    Tcgen05Unsupported {
         /// What is wrong.
         what: &'static str,
     },
