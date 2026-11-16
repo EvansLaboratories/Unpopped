@@ -1,3 +1,0 @@
-kind: docs
----
-Corrects two records without changing code. The `0.47.6` heading named only the tests-only entry (the attention-backward C differential), but #365's stamp had consumed two fragments into it, so the U22 paragraph (`LaunchShape::grid_dims`; `GridDim::Static`, `Param`, `CeilDiv`) read as absent from the CHANGELOG; the heading now names both. And the publish-prep patent text (`0.55.2`) said the earlier hits 22 (US11294713B2, US12118382B2) were NEEDS REVIEW; they, and hit 23, are already ruled A by CireSnave (boards 431, 434), so the sweep and the `0.55.2` entry now say so. When a stamp consumes two fragments the heading must name both.
