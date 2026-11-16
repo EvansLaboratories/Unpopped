@@ -163,8 +163,18 @@ fn kernel(o: Opt) -> KernelFn {
     .with_launch(LaunchShape::new([128, 1, 1], [1, 1, 1]).with_subgroup(32, 32));
     k.allocs = vec![
         AllocDecl::new("a", MemorySpace::Shared, BF16, Extent::Static(64 * 16)),
-        AllocDecl::new("b", MemorySpace::Shared, BF16, Extent::Static((n * 16) as u32)),
-        AllocDecl::new("d", MemorySpace::Private, F32, Extent::Static((n / 2) as u32)),
+        AllocDecl::new(
+            "b",
+            MemorySpace::Shared,
+            BF16,
+            Extent::Static((n * 16) as u32),
+        ),
+        AllocDecl::new(
+            "d",
+            MemorySpace::Private,
+            F32,
+            Extent::Static((n / 2) as u32),
+        ),
     ];
     k
 }
