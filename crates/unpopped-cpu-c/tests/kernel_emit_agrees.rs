@@ -211,6 +211,7 @@ fn acc(v: f64) -> Stmt {
 /// The nested loops: a descending outer `For` over a `Continue`/`Break` inner `For`.
 fn nested_loops() -> Stmt {
     let inner = Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: 3,
         start: ci(0),
         end: ci(6),
@@ -230,6 +231,7 @@ fn nested_loops() -> Stmt {
         ]),
     };
     Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: 4,
         start: l(0),
         end: ci(-1),
@@ -356,6 +358,7 @@ fn a_zero_step_traps_the_same_way() {
         ],
         vec![LocalDecl::scalar(I32), LocalDecl::scalar(I32)],
         Block(vec![Stmt::For {
+            unroll: unpopped::kernel::Unroll::None,
             local: 1,
             start: ScalarExpr::ConstInt(0, I32),
             end: ScalarExpr::ConstInt(3, I32),

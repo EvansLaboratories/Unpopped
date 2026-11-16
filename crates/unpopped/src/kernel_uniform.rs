@@ -316,6 +316,7 @@ impl Walk<'_> {
                 end,
                 step,
                 body,
+                ..
             } => {
                 let bound = [start, end, step].into_iter().any(|e| self.expr(e));
                 if bound {

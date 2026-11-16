@@ -105,6 +105,7 @@ fn at4(buffer: u32, c: [ScalarExpr; 4]) -> Place {
 
 fn counted(local: u32, end: i64, body: Vec<Stmt>) -> Stmt {
     Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local,
         start: ci(0),
         end: ci(end),

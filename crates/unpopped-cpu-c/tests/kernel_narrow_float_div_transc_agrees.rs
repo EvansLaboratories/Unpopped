@@ -63,6 +63,7 @@ fn looped(
         params,
         locals,
         Block(vec![Stmt::For {
+            unroll: unpopped::kernel::Unroll::None,
             local: 0,
             start: ci(0),
             end: ci(n as i64),

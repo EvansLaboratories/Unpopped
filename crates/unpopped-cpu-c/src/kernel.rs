@@ -197,6 +197,7 @@ impl Emitter<'_> {
                 end,
                 step,
                 body,
+                ..
             } => {
                 self.for_stmt(*local, [start, end, step], body)?;
             }
@@ -212,12 +213,28 @@ impl Emitter<'_> {
             Stmt::AtomicRmw { .. } => self.atomic_rmw(s)?,
             Stmt::AtomicCas { .. } => self.atomic_cas(s)?,
             Stmt::Fence { .. } | Stmt::AsyncCommit | Stmt::AsyncWait { .. } => {}
-            Stmt::CopyAsync { dst, src, elems } => {
-                // the sequential reference performs the copy at issue; commit and wait order nothing here
+            Stmt::CopyAsync {
+                dst,
+                src,
+                elems,
+                valid,
+                ..
+            } => {
+                // the sequential reference performs the copy at issue; commit and wait order nothing here. Elements
+                // from `valid` on are zero-filled and never read (the cache and prefetch hints mean nothing here).
                 let (d, s) = (self.address(dst)?, self.address(src)?);
-                self.line(&format!(
-                    "for (int cp_ = 0; cp_ < {elems}; cp_++) (&({d}))[cp_] = (&({s}))[cp_];"
-                ));
+                let copy = match valid {
+                    None => format!(
+                        "for (int cp_ = 0; cp_ < {elems}; cp_++) (&({d}))[cp_] = (&({s}))[cp_];"
+                    ),
+                    Some(e) => {
+                        let v = self.expr(e)?;
+                        format!(
+                            "for (int cp_ = 0; cp_ < {elems}; cp_++) (&({d}))[cp_] = cp_ < ({v}) ? (&({s}))[cp_] : 0;"
+                        )
+                    }
+                };
+                self.line(&copy);
             }
             Stmt::Collective { .. } | Stmt::CollectiveTuple { .. } => {
                 return Err(refuse("a Collective is block-level only"));

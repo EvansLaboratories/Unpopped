@@ -74,6 +74,7 @@ fn add_f(v: f64) -> ScalarExpr {
 
 fn inner_loop() -> Stmt {
     Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: J,
         start: ci(0),
         end: ci(6),
@@ -99,6 +100,7 @@ fn inner_loop() -> Stmt {
 
 fn outer_loop() -> Stmt {
     Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: I,
         start: ci(0),
         end: local(N),
@@ -214,6 +216,7 @@ fn a_zero_step_traps_in_both_evaluators() {
             vec![],
             vec![LocalDecl::scalar(I32)],
             Block(vec![Stmt::For {
+                unroll: unpopped::kernel::Unroll::None,
                 local: 0,
                 start: ci(0),
                 end: ci(2),

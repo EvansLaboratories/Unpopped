@@ -72,6 +72,9 @@ fn prologue() -> Vec<Stmt> {
             init: ScalarExpr::ConstInt(0, I32),
         },
         Stmt::CopyAsync {
+            valid: None,
+            cache: unpopped::kernel::CacheHint::Auto,
+            l2_prefetch: None,
             dst: shared(add(cu(stage(0)), tid())),
             src: global(0, tid()),
             elems: 1,
@@ -86,6 +89,9 @@ fn iteration(k: i64, fault: Fault) -> Vec<Stmt> {
     let mut body = Vec::new();
     if k + 1 < TILES {
         body.push(Stmt::CopyAsync {
+            valid: None,
+            cache: unpopped::kernel::CacheHint::Auto,
+            l2_prefetch: None,
             dst: shared(add(cu(stage(k + 1)), tid())),
             src: global(0, add(cu((k + 1) * i64::from(THREADS)), tid())),
             elems: 1,

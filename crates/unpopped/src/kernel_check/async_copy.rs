@@ -5,10 +5,10 @@
 //! the destination is read too early, depend on run-time control flow, so the oracle traps on those
 //! (`AsyncRace`, `AsyncUnwaited`); the checker does not guess.
 
-use super::{Scope, check_place};
+use super::{Scope, check_expr, check_place};
 use crate::exec::MemorySpace;
-use crate::kernel::{KernelError, KernelFn, Place, Stmt};
-use crate::types::elem_bits;
+use crate::kernel::{CacheHint, KernelError, KernelFn, Place, Stmt};
+use crate::types::{self, Ty, elem_bits};
 
 fn refuse(what: &'static str) -> KernelError {
     KernelError::AsyncUnsupported { what }
@@ -16,7 +16,15 @@ fn refuse(what: &'static str) -> KernelError {
 
 /// Check an async-copy statement.
 pub(super) fn check_async(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
-    let Stmt::CopyAsync { dst, src, elems } = st else {
+    let Stmt::CopyAsync {
+        dst,
+        src,
+        elems,
+        valid,
+        cache,
+        l2_prefetch,
+    } = st
+    else {
         return Ok(());
     };
     let Place::Alloc { alloc, .. } = dst else {
@@ -50,6 +58,20 @@ pub(super) fn check_async(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), Ker
     let bits = elem_bits(de) * *elems as usize;
     if bits % 8 != 0 || !matches!(bits / 8, 4 | 8 | 16) {
         return Err(refuse("a CopyAsync of other than 4, 8 or 16 bytes"));
+    }
+    if *cache == CacheHint::Global && bits / 8 != 16 {
+        return Err(refuse("a CopyAsync .cg of other than 16 bytes"));
+    }
+    if l2_prefetch.is_some_and(|b| !matches!(b, 64 | 128 | 256)) {
+        return Err(refuse(
+            "a CopyAsync L2 prefetch size other than 64, 128 or 256",
+        ));
+    }
+    if let Some(v) = valid {
+        let int = matches!(check_expr(k, v, sc)?, Ty::Scalar(t) if types::int_range(t).is_some());
+        if !int {
+            return Err(refuse("a CopyAsync valid count that is not an integer"));
+        }
     }
     Ok(())
 }

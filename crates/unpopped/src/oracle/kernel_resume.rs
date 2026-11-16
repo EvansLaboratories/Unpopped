@@ -247,6 +247,7 @@ impl<'a> Machine<'a> {
                 end,
                 step,
                 body,
+                ..
             } => {
                 let frame = self.enter_for(*local, [start, end, step], body)?;
                 stack.push(frame);

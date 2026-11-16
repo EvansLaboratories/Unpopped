@@ -54,7 +54,14 @@ fn global(buffer: u32, i: ScalarExpr) -> Place {
 }
 
 fn copy(dst: Place, src: Place, elems: u32) -> Stmt {
-    Stmt::CopyAsync { dst, src, elems }
+    Stmt::CopyAsync {
+        valid: None,
+        cache: unpopped::kernel::CacheHint::Auto,
+        l2_prefetch: None,
+        dst,
+        src,
+        elems,
+    }
 }
 
 fn wait(pending: u32) -> Stmt {

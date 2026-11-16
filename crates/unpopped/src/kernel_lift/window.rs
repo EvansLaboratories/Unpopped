@@ -249,6 +249,7 @@ impl Win {
     fn for_cell(&self, d: u32, inner: Block) -> Block {
         let end = if d == self.axis { self.k_out } else { d };
         Block(vec![Stmt::For {
+            unroll: crate::kernel::Unroll::None,
             local: self.cell(d),
             start: int(0),
             end: local(end),
@@ -301,6 +302,7 @@ impl Win {
             value: add(local(self.cnt), int(1)),
         });
         Stmt::For {
+            unroll: crate::kernel::Unroll::None,
             local: self.tap,
             start: int(0),
             end: int(i64::from(g.size)),

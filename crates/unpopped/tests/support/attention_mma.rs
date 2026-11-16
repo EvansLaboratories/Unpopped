@@ -83,6 +83,7 @@ fn frag(alloc: u32, i: ScalarExpr) -> Place {
 
 fn counted(local_id: u32, end: usize, body: Vec<Stmt>) -> Stmt {
     Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: local_id,
         start: cu(0),
         end: cu(end),

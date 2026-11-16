@@ -125,6 +125,7 @@ pub(crate) fn window(mode: Mode) -> KernelFn {
             LocalDecl::scalar(F32),
         ],
         Block(vec![Stmt::For {
+            unroll: unpopped::kernel::Unroll::None,
             local: 0,
             start: ci(0),
             end: ci(TAPS),

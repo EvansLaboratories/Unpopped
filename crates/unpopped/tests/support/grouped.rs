@@ -69,6 +69,7 @@ fn problem_body(r: &ScalarExpr, c: &ScalarExpr) -> Vec<Stmt> {
             init: ScalarExpr::ConstInt(0, I32),
         },
         Stmt::For {
+            unroll: unpopped::kernel::Unroll::None,
             local: 7,
             start: cu(0),
             end: local(2),
