@@ -83,6 +83,7 @@ fn build(s: Scatter, op: &OpDef, dtype: ElementKind, rank: u8) -> Result<KernelF
     let mut body = s.cell(op);
     for d in (0..s.r).rev() {
         body = Block(vec![Stmt::For {
+            unroll: crate::kernel::Unroll::None,
             local: s.counter(d),
             start: int(0),
             end: local(d),

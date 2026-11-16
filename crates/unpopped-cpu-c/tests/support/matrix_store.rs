@@ -40,6 +40,7 @@ fn alloc(alloc: u32, index: ScalarExpr) -> Place {
 }
 fn counted(var: u32, end: i64, body: Vec<Stmt>) -> Stmt {
     Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: var,
         start: u(0),
         end: u(end),

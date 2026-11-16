@@ -162,6 +162,7 @@ impl Sort {
 
     fn counted(&self, var: u32, start: ScalarExpr, end: ScalarExpr, body: Block) -> Stmt {
         Stmt::For {
+            unroll: crate::kernel::Unroll::None,
             local: var,
             start,
             end,

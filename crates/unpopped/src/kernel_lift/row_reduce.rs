@@ -122,6 +122,7 @@ impl Row {
     /// `for counter(d) in 0..extent(d) { inner }`.
     pub(super) fn for_lead(&self, d: u32, inner: Block) -> Block {
         Block(vec![Stmt::For {
+            unroll: crate::kernel::Unroll::None,
             local: self.counter(d),
             start: int(0),
             end: local(d),

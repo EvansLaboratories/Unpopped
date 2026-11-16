@@ -12,6 +12,7 @@ use super::{Val, elem_bits, read_elem};
 use crate::exec::MemorySpace;
 use crate::ir::ScalarExpr;
 use crate::kernel::Place;
+use crate::types::{self, Ty};
 use unpopped_vocab::ElementKind;
 
 impl Machine<'_> {
@@ -21,6 +22,7 @@ impl Machine<'_> {
         dst: &Place,
         src: &Place,
         elems: u32,
+        valid: Option<&ScalarExpr>,
     ) -> Result<(), KernelTrap> {
         let Place::Alloc { alloc, index } = dst else {
             return Err(KernelTrap::Unsupported(
@@ -47,7 +49,7 @@ impl Machine<'_> {
         if (at..at + n).any(|i| c.asyncq.covers(*alloc, i)) {
             return Err(KernelTrap::AsyncRace { alloc: *alloc });
         }
-        let vals = self.read_source(src, n)?;
+        let vals = self.read_valid(src, n, valid)?;
         let c = self.ctx.as_mut().expect("checked above");
         // the hardware may write the destination at any time after issue, so the issue is already a logged write: a
         // thread still reading the stage this copy refills (no barrier between) races it. The landing logs again.
@@ -60,6 +62,49 @@ impl Machine<'_> {
             vals,
         });
         Ok(())
+    }
+
+    /// Read the first `valid` of `n` source elements (all of them when `valid` is `None`) and zero-fill the rest; a count
+    /// of 0 reads nothing, so the source place is not even resolved.
+    fn read_valid(
+        &mut self,
+        src: &Place,
+        n: usize,
+        valid: Option<&ScalarExpr>,
+    ) -> Result<Vec<Val>, KernelTrap> {
+        let Some(e) = valid else {
+            return self.read_source(src, n);
+        };
+        let Ty::Scalar(t) = types::infer_ty_in(e, self.k.compute, &self.local_tys)
+            .map_err(|_| KernelTrap::Unsupported("a CopyAsync valid count type"))?
+        else {
+            return Err(KernelTrap::Unsupported("a packed CopyAsync valid count"));
+        };
+        let v = self.eval_int(e, t)?;
+        let v = usize::try_from(v)
+            .ok()
+            .filter(|v| *v <= n)
+            .ok_or(KernelTrap::Unsupported(
+                "a CopyAsync valid count outside 0..=elems",
+            ))?;
+        let Place::Logical { buffer, .. } = src else {
+            return Err(KernelTrap::Unsupported(
+                "a CopyAsync source that is not a buffer place",
+            ));
+        };
+        let KernelArg::Buffer(tb) = &self.args[*buffer as usize] else {
+            return Err(KernelTrap::Unsupported(
+                "a CopyAsync source that is not a buffer",
+            ));
+        };
+        let dt = tb.dtype;
+        let mut vals = if v == 0 {
+            Vec::new()
+        } else {
+            self.read_source(src, v)?
+        };
+        vals.resize(n, Val::Raw(0, dt));
+        Ok(vals)
     }
 
     /// Read `n` consecutive source elements starting at `src` now (logged global reads), bounds-checked on the buffer.

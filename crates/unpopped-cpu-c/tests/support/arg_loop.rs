@@ -99,6 +99,7 @@ fn consider_min() -> Stmt {
 /// `for j in 1..cols { x = in[r][j]; <consider> }`.
 fn scan_row(consider: Stmt) -> Stmt {
     Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: 3,
         start: ScalarExpr::ConstInt(1, I32),
         end: l(1),
@@ -116,6 +117,7 @@ fn scan_row(consider: Stmt) -> Stmt {
 /// `for r in 0..rows { best = in[r][0]; bi = 0; <scan>; out[r] = bi }`.
 fn rows(scan: Stmt) -> Stmt {
     Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: 2,
         start: ScalarExpr::ConstInt(0, I32),
         end: l(0),

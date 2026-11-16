@@ -54,6 +54,7 @@ fn out_floats(a: &KernelArg) -> Vec<f32> {
 /// `for i in 0..8 { out[i] = (i < 5 ? in[i] : fill) }` with the load masked (locals: 0 the counter, 1 the value).
 fn masked_load_loop(mask: ScalarExpr, fill: ScalarExpr) -> KernelFn {
     let body = vec![Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: 0,
         start: ci(0),
         end: ci(OUT_LEN as i64),
@@ -161,6 +162,7 @@ fn any_scalar_type_is_a_mask_and_nonzero_means_true() {
 fn a_masked_store_writes_only_where_the_mask_holds() {
     // `for i in 0..8 { if-masked out[i] = 9.0 }` with the mask `i < 5`
     let body = vec![Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: 0,
         start: ci(0),
         end: ci(OUT_LEN as i64),

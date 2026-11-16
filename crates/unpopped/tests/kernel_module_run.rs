@@ -250,6 +250,7 @@ fn loops_over_twice() -> KernelFn {
     let k = ScalarExpr::Cast(Box::new(ScalarExpr::Local(0)), spec);
     let step = call(2, vec![CallArg::Buffer(0), CallArg::Scalar(k)], None);
     let lp = Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: 0,
         start: ScalarExpr::ConstInt(0, I32),
         end: ScalarExpr::ConstInt(4, I32),

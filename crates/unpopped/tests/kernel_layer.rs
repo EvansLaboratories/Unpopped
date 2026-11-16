@@ -45,6 +45,7 @@ fn at(buffer: u32, c: ScalarExpr) -> Place {
 /// `for i in 0..n { x = in[i]; out[i] = x + 1.0 }`
 fn baseline_body() -> Vec<Stmt> {
     vec![Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: I,
         start: ci(0),
         end: local(N),
@@ -83,6 +84,7 @@ fn kernel(body: Vec<Stmt>) -> KernelFn {
 /// The loop body of the baseline, for mutations that edit inside it.
 fn loop_with(inner: Vec<Stmt>) -> Vec<Stmt> {
     vec![Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: I,
         start: ci(0),
         end: local(N),
@@ -324,6 +326,7 @@ fn the_loop_counter_and_scalar_params_cannot_be_assigned() {
 fn for_bounds_must_share_one_integer_type() {
     // Mutation: the end bound is an f32.
     let mixed = kernel(vec![Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: I,
         start: ci(0),
         end: ScalarExpr::Const(4.0),

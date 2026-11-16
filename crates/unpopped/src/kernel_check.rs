@@ -524,7 +524,15 @@ fn check_stmt(
             end,
             step,
             body,
-        } => check_for(k, *local, [start, end, step], body, sc)?,
+            unroll,
+        } => {
+            if matches!(unroll, crate::kernel::Unroll::Count(0)) {
+                return Err(KernelError::UnrollUnsupported {
+                    what: "an unroll factor of 0",
+                });
+            }
+            check_for(k, *local, [start, end, step], body, sc)?;
+        }
         Stmt::While { cond, body } => {
             scalar_cond(k, cond, sc)?;
             in_loop(k, body, sc)?;

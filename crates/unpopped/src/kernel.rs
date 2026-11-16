@@ -211,6 +211,32 @@ pub enum Place {
     },
 }
 
+/// The unroll hint of a [`Stmt::For`] (ROADMAP U18): a request to the emitter, never a meaning.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum Unroll {
+    /// No hint.
+    #[default]
+    None,
+    /// Unroll completely (`#pragma unroll`).
+    Full,
+    /// Unroll by this factor (`#pragma unroll N`); 0 is refused.
+    Count(u32),
+}
+
+/// The cache operator of a [`Stmt::CopyAsync`] (ROADMAP U13): a hint, never a meaning.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum CacheHint {
+    /// None given.
+    #[default]
+    Auto,
+    /// Cache at all levels (`cp.async.ca`).
+    All,
+    /// Cache at L2 only (`cp.async.cg`); 16-byte copies only.
+    Global,
+}
+
 /// A sequence of statements; a block opens a scope.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct Block(pub Vec<Stmt>);
@@ -291,6 +317,10 @@ pub enum Stmt {
         end: ScalarExpr,
         /// Increment; zero traps.
         step: ScalarExpr,
+        /// A non-semantic unroll hint (`#pragma unroll`, `[unroll]`; ROADMAP U18). Every value gives the same result; an
+        /// emitter may ignore it.
+        #[serde(default)]
+        unroll: Unroll,
         /// Loop body.
         body: Block,
     },
@@ -610,6 +640,17 @@ pub enum Stmt {
         src: Place,
         /// How many consecutive elements.
         elems: u32,
+        /// How many of the `elems` source elements are read (`cp.async ... src-size`; ROADMAP U13): the rest of the
+        /// destination is **zero-filled**, and `0` reads nothing at all, so a predicated-off copy may point anywhere. `None` is
+        /// all of them. An integer expression; above `elems` is a trap.
+        #[serde(default)]
+        valid: Option<ScalarExpr>,
+        /// The cache operator (`.ca`, `.cg`); the oracle ignores it.
+        #[serde(default)]
+        cache: CacheHint,
+        /// The L2 prefetch size in bytes (`.L2::64B`, `128B`, `256B`); the oracle ignores it.
+        #[serde(default)]
+        l2_prefetch: Option<u32>,
     },
     /// A bulk copy of `elems` contiguous elements from the global buffer place `src` to the `Shared` allocation place
     /// `dst`, issued by one thread, that **completes on an `mbarrier`** (`cp.async.bulk.shared::cluster.global.
@@ -1211,6 +1252,11 @@ pub enum KernelError {
     /// An `mbarrier` statement the checker refuses: a barrier place that is not a `Shared` 64-bit element, or an operand
     /// that is not an integer.
     MbarrierUnsupported {
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// A `Stmt::For` unroll hint the checker refuses (a factor of 0).
+    UnrollUnsupported {
         /// What is wrong.
         what: &'static str,
     },

@@ -64,6 +64,7 @@ fn k(body: Vec<Stmt>) -> KernelFn {
 
 fn for_loop(start: i64, end: i64, step: i64, body: Vec<Stmt>) -> Stmt {
     Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: 0,
         start: ci(start),
         end: ci(end),
@@ -139,6 +140,7 @@ fn bounds_are_read_once_before_the_first_pass() {
             init: ci(4),
         },
         Stmt::For {
+            unroll: unpopped::kernel::Unroll::None,
             local: 0,
             start: ci(0),
             end: local(1),
@@ -154,6 +156,7 @@ fn bounds_are_read_once_before_the_first_pass() {
 #[test]
 fn a_loop_ending_at_the_top_of_the_type_range_terminates() {
     let kernel = k(vec![Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: 0,
         start: ci(i64::from(i32::MAX) - 1),
         end: ci(i64::from(i32::MAX)),
@@ -215,6 +218,7 @@ fn integer_bounds_wrap_to_the_type_before_the_loop_runs() {
     // invisible in an output element; it is observable only through control flow.)
     let wrapped_end = ScalarExpr::Add(Box::new(ci(i64::from(i32::MAX))), Box::new(ci(1)));
     let kernel = k(vec![Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: 0,
         start: ci(0),
         end: wrapped_end,

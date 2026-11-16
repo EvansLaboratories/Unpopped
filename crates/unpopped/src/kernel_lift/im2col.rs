@@ -117,6 +117,7 @@ impl Geometry {
     /// `for ctr(i) in 0..end { inner }`.
     fn for_to(i: u32, end: ScalarExpr, inner: Block) -> Block {
         Block(vec![Stmt::For {
+            unroll: crate::kernel::Unroll::None,
             local: CTR + i,
             start: int(0),
             end,
