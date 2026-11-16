@@ -28,22 +28,14 @@ fn out() -> Place {
 fn store_three_tid() -> Stmt {
     Stmt::Store {
         place: out(),
-        value: ScalarExpr::Mul(
-            Box::new(tid()),
-            Box::new(ScalarExpr::ConstInt(3, U32)),
-        ),
+        value: ScalarExpr::Mul(Box::new(tid()), Box::new(ScalarExpr::ConstInt(3, U32))),
     }
 }
 fn kernel(body: Vec<Stmt>) -> KernelFn {
     KernelFn::new(
         "grid_dep",
         U32,
-        vec![Param::buffer(
-            "out",
-            U32,
-            BufferRole::ReadWrite,
-            Some(1),
-        )],
+        vec![Param::buffer("out", U32, BufferRole::ReadWrite, Some(1))],
         vec![LocalDecl::scalar(U32)],
         Block(body),
     )
