@@ -160,6 +160,8 @@ pub(super) struct BlockMem {
     pub(super) block_epoch: u32,
     /// Subgroup barriers released so far, per subgroup.
     pub(super) sub_epoch: Vec<u32>,
+    /// The `mbarrier` objects of the block, keyed by the allocation and element that name them.
+    pub(super) mbar: std::collections::HashMap<(u32, usize), super::kernel_mbar::MbarState>,
 }
 
 /// The linear id of the cluster the block at `idx` belongs to (`0` when the launch has no clusters).

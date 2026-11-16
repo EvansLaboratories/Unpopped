@@ -15,6 +15,16 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.50.0` — **BREAKING**: `Stmt::MbarInit`, `MbarArrive`, `MbarCompleteTx`, `MbarWait`, `KernelError::MbarrierUnsupported`, `KernelTrap::MbarrierMisuse`/`MbarrierDeadlock` (ROADMAP U8c slice 1)
+
+The `mbarrier` object (PTX `mbarrier.init`, `arrive` with `expect_tx`, `complete_tx`, `try_wait.parity`) as four statements over an element of a `Shared` 64-bit allocation: no new allocation kind or element kind. The oracle keeps the arrival count, pending arrivals, transaction count and phase per block; a wait blocks its thread until the phase of that parity has completed and the scheduler wakes it when another thread's arrival completes the phase; a block where nothing can run is `KernelTrap::MbarrierDeadlock`, a use outside the contract (never initialised, count below 1, parity not 0 or 1, more arrivals than pending) is `KernelTrap::MbarrierMisuse`. Arrive and `complete_tx` are release-class atomic accesses at `Block` scope and a successful wait is acquire-class, so the existing release/acquire edge model orders what the producer wrote before it arrived (a store after the arrival is still a `DataRace`). The checker (`MbarrierUnsupported`) needs a `Shared` allocation of 64-bit elements and integer operands.
+
+**Who is affected:** `Stmt`, `KernelError` and `KernelTrap` are exhaustive, so a visitor, emitter or trap-matcher that names every variant needs the new arms. `unpopped-cpu-c` **refuses** the statements (a wait blocks a thread until another arrives and the serial C runs a block's threads one after another); a vendor emitter lowers them to `mbarrier.*` PTX or refuses them as a gap. Not modelled: cluster-scope and remote arrivals, `try_wait` timeouts, reading the barrier word as data, and the TMA copy that calls `complete_tx` (U8c's remaining slices). The phase rule is from a recalled reading of the PTX ISA, not re-read for this change (options note S3).
+
+Verified by `tests/kernel_mbar.rs` (nine tests: a consumer that blocks and is woken sees the producer's data without a race; a store after the arrival is a `DataRace`; an unfinished phase is a deadlock; two-arrival completion; parity alternation; parity 1 passing on a fresh barrier; the transaction count holding the phase open; misuse traps; checker refusals; four seeded mutants of the oracle (release order dropped, parity test inverted, tx ignored, acquire order dropped) each failed at least one test) and `unpopped-cpu-c/tests/kernel_mbar_refused.rs` (the refusal and its control).
+
+---
+
 ## `0.49.0` — **BREAKING**: `Stmt::MatrixStore` (`stmatrix`), `KernelError::MatrixStoreUnsupported` (ROADMAP U8b slice 2)
 
 `Stmt::MatrixStore { count, trans, dst, src }` is the inverse of `Stmt::MatrixLoad` (0.48.0): a 32-lane warp holds fragments of `2 * count` 16-bit elements in a `Private` allocation and the lanes `8t + r` write row `r` of tile `t` (8 contiguous `Shared` elements) at their `dst` address; `trans` stores the transposed tile. It is a rendezvous (reached in uniform control by the whole warp); the writes are ordinary logged `Shared` writes by the supplying lane, ordered by the next barrier. Checker: subgroup exactly 32, `count` 1, 2 or 4, `Shared` 16-bit place, `Private` fragment of `2 * count` elements of the same type, else `KernelError::MatrixStoreUnsupported`.

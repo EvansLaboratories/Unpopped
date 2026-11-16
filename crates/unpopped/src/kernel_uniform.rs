@@ -205,6 +205,10 @@ impl Walk<'_> {
             | Stmt::CopyAsync { .. }
             | Stmt::AsyncCommit
             | Stmt::AsyncWait { .. }
+            | Stmt::MbarInit { .. }
+            | Stmt::MbarArrive { .. }
+            | Stmt::MbarCompleteTx { .. }
+            | Stmt::MbarWait { .. }
             | Stmt::Return => {}
             // an MMA is a rendezvous of its subgroup, like a barrier; it defines no local
             Stmt::Mma { .. } | Stmt::MatrixLoad { .. } | Stmt::MatrixStore { .. } => {

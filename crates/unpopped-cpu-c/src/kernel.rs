@@ -231,6 +231,14 @@ impl Emitter<'_> {
             Stmt::MatrixLoad { .. } => {
                 return Err(refuse("a Stmt::MatrixLoad is block-level only"));
             }
+            Stmt::MbarInit { .. }
+            | Stmt::MbarArrive { .. }
+            | Stmt::MbarCompleteTx { .. }
+            | Stmt::MbarWait { .. } => {
+                return Err(refuse(
+                    "an mbarrier waits for another thread, and the serial C runs the threads of a block one after another",
+                ));
+            }
             Stmt::MatrixStore { .. } => {
                 return Err(refuse("a Stmt::MatrixStore is block-level only"));
             }

@@ -299,6 +299,12 @@ impl<'a> Machine<'a> {
             }
             Stmt::Mma { .. } => return Err(KernelTrap::Unsupported("Mma")),
             Stmt::MatrixLoad { .. } => return Err(KernelTrap::Unsupported("MatrixLoad")),
+            Stmt::MbarInit { .. }
+            | Stmt::MbarArrive { .. }
+            | Stmt::MbarCompleteTx { .. }
+            | Stmt::MbarWait { .. } => {
+                return Err(KernelTrap::Unsupported("an mbarrier statement"));
+            }
             Stmt::MatrixStore { .. } => return Err(KernelTrap::Unsupported("MatrixStore")),
             Stmt::ExternCall {
                 decl,

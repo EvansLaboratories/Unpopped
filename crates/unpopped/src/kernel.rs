@@ -481,6 +481,53 @@ pub enum Stmt {
         /// The `Private` allocation (index into [`KernelFn::allocs`]) that receives this lane's `2 * count` elements.
         dst: u32,
     },
+    /// Initialise the `mbarrier` object at `bar` (U8c; PTX `mbarrier.init`): its arrival count is `count` (at least 1), its
+    /// pending arrivals are `count`, its transaction count is 0 and its phase is 0. `bar` is a place of a `Shared`
+    /// allocation of 64-bit elements; the oracle keeps the object's state beside the element (reading the element as data
+    /// is not modelled), and the initialisation is a logged write to that element, so another thread's use needs a barrier
+    /// after it, as on hardware. Not a rendezvous.
+    ///
+    /// **Patent:** `mbarrier` is the published PTX synchronisation object; this describes its behaviour and claims no
+    /// implementation. No patent search specific to it was run (`docs/PATENT-SWEEP.md`, U8c section).
+    MbarInit {
+        /// The `Shared` 64-bit element holding the object.
+        bar: Place,
+        /// The arrival count, at least 1.
+        count: ScalarExpr,
+    },
+    /// Arrive at the `mbarrier` at `bar` (`mbarrier.arrive`): one pending arrival is consumed, after first adding `tx`
+    /// bytes to the transaction count when given (`arrive.expect_tx`). When no arrival is pending and the transaction
+    /// count is 0 the phase completes: the phase number advances and the pending arrivals return to the arrival count.
+    /// A release-class atomic access at `Block` scope: what the thread wrote before it is visible to a thread whose
+    /// [`Stmt::MbarWait`] later sees the phase complete. Arriving at an uninitialised barrier is
+    /// `KernelTrap::MbarrierMisuse`.
+    MbarArrive {
+        /// The barrier.
+        bar: Place,
+        /// Bytes to add to the transaction count first (`expect_tx`), when the arrival also announces a transfer.
+        tx: Option<ScalarExpr>,
+    },
+    /// Subtract `bytes` from the transaction count of the `mbarrier` at `bar` (`mbarrier.complete_tx`): what an
+    /// asynchronous copy does as its data lands. Completes the phase when it brings the count to 0 with no arrival
+    /// pending. A release-class atomic access like [`Stmt::MbarArrive`].
+    MbarCompleteTx {
+        /// The barrier.
+        bar: Place,
+        /// The bytes that landed.
+        bytes: ScalarExpr,
+    },
+    /// Wait until the phase of the `mbarrier` at `bar` whose parity is `parity` (0 or 1) has completed
+    /// (`mbarrier.try_wait.parity` in a loop): true once the barrier's current phase number has the other parity, so
+    /// `parity` 0 waits for the first phase and `parity` 1 passes at once on a fresh barrier (the previous phase of
+    /// the first one is complete by convention). The thread blocks; it resumes when some other thread's arrival
+    /// completes the phase, and a block in which every remaining thread waits is `KernelTrap::MbarrierDeadlock`. An
+    /// acquire-class atomic access at `Block` scope. Not a rendezvous: any subset of the block's threads may wait.
+    MbarWait {
+        /// The barrier.
+        bar: Place,
+        /// Which phase parity to wait for: 0 or 1.
+        parity: ScalarExpr,
+    },
     /// A warp-level matrix store (`stmatrix`; ROADMAP U8b slice 2): the inverse of [`Stmt::MatrixLoad`]. Lane `l` holds
     /// in `src` (a `Private` allocation of `2 * count` 16-bit elements) the fragment it would have received from a load
     /// of the same `count` and `trans`; lane `8 * t + r` (`t < count`, `r < 8`) supplies in `dst` (a place of a
@@ -1094,6 +1141,12 @@ pub enum KernelError {
     },
     /// A `Stmt::Mma` the checker refuses: what is wrong with the atom, the launch or a fragment.
     MmaUnsupported {
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// An `mbarrier` statement the checker refuses: a barrier place that is not a `Shared` 64-bit element, or an operand
+    /// that is not an integer.
+    MbarrierUnsupported {
         /// What is wrong.
         what: &'static str,
     },
