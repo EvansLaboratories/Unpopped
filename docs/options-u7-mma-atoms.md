@@ -76,7 +76,9 @@ collectives; same checker rule (in uniform control, at a scope, full participati
 | S4 | WGMMA: a warpgroup scope, shared-memory operand descriptors, commit/wait | S2 + U4 S7 + U8 smem/async |
 | S5 | `tcgen05`/UMMA: tensor-memory space, single-thread issue, CTA pairs | S4 + a TMEM space |
 
-S1a, S2 and S3 address groups 1, 2 and 4 above; S4 and S5 address group 3 and are blocked on U8 and U4 S7, and say so. The number of survey rows each slice would flip is not computed here.
+S1a, S2 and S3 address groups 1, 2 and 4 above; S4 and S5 address group 3 and were blocked on U8 and U4 S7, and said so.
+
+**S4 built 2026-11-16, option A (PM ruling: the IR is the union regardless of an emitter).** `Stmt::Wgmma`, `WgmmaCommit`, `WgmmaWait` and `Scope::Warpgroup`: a minimal `m64nNk16` over 16-bit float inputs and an `F32` accumulator, both tiles K-major row-major `Shared` places, the accumulator a `Private` fragment in the PTX thread layout, asynchronous with commit and wait groups (the operand tiles are read at issue, the result lands at the wait). Each thread reads its share of the tile rows (A row `t` for `t < 64`, B rows `t` and `t + 128`) so the reads are ordinary logged `Shared` loads, and the compute reuses the `Stmt::Mma` numeric contract. **Not modelled: shared-memory matrix descriptors and swizzle modes (no ISA text was available, so they are recorded as a gap and not counted as covered), register-resident A, transposed operands, 8-bit/`tf32`/sparse inputs, half-precision accumulate, and a trap for reading the fragment before its wait.** S5 (`tcgen05`, tensor memory) is open. The number of survey rows each slice would flip is not computed here.
 
 ## Needs a ruling
 

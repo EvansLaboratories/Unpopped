@@ -298,6 +298,9 @@ impl<'a> Machine<'a> {
                 return Err(KernelTrap::Unsupported("Collective"));
             }
             Stmt::Mma { .. } => return Err(KernelTrap::Unsupported("Mma")),
+            Stmt::Wgmma { .. } | Stmt::WgmmaCommit | Stmt::WgmmaWait { .. } => {
+                return Err(KernelTrap::Unsupported("a wgmma statement"));
+            }
             Stmt::MatrixLoad { .. } => return Err(KernelTrap::Unsupported("MatrixLoad")),
             Stmt::MbarInit { .. }
             | Stmt::MbarArrive { .. }

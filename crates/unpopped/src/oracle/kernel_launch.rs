@@ -35,6 +35,7 @@ use super::kernel_mem::{AllocMem, AsyncQueue, BlockMem, Log, Peers, ThreadCtx, c
 use super::kernel_mma::{MmaContribution, compute};
 use super::kernel_resume::{Frame, Stop, initial_stack};
 use super::kernel_sync::Edges;
+use super::kernel_wgmma::{WgmmaContribution, compute as wgmma_compute};
 use crate::exec::{AllocDecl, Extent, LaunchShape, MemorySpace, Scope};
 use crate::ir::ScalarExpr;
 use crate::kernel::{KernelFn, MemoryOrder, Module, ParamKind, check_kernel, check_module};
@@ -479,6 +480,12 @@ struct ThreadRun<'a> {
     contrib: Option<Contribution>,
     /// What the thread handed over to the `Stmt::Mma` it waits at.
     mma: Option<Box<MmaContribution>>,
+    /// What the thread handed over to the `Stmt::Wgmma` it waits at.
+    wgmma: Option<Box<WgmmaContribution>>,
+    /// The `D` fragments (allocation, values) of this thread's wgmma operations not yet committed, then the committed
+    /// groups still in flight, oldest first.
+    wg_open: Vec<(u32, Vec<Val>)>,
+    wg_groups: std::collections::VecDeque<Vec<(u32, Vec<Val>)>>,
     /// What the thread handed over to the `Stmt::MatrixLoad` it waits at.
     matrix: Option<Box<MatrixContribution>>,
     /// What the thread handed over to the `Stmt::MatrixStore` it waits at.
@@ -535,6 +542,9 @@ fn start_block<'a>(b: &BlockRun<'a>) -> BlockState<'a> {
             matrix_store: None,
             pending: Vec::new(),
             tuple: None,
+            wgmma: None,
+            wg_open: Vec::new(),
+            wg_groups: std::collections::VecDeque::new(),
         })
         .collect();
     BlockState { threads }
@@ -564,6 +574,10 @@ fn advance<'a>(
             return Ok(BlockStop::Done);
         }
         if wake_mbar_waiters(&mut st.threads, own) {
+            continue;
+        }
+        // a thread that stopped only to have a wgmma commit or wait applied is runnable again
+        if st.threads.iter().any(|t| t.status == Status::Runnable) {
             continue;
         }
         if let Some((scope, at)) = at_grid_barrier(&st.threads) {
@@ -696,6 +710,22 @@ fn status_after(stop: Stop, t: &mut ThreadRun<'_>) -> Status {
             t.tuple = Some(c);
             Status::Waiting { scope, at }
         }
+        Stop::Wgmma { at, c } => {
+            t.wgmma = Some(c);
+            Status::Waiting {
+                scope: Scope::Warpgroup,
+                at,
+            }
+        }
+        Stop::WgmmaCommit => {
+            let open = std::mem::take(&mut t.wg_open);
+            t.wg_groups.push_back(open);
+            Status::Runnable
+        }
+        Stop::WgmmaWait { pending } => {
+            land_wgmma(t, pending);
+            Status::Runnable
+        }
         Stop::Mma { at, c } => {
             t.mma = Some(c);
             Status::Waiting {
@@ -776,6 +806,33 @@ fn deliver_tuple(
     Ok(())
 }
 
+/// A wgmma whose 128 threads have all arrived: compute `D` and queue each thread's fragment on it, to land at the wait
+/// that covers its group. Like an MMA it orders no memory.
+fn deliver_wgmma(members: &mut [ThreadRun<'_>]) -> Result<(), KernelTrap> {
+    let lanes: Vec<WgmmaContribution> = members
+        .iter_mut()
+        .map(|t| *t.wgmma.take().expect("every thread handed over"))
+        .collect();
+    let out = wgmma_compute(&lanes)?;
+    for ((t, c), frag) in members.iter_mut().zip(&lanes).zip(out) {
+        t.wg_open.push((c.d, frag));
+    }
+    Ok(())
+}
+
+/// Land this thread's committed wgmma groups until at most `pending` remain in flight.
+fn land_wgmma(t: &mut ThreadRun<'_>, pending: u32) {
+    while t.wg_groups.len() > pending as usize {
+        for (d, frag) in t.wg_groups.pop_front().expect("longer than pending") {
+            if let Some(mem) = t.private[d as usize].as_mut() {
+                for (i, v) in frag.into_iter().enumerate() {
+                    mem.set(i, v);
+                }
+            }
+        }
+    }
+}
+
 /// An MMA whose every lane has arrived: compute `D` and store each lane's fragment in its `Private` array. Like a
 /// collective it exchanges registers and orders no memory.
 fn deliver_mma(members: &mut [ThreadRun<'_>]) -> Result<(), KernelTrap> {
@@ -848,6 +905,11 @@ fn group_of(b: &BlockRun<'_>, scope: Scope, lin: u32, total: u32) -> Range<u32> 
             let s = lin / b.sg;
             (s * b.sg)..((s + 1) * b.sg).min(total)
         }
+        Scope::Warpgroup => {
+            let w = 4 * b.sg;
+            let s = lin / w;
+            (s * w)..((s + 1) * w).min(total)
+        }
         _ => 0..total,
     }
 }
@@ -887,7 +949,9 @@ fn release(
     }
     for (scope, group) in groups {
         let members = &mut threads[group.start as usize..group.end as usize];
-        if members.iter().all(|t| t.mma.is_some()) {
+        if members.iter().all(|t| t.wgmma.is_some()) {
+            deliver_wgmma(members)?;
+        } else if members.iter().all(|t| t.mma.is_some()) {
             deliver_mma(members)?;
         } else if members.iter().all(|t| t.matrix.is_some()) {
             deliver_matrix(members)?;
@@ -970,6 +1034,9 @@ mod tests {
                 matrix_store: None,
                 pending: Vec::new(),
                 tuple: None,
+                wgmma: None,
+                wg_open: Vec::new(),
+                wg_groups: std::collections::VecDeque::new(),
             })
             .collect();
         let mut mem = BlockMem {

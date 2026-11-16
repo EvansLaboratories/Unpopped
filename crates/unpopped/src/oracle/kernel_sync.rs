@@ -88,10 +88,11 @@ pub(super) fn width(s: Scope) -> u8 {
     match s {
         Scope::Thread => 0,
         Scope::Subgroup => 1,
-        Scope::Block => 2,
-        Scope::Cluster => 3,
-        Scope::Device => 4,
-        _ => 5,
+        Scope::Warpgroup => 2,
+        Scope::Block => 3,
+        Scope::Cluster => 4,
+        Scope::Device => 5,
+        _ => 6,
     }
 }
 
@@ -104,6 +105,7 @@ pub(super) fn contains(scope: Scope, a: Tid, b: Tid) -> bool {
     match scope {
         Scope::Thread => a == b,
         Scope::Subgroup => a.0 == b.0 && a.2 == b.2,
+        Scope::Warpgroup => a.0 == b.0 && a.2 / 4 == b.2 / 4,
         Scope::Block => a.0 == b.0,
         Scope::Cluster => a.3 == b.3,
         Scope::Device => a.4 == b.4,

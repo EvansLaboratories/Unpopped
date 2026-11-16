@@ -12,6 +12,7 @@ use super::kernel_collective::{Contribution, TupleContribution};
 use super::kernel_eval::{KernelTrap, Machine};
 use super::kernel_matrix::{MatrixContribution, StoreContribution};
 use super::kernel_mma::MmaContribution;
+use super::kernel_wgmma::WgmmaContribution;
 use crate::exec::Scope;
 use crate::ir::ScalarExpr;
 use crate::kernel::{Block, CallArg, KernelFn, Module, Stmt};
@@ -100,6 +101,18 @@ pub(super) enum Stop {
     },
     /// At an MMA statement, having handed over its fragments, waiting for the rest of the subgroup.
     Mma { at: usize, c: Box<MmaContribution> },
+    /// At a `Stmt::Wgmma`, having handed over its tile rows, waiting for the rest of the warpgroup.
+    Wgmma {
+        at: usize,
+        c: Box<WgmmaContribution>,
+    },
+    /// At a `Stmt::WgmmaCommit`: close this thread's open wgmma operations into a group.
+    WgmmaCommit,
+    /// At a `Stmt::WgmmaWait`: land this thread's wgmma groups older than the newest `pending`.
+    WgmmaWait {
+        /// How many of the newest groups may stay in flight.
+        pending: u32,
+    },
     /// At a `Stmt::MbarWait` whose phase has not completed.
     MbarWait {
         alloc: u32,
@@ -210,6 +223,16 @@ impl<'a> Machine<'a> {
                     at: std::ptr::from_ref(st) as usize,
                     c: Box::new(self.mma_contribution(st)?),
                 }));
+            }
+            Stmt::Wgmma { .. } => {
+                return Ok(Some(Stop::Wgmma {
+                    at: std::ptr::from_ref(st) as usize,
+                    c: Box::new(self.wgmma_contribution(st)?),
+                }));
+            }
+            Stmt::WgmmaCommit => return Ok(Some(Stop::WgmmaCommit)),
+            Stmt::WgmmaWait { pending } => {
+                return Ok(Some(Stop::WgmmaWait { pending: *pending }));
             }
             Stmt::MbarInit { .. }
             | Stmt::MbarArrive { .. }

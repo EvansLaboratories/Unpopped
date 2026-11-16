@@ -579,6 +579,48 @@ pub enum Stmt {
         /// The `Private` allocation (index into [`KernelFn::allocs`]) holding this lane's `2 * count` elements.
         src: u32,
     },
+    /// A warpgroup-level asynchronous matrix multiply-accumulate (`wgmma.mma_async.m64nNk16`; ROADMAP U7 S4, **option
+    /// A: no swizzle and no descriptor bits are modelled, and there was no ISA text to check them against**). The 128
+    /// threads of a warpgroup (a block of `Scope::Warpgroup` groups, 32-lane subgroups, a launch block `[x, 1, 1]` with
+    /// `x` a multiple of 128) issue it together, in uniform control: `D = A.B + C` for a 64 x 16 `A` at `a` (row-major,
+    /// K-major) and an `n` x 16 `B` at `b` (row-major, K-major), both places of `Shared` allocations of `ab` (16-bit
+    /// float) elements, with `D` the thread's `Private` fragment `d` of `n / 2` `acc` elements in the `wgmma` layout
+    /// (see `oracle/kernel_wgmma.rs`). `scale_d` zero overwrites `D` instead of accumulating into it. The operand
+    /// tiles are read when the statement executes (ordinary logged `Shared` reads, so they must be ordered after the
+    /// stores that fill them); the result **lands at the [`Stmt::WgmmaWait`] that covers the group a
+    /// [`Stmt::WgmmaCommit`] closed**, and an operation never committed is never waited for. Reading `d` before then
+    /// returns its old value and is **not** trapped. Register-resident `A`, transposed operands, 8-bit and `tf32`
+    /// inputs, and a half-precision accumulator are not modelled.
+    ///
+    /// **Patent:** see `docs/PATENT-SWEEP.md` (U7 S4 section): this describes the published instruction behaviour
+    /// and does not claim an implementation.
+    Wgmma {
+        /// Columns of `B` and `D`: a multiple of 8, 8 to 256.
+        n: u32,
+        /// The input element type: `F16` or `Bf16`.
+        #[serde(with = "crate::text::ek")]
+        ab: ElementKind,
+        /// The accumulator element type: `F32`.
+        #[serde(with = "crate::text::ek")]
+        acc: ElementKind,
+        /// The first element of the `A` tile: a `Place::Alloc` of a `Shared` allocation.
+        a: Place,
+        /// The first element of the `B` tile: a `Place::Alloc` of a `Shared` allocation.
+        b: Place,
+        /// The `Private` allocation (index into [`KernelFn::allocs`]) holding this thread's `D` fragment.
+        d: u32,
+        /// Zero: `D = A.B`; nonzero: `D = A.B + D`. An integer expression.
+        scale_d: ScalarExpr,
+    },
+    /// Close this thread's open [`Stmt::Wgmma`] operations into one group (`wgmma.commit_group`). A commit with no
+    /// open operation still makes a group, so that wait counts line up.
+    WgmmaCommit,
+    /// Wait until at most `pending` of this thread's committed [`Stmt::Wgmma`] groups are still in flight
+    /// (`wgmma.wait_group`); the older ones land in their `d` fragments.
+    WgmmaWait {
+        /// How many of the newest groups may stay in flight.
+        pending: u32,
+    },
     /// An asynchronous copy of `elems` contiguous elements from the global buffer place `src` to the `Shared`
     /// allocation place `dst`, issued by one thread (`cp.async`; ROADMAP U8 S1, `docs/options-u8-copy-atoms.md`). It
     /// lands only when a later [`Stmt::AsyncWait`] covers its group: `elems` times the element size is 4, 8 or 16
@@ -1222,6 +1264,12 @@ pub enum KernelError {
     /// buffer, mismatched element types, a size that is not a multiple of 16 bytes, or a barrier that is not a `Shared`
     /// 64-bit element.
     BulkCopyUnsupported {
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// A `Stmt::Wgmma` the checker refuses: a launch that is not whole warpgroups of 32-lane subgroups, an `n` or element
+    /// type outside the modelled set, a tile that is not a `Shared` place, or a fragment of the wrong space or length.
+    WgmmaUnsupported {
         /// What is wrong.
         what: &'static str,
     },

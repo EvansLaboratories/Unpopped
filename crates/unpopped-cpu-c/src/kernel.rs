@@ -259,6 +259,11 @@ impl Emitter<'_> {
             Stmt::MatrixStore { .. } => {
                 return Err(refuse("a Stmt::MatrixStore is block-level only"));
             }
+            Stmt::Wgmma { .. } | Stmt::WgmmaCommit | Stmt::WgmmaWait { .. } => {
+                return Err(refuse(
+                    "a wgmma is a warpgroup-wide asynchronous operation the serial C does not spell",
+                ));
+            }
             Stmt::CopyBulk { .. } => {
                 return Err(refuse(
                     "a bulk copy completes on an mbarrier, which the serial C cannot block a thread on",

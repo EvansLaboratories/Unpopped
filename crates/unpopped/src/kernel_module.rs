@@ -150,6 +150,7 @@ fn holds_barrier(b: &Block, externs: &[ExternDecl]) -> bool {
         | Stmt::Collective { .. }
         | Stmt::CollectiveTuple { .. }
         | Stmt::Mma { .. }
+        | Stmt::Wgmma { .. }
         | Stmt::MatrixLoad { .. }
         | Stmt::MatrixStore { .. } => true,
         Stmt::ExternCall { decl, .. } => externs
