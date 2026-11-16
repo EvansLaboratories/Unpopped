@@ -12,7 +12,7 @@ use super::Val;
 use super::kernel_eval::{KernelTrap, Machine};
 use crate::exec::{ExecId, MemorySpace};
 use crate::ir::ScalarExpr;
-use crate::kernel::Place;
+use crate::kernel::{Place, Stmt};
 use unpopped_vocab::ElementKind;
 
 /// Lanes of tensor memory, rows of `A` and of `D`.
@@ -37,14 +37,20 @@ impl Machine<'_> {
     }
 
     /// Run a `Tcgen05Mma`: `D` of `n` columns from `d_col` of the tensor allocation `d`.
-    pub(super) fn tcgen05_mma(
-        &mut self,
-        n: u32,
-        (a, b): (&Place, &Place),
-        (d, d_col): (u32, &ScalarExpr),
-        scale_d: &ScalarExpr,
-    ) -> Result<(), KernelTrap> {
-        let n = n as usize;
+    pub(super) fn tcgen05_mma(&mut self, st: &Stmt) -> Result<(), KernelTrap> {
+        let Stmt::Tcgen05Mma {
+            n,
+            a,
+            b,
+            d,
+            d_col,
+            scale_d,
+            ..
+        } = st
+        else {
+            unreachable!("tcgen05_mma is called for a Tcgen05Mma");
+        };
+        let (n, d) = (*n as usize, *d);
         let cols = self.tmem_columns(d);
         let col0 = usize::try_from(self.wgmma_int(d_col)?)
             .ok()

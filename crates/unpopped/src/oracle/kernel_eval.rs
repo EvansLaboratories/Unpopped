@@ -430,15 +430,7 @@ impl<'a> Machine<'a> {
                 elems,
                 bar,
             } => self.copy_bulk(dst, src, *elems, bar)?,
-            Stmt::Tcgen05Mma {
-                n,
-                a,
-                b,
-                d,
-                d_col,
-                scale_d,
-                ..
-            } => self.tcgen05_mma(*n, (a, b), (*d, d_col), scale_d)?,
+            Stmt::Tcgen05Mma { .. } => self.tcgen05_mma(st)?,
             Stmt::Tcgen05Ld {
                 src,
                 col,
