@@ -638,6 +638,11 @@ pub enum Stmt {
     WgmmaCommit,
     /// Wait until at most `pending` of this thread's committed [`Stmt::Wgmma`] groups are still in flight
     /// (`wgmma.wait_group`); the older ones land in their `d` fragments.
+    ///
+    /// **Patent note (CireSnave 2026-11-16):** lowering this to a hardware operation on non-NVIDIA hardware may implicate
+    /// NVIDIA's US12204897B2 and its continuation US12710961B2 (claims 1, 9, 15 and 9, 15 name no hardware by their words);
+    /// the oracle lands the results here and does not block, and no fence is modelled. See `docs/PATENT-SWEEP.md`.
+    /// Emitters for other manufacturers decline it.
     WgmmaWait {
         /// How many of the newest groups may stay in flight.
         pending: u32,

@@ -235,7 +235,7 @@ CireSnave, 2026-10-30, as relayed by the PM (the relay ends in an ellipsis; the 
 
 Unpopped holds neither the parser nor the emitter for any target above; it keeps the IR, the traits and one reference emitter (`unpopped-cpu-c`). `unpopped-slang` is the exception only until the handover completes; the Slang parser (`parse_slang`, `SLANG`, `SLANG_RESIDUE`) leaves `convert.rs` for `vulkane-slang-parse`. The IR-union work (ROADMAP I*) is unchanged by this. Recorded here without a code change.
 
-## 10. Emitter handling of the `mbarrier` statements (CireSnave 2026-11-16, `docs/PATENT-SWEEP.md`, US11803380B2)
+## 10. Emitter handling of the `mbarrier` statements and `WgmmaWait` (CireSnave 2026-11-16, `docs/PATENT-SWEEP.md`, US11803380B2, US12204897B2)
 
 | Statement | NVIDIA targets | Other manufacturers' targets |
 |---|---|---|
@@ -245,5 +245,6 @@ Unpopped holds neither the parser nor the emitter for any target above; it keeps
 | `Stmt::MbarWait` | may lower, with the risk note in the sweep | decline by name |
 | `Stmt::CopyBulk (completing on an mbarrier)` | may lower, with the risk note in the sweep | decline by name |
 | `Stmt::Tcgen05Commit` (arrives on an mbarrier) | may lower, with the risk note in the sweep | decline by name |
+| `Stmt::WgmmaWait` (US12204897B2, US12710961B2) | may lower, with the risk note in the sweep | decline by name |
 
 Why: claims 1, 6, 18 and 20 of US11803380B2 require hardware by their words; claim 15 is open. A decline here is by statement name, so the refusal text should contain the variant name. Not a legal opinion; the sweep holds the reading.
