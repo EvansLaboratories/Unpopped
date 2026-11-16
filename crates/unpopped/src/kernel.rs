@@ -412,6 +412,15 @@ pub enum Stmt {
         /// The memory order: `Relaxed` or `Acquire`.
         order: MemoryOrder,
     },
+    /// `griddepcontrol.wait` (programmatic dependent launch, ROADMAP U17): block this thread until every prerequisite
+    /// grid of the launch has completed and its memory writes are visible. With no prerequisite grid (the only case the
+    /// oracle and the serial C can see: one launch) it does nothing. Which grids are prerequisites is a launch-time
+    /// property of the host API (a stream attribute or a graph edge), not of the kernel, so the IR does not carry it.
+    GridDepWait,
+    /// `griddepcontrol.launch_dependents`: tell the hardware that the grids that depend on this one may begin to launch
+    /// once every block of this grid has executed it or exited. It is a scheduling hint: it orders nothing, and a
+    /// dependent still [`Stmt::GridDepWait`]s before it reads this grid's results. The oracle and the serial C ignore it.
+    GridDepLaunchDependents,
     /// A memory fence of `scope` with `order`. Since 0.42.8 the oracle runs it as the C++ fence rules do: a release
     /// fence (`Release`, `AcqRel`, `SeqCst`) before a relaxed atomic publishes what the thread knew; an acquire fence
     /// (`Acquire`, `AcqRel`, `SeqCst`) after a relaxed atomic read takes in what that read saw. `check_kernel` refuses a

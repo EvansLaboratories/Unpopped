@@ -262,6 +262,7 @@ fn check_sync_stmt(
         Stmt::Mma { .. } => mma::check_mma(k, st)?,
         Stmt::Wgmma { .. } => wgmma::check_wgmma(k, st, sc)?,
         Stmt::WgmmaCommit | Stmt::WgmmaWait { .. } => {}
+        Stmt::GridDepWait | Stmt::GridDepLaunchDependents => {}
         Stmt::Tcgen05Mma { .. } | Stmt::Tcgen05Ld { .. } => tcgen05::check_tcgen05(k, st, sc)?,
         Stmt::MatrixLoad { .. } => matrix::check_matrix_load(k, st, sc)?,
         Stmt::MbarInit { .. }
@@ -505,6 +506,8 @@ fn check_stmt(
         | Stmt::Wgmma { .. }
         | Stmt::WgmmaCommit
         | Stmt::WgmmaWait { .. }
+        | Stmt::GridDepWait
+        | Stmt::GridDepLaunchDependents
         | Stmt::Tcgen05Mma { .. }
         | Stmt::Tcgen05Commit { .. }
         | Stmt::Tcgen05Ld { .. }

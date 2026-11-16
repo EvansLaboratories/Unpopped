@@ -206,6 +206,8 @@ impl Walk<'_> {
             | Stmt::CopyBulk { .. }
             | Stmt::WgmmaCommit
             | Stmt::WgmmaWait { .. }
+            | Stmt::GridDepWait
+            | Stmt::GridDepLaunchDependents
             | Stmt::Tcgen05Mma { .. }
             | Stmt::Tcgen05Commit { .. }
             | Stmt::Tcgen05Ld { .. }
