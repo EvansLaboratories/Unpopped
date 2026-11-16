@@ -242,6 +242,11 @@ impl Emitter<'_> {
             Stmt::MatrixStore { .. } => {
                 return Err(refuse("a Stmt::MatrixStore is block-level only"));
             }
+            Stmt::CopyBulk { .. } => {
+                return Err(refuse(
+                    "a bulk copy completes on an mbarrier, which the serial C cannot block a thread on",
+                ));
+            }
             Stmt::Call {
                 callee,
                 args,

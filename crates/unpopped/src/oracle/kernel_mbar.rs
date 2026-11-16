@@ -9,10 +9,12 @@
 use super::kernel_eval::{KernelTrap, Machine};
 use super::kernel_mem::AccessKind;
 use super::kernel_resume::{Frame, Stop};
+use super::{Val, elem_bits};
 use crate::exec::{MemorySpace, Scope};
 use crate::ir::ScalarExpr;
 use crate::kernel::{MemoryOrder, Place, Stmt};
 use crate::types::{self, Ty};
+use unpopped_vocab::ElementKind;
 
 /// One `mbarrier` object.
 #[derive(Clone, Copy, Debug)]
@@ -81,15 +83,70 @@ impl Machine<'_> {
             }
             Stmt::MbarCompleteTx { bar, bytes } => {
                 let bytes = self.mbar_operand(bytes)?;
-                let key = self.mbar_key(bar, AccessKind::Atomic, Some(MemoryOrder::Release))?;
-                let s = self.mbar_state(key)?;
-                s.tx -= bytes;
-                s.settle();
+                self.complete_tx(bar, bytes)?;
             }
             Stmt::MbarWait { bar, parity } => return self.mbar_wait(bar, parity, stack),
             _ => unreachable!("mbar_stmt is called for an mbarrier statement"),
         }
         Ok(None)
+    }
+
+    /// Subtract `bytes` from the transaction count of the barrier at `bar` (a release-class access) and settle it.
+    fn complete_tx(&mut self, bar: &Place, bytes: i128) -> Result<(), KernelTrap> {
+        let key = self.mbar_key(bar, AccessKind::Atomic, Some(MemoryOrder::Release))?;
+        let s = self.mbar_state(key)?;
+        s.tx -= bytes;
+        s.settle();
+        Ok(())
+    }
+
+    /// Run a `CopyBulk`: land the data at once (a logged write per element by this thread), then complete its bytes on
+    /// the barrier, so a reader needs an acquire on the barrier to be ordered after the data.
+    pub(super) fn copy_bulk(
+        &mut self,
+        dst: &Place,
+        src: &Place,
+        elems: u32,
+        bar: &Place,
+    ) -> Result<(), KernelTrap> {
+        let Place::Alloc { alloc, index } = dst else {
+            return Err(KernelTrap::Unsupported(
+                "a bulk copy into something other than an allocation",
+            ));
+        };
+        let Place::Alloc {
+            alloc: ba,
+            index: bi,
+        } = bar
+        else {
+            return Err(KernelTrap::Unsupported(
+                "an mbarrier that is not an allocation place",
+            ));
+        };
+        let bi = self.alloc_index(*ba, bi)?;
+        if !self.mbar_table().contains_key(&(*ba, bi)) {
+            return Err(misuse("a bulk copy on an mbarrier never initialised"));
+        }
+        let at = self.alloc_index(*alloc, index)?;
+        let n = elems as usize;
+        let len = self
+            .ctx
+            .as_ref()
+            .and_then(|c| c.mem(*alloc, MemorySpace::Shared))
+            .map_or(0, |m| m.init.len());
+        if at + n > len {
+            return Err(KernelTrap::AllocOutOfBounds { alloc: *alloc });
+        }
+        let vals = self.read_source(src, n)?;
+        let bits = vals.first().map_or(0, |v| match v {
+            Val::Raw(_, dt) => elem_bits(*dt),
+            _ => 0,
+        });
+        for (j, v) in vals.into_iter().enumerate() {
+            let index = ScalarExpr::ConstInt((at + j) as i64, ElementKind::I64);
+            self.alloc_store(*alloc, &index, v)?;
+        }
+        self.complete_tx(bar, (bits * n / 8) as i128)
     }
 
     fn mbar_wait<'k>(

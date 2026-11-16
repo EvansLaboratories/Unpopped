@@ -569,6 +569,28 @@ pub enum Stmt {
         /// How many consecutive elements.
         elems: u32,
     },
+    /// A bulk copy of `elems` contiguous elements from the global buffer place `src` to the `Shared` allocation place
+    /// `dst`, issued by one thread, that **completes on an `mbarrier`** (`cp.async.bulk.shared::cluster.global.
+    /// mbarrier::complete_tx::bytes`; ROADMAP U8c slice 2). The copy is `elems` times the element size bytes, a multiple of
+    /// 16. When the data has landed the hardware does a [`Stmt::MbarCompleteTx`] of those bytes on `bar`; the issuing
+    /// thread (or another) announces them with [`Stmt::MbarArrive`]'s `tx`, and a consumer that
+    /// [`Stmt::MbarWait`]s on the phase then sees the tile. The oracle lands the data at issue (a logged `Shared` write by
+    /// the issuing thread) and then does the `complete_tx`, a release-class access, so a thread that reads the tile
+    /// without an acquire on the barrier is a `DataRace`. This is the 1-D bulk form: a tensor-map (descriptor) copy is a
+    /// later slice. `unpopped-cpu-c` refuses it (it cannot block a thread on the barrier).
+    ///
+    /// **Patent:** see `docs/PATENT-SWEEP.md` (U8c section): this describes the published instruction behaviour and does
+    /// not claim an implementation.
+    CopyBulk {
+        /// The first destination element: a `Shared` allocation place.
+        dst: Place,
+        /// The first source element: a place of a readable global buffer of the same element type.
+        src: Place,
+        /// How many consecutive elements; `elems` times the element size is a multiple of 16 bytes.
+        elems: u32,
+        /// The `mbarrier` (a `Shared` 64-bit element) the copy completes on.
+        bar: Place,
+    },
     /// Close this thread's open [`Stmt::CopyAsync`] copies into one group (`cp.async.commit_group`). A commit with
     /// no open copy still makes a group, as on hardware, so that wait counts line up.
     ///
@@ -1147,6 +1169,13 @@ pub enum KernelError {
     /// An `mbarrier` statement the checker refuses: a barrier place that is not a `Shared` 64-bit element, or an operand
     /// that is not an integer.
     MbarrierUnsupported {
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// A `Stmt::CopyBulk` the checker refuses: a destination that is not `Shared`, a source that is not a readable global
+    /// buffer, mismatched element types, a size that is not a multiple of 16 bytes, or a barrier that is not a `Shared`
+    /// 64-bit element.
+    BulkCopyUnsupported {
         /// What is wrong.
         what: &'static str,
     },

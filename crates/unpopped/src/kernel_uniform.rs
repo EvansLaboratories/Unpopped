@@ -203,6 +203,7 @@ impl Walk<'_> {
             | Stmt::MaskedStore { .. }
             | Stmt::Fence { .. }
             | Stmt::CopyAsync { .. }
+            | Stmt::CopyBulk { .. }
             | Stmt::AsyncCommit
             | Stmt::AsyncWait { .. }
             | Stmt::MbarInit { .. }
