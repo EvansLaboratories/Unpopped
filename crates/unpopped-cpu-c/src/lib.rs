@@ -62,6 +62,7 @@ mod collective_tuple;
 mod dynamic;
 mod kernel;
 mod launch;
+mod matrix;
 mod mma;
 mod module;
 mod narrow;

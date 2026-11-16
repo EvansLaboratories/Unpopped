@@ -28,6 +28,7 @@ use std::ops::Range;
 use super::Val;
 use super::kernel_collective::{Contribution, TupleContribution, results, tuple_results};
 use super::kernel_eval::{KernelArg, KernelTrap, Machine, STEP_LIMIT};
+use super::kernel_matrix::{MatrixContribution, distribute};
 use super::kernel_mem::{AllocMem, AsyncQueue, BlockMem, Log, Peers, ThreadCtx, cluster_of};
 use super::kernel_mma::{MmaContribution, compute};
 use super::kernel_resume::{Frame, Stop, initial_stack};
@@ -466,6 +467,8 @@ struct ThreadRun<'a> {
     contrib: Option<Contribution>,
     /// What the thread handed over to the `Stmt::Mma` it waits at.
     mma: Option<Box<MmaContribution>>,
+    /// What the thread handed over to the `Stmt::MatrixLoad` it waits at.
+    matrix: Option<Box<MatrixContribution>>,
     /// What the thread contributed to the tuple collective it waits at.
     tuple: Option<Box<TupleContribution>>,
 }
@@ -511,6 +514,7 @@ fn start_block<'a>(b: &BlockRun<'a>) -> BlockState<'a> {
             bufmap: Vec::new(),
             contrib: None,
             mma: None,
+            matrix: None,
             tuple: None,
         })
         .collect();
@@ -642,6 +646,13 @@ fn status_after(stop: Stop, t: &mut ThreadRun<'_>) -> Status {
                 at,
             }
         }
+        Stop::Matrix { at, c } => {
+            t.matrix = Some(c);
+            Status::Waiting {
+                scope: Scope::Subgroup,
+                at,
+            }
+        }
     }
 }
 
@@ -713,6 +724,27 @@ fn deliver_mma(members: &mut [ThreadRun<'_>]) -> Result<(), KernelTrap> {
     Ok(())
 }
 
+/// A matrix load whose every lane has arrived: distribute the tiles and store each lane's fragment in its `Private`
+/// array. The rows were read (and race-checked) when the lanes arrived, so this orders no memory.
+fn deliver_matrix(members: &mut [ThreadRun<'_>]) -> Result<(), KernelTrap> {
+    let lanes: Vec<MatrixContribution> = members
+        .iter_mut()
+        .map(|t| *t.matrix.take().expect("every lane handed over"))
+        .collect();
+    let out = distribute(&lanes)?;
+    for ((t, c), frag) in members.iter_mut().zip(&lanes).zip(out) {
+        let mem = t.private[c.dst as usize]
+            .as_mut()
+            .ok_or(KernelTrap::Unsupported(
+                "a matrix fragment that is not Private",
+            ))?;
+        for (i, v) in frag.into_iter().enumerate() {
+            mem.set(i, v);
+        }
+    }
+    Ok(())
+}
+
 /// The threads a barrier of `scope` reached by thread `lin` synchronizes.
 fn group_of(b: &BlockRun<'_>, scope: Scope, lin: u32, total: u32) -> Range<u32> {
     match scope {
@@ -761,6 +793,8 @@ fn release(
         let members = &mut threads[group.start as usize..group.end as usize];
         if members.iter().all(|t| t.mma.is_some()) {
             deliver_mma(members)?;
+        } else if members.iter().all(|t| t.matrix.is_some()) {
+            deliver_matrix(members)?;
         } else if members.iter().all(|t| t.tuple.is_some()) {
             deliver_tuple(members, b.module)?;
         } else if members.iter().all(|t| t.contrib.is_some()) {
@@ -834,6 +868,7 @@ mod tests {
                 bufmap: Vec::new(),
                 contrib: None,
                 mma: None,
+                matrix: None,
                 tuple: None,
             })
             .collect();

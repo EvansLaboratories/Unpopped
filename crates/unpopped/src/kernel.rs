@@ -458,6 +458,29 @@ pub enum Stmt {
         #[serde(default)]
         extra: Vec<u32>,
     },
+    /// A warp-level matrix load (`ldmatrix`; ROADMAP U8b, `docs/options-u8-copy-atoms.md` S2): `count` (1, 2 or 4) 8 x 8
+    /// tiles of 16-bit elements are read from a `Shared` allocation and distributed over the 32 lanes of the warp. Lane
+    /// `8 * t + r` (for `t < count`, `r < 8`) supplies, in `src`, the first of the **8 contiguous elements of row `r` of
+    /// tile `t`**; the other lanes' `src` is not evaluated. Lane `l` then receives, in `dst` (a `Private` allocation of
+    /// `2 * count` elements of the source's type), for each tile `t`: elements `2t` and `2t + 1` are, without `trans`,
+    /// row `l / 4`, columns `2 * (l % 4)` and `2 * (l % 4) + 1` of tile `t`; with `trans`, rows `2 * (l % 4)` and
+    /// `2 * (l % 4) + 1`, column `l / 4` (the tile transposed). A rendezvous like [`Stmt::Mma`]: reached in uniform
+    /// control by the whole warp. The 8 elements each supplying lane names are read (and race-checked) as ordinary
+    /// `Shared` loads. The lane distribution is the one PTX `ldmatrix.sync.aligned.m8n8` fixes; see the source note in
+    /// `docs/options-u8-copy-atoms.md`.
+    ///
+    /// **Patent:** see `docs/PATENT-SWEEP.md` (U8b section; no claim found, claims of adjacent hits unread): a lane-to-element distribution of a warp load
+    /// is the hardware's published behaviour; this statement describes it and does not claim an implementation.
+    MatrixLoad {
+        /// How many 8 x 8 tiles: 1, 2 or 4.
+        count: u32,
+        /// Whether each tile is delivered transposed (`ldmatrix .trans`).
+        trans: bool,
+        /// The first element of this lane's row, when it supplies one: a `Place::Alloc` of a `Shared` allocation.
+        src: Place,
+        /// The `Private` allocation (index into [`KernelFn::allocs`]) that receives this lane's `2 * count` elements.
+        dst: u32,
+    },
     /// An asynchronous copy of `elems` contiguous elements from the global buffer place `src` to the `Shared`
     /// allocation place `dst`, issued by one thread (`cp.async`; ROADMAP U8 S1, `docs/options-u8-copy-atoms.md`). It
     /// lands only when a later [`Stmt::AsyncWait`] covers its group: `elems` times the element size is 4, 8 or 16
@@ -1050,6 +1073,11 @@ pub enum KernelError {
     },
     /// A `Stmt::Mma` the checker refuses: what is wrong with the atom, the launch or a fragment.
     MmaUnsupported {
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// A `Stmt::MatrixLoad` the checker refuses: what is wrong with the launch, the source or the destination.
+    MatrixLoadUnsupported {
         /// What is wrong.
         what: &'static str,
     },

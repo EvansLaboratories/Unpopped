@@ -10,6 +10,7 @@
 use super::int_val;
 use super::kernel_collective::{Contribution, TupleContribution};
 use super::kernel_eval::{KernelTrap, Machine};
+use super::kernel_matrix::MatrixContribution;
 use super::kernel_mma::MmaContribution;
 use crate::exec::Scope;
 use crate::ir::ScalarExpr;
@@ -99,6 +100,11 @@ pub(super) enum Stop {
     },
     /// At an MMA statement, having handed over its fragments, waiting for the rest of the subgroup.
     Mma { at: usize, c: Box<MmaContribution> },
+    /// At a `Stmt::MatrixLoad`, holding the lane's row.
+    Matrix {
+        at: usize,
+        c: Box<MatrixContribution>,
+    },
 }
 
 /// The frame stack of a thread that has not started.
@@ -191,6 +197,12 @@ impl<'a> Machine<'a> {
                 return Ok(Some(Stop::Mma {
                     at: std::ptr::from_ref(st) as usize,
                     c: Box::new(self.mma_contribution(st)?),
+                }));
+            }
+            Stmt::MatrixLoad { .. } => {
+                return Ok(Some(Stop::Matrix {
+                    at: std::ptr::from_ref(st) as usize,
+                    c: Box::new(self.matrix_contribution(st)?),
                 }));
             }
             Stmt::Call {

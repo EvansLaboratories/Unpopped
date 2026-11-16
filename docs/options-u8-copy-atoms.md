@@ -47,7 +47,17 @@ early is refused by the checker's ordering rule, not run.
 `Stmt::MatrixLoad { shape, trans, count, dst: Vec<u32> (locals), src: Place }`: a warp-collective load of 8x8 b16 tiles from
 `Shared` into per-lane fragment locals, the lane distribution being the one PTX fixes (lane `l` receives row `l/4`, columns
 `2*(l%4)..+2` of each tile). Rather than hand-code it, define it as a `MmaAtom`-style lane table in one place and test it against
-the same independent source the MMA tables used. `MatrixStore` is the mirror. *Open:* the second lane-table source
+the same independent source the MMA tables used. `MatrixStore` is the mirror.
+
+**Built 2026-11-15 (U8b, slice 1: `MatrixLoad` only).** `Stmt::MatrixLoad { count, trans, src, dst }`: lane `8t + r` supplies the
+address of row `r` of tile `t` (8 contiguous `b16` elements); lane `l` receives, per tile, row `l/4` columns `2(l%4)`, `+1`
+(transposed: rows `2(l%4)`, `+1`, column `l/4`). The checker needs a 32-lane subgroup, `count` 1, 2 or 4, a `Shared` source and a
+`Private` destination of `2*count` elements of the same 16-bit type. `MatrixStore` (`stmatrix`) is the next slice. **Sources for the
+distribution:** my reading of the PTX ISA's `ldmatrix` section, and, as a second source found 2026-11-15, the TVM project's
+`ldstmatrix` tile-primitive documentation (lane `i` holds row `i // 4`, column pair `i % 4`) and NVIDIA's libcudacxx PTX pages
+(`.m8n8`, `.x1/.x2/.x4`, `.trans`, `b16` only). **Not found in a second source:** the rule that lanes `8t..8t+7` own the addresses
+of tile `t` for `.x2/.x4` (practitioner write-ups agree, none quotes the ISA text); the test pins it, and a device run is the
+check. This is a standard web search, not a read of the ISA. *Open:* the second lane-table source
 (U7's `mma.sp` hold has the same need, a source other than our own memory of the PTX manual); S2 should not start before one is
 found, so the two holds are cleared together. *Oracle and cpu-c:* gather and scatter by the table. One breaking minor.
 
