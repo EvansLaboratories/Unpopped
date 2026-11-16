@@ -267,6 +267,7 @@ fn check_sync_stmt(
         Stmt::CopyAsync { .. } | Stmt::AsyncCommit | Stmt::AsyncWait { .. } => {
             async_copy::check_async(k, st, sc)?;
         }
+        Stmt::CopyBulk { .. } => mbar::check_copy_bulk(k, st, sc)?,
         Stmt::ExternCall {
             decl,
             args,
@@ -498,6 +499,7 @@ fn check_stmt(
         | Stmt::MbarCompleteTx { .. }
         | Stmt::MbarWait { .. }
         | Stmt::MatrixStore { .. }
+        | Stmt::CopyBulk { .. }
         | Stmt::CopyAsync { .. }
         | Stmt::AsyncCommit
         | Stmt::AsyncWait { .. }

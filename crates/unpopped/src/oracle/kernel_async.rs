@@ -108,7 +108,7 @@ impl Machine<'_> {
     }
 
     /// Read `n` consecutive source elements starting at `src` now (logged global reads), bounds-checked on the buffer.
-    fn read_source(&mut self, src: &Place, n: usize) -> Result<Vec<Val>, KernelTrap> {
+    pub(super) fn read_source(&mut self, src: &Place, n: usize) -> Result<Vec<Val>, KernelTrap> {
         let (b, off) = self.offset(src)?;
         let (count, dt) = match &self.args[b] {
             KernelArg::Buffer(tb) => (tb.bytes.len() * 8 / elem_bits(tb.dtype), tb.dtype),

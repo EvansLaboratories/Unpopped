@@ -186,6 +186,7 @@ impl<'a> Machine<'a> {
             | Stmt::AtomicCas { .. }
             | Stmt::MulticastLoadReduce { .. }
             | Stmt::CopyAsync { .. }
+            | Stmt::CopyBulk { .. }
             | Stmt::AsyncCommit
             | Stmt::AsyncWait { .. }
             | Stmt::Fence { .. } => {

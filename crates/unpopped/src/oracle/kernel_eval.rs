@@ -306,6 +306,7 @@ impl<'a> Machine<'a> {
                 return Err(KernelTrap::Unsupported("an mbarrier statement"));
             }
             Stmt::MatrixStore { .. } => return Err(KernelTrap::Unsupported("MatrixStore")),
+            Stmt::CopyBulk { .. } => return Err(KernelTrap::Unsupported("CopyBulk")),
             Stmt::ExternCall {
                 decl,
                 args,
@@ -417,6 +418,12 @@ impl<'a> Machine<'a> {
                 valid,
                 ..
             } => self.copy_async(dst, src, *elems, valid.as_ref())?,
+            Stmt::CopyBulk {
+                dst,
+                src,
+                elems,
+                bar,
+            } => self.copy_bulk(dst, src, *elems, bar)?,
             Stmt::AsyncCommit => self.async_commit()?,
             Stmt::AsyncWait { pending } => self.async_wait(*pending)?,
             _ => unreachable!("exec_simple is called for straight-line statements only"),
