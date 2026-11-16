@@ -231,6 +231,9 @@ impl Emitter<'_> {
             Stmt::MatrixLoad { .. } => {
                 return Err(refuse("a Stmt::MatrixLoad is block-level only"));
             }
+            Stmt::MatrixStore { .. } => {
+                return Err(refuse("a Stmt::MatrixStore is block-level only"));
+            }
             Stmt::Call {
                 callee,
                 args,
