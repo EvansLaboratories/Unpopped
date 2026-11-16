@@ -17,7 +17,7 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ## `0.55.2` — docs
 
-Four patent searches the earlier entries recorded as "not run" (`mbarrier`, `Wgmma`, U18/U13, named barriers), in `docs/PATENT-SWEEP.md`: standard web searches plus the independent claims of the closest hits read in full. **Three hits are NEEDS REVIEW, not "outside"**: US20230289242A1 (a barrier with an arrive counter and a transaction counter, claims 21 and 31 not limited to hardware), US11803380B2 (a barrier advanced by a hardware copy operator, which `CopyBulk` on an `mbarrier` resembles) and US12204897B2 (an instruction that waits on a number of pending MMA operations, which `WgmmaWait { pending }` resembles); coderipper-b's read of US11294713B2/US12118382B2 is also NEEDS REVIEW and US8108625B1 is outside as read. U18/U13 returned a null from one query; named barriers found no claim on an identifier plus a participant count, but US12699602 could not be fetched and is unread. None is a clearance. No code change.
+Four patent searches the earlier entries recorded as "not run" (`mbarrier`, `Wgmma`, U18/U13, named barriers), in `docs/PATENT-SWEEP.md`: standard web searches plus the independent claims of the closest hits read in full. **Three hits are NEEDS REVIEW, not "outside"**: US20230289242A1 (a barrier with an arrive counter and a transaction counter, claims 21 and 31 not limited to hardware), US11803380B2 (a barrier advanced by a hardware copy operator, which `CopyBulk` on an `mbarrier` resembles) and US12204897B2 (an instruction that waits on a number of pending MMA operations, which `WgmmaWait { pending }` resembles); US11294713B2/US12118382B2 and US8539204B2 are already ruled A by CireSnave (boards 431, 434; coderipper-b re-read the first two with no change to that) and US8108625B1 is outside as read. U18/U13 returned a null from one query; named barriers found no claim on an identifier plus a participant count, but US12699602 could not be fetched and is unread. None is a clearance. No code change.
 
 **What is and is not verified (stated once, also in the README).** The semantics of `mbarrier`, `wgmma`, `tcgen05`, `CopyBulk` and named barriers are modelled from recalled PTX with no second source and have not run on hardware; each is an oracle model, not a hardware-verified statement. The development GPU is an RTX 4070 (sm_89), which cannot run `wgmma` or TMA bulk copies (sm_90) or `tcgen05` (sm_100); an sm_90 part (H100/H200) would verify `mbarrier`, `wgmma`, `CopyBulk` and named barriers, and an sm_100 part (B200) `tcgen05`.
 
@@ -93,7 +93,7 @@ New statement `Stmt::MatrixLoad { count, trans, src, dst }`: a warp loads 1, 2 o
 
 ---
 
-## `0.47.6` — attention backward C differential: absolute tolerance (tests only)
+## `0.47.6` — attention backward C differential: absolute tolerance (tests only); launch grid read from scalar arguments (additive, ROADMAP U22)
 
 Corrects the `0.47.5` entry: `kernel_attention_backward_emit_agrees.rs` compares the C against `run_launch` within 1e-4 of the largest gradient, not 3 ulps. The first CI run showed why: `dQ` element 12 is 2e-4 from terms in the hundreds and differed by 4 ulps (C rounds per operation, the oracle per statement), and a cancelling sum has no meaningful ulp bound. A test tag containing `/` also broke the temporary file path and is fixed. No kernel or oracle change.
 
