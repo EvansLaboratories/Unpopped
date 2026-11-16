@@ -207,7 +207,7 @@ impl Walk<'_> {
             | Stmt::AsyncWait { .. }
             | Stmt::Return => {}
             // an MMA is a rendezvous of its subgroup, like a barrier; it defines no local
-            Stmt::Mma { .. } | Stmt::MatrixLoad { .. } => {
+            Stmt::Mma { .. } | Stmt::MatrixLoad { .. } | Stmt::MatrixStore { .. } => {
                 if self.check && (div || *poisoned) {
                     return Err(KernelError::BarrierDivergent);
                 }

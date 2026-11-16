@@ -299,6 +299,7 @@ impl<'a> Machine<'a> {
             }
             Stmt::Mma { .. } => return Err(KernelTrap::Unsupported("Mma")),
             Stmt::MatrixLoad { .. } => return Err(KernelTrap::Unsupported("MatrixLoad")),
+            Stmt::MatrixStore { .. } => return Err(KernelTrap::Unsupported("MatrixStore")),
             Stmt::ExternCall {
                 decl,
                 args,

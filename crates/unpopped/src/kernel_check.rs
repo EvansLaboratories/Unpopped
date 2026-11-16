@@ -258,6 +258,7 @@ fn check_sync_stmt(
         }
         Stmt::Mma { .. } => mma::check_mma(k, st)?,
         Stmt::MatrixLoad { .. } => matrix::check_matrix_load(k, st, sc)?,
+        Stmt::MatrixStore { .. } => matrix::check_matrix_store(k, st, sc)?,
         Stmt::CopyAsync { .. } | Stmt::AsyncCommit | Stmt::AsyncWait { .. } => {
             async_copy::check_async(k, st, sc)?;
         }
@@ -487,6 +488,7 @@ fn check_stmt(
         | Stmt::CollectiveTuple { .. }
         | Stmt::Mma { .. }
         | Stmt::MatrixLoad { .. }
+        | Stmt::MatrixStore { .. }
         | Stmt::CopyAsync { .. }
         | Stmt::AsyncCommit
         | Stmt::AsyncWait { .. }
