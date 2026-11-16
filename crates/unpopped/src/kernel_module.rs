@@ -149,7 +149,8 @@ fn holds_barrier(b: &Block, externs: &[ExternDecl]) -> bool {
         Stmt::Barrier { .. }
         | Stmt::Collective { .. }
         | Stmt::CollectiveTuple { .. }
-        | Stmt::Mma { .. } => true,
+        | Stmt::Mma { .. }
+        | Stmt::MatrixLoad { .. } => true,
         Stmt::ExternCall { decl, .. } => externs
             .get(*decl as usize)
             .is_some_and(|d| d.effects.sync.is_some()),

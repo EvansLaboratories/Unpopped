@@ -228,6 +228,9 @@ impl Emitter<'_> {
                 results,
             } => self.extern_stmt(*decl, args, results)?,
             Stmt::Mma { .. } => return Err(refuse("a Stmt::Mma is block-level only")),
+            Stmt::MatrixLoad { .. } => {
+                return Err(refuse("a Stmt::MatrixLoad is block-level only"));
+            }
             Stmt::Call {
                 callee,
                 args,

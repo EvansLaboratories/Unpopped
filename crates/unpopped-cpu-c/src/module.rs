@@ -97,7 +97,8 @@ fn holds_barrier(b: &Block) -> bool {
         Stmt::Barrier { .. }
         | Stmt::Collective { .. }
         | Stmt::CollectiveTuple { .. }
-        | Stmt::Mma { .. } => true,
+        | Stmt::Mma { .. }
+        | Stmt::MatrixLoad { .. } => true,
         Stmt::If { then, els, .. } => holds_barrier(then) || holds_barrier(els),
         Stmt::For { body, .. } | Stmt::While { body, .. } => holds_barrier(body),
         _ => false,

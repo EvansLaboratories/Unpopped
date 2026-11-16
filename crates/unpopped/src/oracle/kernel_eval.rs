@@ -298,6 +298,7 @@ impl<'a> Machine<'a> {
                 return Err(KernelTrap::Unsupported("Collective"));
             }
             Stmt::Mma { .. } => return Err(KernelTrap::Unsupported("Mma")),
+            Stmt::MatrixLoad { .. } => return Err(KernelTrap::Unsupported("MatrixLoad")),
             Stmt::ExternCall {
                 decl,
                 args,

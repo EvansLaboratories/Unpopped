@@ -173,7 +173,8 @@ fn contains_barrier(s: &Stmt) -> bool {
         Stmt::Barrier { .. }
         | Stmt::Collective { .. }
         | Stmt::CollectiveTuple { .. }
-        | Stmt::Mma { .. } => true,
+        | Stmt::Mma { .. }
+        | Stmt::MatrixLoad { .. } => true,
         Stmt::If { then, els, .. } => has_barrier_block(&then.0) || has_barrier_block(&els.0),
         Stmt::For { body, .. } | Stmt::While { body, .. } => has_barrier_block(&body.0),
         _ => false,
@@ -544,6 +545,7 @@ impl Emitter<'_> {
                 Stmt::Collective { .. } => self.collective(s)?,
                 Stmt::CollectiveTuple { .. } => self.collective_tuple(s)?,
                 Stmt::Mma { .. } => self.mma(s)?,
+                Stmt::MatrixLoad { .. } => self.matrix_load(s)?,
                 Stmt::If { cond, then, els } => self.block_if(cond, then, els)?,
                 Stmt::For {
                     local,

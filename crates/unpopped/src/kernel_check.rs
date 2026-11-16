@@ -5,6 +5,7 @@
 mod async_copy;
 mod collective;
 mod extern_call;
+mod matrix;
 mod mma;
 
 use unpopped_vocab::ElementKind;
@@ -256,6 +257,7 @@ fn check_sync_stmt(
             collective::check_collective_tuple(k, st, sc, declared_here)?;
         }
         Stmt::Mma { .. } => mma::check_mma(k, st)?,
+        Stmt::MatrixLoad { .. } => matrix::check_matrix_load(k, st, sc)?,
         Stmt::CopyAsync { .. } | Stmt::AsyncCommit | Stmt::AsyncWait { .. } => {
             async_copy::check_async(k, st, sc)?;
         }
@@ -484,6 +486,7 @@ fn check_stmt(
         | Stmt::Collective { .. }
         | Stmt::CollectiveTuple { .. }
         | Stmt::Mma { .. }
+        | Stmt::MatrixLoad { .. }
         | Stmt::CopyAsync { .. }
         | Stmt::AsyncCommit
         | Stmt::AsyncWait { .. }
