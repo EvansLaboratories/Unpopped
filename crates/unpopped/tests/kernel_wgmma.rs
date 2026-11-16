@@ -78,30 +78,32 @@ impl Opt {
     }
 }
 
-/// Params: 0 `a_in` `[64 * 16]`, 1 `b_in` `[n * 16]` (bf16, read), 2 `out` `[128 * n / 2]` (f32, read-write). Allocs: 0 `a`
-/// Shared, 1 `b` Shared, 2 `d` Private `[n / 2]` f32. Locals: 0 `i`, 1 `idx`, 2 bf16 temp, 3 f32 temp.
-fn kernel(o: Opt) -> KernelFn {
+/// Each thread copies `per` elements of input buffer `src` into `Shared` allocation `dst`.
+fn copy_tile(src: u32, dst: u32, per: i64) -> Stmt {
+    counted(
+        0,
+        per,
+        vec![
+            Stmt::Let {
+                local: 1,
+                init: add(mul(tid(), u(per)), local(0)),
+            },
+            Stmt::Load {
+                local: 2,
+                place: buf(src, local(1)),
+            },
+            Stmt::Store {
+                place: alloc(dst, local(1)),
+                value: local(2),
+            },
+        ],
+    )
+}
+
+/// The statements of a scenario: fill the tiles, (barrier), initialise `d`, wgmma, (commit), wait, copy `d` out.
+fn body(o: Opt) -> Vec<Stmt> {
     let n = o.n as i64;
-    let copy = |src: u32, dst: u32, per: i64| {
-        counted(
-            0,
-            per,
-            vec![
-                Stmt::Let {
-                    local: 1,
-                    init: add(mul(tid(), u(per)), local(0)),
-                },
-                Stmt::Load {
-                    local: 2,
-                    place: buf(src, local(1)),
-                },
-                Stmt::Store {
-                    place: alloc(dst, local(1)),
-                    value: local(2),
-                },
-            ],
-        )
-    };
+    let copy = copy_tile;
     let mut body = vec![copy(0, 0, 8)];
     // `b` has n * 16 elements: n / 8 per thread
     if n >= 8 {
@@ -145,6 +147,13 @@ fn kernel(o: Opt) -> KernelFn {
             },
         ],
     ));
+    body
+}
+
+/// Params: 0 `a_in` `[64 * 16]`, 1 `b_in` `[n * 16]` (bf16, read), 2 `out` `[128 * n / 2]` (f32, read-write). Allocs: 0 `a`
+/// Shared, 1 `b` Shared, 2 `d` Private `[n / 2]` f32. Locals: 0 `i`, 1 `idx`, 2 bf16 temp, 3 f32 temp.
+fn kernel(o: Opt) -> KernelFn {
+    let n = o.n as i64;
     let mut k = KernelFn::new(
         "wgmma",
         F32,
@@ -159,7 +168,7 @@ fn kernel(o: Opt) -> KernelFn {
             LocalDecl::scalar(BF16),
             LocalDecl::scalar(F32),
         ],
-        Block(body),
+        Block(body(o)),
     )
     .with_launch(LaunchShape::new([128, 1, 1], [1, 1, 1]).with_subgroup(32, 32));
     k.allocs = vec![

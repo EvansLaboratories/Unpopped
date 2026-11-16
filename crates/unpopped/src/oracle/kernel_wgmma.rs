@@ -52,15 +52,9 @@ fn position(t: usize, v: usize) -> (usize, usize) {
     )
 }
 
-/// Every thread's `D` fragment, in thread order.
-pub(super) fn compute(lanes: &[WgmmaContribution]) -> Result<Vec<Vec<Val>>, KernelTrap> {
-    if lanes.len() != WARPGROUP {
-        return Err(KernelTrap::Unsupported(
-            "a wgmma over a group that is not 128 threads",
-        ));
-    }
-    let (n, acc, scale) = (lanes[0].n, lanes[0].acc, lanes[0].scale_d);
-    let missing = KernelTrap::Unsupported("a wgmma tile row no thread read");
+/// The rows of `A` (64) and of `B` (`n`) the threads read, in row order.
+#[allow(clippy::type_complexity)]
+fn tile_rows(lanes: &[WgmmaContribution]) -> Result<(Vec<&Vec<Val>>, Vec<&Vec<Val>>), KernelTrap> {
     let a: Vec<&Vec<Val>> = (0..M)
         .map(|r| {
             lanes[r]
@@ -69,15 +63,24 @@ pub(super) fn compute(lanes: &[WgmmaContribution]) -> Result<Vec<Vec<Val>>, Kern
                 .ok_or(KernelTrap::Unsupported("a wgmma A row no thread read"))
         })
         .collect::<Result<_, _>>()?;
-    let mut b: Vec<Option<&Vec<Val>>> = vec![None; n];
+    let mut b: Vec<Option<&Vec<Val>>> = vec![None; lanes[0].n];
     for l in lanes {
         for (r, row) in &l.b_rows {
             b[*r] = Some(row);
         }
     }
-    let b: Vec<&Vec<Val>> = b.into_iter().collect::<Option<_>>().ok_or(missing)?;
+    let b = b
+        .into_iter()
+        .collect::<Option<_>>()
+        .ok_or(KernelTrap::Unsupported("a wgmma B row no thread read"))?;
+    Ok((a, b))
+}
+
+/// The accumulator `C` as a row-major `64 x n` matrix: the threads' fragments when `scale_d` is set, otherwise zero.
+fn accumulator(lanes: &[WgmmaContribution]) -> Vec<f64> {
+    let n = lanes[0].n;
     let mut c = vec![0.0f64; M * n];
-    if scale {
+    if lanes[0].scale_d {
         for (t, l) in lanes.iter().enumerate() {
             for (v, x) in l.c.iter().enumerate() {
                 let (row, col) = position(t, v);
@@ -85,6 +88,19 @@ pub(super) fn compute(lanes: &[WgmmaContribution]) -> Result<Vec<Vec<Val>>, Kern
             }
         }
     }
+    c
+}
+
+/// Every thread's `D` fragment, in thread order.
+pub(super) fn compute(lanes: &[WgmmaContribution]) -> Result<Vec<Vec<Val>>, KernelTrap> {
+    if lanes.len() != WARPGROUP {
+        return Err(KernelTrap::Unsupported(
+            "a wgmma over a group that is not 128 threads",
+        ));
+    }
+    let (n, acc) = (lanes[0].n, lanes[0].acc);
+    let (a, b) = tile_rows(lanes)?;
+    let c = accumulator(lanes);
     let dot = |row: usize, col: usize| -> Val {
         let sum = (0..K).fold(c[row * n + col], |s, k| {
             s + a[row][k].f64() * b[col][k].f64()
