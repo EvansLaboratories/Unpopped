@@ -212,7 +212,11 @@ impl Emitter<'_> {
             Stmt::Barrier { .. } => return Err(refuse("a Barrier needs a launch (U3 row 4)")),
             Stmt::AtomicRmw { .. } => self.atomic_rmw(s)?,
             Stmt::AtomicCas { .. } => self.atomic_cas(s)?,
-            Stmt::Fence { .. } | Stmt::AsyncCommit | Stmt::AsyncWait { .. } => {}
+            Stmt::Fence { .. }
+            | Stmt::AsyncCommit
+            | Stmt::AsyncWait { .. }
+            | Stmt::GridDepWait
+            | Stmt::GridDepLaunchDependents => {}
             Stmt::CopyAsync {
                 dst,
                 src,

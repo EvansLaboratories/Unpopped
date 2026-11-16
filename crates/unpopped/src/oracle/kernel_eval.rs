@@ -291,6 +291,8 @@ impl<'a> Machine<'a> {
             | Stmt::AtomicRmw { .. }
             | Stmt::AtomicCas { .. }
             | Stmt::MulticastLoadReduce { .. }
+            | Stmt::GridDepWait
+            | Stmt::GridDepLaunchDependents
             | Stmt::Fence { .. } => {
                 self.exec_simple(st)?;
             }
@@ -417,6 +419,7 @@ impl<'a> Machine<'a> {
             }
             Stmt::AtomicRmw { .. } | Stmt::AtomicCas { .. } => self.exec_atomic(st)?,
             Stmt::Fence { scope, order } => self.fence(*order, *scope),
+            Stmt::GridDepWait | Stmt::GridDepLaunchDependents => {}
             Stmt::CopyAsync {
                 dst,
                 src,

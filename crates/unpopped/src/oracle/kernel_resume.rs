@@ -206,6 +206,8 @@ impl<'a> Machine<'a> {
             | Stmt::Tcgen05Ld { .. }
             | Stmt::AsyncCommit
             | Stmt::AsyncWait { .. }
+            | Stmt::GridDepWait
+            | Stmt::GridDepLaunchDependents
             | Stmt::Fence { .. } => {
                 self.exec_simple(st)?;
             }
