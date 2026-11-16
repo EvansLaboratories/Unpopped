@@ -18,6 +18,9 @@ pub enum Scope {
     Thread,
     /// The lanes of one subgroup (warp, wave, simdgroup).
     Subgroup,
+    /// The four consecutive subgroups (warps) of a warpgroup, 128 threads of a launch whose subgroup size is 32
+    /// (`wgmma`; ROADMAP U7 S4). A `Barrier` of this scope waits for exactly those threads.
+    Warpgroup,
     /// The threads of one block (workgroup).
     Block,
     /// The blocks of one cluster.

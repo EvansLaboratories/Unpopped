@@ -117,6 +117,7 @@ mod kernel_mem_ops;
 mod kernel_resume;
 mod kernel_sync;
 mod kernel_trap;
+mod kernel_wgmma;
 
 mod buffers;
 mod elem;
