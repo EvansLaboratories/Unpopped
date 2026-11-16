@@ -32,15 +32,23 @@ impl Emitter<'_> {
         let t = ctype(elem, "a matrix fragment")?;
         let n = self.fresh;
         self.fresh += 1;
-        let addr = self.address(src)?;
         let supplied = 8 * count;
         let width = 2 * count;
         self.line("{");
         self.depth += 1;
         self.line(&format!("const {t} *mr{n}[{nt}];"));
-        self.line(&format!(
-            "for (int t = 0; t < {nt}; ++t) mr{n}[t] = (t % 32) < {supplied} ? &({addr}) : 0;"
-        ));
+        // the address (and its bounds check) is evaluated only by the lanes that supply a row, inside the thread loop
+        self.line(&format!("for (int t = 0; t < {nt}; ++t) {{"));
+        self.depth += 1;
+        self.line(&format!("mr{n}[t] = 0;"));
+        self.line(&format!("if ((t % 32) < {supplied}) {{"));
+        self.depth += 1;
+        let addr = self.address(src)?;
+        self.line(&format!("mr{n}[t] = &({addr});"));
+        self.depth -= 1;
+        self.line("}");
+        self.depth -= 1;
+        self.line("}");
         let (row, col) = if *trans {
             ("2 * (l % 4) + e", "l / 4")
         } else {

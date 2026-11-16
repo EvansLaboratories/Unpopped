@@ -21,11 +21,11 @@ mod launch_run;
 #[path = "support/matrix_load.rs"]
 mod matrix_load;
 use launch_run::agree_launch;
-use matrix_load::{U16, matrix_expected, matrix_input, matrix_load_kernel};
+use matrix_load::{H16, matrix_expected, matrix_input, matrix_load_kernel};
 
 fn buf(v: &[u16]) -> KernelArg {
     KernelArg::Buffer(TypedBuffer::new(
-        U16,
+        H16,
         vec![v.len() as i64],
         vec![1],
         v.iter().flat_map(|x| x.to_le_bytes()).collect(),

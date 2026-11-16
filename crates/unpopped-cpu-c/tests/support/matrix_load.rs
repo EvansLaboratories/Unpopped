@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! The `Stmt::MatrixLoad` conformance kernel of ROADMAP U8b (`docs/options-u8-copy-atoms.md` S2), shared by the oracle
 //! test (`kernel_matrix_load.rs`) and the C test (`unpopped-cpu-c/tests/kernel_matrix_load_emit_agrees.rs`, which keeps a
-//! copy: change both). One warp stages `count` 8 x 8 tiles of `u16` into `Shared`, loads them with `ldmatrix` semantics
+//! copy: change both). One warp stages `count` 8 x 8 tiles of 16-bit elements into `Shared`, loads them with `ldmatrix` semantics
 //! and writes every lane's fragment out, so the output shows exactly which element each lane received.
 
 use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace};
@@ -9,7 +9,9 @@ use unpopped::ir::{BinaryOp, ScalarExpr};
 use unpopped::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 use unpopped_vocab::ElementKind;
 
-pub(crate) const U16: ElementKind = ElementKind::U16;
+/// The element type: 16 bits, moved as bits (the data are bit patterns, never read as numbers). `F16` because the serial C
+/// spells no 16-bit integer compute type.
+pub(crate) const H16: ElementKind = ElementKind::F16;
 const U32: ElementKind = ElementKind::U32;
 
 fn u(v: i64) -> ScalarExpr {
@@ -104,13 +106,13 @@ pub(crate) fn matrix_load_kernel(count: u32, trans: bool, barrier: bool) -> Kern
     ));
     let mut k = KernelFn::new(
         "matrix_load",
-        U16,
+        ElementKind::F32,
         vec![
-            Param::buffer("src", U16, BufferRole::Read, Some(1)),
-            Param::buffer("out", U16, BufferRole::ReadWrite, Some(1)),
+            Param::buffer("src", H16, BufferRole::Read, Some(1)),
+            Param::buffer("out", H16, BufferRole::ReadWrite, Some(1)),
         ],
         vec![
-            LocalDecl::scalar(U16),
+            LocalDecl::scalar(H16),
             LocalDecl::scalar(U32),
             LocalDecl::scalar(U32),
         ],
@@ -121,10 +123,10 @@ pub(crate) fn matrix_load_kernel(count: u32, trans: bool, barrier: bool) -> Kern
         AllocDecl::new(
             "tiles",
             MemorySpace::Shared,
-            U16,
+            H16,
             Extent::Static(64 * count),
         ),
-        AllocDecl::new("frag", MemorySpace::Private, U16, Extent::Static(2 * count)),
+        AllocDecl::new("frag", MemorySpace::Private, H16, Extent::Static(2 * count)),
     ];
     k
 }

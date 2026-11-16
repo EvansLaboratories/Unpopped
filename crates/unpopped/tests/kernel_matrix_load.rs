@@ -12,11 +12,11 @@ use unpopped::oracle::kernel_launch::run_launch;
 
 #[path = "support/matrix_load.rs"]
 mod matrix_load;
-use matrix_load::{U16, matrix_expected, matrix_input, matrix_load_kernel};
+use matrix_load::{H16, matrix_expected, matrix_input, matrix_load_kernel};
 
 fn buf(v: &[u16]) -> KernelArg {
     KernelArg::Buffer(TypedBuffer::new(
-        U16,
+        H16,
         vec![v.len() as i64],
         vec![1],
         v.iter().flat_map(|x| x.to_le_bytes()).collect(),
@@ -83,9 +83,9 @@ fn the_checker_refuses_what_a_warp_load_cannot_be() {
     let mut subgroup16 = matrix_load_kernel(4, false, true);
     subgroup16.launch = Some(LaunchShape::new([32, 1, 1], [1, 1, 1]).with_subgroup(16, 16));
     let mut bad_dst = matrix_load_kernel(4, false, true);
-    bad_dst.allocs[1] = AllocDecl::new("frag", MemorySpace::Private, U16, Extent::Static(7));
+    bad_dst.allocs[1] = AllocDecl::new("frag", MemorySpace::Private, H16, Extent::Static(7));
     let mut shared_dst = matrix_load_kernel(4, false, true);
-    shared_dst.allocs[1] = AllocDecl::new("frag", MemorySpace::Shared, U16, Extent::Static(8));
+    shared_dst.allocs[1] = AllocDecl::new("frag", MemorySpace::Shared, H16, Extent::Static(8));
     let mut wide = matrix_load_kernel(4, false, true);
     wide.allocs[0] = AllocDecl::new(
         "tiles",
