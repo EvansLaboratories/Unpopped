@@ -223,13 +223,18 @@ impl Emitter<'_> {
                 // the sequential reference performs the copy at issue; commit and wait order nothing here. Elements
                 // from `valid` on are zero-filled and never read (the cache and prefetch hints mean nothing here).
                 let (d, s) = (self.address(dst)?, self.address(src)?);
-                let v = match valid {
-                    Some(e) => self.expr(e)?,
-                    None => elems.to_string(),
+                let copy = match valid {
+                    None => format!(
+                        "for (int cp_ = 0; cp_ < {elems}; cp_++) (&({d}))[cp_] = (&({s}))[cp_];"
+                    ),
+                    Some(e) => {
+                        let v = self.expr(e)?;
+                        format!(
+                            "for (int cp_ = 0; cp_ < {elems}; cp_++) (&({d}))[cp_] = cp_ < ({v}) ? (&({s}))[cp_] : 0;"
+                        )
+                    }
                 };
-                self.line(&format!(
-                    "for (int cp_ = 0; cp_ < {elems}; cp_++) (&({d}))[cp_] = cp_ < ({v}) ? (&({s}))[cp_] : 0;"
-                ));
+                self.line(&copy);
             }
             Stmt::Collective { .. } | Stmt::CollectiveTuple { .. } => {
                 return Err(refuse("a Collective is block-level only"));

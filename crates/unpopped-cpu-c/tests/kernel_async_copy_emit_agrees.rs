@@ -233,3 +233,48 @@ fn the_c_is_a_plain_copy_loop_and_commit_and_wait_leave_no_trace() {
     assert_eq!(g.source.matches("cp_ < 4").count(), 1, "{}", g.source);
     assert!(!g.source.contains("async") && !g.source.contains("wait"));
 }
+
+#[test]
+fn a_valid_count_zero_fills_the_rest_and_an_unroll_hint_changes_nothing() {
+    // U13: only the first 2 of 4 elements are read, the rest of the row is zero; U18: the hint is not a meaning
+    let valid = |n: i64| Stmt::CopyAsync {
+        valid: Some(cu(n)),
+        cache: unpopped::kernel::CacheHint::Global,
+        l2_prefetch: Some(128),
+        dst: shared(row(0)),
+        src: global(0, row(0)),
+        elems: 4,
+    };
+    for n in [0, 2, 4] {
+        let mut body = vec![valid(n), Stmt::AsyncCommit, wait(0), barrier()];
+        body.extend(read_mirror(1));
+        check(&format!("cp_valid_{n}"), body);
+    }
+    let mut k = kernel(vec![]);
+    k.locals.push(LocalDecl::scalar(U32));
+    k.body = Block(vec![
+        Stmt::For {
+            unroll: unpopped::kernel::Unroll::Count(2),
+            local: 1,
+            start: cu(0),
+            end: cu(2),
+            step: cu(1),
+            body: Block(vec![
+                copy(shared(row(0)), global(0, row(0)), 2),
+                Stmt::AsyncCommit,
+                wait(0),
+            ]),
+        },
+        barrier(),
+    ]);
+    k.body.0.extend(read_mirror(1));
+    assert_eq!(check_kernel(&k), Ok(()), "well formed");
+    agree_launch(
+        "cp_unroll",
+        &k,
+        vec![
+            KernelArg::Buffer(dense(I32, &[16], 5)),
+            KernelArg::Buffer(zeroed(I32, &[4])),
+        ],
+    );
+}
