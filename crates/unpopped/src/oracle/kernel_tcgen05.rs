@@ -17,8 +17,6 @@ use unpopped_vocab::ElementKind;
 
 /// Lanes of tensor memory, rows of `A` and of `D`.
 const M: usize = 128;
-/// Elements along `k` for the 16-bit input types.
-const K: usize = 16;
 
 fn cell(i: usize) -> ScalarExpr {
     ScalarExpr::ConstInt(i as i64, ElementKind::I64)
@@ -54,15 +52,18 @@ impl Machine<'_> {
             .ok_or(KernelTrap::AllocOutOfBounds { alloc: d })?;
         let accumulate = self.wgmma_int(scale_d)? != 0;
         let (a, b) = (self.tcgen05_tile(a, M)?, self.tcgen05_tile(b, n)?);
-        for m in 0..M {
-            for j in 0..n {
+        for (m, arow) in a.iter().enumerate() {
+            for (j, brow) in b.iter().enumerate() {
                 let at = cell(m * cols + col0 + j);
                 let c = if accumulate {
                     self.alloc_load(d, &at)?.f64()
                 } else {
                     0.0
                 };
-                let sum = (0..K).fold(c, |s, k| s + a[m][k].f64() * b[j][k].f64());
+                let sum = arow
+                    .iter()
+                    .zip(brow)
+                    .fold(c, |s, (x, y)| s + x.f64() * y.f64());
                 self.alloc_store(d, &at, Val::Float(f64::from(sum as f32)))?;
             }
         }
