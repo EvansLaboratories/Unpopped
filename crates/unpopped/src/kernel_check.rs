@@ -8,6 +8,7 @@ mod extern_call;
 mod matrix;
 mod mbar;
 mod mma;
+mod tcgen05;
 mod wgmma;
 
 use unpopped_vocab::ElementKind;
@@ -261,10 +262,12 @@ fn check_sync_stmt(
         Stmt::Mma { .. } => mma::check_mma(k, st)?,
         Stmt::Wgmma { .. } => wgmma::check_wgmma(k, st, sc)?,
         Stmt::WgmmaCommit | Stmt::WgmmaWait { .. } => {}
+        Stmt::Tcgen05Mma { .. } | Stmt::Tcgen05Ld { .. } => tcgen05::check_tcgen05(k, st, sc)?,
         Stmt::MatrixLoad { .. } => matrix::check_matrix_load(k, st, sc)?,
         Stmt::MbarInit { .. }
         | Stmt::MbarArrive { .. }
         | Stmt::MbarCompleteTx { .. }
+        | Stmt::Tcgen05Commit { .. }
         | Stmt::MbarWait { .. } => mbar::check_mbar(k, st, sc)?,
         Stmt::MatrixStore { .. } => matrix::check_matrix_store(k, st, sc)?,
         Stmt::CopyAsync { .. } | Stmt::AsyncCommit | Stmt::AsyncWait { .. } => {
@@ -499,6 +502,9 @@ fn check_stmt(
         | Stmt::Wgmma { .. }
         | Stmt::WgmmaCommit
         | Stmt::WgmmaWait { .. }
+        | Stmt::Tcgen05Mma { .. }
+        | Stmt::Tcgen05Commit { .. }
+        | Stmt::Tcgen05Ld { .. }
         | Stmt::MatrixLoad { .. }
         | Stmt::MbarInit { .. }
         | Stmt::MbarArrive { .. }
@@ -1057,6 +1063,11 @@ fn check_alloc_place(
     let Some(a) = k.allocs.get(alloc as usize) else {
         return Err(KernelError::BadPlace { buffer: alloc });
     };
+    if a.space == MemorySpace::Tensor {
+        return Err(KernelError::Tcgen05Unsupported {
+            what: "an ordinary access to tensor memory",
+        });
+    }
     if a.space == MemorySpace::Shared && k.launch.is_none() {
         return Err(KernelError::SharedWithoutLaunch { alloc });
     }

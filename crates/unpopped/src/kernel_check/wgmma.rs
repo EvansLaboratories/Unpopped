@@ -30,7 +30,12 @@ fn check_launch(k: &KernelFn) -> Result<(), KernelError> {
     Ok(())
 }
 
-fn check_tile(k: &KernelFn, place: &Place, ab: ElementKind, sc: &Scope) -> Result<(), KernelError> {
+pub(super) fn check_tile(
+    k: &KernelFn,
+    place: &Place,
+    ab: ElementKind,
+    sc: &Scope,
+) -> Result<(), KernelError> {
     let Place::Alloc { alloc, .. } = place else {
         return Err(refuse("a tile that is not a Shared allocation place"));
     };

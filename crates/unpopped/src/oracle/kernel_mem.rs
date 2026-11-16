@@ -319,6 +319,7 @@ impl ThreadCtx<'_> {
 
     pub(super) fn mem(&self, alloc: u32, space: MemorySpace) -> Option<&AllocMem> {
         match space {
+            MemorySpace::Tensor => self.block.shared[alloc as usize].as_ref(),
             MemorySpace::Shared => match self.peer {
                 Some(o) => self.peers.get_ref(o).shared[alloc as usize].as_ref(),
                 None => self.block.shared[alloc as usize].as_ref(),
@@ -330,6 +331,7 @@ impl ThreadCtx<'_> {
 
     pub(super) fn mem_mut(&mut self, alloc: u32, space: MemorySpace) -> Option<&mut AllocMem> {
         match space {
+            MemorySpace::Tensor => self.block.shared[alloc as usize].as_mut(),
             MemorySpace::Shared => match self.peer {
                 Some(o) => self.peers.get(o).shared[alloc as usize].as_mut(),
                 None => self.block.shared[alloc as usize].as_mut(),
@@ -347,7 +349,7 @@ impl ThreadCtx<'_> {
         space: MemorySpace,
         kind: AccessKind,
     ) -> Result<(), KernelTrap> {
-        if space == MemorySpace::Shared {
+        if matches!(space, MemorySpace::Shared | MemorySpace::Tensor) {
             let now = self.stamp(kind);
             let owner = self.peer.unwrap_or(self.block_lin);
             let log = match self.peer {
