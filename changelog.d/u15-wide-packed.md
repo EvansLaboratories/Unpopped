@@ -1,0 +1,3 @@
+kind: 8- and 16-lane packed values within 128 bits, type rules (ROADMAP U15 slice 1)
+---
+`Pack` and `BitcastPacked` accept 8 and 16 lanes when the lanes fit 128 bits (8 lanes of at most 16 bits, 16 lanes of 8 bits); `BadLanes` is returned otherwise (a wider 8/16-lane pack, or any other count). Additive: 2 and 4 lanes keep their rule and no enum changes. Only the type rules are built; oracle evaluation of an 8/16-lane `Extract`, the cpu-c lowering and any emitter are not, and no patent search was run for this slice. Verified by two tests in `tests/packed_values.rs`, each failed by a seeded mutant (lane set back to 2/4; width check removed).
