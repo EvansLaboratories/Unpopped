@@ -28,7 +28,7 @@ unpopped` builds with no emitter in its dependency graph. Cross-emitter evidence
 lives in `unpopped-conformance` so no emitter dev-depends on a sibling.
 
 The in-tree reference emitter is **published** — `unpopped-cpu-c` has been on
-crates.io since 0.1.0 (2026-08-19). `unpopped-slang` (published 0.1.0 to 0.35.3)
+crates.io since 0.1.0 (2026-08-19). `unpopped-slang` (published 0.1.0 to 0.35.4)
 moved to Vulkane as `vulkane-slang-emit`; this repository no longer contains it. They were held back once on the argument that a
 `Backend` trait known to be moving would hand a third party breaking changes;
 the hold was lifted four days later and the history is in

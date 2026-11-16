@@ -1,0 +1,3 @@
+kind: docs: US20230289242A1 is granted as US12536056B2; README slang version
+---
+PATENT-SWEEP corrects the `mbarrier` hit's status (granted, continuation pending), separates the application claims I read from the granted claims coderipper-b read, and records what the oracle does with file:line (per-block state, `Block`-scope release arrivals, no peer-block target). README: `unpopped-slang` last published version is 0.35.4 (crates.io, 2026-11-10), not 0.35.3. Docs only; verified against crates.io and `origin/main` sources.
