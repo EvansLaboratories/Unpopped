@@ -555,6 +555,7 @@ impl Emitter<'_> {
                     end,
                     step,
                     body,
+                    ..
                 } => self.block_for(*local, [start, end, step], body)?,
                 _ => {
                     return Err(refuse(

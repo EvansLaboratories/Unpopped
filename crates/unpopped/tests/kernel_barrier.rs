@@ -73,6 +73,7 @@ fn if_(cond: ScalarExpr, then: Vec<Stmt>) -> Stmt {
 
 fn for_(local: u32, end: ScalarExpr, body: Vec<Stmt>) -> Stmt {
     Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local,
         start: ci(0),
         end,
@@ -139,6 +140,7 @@ fn a_barrier_in_a_loop_bounded_by_a_parameter_is_accepted() {
 #[test]
 fn a_barrier_under_block_level_exec_ids_is_accepted_and_under_thread_ids_is_not() {
     let strided = |start: ExecId, step: ExecId| Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: I,
         start: to_i32(exec(start)),
         end: local(N),

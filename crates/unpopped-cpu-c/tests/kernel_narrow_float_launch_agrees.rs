@@ -105,6 +105,9 @@ fn mirrored_copy_body() -> Vec<Stmt> {
     );
     let mut body = vec![
         Stmt::CopyAsync {
+            valid: None,
+            cache: unpopped::kernel::CacheHint::Auto,
+            l2_prefetch: None,
             dst: Place::Alloc {
                 alloc: 0,
                 index: pair_index(tid.clone(), 0),

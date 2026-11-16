@@ -331,6 +331,7 @@ impl<'a> Machine<'a> {
                 end,
                 step,
                 body,
+                ..
             } => return self.exec_for(*local, [start, end, step], body),
             Stmt::While { cond, body } => {
                 while self.truthy(cond)? {
@@ -409,7 +410,13 @@ impl<'a> Machine<'a> {
             }
             Stmt::AtomicRmw { .. } | Stmt::AtomicCas { .. } => self.exec_atomic(st)?,
             Stmt::Fence { scope, order } => self.fence(*order, *scope),
-            Stmt::CopyAsync { dst, src, elems } => self.copy_async(dst, src, *elems)?,
+            Stmt::CopyAsync {
+                dst,
+                src,
+                elems,
+                valid,
+                ..
+            } => self.copy_async(dst, src, *elems, valid.as_ref())?,
             Stmt::AsyncCommit => self.async_commit()?,
             Stmt::AsyncWait { pending } => self.async_wait(*pending)?,
             _ => unreachable!("exec_simple is called for straight-line statements only"),

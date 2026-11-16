@@ -74,7 +74,14 @@ fn global(buffer: u32, i: ScalarExpr) -> Place {
 }
 
 fn copy(dst: Place, src: Place, elems: u32) -> Stmt {
-    Stmt::CopyAsync { dst, src, elems }
+    Stmt::CopyAsync {
+        valid: None,
+        cache: unpopped::kernel::CacheHint::Auto,
+        l2_prefetch: None,
+        dst,
+        src,
+        elems,
+    }
 }
 
 fn barrier() -> Stmt {
@@ -194,6 +201,7 @@ fn a_copy_inside_a_loop_whose_source_moves() {
     let mut k = kernel(vec![]);
     k.locals.push(LocalDecl::scalar(U32));
     k.body = Block(vec![Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: 1,
         start: cu(0),
         end: cu(2),

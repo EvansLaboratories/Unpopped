@@ -116,6 +116,7 @@ pub fn lift_elementwise_opdef(
     let mut body = Block(inner);
     for d in (0..r).rev() {
         body = Block(vec![Stmt::For {
+            unroll: crate::kernel::Unroll::None,
             local: r + d,
             start: ScalarExpr::ConstInt(0, ElementKind::I32),
             end: ScalarExpr::Local(d),
@@ -650,6 +651,7 @@ fn scan_row(sh: &ReductionShape, sop: ReduceOp, reverse: bool, pass: Vec<Stmt>) 
             init: int(0),
         },
         Stmt::For {
+            unroll: crate::kernel::Unroll::None,
             local: sh.counter(scanned),
             start,
             end,
@@ -1034,6 +1036,7 @@ fn widen(to: ElementKind) -> CastSpec {
 /// `for counter(d) in 0..extent(d) { inner }` for input axis `d` of a rank-`r` kernel.
 fn for_axis(d: u32, r: u32, inner: Block) -> Block {
     Block(vec![Stmt::For {
+        unroll: crate::kernel::Unroll::None,
         local: r + d,
         start: ScalarExpr::ConstInt(0, ElementKind::I32),
         end: ScalarExpr::Local(d),

@@ -73,6 +73,7 @@ fn kernel(t: ElementKind, op: Op) -> KernelFn {
         },
     ]);
     let looped = Stmt::For {
+        unroll: unpopped::kernel::Unroll::None,
         local: 1,
         start: ScalarExpr::ConstInt(0, I32),
         end: ScalarExpr::Local(0),

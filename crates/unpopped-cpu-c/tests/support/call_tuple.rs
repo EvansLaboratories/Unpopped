@@ -140,6 +140,7 @@ pub(crate) fn argmax_loop() -> Module {
                 init: ci(0),
             },
             Stmt::For {
+                unroll: unpopped::kernel::Unroll::None,
                 local: 2,
                 start: ci(1),
                 end: ci(LEN),

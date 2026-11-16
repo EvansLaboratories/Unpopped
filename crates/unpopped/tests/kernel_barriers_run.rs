@@ -222,6 +222,7 @@ fn rounds(second_barrier: bool) -> KernelFn {
         let_g(),
         load_in(X),
         Stmt::For {
+            unroll: unpopped::kernel::Unroll::None,
             local: R,
             start: ci(0),
             end: ci(3),

@@ -197,6 +197,7 @@ impl Emitter<'_> {
                 end,
                 step,
                 body,
+                ..
             } => {
                 self.for_stmt(*local, [start, end, step], body)?;
             }
@@ -212,11 +213,22 @@ impl Emitter<'_> {
             Stmt::AtomicRmw { .. } => self.atomic_rmw(s)?,
             Stmt::AtomicCas { .. } => self.atomic_cas(s)?,
             Stmt::Fence { .. } | Stmt::AsyncCommit | Stmt::AsyncWait { .. } => {}
-            Stmt::CopyAsync { dst, src, elems } => {
-                // the sequential reference performs the copy at issue; commit and wait order nothing here
+            Stmt::CopyAsync {
+                dst,
+                src,
+                elems,
+                valid,
+                ..
+            } => {
+                // the sequential reference performs the copy at issue; commit and wait order nothing here. Elements
+                // from `valid` on are zero-filled and never read (the cache and prefetch hints mean nothing here).
                 let (d, s) = (self.address(dst)?, self.address(src)?);
+                let v = match valid {
+                    Some(e) => self.expr(e)?,
+                    None => elems.to_string(),
+                };
                 self.line(&format!(
-                    "for (int cp_ = 0; cp_ < {elems}; cp_++) (&({d}))[cp_] = (&({s}))[cp_];"
+                    "for (int cp_ = 0; cp_ < {elems}; cp_++) (&({d}))[cp_] = cp_ < ({v}) ? (&({s}))[cp_] : 0;"
                 ));
             }
             Stmt::Collective { .. } | Stmt::CollectiveTuple { .. } => {

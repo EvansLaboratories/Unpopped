@@ -81,6 +81,7 @@ fn mainloop_in(start: ScalarExpr, end: ScalarExpr) -> Vec<Stmt> {
             init: ci(0),
         },
         Stmt::For {
+            unroll: unpopped::kernel::Unroll::None,
             local: 5,
             start,
             end,

@@ -74,6 +74,7 @@ fn load_loop(mask: ScalarExpr, fill: ScalarExpr) -> KernelFn {
         ],
         vec![LocalDecl::scalar(I32), LocalDecl::scalar(F32)],
         Block(vec![Stmt::For {
+            unroll: unpopped::kernel::Unroll::None,
             local: 0,
             start: ci(0),
             end: ci(OUT_LEN as i64),
@@ -102,6 +103,7 @@ fn store_loop(mask: ScalarExpr) -> KernelFn {
         vec![Param::buffer("out", F32, BufferRole::Write, Some(1))],
         vec![LocalDecl::scalar(I32)],
         Block(vec![Stmt::For {
+            unroll: unpopped::kernel::Unroll::None,
             local: 0,
             start: ci(0),
             end: ci(OUT_LEN as i64),

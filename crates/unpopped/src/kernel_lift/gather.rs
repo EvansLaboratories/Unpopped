@@ -42,6 +42,7 @@ pub fn lift_gather_opdef(
     let mut body = s.cell(op, &g);
     for d in (0..s.r).rev() {
         body = Block(vec![Stmt::For {
+            unroll: crate::kernel::Unroll::None,
             local: s.counter(d),
             start: int(0),
             end: local(d),

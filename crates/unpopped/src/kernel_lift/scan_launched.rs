@@ -220,6 +220,7 @@ impl Scan<'_> {
             (lo, hi, int(1))
         };
         Stmt::For {
+            unroll: crate::kernel::Unroll::None,
             local: self.sh.counter(self.sh.reduced[0]),
             start,
             end,

@@ -54,6 +54,7 @@ fn convert(tag: &str, (from, to): (ElementKind, ElementKind), n: usize) -> Kerne
         ],
         vec![LocalDecl::scalar(I32), LocalDecl::scalar(from)],
         Block(vec![Stmt::For {
+            unroll: unpopped::kernel::Unroll::None,
             local: 0,
             start: ScalarExpr::ConstInt(0, I32),
             end: ScalarExpr::ConstInt(n as i64, I32),
