@@ -577,15 +577,18 @@ fn advance<'a>(
 fn wake_mbar_waiters(threads: &mut [ThreadRun<'_>], mem: &BlockMem) -> bool {
     let mut woke = false;
     for t in threads {
-        if let Status::MbarWait {
+        let Status::MbarWait {
             alloc,
             index,
             parity,
         } = t.status
-            && mem
-                .mbar
-                .get(&(alloc, index))
-                .is_some_and(|s| s.complete(parity))
+        else {
+            continue;
+        };
+        if mem
+            .mbar
+            .get(&(alloc, index))
+            .is_some_and(|s| s.complete(parity))
         {
             t.status = Status::Runnable;
             woke = true;
