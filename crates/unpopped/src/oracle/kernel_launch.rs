@@ -444,9 +444,16 @@ struct DevicePlace {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Status {
     Runnable,
-    Waiting { scope: Scope, at: usize },
+    Waiting {
+        scope: Scope,
+        at: usize,
+    },
     /// Blocked at a `Stmt::MbarWait` until the barrier's phase of that parity has completed.
-    MbarWait { alloc: u32, index: usize, parity: u32 },
+    MbarWait {
+        alloc: u32,
+        index: usize,
+        parity: u32,
+    },
     Done,
 }
 

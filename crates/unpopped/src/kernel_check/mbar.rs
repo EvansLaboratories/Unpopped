@@ -6,9 +6,9 @@
 
 use super::{Scope, check_expr, check_place};
 use crate::exec::MemorySpace;
+use crate::ir::ScalarExpr;
 use crate::kernel::{KernelError, KernelFn, Place, Stmt};
 use crate::types::{self, Ty, elem_bits};
-use crate::ir::ScalarExpr;
 
 fn refuse(what: &'static str) -> KernelError {
     KernelError::MbarrierUnsupported { what }

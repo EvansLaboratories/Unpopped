@@ -53,7 +53,9 @@ impl Machine<'_> {
             Stmt::MbarInit { bar, count } => {
                 let count = self.mbar_operand(count)?;
                 if count < 1 {
-                    return Err(misuse("an mbarrier initialised with an arrival count below 1"));
+                    return Err(misuse(
+                        "an mbarrier initialised with an arrival count below 1",
+                    ));
                 }
                 let key = self.mbar_key(bar, AccessKind::Write, None)?;
                 self.mbar_table().insert(
@@ -102,7 +104,9 @@ impl Machine<'_> {
             .filter(|p| *p < 2)
             .ok_or_else(|| misuse("an mbarrier wait whose parity is not 0 or 1"))?;
         let Place::Alloc { alloc, index } = bar else {
-            return Err(KernelTrap::Unsupported("an mbarrier that is not an allocation place"));
+            return Err(KernelTrap::Unsupported(
+                "an mbarrier that is not an allocation place",
+            ));
         };
         let i = self.alloc_index(*alloc, index)?;
         let state = *self
@@ -142,13 +146,18 @@ impl Machine<'_> {
         order: Option<MemoryOrder>,
     ) -> Result<(u32, usize), KernelTrap> {
         let Place::Alloc { alloc, index } = bar else {
-            return Err(KernelTrap::Unsupported("an mbarrier that is not an allocation place"));
+            return Err(KernelTrap::Unsupported(
+                "an mbarrier that is not an allocation place",
+            ));
         };
         let i = self.alloc_index(*alloc, index)?;
         if let Some(o) = order {
             self.set_site(o, Scope::Block);
         }
-        let c = self.ctx.as_mut().expect("alloc_index found a launch context");
+        let c = self
+            .ctx
+            .as_mut()
+            .expect("alloc_index found a launch context");
         c.log_shared(*alloc, i, MemorySpace::Shared, kind)?;
         Ok((*alloc, i))
     }

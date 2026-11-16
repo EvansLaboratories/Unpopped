@@ -302,7 +302,9 @@ impl<'a> Machine<'a> {
             Stmt::MbarInit { .. }
             | Stmt::MbarArrive { .. }
             | Stmt::MbarCompleteTx { .. }
-            | Stmt::MbarWait { .. } => return Err(KernelTrap::Unsupported("an mbarrier statement")),
+            | Stmt::MbarWait { .. } => {
+                return Err(KernelTrap::Unsupported("an mbarrier statement"));
+            }
             Stmt::ExternCall {
                 decl,
                 args,

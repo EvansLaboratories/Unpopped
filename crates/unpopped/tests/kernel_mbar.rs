@@ -104,7 +104,12 @@ fn kernel(threads: u32, body: Vec<Stmt>) -> KernelFn {
     )
     .with_launch(LaunchShape::new([threads, 1, 1], [1, 1, 1]));
     k.allocs = vec![
-        AllocDecl::new("bar", MemorySpace::Shared, ElementKind::U64, Extent::Static(1)),
+        AllocDecl::new(
+            "bar",
+            MemorySpace::Shared,
+            ElementKind::U64,
+            Extent::Static(1),
+        ),
         AllocDecl::new("cells", MemorySpace::Shared, U32, Extent::Static(2)),
     ];
     k
@@ -146,7 +151,13 @@ fn consumer(parity: i64) -> Stmt {
 fn a_consumer_blocks_until_the_producer_arrives_and_then_sees_its_data() {
     let k = kernel(
         2,
-        after_init(1, vec![consumer(0), on(1, vec![put(0, 21), put(1, 21), arrive(None)])]),
+        after_init(
+            1,
+            vec![
+                consumer(0),
+                on(1, vec![put(0, 21), put(1, 21), arrive(None)]),
+            ],
+        ),
     );
     assert_eq!(run(&k), Ok(42));
 }
@@ -155,27 +166,40 @@ fn a_consumer_blocks_until_the_producer_arrives_and_then_sees_its_data() {
 fn a_store_after_the_arrival_is_not_ordered_before_the_consumers_read() {
     let k = kernel(
         2,
-        after_init(1, vec![consumer(0), on(1, vec![put(0, 21), arrive(None), put(1, 21)])]),
+        after_init(
+            1,
+            vec![
+                consumer(0),
+                on(1, vec![put(0, 21), arrive(None), put(1, 21)]),
+            ],
+        ),
     );
     assert_eq!(run(&k), Err(KernelTrap::DataRace));
 }
 
 #[test]
 fn a_phase_nobody_completes_is_a_deadlock() {
-    let k = kernel(2, after_init(1, vec![consumer(0), on(1, vec![put(0, 1), put(1, 1)])]));
+    let k = kernel(
+        2,
+        after_init(1, vec![consumer(0), on(1, vec![put(0, 1), put(1, 1)])]),
+    );
     assert_eq!(run(&k), Err(KernelTrap::MbarrierDeadlock));
 }
 
 #[test]
 fn the_phase_completes_when_every_expected_arrival_has_come() {
-    let two = |producers: Vec<Stmt>| kernel(3, after_init(2, [vec![consumer(0)], producers].concat()));
+    let two =
+        |producers: Vec<Stmt>| kernel(3, after_init(2, [vec![consumer(0)], producers].concat()));
     let both = two(vec![
         on(1, vec![put(0, 10), arrive(None)]),
         on(2, vec![put(1, 20), arrive(None)]),
     ]);
     assert_eq!(run(&both), Ok(30));
     // the control: with one arrival missing the phase never completes
-    let one = two(vec![on(1, vec![put(0, 10), arrive(None)]), on(2, vec![put(1, 20)])]);
+    let one = two(vec![
+        on(1, vec![put(0, 10), arrive(None)]),
+        on(2, vec![put(1, 20)]),
+    ]);
     assert_eq!(run(&one), Err(KernelTrap::MbarrierDeadlock));
 }
 
@@ -198,7 +222,18 @@ fn the_phase_parity_alternates() {
 
 #[test]
 fn parity_one_passes_on_a_fresh_barrier_and_parity_zero_does_not() {
-    let alone = |parity| kernel(1, vec![init(1), put(0, 3), put(1, 4), wait(parity), publish().remove(0)]);
+    let alone = |parity| {
+        kernel(
+            1,
+            vec![
+                init(1),
+                put(0, 3),
+                put(1, 4),
+                wait(parity),
+                publish().remove(0),
+            ],
+        )
+    };
     let pass = alone(1);
     assert_eq!(run(&pass), Ok(0));
     assert_eq!(run(&alone(0)), Err(KernelTrap::MbarrierDeadlock));
@@ -236,7 +271,12 @@ fn the_transaction_count_holds_the_phase_open_until_the_bytes_land() {
 
 #[test]
 fn using_a_barrier_outside_its_contract_is_a_misuse_trap() {
-    let misuse = |body: Vec<Stmt>| matches!(run(&kernel(1, body)), Err(KernelTrap::MbarrierMisuse { .. }));
+    let misuse = |body: Vec<Stmt>| {
+        matches!(
+            run(&kernel(1, body)),
+            Err(KernelTrap::MbarrierMisuse { .. })
+        )
+    };
     assert!(misuse(vec![arrive(None)]), "arrive before init");
     assert!(misuse(vec![init(0)]), "arrival count 0");
     assert!(misuse(vec![init(1), wait(2)]), "parity 2");
@@ -244,11 +284,21 @@ fn using_a_barrier_outside_its_contract_is_a_misuse_trap() {
 
 #[test]
 fn the_checker_refuses_what_an_mbarrier_cannot_be() {
-    let refused = |k: KernelFn| matches!(check_kernel(&k), Err(KernelError::MbarrierUnsupported { .. }));
+    let refused = |k: KernelFn| {
+        matches!(
+            check_kernel(&k),
+            Err(KernelError::MbarrierUnsupported { .. })
+        )
+    };
     let mut narrow = kernel(1, vec![init(1)]);
     narrow.allocs[0] = AllocDecl::new("bar", MemorySpace::Shared, U32, Extent::Static(1));
     let mut private = kernel(1, vec![init(1)]);
-    private.allocs[0] = AllocDecl::new("bar", MemorySpace::Private, ElementKind::U64, Extent::Static(1));
+    private.allocs[0] = AllocDecl::new(
+        "bar",
+        MemorySpace::Private,
+        ElementKind::U64,
+        Extent::Static(1),
+    );
     // a bare `Const` takes the compute type, so a float compute type makes the parity a float
     let mut float_parity = kernel(
         1,
@@ -258,7 +308,11 @@ fn the_checker_refuses_what_an_mbarrier_cannot_be() {
         }],
     );
     float_parity.compute = ElementKind::F32;
-    for (what, k) in [("32-bit", narrow), ("private", private), ("float parity", float_parity)] {
+    for (what, k) in [
+        ("32-bit", narrow),
+        ("private", private),
+        ("float parity", float_parity),
+    ] {
         assert!(refused(k), "{what}");
     }
     assert_eq!(check_kernel(&kernel(1, vec![init(1)])), Ok(()));
