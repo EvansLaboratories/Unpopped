@@ -62,7 +62,7 @@ pub enum TypeError {
         /// The integer type of the operand.
         ty: ElementKind,
     },
-    /// A `Pack` with a lane count other than 2 or 4.
+    /// A `Pack` or `BitcastPacked` with a lane count other than 2, 4, 8 or 16, or an 8- or 16-lane one wider than 128 bits.
     BadLanes {
         /// The number of children given (saturated at 255).
         lanes: u8,
@@ -101,14 +101,14 @@ pub enum TypeError {
     },
 }
 
-/// The type of a [`ScalarExpr`] node: a scalar, or a packed value of 2 or 4 lanes
+/// The type of a [`ScalarExpr`] node: a scalar, or a packed value of 2, 4, 8 or 16 lanes
 /// (`docs/ir-typed-expressions.md` section 9).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Ty {
     /// One value of this element type.
     Scalar(ElementKind),
-    /// `lanes` values of this element type, `lanes` in `{2, 4}`.
+    /// `lanes` values of this element type, `lanes` in `{2, 4, 8, 16}` (8 and 16 within 128 bits).
     Packed(ElementKind, u8),
 }
 
@@ -410,10 +410,20 @@ pub fn infer_ty_in(e: &ScalarExpr, compute: ElementKind, locals: &[Ty]) -> Resul
     }
 }
 
-/// The type of a `Pack`: 2 or 4 scalar children of one type.
+/// ROADMAP U15: 8 and 16 lanes are packed values only while they fit one 128-bit register (`uint4`-style): 8 lanes of
+/// at most 16 bits, 16 lanes of 8 bits. 2 and 4 lanes keep the earlier rule (any typed lane). An element with no bit
+/// width (a lane type outside the typed set) is left to the existing operand rules.
+fn check_packed_width(elem: ElementKind, lanes: u8) -> Result<(), TypeError> {
+    match typed_bits(elem) {
+        Some(bits) if lanes > 4 && bits * u32::from(lanes) > 128 => Err(TypeError::BadLanes { lanes }),
+        _ => Ok(()),
+    }
+}
+
+/// The type of a `Pack`: 2, 4, 8 or 16 scalar children of one type (8 and 16 only within 128 bits).
 fn pack_ty(xs: &[ScalarExpr], compute: ElementKind, locals: &[Ty]) -> Result<Ty, TypeError> {
     let lanes = u8::try_from(xs.len()).unwrap_or(u8::MAX);
-    if !matches!(lanes, 2 | 4) {
+    if !matches!(lanes, 2 | 4 | 8 | 16) {
         return Err(TypeError::BadLanes { lanes });
     }
     let first = child("Pack", &xs[0], compute, locals)?;
@@ -427,6 +437,7 @@ fn pack_ty(xs: &[ScalarExpr], compute: ElementKind, locals: &[Ty]) -> Result<Ty,
             });
         }
     }
+    check_packed_width(first, lanes)?;
     Ok(Ty::Packed(first, lanes))
 }
 
@@ -438,9 +449,10 @@ fn bitcast_packed_ty(
     compute: ElementKind,
     locals: &[Ty],
 ) -> Result<Ty, TypeError> {
-    if !matches!(lanes, 2 | 4) {
+    if !matches!(lanes, 2 | 4 | 8 | 16) {
         return Err(TypeError::BadLanes { lanes });
     }
+    check_packed_width(elem, lanes)?;
     let from = child("BitcastPacked", x, compute, locals)?;
     check_packed_bitcast(elem, lanes, from)?;
     Ok(Ty::Packed(elem, lanes))
