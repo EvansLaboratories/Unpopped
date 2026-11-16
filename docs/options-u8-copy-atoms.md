@@ -55,9 +55,11 @@ address of row `r` of tile `t` (8 contiguous `b16` elements); lane `l` receives,
 `Private` destination of `2*count` elements of the same 16-bit type. `MatrixStore` (`stmatrix`) is the next slice. **Sources for the
 distribution:** my reading of the PTX ISA's `ldmatrix` section, and, as a second source found 2026-11-15, the TVM project's
 `ldstmatrix` tile-primitive documentation (lane `i` holds row `i // 4`, column pair `i % 4`) and NVIDIA's libcudacxx PTX pages
-(`.m8n8`, `.x1/.x2/.x4`, `.trans`, `b16` only). **Not found in a second source:** the rule that lanes `8t..8t+7` own the addresses
-of tile `t` for `.x2/.x4` (practitioner write-ups agree, none quotes the ISA text); the test pins it, and a device run is the
-check. This is a standard web search, not a read of the ISA. *Open:* the second lane-table source
+(`.m8n8`, `.x1/.x2/.x4`, `.trans`, `b16` only). **Address rule (lanes `8t..8t+7` own tile `t`):** the baracuda lane (2026-11-16) found it consistent with a working kernel, not the
+ISA text: the vendored AWQ `gemm_cuda_gen.cu` (lines 171 to 186, `.x4`) feeds lane `l` the address of row `(l & 15)` at column block `(l >> 4) * 8`,
+so lanes 0-7 and 8-15 are rows 0-7 and 8-15 at column 0 and lanes 16-31 the same at column 8, which is lane `8t + r` = row `r` of tile `t`
+for tiles laid out that way. That is evidence for the address half, from one kernel; **no source quotes the ISA text for it**, and the
+receive half rests on the TVM page above. The test pins both; a device run is the check. This is a standard web search, not a read of the ISA. *Open:* the second lane-table source
 (U7's `mma.sp` hold has the same need, a source other than our own memory of the PTX manual); S2 should not start before one is
 found, so the two holds are cleared together. *Oracle and cpu-c:* gather and scatter by the table. One breaking minor.
 
