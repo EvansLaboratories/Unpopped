@@ -117,6 +117,8 @@ Two honest caveats on that:
   already target-neutral), which is why it could land after `0.2.0` instead of
   blocking it. Landed in `0.3.0`.
 
+> **What is and is not verified.** The semantics of `mbarrier`, `wgmma`, `tcgen05`, `CopyBulk` and named barriers (`bar.sync`/`bar.arrive`) are modelled from recalled PTX with no second source and have not run on hardware. Each is an oracle model, not a hardware-verified statement. The development GPU here is an RTX 4070 (sm_89), which cannot run `wgmma` or TMA bulk copies (sm_90) or `tcgen05` (sm_100); verifying them takes an sm_90 part (H100/H200) for `mbarrier`, `wgmma`, `CopyBulk` and named barriers, and an sm_100 part (B200) for `tcgen05`. `mbarrier` and named barriers would also run on sm_89 for the parts of the model that do not touch TMA or `wgmma`, but no such run exists yet.
+
 ## History
 
 The crates here carry their original commit history from Baracuda, but git
