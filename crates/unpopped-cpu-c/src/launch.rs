@@ -47,7 +47,7 @@
 use unpopped::backend::{LowerError, Spelling};
 use unpopped::exec::{AllocDecl, ExecId, Extent, MemorySpace, Scope};
 use unpopped::ir::ScalarExpr;
-use unpopped::kernel::{AtomicOp, KernelFn, ParamKind, Place, Stmt};
+use unpopped::kernel::{AtomicOp, BarrierKind, KernelFn, ParamKind, Place, Stmt};
 use unpopped_vocab::ElementKind;
 
 use crate::base::{Emitter, LaunchInfo, ctype, refuse};
@@ -186,6 +186,14 @@ fn contains_barrier(s: &Stmt) -> bool {
 fn admit_stmts(b: &[Stmt], barriers: bool) -> Result<(), LowerError> {
     for s in b {
         match s {
+            Stmt::Barrier {
+                kind: BarrierKind::Named { .. } | BarrierKind::NamedArrive { .. },
+                ..
+            } => {
+                return Err(refuse(
+                    "a named barrier waits for a subset of the threads, which the serial thread loop cannot spell",
+                ));
+            }
             Stmt::Barrier { scope, .. } if *scope != Scope::Block => {
                 return Err(refuse(format!(
                     "a {scope:?} Barrier; only Block is spelled"

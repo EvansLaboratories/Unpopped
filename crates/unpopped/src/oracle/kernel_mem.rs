@@ -162,6 +162,8 @@ pub(super) struct BlockMem {
     pub(super) sub_epoch: Vec<u32>,
     /// The `mbarrier` objects of the block, keyed by the allocation and element that name them.
     pub(super) mbar: std::collections::HashMap<(u32, usize), super::kernel_mbar::MbarState>,
+    /// The named barriers of the block, by id.
+    pub(super) named: std::collections::HashMap<u32, super::kernel_named::NamedState>,
 }
 
 /// The linear id of the cluster the block at `idx` belongs to (`0` when the launch has no clusters).

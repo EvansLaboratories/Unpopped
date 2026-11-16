@@ -457,6 +457,11 @@ enum Status {
         scope: Scope,
         at: usize,
     },
+    /// Blocked at a named barrier until the phase it arrived in has opened.
+    NamedWait {
+        id: u32,
+        phase: u32,
+    },
     /// Blocked at a `Stmt::MbarWait` until the barrier's phase of that parity has completed.
     MbarWait {
         alloc: u32,
@@ -499,6 +504,8 @@ struct ThreadRun<'a> {
     pending: Vec<PendingStore>,
     /// What the thread contributed to the tuple collective it waits at.
     tuple: Option<Box<TupleContribution>>,
+    /// The named barrier that opened while the thread waited at it: the acquire it owes before it runs on.
+    named_acq: Option<u32>,
 }
 
 /// One block between `Device` barriers: its threads and its memory.
@@ -522,6 +529,7 @@ fn start_mem(b: &BlockRun<'_>) -> BlockMem {
         block_epoch: 0,
         sub_epoch: vec![0; (bx * by * bz).div_ceil(b.sg) as usize],
         mbar: Default::default(),
+        named: Default::default(),
     }
 }
 
@@ -550,6 +558,7 @@ fn start_block<'a>(b: &BlockRun<'a>) -> BlockState<'a> {
             wgmma: None,
             wg_open: Vec::new(),
             wg_groups: std::collections::VecDeque::new(),
+            named_acq: None,
         })
         .collect();
     BlockState { threads }
@@ -578,7 +587,7 @@ fn advance<'a>(
         if st.threads.iter().all(|t| t.status == Status::Done) {
             return Ok(BlockStop::Done);
         }
-        if wake_mbar_waiters(&mut st.threads, own) {
+        if wake_mbar_waiters(&mut st.threads, own) | wake_named_waiters(&mut st.threads, own) {
             continue;
         }
         // a thread that stopped only to have a wgmma commit or wait applied is runnable again
@@ -591,7 +600,7 @@ fn advance<'a>(
         let blocked = st
             .threads
             .iter()
-            .any(|t| matches!(t.status, Status::MbarWait { .. }));
+            .any(|t| matches!(t.status, Status::MbarWait { .. } | Status::NamedWait { .. }));
         match release(b, &mut st.threads, own) {
             Err(KernelTrap::BarrierMismatch) if blocked => {
                 return Err(KernelTrap::MbarrierDeadlock);
@@ -619,6 +628,22 @@ fn wake_mbar_waiters(threads: &mut [ThreadRun<'_>], mem: &BlockMem) -> bool {
             .is_some_and(|s| s.complete(parity))
         {
             t.status = Status::Runnable;
+            woke = true;
+        }
+    }
+    woke
+}
+
+/// Make runnable every thread blocked at a named barrier whose phase has opened (each owes an acquire on it); whether any was.
+fn wake_named_waiters(threads: &mut [ThreadRun<'_>], mem: &BlockMem) -> bool {
+    let mut woke = false;
+    for t in threads {
+        let Status::NamedWait { id, phase } = t.status else {
+            continue;
+        };
+        if mem.named.get(&id).is_some_and(|s| s.opened_after(phase)) {
+            t.status = Status::Runnable;
+            t.named_acq = Some(id);
             woke = true;
         }
     }
@@ -679,6 +704,9 @@ fn run_phase<'a>(
     m.steps = t.steps;
     m.limit = b.limit;
     let pending = std::mem::take(&mut t.pending);
+    if let Some(id) = t.named_acq.take() {
+        m.named_acquire(id);
+    }
     let stop = if t.started {
         m.perform_pending(pending)
             .and_then(|()| m.resume(&mut t.stack, module))
@@ -707,6 +735,7 @@ fn status_after(stop: Stop, t: &mut ThreadRun<'_>) -> Status {
     match stop {
         Stop::Done => Status::Done,
         Stop::Barrier { scope, at } => Status::Waiting { scope, at },
+        Stop::NamedWait { id, phase } => Status::NamedWait { id, phase },
         Stop::Collective { scope, at, c } => {
             t.contrib = Some(c);
             Status::Waiting { scope, at }
@@ -1042,6 +1071,7 @@ mod tests {
                 wgmma: None,
                 wg_open: Vec::new(),
                 wg_groups: std::collections::VecDeque::new(),
+                named_acq: None,
             })
             .collect();
         let mut mem = BlockMem {
@@ -1050,6 +1080,7 @@ mod tests {
             block_epoch: 0,
             sub_epoch: vec![0; n.div_ceil(sg) as usize],
             mbar: Default::default(),
+            named: Default::default(),
         };
         let r = release(&b, &mut threads, &mut mem);
         let now = threads.iter().map(|t| t.status).collect();

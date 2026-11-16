@@ -290,12 +290,15 @@ fn check_sync_stmt(
             results,
         } => check_call_tuple(k, (*callee, args, results), sc, declared_here)?,
         Stmt::Barrier { scope, kind } => {
-            let BarrierKind::Full = kind;
             if !scope_ok(k, *scope) {
                 return Err(KernelError::BadBarrierScope);
             }
-            if k.launch.is_none() {
+            let Some(launch) = k.launch.as_ref() else {
                 return Err(KernelError::ExecWithoutLaunch);
+            };
+            if let BarrierKind::Named { id, count } | BarrierKind::NamedArrive { id, count } = kind
+            {
+                check_named(*scope, (*id, *count), launch.block)?;
             }
         }
         _ => unreachable!("check_sync_stmt is called for sync statements only"),
@@ -1130,6 +1133,25 @@ fn walk(k: &KernelFn, e: &ScalarExpr, sc: &Scope) -> Result<(), KernelError> {
                 what: "arithmetic on a sub-byte value (widen it with a Cast first)",
             });
         }
+    }
+    Ok(())
+}
+
+/// A named barrier: `Block` scope, an id of 0 to 15, and a count of whole warps that fits in the block.
+fn check_named(
+    scope: crate::exec::Scope,
+    (id, count): (u32, u32),
+    block: [u32; 3],
+) -> Result<(), KernelError> {
+    let refuse = |what| Err(KernelError::NamedBarrierUnsupported { what });
+    if scope != crate::exec::Scope::Block {
+        return refuse("a named barrier of a scope other than Block");
+    }
+    if id > 15 {
+        return refuse("a barrier id above 15");
+    }
+    if count == 0 || count % 32 != 0 || count > block.iter().product::<u32>() {
+        return refuse("a thread count that is not whole warps within the block");
     }
     Ok(())
 }

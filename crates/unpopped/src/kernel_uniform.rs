@@ -15,7 +15,7 @@
 
 use crate::exec::{ExecId, MemorySpace, Scope};
 use crate::ir::ScalarExpr;
-use crate::kernel::{Block, CallArg, KernelError, KernelFn, Place, Stmt};
+use crate::kernel::{BarrierKind, Block, CallArg, KernelError, KernelFn, Place, Stmt};
 use crate::kernel_extern::ExternSig;
 use crate::types::operands;
 
@@ -226,6 +226,11 @@ impl Walk<'_> {
                 }
             }
             Stmt::Break | Stmt::Continue => *poisoned |= div,
+            // a named barrier names its participants by arrival, so it may sit under thread-dependent control
+            Stmt::Barrier {
+                kind: BarrierKind::Named { .. } | BarrierKind::NamedArrive { .. },
+                ..
+            } => {}
             Stmt::Barrier { .. } => {
                 if self.check && (div || *poisoned) {
                     return Err(KernelError::BarrierDivergent);

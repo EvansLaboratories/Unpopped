@@ -986,6 +986,24 @@ impl ExternDecl {
 pub enum BarrierKind {
     /// Every thread of the scope arrives, then every thread leaves.
     Full,
+    /// `bar.sync id, count`: a barrier of a `Block` that `count` threads (any subset of the block, whole warps) arrive at
+    /// and wait for; `id` is 0 to 15 and names the barrier, so subsets use different ids. Threads that disagree on
+    /// `count` are `KernelTrap::BarrierMismatch`. Unlike [`BarrierKind::Full`] it may sit under thread-dependent control:
+    /// the participants are whoever reach it. Every arrival is release-ordered before every later wait on the barrier.
+    Named {
+        /// Which barrier, 0 to 15.
+        id: u32,
+        /// How many threads must arrive before it opens.
+        count: u32,
+    },
+    /// `bar.arrive id, count`: arrive at the named barrier without waiting (a producer signalling a consumer that waits
+    /// with [`BarrierKind::Named`]). It counts toward the same `count`.
+    NamedArrive {
+        /// Which barrier, 0 to 15.
+        id: u32,
+        /// How many threads must arrive before it opens.
+        count: u32,
+    },
 }
 
 /// Which [`Stmt::Collective`] (ROADMAP U5 P5). **Shapes only** until the semantics lands.
@@ -1325,6 +1343,12 @@ pub enum KernelError {
     /// A `Stmt::Wgmma` the checker refuses: a launch that is not whole warpgroups of 32-lane subgroups, an `n` or element
     /// type outside the modelled set, a tile that is not a `Shared` place, or a fragment of the wrong space or length.
     WgmmaUnsupported {
+        /// What is wrong.
+        what: &'static str,
+    },
+    /// A named barrier the checker refuses: a scope other than `Block`, an id above 15, or a thread count that is not a
+    /// positive whole number of 32-lane warps within the block.
+    NamedBarrierUnsupported {
         /// What is wrong.
         what: &'static str,
     },

@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.55.0` — **BREAKING**: `BarrierKind::Named` and `NamedArrive` (named barriers, `bar.sync` / `bar.arrive`) and `KernelError::NamedBarrierUnsupported` (ROADMAP U4 S6b-2)
+
+`BarrierKind` is `#[non_exhaustive]`, but the new `KernelError::NamedBarrierUnsupported` variant breaks every exhaustive downstream `match` on the exhaustive `KernelError`: `Stmt::Barrier { scope: Block, kind: BarrierKind::Named { id, count } }` is `bar.sync id, count` (arrive, then wait until `count` threads have arrived) and `NamedArrive { id, count }` is `bar.arrive` (arrive without waiting). `id` is 0 to 15, `count` is a positive whole number of 32-lane warps within the block, the participants are whichever threads reach the barrier (so it may sit under thread-dependent control, which a full barrier may not), and threads that disagree on `count` are `KernelTrap::BarrierMismatch`. Every arrival is a release-class access ordered before every later wait on the barrier (an acquire, taken when the waiter runs on), so a producer warp group and a consumer warp group hand a tile over with no race and an overwrite that skips the consumers' release is a `DataRace`; a barrier that cannot open leaves its waiters in `KernelTrap::MbarrierDeadlock`. New `KernelError::NamedBarrierUnsupported` (a scope other than `Block`, an id above 15, a count that is not whole warps within the block). The serial C refuses named barriers. **Not modelled:** a participant set that splits a warp (the oracle counts threads), and the order of a named barrier against a full `Block` barrier. Verified: `tests/kernel_named_barrier.rs` (6 tests; written before the code; the first run was green after the oracle landed, so seeded mutants were run: see the PR). Not verified: the semantics are from recalled PTX `bar.sync`/`bar.arrive` text, no second source.
+
+---
+
 ## `0.54.1` — docs
 
 `docs/PATENT-SWEEP.md`, U7 S5 section: the "no patent search was run" line for `tcgen05` is replaced by two searches (no tensor-memory patent found; the tool is not a patent database, so a null is not a clearance) and the full independent claims (1 and 20) of the closest candidate, US20230289398A1 (a hardware processor with a work distributor for cooperative-warp MMA: outside as read for the IR and oracle, relevant to an emitter that lowers cooperative-warp MMA). The claims of US10338919B2, WO2018217360A1 and US12499052 are named as unread.
