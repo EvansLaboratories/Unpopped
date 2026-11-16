@@ -14,6 +14,59 @@ fn refuse(what: &'static str) -> KernelError {
     KernelError::MbarrierUnsupported { what }
 }
 
+fn refuse_bulk(what: &'static str) -> KernelError {
+    KernelError::BulkCopyUnsupported { what }
+}
+
+/// Check a `Stmt::CopyBulk`: a `Shared` destination, a readable global source of the same element type, a size that is a
+/// multiple of 16 bytes, and a `Shared` 64-bit barrier.
+pub(super) fn check_copy_bulk(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
+    let Stmt::CopyBulk {
+        dst,
+        src,
+        elems,
+        bar,
+    } = st
+    else {
+        unreachable!("check_copy_bulk is called for a CopyBulk");
+    };
+    let shared = |p: &Place| {
+        matches!(p, Place::Alloc { alloc, .. }
+            if k.allocs.get(*alloc as usize).is_some_and(|a| a.space == MemorySpace::Shared))
+    };
+    if !shared(dst) {
+        return Err(refuse_bulk(
+            "a destination that is not a Shared allocation place",
+        ));
+    }
+    if !shared(bar) {
+        return Err(refuse_bulk(
+            "a barrier that is not a Shared allocation place",
+        ));
+    }
+    let Place::Logical { buffer, .. } = src else {
+        return Err(refuse_bulk("a source that is not a global buffer place"));
+    };
+    let (de, _) = check_place(k, dst, sc)?;
+    let (se, role) = check_place(k, src, sc)?;
+    if !role.reads() {
+        return Err(KernelError::ReadFromWriteOnly { buffer: *buffer });
+    }
+    if de != se {
+        return Err(KernelError::TypeMismatch {
+            what: "a CopyBulk destination and source element type",
+        });
+    }
+    if (elem_bits(de) * *elems as usize) % 128 != 0 || *elems == 0 {
+        return Err(refuse_bulk("a size that is not a multiple of 16 bytes"));
+    }
+    let (be, _) = check_place(k, bar, sc)?;
+    if elem_bits(be) != 64 {
+        return Err(refuse_bulk("a barrier whose elements are not 64 bits"));
+    }
+    Ok(())
+}
+
 /// Check an `mbarrier` statement.
 pub(super) fn check_mbar(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
     let (bar, operands): (&Place, Vec<&ScalarExpr>) = match st {
