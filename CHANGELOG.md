@@ -15,6 +15,16 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.49.0` — **BREAKING**: `Stmt::MatrixStore` (`stmatrix`), `KernelError::MatrixStoreUnsupported` (ROADMAP U8b slice 2)
+
+`Stmt::MatrixStore { count, trans, dst, src }` is the inverse of `Stmt::MatrixLoad` (0.48.0): a 32-lane warp holds fragments of `2 * count` 16-bit elements in a `Private` allocation and the lanes `8t + r` write row `r` of tile `t` (8 contiguous `Shared` elements) at their `dst` address; `trans` stores the transposed tile. It is a rendezvous (reached in uniform control by the whole warp); the writes are ordinary logged `Shared` writes by the supplying lane, ordered by the next barrier. Checker: subgroup exactly 32, `count` 1, 2 or 4, `Shared` 16-bit place, `Private` fragment of `2 * count` elements of the same type, else `KernelError::MatrixStoreUnsupported`.
+
+**Who is affected:** `Stmt` and `KernelError` are exhaustive, so an emitter or visitor that matches every variant must add the new arms (`unpopped-cpu-c` spells it as a block-level construct between two thread loops; a vendor emitter may refuse it as a gap). Migration: add a `MatrixStore` arm that lowers to `stmatrix.sync.aligned.m8n8` (`sm_90`) or refuses.
+
+Verified by `tests/kernel_matrix_store.rs` (tile contents for 1, 2, 4 tiles plain and transposed against `(row, col) -> (lane, element)` formulas written from the PTX description; the race without a barrier; the checker's refusals; two seeded mutants of the oracle's mapping were caught) and `unpopped-cpu-c/tests/kernel_matrix_store_emit_agrees.rs` (the compiled C agrees with the oracle: runs only in CI, this box has no C compiler). The `stmatrix` row-address rule (lanes `8t..8t+7` supply tile `t`) is by symmetry with `ldmatrix`, not from the ISA text.
+
+---
+
 ## `0.48.0` — **BREAKING**: `Stmt::MatrixLoad` (`ldmatrix`), ROADMAP U8b slice 1
 
 New statement `Stmt::MatrixLoad { count, trans, src, dst }`: a warp loads 1, 2 or 4 8 x 8 tiles of 16-bit elements from `Shared` memory, lane `8t + r` supplying the address of row `r` of tile `t`, and lane `l` receiving per tile row `l / 4`, columns `2 * (l % 4)` and `+ 1` (with `trans`, rows `2 * (l % 4)` and `+ 1`, column `l / 4`) into a `Private` fragment of `2 * count` elements. Breaking because `Stmt` gains a variant and `KernelError` gains `MatrixLoadUnsupported` (a 32-lane subgroup, `count` 1/2/4, a `Shared` 16-bit source, a `Private` destination of `2 * count` elements of the same type). The oracle reads each supplying lane's row as ordinary logged `Shared` loads (so a missing barrier is `DataRace`) and distributes at the rendezvous; lanes that supply no row are not evaluated. `tests/kernel_matrix_load.rs` writes the expected lane distribution as plain `(row, col)` formulas from the PTX description, for every count, plain and transposed, plus the race, the unevaluated lanes and the checker's refusals. The serial C and `MatrixStore` follow in this row's next slices. Lane-table sources and the patent read: `docs/options-u8-copy-atoms.md` S2 and `docs/PATENT-SWEEP.md` (U8b); the 8t-owns-tile-t address rule has no second source yet.
