@@ -44,6 +44,56 @@ fn lane_counts_other_than_two_and_four_are_refused() {
     }
 }
 
+// ROADMAP U15: 8- and 16-lane packed values (`uint4`-style: at most 128 bits in all).
+fn const_pack(n: usize, ty: ElementKind) -> ScalarExpr {
+    // A narrow lane is a cast of an I32 leaf: an integer leaf itself is I32/I64/U32/U64.
+    let lane = |i: usize| {
+        ScalarExpr::Cast(
+            Box::new(ScalarExpr::ConstInt(i as i64, ElementKind::I32)),
+            unpopped::ir::CastSpec {
+                to: ty,
+                round: unpopped::ir::RoundMode::NearestEven,
+                sat: unpopped::ir::Saturation::Wrap,
+            },
+        )
+    };
+    pack((0..n).map(lane).collect())
+}
+
+#[test]
+fn eight_and_sixteen_lane_packs_are_packed_up_to_128_bits() {
+    let (i16s, i8s) = (ElementKind::I16, ElementKind::I8);
+    assert_eq!(infer_ty(&const_pack(8, i16s), F32), Ok(Ty::Packed(i16s, 8)));
+    assert_eq!(infer_ty(&const_pack(16, i8s), F32), Ok(Ty::Packed(i8s, 16)));
+    assert_eq!(infer_ty(&const_pack(8, i8s), F32), Ok(Ty::Packed(i8s, 8)));
+    // Extract reaches the last lane.
+    assert_eq!(
+        infer_ty(&extract(const_pack(16, i8s), 15), F32),
+        Ok(Ty::Scalar(i8s))
+    );
+}
+
+#[test]
+fn a_pack_wider_than_128_bits_or_with_an_odd_lane_count_is_refused() {
+    // Control: the same lane counts pass at a narrow enough type (above).
+    for (n, ty) in [
+        (8, ElementKind::I32),
+        (16, ElementKind::I16),
+        (8, ElementKind::I64),
+        (32, ElementKind::I8),
+        (6, ElementKind::I8),
+        (12, ElementKind::I8),
+    ] {
+        assert!(
+            matches!(
+                infer_ty(&const_pack(n, ty), F32),
+                Err(TypeError::BadLanes { .. })
+            ),
+            "{n} x {ty:?}"
+        );
+    }
+}
+
 #[test]
 fn pack_children_must_share_one_scalar_type() {
     let mixed = pack(vec![input(0).0, ScalarExpr::ConstInt(1, ElementKind::I32)]);
