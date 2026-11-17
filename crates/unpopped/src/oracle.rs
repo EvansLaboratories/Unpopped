@@ -333,7 +333,7 @@ mod tests {
             reduced: &none,
             coord: &none,
         };
-        let word = ScalarExpr::ConstInt(0x8887_8685_8483_8281_u64 as i64, ElementKind::U64);
+        let word = ScalarExpr::ConstInt(0x8887_8685_8483_8281_u64 as i64, ElementKind::I64);
         let packed = ScalarExpr::BitcastPacked(Box::new(word), ElementKind::I8, 8);
         for i in 0u8..8 {
             let lane = ScalarExpr::Extract(Box::new(packed.clone()), i);
