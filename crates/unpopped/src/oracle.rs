@@ -320,6 +320,48 @@ mod tests {
         }
     }
 
+    /// ROADMAP U15: an 8-lane value slices and reassembles exactly as a 4-lane one (lane 0 least significant), and a
+    /// 16-lane `Pack` picks its last lane. Evaluated directly, as above.
+    #[test]
+    fn eight_and_sixteen_lane_values_evaluate_lane_by_lane() {
+        let leaf = |_: u8| Val::Float(0.0);
+        let none = |_: u8| -> Val { unreachable!() };
+        let ev = Eval {
+            dtype: ElementKind::F32,
+            params: &[],
+            leaf: &leaf,
+            reduced: &none,
+            coord: &none,
+        };
+        let word = ScalarExpr::ConstInt(0x8887_8685_8483_8281, ElementKind::U64);
+        let packed = ScalarExpr::BitcastPacked(Box::new(word), ElementKind::I8, 8);
+        for i in 0u8..8 {
+            let lane = ScalarExpr::Extract(Box::new(packed.clone()), i);
+            match eval(&lane, &ev) {
+                Val::Raw(b, ElementKind::I8) => assert_eq!(b, 0x81 + u128::from(i), "lane {i}"),
+                _ => panic!("lane {i}: not a raw I8"),
+            }
+        }
+        let back = ScalarExpr::Bitcast(Box::new(packed), ElementKind::U64);
+        match eval(&back, &ev) {
+            Val::Raw(b, ElementKind::U64) => assert_eq!(b, 0x8887_8685_8483_8281),
+            _ => panic!("not a raw U64"),
+        }
+        let lane16 = |v: i64| {
+            ScalarExpr::Cast(
+                Box::new(ScalarExpr::ConstInt(v, ElementKind::I32)),
+                crate::ir::CastSpec {
+                    to: ElementKind::I8,
+                    round: crate::ir::RoundMode::NearestEven,
+                    sat: crate::ir::Saturation::Wrap,
+                },
+            )
+        };
+        let sixteen = ScalarExpr::Pack((0..16).map(|v| lane16(v * 3)).collect());
+        let last = ScalarExpr::Extract(Box::new(sixteen), 15);
+        assert_eq!(eval(&last, &ev).f64(), 45.0);
+    }
+
     /// A packed `Select` mask picks per lane: lane `i` of the result is the first arm's lane `i`
     /// when the condition's lane `i` is non-zero, else the second's. Integer and float mask
     /// lanes are both tested `!= 0` (a float `-0.0` is false, a NaN true), exactly as a scalar
