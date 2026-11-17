@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.2` — 8- and 16-lane packed values within 128 bits, type rules (ROADMAP U15 slice 1)
+
+`Pack` and `BitcastPacked` accept 8 and 16 lanes when the lanes fit 128 bits (8 lanes of at most 16 bits, 16 lanes of 8 bits); `BadLanes` is returned otherwise (a wider 8/16-lane pack, or any other count). Additive: 2 and 4 lanes keep their rule and no enum changes. The type rules are built, and the oracle already evaluates an 8-lane `Extract`/`Bitcast` and a 16-lane `Pack` lane (a unit test in `oracle.rs`, with high-bit data, fails when the lane shift or mask is mutated); the cpu-c lowering and any emitter are not, and the patent search (`docs/PATENT-SWEEP.md`, U15 section) read no claim: NOT CLEARED, unread. Verified by two tests in `tests/packed_values.rs`, each failed by a seeded mutant (lane set back to 2/4; width check removed).
+
+---
+
 ## `0.56.1` — docs: patent sweep reads (granted claims), decline list for the barrier and wgmma-wait statements, rustdoc patent notes
 
 PATENT-SWEEP corrects US20230289242A1 (granted as US12536056B2, continuation pending), separates the application claims this lane read from the granted claims coderipper-b read (cited, read, not a clearance; US11803380B2, US12204897B2, new row US12710961B2), and records what the oracle does with file:line (per-block `mbarrier` state, `Block`-scope release arrivals, no peer-block target). Board 453 ruled option A plus an emitter-decline rule (CireSnave 2026-11-16, quoted in the sweep): `MbarInit`, `MbarArrive`, `MbarCompleteTx`, `MbarWait`, `CopyBulk`, `Tcgen05Commit` and `WgmmaWait` each carry a `Patent note` in their rustdoc, and `docs/parser-emitter-ownership-map.md` section 10 tabulates them (NVIDIA targets may lower with the risk note; other manufacturers decline by name). Docs and rustdoc only; `cargo doc -p unpopped` builds, no tests run.
