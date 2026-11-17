@@ -528,6 +528,9 @@ pub enum Stmt {
     ///
     /// **Patent:** `mbarrier` is the published PTX synchronisation object; this describes its behaviour and claims no
     /// implementation. No patent search specific to it was run (`docs/PATENT-SWEEP.md`, U8c section).
+    ///
+    /// **Patent note (CireSnave 2026-11-16):** lowering this to a hardware operation on non-NVIDIA hardware may implicate
+    /// NVIDIA's US11803380B2; see `docs/PATENT-SWEEP.md`. Emitters for other manufacturers decline it.
     MbarInit {
         /// The `Shared` 64-bit element holding the object.
         bar: Place,
@@ -540,6 +543,9 @@ pub enum Stmt {
     /// A release-class atomic access at `Block` scope: what the thread wrote before it is visible to a thread whose
     /// [`Stmt::MbarWait`] later sees the phase complete. Arriving at an uninitialised barrier is
     /// `KernelTrap::MbarrierMisuse`.
+    ///
+    /// **Patent note (CireSnave 2026-11-16):** lowering this to a hardware operation on non-NVIDIA hardware may implicate
+    /// NVIDIA's US11803380B2; see `docs/PATENT-SWEEP.md`. Emitters for other manufacturers decline it.
     MbarArrive {
         /// The barrier.
         bar: Place,
@@ -549,6 +555,9 @@ pub enum Stmt {
     /// Subtract `bytes` from the transaction count of the `mbarrier` at `bar` (`mbarrier.complete_tx`): what an
     /// asynchronous copy does as its data lands. Completes the phase when it brings the count to 0 with no arrival
     /// pending. A release-class atomic access like [`Stmt::MbarArrive`].
+    ///
+    /// **Patent note (CireSnave 2026-11-16):** lowering this to a hardware operation on non-NVIDIA hardware may implicate
+    /// NVIDIA's US11803380B2; see `docs/PATENT-SWEEP.md`. Emitters for other manufacturers decline it.
     MbarCompleteTx {
         /// The barrier.
         bar: Place,
@@ -561,6 +570,9 @@ pub enum Stmt {
     /// the first one is complete by convention). The thread blocks; it resumes when some other thread's arrival
     /// completes the phase, and a block in which every remaining thread waits is `KernelTrap::MbarrierDeadlock`. An
     /// acquire-class atomic access at `Block` scope. Not a rendezvous: any subset of the block's threads may wait.
+    ///
+    /// **Patent note (CireSnave 2026-11-16):** lowering this to a hardware operation on non-NVIDIA hardware may implicate
+    /// NVIDIA's US11803380B2; see `docs/PATENT-SWEEP.md`. Emitters for other manufacturers decline it.
     MbarWait {
         /// The barrier.
         bar: Place,
@@ -626,6 +638,11 @@ pub enum Stmt {
     WgmmaCommit,
     /// Wait until at most `pending` of this thread's committed [`Stmt::Wgmma`] groups are still in flight
     /// (`wgmma.wait_group`); the older ones land in their `d` fragments.
+    ///
+    /// **Patent note (CireSnave 2026-11-16):** lowering this to a hardware operation on non-NVIDIA hardware may implicate
+    /// NVIDIA's US12204897B2 and its continuation US12710961B2 (claims 1, 9, 15 and 9, 15 name no hardware by their words);
+    /// the oracle lands the results here and does not block, and no fence is modelled. See `docs/PATENT-SWEEP.md`.
+    /// Emitters for other manufacturers decline it.
     WgmmaWait {
         /// How many of the newest groups may stay in flight.
         pending: u32,
@@ -666,6 +683,9 @@ pub enum Stmt {
     /// `tcgen05.commit`: arrive (a release-class arrival, like [`Stmt::MbarArrive`] without a transaction count) on the
     /// `mbarrier` at `bar` once the thread's earlier [`Stmt::Tcgen05Mma`] have completed. In the oracle they completed at
     /// issue.
+    ///
+    /// **Patent note (CireSnave 2026-11-16):** lowering this to a hardware operation on non-NVIDIA hardware may implicate
+    /// NVIDIA's US11803380B2; see `docs/PATENT-SWEEP.md`. Emitters for other manufacturers decline it.
     Tcgen05Commit {
         /// The barrier: a `Place::Alloc` of a `Shared` 64-bit element.
         bar: Place,
@@ -728,6 +748,9 @@ pub enum Stmt {
     ///
     /// **Patent:** see `docs/PATENT-SWEEP.md` (U8c section): this describes the published instruction behaviour and does
     /// not claim an implementation.
+    ///
+    /// **Patent note (CireSnave 2026-11-16):** lowering this to a hardware operation on non-NVIDIA hardware may implicate
+    /// NVIDIA's US11803380B2; see `docs/PATENT-SWEEP.md`. Emitters for other manufacturers decline it.
     CopyBulk {
         /// The first destination element: a `Shared` allocation place.
         dst: Place,
