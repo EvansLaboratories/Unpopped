@@ -415,7 +415,9 @@ pub fn infer_ty_in(e: &ScalarExpr, compute: ElementKind, locals: &[Ty]) -> Resul
 /// width (a lane type outside the typed set) is left to the existing operand rules.
 fn check_packed_width(elem: ElementKind, lanes: u8) -> Result<(), TypeError> {
     match typed_bits(elem) {
-        Some(bits) if lanes > 4 && bits * u32::from(lanes) > 128 => Err(TypeError::BadLanes { lanes }),
+        Some(bits) if lanes > 4 && bits * u32::from(lanes) > 128 => {
+            Err(TypeError::BadLanes { lanes })
+        }
         _ => Ok(()),
     }
 }

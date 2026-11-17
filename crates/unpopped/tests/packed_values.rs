@@ -85,7 +85,10 @@ fn a_pack_wider_than_128_bits_or_with_an_odd_lane_count_is_refused() {
         (12, ElementKind::I8),
     ] {
         assert!(
-            matches!(infer_ty(&const_pack(n, ty), F32), Err(TypeError::BadLanes { .. })),
+            matches!(
+                infer_ty(&const_pack(n, ty), F32),
+                Err(TypeError::BadLanes { .. })
+            ),
             "{n} x {ty:?}"
         );
     }
