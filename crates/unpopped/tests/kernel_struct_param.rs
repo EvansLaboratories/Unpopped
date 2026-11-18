@@ -24,14 +24,14 @@ fn local(i: u32) -> ScalarExpr {
     ScalarExpr::Local(i)
 }
 
-fn out0() -> Place {
+fn out_at(i: i64) -> Place {
     Place::Logical {
         buffer: 0,
-        coords: vec![ScalarExpr::ConstInt(0, I32)],
+        coords: vec![ScalarExpr::ConstInt(i, I32)],
     }
 }
 
-/// `out[0] = cfg.a + cfg.b`, with `cfg` a struct parameter of two `F32` fields bound to locals `A` and `B`.
+/// `out[0] = cfg.a; out[1] = cfg.b * 2`, with `cfg` a struct parameter of two `F32` fields bound to locals `A` and `B`.
 fn sum_kernel(fields: Vec<StructField>, locals: Vec<LocalDecl>) -> KernelFn {
     KernelFn::new(
         "sum",
@@ -41,10 +41,16 @@ fn sum_kernel(fields: Vec<StructField>, locals: Vec<LocalDecl>) -> KernelFn {
             Param::structure("cfg", fields),
         ],
         locals,
-        Block(vec![Stmt::Store {
-            place: out0(),
-            value: ScalarExpr::Add(Box::new(local(A)), Box::new(local(B))),
-        }]),
+        Block(vec![
+            Stmt::Store {
+                place: out_at(0),
+                value: local(A),
+            },
+            Stmt::Store {
+                place: out_at(1),
+                value: ScalarExpr::Add(Box::new(local(B)), Box::new(local(B))),
+            },
+        ]),
     )
 }
 
@@ -61,7 +67,7 @@ fn baseline() -> KernelFn {
 
 fn args(a: f64, b: f64) -> Vec<KernelArg> {
     vec![
-        KernelArg::Buffer(TypedBuffer::from_f32(&[1], &[0.0])),
+        KernelArg::Buffer(TypedBuffer::from_f32(&[2], &[0.0, 0.0])),
         KernelArg::Struct(vec![KernelArg::Float(a), KernelArg::Float(b)]),
     ]
 }
@@ -78,14 +84,14 @@ fn a_kernel_reads_each_field_as_its_local() {
     let KernelArg::Buffer(out) = &a[0] else {
         panic!("buffer first")
     };
-    assert_eq!(out.to_f64_vec(), vec![3.75]);
+    assert_eq!(out.to_f64_vec(), vec![1.5, 4.5]);
     // Control: different field values give a different result, so the fields are not ignored.
     let mut c = args(10.0, 0.5);
     run_kernel(&baseline(), &mut c).expect("runs");
     let KernelArg::Buffer(out) = &c[0] else {
         panic!("buffer first")
     };
-    assert_eq!(out.to_f64_vec(), vec![10.5]);
+    assert_eq!(out.to_f64_vec(), vec![10.0, 1.0]);
 }
 
 #[test]
@@ -120,7 +126,7 @@ fn a_field_whose_local_has_another_type_is_refused() {
 #[test]
 fn an_argument_with_the_wrong_field_count_is_a_named_mismatch() {
     let mut a = vec![
-        KernelArg::Buffer(TypedBuffer::from_f32(&[1], &[0.0])),
+        KernelArg::Buffer(TypedBuffer::from_f32(&[2], &[0.0, 0.0])),
         KernelArg::Struct(vec![KernelArg::Float(1.0)]),
     ];
     let r = run_kernel(&baseline(), &mut a);
