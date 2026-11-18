@@ -47,6 +47,8 @@ pub enum KernelArg {
     Int(i128),
     /// A floating-point scalar parameter.
     Float(f64),
+    /// A struct parameter's field values, in field order (`Int` or `Float` each).
+    Struct(Vec<KernelArg>),
 }
 
 pub(super) enum Flow {
@@ -239,6 +241,25 @@ impl<'a> Machine<'a> {
         let base = self.dev_base();
         for (p, a) in self.k.params.iter().zip(self.args[base..].iter()) {
             match (&p.kind, a) {
+                (ParamKind::Struct { fields }, KernelArg::Struct(vals))
+                    if fields.len() == vals.len() =>
+                {
+                    for (f, v) in fields.iter().zip(vals) {
+                        match v {
+                            KernelArg::Int(x) if types::int_range(f.ty).is_some() => {
+                                self.locals[f.local as usize] = Some(int_val(*x, f.ty));
+                            }
+                            KernelArg::Float(x) if types::int_range(f.ty).is_none() => {
+                                self.locals[f.local as usize] = Some(Val::Float(*x));
+                            }
+                            _ => {
+                                return Err(KernelTrap::ArgMismatch(
+                                    "a struct field argument differs from its field type",
+                                ));
+                            }
+                        }
+                    }
+                }
                 (ParamKind::Buffer { elem, .. }, KernelArg::Buffer(b)) if b.dtype == *elem => {}
                 (ParamKind::Scalar { ty, local }, KernelArg::Int(v))
                     if types::int_range(*ty).is_some() =>

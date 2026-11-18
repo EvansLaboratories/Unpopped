@@ -347,6 +347,7 @@ impl KernelInterface {
 #[cfg(test)]
 mod layout_only_guard {
     use super::*;
+    use crate::kernel::StructField;
 
     #[test]
     fn param_types_carry_layout_and_nothing_else() {
@@ -358,6 +359,15 @@ mod layout_only_guard {
                 rank: _,
             } => {}
             ParamKind::Scalar { ty: _, local: _ } => {}
+            ParamKind::Struct { fields } => {
+                for f in fields {
+                    let StructField {
+                        name: _,
+                        ty: _,
+                        local: _,
+                    } = f;
+                }
+            }
         }
         let ParamsBlock {
             fields,
