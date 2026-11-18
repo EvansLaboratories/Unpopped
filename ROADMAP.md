@@ -43,6 +43,7 @@ blob changed, not on a schedule, and record the commit in `kiss/README.md`.
 | Moving `ArchSku` into `baracuda-cuda-vocab` | baracuda's KISS registry repoint (`deferred.md:33-34`), then PM says go; see P2 |
 | Groupshared / cooperative scope call (`docs/groupshared-sizing.md`) | CireSnave or PM |
 | CpuC declines `Select` for every narrow float | parity gap, not a bug; no owner |
+| **Watch: US20230305845A1** (NVIDIA, "Techniques to selectively store data", pending). Re-read the claims when the application grants or is amended (independents 1, 9, 15, 21, 27, "selectively stored ... based on one or more threads to use the data"; dependents on function parameters). The U23 guard stands until then: `Param`, `ParamKind` and `ParamsBlock` carry layout only, checked at compile time by `kernel_interface::layout_only_guard`; a thread-set, memory-kind or copy-count annotation needs CireSnave first (PM 2026-11-17). Not cleared | the grant or an amendment (check Google Patents status at each weekly issues sweep) |
 
 ## 5. Standing constraints
 

@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.3` — docs: U23 patent read (US20230305845A1) and a compile-time layout-only guard on Param, ParamKind and ParamsBlock
+
+Groundwork for ROADMAP U23 (struct-typed scalar parameters); the `ParamKind::Struct` variant itself is not in this change. `docs/PATENT-SWEEP.md` records the claims read with `tools/patent-claims.py` (US20230305845A1, pending, independents 1, 9, 15, 21, 27 "selectively stored ... based on one or more threads to use the data": NEEDS REVIEW, NOT CLEARED; US20110247018A1 not on-point). `kernel_interface::layout_only_guard` destructures `Param`, `ParamKind`, `ParamsBlock` and `ParamsBlockField` with every field named and no wildcard, so a thread-set, memory-kind or copy-count annotation cannot be added without stopping the build (a seeded `threads` field failed it). ROADMAP gains a watch row to re-read the claims when the application grants or is amended. Tests only; no public API change.
+
+---
+
 ## `0.56.2` — 8- and 16-lane packed values within 128 bits, type rules (ROADMAP U15 slice 1)
 
 `Pack` and `BitcastPacked` accept 8 and 16 lanes when the lanes fit 128 bits (8 lanes of at most 16 bits, 16 lanes of 8 bits); `BadLanes` is returned otherwise (a wider 8/16-lane pack, or any other count). Additive: 2 and 4 lanes keep their rule and no enum changes. The type rules are built, and the oracle already evaluates an 8-lane `Extract`/`Bitcast` and a 16-lane `Pack` lane (a unit test in `oracle.rs`, with high-bit data, fails when the lane shift or mask is mutated); the cpu-c lowering and any emitter are not, and the patent search (`docs/PATENT-SWEEP.md`, U15 section) read no claim: NOT CLEARED, unread. Verified by two tests in `tests/packed_values.rs`, each failed by a seeded mutant (lane set back to 2/4; width check removed).

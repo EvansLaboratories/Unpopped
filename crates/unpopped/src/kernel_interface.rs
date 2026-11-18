@@ -338,3 +338,39 @@ impl KernelInterface {
         self
     }
 }
+
+/// **The U23 patent guard, as a compile-time check** (`docs/PATENT-SWEEP.md`, U23 section; PM 2026-11-17). `Param`,
+/// `ParamKind` and `ParamsBlock` describe a LAYOUT only: no thread-set, memory-kind or copy-count annotation, and no
+/// choice of where data lives by which threads read it (US20230305845A1, pending, claims 1, 9, 15, 21, 27). Each type is
+/// destructured with every field named and no `..`, and `ParamKind` is matched with no wildcard, so adding a field or a
+/// variant stops this module compiling. The fix is a person reading that section first, not editing this test.
+#[cfg(test)]
+mod layout_only_guard {
+    use super::*;
+
+    #[test]
+    fn param_types_carry_layout_and_nothing_else() {
+        let Param { name: _, kind } = Param::scalar("x", ElementKind::I32, 0);
+        match kind {
+            ParamKind::Buffer {
+                elem: _,
+                role: _,
+                rank: _,
+            } => {}
+            ParamKind::Scalar { ty: _, local: _ } => {}
+        }
+        let ParamsBlock {
+            fields,
+            size: _,
+            align: _,
+            by_address: _,
+        } = ParamsBlock::new(4, 4).with_field(ParamsBlockField::new("x", 0, ElementKind::I32));
+        for f in fields {
+            let ParamsBlockField {
+                name: _,
+                offset: _,
+                ty: _,
+            } = f;
+        }
+    }
+}
