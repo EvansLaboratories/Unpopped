@@ -348,7 +348,7 @@ impl KernelInterface {
 #[cfg(test)]
 mod layout_only_guard {
     use super::*;
-    use crate::kernel::StructField;
+    use crate::kernel::{ParamKind, StructField};
 
     #[test]
     fn param_types_carry_layout_and_nothing_else() {
