@@ -119,3 +119,33 @@ fn a_reversed_broadcast_or_non_dense_output_scan_declines_too() {
         }
     }
 }
+
+/// `op` against a cell of `n_operands` dense rank-3 operands of `dt`.
+fn fits(op: &OpDef, n_operands: usize, dt: ElementKind) -> Outcome {
+    let a = OperandDesc::new(3, &SHAPE, &DENSE, dt, 256);
+    let key = structure_key(OpCategory::Scan, &vec![a; n_operands], ArchSku::Sm89);
+    match catch_unwind(AssertUnwindSafe(|| try_build_plan(op, &key).map(|_| ()))) {
+        Ok(Ok(())) => Outcome::Plans,
+        Ok(Err(_)) => Outcome::Declines,
+        Err(_) => Outcome::Panics,
+    }
+}
+
+#[test]
+fn a_scan_the_cell_does_not_fit_declines_too() {
+    // control: the same op fits [input, output]; each misfit below changes one thing
+    assert_eq!(fits(&scan(2), 2, F32), Outcome::Plans);
+    assert_eq!(
+        fits(&scan(3), 2, F32),
+        Outcome::Declines,
+        "axis 3 of rank 3"
+    );
+    assert_eq!(fits(&scan(2), 3, F32), Outcome::Declines, "operand count");
+    let mean = |dt| OpDef::scan_simple("m", &[dt], ReduceOp::Mean, 2, false, false);
+    assert_eq!(
+        fits(&mean(ElementKind::I32), 2, ElementKind::I32),
+        Outcome::Declines,
+        "integer Mean"
+    );
+    assert_eq!(fits(&mean(F32), 2, F32), Outcome::Plans, "float Mean plans");
+}
