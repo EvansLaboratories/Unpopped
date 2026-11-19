@@ -11,7 +11,7 @@
 //! the kernel's revision hash: the emitter-set fields follow from the source text the emitter wrote.
 
 use crate::exec::{Extent, LaunchShape, MemorySpace};
-use crate::kernel::{KernelFn, Param, ParamKind};
+use crate::kernel::{KernelFn, Param};
 use unpopped_vocab::ElementKind;
 
 /// A `Shared` allocation whose element count is a launch argument (`Extent::Param`: CUDA `extern __shared__`, sized by the
@@ -26,8 +26,11 @@ pub struct DynamicShared {
     pub name: String,
     /// Its element type.
     pub elem: ElementKind,
-    /// Index into [`KernelInterface::params`] of the scalar parameter that gives the element count.
+    /// Index into [`KernelInterface::params`] of the parameter that gives the element count: a scalar, or a struct
+    /// whose field `size_field` does.
     pub size_param: usize,
+    /// For a struct `size_param`, the index of the integer field in its `fields`; `None` for a scalar parameter.
+    pub size_field: Option<usize>,
 }
 
 /// A binding slot the emitter assigned to a parameter (a Vulkan set and binding, an HLSL register space and register).
@@ -232,24 +235,22 @@ impl KernelInterface {
     /// parameter sizes. The emitter-set half is empty.
     #[must_use]
     pub fn of(kernel: &KernelFn) -> Self {
-        let size_param = |local: u32| {
-            kernel
-                .params
-                .iter()
-                .position(|p| matches!(p.kind, ParamKind::Scalar { local: l, .. } if l == local))
-        };
         let dynamic_shared = kernel
             .allocs
             .iter()
             .enumerate()
             .filter(|(_, a)| a.space == MemorySpace::Shared)
             .filter_map(|(i, a)| match a.extent {
-                Extent::Param(local) => Some(DynamicShared {
-                    alloc: u32::try_from(i).unwrap_or(u32::MAX),
-                    name: a.name.clone(),
-                    elem: a.elem,
-                    size_param: size_param(local)?,
-                }),
+                Extent::Param(local) => {
+                    let (size_param, size_field, _) = kernel.argument_of_local(local)?;
+                    Some(DynamicShared {
+                        alloc: u32::try_from(i).unwrap_or(u32::MAX),
+                        name: a.name.clone(),
+                        elem: a.elem,
+                        size_param,
+                        size_field,
+                    })
+                }
                 _ => None,
             })
             .collect();

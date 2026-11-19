@@ -394,16 +394,14 @@ fn alloc_len(k: &KernelFn, args: &[KernelArg], a: &AllocDecl) -> Result<usize, K
     let bad = KernelTrap::ArgMismatch("a dynamic extent needs a positive integer argument");
     let n = match a.extent {
         Extent::Static(n) => i128::from(n),
-        Extent::Param(local) => {
-            let at = k
-                .params
-                .iter()
-                .position(|p| matches!(p.kind, ParamKind::Scalar { local: l, .. } if l == local));
-            match at.map(|i| &args[i]) {
+        Extent::Param(local) => match k.argument_of_local(local).map(|(i, f, _)| (&args[i], f)) {
+            Some((KernelArg::Int(v), None)) => *v,
+            Some((KernelArg::Struct(vals), Some(j))) => match vals.get(j) {
                 Some(KernelArg::Int(v)) => *v,
                 _ => return Err(bad),
-            }
-        }
+            },
+            _ => return Err(bad),
+        },
     };
     usize::try_from(n).ok().filter(|n| *n > 0).ok_or(bad)
 }

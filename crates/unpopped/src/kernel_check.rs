@@ -164,10 +164,9 @@ fn check_allocs(k: &KernelFn) -> Result<(), KernelError> {
         }
         let ok = match a.extent {
             Extent::Static(n) => n > 0,
-            Extent::Param(local) => k.params.iter().any(|p| {
-                matches!(p.kind, ParamKind::Scalar { ty, local: l }
-                    if l == local && types::int_range(ty).is_some())
-            }),
+            Extent::Param(local) => k
+                .argument_of_local(local)
+                .is_some_and(|(_, _, ty)| types::int_range(ty).is_some()),
         };
         if !ok {
             return Err(KernelError::AllocExtent { alloc });
