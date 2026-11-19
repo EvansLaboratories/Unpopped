@@ -270,7 +270,7 @@ pub(super) fn validate_scan(
     // is ThinkersJournal/KISS#766). Unpopped admits it as an extension, float only: an integer running mean rounds.
     // Prod is admitted too (a scan folds cumprod serially).
     if matches!(scan_op, ReduceOp::Mean) {
-        assert!(
+        require!(
             matches!(
                 key.dtype,
                 ElementKind::F16
@@ -290,20 +290,20 @@ pub(super) fn validate_scan(
         "Scan n_inputs {} out of [1, MAX_OPERANDS)",
         op.n_inputs
     );
-    assert!(
+    require!(
         key.n_operands as usize == n + 1,
         "Scan expects n_inputs+1 operands (inputs then output); got {}",
         key.n_operands
     );
     let rank = key.rank as usize;
-    assert!(rank >= 1, "Scan needs a scanned axis (rank >= 1)");
+    require!(rank >= 1, "Scan needs a scanned axis (rank >= 1)");
     let last = (rank - 1) as u8;
 
     // The scanned axis is any axis of the rank (since 0.42.11). The innermost axis keeps the row-iteration skeleton
     // (rows of a dense inner dimension, with column-broadcast and per-row operands); another axis is strided: the
     // oracle walks `(outer, axis, inner)` with the axis stride `inner`, and every input must then be full-width
     // dense (no broadcast), so there is no per-column or per-row operand to index differently.
-    assert!(
+    require!(
         axis <= last,
         "Scan axis {axis} is outside the rank {rank} (axes 0..={last})"
     );

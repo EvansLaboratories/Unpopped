@@ -25,8 +25,14 @@ enum Outcome {
 }
 
 fn outcome(cat: OpCategory, op: &OpDef, strides: [i64; 3]) -> Outcome {
-    let a = OperandDesc::new(3, &SHAPE, &strides, F32, 256);
-    let key = structure_key(cat, &[a, a], ArchSku::Sm89);
+    outcome_io(cat, op, strides, strides)
+}
+
+/// As `outcome`, with the output's strides apart from the input's.
+fn outcome_io(cat: OpCategory, op: &OpDef, input: [i64; 3], output: [i64; 3]) -> Outcome {
+    let a = OperandDesc::new(3, &SHAPE, &input, F32, 256);
+    let o = OperandDesc::new(3, &SHAPE, &output, F32, 256);
+    let key = structure_key(cat, &[a, o], ArchSku::Sm89);
     match catch_unwind(AssertUnwindSafe(|| try_build_plan(op, &key).map(|_| ()))) {
         Ok(Ok(())) => Outcome::Plans,
         Ok(Err(PlanError::InadmissibleOpInCell { .. })) => Outcome::Declines,
@@ -87,4 +93,29 @@ fn row_reduce_is_the_control_that_already_declined() {
         outcome(OpCategory::Normalization, &op, TRANSPOSED),
         Outcome::Declines
     );
+}
+
+#[test]
+fn a_reversed_broadcast_or_non_dense_output_scan_declines_too() {
+    // each is a layout the gate refuses; the dense control is `a_dense_scan_plans`
+    let flipped = [12, 4, -1];
+    let broadcast_rows = [0, 4, 1];
+    let broadcast_all = [0, 0, 1];
+    for axis in 0..3 {
+        let op = scan(axis);
+        for (what, input, output) in [
+            ("reversed input", flipped, DENSE),
+            ("broadcast input", broadcast_rows, DENSE),
+            ("input broadcast on every outer axis", broadcast_all, DENSE),
+            ("reversed output", DENSE, flipped),
+            ("transposed output", DENSE, TRANSPOSED),
+            ("broadcast output", DENSE, broadcast_rows),
+        ] {
+            assert_eq!(
+                outcome_io(OpCategory::Scan, &op, input, output),
+                Outcome::Declines,
+                "axis {axis}, {what}"
+            );
+        }
+    }
 }
