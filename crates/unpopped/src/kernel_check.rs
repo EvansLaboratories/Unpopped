@@ -116,10 +116,10 @@ fn check_launch(k: &KernelFn) -> Result<(), KernelError> {
                     GridDim::CeilDiv { by, .. } => by >= 1,
                     _ => false,
                 };
+                // a scalar parameter or an integer field of a struct parameter (ROADMAP U23)
                 let param_ok = d.param().is_none_or(|p| {
-                    k.params.iter().any(|q| {
-                        matches!(q.kind, ParamKind::Scalar { ty, local } if local == p && types::int_range(ty).is_some())
-                    })
+                    k.argument_of_local(p)
+                        .is_some_and(|(_, _, ty)| types::int_range(ty).is_some())
                 });
                 (by_ok || matches!(d, GridDim::Param(_))) && param_ok
             });
