@@ -179,6 +179,20 @@ impl<'a> Machine<'a> {
                     bound.scalars.push((*local, v));
                     bound.bufmap.push(usize::MAX);
                 }
+                (CallArg::Struct(vals), ParamKind::Struct { fields })
+                    if vals.len() == fields.len() =>
+                {
+                    for (e, f) in vals.iter().zip(fields) {
+                        let v = match self.eval_expr(e)? {
+                            super::Val::Float(x) => {
+                                super::Val::Float(crate::oracle::round_to_compute(x, f.ty))
+                            }
+                            other => other,
+                        };
+                        bound.scalars.push((f.local, v));
+                    }
+                    bound.bufmap.push(usize::MAX);
+                }
                 (CallArg::Buffer(b), ParamKind::Buffer { .. }) => {
                     bound.bufmap.push(self.root(*b));
                 }

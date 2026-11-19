@@ -434,6 +434,19 @@ fn check_call_arg(
             };
             alloc_fits((*elem, *role, *rank), (d.elem, d.space)).map_or(Ok(()), bad)
         }
+        (CallArg::Struct(vals), ParamKind::Struct { fields }) => {
+            if vals.len() != fields.len() {
+                return bad(
+                    "a struct argument with a different number of fields than its parameter",
+                );
+            }
+            for (e, f) in vals.iter().zip(fields) {
+                if check_expr(k, e, sc)? != Ty::Scalar(f.ty) {
+                    return bad("a struct field of a different type than its parameter's field");
+                }
+            }
+            Ok(())
+        }
         _ => bad("an argument of a different kind than its parameter"),
     }
 }

@@ -875,6 +875,9 @@ pub enum CallArg {
     Buffer(u32),
     /// The caller's allocation (by index into [`KernelFn::allocs`]), passed by alias.
     Alloc(u32),
+    /// A struct passed by value to a [`ParamKind::Struct`] parameter (ROADMAP U23): one expression per field, in the
+    /// callee's field order, each of that field's type. Layout only: the callee sees its fields as scalars.
+    Struct(Vec<ScalarExpr>),
 }
 
 /// A set of kernels, any of which may [`Stmt::Call`] another. Checked by `check_module` and run
