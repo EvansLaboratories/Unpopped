@@ -1,0 +1,5 @@
+kind: a Scan over a transposed, sliced or otherwise strided operand now declines (typed) instead of panicking (bug fix)
+---
+`try_build_plan` panicked on a Scan whose streamed input is not contiguous (a transposed or row-strided view) or whose operands break the other layout rules (reversed, broadcast, a non-dense output), which KISS-EMIT 6.8-0004 forbids for any `(OpDef, structure_key)`. `validate_scan` now returns `PlanError::InadmissibleOpInCell` for those, hoisted into `try_build_plan` as `check_row_reduce` is; RowReduce already declined. The checks on the `OpDef` itself (arity, axis in range, expression legality) remain author-error backstops. A strided Scan or RowReduce is still unsupported (ROADMAP E20, demand-gated). Reported by rockfish; the census (`adversarial_input_panic_census.rs`) has no Scan input, so it never saw it.
+
+Verified: `tests/plan_gate_strided_scan.rs`, run before and after (panics, then declines); one gate turned back into an `assert!` fails it. Not covered by a test of its own: the flipped, broadcast and output-layout declines.
