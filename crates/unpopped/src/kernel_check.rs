@@ -76,22 +76,14 @@ pub(crate) fn check_kernel_with(
         externs,
     };
     for p in &k.params {
-        if let ParamKind::Scalar { ty, local } = &p.kind {
-            let i = *local as usize;
-            let Some(decl) = k.locals.get(i) else {
-                return Err(KernelError::UnknownLocal { local: *local });
-            };
-            if sc.in_scope[i] {
-                return Err(KernelError::Redeclared { local: *local });
+        match &p.kind {
+            ParamKind::Scalar { ty, local } => declare_param_local(k, &mut sc, *ty, *local)?,
+            ParamKind::Struct { fields } => {
+                for f in fields {
+                    declare_param_local(k, &mut sc, f.ty, f.local)?;
+                }
             }
-            if decl.ty() != Ty::Scalar(*ty) {
-                return Err(KernelError::TypeMismatch {
-                    what: "scalar parameter and its local",
-                });
-            }
-            sc.in_scope[i] = true;
-            sc.ever_declared[i] = true;
-            sc.param_local[i] = true;
+            ParamKind::Buffer { .. } => {}
         }
     }
     check_allocs(k)?;
@@ -135,6 +127,31 @@ fn check_launch(k: &KernelFn) -> Result<(), KernelError> {
             return Err(KernelError::BadLaunch);
         }
     }
+    Ok(())
+}
+
+/// Bind scalar parameter local `local` (of type `ty`) in `sc`: it must exist, be declared once and carry that type.
+fn declare_param_local(
+    k: &KernelFn,
+    sc: &mut Scope,
+    ty: ElementKind,
+    local: u32,
+) -> Result<(), KernelError> {
+    let i = local as usize;
+    let Some(decl) = k.locals.get(i) else {
+        return Err(KernelError::UnknownLocal { local });
+    };
+    if sc.in_scope[i] {
+        return Err(KernelError::Redeclared { local });
+    }
+    if decl.ty() != Ty::Scalar(ty) {
+        return Err(KernelError::TypeMismatch {
+            what: "scalar parameter and its local",
+        });
+    }
+    sc.in_scope[i] = true;
+    sc.ever_declared[i] = true;
+    sc.param_local[i] = true;
     Ok(())
 }
 

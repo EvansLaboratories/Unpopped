@@ -72,6 +72,39 @@ pub enum ParamKind {
         /// The local id it is bound to.
         local: u32,
     },
+    /// A group of scalar arguments passed together (ROADMAP U23): each field is readable as its own local, exactly as a
+    /// [`ParamKind::Scalar`] is. The group describes a **layout only**; it carries no thread-set, memory-kind or copy-count
+    /// annotation and chooses no storage (`docs/PATENT-SWEEP.md`, U23 section; `kernel_interface::layout_only_guard`).
+    /// An emitter may pass it by value or by address, or flatten it; `KernelInterface::params_block` records the layout.
+    Struct {
+        /// The fields, in declaration order.
+        fields: Vec<StructField>,
+    },
+}
+
+/// One scalar field of a [`ParamKind::Struct`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct StructField {
+    /// Name, for diagnostics.
+    pub name: String,
+    /// Type of the field.
+    #[serde(with = "crate::text::ek")]
+    pub ty: ElementKind,
+    /// The local id it is bound to (in scope everywhere, never assigned).
+    pub local: u32,
+}
+
+impl StructField {
+    /// A field `name` of type `ty` bound to local `local`.
+    #[must_use]
+    pub fn new(name: impl Into<String>, ty: ElementKind, local: u32) -> Self {
+        Self {
+            name: name.into(),
+            ty,
+            local,
+        }
+    }
 }
 
 /// One kernel parameter.
@@ -96,6 +129,15 @@ impl Param {
         Self {
             name: name.into(),
             kind: ParamKind::Buffer { elem, role, rank },
+        }
+    }
+
+    /// A struct parameter: scalar `fields`, each bound to its own local (ROADMAP U23).
+    #[must_use]
+    pub fn structure(name: impl Into<String>, fields: Vec<StructField>) -> Self {
+        Self {
+            name: name.into(),
+            kind: ParamKind::Struct { fields },
         }
     }
 

@@ -67,6 +67,12 @@ fn admit(k: &KernelFn, in_module: bool) -> Result<(), LowerError> {
         match &p.kind {
             ParamKind::Buffer { elem, .. } => ctype(*elem, &format!("buffer `{}`", p.name))?,
             ParamKind::Scalar { ty, .. } => ctype(*ty, &format!("scalar `{}`", p.name))?,
+            ParamKind::Struct { .. } => {
+                return Err(refuse(format!(
+                    "a struct parameter (`{}`; ROADMAP U23): this emitter flattens nothing and spells no by-value struct",
+                    p.name
+                )));
+            }
             _ => return Err(refuse("a parameter kind this emitter has not been taught")),
         };
     }
