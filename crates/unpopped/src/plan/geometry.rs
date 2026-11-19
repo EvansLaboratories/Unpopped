@@ -227,8 +227,9 @@ pub(crate) fn check_row_reduce(
     check(epilogue, n_inputs, stages.len() as u8, false, &is_col)
 }
 
-/// Validate an [`Access::Scan`] op at build time (AOT — a scan never crosses the
-/// JIT trust boundary, so a panic here is an author-error backstop). Mirrors
+/// Validate an [`Access::Scan`] op at build time. The OPERAND-LAYOUT checks (contiguity, reversal, broadcast, the output)
+/// are typed declines (`PlanError::InadmissibleOpInCell`), because a caller's `(OpDef, structure_key)` pair reaches them
+/// (KISS-EMIT 6.8-0004); the checks on the `OpDef` itself stay author-error backstops. Mirrors
 /// [`check_row_reduce`]'s operand-role + layout checks, with three DELIBERATE
 /// differences:
 ///
@@ -250,7 +251,7 @@ pub(super) fn validate_scan(
     axis: u8,
     reverse: bool,
     exclusive: bool,
-) {
+) -> Result<(), PlanError> {
     let Access::Scan {
         op: scan_op,
         pre,
@@ -309,7 +310,7 @@ pub(super) fn validate_scan(
     if axis != last {
         for i in 0..n {
             let o = key.operands[i];
-            assert!(
+            require!(
                 o.bcast.is_empty() && o.contig == Contiguity::Contig && !o.flipped,
                 "Scan over a non-innermost axis needs input {i} full-width dense (no broadcast, contiguous, not reversed)"
             );
@@ -330,38 +331,38 @@ pub(super) fn validate_scan(
         let o = key.operands[i];
         match rr_role(o, last) {
             RrRole::RowStreamed => {
-                assert!(
+                require!(
                     o.contig == Contiguity::Contig,
                     "Scan streamed input {i} must be contiguous (base = row*k assumes a dense scanned axis)"
                 );
-                assert!(
+                require!(
                     !o.flipped,
                     "Scan streamed input {i} must not be reversed along an axis (idx = base+j reads forward-dense; a flipped view reads mirrored/OOB — use the `reverse` scan flag, not a flipped operand)"
                 );
                 input0_streamed |= i == 0;
             }
             RrRole::ColBroadcast => {
-                assert!(
+                require!(
                     !o.bcast.is_set(last) && (0..last).all(|d| o.bcast.is_set(d)),
                     "Scan column input {i} must broadcast every outer axis and vary along the scanned axis (in_i[j])"
                 );
-                assert!(!o.flipped, "Scan column input {i} must not be reversed");
+                require!(!o.flipped, "Scan column input {i} must not be reversed");
             }
             RrRole::RowScalar => {
-                assert!(
+                require!(
                     rank >= 2 && (0..last).all(|d| !o.bcast.is_set(d)),
                     "Scan row-scalar input {i} needs rank >= 2 and no outer-axis broadcast (in_i[row]); an all-broadcast operand is a true scalar (bake as Const)"
                 );
-                assert!(!o.flipped, "Scan row-scalar input {i} must not be reversed");
+                require!(!o.flipped, "Scan row-scalar input {i} must not be reversed");
             }
         }
     }
-    assert!(
+    require!(
         input0_streamed,
         "Scan Input0 must be the row-streamed scanned tensor, not a column-broadcast weight or a per-row scalar"
     );
     let out = key.operands[n];
-    assert!(
+    require!(
         out.bcast.is_empty() && out.contig == Contiguity::Contig && !out.flipped,
         "Scan output must be full-width forward-dense contiguous (empty bcast, not flipped)"
     );
@@ -425,4 +426,5 @@ pub(super) fn validate_scan(
     }
     check(pre, op.n_inputs, false, "pre-map", name);
     check(post, op.n_inputs, true, "post-epilogue", name);
+    Ok(())
 }

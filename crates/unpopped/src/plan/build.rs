@@ -107,6 +107,15 @@ pub(super) fn try_build_plan_with<'a>(
     {
         check_row_reduce(stages, epilogue, op.n_inputs, key)?;
     }
+    if let Access::Scan {
+        axis,
+        reverse,
+        exclusive,
+        ..
+    } = op.access
+    {
+        validate_scan(op, key, axis, reverse, exclusive)?;
+    }
     check_contraction(op, key)?;
     Ok(build_plan_core(op, key))
 }
@@ -191,7 +200,7 @@ pub(super) fn build_plan_core<'a>(op: &'a OpDef, key: &'a StructureKey) -> Kerne
             exclusive,
             ..
         } => {
-            validate_scan(op, key, axis, reverse, exclusive);
+            // Validated by `validate_scan` in `try_build_plan_with` (typed, like `check_row_reduce`).
             Schedule::Scan {
                 op: sop,
                 axis,
