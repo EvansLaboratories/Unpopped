@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.4` — `ParamKind::Struct`, struct-typed scalar parameters (additive, ROADMAP U23 slice 1)
+
+A kernel parameter can now be a group of scalar fields (`ParamKind::Struct { fields: Vec<StructField> }`, `Param::structure`, `StructField`), each field readable as its own local exactly as a `Scalar` is; the oracle takes the values as `KernelArg::Struct(Vec<KernelArg>)`. Additive: `ParamKind` and `KernelArg` are `#[non_exhaustive]`. The type describes a layout only; `kernel_interface::layout_only_guard` now names its fields too, so a thread-set, memory-kind or copy-count annotation cannot be added without stopping the build (US20230305845A1, `docs/PATENT-SWEEP.md`, NOT CLEARED). `unpopped-cpu-c` declines it by name. **Not in this slice:** `KernelInterface::params_block` is not derived from a struct, no emitter lowers it, a struct field cannot yet be an allocation extent or a grid dimension, and `Stmt::Call` takes no struct argument. Verified by `tests/kernel_struct_param.rs` (6 tests) and `unpopped-cpu-c/tests/kernel_struct_param_refused.rs`; seeded mutants (field values reversed, field locals not declared, arity check loosened) each failed the suite. Owners of emitters: do not pick a storage location per thread set either; where a driver or compiler does, it is not ours.
+
+---
+
 ## `0.56.3` — docs: U23 patent read (US20230305845A1) and a compile-time layout-only guard on Param, ParamKind and ParamsBlock
 
 Groundwork for ROADMAP U23 (struct-typed scalar parameters); the `ParamKind::Struct` variant itself is not in this change. `docs/PATENT-SWEEP.md` records the claims read with `tools/patent-claims.py` (US20230305845A1, pending, independents 1, 9, 15, 21, 27 "selectively stored ... based on one or more threads to use the data": NEEDS REVIEW, NOT CLEARED; US20110247018A1 not on-point). `kernel_interface::layout_only_guard` destructures `Param`, `ParamKind`, `ParamsBlock` and `ParamsBlockField` with every field named and no wildcard, so a thread-set, memory-kind or copy-count annotation cannot be added without stopping the build (a seeded `threads` field failed it). ROADMAP gains a watch row to re-read the claims when the application grants or is amended. Tests only; no public API change.
