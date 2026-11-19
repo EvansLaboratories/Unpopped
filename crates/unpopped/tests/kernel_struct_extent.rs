@@ -23,7 +23,7 @@ const U32: ElementKind = ElementKind::U32;
 const COUNT: u32 = 0;
 const SCALE: u32 = 1;
 
-/// `dyn[5] = 1.0` over a Shared allocation sized by `cfg.<field 0>` (local `COUNT`); `cfg` is `{ n: <ty>, s: f32 }`.
+/// `dyn[5] = 1.0` over a Shared allocation sized by `cfg.<field 0>` (local `COUNT`); `cfg` is `{ s: f32, n: <ty> }`, so the count is NOT field 0.
 fn kernel(count_ty: ElementKind) -> KernelFn {
     KernelFn::new(
         "ext",
@@ -33,8 +33,8 @@ fn kernel(count_ty: ElementKind) -> KernelFn {
             Param::structure(
                 "cfg",
                 vec![
-                    StructField::new("n", count_ty, COUNT),
                     StructField::new("s", F32, SCALE),
+                    StructField::new("n", count_ty, COUNT),
                 ],
             ),
         ],
@@ -59,7 +59,7 @@ fn kernel(count_ty: ElementKind) -> KernelFn {
 fn args(n: i128) -> Vec<KernelArg> {
     vec![
         KernelArg::Buffer(TypedBuffer::from_f32(&[1], &[0.0])),
-        KernelArg::Struct(vec![KernelArg::Int(n), KernelArg::Float(2.0)]),
+        KernelArg::Struct(vec![KernelArg::Float(2.0), KernelArg::Int(n)]),
     ]
 }
 
@@ -96,7 +96,7 @@ fn the_interface_names_the_struct_and_the_field() {
     assert_eq!(i.dynamic_shared.len(), 1);
     let d = &i.dynamic_shared[0];
     assert_eq!(d.size_param, 1, "the struct parameter");
-    assert_eq!(d.size_field, Some(0), "its first field");
+    assert_eq!(d.size_field, Some(1), "its second field");
 }
 
 #[test]
