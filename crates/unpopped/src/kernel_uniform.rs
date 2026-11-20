@@ -173,9 +173,11 @@ impl Walk<'_> {
             .get(callee as usize)
             .copied()
             .unwrap_or(false);
-        let divergent_arg = args
-            .iter()
-            .any(|a| matches!(a, CallArg::Scalar(e) if self.expr(e)));
+        let divergent_arg = args.iter().any(|a| match a {
+            CallArg::Scalar(e) => self.expr(e),
+            CallArg::Struct(vals) => vals.iter().any(|e| self.expr(e)),
+            _ => false,
+        });
         if reaches && self.check && (div || divergent_arg) {
             return Err(KernelError::BarrierDivergent);
         }

@@ -73,7 +73,9 @@ pub(super) fn unary_op_f64(op: UnaryOp, x: f64) -> f64 {
         UnaryOp::Atan => x.atan(),
         UnaryOp::Asinh => x.asinh(),
         UnaryOp::Acosh => x.acosh(),
-        UnaryOp::Atanh => x.atanh(),
+        // `f64::atanh` is `0.5 * ln_1p(2x / (1 - x))`, which cancels for x near -1 (1290 ULP off at -0.99995695); atanh is
+        // odd, and the positive side is accurate, so evaluate on |x| and restore the sign (NaN, +-0 and +-1 unchanged)
+        UnaryOp::Atanh => x.abs().atanh().copysign(x),
         UnaryOp::Cbrt => x.cbrt(),
         UnaryOp::Lgamma => lgamma(x),
     }

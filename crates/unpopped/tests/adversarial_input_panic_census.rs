@@ -95,7 +95,11 @@ const KNOWN_PANICKING: usize = 0;
 /// 1428 -> 1716 in 0.29.0: +288 inputs, all declined, from the three OCP MX element
 /// dtypes (`F4E2M1`/`F6E2M3`/`F6E3M2`) the corpus now iterates; panics stayed 0 and
 /// the lowered count stayed 972, so the new dtypes reach the gate and are refused.
-const KNOWN_DECLINED: usize = 1716;
+/// 1716 -> 2164 on 2026-11-19 (+448, all declined, 0 panicked): two Scan ops joined the corpus. Measured first: ALL 448
+/// PANICKED (operand count, axis outside the rank, Mean at a non-float dtype: key-reachable `assert!`s in `validate_scan`);
+/// they are `require!` now. The cell here has three operands, so a one-input Scan declines at the operand count and
+/// never reaches the layout checks; those are pinned in `plan_gate_strided_scan.rs`.
+const KNOWN_DECLINED: usize = 2164;
 
 /// Spells every dtype and every plan, so a panic is never a backend decline in
 /// disguise. A backend that declined would mask the very thing being counted.
@@ -214,6 +218,16 @@ fn ops(dt: ElementKind) -> Vec<(&'static str, OpDef)> {
                 }],
                 input(0) * reduced(0),
             ),
+        ),
+        // Scan, added 2026-11-19: the census had no Scan, so `validate_scan`'s layout asserts (a transposed operand
+        // panicked `try_build_plan`, rockfish's finding) were never measured. Axis 1 at rank 1 is outside the rank.
+        (
+            "scan_axis0",
+            OpDef::scan_simple("sc0", &[dt], ReduceOp::Sum, 0, false, false),
+        ),
+        (
+            "scan_axis1",
+            OpDef::scan_simple("sc1", &[dt], ReduceOp::Sum, 1, true, true),
         ),
         (
             "row_reduce_forward_ref",

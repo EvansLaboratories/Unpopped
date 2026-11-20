@@ -15,6 +15,40 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.5` — the oracle's F64 atanh is accurate near -1 (bug fix)
+
+`UnaryOp::Atanh` at `F64` used `f64::atanh`, which is `0.5 * ln_1p(2x / (1 - x))` and cancels for `x` near -1: 1172 ULP off at `x = -0.999956949180724`, 1290 at `-0.99995695`, 37618 at `-0.999999`, while the same magnitudes positive were exact. Every emitter's ULP claim for `F64` `atanh` is measured against this oracle, so it inherited the error (openclownfish reported a device result 20 ULP from the oracle on NVIDIA). The oracle now evaluates `atanh(|x|)` and restores the sign, since `atanh` is odd (NaN, +-0, +-1 and out-of-domain values unchanged). Values change for negative `x` near -1; anything pinning the old oracle values there was pinning the error.
+
+Verified: `tests/oracle_atanh_f64_accuracy.rs`, red first (1172 ULP, the reported figure), against correctly rounded 80-digit `Decimal` values; `asinh` and `acosh` swept over 20000 points the same way, worst 2 ULP, no change.
+
+`try_build_plan` panicked on a Scan whose streamed input is not contiguous (a transposed or row-strided view) or whose operands break the other layout rules (reversed, broadcast, a non-dense output), which KISS-EMIT 6.8-0004 forbids for any `(OpDef, structure_key)`. `validate_scan` now returns `PlanError::InadmissibleOpInCell` for those, hoisted into `try_build_plan` as `check_row_reduce` is; RowReduce already declined. The checks on the `OpDef` itself (arity, axis in range, expression legality) remain author-error backstops. A strided Scan or RowReduce is still unsupported (ROADMAP E20, demand-gated). Reported by rockfish; the census (`adversarial_input_panic_census.rs`) has no Scan input, so it never saw it.
+
+Also typed now, because a caller's `(OpDef, structure_key)` pair reaches them: a Scan whose cell has the wrong operand count, an axis outside the cell's rank, and a running `Mean` at a non-float dtype. Scan joined `adversarial_input_panic_census.rs` (two ops, 448 inputs): measured first, all 448 panicked; now 0 panicked, `KNOWN_DECLINED` 1716 -> 2164.
+
+Verified: `tests/plan_gate_strided_scan.rs` (transposed, row-strided, reversed, broadcast, non-dense output, axis, operand count, integer Mean; a dense control and a float-Mean control plan), run before and after (panics, then declines); each of five gates turned back into an `assert!` is caught by that test or the census. Gap: the census cell has three operands, so its one-input Scans decline at the operand count and never reach the layout checks; the dedicated test covers those.
+
+`tests/kernel_packed.rs` shows that `Extract` of a `Pack`, of a lane-wise `Add` over two `Pack`s and of a `BitcastPacked` already evaluates inside a kernel body, lane 0 least significant, and pins the one gap: a packed local passes `check_kernel` but the interpreter traps `Unsupported("packed value")`. The ROADMAP U15 row is corrected (it listed all kernel-interpreter packed support as open). No behaviour change.
+
+New `CallArg::Struct(Vec<ScalarExpr>)` (the enum is `#[non_exhaustive]`) passes a struct by value to a callee's `ParamKind::Struct` parameter: one expression per field, in the callee's field order, each of the field's type. `check_module` refuses a wrong field count, a field of another type, and a scalar passed for a struct (`KernelError::CallArgMismatch`); the oracle binds each field to the callee's field local, rounding a float to the field's type as a scalar argument is; a barrier-reaching callee needs every struct field uniform (`BarrierDivergent`). `unpopped-cpu-c` still refuses a struct argument by name ("a call argument and its parameter differ in kind"), so no emitter lowers this yet.
+
+Verified: `tests/kernel_call_struct.rs` (fields are `a * 10 + b`, so a swapped order shows); seeded mutants (reversed field order, uniformity ignoring struct fields, type check dropped, count check loosened) each applied and caught; baseline green after each restore.
+
+Not built: `params_block` derivation, emitter lowering. Layout only: no storage location is chosen per thread set.
+
+An `Extent::Param(local)` allocation may now be sized by an integer field of a `ParamKind::Struct` parameter, as well as by a scalar parameter. `check_kernel` accepts an integer-typed field and still refuses a float or unbound one (`KernelError::AllocExtent`); `run_launch` reads the extent from the matching `KernelArg::Struct` field and keeps its `ArgMismatch` for a non-positive or non-integer value. `DynamicShared` gains `size_field: Option<usize>` (additive; the type is `#[non_exhaustive]`): `size_param` is the struct parameter's index and `size_field` the field's index, `None` for a scalar parameter. cpu-c still declines any struct parameter by name, so no emitter lowers this yet.
+
+Verified: tests in `tests/kernel_struct_extent.rs` (the count sits in the second field so a first-field read fails); seeded mutants (first-field read, `size_field` dropped, float accepted, parameter index fixed at 0) each caught, the last by `kernel_interface`; baseline green after each restore.
+
+Not built: a struct field as a grid dimension, `params_block` derivation, a struct `Stmt::Call` argument, emitter lowering. Layout only: no storage location is chosen per thread set, and baracuda/fishstringer emitters must not pick one either (the driver/compiler doing it is not ours).
+
+`GridDim::Param` and `GridDim::CeilDiv` may now name an integer field of a `ParamKind::Struct` parameter, as well as a scalar parameter. `check_kernel` accepts an integer-typed field and still returns `KernelError::BadLaunch` for a float or unbound one; `run_launch` resolves the grid from the matching `KernelArg::Struct` field and keeps its `ArgMismatch` for a missing, non-integer or non-positive value. No type changes. cpu-c refuses a grid extent that names no scalar parameter, so it still declines by name and no emitter lowers this yet.
+
+Verified: `tests/kernel_struct_grid.rs` (the count sits in the second field); seeded mutants (scalar-only lookup, first-field read, float accepted) each applied and caught; baseline green after each restore.
+
+Not built: `params_block` derivation, a struct `Stmt::Call` argument, emitter lowering. Layout only: no storage location is chosen per thread set.
+
+---
+
 ## `0.56.4` — `ParamKind::Struct`, struct-typed scalar parameters (additive, ROADMAP U23 slice 1)
 
 A kernel parameter can now be a group of scalar fields (`ParamKind::Struct { fields: Vec<StructField> }`, `Param::structure`, `StructField`), each field readable as its own local exactly as a `Scalar` is; the oracle takes the values as `KernelArg::Struct(Vec<KernelArg>)`. Additive: `ParamKind` and `KernelArg` are `#[non_exhaustive]`. The type describes a layout only; `kernel_interface::layout_only_guard` now names its fields too, so a thread-set, memory-kind or copy-count annotation cannot be added without stopping the build (US20230305845A1, `docs/PATENT-SWEEP.md`, NOT CLEARED). `unpopped-cpu-c` declines it by name. **Not in this slice:** `KernelInterface::params_block` is not derived from a struct, no emitter lowers it, a struct field cannot yet be an allocation extent or a grid dimension, and `Stmt::Call` takes no struct argument. Verified by `tests/kernel_struct_param.rs` (6 tests) and `unpopped-cpu-c/tests/kernel_struct_param_refused.rs`; seeded mutants (field values reversed, field locals not declared, arity check loosened) each failed the suite. Owners of emitters: do not pick a storage location per thread set either; where a driver or compiler does, it is not ours.

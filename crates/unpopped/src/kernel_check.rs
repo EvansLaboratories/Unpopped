@@ -116,10 +116,10 @@ fn check_launch(k: &KernelFn) -> Result<(), KernelError> {
                     GridDim::CeilDiv { by, .. } => by >= 1,
                     _ => false,
                 };
+                // a scalar parameter or an integer field of a struct parameter (ROADMAP U23)
                 let param_ok = d.param().is_none_or(|p| {
-                    k.params.iter().any(|q| {
-                        matches!(q.kind, ParamKind::Scalar { ty, local } if local == p && types::int_range(ty).is_some())
-                    })
+                    k.argument_of_local(p)
+                        .is_some_and(|(_, _, ty)| types::int_range(ty).is_some())
                 });
                 (by_ok || matches!(d, GridDim::Param(_))) && param_ok
             });
@@ -164,10 +164,9 @@ fn check_allocs(k: &KernelFn) -> Result<(), KernelError> {
         }
         let ok = match a.extent {
             Extent::Static(n) => n > 0,
-            Extent::Param(local) => k.params.iter().any(|p| {
-                matches!(p.kind, ParamKind::Scalar { ty, local: l }
-                    if l == local && types::int_range(ty).is_some())
-            }),
+            Extent::Param(local) => k
+                .argument_of_local(local)
+                .is_some_and(|(_, _, ty)| types::int_range(ty).is_some()),
         };
         if !ok {
             return Err(KernelError::AllocExtent { alloc });
@@ -434,6 +433,19 @@ fn check_call_arg(
                 return bad("an allocation the caller does not declare");
             };
             alloc_fits((*elem, *role, *rank), (d.elem, d.space)).map_or(Ok(()), bad)
+        }
+        (CallArg::Struct(vals), ParamKind::Struct { fields }) => {
+            if vals.len() != fields.len() {
+                return bad(
+                    "a struct argument with a different number of fields than its parameter",
+                );
+            }
+            for (e, f) in vals.iter().zip(fields) {
+                if check_expr(k, e, sc)? != Ty::Scalar(f.ty) {
+                    return bad("a struct field of a different type than its parameter's field");
+                }
+            }
+            Ok(())
         }
         _ => bad("an argument of a different kind than its parameter"),
     }

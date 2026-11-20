@@ -875,6 +875,9 @@ pub enum CallArg {
     Buffer(u32),
     /// The caller's allocation (by index into [`KernelFn::allocs`]), passed by alias.
     Alloc(u32),
+    /// A struct passed by value to a [`ParamKind::Struct`] parameter (ROADMAP U23): one expression per field, in the
+    /// callee's field order, each of that field's type. Layout only: the callee sees its fields as scalars.
+    Struct(Vec<ScalarExpr>),
 }
 
 /// A set of kernels, any of which may [`Stmt::Call`] another. Checked by `check_module` and run
@@ -1247,6 +1250,26 @@ pub struct KernelFn {
 }
 
 impl KernelFn {
+    /// Where the integer `local` comes from as a launch argument: `(parameter index, field index, type)`. A scalar
+    /// parameter has no field index; a struct parameter's field has `Some`. `None` when no parameter binds `local`.
+    #[must_use]
+    pub(crate) fn argument_of_local(
+        &self,
+        local: u32,
+    ) -> Option<(usize, Option<usize>, ElementKind)> {
+        self.params
+            .iter()
+            .enumerate()
+            .find_map(|(i, p)| match &p.kind {
+                ParamKind::Scalar { ty, local: l } if *l == local => Some((i, None, *ty)),
+                ParamKind::Struct { fields } => fields
+                    .iter()
+                    .position(|f| f.local == local)
+                    .map(|j| (i, Some(j), fields[j].ty)),
+                _ => None,
+            })
+    }
+
     /// Build a kernel.
     #[must_use]
     pub fn new(

@@ -38,7 +38,7 @@ use super::kernel_sync::Edges;
 use super::kernel_wgmma::{WgmmaContribution, compute as wgmma_compute};
 use crate::exec::{AllocDecl, Extent, LaunchShape, MemorySpace, Scope};
 use crate::ir::ScalarExpr;
-use crate::kernel::{KernelFn, MemoryOrder, Module, ParamKind, check_kernel, check_module};
+use crate::kernel::{KernelFn, MemoryOrder, Module, check_kernel, check_module};
 
 /// Run every thread of `k`'s launch on `args` (one per parameter), choosing the smallest subgroup
 /// size the launch allows.
@@ -359,14 +359,8 @@ fn resolve_launch(
         return Ok(launch);
     }
     let value = |local: u32| {
-        let at = k
-            .params
-            .iter()
-            .position(|p| matches!(p.kind, ParamKind::Scalar { local: l, .. } if l == local))?;
-        match args.get(at)? {
-            KernelArg::Int(v) => Some(*v),
-            _ => None,
-        }
+        let (at, field, _) = k.argument_of_local(local)?;
+        int_argument(args.get(at)?, field)
     };
     let grid = launch.resolve_grid(value).ok_or(KernelTrap::ArgMismatch(
         "a grid extent needs a positive integer argument that fits a u32",
@@ -389,21 +383,30 @@ fn pick_subgroup(launch: &LaunchShape, want: Option<u32>) -> Result<u32, KernelT
     Ok(size)
 }
 
+/// The integer `arg` carries: itself, or field `field` of a struct argument (`None` for anything else).
+fn int_argument(arg: &KernelArg, field: Option<usize>) -> Option<i128> {
+    match (arg, field) {
+        (KernelArg::Int(v), None) => Some(*v),
+        (KernelArg::Struct(vals), Some(j)) => match vals.get(j) {
+            Some(KernelArg::Int(v)) => Some(*v),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// The element count of `a`, resolving a dynamic extent from its scalar argument.
 fn alloc_len(k: &KernelFn, args: &[KernelArg], a: &AllocDecl) -> Result<usize, KernelTrap> {
     let bad = KernelTrap::ArgMismatch("a dynamic extent needs a positive integer argument");
     let n = match a.extent {
         Extent::Static(n) => i128::from(n),
-        Extent::Param(local) => {
-            let at = k
-                .params
-                .iter()
-                .position(|p| matches!(p.kind, ParamKind::Scalar { local: l, .. } if l == local));
-            match at.map(|i| &args[i]) {
-                Some(KernelArg::Int(v)) => *v,
-                _ => return Err(bad),
-            }
-        }
+        Extent::Param(local) => match k
+            .argument_of_local(local)
+            .and_then(|(i, f, _)| int_argument(&args[i], f))
+        {
+            Some(v) => v,
+            None => return Err(bad),
+        },
     };
     usize::try_from(n).ok().filter(|n| *n > 0).ok_or(bad)
 }
