@@ -246,6 +246,16 @@ pub const fn typed_bits(t: ElementKind) -> Option<u32> {
     }
 }
 
+/// The size in bytes of a value a `Place::Raw` access may name (ROADMAP U9c): the types with a [`typed_bits`] width, all of a
+/// whole number of bytes. Sub-byte, FP8 and other untyped kinds are `None` (a raw access to them would pick a layout).
+#[must_use]
+pub const fn raw_access_bytes(t: ElementKind) -> Option<u32> {
+    match typed_bits(t) {
+        Some(bits) => Some(bits / 8),
+        None => None,
+    }
+}
+
 /// `(min, max)` of an integer type as exact `i128`s.
 #[must_use]
 pub const fn int_range(t: ElementKind) -> Option<(i128, i128)> {

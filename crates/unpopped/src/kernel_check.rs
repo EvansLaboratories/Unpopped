@@ -607,15 +607,16 @@ fn check_load_elem(k: &KernelFn, place: &Place, sc: &Scope) -> Result<ElementKin
             what: "a Load of a multicast place (a reducing read is a MulticastLoadReduce)",
         });
     }
-    let (elem, role) = check_place(k, place, sc)?;
+    let (elem, role) = check_place_raw_ok(k, place, sc)?;
     if !role.reads() {
         return Err(match place {
             Place::Logical { buffer, .. }
             | Place::Peer { buffer, .. }
+            | Place::Raw { buffer, .. }
             | Place::Multicast { buffer, .. } => KernelError::ReadFromWriteOnly { buffer: *buffer },
-            Place::Alloc { alloc, .. } | Place::ClusterPeer { alloc, .. } => {
-                KernelError::BadPlace { buffer: *alloc }
-            }
+            Place::Alloc { alloc, .. }
+            | Place::AllocRaw { alloc, .. }
+            | Place::ClusterPeer { alloc, .. } => KernelError::BadPlace { buffer: *alloc },
         });
     }
     Ok(elem)
@@ -637,15 +638,16 @@ fn check_store(
     value: &ScalarExpr,
     sc: &Scope,
 ) -> Result<(), KernelError> {
-    let (elem, role) = check_place(k, place, sc)?;
+    let (elem, role) = check_place_raw_ok(k, place, sc)?;
     if !role.writes() {
         return Err(match place {
             Place::Logical { buffer, .. }
             | Place::Peer { buffer, .. }
+            | Place::Raw { buffer, .. }
             | Place::Multicast { buffer, .. } => KernelError::WriteToReadOnly { buffer: *buffer },
-            Place::Alloc { alloc, .. } | Place::ClusterPeer { alloc, .. } => {
-                KernelError::WriteToConstant { alloc: *alloc }
-            }
+            Place::Alloc { alloc, .. }
+            | Place::AllocRaw { alloc, .. }
+            | Place::ClusterPeer { alloc, .. } => KernelError::WriteToConstant { alloc: *alloc },
         });
     }
     if matches!(place, Place::Multicast { .. }) && !multicast_store_elem(elem) {
@@ -999,7 +1001,22 @@ fn scalar_cond(k: &KernelFn, cond: &ScalarExpr, sc: &Scope) -> Result<(), Kernel
     }
 }
 
+/// The place of a statement other than a plain `Load`/`Store` (and their masked forms): a [`Place::Raw`] is refused here by
+/// name, since the atomics, the async copies, the matrix and barrier statements have no raw-byte rules yet (ROADMAP U9c).
 fn check_place(
+    k: &KernelFn,
+    p: &Place,
+    sc: &Scope,
+) -> Result<(ElementKind, BufferRole), KernelError> {
+    if matches!(p, Place::Raw { .. } | Place::AllocRaw { .. }) {
+        return Err(KernelError::TypeMismatch {
+            what: "a Raw place here (only Load, Store, MaskedLoad and MaskedStore take one)",
+        });
+    }
+    check_place_raw_ok(k, p, sc)
+}
+
+fn check_place_raw_ok(
     k: &KernelFn,
     p: &Place,
     sc: &Scope,
@@ -1020,17 +1037,38 @@ fn check_place(
             (buffer, coords, None)
         }
         Place::Alloc { alloc, index } => return check_alloc_place(k, *alloc, index, sc),
+        Place::Raw {
+            buffer,
+            byte_offset,
+            elem,
+        } => return check_raw_place(k, *buffer, byte_offset, *elem, sc),
+        Place::AllocRaw {
+            alloc,
+            byte_offset,
+            elem,
+        } => return check_alloc_raw_place(k, *alloc, byte_offset, *elem, sc),
         Place::ClusterPeer {
             alloc,
             block,
             index,
         } => return check_peer_place(k, *alloc, (block, index), sc),
     };
-    let bad = KernelError::BadPlace { buffer: *buffer };
+    check_logical_place(k, *buffer, coords, device, sc)
+}
+
+/// A `Logical`, `Peer` or `Multicast` place: a buffer parameter indexed by integer coordinates (and a peer device).
+fn check_logical_place(
+    k: &KernelFn,
+    buffer: u32,
+    coords: &[ScalarExpr],
+    device: Option<&ScalarExpr>,
+    sc: &Scope,
+) -> Result<(ElementKind, BufferRole), KernelError> {
+    let bad = KernelError::BadPlace { buffer };
     let Some(Param {
         kind: ParamKind::Buffer { elem, role, rank },
         ..
-    }) = k.params.get(*buffer as usize)
+    }) = k.params.get(buffer as usize)
     else {
         return Err(bad);
     };
@@ -1055,6 +1093,77 @@ fn check_place(
         }
     }
     Ok((*elem, *role))
+}
+
+/// A `Raw` place (ROADMAP U9c): a buffer parameter, an integer byte offset, and an access type of a whole number of bytes. It
+/// reads and writes as the buffer's role says; the access type need not be the buffer's element type.
+fn check_raw_place(
+    k: &KernelFn,
+    buffer: u32,
+    byte_offset: &ScalarExpr,
+    elem: ElementKind,
+    sc: &Scope,
+) -> Result<(ElementKind, BufferRole), KernelError> {
+    let bad = KernelError::BadPlace { buffer };
+    let Some(Param {
+        kind: ParamKind::Buffer { role, .. },
+        ..
+    }) = k.params.get(buffer as usize)
+    else {
+        return Err(bad);
+    };
+    if types::raw_access_bytes(elem).is_none() {
+        return Err(KernelError::TypeMismatch {
+            what: "a Raw place of an element that is not a whole number of bytes",
+        });
+    }
+    let int =
+        matches!(check_expr(k, byte_offset, sc)?, Ty::Scalar(e) if types::int_range(e).is_some());
+    if !int {
+        return Err(bad);
+    }
+    Ok((elem, *role))
+}
+
+/// An `AllocRaw` place (ROADMAP U9c): an existing `Shared` or `Private` allocation (`Shared` needs a launch), an integer byte
+/// offset and an access type of a whole number of bytes. `Constant` (the oracle holds no initializer) and `Tensor` are refused.
+fn check_alloc_raw_place(
+    k: &KernelFn,
+    alloc: u32,
+    byte_offset: &ScalarExpr,
+    elem: ElementKind,
+    sc: &Scope,
+) -> Result<(ElementKind, BufferRole), KernelError> {
+    let Some(a) = k.allocs.get(alloc as usize) else {
+        return Err(KernelError::BadPlace { buffer: alloc });
+    };
+    match a.space {
+        MemorySpace::Tensor => {
+            return Err(KernelError::Tcgen05Unsupported {
+                what: "an ordinary access to tensor memory",
+            });
+        }
+        MemorySpace::Constant => {
+            return Err(KernelError::TypeMismatch {
+                what: "an AllocRaw place on a Constant allocation",
+            });
+        }
+        MemorySpace::Shared if k.launch.is_none() => {
+            return Err(KernelError::SharedWithoutLaunch { alloc });
+        }
+        _ => {}
+    }
+    if types::raw_access_bytes(elem).is_none() || types::elem_bits(a.elem) % 8 != 0 {
+        return Err(KernelError::TypeMismatch {
+            what: "an AllocRaw place of an element, or on an allocation, that is not a whole number of bytes",
+        });
+    }
+    let int =
+        matches!(check_expr(k, byte_offset, sc)?, Ty::Scalar(e) if types::int_range(e).is_some());
+    if !int {
+        return Err(KernelError::BadPlace { buffer: alloc });
+    }
+    Ok((elem, BufferRole::ReadWrite))
 }
 
 /// A `ClusterPeer` place (ROADMAP U12 slice 1): a `Shared` allocation, a launch that names cluster dimensions, and an
