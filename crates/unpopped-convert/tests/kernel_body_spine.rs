@@ -289,3 +289,12 @@ fn a_missing_function_and_a_syntax_error_are_distinct() {
         Err(KernelLiftError::NotAKernel)
     );
 }
+
+#[test]
+fn unary_minus_and_unsigned_conversions() {
+    // float negate, integer negate (0 - x), and an unsigned operand meeting a signed one of the same width
+    let k = lift("void k(float* out, const float* x, int s, unsigned int u) { out[0] = -x[0]; out[1] = (float)(-s); out[2] = (float)(s + u); }").unwrap();
+    let got = run_f32(&k, &[&[2.5]], &[KernelArg::Int(-3), KernelArg::Int(1)], 3);
+    // s + u is unsigned: -3 + 1 wraps to 4294967294
+    assert_eq!(got, vec![-2.5, 3.0, f64::from(4_294_967_294u32 as f32)]);
+}
