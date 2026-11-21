@@ -13,10 +13,17 @@ vocabulary a CUDA body needs is in the tree except what a slice below names.
 - `unpopped-convert` is a tree-sitter walker for **operator-shaped** kernels only: `lift_elementwise`, `lift_reduction`, `lift_scan`,
   `lift` produce an `OpDef`, never a `KernelFn`. `Frontend` carries a `parse: fn(&str) -> Option<Tree>`, so the grammar stays in
   `baracuda-cuda-parse` / `vulkane-slang-parse`; the crate bundles none. Its own header says the shared walker accepted 0/147 of Fuel's
-  real Slang kernels, so nothing there is evidence a statement-level walker works.
+  real Slang kernels (**measured 2026-09-24 at Unpopped `3bf11f6b`, #11, by running the then `convert.rs`; 4/147 after a naming fix,
+  per the same header; not re-measured at `df1e5b14`, so it describes an older walker**), so nothing there is evidence a
+  statement-level walker works.
 - `KernelFn` (`kernel.rs`) has the statement vocabulary a body needs (`Let`, `Assign`, `If`, `For`, `Store`, atomics, barriers, `Call`,
   the U9c `Place::Raw`, struct params from U23). Nothing builds one from text. Kernel-layer lifts go `OpDef -> KernelFn` only.
-- **Not measured yet:** how much of FlashInfer's paged decode is template metaprogramming rather than statements. That decides Q2.
+- **Measured by Baracuda 2026-11-21 (decode.cuh at vendored flashinfer `eee0d75f`; one config: half, `HEAD_DIM=128`, `kNone`):** `nvcc -E`
+  leaves **all** templates (240 `template <` in the flashinfer headers); the `__global__` `BatchDecodeWithPagedKVCacheKernel` has 9
+  template parameters, with about 15 nested template constructs reachable (partial specialisation of `vec_t`, `if constexpr`).
+  Baracuda does not preprocess FlashInfer today; it can emit a hand-instantiated file for one config on request.
+  **So Q2 A means a hand-flattened ~15-construct copy, not a preprocessor run; Q2 B means a template evaluator. Slice 5's cost
+  hinges on that choice and is pm-kernels' to rule; slices 1 to 4 do not depend on it.**
 
 ## Questions and options
 
