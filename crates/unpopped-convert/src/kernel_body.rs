@@ -26,8 +26,8 @@ use tree_sitter::Node;
 use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
 use unpopped::ir::{BinaryOp, CastSpec, RoundMode, Saturation, ScalarExpr, UnaryOp};
 use unpopped::kernel::{
-    BarrierKind, Block, BufferRole, KernelError, KernelFn, LocalDecl, Param, Place, Stmt,
-    check_kernel,
+    AtomicOp, BarrierKind, Block, BufferRole, KernelError, KernelFn, LocalDecl, MemoryOrder, Param,
+    Place, Stmt, check_kernel,
 };
 use unpopped::types::{Ty, infer_ty_in, int_range};
 use unpopped_vocab::ElementKind as E;
@@ -125,6 +125,8 @@ fn lift_with_launch(
         .ok_or_else(|| KernelLiftError::NoSuchFunction(name.to_string()))?;
     let mut w = Walker::new(src);
     w.launch = launch;
+    w.unary_fn = fe.unary_fn;
+    w.binary_fn = fe.binary_fn;
     let k = w.function(func, name)?;
     check_kernel(&k).map_err(KernelLiftError::Invalid)?;
     Ok(k)
@@ -194,6 +196,9 @@ struct Walker<'s> {
     /// The caller's launch shape, if any (slice 2).
     launch: Option<LaunchShape>,
     allocs: Vec<AllocDecl>,
+    /// The frontend's math-call tables (`Frontend::unary_fn`, `binary_fn`).
+    unary_fn: fn(&str) -> Option<UnaryOp>,
+    binary_fn: fn(&str) -> Option<BinaryOp>,
 }
 
 impl<'s> Walker<'s> {
@@ -208,6 +213,8 @@ impl<'s> Walker<'s> {
             hoisted: Vec::new(),
             launch: None,
             allocs: Vec::new(),
+            unary_fn: |_| None,
+            binary_fn: |_| None,
         }
     }
 
@@ -484,6 +491,11 @@ impl<'s> Walker<'s> {
                     kind: BarrierKind::Full,
                 },
             ),
+            (Some(f), _) if f.starts_with("atomic") => {
+                self.atomic(e, f, false)?;
+                self.flush(out);
+                Ok(())
+            }
             (Some("__syncthreads"), _) => self.not_yet(
                 e,
                 "`__syncthreads` without a launch (use `lift_kernel_launched`) or with arguments",
@@ -535,6 +547,160 @@ impl<'s> Walker<'s> {
             );
         }
         Ok((ScalarExpr::Exec(id), E::U32))
+    }
+
+    fn call_args<'t>(&self, n: Node<'t>) -> Vec<Node<'t>> {
+        n.child_by_field_name("arguments")
+            .map_or_else(Vec::new, |a| {
+                let mut c = a.walk();
+                a.named_children(&mut c).collect()
+            })
+    }
+
+    /// A math call through the frontend's tables, or an atomic that returns the old value (hoisted as a statement).
+    fn call_expr(&mut self, n: Node<'_>) -> R<(ScalarExpr, E)> {
+        let Some(f) = n.child_by_field_name("function") else {
+            return self.not_yet(n, "a call of an unexpected shape");
+        };
+        let name = text(f, self.src);
+        if name.starts_with("atomic") {
+            return match self.atomic(n, name, true)? {
+                Some(v) => Ok(v),
+                None => self.not_yet(n, "an atomic without a result"),
+            };
+        }
+        let args = self.call_args(n);
+        match args.len() {
+            1 if (self.unary_fn)(name).is_some() => self.math_unary(n, name, args[0]),
+            2 if (self.binary_fn)(name).is_some() => self.math_binary(n, name, args[0], args[1]),
+            _ => self.not_yet(
+                n,
+                format!("a call to `{name}` with {} argument(s)", args.len()),
+            ),
+        }
+    }
+
+    /// The type a math function computes at: the `f`-suffixed C names are `float`, the others take their argument's type.
+    fn math_type(name: &str, arg: E) -> E {
+        let single = name.ends_with('f') && !matches!(name, "fabs" | "abs");
+        if single && name != "__fsqrt_rn" {
+            E::F32
+        } else {
+            arg
+        }
+    }
+
+    fn math_unary(&mut self, n: Node<'_>, name: &str, a: Node<'_>) -> R<(ScalarExpr, E)> {
+        let Some(op) = (self.unary_fn)(name) else {
+            return self.not_yet(n, format!("a call to `{name}`"));
+        };
+        let (v, t) = self.expr(a)?;
+        let at = Self::math_type(name, t);
+        let v = self.convert(v, t, at, a)?;
+        let e = ScalarExpr::Unary(op, Box::new(v));
+        let ty = self.ty_of(&e, n)?;
+        Ok((e, ty))
+    }
+
+    fn math_binary(
+        &mut self,
+        n: Node<'_>,
+        name: &str,
+        a: Node<'_>,
+        b: Node<'_>,
+    ) -> R<(ScalarExpr, E)> {
+        let Some(op) = (self.binary_fn)(name) else {
+            return self.not_yet(n, format!("a call to `{name}`"));
+        };
+        let (x, xt) = self.expr(a)?;
+        let (y, yt) = self.expr(b)?;
+        let common = self.common_type(xt, yt, n)?;
+        let at = Self::math_type(name, common);
+        let x = self.convert(x, xt, at, a)?;
+        let y = self.convert(y, yt, at, b)?;
+        let e = ScalarExpr::Binary(op, Box::new(x), Box::new(y));
+        let ty = self.ty_of(&e, n)?;
+        Ok((e, ty))
+    }
+
+    /// `atomicAdd(&a[i], v)` and its kin: one `AtomicRmw` (or `AtomicCas`), relaxed, at device scope (block scope on a
+    /// `__shared__` array), as CUDA's are. With `want_old` the old value is a fresh local and the result.
+    fn atomic(&mut self, n: Node<'_>, name: &str, want_old: bool) -> R<Option<(ScalarExpr, E)>> {
+        let args = self.call_args(n);
+        let op = match name {
+            "atomicAdd" => Some(AtomicOp::Add),
+            "atomicMax" => Some(AtomicOp::Max),
+            "atomicMin" => Some(AtomicOp::Min),
+            "atomicAnd" => Some(AtomicOp::And),
+            "atomicOr" => Some(AtomicOp::Or),
+            "atomicXor" => Some(AtomicOp::Xor),
+            "atomicExch" => Some(AtomicOp::Exchange),
+            "atomicCAS" => None,
+            other => return self.not_yet(n, format!("the atomic `{other}`")),
+        };
+        let want = if op.is_some() { 2 } else { 3 };
+        if args.len() != want {
+            return self.not_yet(n, format!("`{name}` with {} argument(s)", args.len()));
+        }
+        let (place, elem, scope) = self.address_of(args[0])?;
+        let old = want_old.then(|| self.new_local(elem));
+        let first = self.expr(args[1])?;
+        let first = self.convert(first.0, first.1, elem, args[1])?;
+        let stmt = match op {
+            Some(op) => Stmt::AtomicRmw {
+                op,
+                place,
+                value: first,
+                old,
+                order: MemoryOrder::Relaxed,
+                scope,
+            },
+            None => {
+                let d = self.expr(args[2])?;
+                let desired = self.convert(d.0, d.1, elem, args[2])?;
+                Stmt::AtomicCas {
+                    place,
+                    expected: first,
+                    desired,
+                    old,
+                    order: MemoryOrder::Relaxed,
+                    scope,
+                }
+            }
+        };
+        self.hoisted.push(stmt);
+        Ok(old.map(|l| (ScalarExpr::Local(l), elem)))
+    }
+
+    /// `&a[i]`: the place, its element type and the scope an atomic on it has.
+    fn address_of(&mut self, n: Node<'_>) -> R<(Place, E, Scope)> {
+        let inner = if n.kind() == "parenthesized_expression" {
+            n.named_child(0)
+        } else {
+            Some(n)
+        };
+        let Some(inner) = inner.filter(|i| i.kind() == "pointer_expression") else {
+            return self.not_yet(
+                n,
+                "an atomic whose address is not `&a[i]` (pointer arithmetic is a later slice)",
+            );
+        };
+        let op = inner
+            .child_by_field_name("operator")
+            .map(|o| text(o, self.src));
+        let arg = inner
+            .child_by_field_name("argument")
+            .filter(|a| a.kind() == "subscript_expression");
+        let (Some("&"), Some(arg)) = (op, arg) else {
+            return self.not_yet(n, "an atomic whose address is not `&a[i]`");
+        };
+        let (place, elem) = self.element_place(arg)?;
+        let scope = if matches!(place, Place::Alloc { .. }) {
+            Scope::Block
+        } else {
+            Scope::Device
+        };
+        Ok((place, elem, scope))
     }
 
     fn expression_statement(&mut self, n: Node<'_>, out: &mut Vec<Stmt>) -> R<()> {
@@ -924,6 +1090,7 @@ impl<'s> Walker<'s> {
             "cast_expression" => self.cast_node(n),
             "subscript_expression" => self.read_element(n),
             "field_expression" => self.builtin(n),
+            "call_expression" => self.call_expr(n),
             other => self.not_yet(n, format!("a `{other}` expression")),
         }
     }
