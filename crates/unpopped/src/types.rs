@@ -149,6 +149,23 @@ pub fn check_int_leaf(ty: ElementKind, value: Option<i64>) -> Result<(), TypeErr
     Ok(())
 }
 
+/// The binary operators defined on floating-point values only: no integer type takes them, as an operand or as the compute
+/// type.
+#[must_use]
+pub fn float_only_binary(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Pow
+            | BinaryOp::Rem
+            | BinaryOp::RemTrunc
+            | BinaryOp::Atan2
+            | BinaryOp::Copysign
+            | BinaryOp::Nextafter
+            | BinaryOp::FmaxIeee
+            | BinaryOp::FminIeee
+    )
+}
+
 /// `true` for the binary operations an integer-typed operand pair admits: ordering
 /// (`Min`, `Max`, whose NaN rules are moot) and the comparisons.
 #[must_use]
@@ -735,6 +752,15 @@ fn node_ty(
         ScalarExpr::Div(..) => no_int("Div", same("Div", k[0], k[1])?),
         ScalarExpr::Binary(op, ..) => {
             let t = same("Binary", k[0], k[1])?;
+            // The float-only operators have no integer meaning anywhere (the oracle defines none, and a C emitter would
+            // spell `fmod` and `pow` on integers), whether or not the integer type is the compute type. An integer
+            // remainder is `Select(b == 0, 0, a - (a / b) * b)` over the total `Div` (`docs/int-div-shift-semantics.md`).
+            if is_cast_int(t) && float_only_binary(*op) {
+                return Err(TypeError::IntegerOperand {
+                    node: "Binary",
+                    ty: t,
+                });
+            }
             if t != compute && is_cast_int(t) {
                 if !int_binary_ok(*op) {
                     return Err(TypeError::IntegerOperand {

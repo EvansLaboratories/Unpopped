@@ -125,7 +125,7 @@ fn a_while_loop_that_reads_memory_is_reread_every_iteration() {
 #[test]
 fn integer_kernels_promote_and_convert_as_c_does() {
     let src = "void k(int* out, const int* a, int n) { for (int i = 0; i < n; i++) { int v = a[i]; \
-        out[i] = (v / 2) * 5 + (v << 2) - (v & 3) + (v > 2 ? 1 : 0); } }";
+        out[i] = (v / 2) % 5 + (v << 2) - (v & 3) + (v > 2 ? 1 : 0); } }";
     let k = lift(src).unwrap();
     let a = [7i32, -9, 4, 13, 0, 21];
     let mut args = vec![
@@ -139,7 +139,7 @@ fn integer_kernels_promote_and_convert_as_c_does() {
     };
     let want: Vec<f64> = a
         .iter()
-        .map(|&v| f64::from((v / 2) * 5 + (v << 2) - (v & 3) + i32::from(v > 2)))
+        .map(|&v| f64::from((v / 2) % 5 + (v << 2) - (v & 3) + i32::from(v > 2)))
         .collect();
     assert_eq!(o.to_f64_vec(), want);
 }
@@ -247,15 +247,37 @@ fn the_irs_own_refusals_are_outside_ir_not_not_yet() {
 }
 
 #[test]
-fn integer_remainder_is_outside_ir() {
-    // The checker would accept a `RemTrunc` on integers but the oracle has no meaning for it, so lifting it would build a
-    // kernel nothing can run. Control: the same kernel with `*` lifts.
-    let r = declined("void k(int* out, const int* a) { out[0] = a[0] % 3; }");
+fn c_remainder_truncates_toward_zero_and_is_total() {
+    // `a % b`: sign of the dividend (asymmetric negative operands), and 0 for a zero divisor and for MIN % -1.
+    let k = lift("void k(int* out, const int* a, const int* b, int n) { for (int i = 0; i < n; i++) { out[i] = a[i] % b[i]; } }").unwrap();
+    let a = [7i32, -7, 7, -7, 9, i32::MIN, 5, -6];
+    let b = [3i32, 3, -3, -3, 0, -1, 5, 4];
+    let mut args = vec![
+        KernelArg::Buffer(TypedBuffer::from_i32(&[8], &[99; 8])),
+        KernelArg::Buffer(TypedBuffer::from_i32(&[8], &a)),
+        KernelArg::Buffer(TypedBuffer::from_i32(&[8], &b)),
+        KernelArg::Int(8),
+    ];
+    run_kernel(&k, &mut args).expect("runs");
+    let KernelArg::Buffer(o) = &args[0] else {
+        panic!()
+    };
+    let want: Vec<f64> = a
+        .iter()
+        .zip(&b)
+        .map(|(&x, &y)| f64::from(x.checked_rem(y).unwrap_or(0)))
+        .collect();
+    assert_eq!(want, vec![1.0, -1.0, 1.0, -1.0, 0.0, 0.0, 0.0, -2.0]);
+    assert_eq!(o.to_f64_vec(), want);
+}
+
+#[test]
+fn remainder_on_floats_is_not_c() {
+    let r = declined("void k(float* out, const float* a) { out[0] = a[0] % 2.0f; }");
     assert!(
-        matches!(&r, KernelLiftError::OutsideIr { construct, .. } if construct.contains("remainder")),
+        matches!(&r, KernelLiftError::OutsideIr { construct, .. } if construct.contains("floating-point")),
         "{r:?}"
     );
-    assert!(lift("void k(int* out, const int* a) { out[0] = a[0] * 3; }").is_ok());
 }
 
 #[test]

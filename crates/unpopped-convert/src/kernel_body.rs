@@ -841,12 +841,7 @@ impl<'s> Walker<'s> {
             "-" => ScalarExpr::Sub(a, b),
             "*" => ScalarExpr::Mul(a, b),
             "/" => ScalarExpr::Div(a, b),
-            "%" => {
-                return self.outside(
-                    at,
-                    "an integer remainder `%` (the IR has no integer remainder the oracle defines: `Div`, shifts, bit operations, `Min` and `Max` only)",
-                );
-            }
+            "%" => return self.remainder(a, b, common, at),
             "&" => ScalarExpr::Binary(BinaryOp::BitAnd, a, b),
             "|" => ScalarExpr::Binary(BinaryOp::BitOr, a, b),
             "^" => ScalarExpr::Binary(BinaryOp::BitXor, a, b),
@@ -858,6 +853,33 @@ impl<'s> Walker<'s> {
             "!=" => ScalarExpr::Binary(BinaryOp::CmpNe, a, b),
             other => return self.not_yet(at, format!("the operator `{other}`")),
         };
+        let t = self.ty_of(&e, at)?;
+        Ok((e, t))
+    }
+
+    /// C `a % b` on integers: truncating, sign of the dividend, and `0` for a zero divisor (and for `MIN % -1`), as the
+    /// total `Div` composes it (`docs/int-div-shift-semantics.md`, the PM ruling 2026-10-31): `Select(b == 0, 0, a - (a / b) * b)`.
+    /// A zero divisor is undefined in C, so any total result is a refinement. Both operands are pure (a memory read is
+    /// already a local), so naming each twice repeats no effect.
+    fn remainder(
+        &self,
+        a: Box<ScalarExpr>,
+        b: Box<ScalarExpr>,
+        ty: E,
+        at: Node<'_>,
+    ) -> R<(ScalarExpr, E)> {
+        if int_range(ty).is_none() {
+            return self.outside(at, "`%` on a floating-point operand (not valid C)");
+        }
+        let quotient = ScalarExpr::Div(a.clone(), b.clone());
+        let product = ScalarExpr::Mul(Box::new(quotient), b.clone());
+        let rem = ScalarExpr::Sub(a, Box::new(product));
+        let is_zero = ScalarExpr::Binary(BinaryOp::CmpEq, b, Box::new(ScalarExpr::ConstInt(0, ty)));
+        let e = ScalarExpr::Select(
+            Box::new(is_zero),
+            Box::new(ScalarExpr::ConstInt(0, ty)),
+            Box::new(rem),
+        );
         let t = self.ty_of(&e, at)?;
         Ok((e, t))
     }
