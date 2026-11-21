@@ -61,6 +61,16 @@ same kernel written directly as `KernelFn` and to a Rust reference, on distinct-
 the walker. A second leg compiles the source with `nvcc`/a C compiler where one is available and compares outputs (Baracuda's runner,
 or cpu-c on the neutral subset). A green suite proves only the idioms in it, so each slice states the construct list it covers.
 
+## Slice 5's input, as Baracuda reported it (2026-11-21)
+
+`flashinfer_paged_decode_f16_d128_g1_flat.cu` in Baracuda's `docs/planning/u19/` (branch `r6-reviews-2`, `cc6183d86`, unpushed when
+reported): a plain `__global__` and plain `__device__` callees for **one config** (half, `HEAD_DIM=128`, `kNone`, group size 1; block
+(16,1,8), grid (batch, kv_heads), 36864 B of shared memory); bitwise-equal to the vendored original on 30 GPU cases (0 diffs, a
+mutated-scale control gives 39350). Upstream `eee0d75f` and its Apache-2.0 header are kept. Constructs the walker meets there, which
+are the work of slices 3 and 4: `asm volatile` PTX (`ex2`, `lg2`, `rcp`, `shfl`, `cp.async`, `griddepcontrol`), `__ldg`,
+`__grid_constant__`, dynamic `extern __shared__`, `#if` architecture guards, `alignas(16)` arrays, `float4`/`int4`/`half2` reinterpret
+casts, `#pragma unroll`. Slice 2 (built) took the thread builtins, `__syncthreads` and static `__shared__`.
+
 ## Recommendation and what I need
 
 Q1 A, Q2 A, Q3 as above, Q4 order as listed, Q5 as listed. **Rulings needed:** Q1 (PM), Q2 (Baracuda's yes or no on supplying
