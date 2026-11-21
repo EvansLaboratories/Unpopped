@@ -1,0 +1,106 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//! `Place::Raw` in the interpreter (ROADMAP U9c, `docs/options-u9c-pointer-values.md`): a typed access at a **byte** offset
+//! into a buffer's storage. Byte 0 is the view's first element (`base_offset` elements into the storage); shape and strides are
+//! not consulted. A misaligned or out-of-range access is a typed trap; the race detector sees every buffer element the bytes
+//! touch (conservative: two threads writing different bytes of one wider element are reported).
+
+use super::kernel_eval::Machine;
+use super::kernel_mem::AccessKind;
+use super::kernel_trap::KernelTrap;
+use super::{Val, store_val};
+use crate::kernel::Place;
+use crate::oracle::kernel_eval::KernelArg;
+use crate::types::{self, Ty};
+use unpopped_vocab::ElementKind;
+
+/// Where a checked raw access lands.
+pub(super) struct RawAt {
+    /// The root argument index of the buffer.
+    pub(super) root: usize,
+    /// The absolute byte position in the buffer's storage.
+    pub(super) at: usize,
+    /// The access type.
+    pub(super) elem: ElementKind,
+    /// Its size in bytes.
+    pub(super) size: usize,
+}
+
+impl Machine<'_> {
+    /// Evaluate, align- and bounds-check a `Place::Raw`, and log the access for the race detector.
+    pub(super) fn raw_at(&mut self, place: &Place, kind: AccessKind) -> Result<RawAt, KernelTrap> {
+        let Place::Raw {
+            buffer,
+            byte_offset,
+            elem,
+        } = place
+        else {
+            unreachable!("raw_at is called on a Raw place");
+        };
+        let Ty::Scalar(t) = types::infer_ty_in(byte_offset, self.k.compute, &self.local_tys)
+            .map_err(|_| KernelTrap::Unsupported("byte offset type"))?
+        else {
+            return Err(KernelTrap::Unsupported("packed byte offset"));
+        };
+        let off = self.eval_int(byte_offset, t)?;
+        let size = types::raw_access_bytes(*elem)
+            .ok_or(KernelTrap::Unsupported("a Raw access of a non-byte element"))? as usize;
+        let root = self.root(*buffer);
+        let KernelArg::Buffer(tb) = &self.args[root] else {
+            return Err(KernelTrap::ArgMismatch(
+                "a Place names a non-buffer argument",
+            ));
+        };
+        if types::elem_bits(tb.dtype) % 8 != 0 {
+            return Err(KernelTrap::Unsupported("a Raw access to a sub-byte buffer"));
+        }
+        let esz = types::elem_size(tb.dtype);
+        if off < 0 || off % size as i128 != 0 {
+            return Err(KernelTrap::MisalignedAccess {
+                buffer: *buffer,
+                byte_offset: off,
+            });
+        }
+        let oob = KernelTrap::OutOfBounds { buffer: *buffer };
+        let at = usize::try_from(off)
+            .ok()
+            .and_then(|o| o.checked_add(usize::try_from(tb.base_offset).ok()?.checked_mul(esz)?))
+            .ok_or_else(|| oob.clone())?;
+        if at.checked_add(size).is_none_or(|end| end > tb.bytes.len()) {
+            return Err(oob);
+        }
+        for e in at / esz..=(at + size - 1) / esz {
+            self.note_global(root, e, kind)?;
+        }
+        Ok(RawAt {
+            root,
+            at,
+            elem: *elem,
+            size,
+        })
+    }
+
+    /// The value of a raw load: the stored bytes, little-endian, as `elem` bits.
+    pub(super) fn raw_load(&mut self, place: &Place) -> Result<Val, KernelTrap> {
+        let a = self.raw_at(place, AccessKind::Read)?;
+        let KernelArg::Buffer(tb) = &self.args[a.root] else {
+            unreachable!("raw_at returned a buffer");
+        };
+        let mut bits = 0u128;
+        for (i, b) in tb.bytes[a.at..a.at + a.size].iter().enumerate() {
+            bits |= u128::from(*b) << (8 * i);
+        }
+        Ok(Val::Raw(bits, a.elem))
+    }
+
+    /// A raw store: `v` encoded as `elem` (verbatim when it already is one), written little-endian at the byte position.
+    pub(super) fn raw_store(&mut self, place: &Place, v: Val) -> Result<(), KernelTrap> {
+        let a = self.raw_at(place, AccessKind::Write)?;
+        let mut tmp = [0u8; 16];
+        store_val(v, a.elem, &mut tmp, 0);
+        let KernelArg::Buffer(tb) = &mut self.args[a.root] else {
+            unreachable!("raw_at returned a buffer");
+        };
+        tb.bytes[a.at..a.at + a.size].copy_from_slice(&tmp[..a.size]);
+        Ok(())
+    }
+}

@@ -115,6 +115,7 @@ pub mod kernel_launch;
 mod kernel_mem;
 mod kernel_mem_ops;
 mod kernel_named;
+mod kernel_raw;
 mod kernel_resume;
 mod kernel_sync;
 mod kernel_tcgen05;

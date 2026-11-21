@@ -22,6 +22,13 @@ pub enum KernelTrap {
         /// The buffer parameter index.
         buffer: u32,
     },
+    /// A `Place::Raw` whose byte offset is negative or not a multiple of the access type's size (ROADMAP U9c).
+    MisalignedAccess {
+        /// The buffer parameter index.
+        buffer: u32,
+        /// The byte offset the kernel computed.
+        byte_offset: i128,
+    },
     /// A construct this interpreter does not evaluate (named), by design not guessed at.
     Unsupported(&'static str),
     /// A `Place::Peer` names a device rank outside the launch.

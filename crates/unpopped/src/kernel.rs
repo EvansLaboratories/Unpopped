@@ -207,6 +207,24 @@ pub enum Place {
         /// An integer expression: the flat element index.
         index: ScalarExpr,
     },
+    /// The `elem`-typed value at **byte** `byte_offset` of the storage of buffer parameter `buffer` (ROADMAP U9c, level (b);
+    /// `docs/options-u9c-pointer-values.md`): the `(elem*)((char*)buffer + byte_offset)` of C and the byte-addressed `ld`/`st` of
+    /// PTX. There is no pointer value, only a base named by a parameter and an integer offset. Byte 0 is the buffer's first
+    /// element (its view origin); strides and shape are **ignored** (raw is bytes of the storage, not "through the view").
+    /// `elem` need not be the buffer's element type (a width-punned access). Traps, never UB: a `byte_offset` that is not a
+    /// multiple of `elem`'s size (misaligned), or an access outside the buffer's bytes. `elem` is a scalar of a whole number
+    /// of bytes (no sub-byte or untyped kind). The race detector sees the access at the granularity of the buffer's own
+    /// elements: every element the bytes touch is logged, so two threads writing different bytes of one wider element are
+    /// reported as a race the hardware would not have (conservative). Taken by `Load`, `Store`, `MaskedLoad` and `MaskedStore`.
+    Raw {
+        /// Index into [`KernelFn::params`]; a buffer.
+        buffer: u32,
+        /// An integer expression: the byte offset from the buffer's first element.
+        byte_offset: ScalarExpr,
+        /// The type of the value accessed.
+        #[serde(with = "crate::text::ek")]
+        elem: ElementKind,
+    },
     /// The element at flat `index` of the `Shared` allocation `alloc` **of another block of this block's cluster**
     /// (distributed shared memory: PTX `mapa`, ROADMAP U12 slice 1). `block` is an integer expression: the rank of
     /// the block inside its cluster, `x` fastest (`%cluster_ctarank`), so `0..cluster x * y * z`; the rank of this very
