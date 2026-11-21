@@ -269,6 +269,20 @@ fn a_raw_read_of_a_byte_of_an_element_another_thread_wrote_races() {
     assert_eq!(two_threads(elem_store(1), raw_load_u8(8)), Ok(()));
 }
 
+/// `st` run by thread `v` alone.
+fn only(v: i64, st: Stmt) -> Stmt {
+    let tid_is = ScalarExpr::Binary(
+        BinaryOp::CmpEq,
+        Box::new(ScalarExpr::Exec(ExecId::ThreadIdx(0))),
+        Box::new(ScalarExpr::ConstInt(v, U32)),
+    );
+    Stmt::If {
+        cond: tid_is,
+        then: Block(vec![st]),
+        els: Block(vec![]),
+    }
+}
+
 #[test]
 fn a_wide_raw_access_covers_every_allocation_element_its_bytes_touch() {
     let wide = Stmt::Load {
@@ -276,18 +290,6 @@ fn a_wide_raw_access_covers_every_allocation_element_its_bytes_touch() {
         place: araw(0, U64),
     };
     let k_local = |a, b| {
-        let tid_is = |v| {
-            ScalarExpr::Binary(
-                BinaryOp::CmpEq,
-                Box::new(ScalarExpr::Exec(ExecId::ThreadIdx(0))),
-                Box::new(ScalarExpr::ConstInt(v, U32)),
-            )
-        };
-        let only = |v, st| Stmt::If {
-            cond: tid_is(v),
-            then: Block(vec![st]),
-            els: Block(vec![]),
-        };
         let mut stmts = vec![only(
             0,
             Stmt::If {
@@ -349,6 +351,21 @@ fn the_checker_refuses_constant_tensor_and_what_has_no_raw_rules() {
         check_kernel(&k(MemorySpace::Tensor, load)),
         Err(KernelError::Tcgen05Unsupported { .. })
     ));
+}
+
+#[test]
+fn the_checker_refuses_a_fractional_element_a_missing_alloc_and_atomics_on_raw() {
+    let k = |space, st| {
+        KernelFn::new(
+            "k",
+            F32,
+            vec![],
+            vec![LocalDecl::scalar(U32)],
+            Block(vec![st]),
+        )
+        .with_launch(LaunchShape::new([1, 1, 1], [1, 1, 1]))
+        .with_allocs(vec![AllocDecl::new("a", space, U32, Extent::Static(4))])
+    };
     // an element that is not a whole number of bytes
     let fp8 = Stmt::Load {
         local: 0,

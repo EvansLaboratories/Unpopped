@@ -54,7 +54,10 @@ fn a_raw_place_is_refused_with_its_reason_and_the_control_lowers() {
             "the refusal names the place: {err:?}"
         );
     }
-    // as the source of an async copy too
+}
+
+#[test]
+fn a_raw_async_copy_source_is_refused_and_a_logical_control_lowers() {
     let copy = KernelFn::new(
         "raw_copy",
         U32,

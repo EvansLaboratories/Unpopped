@@ -322,6 +322,20 @@ fn the_checker_applies_the_buffers_role_and_refuses_what_has_no_raw_rules() {
         check_kernel(&with(BufferRole::ReadWrite, atomic)),
         Err(KernelError::TypeMismatch { .. })
     ));
+}
+
+#[test]
+fn the_checker_refuses_a_fractional_element_and_a_non_integer_byte_offset() {
+    let with = |role, st| {
+        KernelFn::new(
+            "k",
+            F32,
+            vec![Param::buffer("buf", U32, role, Some(1))],
+            vec![LocalDecl::scalar(U32)],
+            Block(vec![st]),
+        )
+        .with_launch(LaunchShape::new([1, 1, 1], [1, 1, 1]))
+    };
     // an element that is not a whole number of bytes picks a layout: refused by name
     let fp8 = Stmt::Load {
         local: 0,

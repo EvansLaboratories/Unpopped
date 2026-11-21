@@ -3,11 +3,11 @@
 //! 32 bytes holding 1, 2, 3 ... 32, so the bytes read, their order and the offset all show in the values that land. `elems`
 //! counts values of the raw place's type; the bytes read are `elems * size`, aligned to one value and inside the buffer.
 
-use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
+use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace};
 use unpopped::ir::{BinaryOp, ScalarExpr};
 use unpopped::kernel::{
-    BarrierKind, Block, BufferRole, CacheHint, KernelError, KernelFn, LocalDecl, Param, Place,
-    Stmt, check_kernel,
+    Block, BufferRole, CacheHint, KernelError, KernelFn, LocalDecl, Param, Place, Stmt,
+    check_kernel,
 };
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
@@ -53,6 +53,37 @@ fn bytes32() -> TypedBuffer {
     TypedBuffer::new(U8, vec![32], vec![1], (1..=32u8).collect())
 }
 
+/// Copy the eight `Shared` elements to `out`.
+fn readout() -> Vec<Stmt> {
+    (0..8i64)
+        .flat_map(|i| {
+            [
+                Stmt::Load {
+                    local: i as u32,
+                    place: shared(i),
+                },
+                Stmt::Store {
+                    place: Place::Logical {
+                        buffer: 1,
+                        coords: vec![cu(i)],
+                    },
+                    value: ScalarExpr::Local(i as u32),
+                },
+            ]
+        })
+        .collect()
+}
+
+/// The eight-element `Shared` U32 array every kernel here declares.
+fn shared_decl() -> Vec<AllocDecl> {
+    vec![AllocDecl::new(
+        "s",
+        MemorySpace::Shared,
+        U32,
+        Extent::Static(8),
+    )]
+}
+
 /// One thread: `body`, commit, wait for everything, then the eight `Shared` U32 elements go to `out`.
 fn run(body: Vec<Stmt>) -> Result<Vec<u32>, KernelTrap> {
     // zero the whole array first, so an element no copy lands on reads as 0 rather than trapping uninitialized
@@ -65,19 +96,7 @@ fn run(body: Vec<Stmt>) -> Result<Vec<u32>, KernelTrap> {
     stmts.extend(body);
     stmts.push(Stmt::AsyncCommit);
     stmts.push(Stmt::AsyncWait { pending: 0 });
-    for i in 0..8 {
-        stmts.push(Stmt::Load {
-            local: i as u32,
-            place: shared(i),
-        });
-        stmts.push(Stmt::Store {
-            place: Place::Logical {
-                buffer: 1,
-                coords: vec![cu(i)],
-            },
-            value: ScalarExpr::Local(i as u32),
-        });
-    }
+    stmts.extend(readout());
     let k = KernelFn::new(
         "k",
         F32,
@@ -88,12 +107,7 @@ fn run(body: Vec<Stmt>) -> Result<Vec<u32>, KernelTrap> {
         (0..8).map(|_| LocalDecl::scalar(U32)).collect(),
         Block(stmts),
     )
-    .with_allocs(vec![AllocDecl::new(
-        "s",
-        MemorySpace::Shared,
-        U32,
-        Extent::Static(8),
-    )])
+    .with_allocs(shared_decl())
     .with_launch(LaunchShape::new([1, 1, 1], [1, 1, 1]));
     check_kernel(&k).map_err(KernelTrap::Malformed)?;
     let mut args = [
@@ -193,12 +207,7 @@ fn race_with_write_to(elem: i64) -> Result<(), KernelTrap> {
             ),
         ]),
     )
-    .with_allocs(vec![AllocDecl::new(
-        "s",
-        MemorySpace::Shared,
-        U32,
-        Extent::Static(8),
-    )])
+    .with_allocs(shared_decl())
     .with_launch(LaunchShape::new([2, 1, 1], [1, 1, 1]));
     check_kernel(&k).map_err(KernelTrap::Malformed)?;
     let mut args = [KernelArg::Buffer(TypedBuffer::new(
@@ -257,6 +266,10 @@ fn the_checker_takes_a_raw_source_of_the_destinations_type_and_nothing_else() {
         check_kernel(&k(araw, raw(0, U32))),
         Err(KernelError::AsyncUnsupported { .. })
     ));
+}
+
+#[test]
+fn a_raw_source_copy_of_an_illegal_byte_count_is_refused() {
     // 2 values of 4 bytes is 8 bytes (fine), 3 is not a legal size
     let three = KernelFn::new(
         "k",
@@ -265,16 +278,10 @@ fn the_checker_takes_a_raw_source_of_the_destinations_type_and_nothing_else() {
         vec![],
         Block(vec![copy(shared(0), raw(0, U32), 3, None)]),
     )
-    .with_allocs(vec![AllocDecl::new(
-        "s",
-        MemorySpace::Shared,
-        U32,
-        Extent::Static(8),
-    )])
+    .with_allocs(shared_decl())
     .with_launch(LaunchShape::new([1, 1, 1], [1, 1, 1]));
     assert!(matches!(
         check_kernel(&three),
         Err(KernelError::AsyncUnsupported { .. })
     ));
-    let _ = (Scope::Block, BarrierKind::Full);
 }

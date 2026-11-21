@@ -1053,11 +1053,22 @@ fn check_place_raw_ok(
             index,
         } => return check_peer_place(k, *alloc, (block, index), sc),
     };
-    let bad = KernelError::BadPlace { buffer: *buffer };
+    check_logical_place(k, *buffer, coords, device, sc)
+}
+
+/// A `Logical`, `Peer` or `Multicast` place: a buffer parameter indexed by integer coordinates (and a peer device).
+fn check_logical_place(
+    k: &KernelFn,
+    buffer: u32,
+    coords: &[ScalarExpr],
+    device: Option<&ScalarExpr>,
+    sc: &Scope,
+) -> Result<(ElementKind, BufferRole), KernelError> {
+    let bad = KernelError::BadPlace { buffer };
     let Some(Param {
         kind: ParamKind::Buffer { elem, role, rank },
         ..
-    }) = k.params.get(*buffer as usize)
+    }) = k.params.get(buffer as usize)
     else {
         return Err(bad);
     };
