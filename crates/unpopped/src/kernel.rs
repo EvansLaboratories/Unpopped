@@ -207,6 +207,41 @@ pub enum Place {
         /// An integer expression: the flat element index.
         index: ScalarExpr,
     },
+    /// The `elem`-typed value at **byte** `byte_offset` of the storage of buffer parameter `buffer` (ROADMAP U9c, level (b);
+    /// `docs/options-u9c-pointer-values.md`): the `(elem*)((char*)buffer + byte_offset)` of C and the byte-addressed `ld`/`st` of
+    /// PTX. There is no pointer value, only a base named by a parameter and an integer offset. Byte 0 is the buffer's first
+    /// element (its view origin); strides and shape are **ignored** (raw is bytes of the storage, not "through the view").
+    /// `elem` need not be the buffer's element type (a width-punned access). Traps, never UB: a `byte_offset` that is not a
+    /// multiple of `elem`'s size (misaligned), or an access outside the buffer's bytes. `elem` is a scalar of a whole number
+    /// of bytes (no sub-byte or untyped kind). The race detector sees the access at the granularity of the buffer's own
+    /// elements: every element the bytes touch is logged, so two threads writing different bytes of one wider element are
+    /// reported as a race the hardware would not have (conservative). Taken by `Load`, `Store`, `MaskedLoad` and `MaskedStore`, and as the source of a
+    /// `CopyAsync`.
+    Raw {
+        /// Index into [`KernelFn::params`]; a buffer.
+        buffer: u32,
+        /// An integer expression: the byte offset from the buffer's first element.
+        byte_offset: ScalarExpr,
+        /// The type of the value accessed.
+        #[serde(with = "crate::text::ek")]
+        elem: ElementKind,
+    },
+    /// The `elem`-typed value at **byte** `byte_offset` of the allocation `alloc` (a `Shared` or `Private` one; ROADMAP U9c): the
+    /// byte-addressed twin of [`Place::Raw`], with the same rules (byte 0 is the allocation's first element, a misaligned or
+    /// out-of-range offset is a typed trap, `elem` is a whole number of bytes and need not be the allocation's type). The race
+    /// detector sees every allocation element the bytes touch. An element is initialized once a store has covered all of its
+    /// bytes; a load of an element not yet fully covered is the usual uninitialized-read trap (so a byte-wise fill of a wider
+    /// element never initializes it: conservative). `Constant` and `Tensor` allocations are refused. Taken by `Load`, `Store`,
+    /// `MaskedLoad` and `MaskedStore`.
+    AllocRaw {
+        /// Index into [`KernelFn::allocs`].
+        alloc: u32,
+        /// An integer expression: the byte offset from the allocation's first element.
+        byte_offset: ScalarExpr,
+        /// The type of the value accessed.
+        #[serde(with = "crate::text::ek")]
+        elem: ElementKind,
+    },
     /// The element at flat `index` of the `Shared` allocation `alloc` **of another block of this block's cluster**
     /// (distributed shared memory: PTX `mapa`, ROADMAP U12 slice 1). `block` is an integer expression: the rank of
     /// the block inside its cluster, `x` fastest (`%cluster_ctarank`), so `0..cluster x * y * z`; the rank of this very

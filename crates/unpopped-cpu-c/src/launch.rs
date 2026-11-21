@@ -673,6 +673,13 @@ impl Emitter<'_> {
         {
             return self.device_peer_address(*buffer, (device, coords));
         }
+        if matches!(place, Place::Raw { .. } | Place::AllocRaw { .. }) {
+            // the C ABI passes a buffer's base, shape and strides but not its storage length, so the byte-range trap of a raw
+            // access cannot be emitted yet (ROADMAP U9c slice 3)
+            return Err(refuse(
+                "a Place::Raw or Place::AllocRaw (a byte-offset access; the C ABI carries no storage length to bound it)",
+            ));
+        }
         let Place::Alloc { alloc, index } = place else {
             return Err(refuse("an address this emitter does not spell"));
         };

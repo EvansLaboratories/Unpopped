@@ -87,17 +87,22 @@ impl Machine<'_> {
             .ok_or(KernelTrap::Unsupported(
                 "a CopyAsync valid count outside 0..=elems",
             ))?;
-        let Place::Logical { buffer, .. } = src else {
-            return Err(KernelTrap::Unsupported(
-                "a CopyAsync source that is not a buffer place",
-            ));
+        let dt = match src {
+            Place::Raw { elem, .. } => *elem,
+            Place::Logical { buffer, .. } => match &self.args[*buffer as usize] {
+                KernelArg::Buffer(tb) => tb.dtype,
+                _ => {
+                    return Err(KernelTrap::Unsupported(
+                        "a CopyAsync source that is not a buffer",
+                    ));
+                }
+            },
+            _ => {
+                return Err(KernelTrap::Unsupported(
+                    "a CopyAsync source that is not a buffer place",
+                ));
+            }
         };
-        let KernelArg::Buffer(tb) = &self.args[*buffer as usize] else {
-            return Err(KernelTrap::Unsupported(
-                "a CopyAsync source that is not a buffer",
-            ));
-        };
-        let dt = tb.dtype;
         let mut vals = if v == 0 {
             Vec::new()
         } else {
@@ -109,6 +114,9 @@ impl Machine<'_> {
 
     /// Read `n` consecutive source elements starting at `src` now (logged global reads), bounds-checked on the buffer.
     pub(super) fn read_source(&mut self, src: &Place, n: usize) -> Result<Vec<Val>, KernelTrap> {
+        if matches!(src, Place::Raw { .. }) {
+            return self.raw_read_n(src, n);
+        }
         let (b, off) = self.offset(src)?;
         let (count, dt) = match &self.args[b] {
             KernelArg::Buffer(tb) => (tb.bytes.len() * 8 / elem_bits(tb.dtype), tb.dtype),

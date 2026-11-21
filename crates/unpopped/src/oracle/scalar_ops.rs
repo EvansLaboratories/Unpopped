@@ -258,6 +258,15 @@ pub(super) fn lgamma(x: f64) -> f64 {
         9.984_369_578_019_572e-6,
         1.505_632_735_149_311_6e-7,
     ];
+    // C99 Annex F.9.5.3: +-inf and a negative integer (a pole) are +inf; 1 and 2 give +0. The series below would give `inf - inf`
+    // (NaN) at +inf and a large finite value near a negative integer. NaN and +-0 already come out right (NaN propagates; the
+    // reflection divides by sin(+-0) and gives +inf), so they have no guard.
+    if x.is_infinite() || (x < 0.0 && x == x.floor()) {
+        return f64::INFINITY;
+    }
+    if x == 1.0 || x == 2.0 {
+        return 0.0; // exact zeros (Annex F), where the series is off by ~1e-15
+    }
     if x < 0.5 {
         // reflection: ln|Γ(x)| = ln(π / |sin(π x)|) - ln|Γ(1-x)|
         (PI / (PI * x).sin()).abs().ln() - lgamma(1.0 - x)
@@ -269,5 +278,30 @@ pub(super) fn lgamma(x: f64) -> f64 {
             a += g / (x + i as f64);
         }
         0.5 * (2.0 * PI).ln() + (x + 0.5) * t.ln() - t + a.ln()
+    }
+}
+
+#[cfg(test)]
+mod lgamma_special_values {
+    use super::lgamma;
+
+    /// C99 Annex F.9.5.3 (`lgamma`): `lgamma(+-inf)` is `+inf`; `lgamma(+-0)` and `lgamma` of a negative integer are `+inf` (a pole);
+    /// `lgamma(NaN)` is NaN; `lgamma(1)` and `lgamma(2)` are `+0`. Found by openclownfish's device test (RTX 4070 Laptop, 2026-11-21):
+    /// the oracle gave NaN at `+inf` (`inf - inf` in the Lanczos tail).
+    #[test]
+    fn follows_the_annex_f_special_values() {
+        assert_eq!(lgamma(f64::INFINITY), f64::INFINITY);
+        assert_eq!(lgamma(f64::NEG_INFINITY), f64::INFINITY);
+        assert_eq!(lgamma(0.0), f64::INFINITY);
+        assert_eq!(lgamma(-0.0), f64::INFINITY);
+        for n in [-1.0, -2.0, -7.0, -1.0e15] {
+            assert_eq!(lgamma(n), f64::INFINITY, "a pole at {n}");
+        }
+        assert!(lgamma(f64::NAN).is_nan());
+        assert_eq!(lgamma(1.0), 0.0);
+        assert_eq!(lgamma(2.0), 0.0);
+        // a negative non-integer is finite, and just off a pole is large but finite
+        assert!((lgamma(-1.5) - 0.860_047_015_376_481_2).abs() < 1e-10);
+        assert!(lgamma(-1.0 + 1e-9).is_finite());
     }
 }
