@@ -102,6 +102,7 @@ impl Walk<'_> {
             | Place::ClusterPeer { .. }
             | Place::Peer { .. }
             | Place::Raw { .. }
+            | Place::AllocRaw { .. }
             | Place::Multicast { .. } => true,
             Place::Alloc { alloc, index } => {
                 let constant = self

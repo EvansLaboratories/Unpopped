@@ -8,6 +8,7 @@ use super::kernel_eval::Machine;
 use super::kernel_mem::AccessKind;
 use super::kernel_trap::KernelTrap;
 use super::{Val, store_val};
+use crate::exec::MemorySpace;
 use crate::kernel::Place;
 use crate::oracle::kernel_eval::KernelArg;
 use crate::types::{self, Ty};
@@ -77,6 +78,93 @@ impl Machine<'_> {
             elem: *elem,
             size,
         })
+    }
+
+    /// Evaluate, align- and bounds-check a `Place::AllocRaw`; log every allocation element the bytes touch. Returns the
+    /// allocation, its space, the byte position inside it, the access type and its size.
+    fn alloc_raw_at(
+        &mut self,
+        place: &Place,
+        kind: AccessKind,
+    ) -> Result<(u32, MemorySpace, usize, ElementKind, usize), KernelTrap> {
+        let Place::AllocRaw {
+            alloc,
+            byte_offset,
+            elem,
+        } = place
+        else {
+            unreachable!("alloc_raw_at is called on an AllocRaw place");
+        };
+        let space = self.alloc_k.allocs[*alloc as usize].space;
+        let Ty::Scalar(t) = types::infer_ty_in(byte_offset, self.k.compute, &self.local_tys)
+            .map_err(|_| KernelTrap::Unsupported("byte offset type"))?
+        else {
+            return Err(KernelTrap::Unsupported("packed byte offset"));
+        };
+        let off = self.eval_int(byte_offset, t)?;
+        let size = types::raw_access_bytes(*elem)
+            .ok_or(KernelTrap::Unsupported("a Raw access of a non-byte element"))? as usize;
+        let c = self.ctx.as_mut().ok_or(KernelTrap::Unsupported(
+            "an allocation outside run_launch",
+        ))?;
+        let m = c
+            .mem(*alloc, space)
+            .ok_or(KernelTrap::Unsupported("an AllocRaw on a space with no instance"))?;
+        let (esz, total) = (types::elem_size(m.dtype), m.init.len() * types::elem_size(m.dtype));
+        if off < 0 || off % size as i128 != 0 {
+            return Err(KernelTrap::MisalignedAccess {
+                buffer: *alloc,
+                byte_offset: off,
+            });
+        }
+        let at = usize::try_from(off)
+            .ok()
+            .filter(|o| o.checked_add(size).is_some_and(|end| end <= total))
+            .ok_or(KernelTrap::AllocOutOfBounds { alloc: *alloc })?;
+        for e in at / esz..=(at + size - 1) / esz {
+            if c.peer.is_none() && c.asyncq.covers(*alloc, e) {
+                return Err(KernelTrap::AsyncRace { alloc: *alloc });
+            }
+            c.log_shared(*alloc, e, space, kind)?;
+        }
+        Ok((*alloc, space, at, *elem, size))
+    }
+
+    /// A raw load from an allocation: every element the bytes touch must already be fully stored.
+    pub(super) fn alloc_raw_load(&mut self, place: &Place) -> Result<Val, KernelTrap> {
+        let (alloc, space, at, elem, size) = self.alloc_raw_at(place, AccessKind::Read)?;
+        let c = self.ctx.as_mut().expect("alloc_raw_at found a launch context");
+        let m = c.mem(alloc, space).expect("the space holds an instance");
+        let esz = types::elem_size(m.dtype);
+        if (at / esz..=(at + size - 1) / esz).any(|e| !m.init[e]) {
+            return Err(if space == MemorySpace::Private {
+                KernelTrap::UninitializedPrivate { alloc }
+            } else {
+                KernelTrap::UninitializedShared { alloc }
+            });
+        }
+        let mut bits = 0u128;
+        for (i, b) in m.bytes[at..at + size].iter().enumerate() {
+            bits |= u128::from(*b) << (8 * i);
+        }
+        Ok(Val::Raw(bits, elem))
+    }
+
+    /// A raw store into an allocation: the bytes land little-endian; an element counts as stored only when the store covers all of it.
+    pub(super) fn alloc_raw_store(&mut self, place: &Place, v: Val) -> Result<(), KernelTrap> {
+        let (alloc, space, at, elem, size) = self.alloc_raw_at(place, AccessKind::Write)?;
+        let mut tmp = [0u8; 16];
+        store_val(v, elem, &mut tmp, 0);
+        let c = self.ctx.as_mut().expect("alloc_raw_at found a launch context");
+        let m = c.mem_mut(alloc, space).expect("the space holds an instance");
+        m.bytes[at..at + size].copy_from_slice(&tmp[..size]);
+        let esz = types::elem_size(m.dtype);
+        for e in at / esz..=(at + size - 1) / esz {
+            if at <= e * esz && (e + 1) * esz <= at + size {
+                m.init[e] = true;
+            }
+        }
+        Ok(())
     }
 
     /// The value of a raw load: the stored bytes, little-endian, as `elem` bits.

@@ -592,6 +592,9 @@ impl<'a> Machine<'a> {
         if matches!(place, Place::Raw { .. }) {
             return self.raw_load(place);
         }
+        if matches!(place, Place::AllocRaw { .. }) {
+            return self.alloc_raw_load(place);
+        }
         if let Place::Alloc { alloc, index } = place {
             return self.alloc_load(*alloc, index);
         }
@@ -727,6 +730,9 @@ impl<'a> Machine<'a> {
     fn store(&mut self, place: &Place, v: Val) -> Result<(), KernelTrap> {
         if matches!(place, Place::Raw { .. }) {
             return self.raw_store(place, v);
+        }
+        if matches!(place, Place::AllocRaw { .. }) {
+            return self.alloc_raw_store(place, v);
         }
         if let Place::Alloc { alloc, index } = place {
             return self.alloc_store(*alloc, index, v);

@@ -225,6 +225,22 @@ pub enum Place {
         #[serde(with = "crate::text::ek")]
         elem: ElementKind,
     },
+    /// The `elem`-typed value at **byte** `byte_offset` of the allocation `alloc` (a `Shared` or `Private` one; ROADMAP U9c): the
+    /// byte-addressed twin of [`Place::Raw`], with the same rules (byte 0 is the allocation's first element, a misaligned or
+    /// out-of-range offset is a typed trap, `elem` is a whole number of bytes and need not be the allocation's type). The race
+    /// detector sees every allocation element the bytes touch. An element is initialized once a store has covered all of its
+    /// bytes; a load of an element not yet fully covered is the usual uninitialized-read trap (so a byte-wise fill of a wider
+    /// element never initializes it: conservative). `Constant` and `Tensor` allocations are refused. Taken by `Load`, `Store`,
+    /// `MaskedLoad` and `MaskedStore`.
+    AllocRaw {
+        /// Index into [`KernelFn::allocs`].
+        alloc: u32,
+        /// An integer expression: the byte offset from the allocation's first element.
+        byte_offset: ScalarExpr,
+        /// The type of the value accessed.
+        #[serde(with = "crate::text::ek")]
+        elem: ElementKind,
+    },
     /// The element at flat `index` of the `Shared` allocation `alloc` **of another block of this block's cluster**
     /// (distributed shared memory: PTX `mapa`, ROADMAP U12 slice 1). `block` is an integer expression: the rank of
     /// the block inside its cluster, `x` fastest (`%cluster_ctarank`), so `0..cluster x * y * z`; the rank of this very

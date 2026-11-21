@@ -614,9 +614,9 @@ fn check_load_elem(k: &KernelFn, place: &Place, sc: &Scope) -> Result<ElementKin
             | Place::Peer { buffer, .. }
             | Place::Raw { buffer, .. }
             | Place::Multicast { buffer, .. } => KernelError::ReadFromWriteOnly { buffer: *buffer },
-            Place::Alloc { alloc, .. } | Place::ClusterPeer { alloc, .. } => {
-                KernelError::BadPlace { buffer: *alloc }
-            }
+            Place::Alloc { alloc, .. }
+            | Place::AllocRaw { alloc, .. }
+            | Place::ClusterPeer { alloc, .. } => KernelError::BadPlace { buffer: *alloc },
         });
     }
     Ok(elem)
@@ -645,9 +645,9 @@ fn check_store(
             | Place::Peer { buffer, .. }
             | Place::Raw { buffer, .. }
             | Place::Multicast { buffer, .. } => KernelError::WriteToReadOnly { buffer: *buffer },
-            Place::Alloc { alloc, .. } | Place::ClusterPeer { alloc, .. } => {
-                KernelError::WriteToConstant { alloc: *alloc }
-            }
+            Place::Alloc { alloc, .. }
+            | Place::AllocRaw { alloc, .. }
+            | Place::ClusterPeer { alloc, .. } => KernelError::WriteToConstant { alloc: *alloc },
         });
     }
     if matches!(place, Place::Multicast { .. }) && !multicast_store_elem(elem) {
@@ -1008,7 +1008,7 @@ fn check_place(
     p: &Place,
     sc: &Scope,
 ) -> Result<(ElementKind, BufferRole), KernelError> {
-    if matches!(p, Place::Raw { .. }) {
+    if matches!(p, Place::Raw { .. } | Place::AllocRaw { .. }) {
         return Err(KernelError::TypeMismatch {
             what: "a Raw place here (only Load, Store, MaskedLoad and MaskedStore take one)",
         });
@@ -1042,6 +1042,11 @@ fn check_place_raw_ok(
             byte_offset,
             elem,
         } => return check_raw_place(k, *buffer, byte_offset, *elem, sc),
+        Place::AllocRaw {
+            alloc,
+            byte_offset,
+            elem,
+        } => return check_alloc_raw_place(k, *alloc, byte_offset, *elem, sc),
         Place::ClusterPeer {
             alloc,
             block,
@@ -1106,6 +1111,46 @@ fn check_raw_place(
         return Err(bad);
     }
     Ok((elem, *role))
+}
+
+/// An `AllocRaw` place (ROADMAP U9c): an existing `Shared` or `Private` allocation (`Shared` needs a launch), an integer byte
+/// offset and an access type of a whole number of bytes. `Constant` (the oracle holds no initializer) and `Tensor` are refused.
+fn check_alloc_raw_place(
+    k: &KernelFn,
+    alloc: u32,
+    byte_offset: &ScalarExpr,
+    elem: ElementKind,
+    sc: &Scope,
+) -> Result<(ElementKind, BufferRole), KernelError> {
+    let Some(a) = k.allocs.get(alloc as usize) else {
+        return Err(KernelError::BadPlace { buffer: alloc });
+    };
+    match a.space {
+        MemorySpace::Tensor => {
+            return Err(KernelError::Tcgen05Unsupported {
+                what: "an ordinary access to tensor memory",
+            });
+        }
+        MemorySpace::Constant => {
+            return Err(KernelError::TypeMismatch {
+                what: "an AllocRaw place on a Constant allocation",
+            });
+        }
+        MemorySpace::Shared if k.launch.is_none() => {
+            return Err(KernelError::SharedWithoutLaunch { alloc });
+        }
+        _ => {}
+    }
+    if types::raw_access_bytes(elem).is_none() || types::elem_bits(a.elem) % 8 != 0 {
+        return Err(KernelError::TypeMismatch {
+            what: "an AllocRaw place of an element, or on an allocation, that is not a whole number of bytes",
+        });
+    }
+    let int = matches!(check_expr(k, byte_offset, sc)?, Ty::Scalar(e) if types::int_range(e).is_some());
+    if !int {
+        return Err(KernelError::BadPlace { buffer: alloc });
+    }
+    Ok((elem, BufferRole::ReadWrite))
 }
 
 /// A `ClusterPeer` place (ROADMAP U12 slice 1): a `Shared` allocation, a launch that names cluster dimensions, and an
