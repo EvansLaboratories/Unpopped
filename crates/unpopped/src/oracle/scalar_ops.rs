@@ -258,12 +258,10 @@ pub(super) fn lgamma(x: f64) -> f64 {
         9.984_369_578_019_572e-6,
         1.505_632_735_149_311_6e-7,
     ];
-    // C99 Annex F.9.5.3: a NaN stays NaN; +-inf, +-0 and a negative integer (a pole) are +inf; 1 and 2 give +0. The series below would give
-    // `inf - inf` (NaN) at +inf and a large finite value near a negative integer.
-    if x.is_nan() {
-        return x;
-    }
-    if x.is_infinite() || x == 0.0 || (x < 0.0 && x == x.floor()) {
+    // C99 Annex F.9.5.3: +-inf and a negative integer (a pole) are +inf; 1 and 2 give +0. The series below would give `inf - inf`
+    // (NaN) at +inf and a large finite value near a negative integer. NaN and +-0 already come out right (NaN propagates; the
+    // reflection divides by sin(+-0) and gives +inf), so they have no guard.
+    if x.is_infinite() || (x < 0.0 && x == x.floor()) {
         return f64::INFINITY;
     }
     if x == 1.0 || x == 2.0 {
