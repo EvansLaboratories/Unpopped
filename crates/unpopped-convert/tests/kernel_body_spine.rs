@@ -227,8 +227,9 @@ fn constructs_outside_the_spine_decline_by_name() {
 #[test]
 fn a_decline_is_the_whole_kernel_never_a_partial_one() {
     // the first statements lift; the third does not: nothing comes back
-    let r =
-        lift("void k(float* out, float x) { out[0] = x; out[1] = x + 1.0f; out[2] = frobnicate(x); }");
+    let r = lift(
+        "void k(float* out, float x) { out[0] = x; out[1] = x + 1.0f; out[2] = frobnicate(x); }",
+    );
     assert!(
         matches!(r, Err(KernelLiftError::NotYetLifted { line: 1, .. })),
         "{r:?}"

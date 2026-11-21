@@ -159,6 +159,11 @@ fn the_rest_of_the_cuda_surface_declines_by_name() {
         "`__syncwarp`",
     );
     not_yet(
+        "void k(float* out) { __shared__ float t[2][2]; out[0] = 1.0f; }",
+        true,
+        "more than one dimension",
+    );
+    not_yet(
         "void k(float* out) { __shared__ float t[4]; out[0] = t; }",
         true,
         "array or pointer",

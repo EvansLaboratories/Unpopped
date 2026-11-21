@@ -412,7 +412,22 @@ impl<'s> Walker<'s> {
         let ty = self.type_of(n.child_by_field_name("type"), n)?;
         let head = text(n, self.src).trim_start();
         if head.starts_with("__shared__") {
-            return self.shared_declaration(n, ty);
+            return self.array_declaration(n, ty, MemorySpace::Shared);
+        }
+        let has_array = {
+            let mut c = n.walk();
+            let found = n.children_by_field_name("declarator", &mut c).any(|d| {
+                let inner = if d.kind() == "init_declarator" {
+                    d.child_by_field_name("declarator")
+                } else {
+                    Some(d)
+                };
+                inner.is_some_and(|i| i.kind() == "array_declarator")
+            });
+            found
+        };
+        if has_array && !head.starts_with("extern") {
+            return self.array_declaration(n, ty, MemorySpace::Private);
         }
         if head.starts_with("extern")
             || head.starts_with("__constant__")
@@ -601,11 +616,16 @@ impl<'s> Walker<'s> {
     }
 
     /// `__shared__ T name[N];` with a literal `N`: one `Shared` allocation, named by the array.
-    fn shared_declaration(&mut self, n: Node<'_>, ty: E) -> R<()> {
+    fn array_declaration(&mut self, n: Node<'_>, ty: E, space: MemorySpace) -> R<()> {
+        let what = if space == MemorySpace::Shared {
+            "`__shared__`"
+        } else {
+            "a local array"
+        };
         if self.launch.is_none() {
             return self.not_yet(
                 n,
-                "`__shared__` without a launch (use `lift_kernel_launched`)",
+                format!("{what} without a launch (use `lift_kernel_launched`)"),
             );
         }
         let mut c = n.walk();
@@ -615,10 +635,7 @@ impl<'s> Walker<'s> {
                 d.child_by_field_name("declarator"),
                 d.child_by_field_name("size"),
             ) else {
-                return self.not_yet(
-                    d,
-                    "a `__shared__` declarator that is not a sized array `T name[N]`",
-                );
+                return self.not_yet(d, format!("{what} declarator that is not a sized array `T name[N]` (an initializer is a later slice)"));
             };
             let count = match parse_literal(text(size, self.src)) {
                 Some(Lit::Int(v, _)) if v > 0 => u32::try_from(v).ok(),
@@ -627,13 +644,16 @@ impl<'s> Walker<'s> {
             let Some(count) = count else {
                 return self.not_yet(
                     size,
-                    "a `__shared__` array whose size is not a positive integer literal",
+                    format!("{what} whose size is not a positive integer literal"),
                 );
             };
+            if id.kind() != "identifier" {
+                return self.not_yet(id, format!("{what} with more than one dimension"));
+            }
             let name = text(id, self.src).to_string();
             self.allocs.push(AllocDecl::new(
                 name.clone(),
-                MemorySpace::Shared,
+                space,
                 ty,
                 Extent::Static(count),
             ));
