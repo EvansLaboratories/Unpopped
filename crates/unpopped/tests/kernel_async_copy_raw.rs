@@ -253,6 +253,16 @@ fn the_checker_takes_a_raw_source_of_the_destinations_type_and_nothing_else() {
         check_kernel(&k(raw(0, U32), raw(0, U32))),
         Err(KernelError::AsyncUnsupported { .. })
     ));
+    // a byte-addressed allocation destination is declined by name too (the landing of a pun is not modelled)
+    let araw = Place::AllocRaw {
+        alloc: 0,
+        byte_offset: ScalarExpr::ConstInt(0, ElementKind::I32),
+        elem: U32,
+    };
+    assert!(matches!(
+        check_kernel(&k(araw, raw(0, U32))),
+        Err(KernelError::AsyncUnsupported { .. })
+    ));
     // 2 values of 4 bytes is 8 bytes (fine), 3 is not a legal size
     let three = KernelFn::new(
         "k",
