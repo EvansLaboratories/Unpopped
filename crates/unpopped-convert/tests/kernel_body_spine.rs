@@ -187,8 +187,8 @@ fn not_yet(src: &str, needle: &str) {
 #[test]
 fn constructs_outside_the_spine_decline_by_name() {
     not_yet(
-        "void k(float* out, float x) { out[0] = sqrtf(x); }",
-        "call_expression",
+        "void k(float* out, float x) { out[0] = frobnicate(x); }",
+        "`frobnicate`",
     );
     not_yet("void k(float* out) { out[0] = 1.0; }", "F64 literal");
     not_yet(
@@ -228,7 +228,7 @@ fn constructs_outside_the_spine_decline_by_name() {
 fn a_decline_is_the_whole_kernel_never_a_partial_one() {
     // the first statements lift; the third does not: nothing comes back
     let r =
-        lift("void k(float* out, float x) { out[0] = x; out[1] = x + 1.0f; out[2] = sinf(x); }");
+        lift("void k(float* out, float x) { out[0] = x; out[1] = x + 1.0f; out[2] = frobnicate(x); }");
     assert!(
         matches!(r, Err(KernelLiftError::NotYetLifted { line: 1, .. })),
         "{r:?}"
