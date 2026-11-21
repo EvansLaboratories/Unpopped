@@ -27,7 +27,7 @@ use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope}
 use unpopped::ir::{BinaryOp, CastSpec, RoundMode, Saturation, ScalarExpr, UnaryOp};
 use unpopped::kernel::{
     AtomicOp, BarrierKind, Block, BufferRole, KernelError, KernelFn, LocalDecl, MemoryOrder, Param,
-    Place, Stmt, check_kernel,
+    Place, Stmt, Unroll, check_kernel,
 };
 use unpopped::types::{Ty, infer_ty_in, int_range};
 use unpopped_vocab::ElementKind as E;
@@ -196,6 +196,8 @@ struct Walker<'s> {
     /// The caller's launch shape, if any (slice 2).
     launch: Option<LaunchShape>,
     allocs: Vec<AllocDecl>,
+    /// A `#pragma unroll` read and not yet given to a loop (it applies to the very next statement only).
+    pending_unroll: Unroll,
     /// The frontend's math-call tables (`Frontend::unary_fn`, `binary_fn`).
     unary_fn: fn(&str) -> Option<UnaryOp>,
     binary_fn: fn(&str) -> Option<BinaryOp>,
@@ -213,6 +215,7 @@ impl<'s> Walker<'s> {
             hoisted: Vec::new(),
             launch: None,
             allocs: Vec::new(),
+            pending_unroll: Unroll::None,
             unary_fn: |_| None,
             binary_fn: |_| None,
         }
@@ -357,6 +360,11 @@ impl<'s> Walker<'s> {
     }
 
     fn stmt(&mut self, n: Node<'_>, out: &mut Vec<Stmt>) -> R<()> {
+        if n.kind() == "preproc_call" {
+            return self.pragma(n);
+        }
+        // a hint binds the statement right after it: any other statement drops it, a `for` takes it
+        let unroll = std::mem::take(&mut self.pending_unroll);
         match n.kind() {
             "compound_statement" => {
                 let b = self.block_of(n)?;
@@ -369,7 +377,7 @@ impl<'s> Walker<'s> {
             "expression_statement" => self.expression_statement(n, out),
             "if_statement" => self.if_statement(n, out),
             "while_statement" => self.while_statement(n, out),
-            "for_statement" => self.for_statement(n, out),
+            "for_statement" => self.for_statement(n, out, unroll),
             "break_statement" => push(out, Stmt::Break),
             "continue_statement" => push(out, Stmt::Continue),
             "return_statement" => {
@@ -570,6 +578,13 @@ impl<'s> Walker<'s> {
             };
         }
         let args = self.call_args(n);
+        if name == "__ldg" && args.len() == 1 {
+            // `__ldg(&a[i])` is a read through the read-only cache: a plain load (the cache path is a hint, never a meaning)
+            let (place, elem, _) = self.address_of(args[0])?;
+            let local = self.new_local(elem);
+            self.hoisted.push(Stmt::Load { local, place });
+            return Ok((ScalarExpr::Local(local), elem));
+        }
         match args.len() {
             1 if (self.unary_fn)(name).is_some() => self.math_unary(n, name, args[0]),
             2 if (self.binary_fn)(name).is_some() => self.math_binary(n, name, args[0], args[1]),
@@ -917,7 +932,35 @@ impl<'s> Walker<'s> {
         Ok(())
     }
 
-    fn for_statement(&mut self, n: Node<'_>, out: &mut Vec<Stmt>) -> R<()> {
+    /// `#pragma unroll` and `#pragma unroll N`: a request to the emitter, never a meaning (`Stmt::For::unroll`). Any other
+    /// directive is a typed decline.
+    fn pragma(&mut self, n: Node<'_>) -> R<()> {
+        let directive = n
+            .child_by_field_name("directive")
+            .map(|d| text(d, self.src));
+        let arg = n
+            .child_by_field_name("argument")
+            .map_or("", |a| text(a, self.src).trim());
+        let mut words = arg.split_whitespace();
+        if directive != Some("#pragma") || words.next() != Some("unroll") {
+            return self.not_yet(n, format!("the directive `{}`", text(n, self.src).trim()));
+        }
+        self.pending_unroll = match (words.next(), words.next()) {
+            (None, _) => Unroll::Full,
+            (Some(c), None) => match c.parse::<u32>() {
+                Ok(0) | Err(_) => {
+                    return self
+                        .not_yet(n, "a `#pragma unroll` count that is not a positive literal");
+                }
+                Ok(1) => Unroll::None,
+                Ok(k) => Unroll::Count(k),
+            },
+            _ => return self.not_yet(n, "a `#pragma unroll` with trailing text"),
+        };
+        Ok(())
+    }
+
+    fn for_statement(&mut self, n: Node<'_>, out: &mut Vec<Stmt>, unroll: Unroll) -> R<()> {
         let Some(shape) = self.counted_for(n)? else {
             return self.not_yet(
                 n,
@@ -940,7 +983,7 @@ impl<'s> Walker<'s> {
             start,
             end,
             step,
-            unroll: unpopped::kernel::Unroll::None,
+            unroll,
             body: body?,
         });
         Ok(())
