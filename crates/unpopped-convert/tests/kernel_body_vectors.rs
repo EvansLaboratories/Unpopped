@@ -118,3 +118,15 @@ fn what_is_not_a_vector_local_declines_by_name() {
         lift("void k(float* out) { float2 v = make_float2(1.0f, 2.0f); out[0] = v.y; }").is_ok()
     );
 }
+
+#[test]
+fn uint_lanes_are_unsigned() {
+    // 0u - 1u wraps to 4294967295 in an unsigned lane; as a signed lane it would read back as -1.
+    let k = lift("void k(float* out) { uint2 p = make_uint2(0u, 7u); p.x -= 1u; out[0] = (float)p.x; out[1] = (float)p.y; }").unwrap();
+    let mut args = vec![KernelArg::Buffer(TypedBuffer::from_f32(&[2], &[0.0; 2]))];
+    run_kernel(&k, &mut args).expect("runs");
+    let KernelArg::Buffer(o) = &args[0] else {
+        panic!()
+    };
+    assert_eq!(o.to_f64_vec(), vec![f64::from(u32::MAX as f32), 7.0]);
+}
