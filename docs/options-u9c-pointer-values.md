@@ -41,8 +41,12 @@ Place::AllocRaw { alloc: u32,  byte_offset: ScalarExpr, elem: ElementKind }
 * **cpu-c**: `memcpy` through `unsigned char*` at the byte offset (no aliasing UB, no alignment assumption beyond the checked
   one). Other emitters decline `Raw` by name until taught (the typed-decline discipline of U4 option B).
 * **Break shape: additive** for downstream crates (`Place` is non-exhaustive). In this workspace every exhaustive `match` on `Place`
-  gains an arm: about 25 non-test sites by `git grep Place::Alloc` (checker, lift, uniformity, cpu-c launch); `cargo check
-  --workspace` finds all of them. **Exact new `Stmt` variants: none. New `ScalarExpr` nodes: none.** pm-assist stamps a minor bump.
+  gains an arm: **4** in the event (checker, uniformity; the first estimate here, "about 25", was wrong: it counted `Place::Alloc`
+  mentions, not exhaustive matches); `cargo check --workspace` finds them all. The race detector is **conservative at element
+  granularity** (two threads writing different bytes of one wider element are reported); built and pinned in slice 1.
+  **Built 2026-11-21:** slice 1 `Place::Raw`, slice 2 `Place::AllocRaw` and a `Raw` source for `CopyAsync` (a raw or `AllocRaw`
+  *destination* of a copy is declined by name: landing a pun in the async queue is not modelled). Slice 3: cpu-c declines both by
+  name; lowering needs the storage length in the C ABI first (see the ROADMAP row). **Exact new `Stmt` variants: none. New `ScalarExpr` nodes: none.** pm-assist stamps a minor bump.
 * **Not built here**: pointer-typed `Ty`, a pointer as a parameter, local, return or struct field, pointer comparison and
   arithmetic as expressions, aliasing analysis. That is option C and stays deferred (D-R4-3).
 

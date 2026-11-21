@@ -21,10 +21,7 @@ const F32: ElementKind = ElementKind::F32;
 
 /// 16 bytes, byte `i` holding `i + 1`, as four little-endian `u32`.
 fn source() -> TypedBuffer {
-    TypedBuffer::from_u32(
-        &[4],
-        &[0x0403_0201, 0x0807_0605, 0x0C0B_0A09, 0x100F_0E0D],
-    )
+    TypedBuffer::from_u32(&[4], &[0x0403_0201, 0x0807_0605, 0x0C0B_0A09, 0x100F_0E0D])
 }
 
 /// `v` as a constant of the narrow integer type `to` (an integer leaf is I32, I64, U32 or U64, so a narrower one is a cast).
@@ -90,7 +87,10 @@ fn load_at(src: TypedBuffer, off: i64, elem: ElementKind) -> Result<u128, Kernel
     let KernelArg::Buffer(o) = &args[1] else {
         unreachable!("a buffer")
     };
-    Ok(o.bytes.iter().rev().fold(0u128, |a, b| (a << 8) | u128::from(*b)))
+    Ok(o.bytes
+        .iter()
+        .rev()
+        .fold(0u128, |a, b| (a << 8) | u128::from(*b)))
 }
 
 #[test]
@@ -172,11 +172,13 @@ fn a_raw_store_writes_only_its_bytes_little_endian() {
 
 /// Two threads: thread 0 runs `a`, thread 1 runs `b`.
 fn two_threads(a: Stmt, b: Stmt) -> Result<(), KernelTrap> {
-    let tid_is = |v| ScalarExpr::Binary(
-        BinaryOp::CmpEq,
-        Box::new(ScalarExpr::Exec(ExecId::ThreadIdx(0))),
-        Box::new(ScalarExpr::ConstInt(v, U32)),
-    );
+    let tid_is = |v| {
+        ScalarExpr::Binary(
+            BinaryOp::CmpEq,
+            Box::new(ScalarExpr::Exec(ExecId::ThreadIdx(0))),
+            Box::new(ScalarExpr::ConstInt(v, U32)),
+        )
+    };
     let only = |v, st| Stmt::If {
         cond: tid_is(v),
         then: Block(vec![st]),
@@ -239,11 +241,13 @@ fn a_wide_raw_access_covers_every_element_its_bytes_touch() {
         place: raw(0, U64),
     };
     let r = {
-        let tid_is = |v| ScalarExpr::Binary(
-            BinaryOp::CmpEq,
-            Box::new(ScalarExpr::Exec(ExecId::ThreadIdx(0))),
-            Box::new(ScalarExpr::ConstInt(v, U32)),
-        );
+        let tid_is = |v| {
+            ScalarExpr::Binary(
+                BinaryOp::CmpEq,
+                Box::new(ScalarExpr::Exec(ExecId::ThreadIdx(0))),
+                Box::new(ScalarExpr::ConstInt(v, U32)),
+            )
+        };
         let only = |v, st| Stmt::If {
             cond: tid_is(v),
             then: Block(vec![st]),

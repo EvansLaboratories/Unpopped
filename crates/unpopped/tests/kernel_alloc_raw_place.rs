@@ -101,7 +101,10 @@ fn run_in(
     let KernelArg::Buffer(o) = &args[0] else {
         unreachable!("a buffer")
     };
-    Ok(o.bytes.iter().rev().fold(0u128, |a, b| (a << 8) | u128::from(*b)))
+    Ok(o.bytes
+        .iter()
+        .rev()
+        .fold(0u128, |a, b| (a << 8) | u128::from(*b)))
 }
 
 fn run(body: Vec<Stmt>, off: i64, elem: ElementKind) -> Result<u128, KernelTrap> {
@@ -134,7 +137,10 @@ fn a_raw_store_into_an_allocation_lands_little_endian_and_a_wide_one_covers_two_
         Stmt::Store {
             place: araw(8, U64),
             value: ScalarExpr::Cast(
-                Box::new(ScalarExpr::ConstInt(0x1122_3344_5566_7788, ElementKind::I64)),
+                Box::new(ScalarExpr::ConstInt(
+                    0x1122_3344_5566_7788,
+                    ElementKind::I64,
+                )),
                 CastSpec {
                     to: U64,
                     round: RoundMode::NearestEven,
@@ -215,14 +221,20 @@ fn two_threads(a: Stmt, b: Stmt) -> Result<(), KernelTrap> {
     stmts.push(Stmt::barrier(Scope::Block));
     stmts.push(only(0, a));
     stmts.push(only(1, b));
-    let k = KernelFn::new("alloc_raw_race", F32, vec![], vec![LocalDecl::scalar(U8)], Block(stmts))
-        .with_launch(LaunchShape::new([2, 1, 1], [1, 1, 1]))
-        .with_allocs(vec![AllocDecl::new(
-            "a",
-            MemorySpace::Shared,
-            U32,
-            Extent::Static(4),
-        )]);
+    let k = KernelFn::new(
+        "alloc_raw_race",
+        F32,
+        vec![],
+        vec![LocalDecl::scalar(U8)],
+        Block(stmts),
+    )
+    .with_launch(LaunchShape::new([2, 1, 1], [1, 1, 1]))
+    .with_allocs(vec![AllocDecl::new(
+        "a",
+        MemorySpace::Shared,
+        U32,
+        Extent::Static(4),
+    )]);
     check_kernel(&k).map_err(KernelTrap::Malformed)?;
     run_launch(&k, &mut []).map(|_| ())
 }
@@ -287,27 +299,42 @@ fn a_wide_raw_access_covers_every_allocation_element_its_bytes_touch() {
         stmts.push(Stmt::barrier(Scope::Block));
         stmts.push(only(0, a));
         stmts.push(only(1, b));
-        KernelFn::new("wide", F32, vec![], vec![LocalDecl::scalar(U64)], Block(stmts))
-            .with_launch(LaunchShape::new([2, 1, 1], [1, 1, 1]))
-            .with_allocs(vec![AllocDecl::new(
-                "a",
-                MemorySpace::Shared,
-                U32,
-                Extent::Static(4),
-            )])
+        KernelFn::new(
+            "wide",
+            F32,
+            vec![],
+            vec![LocalDecl::scalar(U64)],
+            Block(stmts),
+        )
+        .with_launch(LaunchShape::new([2, 1, 1], [1, 1, 1]))
+        .with_allocs(vec![AllocDecl::new(
+            "a",
+            MemorySpace::Shared,
+            U32,
+            Extent::Static(4),
+        )])
     };
     // thread 0 reads bytes 0..8 (elements 0 and 1); thread 1 writes element 1
     let k = k_local(wide, elem_store(1));
     assert_eq!(check_kernel(&k), Ok(()));
-    assert_eq!(run_launch(&k, &mut []).map(|_| ()), Err(KernelTrap::DataRace));
+    assert_eq!(
+        run_launch(&k, &mut []).map(|_| ()),
+        Err(KernelTrap::DataRace)
+    );
 }
 
 #[test]
 fn the_checker_refuses_constant_tensor_and_what_has_no_raw_rules() {
     let k = |space, st| {
-        KernelFn::new("k", F32, vec![], vec![LocalDecl::scalar(U32)], Block(vec![st]))
-            .with_launch(LaunchShape::new([1, 1, 1], [1, 1, 1]))
-            .with_allocs(vec![AllocDecl::new("a", space, U32, Extent::Static(4))])
+        KernelFn::new(
+            "k",
+            F32,
+            vec![],
+            vec![LocalDecl::scalar(U32)],
+            Block(vec![st]),
+        )
+        .with_launch(LaunchShape::new([1, 1, 1], [1, 1, 1]))
+        .with_allocs(vec![AllocDecl::new("a", space, U32, Extent::Static(4))])
     };
     let load = Stmt::Load {
         local: 0,

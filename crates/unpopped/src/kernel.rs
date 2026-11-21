@@ -215,7 +215,8 @@ pub enum Place {
     /// multiple of `elem`'s size (misaligned), or an access outside the buffer's bytes. `elem` is a scalar of a whole number
     /// of bytes (no sub-byte or untyped kind). The race detector sees the access at the granularity of the buffer's own
     /// elements: every element the bytes touch is logged, so two threads writing different bytes of one wider element are
-    /// reported as a race the hardware would not have (conservative). Taken by `Load`, `Store`, `MaskedLoad` and `MaskedStore`.
+    /// reported as a race the hardware would not have (conservative). Taken by `Load`, `Store`, `MaskedLoad` and `MaskedStore`, and as the source of a
+    /// `CopyAsync`.
     Raw {
         /// Index into [`KernelFn::params`]; a buffer.
         buffer: u32,

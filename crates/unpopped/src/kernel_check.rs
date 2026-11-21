@@ -1106,7 +1106,8 @@ fn check_raw_place(
             what: "a Raw place of an element that is not a whole number of bytes",
         });
     }
-    let int = matches!(check_expr(k, byte_offset, sc)?, Ty::Scalar(e) if types::int_range(e).is_some());
+    let int =
+        matches!(check_expr(k, byte_offset, sc)?, Ty::Scalar(e) if types::int_range(e).is_some());
     if !int {
         return Err(bad);
     }
@@ -1146,7 +1147,8 @@ fn check_alloc_raw_place(
             what: "an AllocRaw place of an element, or on an allocation, that is not a whole number of bytes",
         });
     }
-    let int = matches!(check_expr(k, byte_offset, sc)?, Ty::Scalar(e) if types::int_range(e).is_some());
+    let int =
+        matches!(check_expr(k, byte_offset, sc)?, Ty::Scalar(e) if types::int_range(e).is_some());
     if !int {
         return Err(KernelError::BadPlace { buffer: alloc });
     }

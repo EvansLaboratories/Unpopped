@@ -56,8 +56,9 @@ impl Machine<'_> {
             return Err(KernelTrap::Unsupported("packed byte offset"));
         };
         let off = self.eval_int(byte_offset, t)?;
-        let size = types::raw_access_bytes(*elem)
-            .ok_or(KernelTrap::Unsupported("a Raw access of a non-byte element"))? as usize;
+        let size = types::raw_access_bytes(*elem).ok_or(KernelTrap::Unsupported(
+            "a Raw access of a non-byte element",
+        ))? as usize;
         let root = self.root(*buffer);
         let KernelArg::Buffer(tb) = &self.args[root] else {
             return Err(KernelTrap::ArgMismatch(
@@ -117,15 +118,20 @@ impl Machine<'_> {
             return Err(KernelTrap::Unsupported("packed byte offset"));
         };
         let off = self.eval_int(byte_offset, t)?;
-        let size = types::raw_access_bytes(*elem)
-            .ok_or(KernelTrap::Unsupported("a Raw access of a non-byte element"))? as usize;
-        let c = self.ctx.as_mut().ok_or(KernelTrap::Unsupported(
-            "an allocation outside run_launch",
+        let size = types::raw_access_bytes(*elem).ok_or(KernelTrap::Unsupported(
+            "a Raw access of a non-byte element",
+        ))? as usize;
+        let c = self
+            .ctx
+            .as_mut()
+            .ok_or(KernelTrap::Unsupported("an allocation outside run_launch"))?;
+        let m = c.mem(*alloc, space).ok_or(KernelTrap::Unsupported(
+            "an AllocRaw on a space with no instance",
         ))?;
-        let m = c
-            .mem(*alloc, space)
-            .ok_or(KernelTrap::Unsupported("an AllocRaw on a space with no instance"))?;
-        let (esz, total) = (types::elem_size(m.dtype), m.init.len() * types::elem_size(m.dtype));
+        let (esz, total) = (
+            types::elem_size(m.dtype),
+            m.init.len() * types::elem_size(m.dtype),
+        );
         if off < 0 || off % size as i128 != 0 {
             return Err(KernelTrap::MisalignedAccess {
                 buffer: *alloc,
@@ -148,7 +154,10 @@ impl Machine<'_> {
     /// A raw load from an allocation: every element the bytes touch must already be fully stored.
     pub(super) fn alloc_raw_load(&mut self, place: &Place) -> Result<Val, KernelTrap> {
         let (alloc, space, at, elem, size) = self.alloc_raw_at(place, AccessKind::Read)?;
-        let c = self.ctx.as_mut().expect("alloc_raw_at found a launch context");
+        let c = self
+            .ctx
+            .as_mut()
+            .expect("alloc_raw_at found a launch context");
         let m = c.mem(alloc, space).expect("the space holds an instance");
         let esz = types::elem_size(m.dtype);
         if (at / esz..=(at + size - 1) / esz).any(|e| !m.init[e]) {
@@ -170,8 +179,13 @@ impl Machine<'_> {
         let (alloc, space, at, elem, size) = self.alloc_raw_at(place, AccessKind::Write)?;
         let mut tmp = [0u8; 16];
         store_val(v, elem, &mut tmp, 0);
-        let c = self.ctx.as_mut().expect("alloc_raw_at found a launch context");
-        let m = c.mem_mut(alloc, space).expect("the space holds an instance");
+        let c = self
+            .ctx
+            .as_mut()
+            .expect("alloc_raw_at found a launch context");
+        let m = c
+            .mem_mut(alloc, space)
+            .expect("the space holds an instance");
         m.bytes[at..at + size].copy_from_slice(&tmp[..size]);
         let esz = types::elem_size(m.dtype);
         for e in at / esz..=(at + size - 1) / esz {

@@ -6,8 +6,8 @@
 use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
 use unpopped::ir::{BinaryOp, ScalarExpr};
 use unpopped::kernel::{
-    BarrierKind, Block, BufferRole, CacheHint, KernelError, KernelFn, LocalDecl, Param, Place, Stmt,
-    check_kernel,
+    BarrierKind, Block, BufferRole, CacheHint, KernelError, KernelFn, LocalDecl, Param, Place,
+    Stmt, check_kernel,
 };
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
@@ -121,20 +121,14 @@ fn a_raw_source_lands_consecutive_values_from_the_named_bytes() {
     let got = run(vec![copy(shared(2), raw(4, U32), 4, None)]).unwrap();
     assert_eq!(
         got,
-        vec![
-            0,
-            0,
-            word_at(4),
-            word_at(8),
-            word_at(12),
-            word_at(16),
-            0,
-            0
-        ]
+        vec![0, 0, word_at(4), word_at(8), word_at(12), word_at(16), 0, 0]
     );
     // the last 16 bytes of the buffer are in range
     let end = run(vec![copy(shared(4), raw(16, U32), 4, None)]).unwrap();
-    assert_eq!(&end[4..], &[word_at(16), word_at(20), word_at(24), word_at(28)]);
+    assert_eq!(
+        &end[4..],
+        &[word_at(16), word_at(20), word_at(24), word_at(28)]
+    );
 }
 
 #[test]
