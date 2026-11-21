@@ -9,6 +9,7 @@ use super::kernel_mem::AccessKind;
 use super::kernel_trap::KernelTrap;
 use super::{Val, store_val};
 use crate::exec::MemorySpace;
+use crate::ir::ScalarExpr;
 use crate::kernel::Place;
 use crate::oracle::kernel_eval::KernelArg;
 use crate::types::{self, Ty};
@@ -29,6 +30,30 @@ pub(super) struct RawAt {
 }
 
 impl Machine<'_> {
+    /// The evaluated byte offset of a raw place and the size in bytes of its access type, the offset checked for alignment: a
+    /// negative or misaligned offset is `MisalignedAccess` against `buffer` (a parameter or allocation index).
+    fn raw_offset(
+        &self,
+        (buffer, byte_offset, elem): (u32, &ScalarExpr, ElementKind),
+    ) -> Result<(i128, usize), KernelTrap> {
+        let Ty::Scalar(t) = types::infer_ty_in(byte_offset, self.k.compute, &self.local_tys)
+            .map_err(|_| KernelTrap::Unsupported("byte offset type"))?
+        else {
+            return Err(KernelTrap::Unsupported("packed byte offset"));
+        };
+        let off = self.eval_int(byte_offset, t)?;
+        let size = types::raw_access_bytes(elem).ok_or(KernelTrap::Unsupported(
+            "a Raw access of a non-byte element",
+        ))? as usize;
+        if off < 0 || off % size as i128 != 0 {
+            return Err(KernelTrap::MisalignedAccess {
+                buffer,
+                byte_offset: off,
+            });
+        }
+        Ok((off, size))
+    }
+
     /// Evaluate, align- and bounds-check a `Place::Raw`, and log the access for the race detector.
     pub(super) fn raw_at(&mut self, place: &Place, kind: AccessKind) -> Result<RawAt, KernelTrap> {
         self.raw_span(place, kind, 1)
@@ -50,15 +75,7 @@ impl Machine<'_> {
         else {
             unreachable!("raw_at is called on a Raw place");
         };
-        let Ty::Scalar(t) = types::infer_ty_in(byte_offset, self.k.compute, &self.local_tys)
-            .map_err(|_| KernelTrap::Unsupported("byte offset type"))?
-        else {
-            return Err(KernelTrap::Unsupported("packed byte offset"));
-        };
-        let off = self.eval_int(byte_offset, t)?;
-        let size = types::raw_access_bytes(*elem).ok_or(KernelTrap::Unsupported(
-            "a Raw access of a non-byte element",
-        ))? as usize;
+        let (off, size) = self.raw_offset((*buffer, byte_offset, *elem))?;
         let root = self.root(*buffer);
         let KernelArg::Buffer(tb) = &self.args[root] else {
             return Err(KernelTrap::ArgMismatch(
@@ -69,12 +86,6 @@ impl Machine<'_> {
             return Err(KernelTrap::Unsupported("a Raw access to a sub-byte buffer"));
         }
         let esz = types::elem_size(tb.dtype);
-        if off < 0 || off % size as i128 != 0 {
-            return Err(KernelTrap::MisalignedAccess {
-                buffer: *buffer,
-                byte_offset: off,
-            });
-        }
         let oob = KernelTrap::OutOfBounds { buffer: *buffer };
         let at = usize::try_from(off)
             .ok()
@@ -112,15 +123,7 @@ impl Machine<'_> {
             unreachable!("alloc_raw_at is called on an AllocRaw place");
         };
         let space = self.alloc_k.allocs[*alloc as usize].space;
-        let Ty::Scalar(t) = types::infer_ty_in(byte_offset, self.k.compute, &self.local_tys)
-            .map_err(|_| KernelTrap::Unsupported("byte offset type"))?
-        else {
-            return Err(KernelTrap::Unsupported("packed byte offset"));
-        };
-        let off = self.eval_int(byte_offset, t)?;
-        let size = types::raw_access_bytes(*elem).ok_or(KernelTrap::Unsupported(
-            "a Raw access of a non-byte element",
-        ))? as usize;
+        let (off, size) = self.raw_offset((*alloc, byte_offset, *elem))?;
         let c = self
             .ctx
             .as_mut()
@@ -132,12 +135,6 @@ impl Machine<'_> {
             types::elem_size(m.dtype),
             m.init.len() * types::elem_size(m.dtype),
         );
-        if off < 0 || off % size as i128 != 0 {
-            return Err(KernelTrap::MisalignedAccess {
-                buffer: *alloc,
-                byte_offset: off,
-            });
-        }
         let at = usize::try_from(off)
             .ok()
             .filter(|o| o.checked_add(size).is_some_and(|end| end <= total))
