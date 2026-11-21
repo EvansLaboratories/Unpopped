@@ -23,9 +23,11 @@
 use crate::{Frontend, prepared};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
+use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
 use unpopped::ir::{BinaryOp, CastSpec, RoundMode, Saturation, ScalarExpr, UnaryOp};
 use unpopped::kernel::{
-    Block, BufferRole, KernelError, KernelFn, LocalDecl, Param, Place, Stmt, check_kernel,
+    BarrierKind, Block, BufferRole, KernelError, KernelFn, LocalDecl, Param, Place, Stmt,
+    check_kernel,
 };
 use unpopped::types::{Ty, infer_ty_in, int_range};
 use unpopped_vocab::ElementKind as E;
@@ -87,6 +89,31 @@ type R<T> = Result<T, KernelLiftError>;
 /// # Errors
 /// [`KernelLiftError`]: the kernel is declined whole, naming the first construct that stopped it.
 pub fn lift_kernel(fe: &Frontend, src: &str, name: &str) -> Result<KernelFn, KernelLiftError> {
+    lift_with_launch(fe, src, name, None)
+}
+
+/// [`lift_kernel`] for a kernel that runs under `launch` (ROADMAP U19 slice 2). The launch shape is the **caller's**: a CUDA
+/// source does not carry its block and grid (the call site does), and `__launch_bounds__` gives only a limit. With it the walker
+/// lifts the thread builtins (`threadIdx.x`, `blockIdx`, `blockDim`, `gridDim`), `__syncthreads()` and static
+/// `__shared__ T name[N];` arrays, none of which has a meaning without one.
+///
+/// # Errors
+/// As [`lift_kernel`].
+pub fn lift_kernel_launched(
+    fe: &Frontend,
+    src: &str,
+    name: &str,
+    launch: LaunchShape,
+) -> Result<KernelFn, KernelLiftError> {
+    lift_with_launch(fe, src, name, Some(launch))
+}
+
+fn lift_with_launch(
+    fe: &Frontend,
+    src: &str,
+    name: &str,
+    launch: Option<LaunchShape>,
+) -> Result<KernelFn, KernelLiftError> {
     let tree = prepared(fe, src).map_err(|_| KernelLiftError::NotAKernel)?;
     let root = tree.root_node();
     if let Some(bad) = first_error(root) {
@@ -97,6 +124,7 @@ pub fn lift_kernel(fe: &Frontend, src: &str, name: &str) -> Result<KernelFn, Ker
     let func = find_function(root, src, name)
         .ok_or_else(|| KernelLiftError::NoSuchFunction(name.to_string()))?;
     let mut w = Walker::new(src);
+    w.launch = launch;
     let k = w.function(func, name)?;
     check_kernel(&k).map_err(KernelLiftError::Invalid)?;
     Ok(k)
@@ -136,6 +164,8 @@ fn text<'a>(n: Node<'_>, src: &'a str) -> &'a str {
 enum Sym {
     /// A buffer parameter: its index in `KernelFn::params`, element type and whether the source made it `const`.
     Buffer(u32, E),
+    /// A static `__shared__` array: its index in `KernelFn::allocs` and element type.
+    Alloc(u32, E),
     /// A scalar local (a scalar parameter is one): its id, type and whether the IR forbids assigning it.
     Scalar(u32, E, Fixed),
 }
@@ -161,6 +191,9 @@ struct Walker<'s> {
     assigned: HashSet<String>,
     /// `Load`s the current expression needs, in evaluation order; the statement emits them first.
     hoisted: Vec<Stmt>,
+    /// The caller's launch shape, if any (slice 2).
+    launch: Option<LaunchShape>,
+    allocs: Vec<AllocDecl>,
 }
 
 impl<'s> Walker<'s> {
@@ -173,6 +206,8 @@ impl<'s> Walker<'s> {
             compute: E::I32,
             assigned: HashSet::new(),
             hoisted: Vec::new(),
+            launch: None,
+            allocs: Vec::new(),
         }
     }
 
@@ -219,7 +254,11 @@ impl<'s> Walker<'s> {
             std::mem::take(&mut self.locals),
             self.compute,
         );
-        Ok(KernelFn::new(name, compute, params, locals, block))
+        let mut k = KernelFn::new(name, compute, params, locals, block);
+        if let Some(l) = self.launch.take() {
+            k = k.with_launch(l);
+        }
+        Ok(k.with_allocs(std::mem::take(&mut self.allocs)))
     }
 
     fn parameter(&self, p: Node<'_>) -> R<(String, PShape)> {
@@ -343,6 +382,19 @@ impl<'s> Walker<'s> {
 
     fn declaration(&mut self, n: Node<'_>, out: &mut Vec<Stmt>) -> R<()> {
         let ty = self.type_of(n.child_by_field_name("type"), n)?;
+        let head = text(n, self.src).trim_start();
+        if head.starts_with("__shared__") {
+            return self.shared_declaration(n, ty);
+        }
+        if head.starts_with("extern")
+            || head.starts_with("__constant__")
+            || head.starts_with("__device__")
+        {
+            return self.not_yet(
+                n,
+                "a declaration with a storage class other than `__shared__`",
+            );
+        }
         let mut c = n.walk();
         let decls: Vec<_> = n.children_by_field_name("declarator", &mut c).collect();
         for d in decls {
@@ -372,6 +424,119 @@ impl<'s> Walker<'s> {
         Ok(())
     }
 
+    /// `__shared__ T name[N];` with a literal `N`: one `Shared` allocation, named by the array.
+    fn shared_declaration(&mut self, n: Node<'_>, ty: E) -> R<()> {
+        if self.launch.is_none() {
+            return self.not_yet(
+                n,
+                "`__shared__` without a launch (use `lift_kernel_launched`)",
+            );
+        }
+        let mut c = n.walk();
+        let decls: Vec<_> = n.children_by_field_name("declarator", &mut c).collect();
+        for d in decls {
+            let (Some(id), Some(size)) = (
+                d.child_by_field_name("declarator"),
+                d.child_by_field_name("size"),
+            ) else {
+                return self.not_yet(
+                    d,
+                    "a `__shared__` declarator that is not a sized array `T name[N]`",
+                );
+            };
+            let count = match parse_literal(text(size, self.src)) {
+                Some(Lit::Int(v, _)) if v > 0 => u32::try_from(v).ok(),
+                _ => None,
+            };
+            let Some(count) = count else {
+                return self.not_yet(
+                    size,
+                    "a `__shared__` array whose size is not a positive integer literal",
+                );
+            };
+            let name = text(id, self.src).to_string();
+            self.allocs.push(AllocDecl::new(
+                name.clone(),
+                MemorySpace::Shared,
+                ty,
+                Extent::Static(count),
+            ));
+            let index = u32::try_from(self.allocs.len() - 1).unwrap_or(u32::MAX);
+            self.scopes
+                .last_mut()
+                .expect("a scope is open")
+                .insert(name, Sym::Alloc(index, ty));
+        }
+        Ok(())
+    }
+
+    /// A call statement: only `__syncthreads()` (a block barrier) in slice 2.
+    fn call_statement(&mut self, e: Node<'_>, out: &mut Vec<Stmt>) -> R<()> {
+        let callee = e.child_by_field_name("function").map(|f| text(f, self.src));
+        let nargs = e
+            .child_by_field_name("arguments")
+            .map_or(0, |a| a.named_child_count());
+        match (callee, nargs) {
+            (Some("__syncthreads"), 0) if self.launch.is_some() => push(
+                out,
+                Stmt::Barrier {
+                    scope: Scope::Block,
+                    kind: BarrierKind::Full,
+                },
+            ),
+            (Some("__syncthreads"), _) => self.not_yet(
+                e,
+                "`__syncthreads` without a launch (use `lift_kernel_launched`) or with arguments",
+            ),
+            (Some(f), _) => self.not_yet(e, format!("a call to `{f}`")),
+            (None, _) => self.not_yet(e, "a call"),
+        }
+    }
+
+    /// `threadIdx.x`, `blockIdx.y`, `blockDim.z`, `gridDim.x`: the launch's execution ids (`U32`).
+    fn builtin(&self, n: Node<'_>) -> R<(ScalarExpr, E)> {
+        let (Some(a), Some(f)) = (
+            n.child_by_field_name("argument"),
+            n.child_by_field_name("field"),
+        ) else {
+            return self.not_yet(n, "a member access of an unexpected shape");
+        };
+        let base = text(a, self.src);
+        if a.kind() != "identifier" || self.lookup(base).is_some() {
+            return self.not_yet(
+                n,
+                "a member access on a value (structs and vector types are a later slice)",
+            );
+        }
+        let axis = match text(f, self.src) {
+            "x" => 0,
+            "y" => 1,
+            "z" => 2,
+            other => return self.not_yet(f, format!("the member `{other}`")),
+        };
+        let id = match base {
+            "threadIdx" => ExecId::ThreadIdx(axis),
+            "blockIdx" => ExecId::BlockIdx(axis),
+            "blockDim" => ExecId::BlockDim(axis),
+            "gridDim" => ExecId::GridDim(axis),
+            other => {
+                return self.not_yet(
+                    a,
+                    format!(
+                        "the name `{other}`, which is not a parameter, local or thread builtin"
+                    ),
+                );
+            }
+        };
+        if self.launch.is_none() {
+            return self.not_yet(
+                n,
+                format!("`{base}` without a launch (use `lift_kernel_launched`)"),
+            );
+        }
+        Ok((ScalarExpr::Exec(id), E::U32))
+    }
+
     fn expression_statement(&mut self, n: Node<'_>, out: &mut Vec<Stmt>) -> R<()> {
         let Some(e) = n.named_child(0) else {
             return Ok(());
@@ -379,6 +544,7 @@ impl<'s> Walker<'s> {
         match e.kind() {
             "assignment_expression" => self.assignment(e, out),
             "update_expression" => self.update(e, out),
+            "call_expression" => self.call_statement(e, out),
             other => self.not_yet(e, format!("a `{other}` expression statement")),
         }
     }
@@ -757,6 +923,7 @@ impl<'s> Walker<'s> {
             "conditional_expression" => self.conditional(n),
             "cast_expression" => self.cast_node(n),
             "subscript_expression" => self.read_element(n),
+            "field_expression" => self.builtin(n),
             other => self.not_yet(n, format!("a `{other}` expression")),
         }
     }
@@ -765,8 +932,8 @@ impl<'s> Walker<'s> {
         let name = text(n, self.src);
         match self.lookup(name) {
             Some(Sym::Scalar(l, t, _)) => Ok((ScalarExpr::Local(l), t)),
-            Some(Sym::Buffer(..)) => {
-                self.not_yet(n, format!("the pointer `{name}` used as a value"))
+            Some(Sym::Buffer(..) | Sym::Alloc(..)) => {
+                self.not_yet(n, format!("the array or pointer `{name}` used as a value"))
             }
             None => self.not_yet(
                 n,
@@ -1029,8 +1196,12 @@ impl<'s> Walker<'s> {
         ) else {
             return self.not_yet(n, "an index of an unexpected shape");
         };
-        let Some(Sym::Buffer(buffer, elem)) = self.lookup(text(arg, self.src)) else {
-            return self.not_yet(arg, "indexing something that is not a buffer parameter");
+        let sym = self.lookup(text(arg, self.src));
+        let Some(Sym::Buffer(_, elem) | Sym::Alloc(_, elem)) = sym else {
+            return self.not_yet(
+                arg,
+                "indexing something that is not a buffer parameter or a `__shared__` array",
+            );
         };
         if idx.named_child_count() != 1 {
             return self.not_yet(idx, "an index with other than one subscript");
@@ -1040,13 +1211,15 @@ impl<'s> Walker<'s> {
         if int_range(it).is_none() {
             return self.outside(i, "a floating-point index");
         }
-        Ok((
-            Place::Logical {
+        let place = match sym {
+            Some(Sym::Alloc(alloc, _)) => Place::Alloc { alloc, index: ie },
+            Some(Sym::Buffer(buffer, _)) => Place::Logical {
                 buffer,
                 coords: vec![ie],
             },
-            elem,
-        ))
+            _ => unreachable!("matched above"),
+        };
+        Ok((place, elem))
     }
 
     fn read_element(&mut self, n: Node<'_>) -> R<(ScalarExpr, E)> {
