@@ -15,6 +15,18 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.6` — docs: ROADMAP E3 row points at fishstringer, owner corrected
+
+ROADMAP row E3 named `dtype_lowering_coverage.rs:162-193` as if it were in this repo. The 9 `NotYet` cells live in fishstringer's `fishstringer-slang-emit` tests (16 `NotYet` hits at fishstringer origin/main, verified by pm-kernels 2026-11-21); Unpopped has no Slang crate. Owner is now fishstringer, trigger unchanged. Docs only.
+
+`oracle::scalar_ops::lgamma` computed `inf - inf` at `+inf` (NaN; C `lgamma(+inf)` is `+inf`), returned a large finite value near a negative integer where C has a pole, and was off by ~1e-15 at 1 and 2. It now follows C99 Annex F.9.5.3: `+-inf`, `+-0` and negative integers give `+inf`, NaN stays NaN, `lgamma(1)` and `lgamma(2)` are `+0`. Found by openclownfish's device test (RTX 4070 Laptop, `device_agrees_float_transcendental.rs`). Pinned by `oracle::scalar_ops::lgamma_special_values`.
+
+`Place::Raw { buffer, byte_offset, elem }` names the `elem`-typed value at a byte offset into a buffer parameter's storage, taken by `Load`, `Store`, `MaskedLoad` and `MaskedStore`; no new `Stmt` or `ScalarExpr` variant, and `Place` is non-exhaustive, so this is additive. Byte 0 is the view's first element, shape and strides are ignored, `elem` need not be the buffer's type. `check_kernel` applies the buffer's role and refuses `Raw` in atomics, async copies and the matrix/barrier statements by name, and refuses an `elem` that is not a whole number of bytes. The interpreter traps a misaligned offset (`KernelTrap::MisalignedAccess`, new) and an out-of-range access (`OutOfBounds`) and logs every buffer element the bytes touch for the race detector (conservative: two threads writing different bytes of one wider element are reported). `types::raw_access_bytes` is new. Verified by `tests/kernel_raw_place.rs` (distinct-byte data, width pun, view origin, alignment, bounds, role, race coverage). `docs/options-u9c-pointer-values.md`, `docs/PATENT-SWEEP.md` U9c section.
+
+Also (slice 2): `Place::AllocRaw { alloc, byte_offset, elem }`, the same access into a `Shared` or `Private` allocation (`Constant` and `Tensor` refused); an element counts as stored only once a store covers all of its bytes. `CopyAsync` takes a `Place::Raw` source (`elems` values of the place's type from consecutive bytes, aligned to one value, bounds-checked and logged for the race detector); a raw or `AllocRaw` destination is declined by name. `unpopped-cpu-c` declines both raw places by name (its C ABI has no storage length to bound them). Verified by `tests/kernel_alloc_raw_place.rs`, `tests/kernel_async_copy_raw.rs` and `unpopped-cpu-c/tests/kernel_raw_place_refused.rs`.
+
+---
+
 ## `0.56.5` — the oracle's F64 atanh is accurate near -1 (bug fix)
 
 `UnaryOp::Atanh` at `F64` used `f64::atanh`, which is `0.5 * ln_1p(2x / (1 - x))` and cancels for `x` near -1: 1172 ULP off at `x = -0.999956949180724`, 1290 at `-0.99995695`, 37618 at `-0.999999`, while the same magnitudes positive were exact. Every emitter's ULP claim for `F64` `atanh` is measured against this oracle, so it inherited the error (openclownfish reported a device result 20 ULP from the oracle on NVIDIA). The oracle now evaluates `atanh(|x|)` and restores the sign, since `atanh` is odd (NaN, +-0, +-1 and out-of-domain values unchanged). Values change for negative `x` near -1; anything pinning the old oracle values there was pinning the error.
