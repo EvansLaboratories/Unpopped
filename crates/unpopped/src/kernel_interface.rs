@@ -11,7 +11,7 @@
 //! the kernel's revision hash: the emitter-set fields follow from the source text the emitter wrote.
 
 use crate::exec::{Extent, LaunchShape, MemorySpace};
-use crate::kernel::{KernelFn, Param};
+use crate::kernel::{KernelFn, Param, ParamKind};
 use unpopped_vocab::ElementKind;
 
 /// A `Shared` allocation whose element count is a launch argument (`Extent::Param`: CUDA `extern __shared__`, sized by the
@@ -118,6 +118,86 @@ impl ParamsBlock {
         self.by_address = true;
         self
     }
+
+    /// The block of a [`ParamKind::Struct`] parameter, derived from its fields (ROADMAP U23): each field at the next
+    /// offset aligned to its own size (the natural C layout, no packing), the block aligned to its widest field and sized
+    /// to a multiple of that alignment. A `Complex64`/`Complex128` field is a pair aligned to one half. By value; chain
+    /// [`ParamsBlock::passed_by_address`] for `__grid_constant__`. **Layout only** (`layout_only_guard`).
+    ///
+    /// # Errors
+    /// [`ParamsBlockError::NotAStruct`] for a buffer or scalar parameter; [`ParamsBlockError::Unsized`] for a field type
+    /// with no whole-byte width (`I4`, `U4`, `B1`) or no defined one.
+    pub fn of_struct(param: &Param) -> Result<Self, ParamsBlockError> {
+        let ParamKind::Struct { fields } = &param.kind else {
+            return Err(ParamsBlockError::NotAStruct);
+        };
+        let mut block = Self::new(0, 1);
+        let mut offset: u32 = 0;
+        let mut align: u32 = 1;
+        for f in fields {
+            let (size, a) = field_size_align(f.ty).ok_or_else(|| ParamsBlockError::Unsized {
+                field: f.name.clone(),
+                ty: f.ty,
+            })?;
+            offset = offset.next_multiple_of(a);
+            block
+                .fields
+                .push(ParamsBlockField::new(f.name.clone(), offset, f.ty));
+            offset += size;
+            align = align.max(a);
+        }
+        block.size = offset.next_multiple_of(align);
+        block.align = align;
+        Ok(block)
+    }
+}
+
+/// Why [`ParamsBlock::of_struct`] declined.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ParamsBlockError {
+    /// The parameter is not a [`ParamKind::Struct`].
+    NotAStruct,
+    /// A field's type has no whole-byte width to lay out.
+    Unsized {
+        /// The field's name.
+        field: String,
+        /// Its type.
+        ty: ElementKind,
+    },
+}
+
+impl std::fmt::Display for ParamsBlockError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotAStruct => f.write_str("parameter is not a struct"),
+            Self::Unsized { field, ty } => {
+                write!(
+                    f,
+                    "struct field `{field}` of type {ty:?} has no whole-byte layout"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ParamsBlockError {}
+
+/// `(size, alignment)` in bytes of a laid-out field, or `None` for a type with no whole-byte width.
+fn field_size_align(ty: ElementKind) -> Option<(u32, u32)> {
+    Some(match ty {
+        ElementKind::I8
+        | ElementKind::U8
+        | ElementKind::Bool
+        | ElementKind::Fp8E4M3FN
+        | ElementKind::Fp8E5M2 => (1, 1),
+        ElementKind::F16 | ElementKind::Bf16 | ElementKind::I16 | ElementKind::U16 => (2, 2),
+        ElementKind::F32 | ElementKind::F32Strict | ElementKind::I32 | ElementKind::U32 => (4, 4),
+        ElementKind::F64 | ElementKind::I64 | ElementKind::U64 => (8, 8),
+        ElementKind::Complex64 => (8, 4),
+        ElementKind::Complex128 => (16, 8),
+        _ => return None,
+    })
 }
 
 /// What the emitter guarantees about a buffer parameter, beyond its [`crate::kernel::BufferRole`]: the launcher asserts it.

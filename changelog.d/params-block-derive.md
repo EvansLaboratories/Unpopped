@@ -1,0 +1,3 @@
+kind: `ParamsBlock::of_struct`, derive a struct parameter's layout (ROADMAP U23)
+---
+`ParamsBlock::of_struct(&Param)` derives the parameter block of a `ParamKind::Struct` from its fields with the natural C rules (each field aligned to its own size, the block to its widest field, size rounded up; a complex field is a pair aligned to one half), and declines typed (`ParamsBlockError::NotAStruct`, `::Unsized` for `I4`/`U4`/`B1`). Additive; layout only, so the `layout_only_guard` and the U23 patent read are unchanged. Consumers: fishstringer and Baracuda, who set it with `KernelInterface::with_params_block`. Verified by `tests/kernel_params_block_derive.rs` (hand-computed offsets from the C rules, a control per rule).
