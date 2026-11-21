@@ -24,11 +24,24 @@ pub(super) struct RawAt {
     pub(super) elem: ElementKind,
     /// Its size in bytes.
     pub(super) size: usize,
+    /// How many consecutive `elem`-sized values the access spans (1 except for an async copy's source).
+    pub(super) count: usize,
 }
 
 impl Machine<'_> {
     /// Evaluate, align- and bounds-check a `Place::Raw`, and log the access for the race detector.
     pub(super) fn raw_at(&mut self, place: &Place, kind: AccessKind) -> Result<RawAt, KernelTrap> {
+        self.raw_span(place, kind, 1)
+    }
+
+    /// [`Self::raw_at`] for `count` consecutive values (the source of an async copy): aligned to one value, bounds-checked
+    /// and logged over all `count`.
+    pub(super) fn raw_span(
+        &mut self,
+        place: &Place,
+        kind: AccessKind,
+        count: usize,
+    ) -> Result<RawAt, KernelTrap> {
         let Place::Raw {
             buffer,
             byte_offset,
@@ -66,10 +79,11 @@ impl Machine<'_> {
             .ok()
             .and_then(|o| o.checked_add(usize::try_from(tb.base_offset).ok()?.checked_mul(esz)?))
             .ok_or_else(|| oob.clone())?;
-        if at.checked_add(size).is_none_or(|end| end > tb.bytes.len()) {
+        let span = size * count;
+        if span == 0 || at.checked_add(span).is_none_or(|end| end > tb.bytes.len()) {
             return Err(oob);
         }
-        for e in at / esz..=(at + size - 1) / esz {
+        for e in at / esz..=(at + span - 1) / esz {
             self.note_global(root, e, kind)?;
         }
         Ok(RawAt {
@@ -77,6 +91,7 @@ impl Machine<'_> {
             at,
             elem: *elem,
             size,
+            count,
         })
     }
 
@@ -165,6 +180,24 @@ impl Machine<'_> {
             }
         }
         Ok(())
+    }
+
+    /// `n` consecutive raw values from `src`, read now (the source of an async copy), each as `elem` bits.
+    pub(super) fn raw_read_n(&mut self, src: &Place, n: usize) -> Result<Vec<Val>, KernelTrap> {
+        let a = self.raw_span(src, AccessKind::Read, n)?;
+        let KernelArg::Buffer(tb) = &self.args[a.root] else {
+            unreachable!("raw_span returned a buffer");
+        };
+        Ok(tb.bytes[a.at..a.at + a.size * a.count]
+            .chunks(a.size)
+            .map(|c| {
+                let bits = c
+                    .iter()
+                    .enumerate()
+                    .fold(0u128, |acc, (i, b)| acc | u128::from(*b) << (8 * i));
+                Val::Raw(bits, a.elem)
+            })
+            .collect())
     }
 
     /// The value of a raw load: the stored bytes, little-endian, as `elem` bits.
