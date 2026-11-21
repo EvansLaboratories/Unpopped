@@ -166,6 +166,10 @@ fn text<'a>(n: Node<'_>, src: &'a str) -> &'a str {
 enum Sym {
     /// A buffer parameter: its index in `KernelFn::params`, element type and whether the source made it `const`.
     Buffer(u32, E),
+    /// A local of a CUDA vector type (`float4`, `int2`, ...), **scalarized**: one scalar local per lane (the first `lanes` of
+    /// the array), the lane type and the lane count. Not an IR packed value: the oracle cannot run a packed local
+    /// (`tests/kernel_packed.rs`, the pinned gap), and a scalarized vector is exact.
+    Vector([u32; 4], E, u8),
     /// A static `__shared__` array: its index in `KernelFn::allocs` and element type.
     Alloc(u32, E),
     /// A scalar local (a scalar parameter is one): its id, type and whether the IR forbids assigning it.
@@ -396,6 +400,15 @@ impl<'s> Walker<'s> {
     }
 
     fn declaration(&mut self, n: Node<'_>, out: &mut Vec<Stmt>) -> R<()> {
+        let tname = n.child_by_field_name("type").map(|t| {
+            text(t, self.src)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        });
+        if let Some((elem, lanes)) = tname.as_deref().and_then(vector_type) {
+            return self.vector_declaration(n, (elem, lanes), out);
+        }
         let ty = self.type_of(n.child_by_field_name("type"), n)?;
         let head = text(n, self.src).trim_start();
         if head.starts_with("__shared__") {
@@ -436,6 +449,154 @@ impl<'s> Walker<'s> {
             );
             out.push(Stmt::Let { local, init: e });
         }
+        Ok(())
+    }
+
+    /// `float4 v = make_float4(a, b, c, d);` or `float4 v = w;`: one scalar local per lane.
+    fn vector_declaration(
+        &mut self,
+        n: Node<'_>,
+        (elem, lanes): (E, u8),
+        out: &mut Vec<Stmt>,
+    ) -> R<()> {
+        let mut c = n.walk();
+        let decls: Vec<_> = n.children_by_field_name("declarator", &mut c).collect();
+        for d in decls {
+            let (id, value) = match d.kind() {
+                "init_declarator" => (
+                    d.child_by_field_name("declarator"),
+                    d.child_by_field_name("value"),
+                ),
+                _ => (Some(d), None),
+            };
+            let (Some(id), Some(value)) = (id, value) else {
+                return self.not_yet(d, "a vector local without an initializer");
+            };
+            if id.kind() != "identifier" {
+                return self.not_yet(id, format!("a `{}` declarator", id.kind()));
+            }
+            let init = self.vector_value(value, (elem, lanes))?;
+            self.flush(out);
+            let mut ls = [0u32; 4];
+            for (k, v) in init.into_iter().enumerate() {
+                ls[k] = self.new_local(elem);
+                out.push(Stmt::Let {
+                    local: ls[k],
+                    init: v,
+                });
+            }
+            self.scopes
+                .last_mut()
+                .expect("a scope is open")
+                .insert(text(id, self.src).to_string(), Sym::Vector(ls, elem, lanes));
+        }
+        Ok(())
+    }
+
+    /// A vector-typed value as its lane expressions: `make_<type>(lanes...)` or another vector local of the same type.
+    fn vector_value(&mut self, n: Node<'_>, (elem, lanes): (E, u8)) -> R<Vec<ScalarExpr>> {
+        if n.kind() == "identifier" {
+            return match self.lookup(text(n, self.src)) {
+                Some(Sym::Vector(ls, e, k)) if (e, k) == (elem, lanes) => Ok(ls[..usize::from(k)]
+                    .iter()
+                    .map(|l| ScalarExpr::Local(*l))
+                    .collect()),
+                _ => self.not_yet(
+                    n,
+                    "a vector value that is not a vector local of the same type",
+                ),
+            };
+        }
+        let callee = (n.kind() == "call_expression")
+            .then(|| n.child_by_field_name("function").map(|f| text(f, self.src)))
+            .flatten();
+        let Some(callee) = callee
+            .filter(|c| c.starts_with("make_") && vector_type(&c[5..]) == Some((elem, lanes)))
+        else {
+            return self.not_yet(
+                n,
+                "a vector value that is neither `make_<type>(...)` nor a vector local",
+            );
+        };
+        let args = self.call_args(n);
+        if args.len() != usize::from(lanes) {
+            return self.not_yet(n, format!("`{callee}` with {} argument(s)", args.len()));
+        }
+        let mut xs = Vec::new();
+        for a in args {
+            let (v, t) = self.expr(a)?;
+            xs.push(self.convert(v, t, elem, a)?);
+        }
+        Ok(xs)
+    }
+
+    /// `v = make_float4(...)` or `v = w`. Every lane value is computed into a temporary first, so `v = make_float2(v.y, v.x)`
+    /// reads the old lanes.
+    fn assign_vector(
+        &mut self,
+        ls: [u32; 4],
+        shape: (E, u8),
+        op: &str,
+        rhs: Node<'_>,
+        out: &mut Vec<Stmt>,
+    ) -> R<()> {
+        if !op.is_empty() {
+            return self.not_yet(
+                rhs,
+                "a compound assignment to a whole vector (operators on vector types are not C)",
+            );
+        }
+        let values = self.vector_value(rhs, shape)?;
+        self.flush(out);
+        let mut temps = Vec::new();
+        for v in values {
+            let t = self.new_local(shape.0);
+            out.push(Stmt::Let { local: t, init: v });
+            temps.push(t);
+        }
+        for (k, t) in temps.into_iter().enumerate() {
+            out.push(Stmt::Assign {
+                local: ls[k],
+                value: ScalarExpr::Local(t),
+            });
+        }
+        Ok(())
+    }
+
+    /// `v.x = e` (and `v.x += e`): an assignment to that lane's local.
+    fn assign_member(
+        &mut self,
+        lhs: Node<'_>,
+        op: &str,
+        rhs: Node<'_>,
+        out: &mut Vec<Stmt>,
+    ) -> R<()> {
+        let (Some(a), Some(f)) = (
+            lhs.child_by_field_name("argument"),
+            lhs.child_by_field_name("field"),
+        ) else {
+            return self.not_yet(lhs, "a member assignment of an unexpected shape");
+        };
+        let Some(Sym::Vector(ls, elem, lanes)) = self.lookup(text(a, self.src)) else {
+            return self.not_yet(
+                lhs,
+                "an assignment to a member of something that is not a vector local",
+            );
+        };
+        let Some(i) = lane_of(text(f, self.src), lanes) else {
+            return self.not_yet(
+                f,
+                format!(
+                    "the member `{}` of a {lanes}-lane vector",
+                    text(f, self.src)
+                ),
+            );
+        };
+        let local = ls[usize::from(i)];
+        let (r, rt) = self.expr(rhs)?;
+        let value = self.compound(ScalarExpr::Local(local), elem, op, (r, rt), lhs)?;
+        self.flush(out);
+        out.push(Stmt::Assign { local, value });
         Ok(())
     }
 
@@ -522,6 +683,21 @@ impl<'s> Walker<'s> {
             return self.not_yet(n, "a member access of an unexpected shape");
         };
         let base = text(a, self.src);
+        if let (true, Some(Sym::Vector(ls, elem, lanes))) =
+            (a.kind() == "identifier", self.lookup(base))
+        {
+            let lane = lane_of(text(f, self.src), lanes);
+            let Some(i) = lane else {
+                return self.not_yet(
+                    f,
+                    format!(
+                        "the member `{}` of a {lanes}-lane vector",
+                        text(f, self.src)
+                    ),
+                );
+            };
+            return Ok((ScalarExpr::Local(ls[usize::from(i)]), elem));
+        }
         if a.kind() != "identifier" || self.lookup(base).is_some() {
             return self.not_yet(
                 n,
@@ -742,6 +918,7 @@ impl<'s> Walker<'s> {
         match lhs.kind() {
             "identifier" => self.assign_local(lhs, &op, rhs, out),
             "subscript_expression" => self.assign_element(lhs, &op, rhs, out),
+            "field_expression" => self.assign_member(lhs, &op, rhs, out),
             other => self.not_yet(lhs, format!("an assignment to a `{other}`")),
         }
     }
@@ -754,6 +931,9 @@ impl<'s> Walker<'s> {
         out: &mut Vec<Stmt>,
     ) -> R<()> {
         let name = text(lhs, self.src);
+        if let Some(Sym::Vector(ls, elem, lanes)) = self.lookup(name) {
+            return self.assign_vector(ls, (elem, lanes), op, rhs, out);
+        }
         let Some(Sym::Scalar(local, ty, fixed)) = self.lookup(name) else {
             return self.not_yet(
                 lhs,
@@ -1145,6 +1325,10 @@ impl<'s> Walker<'s> {
             Some(Sym::Buffer(..) | Sym::Alloc(..)) => {
                 self.not_yet(n, format!("the array or pointer `{name}` used as a value"))
             }
+            Some(Sym::Vector(..)) => self.not_yet(
+                n,
+                format!("the vector `{name}` used as a scalar (read a member, or assign it whole)"),
+            ),
             None => self.not_yet(
                 n,
                 format!("the name `{name}`, which is not a parameter or local"),
@@ -1438,6 +1622,32 @@ impl<'s> Walker<'s> {
         self.hoisted.push(Stmt::Load { local, place });
         Ok((ScalarExpr::Local(local), elem))
     }
+}
+
+/// The lane type and count of a CUDA vector type name (`float4`, `int2`, ...).
+fn vector_type(t: &str) -> Option<(E, u8)> {
+    let (base, n) = t.split_at(t.len().checked_sub(1)?);
+    let lanes: u8 = n.parse().ok().filter(|k| matches!(k, 2 | 4))?;
+    let elem = match base {
+        "float" => E::F32,
+        "double" => E::F64,
+        "int" => E::I32,
+        "uint" => E::U32,
+        _ => return None,
+    };
+    Some((elem, lanes))
+}
+
+/// The lane a member name selects in a `lanes`-lane vector (`x`, `y`, then `z`, `w` for four).
+fn lane_of(member: &str, lanes: u8) -> Option<u8> {
+    let i = match member {
+        "x" => 0,
+        "y" => 1,
+        "z" => 2,
+        "w" => 3,
+        _ => return None,
+    };
+    (i < lanes).then_some(i)
 }
 
 fn push(out: &mut Vec<Stmt>, s: Stmt) -> R<()> {
