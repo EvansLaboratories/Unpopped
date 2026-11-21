@@ -46,6 +46,9 @@
 //! parser are Vulkane's: `vulkane-slang-emit`, `vulkane-slang-parse`). The tests build their own
 //! Slang `Frontend` from a dev-dependency.
 
+mod kernel_body;
+pub use kernel_body::{KernelLiftError, lift_kernel};
+
 use tree_sitter::{Node, Tree};
 use unpopped::ir::{BinaryOp, Expr, OpDef, ReduceOp, ScalarExpr, UnaryOp};
 use unpopped::lift::{LiftError, LiftProvenance, Lifted};
