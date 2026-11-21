@@ -164,3 +164,50 @@ fn the_rest_of_the_cuda_surface_declines_by_name() {
         "array or pointer",
     );
 }
+
+#[test]
+fn all_three_axes_map_to_their_own_ids() {
+    // A distinct weight per id, so a swapped axis changes the sum: thread (x,y,z) of block (bx,by) in a 2x3x2 block, 3x2 grid.
+    let src = "void k(float* out) { int t = threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z); \
+        int b = blockIdx.x + gridDim.x * blockIdx.y; \
+        out[b * 12 + t] = (float)(threadIdx.x + 10 * threadIdx.y + 100 * threadIdx.z + 1000 * blockIdx.x + 10000 * blockIdx.y + 7 * gridDim.y + 70 * blockDim.z); }";
+    let k = lift_kernel_launched(&C, src, "k", LaunchShape::new([2, 3, 2], [3, 2, 1])).unwrap();
+    let mut args = vec![f32s(&[0.0; 72])];
+    run_launch(&k, &mut args).expect("runs");
+    let mut want = vec![0.0f64; 72];
+    for by in 0..2u32 {
+        for bx in 0..3u32 {
+            for tz in 0..2u32 {
+                for ty in 0..3u32 {
+                    for tx in 0..2u32 {
+                        let t = tx + 2 * (ty + 3 * tz);
+                        let b = bx + 3 * by;
+                        want[(b * 12 + t) as usize] = f64::from(
+                            tx + 10 * ty + 100 * tz + 1000 * bx + 10000 * by + 7 * 2 + 70 * 2,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(out_of(&args), want);
+}
+
+#[test]
+fn a_shared_array_has_exactly_the_declared_size() {
+    // `tile[8]` is declared with 8 elements: index 7 is legal, index 8 is out of range. A lifted size that is off by one in
+    // either direction changes one of the two runs.
+    let src = |i: u32| {
+        format!(
+            "void k(float* out) {{ __shared__ float tile[8]; tile[{i}] = 1.0f; out[0] = tile[{i}]; }}"
+        )
+    };
+    let ok = launched(&src(7), 1, 1).unwrap();
+    let mut args = vec![f32s(&[0.0])];
+    run_launch(&ok, &mut args).expect("index 7 is in range");
+    assert_eq!(out_of(&args), vec![1.0]);
+    let bad = launched(&src(8), 1, 1).unwrap();
+    let mut args = vec![f32s(&[0.0])];
+    let r = run_launch(&bad, &mut args);
+    assert!(r.is_err(), "index 8 of 8 must trap, got {r:?}");
+}
