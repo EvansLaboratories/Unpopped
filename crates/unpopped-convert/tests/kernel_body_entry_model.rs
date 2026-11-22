@@ -207,7 +207,10 @@ fn the_declines_name_the_slots_the_parameter_and_the_missing_launch() {
     not_yet(lift(start, [1, 1, 1], [1, 1, 1]), "binding slots [1]");
     // an entry parameter with no semantic
     let bare = "[[vk::binding(0, 0)]] RWStructuredBuffer<float> output;\n[numthreads(1, 1, 1)]\nvoid main(uint3 g : SV_DispatchThreadID, uint3 extra) { output[g.x] = 1.0f; }";
-    not_yet(lift(bare, [1, 1, 1], [1, 1, 1]), "`extra`, which carries no execution-id semantic");
+    not_yet(
+        lift(bare, [1, 1, 1], [1, 1, 1]),
+        "`extra`, which carries no execution-id semantic",
+    );
     // a constant buffer of a struct that is not defined
     let nostruct = SCALE.replace("struct Params { uint out_size; float scale; };\n", "");
     not_yet(

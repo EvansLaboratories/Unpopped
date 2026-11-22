@@ -1,6 +1,6 @@
 # Options: the Slang entry model in the kernel-body walker (census slice 4)
 
-Status: **options note, no code** (pm-kernels `[TASK]` 2026-11-22). To go to fishstringer, who owns the Slang front end and E17 slice 3
+Status: **walker side built (branch `lane/u19-templates`); fishstringer implements the reader**. Originally: options note, no code (pm-kernels `[TASK]` 2026-11-22). To go to fishstringer, who owns the Slang front end and E17 slice 3
 (`docs/options-e17-slice3-abi.md` in its repo), so the two stay on one convention. Source: `docs/options-u19-census.md`: **0 of 153** Slang entry points lift
 (fishstringer `8c203f2`; 0 of 151 at Fuel `ded9bed`), **140 of them stopped on one construct**: the entry parameter `uint3 gid : SV_DispatchThreadID`.
 
@@ -64,5 +64,16 @@ Whether `numthreads` overrides or must equal the context's block (recommend: the
 share a file (`autodiff_poc.slang`: two kernels, each lifted with the resources it references); `ByteAddressBuffer`, `Texture*` and
 `Ptr<T>` (absent from the corpus). **The 13 grammar errors are not this walker's**: the parser stops on them (first ERROR node at `float var = ...` in 8 `layer_norm*` kernels, `uint is = ...` in
 `dequant_q4_km.slang:110`, `out[...] = ...` in the 4 `rope*` kernels); the cause, and whether to report it, is fishstringer's to establish.
+
+
+## Result (2026-11-22): the walker side
+
+Option B as agreed. `Frontend::with_entry_model(fn(&Tree, &str, &str) -> Result<EntryModel, EntryModelError>)`; types `EntryModel { block: Option<[u32; 3]>, semantics: Vec<(String, Semantic)>,
+resources: Vec<Resource> }`, `Resource { name, kind: ResourceKind, elem: String, slot: u32 }`, `ResourceKind { StructuredRO, StructuredRW, ConstantBuffer }`,
+`Semantic { DispatchThreadId, GroupId, GroupThreadId, GroupIndex }`, all `#[non_exhaustive]` with `new` constructors. The walker: resources in slot order are the parameters (a gap, repeat or non-zero
+start declines), `numthreads` wins over the context block, each entry parameter must carry a semantic. **Decided here and not in the note above:** `elem` is the source's type text and
+the walker resolves it (`float`, `uint`, ...; a vector type or an alias declines by name); a `ConstantBuffer<S>`'s `S` must be a struct defined in the same source. **Measured:** nothing yet on the
+153 fishstringer entry points: that needs fishstringer's reader (`fishstringer-slang-parse`), which does not exist; the walker half is proven against a test-only reader over `tree-sitter-slang`
+(`tests/kernel_body_entry_model.rs`). The second layer under this gate (`groupshared`, `Interlocked*`, `Wave*`, `while`, value-returning helpers) is untouched and unmeasured.
 
 — lane: unpopped

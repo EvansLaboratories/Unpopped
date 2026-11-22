@@ -1247,6 +1247,7 @@ mod tests {
             parse: parse_slang,
             unary_fn: toy_unary,
             binary_fn: toy_binary,
+            entry_model: None,
         };
         let src = "TOY_KERNEL void k(float* dst, const float* src0, const float* src1) {\
                    int i = 0; dst[i] = src0[i] + src1[i]; }";
