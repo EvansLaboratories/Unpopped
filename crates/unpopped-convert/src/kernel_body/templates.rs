@@ -9,7 +9,8 @@
 
 use super::context::LiftContext;
 use super::{KernelLiftError, text};
-use tree_sitter::Node;
+use std::collections::HashMap;
+use tree_sitter::{Node, Tree};
 
 type Res<T> = Result<T, KernelLiftError>;
 
@@ -173,4 +174,155 @@ pub(super) fn instantiate(
     out.push_str(&substitute(&src[body_start..end], &subs));
     out.push_str(&src[end..]);
     Ok(Some(out))
+}
+
+// ---- calls with explicit template arguments (census slice 2) ----
+
+/// Rounds of rewriting before a chain of template helpers is declined (each round resolves one nesting level).
+const MAX_ROUNDS: usize = 16;
+
+/// The instance each distinct `(helper, arguments)` became: a plain function appended to the source, so it is walked and inlined
+/// like any other helper.
+#[derive(Default)]
+struct Instances {
+    by_key: HashMap<String, String>,
+    text: String,
+}
+
+/// Rewrite every call with explicit template arguments (`helper<float, 4>(x)`) to a **plain function** that is the helper
+/// instantiated with those arguments (`helper__t0`), appended to the source; repeat until no such call is left (an instance can
+/// itself call a template helper). A call whose helper is not a template defined in the file, or whose arguments do not fit its
+/// parameters, is left as it is and declines at its use. Calls without explicit arguments (`helper(x)`, deduced) are not modelled.
+///
+/// # Errors
+/// A chain of instantiations deeper than [`MAX_ROUNDS`], or a source that stops parsing.
+pub(super) fn expand_calls(parse: fn(&str) -> Option<Tree>, mut src: String) -> Res<String> {
+    let mut inst = Instances::default();
+    for _ in 0..MAX_ROUNDS {
+        let tree = parse(&src).ok_or(KernelLiftError::SyntaxError { line: 0 })?;
+        let edits = call_edits(&tree, &src, &mut inst);
+        if edits.is_empty() {
+            return Ok(src);
+        }
+        for (start, end, name) in edits.into_iter().rev() {
+            src.replace_range(start..end, &name);
+        }
+        src.push_str(&std::mem::take(&mut inst.text));
+    }
+    decline(format!(
+        "template helper calls nested deeper than {MAX_ROUNDS} levels"
+    ))
+}
+
+/// The call sites to rewrite this round, as `(start, end, instance name)`, in source order.
+fn call_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize, String)> {
+    let mut templates: HashMap<String, Node<'_>> = HashMap::new();
+    let mut calls: Vec<Node<'_>> = Vec::new();
+    let mut stack = vec![tree.root_node()];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "function_definition" => {
+                let id = n
+                    .child_by_field_name("declarator")
+                    .and_then(|d| d.child_by_field_name("declarator"));
+                let is_template = n
+                    .parent()
+                    .is_some_and(|p| p.kind() == "template_declaration");
+                match (is_template, id) {
+                    (true, Some(id)) => {
+                        templates.insert(text(id, src).to_string(), n);
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            "call_expression" => {
+                if n.child_by_field_name("function")
+                    .is_some_and(|f| f.kind() == "template_function")
+                {
+                    calls.push(n);
+                }
+            }
+            _ => {}
+        }
+        let mut c = n.walk();
+        stack.extend(n.children(&mut c));
+    }
+    let mut edits = Vec::new();
+    for call in calls {
+        let Some(f) = call.child_by_field_name("function") else {
+            continue;
+        };
+        let (Some(name), Some(args)) = (
+            f.child_by_field_name("name"),
+            f.child_by_field_name("arguments"),
+        ) else {
+            continue;
+        };
+        let helper = text(name, src);
+        let Some(&def) = templates.get(helper) else {
+            continue;
+        };
+        let mut c = args.walk();
+        let given: Vec<String> = args
+            .named_children(&mut c)
+            .map(|a| text(a, src).trim().to_string())
+            .collect();
+        if let Some(instance) = instance_of(src, def, helper, &given, inst) {
+            edits.push((f.start_byte(), f.end_byte(), instance));
+        }
+    }
+    edits.sort_by_key(|e| e.0);
+    edits
+}
+
+/// The name of `helper` instantiated with `given`, creating it on first use; `None` when the arguments do not fit.
+fn instance_of(
+    src: &str,
+    def: Node<'_>,
+    helper: &str,
+    given: &[String],
+    inst: &mut Instances,
+) -> Option<String> {
+    let key = format!("{helper}<{}>", given.join(","));
+    if let Some(n) = inst.by_key.get(&key) {
+        return Some(n.clone());
+    }
+    let (decl, params) = params_of(def, src).ok().flatten()?;
+    let subs = bind_explicit(&params, given)?;
+    let id = def
+        .child_by_field_name("declarator")?
+        .child_by_field_name("declarator")?;
+    let name = format!("{helper}__t{}", inst.by_key.len());
+    let body = &src[def.start_byte()..decl.end_byte()];
+    let (a, b) = (
+        id.start_byte() - def.start_byte(),
+        id.end_byte() - def.start_byte(),
+    );
+    inst.text.push_str("\n");
+    inst.text.push_str(&substitute(&body[..a], &subs));
+    inst.text.push_str(&name);
+    inst.text.push_str(&substitute(&body[b..], &subs));
+    inst.by_key.insert(key, name.clone());
+    Some(name)
+}
+
+/// Positional arguments to parameters (a non-type value parenthesised), the rest from defaults; `None` when there are too many
+/// arguments or a parameter has neither.
+fn bind_explicit(params: &[TParam], given: &[String]) -> Option<Vec<(String, String)>> {
+    if given.len() > params.len() {
+        return None;
+    }
+    params
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let v = match given.get(i) {
+                Some(a) if p.is_type => a.clone(),
+                Some(a) => format!("({a})"),
+                None => p.default.clone()?,
+            };
+            Some((p.name.clone(), v))
+        })
+        .collect()
 }

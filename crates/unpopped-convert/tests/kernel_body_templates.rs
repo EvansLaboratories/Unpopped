@@ -191,3 +191,66 @@ fn the_substitution_stops_at_the_end_of_the_kernels_template() {
         vec![10.0, 7.0]
     );
 }
+
+// ---- census slice 2: helper templates called with explicit arguments ----
+
+const SCALE: &str = "template <typename T, int N>\nT scale(T x) { return x * (T)N; }\n";
+
+fn run1(src: &str, c: &LiftContext, outs: usize) -> Vec<f64> {
+    run(&lift(src, c).unwrap(), outs, vec![f32s(&[2.5])]).unwrap()
+}
+
+#[test]
+fn a_helper_template_called_with_explicit_arguments_is_instantiated_per_distinct_arguments() {
+    let src = format!(
+        "{SCALE}void k(float* out, const float* in) {{ out[0] = scale<float, 3>(in[0]); out[1] = scale<float, 5>(in[0]); out[2] = scale<float, 3>(in[0]) + 1.0f; }}"
+    );
+    assert_eq!(run1(&src, &ctx(), 3), vec![7.5, 12.5, 8.5]);
+}
+
+#[test]
+fn the_kernels_own_arguments_flow_into_the_helpers() {
+    let src = format!(
+        "{SCALE}template <int N>\nvoid k(float* out, const float* in) {{ out[0] = scale<float, N>(in[0]); out[1] = scale<float, N + 1>(in[0]); }}"
+    );
+    assert_eq!(run1(&src, &ctx().with_const("N", 4), 2), vec![10.0, 12.5]);
+    assert_eq!(run1(&src, &ctx().with_const("N", 2), 2), vec![5.0, 7.5]); // control
+}
+
+#[test]
+fn a_helper_template_that_calls_a_helper_template_and_a_default_argument() {
+    let src = format!(
+        "{SCALE}template <int M>\nfloat twice(float x) {{ return scale<float, M>(x) * 2.0f; }}\n\
+         template <typename T, int N = 2>\nT sc(T x) {{ return x * (T)N; }}\n\
+         void k(float* out, const float* in) {{ out[0] = twice<3>(in[0]); out[1] = sc<float>(in[0]); }}"
+    );
+    assert_eq!(run1(&src, &ctx(), 2), vec![15.0, 5.0]);
+}
+
+#[test]
+fn a_call_that_cannot_be_instantiated_declines_at_its_use() {
+    // not a template in the file
+    let r = lift(
+        "void k(float* out) { out[0] = std::max<float>(1.0f, 2.0f); }",
+        &ctx(),
+    );
+    assert!(
+        matches!(r, Err(KernelLiftError::NotYetLifted { .. })),
+        "{r:?}"
+    );
+    // too many arguments for the helper
+    let src = format!(
+        "{SCALE}void k(float* out, const float* in) {{ out[0] = scale<float, 3, 9>(in[0]); }}"
+    );
+    assert!(matches!(
+        lift(&src, &ctx()),
+        Err(KernelLiftError::NotYetLifted { .. })
+    ));
+    // a parameter with no argument and no default
+    let src =
+        format!("{SCALE}void k(float* out, const float* in) {{ out[0] = scale<float>(in[0]); }}");
+    assert!(matches!(
+        lift(&src, &ctx()),
+        Err(KernelLiftError::NotYetLifted { .. })
+    ));
+}

@@ -170,6 +170,10 @@ fn lift_in(
         }
         None => src,
     };
+    // template helpers called with explicit arguments become plain functions (census slice 2)
+    let expanded = templates::expand_calls(fe.parse, src.to_string())?;
+    let src = expanded.as_str();
+    tree = (fe.parse)(src).ok_or(KernelLiftError::SyntaxError { line: 0 })?;
     let root = tree.root_node();
     let func = find_function(root, src, name)
         .ok_or_else(|| KernelLiftError::NoSuchFunction(name.to_string()))?;
