@@ -68,4 +68,18 @@ Walked with `LiftContext::new(LaunchShape::new([16,1,8],[4,2,1]))`, dynamic shar
 
 Still ahead after those (not yet reached by the walk): `cp.async` asm whose operands are pointers (`__cvta_generic_to_shared`), a masked load inside `?:`, `size_t` loop counters.
 
+## Result (2026-11-22): the whole kernel lifts and runs on the oracle, **leniently**
+
+`tests/kernel_body_decode_goal.rs` lifts `BatchDecodeWithPagedKVCacheKernel_f16_d128_g1_none` from the verbatim fixture (Baracuda `ce29119567c7`, Baracuda #419) with `LiftContext` block (16,1,8), dynamic shared 36864, `__CUDACC_VER_MAJOR__` 13, `__CUDA_ARCH__` 800, and runs it with `run_launch_lenient` against an independent host reference (softmax(sm_scale q . K^T) V in `f64`, gathered by hand from the same page table over the f16-rounded inputs). **9 tests, 75 s in debug.** Worst error over the cases below: `o` 2.4e-4 (the f16 output rounding), `lse` 2.3e-7; a control with a 1% wrong scale moves `lse` by 7e-3 and is seen.
+
+Cases: 1 request of 5 tokens; 2 requests x 2 heads with shuffled physical pages; 130 tokens (several tiles, a partial last page); page size 1; page edges 16/17/32; **600 tokens, which runs the `kv_offset_smem` refresh**; an **empty request** (`o` exactly 0; its `lse` is upstream's -INF sentinel, asserted to be that, not compared); `lse` null (`o` right, `lse` untouched). **This is a result on those cases against an `f64` reference, not a proof about the kernel.**
+
+**It is a lenient run, never "oracle-clean".** The strict `run_launch` refuses the kernel three ways, each a property of FlashInfer's own code that hardware shrugs off:
+1. **`UninitializedShared`**: the predicated no-fill `cp.async` leaves the tokens past a request's length unwritten; `compute_qk` reads them and masks the logit to `-INF` afterwards. Allowed by `Leniency::zero_shared`, and **proven benign here, not assumed**: the same launches with those slots zero and with two different non-zero patterns (seeds 3 and 41, every byte 1 to 58 so no NaN) give bit-identical `o` and `lse`.
+2. **`DataRace` in shared**: in `sync_state` all 16 `tx` threads of a row store the same `st.m`/`st.d` to `smem_md`. 3. **`DataRace` in global**: under `if (tz == 0)` all `tx` threads store the same value to `lse[...]`. Both allowed by `Leniency::same_value_writes`, which accepts only a store of the **same bits** the element already holds (typed and raw places, shared and global); a different value, `+0.0` against `-0.0`, and any read racing a store still race (`tests/kernel_lenient.rs`, 11 mutants caught).
+
+The lift also needed the checker to call a load from a `Read` buffer at a uniform index uniform (the early exit `if (block_valid_mask && !block_valid_mask[bx]) return;` and the bounds loaded from `indptr` sit above `__syncthreads`), so the walker **derives buffer roles from use** and the checker applies the refinement to an **entry function only** (`docs/ir-kernel-layer.md`, "Buffer roles and the barrier-uniformity check").
+
+**Found by running it** (neither was visible to a per-construct differential), each now its own regression test: a local alias of a null buffer was not null (`const bool* m = m_ptr;`: the guard read a dummy buffer and the kernel returned early, writing nothing), and an integer `Select` with a comparison condition (the total `%`) failed on the oracle in an `f32` kernel because the comparison is typed as the compute type.
+
 — lane: unpopped

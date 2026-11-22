@@ -151,4 +151,8 @@ change, was a bare C `/` that crashed on a zero divisor in a float kernel: found
   kernels (`I32`/`U32`) with `BitAnd`/`BitOr`/`BitXor` and `Shl`/`Shr` (the count masked to the width) and "anything else a typed
   `UnsupportedKernel`". `fishstringer-slang-emit` `slang_binary_int` spells the same operators with the mask `& 31` or `& 63`, choosing
   the 63 only for `I64`, so a `U64` operand would get 31 *if* it reached that speller (not verified; its dtype gate was not read).
-  **Not read:** `rockfish-hip-emit`, `openclownfish-clc`.
+  **Reported by their lanes, read not run** (pm-kernels `[FINDING]`, 2026-11-22, `rockfish-hip-emit/src/lib.rs:1745-1943` and `openclownfish-clc/kernel.rs@d7ed879`):
+  `rockfish-hip-emit` **emits** integer `Div`/`Shl`/`Shr` at `i32`/`i64`/`u32`/`u64` through guarded helpers (`b == 0` gives `a`, signed `MIN / -1` gives `MIN`, shift count
+  `& (N-1)`, left shift through unsigned; `And`/`Or`/`Xor` bare), which matches the ruling by reading, and is tested by text and a clang syntax check only, **no value-level
+  run**. `openclownfish-clc` **declines** them by name in `lower_kernel` (`Div`: "a Div other than of two floats"; the others: "the binary op {op:?}"); its older fused
+  path masks shifts and uses `ocl_idiv` at the compute type only. Neither was read by this lane.
