@@ -140,7 +140,7 @@ fn every_thread_of_a_block_adds_into_one_counter() {
 #[test]
 fn atomics_that_are_not_a_plain_address_decline() {
     for (call, needle) in [
-        ("atomicAdd(c + 1, 1)", "through a pointer"),
+        ("atomicAdd((unsigned*)c, 1u)", "through a pointer"),
         ("atomicInc(&c[0], 3)", "`atomicInc`"),
         ("atomicAdd(&c[0])", "1 argument"),
     ] {
@@ -153,6 +153,8 @@ fn atomics_that_are_not_a_plain_address_decline() {
         }
     }
     assert!(one_thread("void k(int* c) { atomicAdd(&c[0], 1); }").is_ok());
+    // since the census wall slice, a pointer that names an element of its own base is that element
+    assert!(one_thread("void k(int* c) { atomicAdd(c + 1, 1); }").is_ok());
 }
 
 #[test]
