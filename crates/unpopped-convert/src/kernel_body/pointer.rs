@@ -376,7 +376,7 @@ impl<'s, 't> Walker<'s, 't> {
         let (ScalarExpr::Local(local), true) = (&p.off, matches!(op, "+" | "-")) else {
             return self.not_yet(
                 lhs,
-                format!("an assignment to the pointer `{name}` other than `+=` or `-=`"),
+                format!("an assignment to `{name}`, which is not a scalar local (a pointer local only moves with `+=` or `-=`)"),
             );
         };
         let Some(size) = byte_size(p.pointee).map(|s| s * i64::from(p.lanes)) else {
