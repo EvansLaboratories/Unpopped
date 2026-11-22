@@ -74,6 +74,10 @@ fn a_bound_the_loop_itself_changes_still_declines() {
     declines(
         "void k(float* out) { int m = 4; float s = 0.0f; for (int i = 0; i < m; i++) { for (int j = 0; j < 2; j++) { m = 3; } s += 1.0f; } out[0] = s; }",
     );
+    // a bound that names the loop's own counter moves with it (only the update assigns it)
+    declines(
+        "void k(float* out) { float s = 0.0f; for (int i = 1; i < 10 - i; i++) { s += 1.0f; } out[0] = s; }",
+    );
     declines(
         "void k(float* out) { int m = 4; float s = 0.0f; for (int i = 0; i < 9; i += m) { m = 1; s += 1.0f; } out[0] = s; }",
     );
