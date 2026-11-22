@@ -98,6 +98,7 @@ mod returns;
 mod roles;
 mod statements;
 mod structs;
+mod templates;
 mod unrolled;
 mod vecmem;
 
@@ -157,7 +158,18 @@ fn lift_in(
     if !src.contains(fe.kernel_marker) {
         return Err(KernelLiftError::NotAKernel);
     }
-    let tree = (fe.parse)(src).ok_or(KernelLiftError::SyntaxError { line: 0 })?;
+    let mut tree = (fe.parse)(src).ok_or(KernelLiftError::SyntaxError { line: 0 })?;
+    let first = find_function(tree.root_node(), src, name)
+        .ok_or_else(|| KernelLiftError::NoSuchFunction(name.to_string()))?;
+    // a template kernel is instantiated from the caller's arguments and re-parsed (census slice 1)
+    let instantiated = templates::instantiate(src, first, name, ctx)?;
+    let src = match &instantiated {
+        Some(s) => {
+            tree = (fe.parse)(s).ok_or(KernelLiftError::SyntaxError { line: 0 })?;
+            s.as_str()
+        }
+        None => src,
+    };
     let root = tree.root_node();
     let func = find_function(root, src, name)
         .ok_or_else(|| KernelLiftError::NoSuchFunction(name.to_string()))?;

@@ -25,6 +25,10 @@ pub struct LiftContext {
     /// Buffer parameters that are **null** in this lift (an optional buffer the launch does not bind): a null check on one is false.
     /// Every other buffer is non-null.
     pub null_buffers: Vec<String>,
+    /// Template **type** arguments of the kernel (`T` is `float`), by parameter name (ROADMAP U19 census slice 1).
+    pub type_args: Vec<(String, String)>,
+    /// Template **non-type** arguments of the kernel (`N` is `128`, `kCausal` is `1`), by parameter name.
+    pub const_args: Vec<(String, i64)>,
 }
 
 impl LiftContext {
@@ -36,6 +40,8 @@ impl LiftContext {
             dynamic_shared_bytes: 0,
             defines: Vec::new(),
             null_buffers: Vec::new(),
+            type_args: Vec::new(),
+            const_args: Vec::new(),
         }
     }
 
@@ -46,6 +52,8 @@ impl LiftContext {
             dynamic_shared_bytes: 0,
             defines: Vec::new(),
             null_buffers: Vec::new(),
+            type_args: Vec::new(),
+            const_args: Vec::new(),
         }
     }
 
@@ -60,6 +68,21 @@ impl LiftContext {
     #[must_use]
     pub fn with_null_buffer(mut self, name: impl Into<String>) -> Self {
         self.null_buffers.push(name.into());
+        self
+    }
+
+    /// With the kernel's template type parameter `name` instantiated as the C type `ty` (`with_type("T", "float")`). A parameter
+    /// with a default and no argument takes its default; one with neither declines.
+    #[must_use]
+    pub fn with_type(mut self, name: impl Into<String>, ty: impl Into<String>) -> Self {
+        self.type_args.push((name.into(), ty.into()));
+        self
+    }
+
+    /// With the kernel's template non-type parameter `name` instantiated as `value` (`with_const("N", 128)`; a `bool` is `0` or `1`).
+    #[must_use]
+    pub fn with_const(mut self, name: impl Into<String>, value: i64) -> Self {
+        self.const_args.push((name.into(), value));
         self
     }
 
