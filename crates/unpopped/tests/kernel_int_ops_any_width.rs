@@ -27,9 +27,19 @@ enum Op {
     And,
     Or,
     Xor,
+    /// `(a << b) >> b`: the shifted value is used again, so a `<<` that did not wrap into the type shows here.
+    ShlThenShr,
 }
 
-const OPS: [Op; 6] = [Op::Div, Op::Shl, Op::Shr, Op::And, Op::Or, Op::Xor];
+const OPS: [Op; 7] = [
+    Op::Div,
+    Op::Shl,
+    Op::Shr,
+    Op::And,
+    Op::Or,
+    Op::Xor,
+    Op::ShlThenShr,
+];
 
 fn local(i: u32) -> Box<ScalarExpr> {
     Box::new(ScalarExpr::Local(i))
@@ -51,6 +61,11 @@ fn kernel(t: E, op: Op, n: usize) -> KernelFn {
         Op::And => ScalarExpr::Binary(BinaryOp::BitAnd, local(1), local(2)),
         Op::Or => ScalarExpr::Binary(BinaryOp::BitOr, local(1), local(2)),
         Op::Xor => ScalarExpr::Binary(BinaryOp::BitXor, local(1), local(2)),
+        Op::ShlThenShr => ScalarExpr::Binary(
+            BinaryOp::Shr,
+            Box::new(ScalarExpr::Binary(BinaryOp::Shl, local(1), local(2))),
+            local(2),
+        ),
     };
     let body = Block(vec![
         Stmt::Load {
@@ -114,6 +129,7 @@ fn reference(t: E, op: Op, x: i128, y: i128) -> i128 {
         Op::And => x & y,
         Op::Or => x | y,
         Op::Xor => x ^ y,
+        Op::ShlThenShr => reference(t, Op::Shr, reference(t, Op::Shl, x, y), y),
     }
 }
 
@@ -134,7 +150,9 @@ fn rhs(t: E, op: Op) -> Vec<i128> {
     let bits = i128::from(typed_bits(t).expect("an integer type"));
     let mut v = match op {
         Op::Div => vec![0, 1, -1, lo, hi, 2, -3, 7],
-        Op::Shl | Op::Shr => vec![0, 1, bits - 1, bits, bits + 1, 31, 32, 33, 63, 64, 255, -1],
+        Op::Shl | Op::Shr | Op::ShlThenShr => {
+            vec![0, 1, bits - 1, bits, bits + 1, 31, 32, 33, 63, 64, 255, -1]
+        }
         _ => vec![0, 1, lo, hi, 85, -1, -86],
     };
     v.retain(|x| (lo..=hi).contains(x));
