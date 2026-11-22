@@ -400,6 +400,10 @@ impl<'s, 't> Walker<'s, 't> {
         let mut raw = Vec::new();
         let mut c = plist.walk();
         for p in plist.named_children(&mut c) {
+            // a comment between parameters is not one (the census over Baracuda's kernels: 94 kernels stopped on it)
+            if p.kind() == "comment" {
+                continue;
+            }
             if p.kind() != "parameter_declaration" {
                 return self.not_yet(p, format!("a `{}` parameter", p.kind()));
             }

@@ -378,3 +378,15 @@ fn a_frontends_residue_list_does_not_stop_the_walker() {
         Err(KernelLiftError::NotAKernel)
     ));
 }
+
+#[test]
+fn comments_between_parameters_are_not_parameters() {
+    // Found by the census over Baracuda's CUDA kernels (2026-11-22): a `// ...` between parameters stopped 94 kernels at "a `comment`
+    // parameter". Both comment forms, and one before the first and after the last.
+    let k = lift(
+        "void k(/* the output */ float* out, // the input\n const float* a /* last */) { out[0] = a[0] + 1.0f; }",
+    )
+    .unwrap();
+    assert_eq!(k.params.len(), 2);
+    assert_eq!(run(&k, 1, vec![f32s(&[2.0])]).unwrap(), vec![3.0]);
+}
