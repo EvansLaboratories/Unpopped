@@ -35,6 +35,11 @@ impl<'s, 't> Walker<'s, 't> {
                 "a declaration with a storage class other than `__shared__`",
             );
         }
+        self.scalar_declaration(n, ty, out)
+    }
+
+    /// `T x = e;` and `T x;` (a scalar local, zero when not initialised).
+    pub(super) fn scalar_declaration(&mut self, n: Node<'_>, ty: E, out: &mut Vec<Stmt>) -> R<()> {
         let mut c = n.walk();
         let decls: Vec<_> = n.children_by_field_name("declarator", &mut c).collect();
         for d in decls {

@@ -141,16 +141,8 @@ impl<'s, 't> Walker<'s, 't> {
         want_old: bool,
     ) -> R<Option<(ScalarExpr, E)>> {
         let args = self.call_args(n);
-        let op = match name {
-            "atomicAdd" => Some(AtomicOp::Add),
-            "atomicMax" => Some(AtomicOp::Max),
-            "atomicMin" => Some(AtomicOp::Min),
-            "atomicAnd" => Some(AtomicOp::And),
-            "atomicOr" => Some(AtomicOp::Or),
-            "atomicXor" => Some(AtomicOp::Xor),
-            "atomicExch" => Some(AtomicOp::Exchange),
-            "atomicCAS" => None,
-            other => return self.not_yet(n, format!("the atomic `{other}`")),
+        let Some(op) = atomic_op(name) else {
+            return self.not_yet(n, format!("the atomic `{name}`"));
         };
         let want = if op.is_some() { 2 } else { 3 };
         if args.len() != want {
@@ -164,15 +156,29 @@ impl<'s, 't> Walker<'s, 't> {
             );
         }
         let old = want_old.then(|| self.new_local(elem));
+        let stmt = self.atomic_stmt(op, &args, (place, elem, scope), old)?;
+        self.hoisted.push(stmt);
+        Ok(old.map(|l| (ScalarExpr::Local(l), elem)))
+    }
+
+    /// The `AtomicRmw` (or, for `atomicCAS`, the `AtomicCas`) of `args` on `target`.
+    fn atomic_stmt(
+        &mut self,
+        op: Option<AtomicOp>,
+        args: &[Node<'_>],
+        (place, elem, scope): (Place, E, Scope),
+        old: Option<u32>,
+    ) -> R<Stmt> {
         let first = self.expr(args[1])?;
         let first = self.convert(first.0, first.1, elem, args[1])?;
-        let stmt = match op {
+        let order = MemoryOrder::Relaxed;
+        Ok(match op {
             Some(op) => Stmt::AtomicRmw {
                 op,
                 place,
                 value: first,
                 old,
-                order: MemoryOrder::Relaxed,
+                order,
                 scope,
             },
             None => {
@@ -183,12 +189,26 @@ impl<'s, 't> Walker<'s, 't> {
                     expected: first,
                     desired,
                     old,
-                    order: MemoryOrder::Relaxed,
+                    order,
                     scope,
                 }
             }
-        };
-        self.hoisted.push(stmt);
-        Ok(old.map(|l| (ScalarExpr::Local(l), elem)))
+        })
     }
+}
+
+/// The IR operation of a CUDA atomic: `Some(Some(op))` for a read-modify-write, `Some(None)` for `atomicCAS`, `None` for any
+/// other name.
+fn atomic_op(name: &str) -> Option<Option<AtomicOp>> {
+    Some(match name {
+        "atomicAdd" => Some(AtomicOp::Add),
+        "atomicMax" => Some(AtomicOp::Max),
+        "atomicMin" => Some(AtomicOp::Min),
+        "atomicAnd" => Some(AtomicOp::And),
+        "atomicOr" => Some(AtomicOp::Or),
+        "atomicXor" => Some(AtomicOp::Xor),
+        "atomicExch" => Some(AtomicOp::Exchange),
+        "atomicCAS" => None,
+        _ => return None,
+    })
 }

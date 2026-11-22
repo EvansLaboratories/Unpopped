@@ -123,26 +123,42 @@ impl<'s, 't> Walker<'s, 't> {
         };
         let pname = text(id, self.src).to_string();
         match kind {
-            Bind::Value(t) => {
-                let (v, vt) = self.expr(arg)?;
-                let v = self.convert(v, vt, t, arg)?;
-                out.append(&mut self.hoisted);
-                let local = self.new_local(t);
-                out.push(Stmt::Let { local, init: v });
-                Ok((pname, Sym::Scalar(local, t, Fixed::No)))
+            Bind::Value(t) => self.bind_value(pname, t, arg, out),
+            Bind::Reference(t) => self.bind_reference(pname, t, arg),
+        }
+    }
+
+    /// A by-value parameter: a fresh local holding the converted argument.
+    fn bind_value(
+        &mut self,
+        pname: String,
+        t: E,
+        arg: Node<'_>,
+        out: &mut Vec<Stmt>,
+    ) -> R<(String, Sym)> {
+        let (v, vt) = self.expr(arg)?;
+        let v = self.convert(v, vt, t, arg)?;
+        out.append(&mut self.hoisted);
+        let local = self.new_local(t);
+        out.push(Stmt::Let { local, init: v });
+        Ok((pname, Sym::Scalar(local, t, Fixed::No)))
+    }
+
+    /// A `T&` parameter: the caller's own local, which must be a plain local of the same type.
+    fn bind_reference(&mut self, pname: String, t: E, arg: Node<'_>) -> R<(String, Sym)> {
+        let target = (arg.kind() == "identifier")
+            .then(|| self.lookup(text(arg, self.src)))
+            .flatten();
+        match target {
+            Some(Sym::Scalar(l, at, Fixed::No)) if at == t => {
+                Ok((pname, Sym::Scalar(l, t, Fixed::No)))
             }
-            Bind::Reference(t) => {
-                let target = (arg.kind() == "identifier")
-                    .then(|| self.lookup(text(arg, self.src)))
-                    .flatten();
-                match target {
-                    Some(Sym::Scalar(l, at, Fixed::No)) if at == t => Ok((pname, Sym::Scalar(l, t, Fixed::No))),
-                    _ => self.not_yet(
-                        arg,
-                        format!("a reference argument that is not a plain local of the parameter's type `{t:?}`"),
-                    ),
-                }
-            }
+            _ => self.not_yet(
+                arg,
+                format!(
+                    "a reference argument that is not a plain local of the parameter's type `{t:?}`"
+                ),
+            ),
         }
     }
 

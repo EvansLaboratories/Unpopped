@@ -109,17 +109,7 @@ impl<'s, 't> Walker<'s, 't> {
         if let (true, Some(Sym::Vector(ls, elem, lanes))) =
             (a.kind() == "identifier", self.lookup(base))
         {
-            let lane = lane_of(text(f, self.src), lanes);
-            let Some(i) = lane else {
-                return self.not_yet(
-                    f,
-                    format!(
-                        "the member `{}` of a {lanes}-lane vector",
-                        text(f, self.src)
-                    ),
-                );
-            };
-            return Ok((ScalarExpr::Local(ls[usize::from(i)]), elem));
+            return self.vector_member(f, ls, (elem, lanes));
         }
         if a.kind() != "identifier" || self.lookup(base).is_some() {
             return self.not_yet(
@@ -127,6 +117,31 @@ impl<'s, 't> Walker<'s, 't> {
                 "a member access on a value (structs and vector types are a later slice)",
             );
         }
+        self.exec_builtin(n, a, f)
+    }
+
+    /// `v.x` of a vector local: that lane's scalar local.
+    fn vector_member(
+        &self,
+        f: Node<'_>,
+        ls: [u32; 4],
+        (elem, lanes): (E, u8),
+    ) -> R<(ScalarExpr, E)> {
+        let Some(i) = lane_of(text(f, self.src), lanes) else {
+            return self.not_yet(
+                f,
+                format!(
+                    "the member `{}` of a {lanes}-lane vector",
+                    text(f, self.src)
+                ),
+            );
+        };
+        Ok((ScalarExpr::Local(ls[usize::from(i)]), elem))
+    }
+
+    /// `threadIdx.x` and kin: the launch's execution id (`U32`), which needs the caller's launch.
+    fn exec_builtin(&self, n: Node<'_>, a: Node<'_>, f: Node<'_>) -> R<(ScalarExpr, E)> {
+        let base = text(a, self.src);
         let axis = match text(f, self.src) {
             "x" => 0,
             "y" => 1,
