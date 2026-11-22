@@ -110,10 +110,17 @@ fn field_of(d: Node<'_>, ty: &str, src: &str) -> FieldDef {
                 .child_by_field_name("declarator")
                 .filter(|i| i.kind() == "field_identifier");
             let n = d.child_by_field_name("size").and_then(|s| {
-                let t = text(s, src).trim();
-                match (t.parse::<u32>(), s.kind()) {
-                    (Ok(n), _) if n > 0 => Some(ArrSize::Lit(n)),
-                    (_, "identifier") => Some(ArrSize::Named(t.to_string())),
+                // an extent substituted from a template argument arrives parenthesised (`data[(4)]`)
+                let mut t = text(s, src).trim();
+                while let Some(inner) = t.strip_prefix('(').and_then(|r| r.strip_suffix(')')) {
+                    t = inner.trim();
+                }
+                let ident = !t.is_empty()
+                    && !t.starts_with(|c: char| c.is_ascii_digit())
+                    && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+                match t.parse::<u32>() {
+                    Ok(n) if n > 0 => Some(ArrSize::Lit(n)),
+                    _ if ident => Some(ArrSize::Named(t.to_string())),
                     _ => None,
                 }
             });
