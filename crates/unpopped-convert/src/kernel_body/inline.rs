@@ -293,7 +293,7 @@ impl<'s, 't> Walker<'s, 't> {
 }
 
 /// The parameter list of a function or method (a conversion operator keeps it one level down).
-fn callee_params(func: Node<'_>) -> Option<Node<'_>> {
+pub(super) fn callee_params(func: Node<'_>) -> Option<Node<'_>> {
     let d = func.child_by_field_name("declarator")?;
     let d = if d.kind() == "operator_cast" {
         d.child_by_field_name("declarator")?

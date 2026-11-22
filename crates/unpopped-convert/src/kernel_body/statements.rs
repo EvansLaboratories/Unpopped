@@ -466,28 +466,45 @@ impl<'s, 't> Walker<'s, 't> {
         }
     }
 
-    /// The names that can change while the loop `n` runs: those assigned inside it (its body and update), or, when the body calls
-    /// a function defined in this source (which could assign a caller's variable through a reference), every name the function
-    /// assigns anywhere. A bound naming a variable assigned only *outside* the loop (an enclosing loop's counter, a value set
-    /// before it) is the same on every iteration.
+    /// The names that can change while the loop `n` runs: those assigned inside it (its body and update), plus every name passed
+    /// to a reference or pointer parameter of a source-defined function it calls (the callee can assign through it). A call
+    /// that cannot be matched to its definition counts every name the function assigns anywhere. A bound naming a variable
+    /// assigned only *outside* the loop (an enclosing loop's counter, a value set before it) is the same on every iteration.
     fn loop_assigned(&self, n: Node<'_>) -> HashSet<String> {
-        if self.calls_defined(n) {
-            return self.assigned.clone();
-        }
         let mut out = HashSet::new();
         collect_assigned(n, self.src, &mut out);
+        if !self.add_escaping_args(n, &mut out) {
+            return self.assigned.clone();
+        }
         out
     }
 
-    fn calls_defined(&self, n: Node<'_>) -> bool {
+    /// Adds the names a defined function called inside `n` can assign through its arguments; `false` if a call has no usable
+    /// definition (the caller then falls back to the function-wide set).
+    fn add_escaping_args(&self, n: Node<'_>, out: &mut HashSet<String>) -> bool {
         if n.kind() == "call_expression"
-            && n.child_by_field_name("function")
-                .is_some_and(|f| self.defines(text(f, self.src)))
+            && let Some(f) = n.child_by_field_name("function")
+            && let Some(&func) = self.functions.get(text(f, self.src))
         {
-            return true;
+            let params = super::inline::callee_params(func);
+            let args = self.call_args(n);
+            let Some(params) = params else { return false };
+            let mut c = params.walk();
+            let params: Vec<_> = params.named_children(&mut c).collect();
+            if params.len() != args.len() {
+                return false;
+            }
+            for (p, a) in params.into_iter().zip(args) {
+                let t = text(p, self.src);
+                // a by-value parameter is the callee's own copy; anything else may alias the argument
+                if t.contains('&') || t.contains('*') || p.kind() != "parameter_declaration" {
+                    collect_identifiers(a, self.src, out);
+                }
+            }
         }
         let mut c = n.walk();
-        n.named_children(&mut c).any(|k| self.calls_defined(k))
+        n.named_children(&mut c)
+            .all(|k| self.add_escaping_args(k, out))
     }
 
     /// A `For` bound is read once by the IR and every iteration by C: they agree only if nothing it names is assigned while the
@@ -508,4 +525,14 @@ impl<'s, 't> Walker<'s, 't> {
     }
 
     // ---- expressions ----
+}
+
+fn collect_identifiers(n: Node<'_>, src: &str, out: &mut HashSet<String>) {
+    if n.kind() == "identifier" {
+        out.insert(text(n, src).to_string());
+    }
+    let mut c = n.walk();
+    for k in n.named_children(&mut c) {
+        collect_identifiers(k, src, out);
+    }
 }

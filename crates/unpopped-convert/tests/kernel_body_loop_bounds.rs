@@ -84,15 +84,28 @@ fn a_bound_the_loop_itself_changes_still_declines() {
 }
 
 #[test]
-fn a_loop_that_calls_a_function_of_the_source_keeps_the_function_wide_rule() {
-    // the callee could assign the caller's variable through a reference, so any assignment of `m` in the function counts
+fn a_helper_that_takes_the_bound_by_reference_keeps_it_changing() {
+    // the callee assigns the caller's `m` through the reference, so the bound moves while the loop runs
     declines(
-        "float f(float x) { return x; } \
-        void k(float* out) { int m = 2; float s = 0.0f; for (int i = 0; i < m; i++) { s += f(1.0f); } m = 3; out[0] = s; }",
+        "void dec(int& v) { v -= 1; }         void k(float* out) { int m = 4; float s = 0.0f; for (int i = 0; i < m; i++) { dec(m); s += 1.0f; } out[0] = s; }",
     );
-    // control: without the call, the same assignment after the loop lifts
-    assert!(
-        lift("void k(float* out) { int m = 2; float s = 0.0f; for (int i = 0; i < m; i++) { s += 1.0f; } m = 3; out[0] = s; }")
-            .is_ok()
+    // passed on through a second helper it is still the caller's variable
+    declines(
+        "void dec(int& v) { v -= 1; } void via(int& w) { dec(w); }         void k(float* out) { int m = 4; float s = 0.0f; for (int i = 0; i < m; i++) { via(m); s += 1.0f; } out[0] = s; }",
+    );
+}
+
+#[test]
+fn a_helper_called_by_value_leaves_the_bound_alone() {
+    // triangular loop whose body calls helpers (the batched_ormqr shape): `k` is the outer counter, set only by the outer update
+    let src = "float add(float a, float b) { return a + b; } void bump(float& acc, float v) { acc += v; }         void k(float* out) { float t = 0.0f;         for (int k2 = 0; k2 < 4; k2++) { float s = 0.0f; for (int j = 0; j < k2; j++) { s = add(s, (float)(j + 1)); bump(t, 1.0f); } out[k2] = s; }         out[4] = t; }";
+    let mut want: Vec<f64> = (0..4)
+        .map(|k: i32| f64::from((0..k).map(|j| j + 1).sum::<i32>()))
+        .collect();
+    want.push(f64::from((0..4).sum::<i32>()));
+    assert_eq!(out(&lift(src).unwrap(), 5), want);
+    // control: the same helper given the counter's bound by reference declines
+    declines(
+        "void bump(int& m) { m += 1; }         void k(float* out) { int m = 2; float s = 0.0f; for (int i = 0; i < m; i++) { bump(m); s += 1.0f; } out[0] = s; }",
     );
 }
