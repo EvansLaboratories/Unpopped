@@ -60,7 +60,7 @@ impl<'s, 't> Walker<'s, 't> {
 
     /// `a[i][j]` of a multi-dimensional array allocation: the flat element `(i * J + j)`, row-major, every index converted to
     /// `I64` first. `None` when `n` is not a chain of subscripts on such an array (a partial chain is declined by the caller).
-    fn nd_element_place(&mut self, n: Node<'_>) -> R<Option<(Place, E)>> {
+    pub(super) fn nd_element_place(&mut self, n: Node<'_>) -> R<Option<(Place, E)>> {
         let mut indices = Vec::new();
         let mut cur = n;
         while cur.kind() == "subscript_expression" {
