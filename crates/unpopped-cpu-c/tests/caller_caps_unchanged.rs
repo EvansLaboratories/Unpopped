@@ -11,7 +11,7 @@ use unpopped_cpu_c::CpuC;
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_key};
 
 fn gen_with(op: &OpDef, caps: Option<CallerCaps>) -> unpopped::GeneratedKernel {
-    let d = OperandDesc::new(1, &[16], &[1], ElementKind::F32, 256);
+    let d = OperandDesc::new(1, &[7], &[1], ElementKind::F32, 256);
     let key = structure_key(OpCategory::BinaryElementwise, &[d, d, d], ArchSku::Sm89);
     match caps {
         None => try_generate(op, &key, &CpuC),
