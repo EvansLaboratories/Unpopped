@@ -16,9 +16,9 @@ Status: **options for pm-kernels' ruling; no code.** Measured on lane/u19-walls-
 
 ## Options
 
-- **A. Recognise the idiom, lift to the native op (recommended for the two known helpers).** A function whose body is exactly the max/min CAS loop above becomes `AtomicRmw { op: Max | Min }` on the typed element. Additive, walker only. Cost S. Semantics: equal for non-NaN values; the CAS loop's `val <= cur` early-out makes a NaN `val` never store, `AtomicOp::Max` on a NaN is unspecified in the oracle (say so in the changelog). Fragile to a different spelling (declines by name, as today).
+- **A. Recognise the idiom, lift to the native op (recommended for the two known helpers).** A function whose body is exactly the max/min CAS loop above becomes `AtomicRmw { op: Max | Min }` on the typed element. Additive, walker only. Cost S. Semantics: equal for non-NaN values; the CAS loop's `val <= cur` early-out makes a NaN `val` never store, `AtomicOp::Max` on a NaN is whatever the oracle's `Max` does, to be read and pinned by a test before building. Fragile to a different spelling (declines by name, as today).
 - **B. Lift the general form.** `do/while` to `While`, `atomicCAS(ptr, a, b)` to `AtomicCas` with `old`, `__float_as_int` and friends to `Bitcast`, and let an atomic through a same-width cast pointer address the buffer's element as the integer (a `Place::Raw` int element over a float buffer). Needs the checker's v1 atomic form to admit `Place::Raw` with an element of another type than the buffer's (an additive checker relaxation, the one IR-adjacent part; no enum widening). Cost M-L. Lifts every CAS loop in the corpus (27 sites), not only the max/min helpers; the oracle must run a CAS loop (a spin until success: single-threaded progress is fine, with many threads it is a bounded retry per the oracle's scheduler).
-- **C. Decline (status quo)**, and ask Baracuda to call native `atomicMax`/`atomicMin` on `float` (CUDA 12 has them) in kernels it wants lifted. Cost 0 here; a Baracuda change.
+- **C. Decline (status quo)**, and keep the helper as it is and accept that these kernels do not lift (Baracuda could route them through an `ExternCall`-style helper the oracle models separately). Cost 0 here.
 
 ## Recommendation
 
