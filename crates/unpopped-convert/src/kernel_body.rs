@@ -84,6 +84,7 @@ impl std::error::Error for KernelLiftError {}
 
 mod asm;
 mod inline;
+mod pointer;
 
 type R<T> = Result<T, KernelLiftError>;
 
@@ -185,8 +186,10 @@ fn text<'a>(n: Node<'_>, src: &'a str) -> &'a str {
 }
 
 /// A name in scope.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Sym {
+    /// A pointer local or parameter (slice 4c-4): a base, a pointee type and a byte offset, resolved in the walker.
+    Pointer(pointer::PtrVal),
     /// A buffer parameter: its index in `KernelFn::params`, element type and whether the source made it `const`.
     Buffer(u32, E),
     /// A local of a CUDA vector type (`float4`, `int2`, ...), **scalarized**: one scalar local per lane (the first `lanes` of
@@ -359,7 +362,7 @@ impl<'s, 't> Walker<'s, 't> {
     }
 
     fn lookup(&self, name: &str) -> Option<Sym> {
-        self.scopes.iter().rev().find_map(|s| s.get(name).copied())
+        self.scopes.iter().rev().find_map(|s| s.get(name).cloned())
     }
 
     fn type_of(&self, ty: Option<Node<'_>>, at: Node<'_>) -> R<E> {
@@ -448,6 +451,9 @@ impl<'s, 't> Walker<'s, 't> {
         }
         let ty = self.type_of(n.child_by_field_name("type"), n)?;
         let head = text(n, self.src).trim_start();
+        if declares_pointer(n) {
+            return self.pointer_declaration(n, ty, out);
+        }
         if head.starts_with("__shared__") {
             return self.array_declaration(n, ty, MemorySpace::Shared);
         }
@@ -901,6 +907,12 @@ impl<'s, 't> Walker<'s, 't> {
             return self.not_yet(n, format!("`{name}` with {} argument(s)", args.len()));
         }
         let (place, elem, scope) = self.address_of(args[0])?;
+        if matches!(place, Place::Raw { .. } | Place::AllocRaw { .. }) {
+            return self.not_yet(
+                n,
+                "an atomic through a pointer (the IR's atomics take no raw place)",
+            );
+        }
         let old = want_old.then(|| self.new_local(elem));
         let first = self.expr(args[1])?;
         let first = self.convert(first.0, first.1, elem, args[1])?;
@@ -932,6 +944,17 @@ impl<'s, 't> Walker<'s, 't> {
 
     /// `&a[i]`: the place, its element type and the scope an atomic on it has.
     fn address_of(&mut self, n: Node<'_>) -> R<(Place, E, Scope)> {
+        if !self.is_plain_address(n) {
+            if let Some(p) = self.ptr_expr(n)? {
+                let (place, elem) = self.pointer_place(&p, None, n)?;
+                let scope = if matches!(place, Place::AllocRaw { .. }) {
+                    Scope::Block
+                } else {
+                    Scope::Device
+                };
+                return Ok((place, elem, scope));
+            }
+        }
         let inner = if n.kind() == "parenthesized_expression" {
             n.named_child(0)
         } else {
@@ -985,7 +1008,9 @@ impl<'s, 't> Walker<'s, 't> {
         let op = text(op, self.src).trim_end_matches('=').to_string();
         match lhs.kind() {
             "identifier" => self.assign_local(lhs, &op, rhs, out),
-            "subscript_expression" => self.assign_element(lhs, &op, rhs, out),
+            "subscript_expression" | "pointer_expression" => {
+                self.assign_element(lhs, &op, rhs, out)
+            }
             "field_expression" => self.assign_member(lhs, &op, rhs, out),
             other => self.not_yet(lhs, format!("an assignment to a `{other}`")),
         }
@@ -1379,7 +1404,7 @@ impl<'s, 't> Walker<'s, 't> {
             "unary_expression" => self.unary_node(n),
             "conditional_expression" => self.conditional(n),
             "cast_expression" => self.cast_node(n),
-            "subscript_expression" => self.read_element(n),
+            "subscript_expression" | "pointer_expression" => self.read_element(n),
             "field_expression" => self.builtin(n),
             "call_expression" => self.call_expr(n),
             other => self.not_yet(n, format!("a `{other}` expression")),
@@ -1390,7 +1415,7 @@ impl<'s, 't> Walker<'s, 't> {
         let name = text(n, self.src);
         match self.lookup(name) {
             Some(Sym::Scalar(l, t, _)) => Ok((ScalarExpr::Local(l), t)),
-            Some(Sym::Buffer(..) | Sym::Alloc(..)) => {
+            Some(Sym::Buffer(..) | Sym::Alloc(..) | Sym::Pointer(..)) => {
                 self.not_yet(n, format!("the array or pointer `{name}` used as a value"))
             }
             Some(Sym::Vector(..)) => self.not_yet(
@@ -1652,17 +1677,30 @@ impl<'s, 't> Walker<'s, 't> {
     }
 
     fn element_place(&mut self, n: Node<'_>) -> R<(Place, E)> {
+        if n.kind() == "pointer_expression" {
+            return self.deref_place(n);
+        }
         let (Some(arg), Some(idx)) = (
             n.child_by_field_name("argument"),
             n.child_by_field_name("indices"),
         ) else {
             return self.not_yet(n, "an index of an unexpected shape");
         };
-        let sym = self.lookup(text(arg, self.src));
+        let sym = (arg.kind() == "identifier")
+            .then(|| self.lookup(text(arg, self.src)))
+            .flatten();
         let Some(Sym::Buffer(_, elem) | Sym::Alloc(_, elem)) = sym else {
+            // not a plain buffer or array: a pointer expression (`p[i]`, `(T*)p`, `(p + k)[i]`), read through a raw place
+            if let Some(p) = self.ptr_expr(arg)? {
+                let one = idx.named_child(0).filter(|_| idx.named_child_count() == 1);
+                let Some(one) = one else {
+                    return self.not_yet(idx, "an index with other than one subscript");
+                };
+                return self.pointer_place(&p, Some(one), n);
+            }
             return self.not_yet(
                 arg,
-                "indexing something that is not a buffer parameter or a `__shared__` array",
+                "indexing something that is not a buffer parameter, a `__shared__` array or a pointer",
             );
         };
         if idx.named_child_count() != 1 {
@@ -1682,6 +1720,46 @@ impl<'s, 't> Walker<'s, 't> {
             _ => unreachable!("matched above"),
         };
         Ok((place, elem))
+    }
+
+    /// `*p`: the place a pointer expression points at.
+    fn deref_place(&mut self, n: Node<'_>) -> R<(Place, E)> {
+        let op = n.child_by_field_name("operator").map(|o| text(o, self.src));
+        let arg = n.child_by_field_name("argument");
+        let (Some("*"), Some(arg)) = (op, arg) else {
+            return self.not_yet(n, "the address-of operator used as a value (only `&p[i]` as an atomic or `__ldg` address, or a pointer initialiser)");
+        };
+        match self.ptr_expr(arg)? {
+            Some(p) => self.pointer_place(&p, None, n),
+            None => self.not_yet(n, "a dereference of something that is not a pointer"),
+        }
+    }
+
+    /// Whether `n` is `&a[i]` of a plain buffer parameter or `__shared__` array (which keeps its typed `Logical`/`Alloc` place).
+    fn is_plain_address(&self, n: Node<'_>) -> bool {
+        let inner = if n.kind() == "parenthesized_expression" {
+            n.named_child(0)
+        } else {
+            Some(n)
+        };
+        let Some(inner) = inner.filter(|i| i.kind() == "pointer_expression") else {
+            return false;
+        };
+        let is_amp = inner
+            .child_by_field_name("operator")
+            .is_some_and(|o| text(o, self.src) == "&");
+        let base = inner
+            .child_by_field_name("argument")
+            .filter(|a| a.kind() == "subscript_expression")
+            .and_then(|a| a.child_by_field_name("argument"))
+            .filter(|b| b.kind() == "identifier");
+        is_amp
+            && base.is_some_and(|b| {
+                matches!(
+                    self.lookup(text(b, self.src)),
+                    Some(Sym::Buffer(..) | Sym::Alloc(..))
+                )
+            })
     }
 
     fn read_element(&mut self, n: Node<'_>) -> R<(ScalarExpr, E)> {
@@ -1716,6 +1794,19 @@ fn lane_of(member: &str, lanes: u8) -> Option<u8> {
         _ => return None,
     };
     (i < lanes).then_some(i)
+}
+
+/// Whether a declaration declares a pointer (`T* p = ...`).
+fn declares_pointer(n: Node<'_>) -> bool {
+    let mut c = n.walk();
+    n.children_by_field_name("declarator", &mut c).any(|d| {
+        let inner = if d.kind() == "init_declarator" {
+            d.child_by_field_name("declarator")
+        } else {
+            Some(d)
+        };
+        inner.is_some_and(|i| i.kind() == "pointer_declarator")
+    })
 }
 
 /// Whether a declaration declares an array (`T a[N]`, with or without an initializer).
@@ -1795,6 +1886,8 @@ fn c_type(t: &str) -> Result<E, String> {
         "long long" | "long long int" | "int64_t" => E::I64,
         "unsigned long long" | "uint64_t" | "size_t" => E::U64,
         "bool" => E::Bool,
+        "half" | "__half" => E::F16,
+        "__nv_bfloat16" | "nv_bfloat16" => E::Bf16,
         "char" => return Err("`char` (its signedness is implementation-defined)".into()),
         "long" | "unsigned long" => {
             return Err(format!(

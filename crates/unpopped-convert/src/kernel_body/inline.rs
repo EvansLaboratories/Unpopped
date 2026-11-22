@@ -98,6 +98,9 @@ impl<'s, 't> Walker<'s, 't> {
         let Some(d) = p.child_by_field_name("declarator") else {
             return self.not_yet(p, "an unnamed parameter");
         };
+        if d.kind() == "pointer_declarator" {
+            return self.bind_pointer_argument(d, ty, arg, out);
+        }
         let (kind, id) = match d.kind() {
             "identifier" => (Bind::Value(ty), d),
             "reference_declarator" => {
@@ -141,6 +144,40 @@ impl<'s, 't> Walker<'s, 't> {
                 }
             }
         }
+    }
+
+    /// `T* name` bound to a pointer argument: the pointer, its offset pinned in a local (so it cannot move afterwards).
+    fn bind_pointer_argument(
+        &mut self,
+        d: Node<'_>,
+        ty: E,
+        arg: Node<'_>,
+        out: &mut Vec<Stmt>,
+    ) -> R<(String, Sym)> {
+        let id = d
+            .child_by_field_name("declarator")
+            .filter(|i| i.kind() == "identifier");
+        let Some(id) = id else {
+            return self.not_yet(d, "a pointer parameter of an unexpected shape");
+        };
+        let Some(mut p) = self.ptr_expr(arg)? else {
+            return self.not_yet(
+                arg,
+                "a pointer parameter given something that is not a pointer expression",
+            );
+        };
+        if p.pointee != ty {
+            return self.not_yet(
+                arg,
+                format!(
+                    "an implicit pointer conversion from {:?}* to {ty:?}* (cast it)",
+                    p.pointee
+                ),
+            );
+        }
+        out.append(&mut self.hoisted);
+        p.off = self.pin_offset(p.off, out);
+        Ok((text(id, self.src).to_string(), Sym::Pointer(p)))
     }
 
     /// A callee's `return` is allowed only as its last top-level statement (with a value iff it is not `void`).

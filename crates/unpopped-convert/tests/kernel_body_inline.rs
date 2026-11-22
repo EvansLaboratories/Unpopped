@@ -116,8 +116,8 @@ fn what_cannot_be_inlined_declines_by_name() {
         "not the last statement",
     );
     not_yet(
-        "__device__ float f(float* p) { return 1.0f; }\nvoid k(float* out) { out[0] = f(out); }",
-        "pointer",
+        "__device__ float f(float* p) { return 1.0f; }\nvoid k(float* out) { out[0] = f(1.0f); }",
+        "not a pointer expression",
     );
     not_yet(
         "__device__ float f(float x) { return x; }\nvoid k(float* out) { out[0] = f(1.0f, 2.0f); }",
