@@ -248,3 +248,51 @@ fn a_vector_is_read_and_written_through_a_pointer_one_lane_at_a_time() {
         "vector",
     );
 }
+
+#[test]
+fn an_elif_after_a_taken_branch_is_never_taken_even_when_true() {
+    // `#if 1` is taken, so the true `#elif 1` after it must stay blanked (only one branch of a chain is live)
+    let src = "#if 1\n#define FIRST\n#elif 1\n#define SECOND\n#endif\nvoid k(float* out) {\n#ifdef SECOND\n out[0] = 2.0f;\n#else\n out[0] = 1.0f;\n#endif\n}";
+    assert_eq!(
+        run(&lift(src, &ctx()).unwrap(), 1, vec![]).unwrap(),
+        vec![1.0]
+    );
+}
+
+#[test]
+fn constant_sizes_fold_with_subtraction_and_shifts() {
+    let k = lift(
+        "constexpr unsigned int A = 10 - 3;\nconstexpr unsigned int B = 1 << 4;\nconstexpr unsigned int C = 64 >> 2;\n\
+         void k(float* out) { float v[A]; v[6] = 1.0f; out[0] = (float)sizeof(float) + (float)A; out[1] = (float)B; out[2] = (float)C; }",
+        &ctx(),
+    )
+    .unwrap();
+    assert_eq!(run(&k, 3, vec![]).unwrap(), vec![11.0, 16.0, 16.0]);
+}
+
+#[test]
+fn a_constant_condition_decides_whether_the_right_side_is_evaluated() {
+    // `0 && x[1000]` must not read (an out-of-range load would trap); `1 || x[1000]` likewise; `1 && x[0]` and `0 || x[0]` must
+    let k = lift(
+        "void k(float* out, const float* x) { \
+         out[0] = (0 && x[1000] > 0.0f) ? 1.0f : 2.0f; out[1] = (1 || x[1000] > 0.0f) ? 3.0f : 4.0f; \
+         out[2] = (1 && x[0] > 5.0f) ? 5.0f : 6.0f; out[3] = (0 || x[0] > 5.0f) ? 7.0f : 8.0f; }",
+        &ctx(),
+    )
+    .unwrap();
+    assert_eq!(
+        run(&k, 4, vec![f32s(&[9.0])]).unwrap(),
+        vec![2.0, 3.0, 5.0, 7.0]
+    );
+}
+
+#[test]
+fn a_brace_list_must_give_every_field() {
+    not_yet(
+        lift(
+            "struct V { unsigned int n; const float* d; };\nvoid k(float* out, const float* a) { V v = {1}; out[0] = 1.0f; }",
+            &ctx(),
+        ),
+        "every field must be given",
+    );
+}

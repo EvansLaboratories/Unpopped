@@ -33,6 +33,14 @@ impl<'s, 't> Walker<'s, 't> {
             self.hoisted = saved_loads;
             r?
         };
+        // An integer constant expression is a literal: `1 << 4` stays a literal 16, not a shift the oracle would have to type
+        // inside a cast
+        let e = match (fold(&e), t) {
+            (Some(v), E::I32 | E::I64 | E::U32 | E::U64) => {
+                i64::try_from(v).map_or(e, |v| ScalarExpr::ConstInt(v, t))
+            }
+            _ => e,
+        };
         Ok(Some((self.convert(e, t, to, at)?, to)))
     }
 
