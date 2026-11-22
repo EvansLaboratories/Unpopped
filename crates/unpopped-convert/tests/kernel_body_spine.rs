@@ -205,8 +205,9 @@ fn constructs_outside_the_spine_decline_by_name() {
     );
     not_yet("void k(float* out, long n) { out[0] = 1.0f; }", "`long`");
     not_yet("void k(float* out) { float* p = out; }", "pointer");
+    // a vector local still needs its initializer (`T x;` of a scalar starts at zero, see the asm tests)
     not_yet(
-        "void k(float* out) { float v; out[0] = 1.0f; }",
+        "void k(float* out) { float4 v; out[0] = 1.0f; }",
         "initializer",
     );
     not_yet("void k(float* out) { return 1; }", "return");

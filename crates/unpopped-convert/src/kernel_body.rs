@@ -82,6 +82,7 @@ impl std::fmt::Display for KernelLiftError {
 
 impl std::error::Error for KernelLiftError {}
 
+mod asm;
 mod inline;
 
 type R<T> = Result<T, KernelLiftError>;
@@ -423,6 +424,14 @@ impl<'s, 't> Walker<'s, 't> {
         }
     }
 
+    /// The zero of `ty`, as an expression.
+    fn zero_of(&self, ty: E, at: Node<'_>) -> R<ScalarExpr> {
+        if int_range(ty).is_some() {
+            return Ok(ScalarExpr::ConstInt(0, ty));
+        }
+        self.convert(ScalarExpr::Const(0.0), self.compute, ty, at)
+    }
+
     fn flush(&mut self, out: &mut Vec<Stmt>) {
         out.append(&mut self.hoisted);
     }
@@ -465,14 +474,21 @@ impl<'s, 't> Walker<'s, 't> {
                 ),
                 _ => (Some(d), None),
             };
-            let (Some(id), Some(value)) = (id, value) else {
-                return self.not_yet(d, "a local without an initializer");
+            let Some(id) = id else {
+                return self.not_yet(d, "a declarator of an unexpected shape");
             };
             if id.kind() != "identifier" {
                 return self.not_yet(id, format!("a `{}` declarator", id.kind()));
             }
-            let (e, et) = self.expr(value)?;
-            let e = self.convert(e, et, ty, value)?;
+            // `T x;` is indeterminate in C until it is written; the IR needs a value, so it starts at zero (a refinement: a
+            // read before the write is undefined in C)
+            let e = match value {
+                Some(v) => {
+                    let (e, et) = self.expr(v)?;
+                    self.convert(e, et, ty, v)?
+                }
+                None => self.zero_of(ty, d)?,
+            };
             self.flush(out);
             let local = self.new_local(ty);
             self.scopes.last_mut().expect("a scope is open").insert(
@@ -953,6 +969,7 @@ impl<'s, 't> Walker<'s, 't> {
             "assignment_expression" => self.assignment(e, out),
             "update_expression" => self.update(e, out),
             "call_expression" => self.call_statement(e, out),
+            "gnu_asm_expression" => self.asm_statement(e, out),
             other => self.not_yet(e, format!("a `{other}` expression statement")),
         }
     }
