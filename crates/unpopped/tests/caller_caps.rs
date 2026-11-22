@@ -79,7 +79,7 @@ fn same(a: &GeneratedKernel, b: &GeneratedKernel) -> bool {
 #[test]
 fn legacy_is_the_default_and_without_the_interface() {
     assert_eq!(CallerCaps::default(), CallerCaps::LEGACY);
-    assert!(!CallerCaps::LEGACY.interface);
+    assert!(!std::hint::black_box(CallerCaps::LEGACY).interface);
     assert!(CallerCaps::LEGACY.with_interface().interface);
     assert_ne!(CallerCaps::LEGACY, CallerCaps::LEGACY.with_interface());
 }
