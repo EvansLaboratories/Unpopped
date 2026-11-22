@@ -54,10 +54,29 @@ impl Machine<'_> {
         off: usize,
         kind: AccessKind,
     ) -> Result<(), KernelTrap> {
+        self.note_global_write(buffer, off, kind, false)
+    }
+
+    /// [`Self::note_global`] for a store that may write the value the element already holds (`same_value`).
+    pub(super) fn note_global_write(
+        &mut self,
+        buffer: usize,
+        off: usize,
+        kind: AccessKind,
+        same_value: bool,
+    ) -> Result<(), KernelTrap> {
         match &mut self.ctx {
             Some(c) => {
                 let now = c.stamp(kind);
-                touch(c.global, (buffer as u32, off), now, kind, c.sync)?;
+                let same_value = same_value && c.block.same_value_writes;
+                touch(
+                    c.global,
+                    (buffer as u32, off),
+                    now,
+                    kind,
+                    c.sync,
+                    same_value,
+                )?;
                 c.after(now, kind, (0, 0, buffer as u32, off));
                 Ok(())
             }
@@ -201,7 +220,14 @@ impl Machine<'_> {
             .ctx
             .as_mut()
             .expect("alloc_index found a launch context");
-        c.log_shared(alloc, i, space, AccessKind::Write)?;
+        // whether this store writes the value the element already holds (a benign race when `Leniency` allows it)
+        let same = c.mem(alloc, space).is_some_and(|m| {
+            let (esz, bits) = (types::elem_size(m.dtype), types::elem_bits(m.dtype));
+            let mut tmp = [0u8; 16];
+            store_val(v, m.dtype, &mut tmp, 0);
+            bits % 8 == 0 && m.init[i] && m.bytes[i * esz..(i + 1) * esz] == tmp[..esz]
+        });
+        c.log_shared_write(alloc, i, space, AccessKind::Write, same)?;
         let m = c
             .mem_mut(alloc, space)
             .expect("the space holds an instance");

@@ -370,3 +370,22 @@ fn a_pointer_compared_with_nullptr_is_the_null_check() {
         vec![0.0, 2.0, 3.0]
     );
 }
+
+#[test]
+fn a_local_alias_of_a_null_buffer_is_null_too() {
+    // Found by running the real decode kernel on the oracle (2026-11-22): `const bool* mask = mask_ptr;` then
+    // `if (mask && !mask[bx]) return;`. The null check looked at the alias's own name, so `mask_ptr` declared null did not make
+    // `mask` null; the guard read a dummy buffer and the kernel returned early, writing nothing.
+    let src = "void k(float* out, const unsigned char* m_ptr) { const unsigned char* m = m_ptr; \
+               out[0] = 1.0f; if (m && !m[0]) { return; } out[0] = 2.0f; out[1] = (m != nullptr) ? 3.0f : 4.0f; }";
+    let dummy = KernelArg::Buffer(TypedBuffer::from_u8(&[1], &[0]));
+    // present (zero byte): the guard returns early
+    let present = lift(src, &ctx()).unwrap();
+    assert_eq!(
+        run(&present, 2, vec![dummy.clone()]).unwrap(),
+        vec![1.0, 0.0]
+    );
+    // declared null: the alias is null, the guard is skipped and the kernel runs on
+    let absent = lift(src, &ctx().with_null_buffer("m_ptr")).unwrap();
+    assert_eq!(run(&absent, 2, vec![dummy]).unwrap(), vec![2.0, 4.0]);
+}

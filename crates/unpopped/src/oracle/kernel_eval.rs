@@ -761,7 +761,17 @@ impl<'a> Machine<'a> {
             return self.alloc_store(alloc, index, v);
         }
         let (b, off) = self.offset(place)?;
-        self.note_global(b, off, AccessKind::Write)?;
+        // whether this store writes the bytes the element already holds (a benign race when the launch allows it)
+        let same = match &self.args[b] {
+            KernelArg::Buffer(tb) if types::elem_bits(tb.dtype) % 8 == 0 => {
+                let esz = types::elem_size(tb.dtype);
+                let mut tmp = [0u8; 16];
+                store_val(v, tb.dtype, &mut tmp, 0);
+                tb.bytes.get(off * esz..(off + 1) * esz) == Some(&tmp[..esz])
+            }
+            _ => false,
+        };
+        self.note_global_write(b, off, AccessKind::Write, same)?;
         let KernelArg::Buffer(tb) = &mut self.args[b] else {
             unreachable!("offset() returned a buffer");
         };
@@ -866,7 +876,13 @@ impl<'a> Machine<'a> {
         b: &ScalarExpr,
         t: ElementKind,
     ) -> Result<i128, KernelTrap> {
-        let arm = if self.eval_operand_int(c)? != 0 { a } else { b };
+        // A comparison is the condition most `Select`s have, and its inferred type is the compute type (`1.0`/`0.0` in an `f32`
+        // kernel), not an integer: evaluate it as the comparison it is, over its own operands' integer types.
+        let taken = match c {
+            ScalarExpr::Binary(op, x, y) if op.is_cmp() => self.eval_cmp(*op, x, y)? != 0,
+            _ => self.eval_operand_int(c)? != 0,
+        };
+        let arm = if taken { a } else { b };
         self.eval_int(arm, t)
     }
 

@@ -55,6 +55,24 @@ impl<'s, 't> Walker<'s, 't> {
 
     /// An operand tested for truth (`&&`, `||`, `!`, a condition): a **buffer pointer** is a null check, and is `1` (the buffer
     /// is bound) unless the caller declared it null (`LiftContext::with_null_buffer`); anything else is an ordinary expression.
+    /// Whether the buffer or pointer `name` is null: declared so by the caller (`LiftContext::with_null_buffer`), or a pointer
+    /// local whose base is a buffer parameter so declared (`const bool* m = m_ptr;` is null when `m_ptr` is).
+    pub(super) fn pointer_is_null(&self, name: &str) -> bool {
+        if self.null_buffers.contains(name) {
+            return true;
+        }
+        match self.lookup(name) {
+            Some(super::Sym::Pointer(p)) => match p.base {
+                super::pointer::PBase::Buffer(i) => self
+                    .params
+                    .get(i as usize)
+                    .is_some_and(|q| self.null_buffers.contains(&q.name)),
+                super::pointer::PBase::Alloc(_) => false,
+            },
+            _ => false,
+        }
+    }
+
     /// Whether `n` is the name of a buffer or pointer.
     pub(super) fn is_pointer_name(&self, n: Node<'_>) -> bool {
         n.kind() == "identifier"
@@ -76,7 +94,7 @@ impl<'s, 't> Walker<'s, 't> {
                 self.lookup(name),
                 Some(super::Sym::Buffer(..) | super::Sym::Pointer(_))
             ) {
-                return Ok(self.constant(i64::from(!self.null_buffers.contains(name))));
+                return Ok(self.constant(i64::from(!self.pointer_is_null(name))));
             }
         }
         self.expr(n)

@@ -325,3 +325,22 @@ void k(float* out, float* w, float* r) {{ out[0] = r[0]; {body} }}"
         "mystery",
     );
 }
+
+#[test]
+fn a_c_remainder_in_a_float_kernel_runs_on_the_oracle() {
+    // Found by running the real decode kernel (2026-11-22): `%` lowers to `Select(b == 0, 0, a - (a / b) * b)`, an INTEGER
+    // select whose condition is a comparison, which the type system types as the compute type. In an `f32` kernel the oracle
+    // refused it ("comparison of a non-integer operand"); the integer-compute tests never saw it.
+    let k = lift(
+        "void k(float* out, const int* a, const int* b) { for (int i = 0; i < 5; i++) { out[i] = (float)(a[i] % b[i]); } \
+         unsigned int u = 7u; unsigned int v = 3u; out[5] = (float)(u % v); }",
+    )
+    .unwrap();
+    let a = TypedBuffer::from_i32(&[5], &[7, -7, 7, -7, 5]);
+    let b = TypedBuffer::from_i32(&[5], &[3, 3, -3, 0, 5]);
+    // C: 1, -1, 1, then the ruled total 0 for a zero divisor, then 0; 7u % 3u = 1
+    assert_eq!(
+        run(&k, 6, vec![KernelArg::Buffer(a), KernelArg::Buffer(b)]).unwrap(),
+        vec![1.0, -1.0, 1.0, 0.0, 0.0, 1.0]
+    );
+}

@@ -110,7 +110,7 @@ impl<'s, 't> Walker<'s, 't> {
             };
             if let Some(p) = ptr.filter(|p| self.is_pointer_name(*p)) {
                 // present unless the caller declared it null; the result is a C `int`, whatever the compute type
-                let present = !self.null_buffers.contains(text(p, self.src));
+                let present = !self.pointer_is_null(text(p, self.src));
                 let v = i64::from(present == (op == "!="));
                 return Ok((ScalarExpr::ConstInt(v, E::I32), E::I32));
             }
