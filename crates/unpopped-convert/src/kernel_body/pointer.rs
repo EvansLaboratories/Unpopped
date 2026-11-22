@@ -33,6 +33,8 @@ pub(super) struct PtrVal {
     pub(super) lanes: u8,
     /// Bytes from the start of the base; an `I64` expression.
     pub(super) off: ScalarExpr,
+    /// The laid-out struct this pointer points at (U38d): `pointee` is then `U8` and the stride is the layout's size.
+    pub(super) strukt: Option<String>,
 }
 
 /// The byte size of a pointee type (whole bytes only), or `None`.
@@ -64,6 +66,7 @@ impl<'s, 't> Walker<'s, 't> {
                     pointee: e,
                     lanes: 1,
                     off: ScalarExpr::ConstInt(0, E::I64),
+                    strukt: None,
                 }),
                 _ => None,
             }),
@@ -83,12 +86,14 @@ impl<'s, 't> Walker<'s, 't> {
                 pointee: e,
                 lanes: 1,
                 off: zero,
+                strukt: None,
             }),
             Sym::Alloc(i, e) => Some(PtrVal {
                 base: PBase::Alloc(i),
                 pointee: e,
                 lanes: 1,
                 off: zero,
+                strukt: None,
             }),
             Sym::Pointer(p) => Some(p),
             _ => None,
@@ -158,11 +163,13 @@ impl<'s, 't> Walker<'s, 't> {
                 .collect::<Vec<_>>()
                 .join(" ")
         });
-        if let Some((elem, lanes)) = tname.as_deref().and_then(super::vector_type) {
-            (p.pointee, p.lanes) = (elem, lanes);
+        if let Some(sname) = tname.as_deref().and_then(|t| self.layout_name(t)) {
+            (p.pointee, p.lanes, p.strukt) = (E::U8, 1, Some(sname));
+        } else if let Some((elem, lanes)) = tname.as_deref().and_then(super::vector_type) {
+            (p.pointee, p.lanes, p.strukt) = (elem, lanes, None);
         } else {
             p.pointee = self.type_of(ty.child_by_field_name("type"), ty)?;
-            p.lanes = 1;
+            (p.lanes, p.strukt) = (1, None);
         }
         Ok(Some(p))
     }
@@ -210,6 +217,7 @@ impl<'s, 't> Walker<'s, 't> {
                 pointee: e,
                 lanes: 1,
                 off: ScalarExpr::ConstInt(0, E::I64),
+                strukt: None,
             }));
         }
         let arg = n
@@ -235,6 +243,7 @@ impl<'s, 't> Walker<'s, 't> {
                 pointee: elem,
                 lanes: 1,
                 off,
+                strukt: None,
             }));
         }
         let (Some(base), Some(idx)) = (
@@ -264,7 +273,10 @@ impl<'s, 't> Walker<'s, 't> {
         negate: bool,
         at: Node<'_>,
     ) -> R<PtrVal> {
-        let step = self.scaled(delta, p.pointee, at)?;
+        let step = match p.strukt.as_deref() {
+            Some(s) => self.scaled_by(delta, self.layout_size(s), at)?,
+            None => self.scaled(delta, p.pointee, at)?,
+        };
         p.off = if negate {
             ScalarExpr::Sub(Box::new(p.off), Box::new(step))
         } else {
@@ -302,6 +314,12 @@ impl<'s, 't> Walker<'s, 't> {
         index: Option<Node<'_>>,
         at: Node<'_>,
     ) -> R<(Place, E)> {
+        if p.strukt.is_some() {
+            return self.not_yet(
+                at,
+                "a struct read or written whole through a pointer (read a member: `p[i].field`)",
+            );
+        }
         let off = match index {
             Some(i) => {
                 let step = self.scaled(i, p.pointee, at)?;

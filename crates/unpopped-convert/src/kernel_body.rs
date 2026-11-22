@@ -94,6 +94,7 @@ mod expressions;
 mod globals;
 mod groups;
 mod inline;
+mod layouts;
 mod methods;
 mod places;
 mod pointer;
@@ -219,6 +220,7 @@ fn lift_preprocessed(
         w.entry = Some(model);
     }
     w.dyn_shared = ctx.dynamic_shared_bytes;
+    w.struct_layouts = ctx.struct_layouts.iter().cloned().collect();
     w.null_buffers = ctx.null_buffers.iter().cloned().collect();
     w.consts = collect_consts(root, src);
     w.type_aliases = aliases::collect_aliases(root, src);
@@ -391,6 +393,8 @@ struct Walker<'s, 't> {
     unexpanded: context::Unexpanded,
     /// Object-like integer macros with one value (`#define QR4_0 2`), read where a name is used in code.
     macros: HashMap<String, i64>,
+    /// The struct layouts the caller stated, by struct name (U38d).
+    struct_layouts: HashMap<String, context::StructLayout>,
     /// Names of block groups in scope (`cg::thread_block b = cg::this_thread_block();`): handles with no IR of their own.
     groups: HashSet<String>,
     /// Warp tiles in scope (`cg::thread_block_tile<32> w = cg::tiled_partition<32>(block);`) with their width.
@@ -439,6 +443,7 @@ impl<'s, 't> Walker<'s, 't> {
             null_buffers: HashSet::new(),
             unexpanded: Vec::new(),
             macros: HashMap::new(),
+            struct_layouts: HashMap::new(),
             entry: None,
             type_aliases: HashMap::new(),
             traits: HashMap::new(),

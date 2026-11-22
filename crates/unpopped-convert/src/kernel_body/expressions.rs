@@ -42,8 +42,18 @@ impl<'s, 't> Walker<'s, 't> {
             "unary_expression" => self.unary_node(n),
             "conditional_expression" => self.conditional(n),
             "cast_expression" => self.cast_node(n),
-            "subscript_expression" | "pointer_expression" => self.read_element(n),
-            "field_expression" => self.builtin(n),
+            "subscript_expression" | "pointer_expression" => {
+                if let Some(r) = self.layout_member(n)? {
+                    return Ok(r);
+                }
+                self.read_element(n)
+            }
+            "field_expression" => {
+                if let Some(r) = self.layout_member(n)? {
+                    return Ok(r);
+                }
+                self.builtin(n)
+            }
             "call_expression" => self.call_expr(n),
             "sizeof_expression" => self.sizeof_expr(n),
             "qualified_identifier" => self.qualified_value(n),

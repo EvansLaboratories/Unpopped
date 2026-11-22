@@ -26,6 +26,11 @@ impl<'s, 't> Walker<'s, 't> {
         if let Some((elem, lanes)) = tname.as_deref().and_then(vector_type) {
             return self.vector_declaration(n, (elem, lanes), out);
         }
+        if declares_pointer(n)
+            && let Some(sname) = tname.as_deref().and_then(|t| self.layout_name(t))
+        {
+            return self.struct_pointer_declaration(n, &sname, out);
+        }
         let ty = self.type_of(n.child_by_field_name("type"), n)?;
         let head = text(n, self.src).trim_start();
         if declares_pointer(n) {
