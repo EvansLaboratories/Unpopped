@@ -63,7 +63,10 @@ fn a_fused_multiply_add_rounds_once_and_reciprocal_is_exact() {
         out[0] = __fmaf_rn(a, b, c); out[1] = __fmul_rn(a, b) + c; out[2] = __frcp_rn(4.0f); out[3] = __fdiv_rn(1.0f, 8.0f); }";
     let got = run(src, 4);
     let fused = 0.1f32.mul_add(10.0, -1.0);
-    assert_ne!(fused, 0.0, "the reference must tell the fused result from the unfused one");
+    assert_ne!(
+        fused, 0.0,
+        "the reference must tell the fused result from the unfused one"
+    );
     assert_eq!(got, vec![f64::from(fused), 0.0, 0.25, 0.125]);
 }
 

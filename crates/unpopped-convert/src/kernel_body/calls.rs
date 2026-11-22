@@ -75,7 +75,10 @@ impl<'s, 't> Walker<'s, 't> {
             } else {
                 Saturation::Wrap
             };
-            Ok((ScalarExpr::Cast(Box::new(e), CastSpec { to, round, sat }), to))
+            Ok((
+                ScalarExpr::Cast(Box::new(e), CastSpec { to, round, sat }),
+                to,
+            ))
         })())
     }
 
@@ -85,7 +88,10 @@ impl<'s, 't> Walker<'s, 't> {
     fn rounded_arithmetic(&mut self, call: Node<'_>, name: &str) -> Option<R<(ScalarExpr, E)>> {
         let (op, ty, round) = rounded_intrinsic(name)?;
         if round != RoundMode::NearestEven && !op.takes_directed_round() {
-            return Some(self.not_yet(call, format!("`{name}`: that operation takes no rounding but to nearest")));
+            return Some(self.not_yet(
+                call,
+                format!("`{name}`: that operation takes no rounding but to nearest"),
+            ));
         }
         let args = self.call_args(call);
         if args.len() != op.arity() {
@@ -145,18 +151,29 @@ impl<'s, 't> Walker<'s, 't> {
                 approx: true,
             };
             let c = |x: f32| Box::new(ScalarExpr::Const(f64::from(x)));
-            let un = |op, x: ScalarExpr| ScalarExpr::Qualified(Box::new(ScalarExpr::Unary(op, Box::new(x))), approx());
+            let un = |op, x: ScalarExpr| {
+                ScalarExpr::Qualified(Box::new(ScalarExpr::Unary(op, Box::new(x))), approx())
+            };
             let mut it = v.into_iter();
             let (a, b) = (it.next(), it.next());
             let e = match (name, a, b) {
-                ("__expf", Some(x), _) => un(UnaryOp::Exp2, ScalarExpr::Mul(Box::new(x), c(k::LOG2_E))),
-                ("__exp10f", Some(x), _) => un(UnaryOp::Exp2, ScalarExpr::Mul(Box::new(x), c(k::LOG2_10))),
-                ("__log2f", Some(x), _) => un(UnaryOp::Log2, x),
-                ("__logf", Some(x), _) => ScalarExpr::Mul(Box::new(un(UnaryOp::Log2, x)), c(k::LN_2)),
-                ("__log10f", Some(x), _) => ScalarExpr::Mul(Box::new(un(UnaryOp::Log2, x)), c(k::LOG10_2)),
-                ("__fdividef", Some(x), Some(y)) => {
-                    ScalarExpr::Qualified(Box::new(ScalarExpr::Div(Box::new(x), Box::new(y))), approx())
+                ("__expf", Some(x), _) => {
+                    un(UnaryOp::Exp2, ScalarExpr::Mul(Box::new(x), c(k::LOG2_E)))
                 }
+                ("__exp10f", Some(x), _) => {
+                    un(UnaryOp::Exp2, ScalarExpr::Mul(Box::new(x), c(k::LOG2_10)))
+                }
+                ("__log2f", Some(x), _) => un(UnaryOp::Log2, x),
+                ("__logf", Some(x), _) => {
+                    ScalarExpr::Mul(Box::new(un(UnaryOp::Log2, x)), c(k::LN_2))
+                }
+                ("__log10f", Some(x), _) => {
+                    ScalarExpr::Mul(Box::new(un(UnaryOp::Log2, x)), c(k::LOG10_2))
+                }
+                ("__fdividef", Some(x), Some(y)) => ScalarExpr::Qualified(
+                    Box::new(ScalarExpr::Div(Box::new(x), Box::new(y))),
+                    approx(),
+                ),
                 _ => return self.not_yet(call, format!("`{name}`")),
             };
             Ok((e, E::F32))
@@ -185,7 +202,11 @@ impl<'s, 't> Walker<'s, 't> {
             {
                 return self.not_yet(*x, format!("`{name}` of a {t:?} value (it takes {want:?})"));
             }
-            let e = if from.is_none() { self.convert(e, t, E::F32, *x)? } else { e };
+            let e = if from.is_none() {
+                self.convert(e, t, E::F32, *x)?
+            } else {
+                e
+            };
             let spec = CastSpec {
                 to,
                 round: RoundMode::NearestEven,

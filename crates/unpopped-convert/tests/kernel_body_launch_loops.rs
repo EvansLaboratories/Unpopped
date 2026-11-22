@@ -22,7 +22,8 @@ fn parse(src: &str) -> Option<tree_sitter::Tree> {
 const C: Frontend = Frontend::new("c", "void", &[], "out", "in", parse);
 
 fn lift(src: &str, block: [u32; 3], shared: u32) -> Result<KernelFn, KernelLiftError> {
-    let ctx = LiftContext::new(LaunchShape::new(block, [1, 1, 1])).with_dynamic_shared_bytes(shared);
+    let ctx =
+        LiftContext::new(LaunchShape::new(block, [1, 1, 1])).with_dynamic_shared_bytes(shared);
     lift_kernel_in(&C, src, "k", &ctx)
 }
 

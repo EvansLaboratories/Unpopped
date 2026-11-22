@@ -138,7 +138,8 @@ impl<'s, 't> Walker<'s, 't> {
         if cond.kind() != "binary_expression" || text(l, self.src) != name {
             return Ok(false);
         }
-        let (Some(bound), Some(update)) = (self.loop_const_value(r)?, self.loop_update(upd, &name)?)
+        let (Some(bound), Some(update)) =
+            (self.loop_const_value(r)?, self.loop_update(upd, &name)?)
         else {
             return Ok(false);
         };

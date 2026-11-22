@@ -407,6 +407,11 @@ impl<'s, 't> Walker<'s, 't> {
         self.require_invariant(b, &assigned)?;
         let (be, bt) = self.expr(b)?;
         let mut be = self.convert(be, bt, ty, b)?;
+        // a `!=` loop whose start and bound are both known now is left to the constant-loop path, which runs it as C does and
+        // declines one that never ends; the IR's stop-when-past refinement is only for bounds known at run time
+        if ne && self.launch_fold(&a).is_some() && self.launch_fold(&be).is_some() {
+            return Ok(None);
+        }
         if op == ">=" {
             // the IR's limit is exclusive: `i >= b` stops above `b - 1`
             be = ScalarExpr::Sub(Box::new(be), Box::new(ScalarExpr::ConstInt(1, ty)));
@@ -582,7 +587,8 @@ fn lvalue_roots(n: Node<'_>, src: &str, out: &mut HashSet<String>) {
 /// The variables whose address an argument takes (`&x`, `&x.f`, `&x[i]`): the only scalars a pointer parameter can reach.
 fn address_taken(n: Node<'_>, src: &str, out: &mut HashSet<String>) {
     if n.kind() == "pointer_expression"
-        && n.child_by_field_name("operator").is_some_and(|o| text(o, src) == "&")
+        && n.child_by_field_name("operator")
+            .is_some_and(|o| text(o, src) == "&")
         && let Some(k) = n.child_by_field_name("argument")
     {
         lvalue_roots(k, src, out);

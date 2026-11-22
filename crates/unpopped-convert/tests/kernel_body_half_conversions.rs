@@ -27,7 +27,10 @@ fn run(src: &str, input: &[f32], half_bits: &[u16], n: usize) -> Vec<f64> {
     let mut args = vec![
         KernelArg::Buffer(TypedBuffer::from_f32(&[n as i64], &vec![0.0; n])),
         KernelArg::Buffer(TypedBuffer::from_f32(&[input.len() as i64], input)),
-        KernelArg::Buffer(TypedBuffer::from_f16_bits(&[half_bits.len() as i64], half_bits)),
+        KernelArg::Buffer(TypedBuffer::from_f16_bits(
+            &[half_bits.len() as i64],
+            half_bits,
+        )),
     ];
     run_launch(&k, &mut args).expect("runs");
     let KernelArg::Buffer(o) = &args[0] else {
@@ -80,7 +83,11 @@ fn bfloat16_rounds_to_nearest_even_with_an_eight_bit_significand() {
     // 1 + 2^-8 is a tie between 1 and 1 + 2^-7 -> 1; pi -> 3.140625; 1 + 3 * 2^-8 is a tie -> 1 + 2^-6
     let got = run(
         src,
-        &[1.0 + 2f32.powi(-8), std::f32::consts::PI, 1.0 + 3.0 * 2f32.powi(-8)],
+        &[
+            1.0 + 2f32.powi(-8),
+            std::f32::consts::PI,
+            1.0 + 3.0 * 2f32.powi(-8),
+        ],
         &[0],
         3,
     );
@@ -95,7 +102,8 @@ fn the_wrong_argument_type_or_count_declines() {
         "__bfloat162float(h[0])",
         "__half2float(h[0], h[1])",
     ] {
-        let src = format!("void k(float* out, const float* in, const half* h) {{ out[0] = {call}; }}");
+        let src =
+            format!("void k(float* out, const float* in, const half* h) {{ out[0] = {call}; }}");
         assert!(
             matches!(lift(&src), Err(KernelLiftError::NotYetLifted { .. })),
             "{call}"

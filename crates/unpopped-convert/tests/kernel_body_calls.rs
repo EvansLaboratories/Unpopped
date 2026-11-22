@@ -73,7 +73,9 @@ fn math_calls_lift_through_the_frontends_table_with_c_semantics() {
 #[test]
 fn a_fast_math_spelling_and_unknown_calls_decline_instead_of_lifting_as_the_accurate_op() {
     for (call, needle) in [
-        ("__expf(a[0])", "`__expf`"),
+        // `__expf` and the other approximable ones lift as approx nodes (tests/kernel_body_fast_math.rs); `__sinf` has no
+        // approximate form in the IR, so it must decline rather than lift as the accurate sine
+        ("__sinf(a[0])", "`__sinf`"),
         ("frobnicate(a[0])", "`frobnicate`"),
         ("sqrtf(a[0], a[1])", "2 argument"),
     ] {

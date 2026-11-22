@@ -41,13 +41,21 @@ fn counting_up_and_down_to_a_bound() {
     // `z` is 0 at run time (the compiler cannot see it), so these are not constant loops
     let z = "int z = (int)threadIdx.x;";
     // digits appended in visit order, so a wrong order or count shows
-    let up = format!("void k(float* out) {{ {z} float a = 0.0f; for (int i = z; i != z + 4; i++) {{ a = a * 10.0f + (float)i; }} out[0] = a; }}");
+    let up = format!(
+        "void k(float* out) {{ {z} float a = 0.0f; for (int i = z; i != z + 4; i++) {{ a = a * 10.0f + (float)i; }} out[0] = a; }}"
+    );
     assert_eq!(run(&up, 1, 1), vec![123.0]);
-    let down = format!("void k(float* out) {{ {z} float a = 0.0f; for (int i = z + 3; i != z - 1; i--) {{ a = a * 10.0f + (float)i; }} out[0] = a; }}");
+    let down = format!(
+        "void k(float* out) {{ {z} float a = 0.0f; for (int i = z + 3; i != z - 1; i--) {{ a = a * 10.0f + (float)i; }} out[0] = a; }}"
+    );
     assert_eq!(run(&down, 1, 1), vec![3210.0]);
-    let stride = format!("void k(float* out) {{ {z} float a = 0.0f; for (int i = z; i != z + 6; i += 2) {{ a = a * 10.0f + (float)i; }} out[0] = a; }}");
+    let stride = format!(
+        "void k(float* out) {{ {z} float a = 0.0f; for (int i = z; i != z + 6; i += 2) {{ a = a * 10.0f + (float)i; }} out[0] = a; }}"
+    );
     assert_eq!(run(&stride, 1, 1), vec![24.0]);
-    let empty = format!("void k(float* out) {{ {z} float a = 7.0f; for (int i = z + 3; i != z + 3; i++) {{ a = 0.0f; }} out[0] = a; }}");
+    let empty = format!(
+        "void k(float* out) {{ {z} float a = 7.0f; for (int i = z + 3; i != z + 3; i++) {{ a = 0.0f; }} out[0] = a; }}"
+    );
     assert_eq!(run(&empty, 1, 1), vec![7.0]);
 }
 

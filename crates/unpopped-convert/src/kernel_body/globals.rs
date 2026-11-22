@@ -214,7 +214,10 @@ pub(super) fn fold(e: &ScalarExpr) -> Option<i128> {
 }
 
 /// [`fold`] where `leaf` may give a value to an expression the plain fold cannot (a launch extent, a known constant local).
-pub(super) fn fold_with(e: &ScalarExpr, leaf: &dyn Fn(&ScalarExpr) -> Option<i128>) -> Option<i128> {
+pub(super) fn fold_with(
+    e: &ScalarExpr,
+    leaf: &dyn Fn(&ScalarExpr) -> Option<i128>,
+) -> Option<i128> {
     use unpopped::ir::BinaryOp as B;
     let fold = |x: &ScalarExpr| fold_with(x, leaf);
     let two = |a: &ScalarExpr, b: &ScalarExpr| Some((fold(a)?, fold(b)?));

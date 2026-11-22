@@ -258,7 +258,11 @@ impl<'s, 't> Walker<'s, 't> {
     /// `__shfl_sync(mask, v, lane[, width])`, `__shfl_up_sync`, `__shfl_down_sync`, `__shfl_xor_sync`: a shuffle over the subgroup.
     /// The mask must be all ones and the width (when given) 32, which must be the launch's subgroup when it names one: a
     /// partial mask or a narrower segment is not a full-participation subgroup collective. `None` when `name` is not one.
-    pub(super) fn sync_shuffle(&mut self, call: Node<'_>, name: &str) -> Option<R<(ScalarExpr, E)>> {
+    pub(super) fn sync_shuffle(
+        &mut self,
+        call: Node<'_>,
+        name: &str,
+    ) -> Option<R<(ScalarExpr, E)>> {
         let mode = match name {
             "__shfl_sync" => ShuffleMode::Idx,
             "__shfl_up_sync" => ShuffleMode::Up,
@@ -272,10 +276,7 @@ impl<'s, 't> Walker<'s, 't> {
                 [m, v, o] => (*m, *v, *o, None),
                 [m, v, o, w] => (*m, *v, *o, Some(*w)),
                 _ => {
-                    return self.not_yet(
-                        call,
-                        format!("`{name}` with {} argument(s)", args.len()),
-                    );
+                    return self.not_yet(call, format!("`{name}` with {} argument(s)", args.len()));
                 }
             };
             if self.const_value(mask)? != Some(0xffff_ffff) {

@@ -82,21 +82,39 @@ fn a_partial_mask_a_narrow_width_or_another_subgroup_declines() {
         format!("void k(float* out, const float* in) {{ out[threadIdx.x] = {call}; }}")
     };
     not_yet(
-        lift(&body("__shfl_xor_sync(0x0000ffff, in[threadIdx.x], 1)"), Some(32)),
+        lift(
+            &body("__shfl_xor_sync(0x0000ffff, in[threadIdx.x], 1)"),
+            Some(32),
+        ),
         "member mask",
     );
     not_yet(
-        lift(&body("__shfl_down_sync(0xffffffffu, in[threadIdx.x], 1, 16)"), Some(32)),
+        lift(
+            &body("__shfl_down_sync(0xffffffffu, in[threadIdx.x], 1, 16)"),
+            Some(32),
+        ),
         "width other than 32",
     );
     not_yet(
-        lift(&body("__shfl_xor_sync(0xffffffffu, in[threadIdx.x], 1)"), Some(16)),
+        lift(
+            &body("__shfl_xor_sync(0xffffffffu, in[threadIdx.x], 1)"),
+            Some(16),
+        ),
         "not exactly 32",
     );
     not_yet(
-        lift(&body("__shfl_xor_sync(0xffffffffu, in[threadIdx.x])"), Some(32)),
+        lift(
+            &body("__shfl_xor_sync(0xffffffffu, in[threadIdx.x])"),
+            Some(32),
+        ),
         "2 argument",
     );
     // control: the full form lifts
-    assert!(lift(&body("__shfl_xor_sync(0xffffffffu, in[threadIdx.x], 1)"), Some(32)).is_ok());
+    assert!(
+        lift(
+            &body("__shfl_xor_sync(0xffffffffu, in[threadIdx.x], 1)"),
+            Some(32)
+        )
+        .is_ok()
+    );
 }
