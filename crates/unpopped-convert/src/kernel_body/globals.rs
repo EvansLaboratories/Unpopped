@@ -210,7 +210,13 @@ impl<'s, 't> Walker<'s, 't> {
 /// The value of a constant integer expression (literals, casts, arithmetic, shifts, bit operations, comparisons and a selected
 /// arm), or `None` if it depends on anything else.
 pub(super) fn fold(e: &ScalarExpr) -> Option<i128> {
+    fold_with(e, &|_| None)
+}
+
+/// [`fold`] where `leaf` may give a value to an expression the plain fold cannot (a launch extent, a known constant local).
+pub(super) fn fold_with(e: &ScalarExpr, leaf: &dyn Fn(&ScalarExpr) -> Option<i128>) -> Option<i128> {
     use unpopped::ir::BinaryOp as B;
+    let fold = |x: &ScalarExpr| fold_with(x, leaf);
     let two = |a: &ScalarExpr, b: &ScalarExpr| Some((fold(a)?, fold(b)?));
     Some(match e {
         ScalarExpr::ConstInt(v, _) => i128::from(*v),
@@ -257,6 +263,6 @@ pub(super) fn fold(e: &ScalarExpr) -> Option<i128> {
                 fold(b)?
             }
         }
-        _ => return None,
+        _ => return leaf(e),
     })
 }

@@ -118,6 +118,16 @@ impl<'s, 't> Walker<'s, 't> {
                 text(id, self.src).to_string(),
                 Sym::Scalar(local, ty, Fixed::No),
             );
+            // a `const` integer local with a known initialiser is a constant a loop can unroll over
+            if value.is_some()
+                && int_range(ty).is_some()
+                && (0..n.child_count())
+                    .filter_map(|i| n.child(i))
+                    .any(|k| k.kind() == "type_qualifier" && text(k, self.src) == "const")
+                && let Some(v) = self.launch_fold(&e)
+            {
+                self.known.insert(local, v);
+            }
             out.push(Stmt::Let { local, init: e });
         }
         Ok(())

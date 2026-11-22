@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use tree_sitter::Node;
 use unpopped::kernel::Stmt;
 
-use super::globals::fold;
+use super::globals::{fold, fold_with};
 use unpopped::ir::ScalarExpr;
 
 /// The most trips the walker unrolls.
@@ -47,6 +47,26 @@ impl<'s, 't> Walker<'s, 't> {
         Ok(fold(&r?.0))
     }
 
+    /// [`fold`], also knowing the launch's block extents and the `const` locals recorded in `known`.
+    pub(super) fn launch_fold(&self, e: &ScalarExpr) -> Option<i128> {
+        let block = self.launch.as_ref().map(|l| l.block);
+        fold_with(e, &|x| match x {
+            ScalarExpr::Exec(unpopped::exec::ExecId::BlockDim(a)) => {
+                block.map(|b| i128::from(b[usize::from(*a).min(2)]))
+            }
+            ScalarExpr::Local(l) => self.known.get(l).copied(),
+            _ => None,
+        })
+    }
+
+    /// A constant loop's expression value: [`Self::const_value`] with the launch folded in.
+    fn loop_const_value(&mut self, n: Node<'_>) -> R<Option<i128>> {
+        let mark = self.hoisted.len();
+        let r = self.expr(n);
+        self.hoisted.truncate(mark);
+        Ok(self.launch_fold(&r?.0))
+    }
+
     fn loop_update(&mut self, upd: Node<'_>, name: &str) -> R<Option<Update>> {
         let is_var = |n: Option<Node<'_>>| n.is_some_and(|a| text(a, self.src) == name);
         match upd.kind() {
@@ -74,7 +94,7 @@ impl<'s, 't> Walker<'s, 't> {
                 if !is_var(Some(l)) {
                     return Ok(None);
                 }
-                let Some(k) = self.const_value(r)? else {
+                let Some(k) = self.loop_const_value(r)? else {
                     return Ok(None);
                 };
                 Ok(match text(op, self.src) {
@@ -105,7 +125,7 @@ impl<'s, 't> Walker<'s, 't> {
         let Some((name, ty, a)) = self.for_init(init)? else {
             return Ok(false);
         };
-        let Some(start) = fold(&a) else {
+        let Some(start) = self.launch_fold(&a) else {
             return Ok(false);
         };
         let (Some(l), Some(op), Some(r)) = (
@@ -118,7 +138,7 @@ impl<'s, 't> Walker<'s, 't> {
         if cond.kind() != "binary_expression" || text(l, self.src) != name {
             return Ok(false);
         }
-        let (Some(bound), Some(update)) = (self.const_value(r)?, self.loop_update(upd, &name)?)
+        let (Some(bound), Some(update)) = (self.loop_const_value(r)?, self.loop_update(upd, &name)?)
         else {
             return Ok(false);
         };

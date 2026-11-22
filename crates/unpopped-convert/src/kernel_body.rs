@@ -398,6 +398,9 @@ struct Walker<'s, 't> {
     type_aliases: HashMap<String, String>,
     /// File-scope `constexpr`/`const` constants by name: the declared type text and the initialiser.
     consts: HashMap<String, (String, Node<'t>)>,
+    /// `const` integer locals whose initialiser is known at lift time (a launch extent or a constant), by local: what a constant
+    /// loop may unroll over. Keyed by the local's id, so a shadowing name cannot pick up another's value.
+    known: HashMap<u32, i128>,
     allocs: Vec<AllocDecl>,
     /// A `#pragma unroll` read and not yet given to a loop (it applies to the very next statement only).
     pending_unroll: Unroll,
@@ -430,6 +433,7 @@ impl<'s, 't> Walker<'s, 't> {
             entry: None,
             type_aliases: HashMap::new(),
             consts: HashMap::new(),
+            known: HashMap::new(),
             allocs: Vec::new(),
             pending_unroll: Unroll::None,
             unary_fn: |_| None,
