@@ -152,4 +152,31 @@ So slice 1 to 3 and 5 are built and correct (each tested on the oracle, mutants 
 **The `for` loop that counts down** (`for (d = rank - 1; d >= 0; --d)`, which every Baracuda strided kernel runs over its `shape.v[d]`) was a hidden gate behind slice 5: it was found by
 slice 5's own test and is lifted now (`tests/kernel_body_descending_for.rs`).
 
+
+## Re-measured with real template arguments and caller-supplied includes (2026-11-22, branch `lane/u19-templates`, same corpus and tool)
+
+Two corrections to the section above, found while building `LiftContext::with_include`:
+
+1. **The `--instantiate` heuristic was itself the wall for template helpers.** It replaced `T` with `float` across the whole file, which turned a helper's own
+   `template <typename T>` into `template <typename float>`: the explicit-argument helper calls (`load_as_acc<float>`, 43 + 28 kernels) could not resolve, and the section above
+   read that as "defined in another file". It was not: `load_as_acc` is in the same file as its kernel. The tool now has `--args`, which gives each kernel its own template
+   header's parameters through the real API (`with_type("T", "float")`, `with_const("N", 128)`; bool `1`) and leaves the text alone.
+2. **A bug the real code found in slice 2:** `baracuda_loss.cuh` follows its primary template with explicit specialisations (`template <> float load_as_acc<__half>(__half)`);
+   a call `load_as_acc<double>` would have been served the primary where a specialisation exists. An exact specialisation now wins (`tests/kernel_body_templates.rs`).
+
+| Method (Baracuda `crates/baracuda-kernels-sys`, 535 definitions, 408 templates) | lifted |
+|---|---|
+| census before this branch, text heuristic (above) | 56 |
+| text heuristic, slices 1-3 and 5 | 80 |
+| text heuristic, + specialisation fix and includes | 91 |
+| **real arguments (`--args`), no includes** | **141** |
+| **real arguments (`--args`), includes supplied from the corpus (`--includes`)** | **146** |
+
+The two bold rows are the like-for-like pair pm-kernels asked for: the same corpus and tool, includes off and on, **+5 kernels from includes**. The tool supplies, for each
+kernel, every quoted `#include "x"` of its file and, transitively, of those files, resolved by the basename of the written name from the corpus (first file wins); `<system>` includes are
+not supplied. The control kernel that needs an include is `tests/kernel_body_includes.rs`'s `load_as_acc<float>` from a header (lifts with it; without it the decline names
+`promote.cuh`). Includes were a smaller wall than the earlier section said (+5, not the ~210 it guessed); **the largest remaining first declines (146 lifted, 389 not)** are
+39 `#if` conditions the preprocessor cannot read (`defined(X) && ...` over `\`-continued lines in FlashInfer), 27 `using T = ...;`, 21 `static_assert`, 14 local arrays with an
+initialiser, 14 `INFINITY` and the small constant table, 14 `DimsI32` and 11 `floatX` (types from headers: the include slice plus a type alias), 11 loop bounds the function assigns.
+
 — lane: unpopped
