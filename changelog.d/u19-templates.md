@@ -49,3 +49,5 @@ A counted loop whose test is `!=` (`for (int ii = i_start; ii != i_end; ii += i_
 `Trait<Args>::member` as a value (`TileShape<T>::Br`) reads the struct template's `static constexpr` integer member with a literal initialiser: the explicit specialisation with exactly those arguments (a template parameter bound by `LiftContext::with_type` read as its type), else the primary template. A non-literal initialiser or a missing member declines.
 
 A pointer local that moves (`unsigned char* sp = smem_raw; T* a = (T*)sp; sp += n * sizeof(T);`) lifts: `p += n` / `p -= n` moves the pointer's byte offset (kept in a local) by `n` elements, in straight-line code and in loops, and a pointer made from `p` before the move keeps the old position. Any other assignment to a pointer local (`p = q`, `p *= 2`) still declines.
+
+A `const` or `constexpr` integer local with a value known at lift time (a literal, arithmetic on constants, a trait's `static constexpr` member) is a constant expression where C needs one: an array extent (`static constexpr int kBr = TileShape<T>::Br; __shared__ CT s[kBr];`). A non-`const` local, or one from a run-time value, still declines.

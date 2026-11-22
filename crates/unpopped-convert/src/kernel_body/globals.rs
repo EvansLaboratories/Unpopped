@@ -155,9 +155,13 @@ impl<'s, 't> Walker<'s, 't> {
         let r = self.expr(n);
         self.hoisted = saved;
         let (e, _) = r?;
-        Ok(fold(&e)
-            .and_then(|v| u32::try_from(v).ok())
-            .filter(|v| *v > 0))
+        // a `const`/`constexpr` local with a known value is a constant expression here too (`__shared__ T s[kBr];`)
+        Ok(fold_with(&e, &|x| match x {
+            ScalarExpr::Local(l) => self.known.get(l).copied(),
+            _ => None,
+        })
+        .and_then(|v| u32::try_from(v).ok())
+        .filter(|v| *v > 0))
     }
 
     /// `extern __shared__ T name[];`: the caller's dynamic shared memory as one array.
