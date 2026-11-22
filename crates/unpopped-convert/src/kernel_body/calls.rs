@@ -118,6 +118,51 @@ impl<'s, 't> Walker<'s, 't> {
         })())
     }
 
+    /// The CUDA fast-math intrinsics, written as the hardware sequences they are: `__expf(x)` is `ex2.approx(x * log2 e)`,
+    /// `__exp10f` the same with `log2 10`, `__log2f` is `lg2.approx(x)`, `__logf` and `__log10f` scale that by `ln 2` and
+    /// `log10 2`, `__fdividef(a, b)` an approximate divide. Each result is the oracle's `approx` node (within a few ulp of exact),
+    /// which is the contract of the intrinsic. `None` when `name` is not one.
+    fn fast_math(&mut self, call: Node<'_>, name: &str) -> Option<R<(ScalarExpr, E)>> {
+        use std::f32::consts as k;
+        let arity = match name {
+            "__expf" | "__exp10f" | "__log2f" | "__logf" | "__log10f" => 1,
+            "__fdividef" => 2,
+            _ => return None,
+        };
+        let args = self.call_args(call);
+        if args.len() != arity {
+            return Some(self.not_yet(call, format!("`{name}` with {} argument(s)", args.len())));
+        }
+        Some((|| {
+            let mut v = Vec::new();
+            for a in &args {
+                let (e, t) = self.expr(*a)?;
+                v.push(self.convert(e, t, E::F32, *a)?);
+            }
+            let approx = || unpopped::ir::Numerics {
+                round: RoundMode::NearestEven,
+                ftz: false,
+                approx: true,
+            };
+            let c = |x: f32| Box::new(ScalarExpr::Const(f64::from(x)));
+            let un = |op, x: ScalarExpr| ScalarExpr::Qualified(Box::new(ScalarExpr::Unary(op, Box::new(x))), approx());
+            let mut it = v.into_iter();
+            let (a, b) = (it.next(), it.next());
+            let e = match (name, a, b) {
+                ("__expf", Some(x), _) => un(UnaryOp::Exp2, ScalarExpr::Mul(Box::new(x), c(k::LOG2_E))),
+                ("__exp10f", Some(x), _) => un(UnaryOp::Exp2, ScalarExpr::Mul(Box::new(x), c(k::LOG2_10))),
+                ("__log2f", Some(x), _) => un(UnaryOp::Log2, x),
+                ("__logf", Some(x), _) => ScalarExpr::Mul(Box::new(un(UnaryOp::Log2, x)), c(k::LN_2)),
+                ("__log10f", Some(x), _) => ScalarExpr::Mul(Box::new(un(UnaryOp::Log2, x)), c(k::LOG10_2)),
+                ("__fdividef", Some(x), Some(y)) => {
+                    ScalarExpr::Qualified(Box::new(ScalarExpr::Div(Box::new(x), Box::new(y))), approx())
+                }
+                _ => return self.not_yet(call, format!("`{name}`")),
+            };
+            Ok((e, E::F32))
+        })())
+    }
+
     /// A math call through the frontend's tables, or an atomic that returns the old value (hoisted as a statement).
     pub(super) fn call_expr(&mut self, n: Node<'_>) -> R<(ScalarExpr, E)> {
         let Some(f) = n.child_by_field_name("function") else {
@@ -143,6 +188,9 @@ impl<'s, 't> Walker<'s, 't> {
             return r;
         }
         if let Some(r) = self.rounded_arithmetic(n, name) {
+            return r;
+        }
+        if let Some(r) = self.fast_math(n, name) {
             return r;
         }
         if self.defines(name) {

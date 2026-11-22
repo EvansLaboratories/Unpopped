@@ -37,3 +37,5 @@ Hexadecimal integer literals lift (`0xffffffff`, `0x1Fu`, `0xFFll`), typed as C 
 The CUDA conversion intrinsics `__{float,double}2{int,uint,ll,ull}_{rn,rz,rd,ru}` and `__{int,uint,ll,ull}2{float,double}_{rn,rz,rd,ru}` lift to one `Cast` with the rounding the suffix names; float to integer clamps to the integer's range and maps NaN to 0, as the intrinsic does.
 
 The rounding-named single-precision arithmetic intrinsics `__f{add,sub,mul,div,rcp,sqrt,maf}_{rn,rz,rd,ru}` lift to the plain operation in a `Qualified` node with that rounding (so a directed result differs from round-to-nearest by the ulp it should, and the operation is not contracted). A direction the operation does not take (`__frcp_rz`) and the double forms decline.
+
+The CUDA fast-math intrinsics `__expf`, `__exp10f`, `__log2f`, `__logf`, `__log10f` and `__fdividef` lift as the hardware sequences they are (`__expf(x)` is `ex2.approx(x * log2 e)`, `__logf(x)` is `lg2.approx(x) * ln 2`): an `approx` node, which the oracle evaluates within a few ulp of the exact function, the intrinsic's own contract. `__sinf`, `__cosf`, `__tanf` and `__powf` have no approximate form in the IR and still decline.
