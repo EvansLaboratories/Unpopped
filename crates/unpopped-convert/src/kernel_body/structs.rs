@@ -401,6 +401,8 @@ impl<'s, 't> Walker<'s, 't> {
                 }
                 Sym::Struct(inner) => Sym::Struct(self.clone_struct(inner, &path, at, out)?),
                 Sym::Pointer(p) => Sym::Pointer(p.clone()),
+                // a struct parameter's array is a row of immutable locals (an element is never assigned): the copy shares them
+                Sym::ParamArray(ls, e) => Sym::ParamArray(ls.clone(), *e),
                 _ => {
                     return self.not_yet(at, format!("the field `{path}`, which cannot be copied"));
                 }

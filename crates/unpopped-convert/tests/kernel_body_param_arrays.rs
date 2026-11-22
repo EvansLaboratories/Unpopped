@@ -217,3 +217,44 @@ fn an_element_is_never_assigned_and_an_array_of_structs_still_declines() {
     // the array used whole, not indexed
     assert!(lift(&format!("{DIMS}void k(float* out, Dims shape) {{ const int* p = shape.v; out[0] = (float)p[0]; }}")).is_err());
 }
+
+#[test]
+fn a_struct_parameter_with_an_array_passes_whole_to_a_helper() {
+    // the census wall `the field shape.d, which cannot be copied`: `pc_axis_coord(i, shape, axis)` reads `shape.d[d]` at a
+    // runtime index in a helper that takes the struct by value (and by const reference)
+    let helper = "int coord(int linear, const Dims s, int axis) { int rem = linear; int c[4] = {0}; \
+        for (int d = 3; d >= 0; --d) { int e = s.v[d]; if (e <= 0) { c[d] = 0; continue; } c[d] = rem % e; rem = rem / e; } return c[axis]; }\n";
+    let by_ref = helper.replace("const Dims s", "const Dims& s");
+    for h in [helper.to_string(), by_ref] {
+        let src = format!(
+            "{DIMS}{h}void k(float* out, Dims shape) {{ for (int i = 0; i < 6; i++) {{ out[i] = (float)coord(i * 7, shape, 2); }} }}"
+        );
+        let k = lift(&src).unwrap();
+        // shape (1, 2, 3, 4) row-major; `axis` 2 is the third coordinate of the linear index
+        let shape = [1i64, 2, 3, 4];
+        let want: Vec<f64> = (0..6)
+            .map(|i: i64| {
+                let mut rem = i * 7;
+                let mut c = [0i64; 4];
+                for d in (0..4).rev() {
+                    c[d] = rem % shape[d];
+                    rem /= shape[d];
+                }
+                c[2] as f64
+            })
+            .collect();
+        assert_eq!(run(&k, 6, vec![ints(&shape)]), want);
+        // control: a different shape gives different coordinates (the array is the caller's, not a constant)
+        let other = [2i64, 2, 2, 2];
+        assert_ne!(run(&k, 6, vec![ints(&other)]), want);
+    }
+}
+
+#[test]
+fn a_helper_that_writes_its_copy_of_the_array_still_declines() {
+    // the copy shares the parameter's read-only locals, so a write to an element is refused rather than aliased
+    let src = format!(
+        "{DIMS}float f(Dims s) {{ s.v[0] = 5; return (float)s.v[0]; }}\nvoid k(float* out, Dims shape) {{ out[0] = f(shape); }}"
+    );
+    assert!(lift(&src).is_err());
+}
