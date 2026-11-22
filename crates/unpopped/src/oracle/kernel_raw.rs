@@ -192,7 +192,7 @@ impl Machine<'_> {
         };
         let mut tmp = [0u8; 16];
         store_val(v, *stored, &mut tmp, 0);
-        let (alloc, space, at, elem, size) =
+        let (alloc, space, at, _elem, size) =
             self.alloc_raw_at(place, AccessKind::Write, Some(tmp))?;
         let c = self
             .ctx
