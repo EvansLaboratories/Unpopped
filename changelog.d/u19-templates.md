@@ -33,3 +33,5 @@ A counted loop with an inclusive upward bound, `for (int i = lo; i <= hi; ++i)`,
 `__shfl_sync`, `__shfl_up_sync`, `__shfl_down_sync` and `__shfl_xor_sync` with an all-ones mask and a width of 32 (given or omitted) lift to the subgroup shuffle collective, the same one a `thread_block_tile` shuffle uses. A partial mask, another width, or a launch whose subgroup is not 32 declines by name.
 
 Hexadecimal integer literals lift (`0xffffffff`, `0x1Fu`, `0xFFll`), typed as C types them: the first of `int`, `unsigned int`, `long long`, `unsigned long long` that holds the value, so `0xffffffff` is an unsigned 32-bit (and `0xffffffff + 1` is 0). A value above `i64::MAX` still declines.
+
+The CUDA conversion intrinsics `__{float,double}2{int,uint,ll,ull}_{rn,rz,rd,ru}` and `__{int,uint,ll,ull}2{float,double}_{rn,rz,rd,ru}` lift to one `Cast` with the rounding the suffix names; float to integer clamps to the integer's range and maps NaN to 0, as the intrinsic does.

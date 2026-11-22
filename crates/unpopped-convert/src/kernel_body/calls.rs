@@ -57,6 +57,27 @@ impl<'s, 't> Walker<'s, 't> {
             })
     }
 
+    /// `__float2int_rn(x)` and the rest of the CUDA conversion intrinsics `__{float,double}2{int,uint,ll,ull}_{rn,rz,rd,ru}` and
+    /// `__{int,uint,ll,ull}2{float,double}_{rn,rz,rd,ru}`: one [`ScalarExpr::Cast`] with the named rounding. Float to integer
+    /// clamps to the integer's range (NaN gives 0), as the intrinsic does. `None` when `name` is not one.
+    fn convert_intrinsic(&mut self, call: Node<'_>, name: &str) -> Option<R<(ScalarExpr, E)>> {
+        let (from, to, round) = conversion_intrinsic(name)?;
+        let args = self.call_args(call);
+        let [x] = args.as_slice() else {
+            return Some(self.not_yet(call, format!("`{name}` with {} argument(s)", args.len())));
+        };
+        Some((|| {
+            let (e, t) = self.expr(*x)?;
+            let e = self.convert(e, t, from, *x)?;
+            let sat = if int_range(to).is_some() {
+                Saturation::Clamp
+            } else {
+                Saturation::Wrap
+            };
+            Ok((ScalarExpr::Cast(Box::new(e), CastSpec { to, round, sat }), to))
+        })())
+    }
+
     /// A math call through the frontend's tables, or an atomic that returns the old value (hoisted as a statement).
     pub(super) fn call_expr(&mut self, n: Node<'_>) -> R<(ScalarExpr, E)> {
         let Some(f) = n.child_by_field_name("function") else {
@@ -76,6 +97,9 @@ impl<'s, 't> Walker<'s, 't> {
             return r;
         }
         if let Some(r) = self.sync_shuffle(n, name) {
+            return r;
+        }
+        if let Some(r) = self.convert_intrinsic(n, name) {
             return r;
         }
         if self.defines(name) {
@@ -325,4 +349,32 @@ fn element_index(byte_offset: ScalarExpr, elem: E) -> ScalarExpr {
         Box::new(byte_offset),
         Box::new(ScalarExpr::ConstInt(size, E::I64)),
     )
+}
+
+/// The source type, destination type and rounding of a CUDA conversion intrinsic name.
+fn conversion_intrinsic(name: &str) -> Option<(E, E, RoundMode)> {
+    let rest = name.strip_prefix("__")?;
+    let (kinds, mode) = rest.rsplit_once('_')?;
+    let round = match mode {
+        "rn" => RoundMode::NearestEven,
+        "rz" => RoundMode::TowardZero,
+        "rd" => RoundMode::TowardNegInf,
+        "ru" => RoundMode::TowardPosInf,
+        _ => return None,
+    };
+    let (a, b) = kinds.split_once('2')?;
+    let ty = |s: &str| {
+        Some(match s {
+            "float" => E::F32,
+            "double" => E::F64,
+            "int" => E::I32,
+            "uint" => E::U32,
+            "ll" => E::I64,
+            "ull" => E::U64,
+            _ => return None,
+        })
+    };
+    let (from, to) = (ty(a)?, ty(b)?);
+    // exactly one side is a float
+    (matches!(from, E::F32 | E::F64) != matches!(to, E::F32 | E::F64)).then_some((from, to, round))
 }
