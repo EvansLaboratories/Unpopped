@@ -7,9 +7,7 @@ impl<'s, 't> Walker<'s, 't> {
     pub(super) fn declaration(&mut self, n: Node<'_>, out: &mut Vec<Stmt>) -> R<()> {
         let struct_type = n
             .child_by_field_name("type")
-            .filter(|t| t.kind() == "type_identifier")
-            .map(|t| text(t, self.src))
-            .filter(|t| self.is_struct(t));
+            .and_then(|t| self.struct_named(t));
         if let Some(sname) = struct_type {
             return self.struct_declaration(n, sname, out);
         }

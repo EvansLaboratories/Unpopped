@@ -225,11 +225,8 @@ impl<'s, 't> Walker<'s, 't> {
 
     /// The struct a parameter declaration is typed with, if it is one of this source's structs.
     fn struct_type_of(&self, p: Node<'_>) -> Option<String> {
-        let t = p
-            .child_by_field_name("type")
-            .filter(|t| t.kind() == "type_identifier")?;
-        let name = text(t, self.src);
-        self.is_struct(name).then(|| name.to_string())
+        let t = p.child_by_field_name("type")?;
+        self.struct_named(t).map(str::to_string)
     }
 
     /// A struct parameter: `S& s` aliases the caller's instance, `const S& s` too (it is read-only), `S s` is a copy.

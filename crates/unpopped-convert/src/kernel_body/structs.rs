@@ -156,6 +156,28 @@ impl<'s, 't> Walker<'s, 't> {
         self.structs.contains_key(name)
     }
 
+    /// The struct a type node names, plain (`S`) or namespace-qualified (`ns::inner::S`, resolved by its last segment, since
+    /// structs are collected by short name across namespaces), if it is one of this source's structs.
+    pub(super) fn struct_named(&self, t: Node<'_>) -> Option<&'s str> {
+        let id = match t.kind() {
+            "type_identifier" => t,
+            "qualified_identifier" => {
+                let mut cur = t;
+                while let Some(inner) = cur
+                    .child_by_field_name("name")
+                    .filter(|n| n.kind() == "qualified_identifier")
+                {
+                    cur = inner;
+                }
+                cur.child_by_field_name("name")
+                    .filter(|n| n.kind() == "type_identifier")?
+            }
+            _ => return None,
+        };
+        let name = text(id, self.src);
+        self.is_struct(name).then_some(name)
+    }
+
     /// A fresh instance of `sname`: every field zero, every array a private allocation; its statements go to `out`.
     pub(super) fn new_struct(
         &mut self,

@@ -563,13 +563,7 @@ impl<'s, 't> Walker<'s, 't> {
 
     /// A parameter of struct type passed by value (`const S p`), or `None` if the parameter is not one.
     fn struct_parameter(&self, p: Node<'_>) -> Option<R<(String, PShape)>> {
-        let ty = p
-            .child_by_field_name("type")
-            .filter(|t| t.kind() == "type_identifier")?;
-        let sname = text(ty, self.src);
-        if !self.is_struct(sname) {
-            return None;
-        }
+        let sname = self.struct_named(p.child_by_field_name("type")?)?;
         let d = p.child_by_field_name("declarator")?;
         if d.kind() != "identifier" {
             return Some(self.not_yet(
