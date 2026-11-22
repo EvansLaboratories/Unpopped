@@ -131,6 +131,17 @@ fn what_cannot_be_inlined_declines_by_name() {
         "__device__ void bump(int& c) { c += 1; }\nvoid k(float* out, const float* a) { bump(3); out[0] = 1.0f; }",
         "reference argument",
     );
+    // a `return` must match the function's type: a value from a `void` function, a bare `return` from a value function
+    not_yet(
+        "__device__ void g(float x) { return x; }
+void k(float* out) { g(1.0f); out[0] = 1.0f; }",
+        "does not match",
+    );
+    not_yet(
+        "__device__ float g(float x) { return; }
+void k(float* out) { out[0] = g(1.0f); }",
+        "does not match",
+    );
     // the callee does not see the caller's locals
     not_yet(
         "__device__ float f(float x) { return x + y; }\nvoid k(float* out) { float y = 1.0f; out[0] = f(2.0f); }",
