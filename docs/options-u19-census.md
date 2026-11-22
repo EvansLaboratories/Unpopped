@@ -131,4 +131,25 @@ A count is the kernels **stopped** by the class (an upper bound on what the slic
 slice 4 built), and a macro-expansion slice (`#define F(x)` appears in 456 of the 535 kernels' files; the walker now only declines at a use, which this run found
 rare).
 
+
+## Re-measured after slices 1, 2, 3 and 5 (2026-11-22, branch `lane/u19-templates`, same corpus and tool)
+
+Same Baracuda corpus, same method (`--instantiate` heuristic: type parameters `float`, non-type `128`), same generic context. **Lifted: 80 of 535 kernel definitions
+(was 56; 72 of them template kernels, was 48)**; with no instantiation 8 of 535 (unchanged: a template kernel with no arguments now declines as "the template parameter `T` has no
+value", not as "template"). The 24 gained are not "391 + 158 + 76 + 67 unlocked" as the census order hoped: **each slice removed the first wall and met the next one**.
+What the first decline is now, by count (first decline per kernel):
+
+- **160 + 40 + 13: a call to a helper defined in another file** (`load_as_acc<float>`, `load_as_f32<float>`, `fast_sigmoid`, `op`). The extraction is per file and `#include` is
+  dropped, so a helper in `baracuda_dtype_promote.cuh` is invisible to a kernel in `causal_conv1d_backward_fp.cu`. **This is now the largest wall and it is not a walker
+  construct: it needs the included text.** Slice 2 works when the helper is in the same source (tested), and finds none here. Candidate next slice: `LiftContext::with_include(name, text)`
+  (the caller supplies the file's includes; the walker splices them in front, no filesystem read). Not built; needs pm-kernels' ruling (a caller-supplied prelude widens the preprocessor).
+- **49 + 20 + 11: types and names from other headers** (`DimsI32`, `floatX`, `INFINITY`): the same include wall plus a small intrinsic and constant table.
+- **26 + 18: `using T = ...;`** inside the kernel (an `alias_declaration` statement): not modelled.
+- **13: a local array with an initialiser** (`int a[3] = {..}`): the "later slice" the decline names.
+- 10 FlashInfer kernels decline "the template parameter `X` of `X` has no value": the heuristic does not name their parameters; a caller who gives them lifts as the decode goal test does.
+
+So slice 1 to 3 and 5 are built and correct (each tested on the oracle, mutants caught), and they move 56 to 80; the next 100-odd kernels wait on includes, not on the IR.
+**The `for` loop that counts down** (`for (d = rank - 1; d >= 0; --d)`, which every Baracuda strided kernel runs over its `shape.v[d]`) was a hidden gate behind slice 5: it was found by
+slice 5's own test and is lifted now (`tests/kernel_body_descending_for.rs`).
+
 — lane: unpopped
