@@ -93,14 +93,17 @@ fn a_static_assert_is_nothing_unless_it_is_false_for_these_arguments() {
 #[test]
 fn the_c_limit_constants_are_constants() {
     let src = "void k(float* out) { out[0] = INFINITY; out[1] = -INFINITY; out[2] = FLT_MAX; out[3] = FLT_EPSILON; \
-        out[4] = (float)INT_MAX; out[5] = (float)(INT_MIN + 1); out[6] = (float)UINT_MAX; }";
+        out[4] = (float)INT_MAX; out[5] = (float)((INT_MIN + 4) + INT_MAX); out[6] = (float)UINT_MAX; }";
     let got = run(&lift(src).unwrap(), 7);
     assert_eq!(got[0], f64::INFINITY);
     assert_eq!(got[1], f64::NEG_INFINITY);
     assert_eq!(got[2], f64::from(f32::MAX));
     assert_eq!(got[3], f64::from(f32::EPSILON));
     assert_eq!(got[4], f64::from(i32::MAX as f32));
-    assert_eq!(got[5], f64::from((i32::MIN + 1) as f32));
+    assert_eq!(
+        got[5],
+        3.0 /* (-2^31 + 4) + (2^31 - 1), exact; INT_MAX in place of INT_MIN would wrap to 2 */
+    );
     assert_eq!(got[6], f64::from(u32::MAX as f32));
     // a file's own constant of the same name wins over the library's
     let own = "constexpr float FLT_MAX = 7.0f;\nvoid k(float* out) { out[0] = FLT_MAX; }";
