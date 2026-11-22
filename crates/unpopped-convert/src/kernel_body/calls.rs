@@ -216,6 +216,39 @@ impl<'s, 't> Walker<'s, 't> {
         })())
     }
 
+    /// `isnan(x)`, `isinf(x)`, `isfinite(x)` on a float: `x != x`; `|x| == inf`; `x - x == 0` (NaN and infinity both make
+    /// `x - x` not equal to zero). `None` when `name` is not one.
+    fn float_class(&mut self, call: Node<'_>, name: &str) -> Option<R<(ScalarExpr, E)>> {
+        if !matches!(name, "isnan" | "isinf" | "isfinite") {
+            return None;
+        }
+        let args = self.call_args(call);
+        let [x] = args.as_slice() else {
+            return Some(self.not_yet(call, format!("`{name}` with {} argument(s)", args.len())));
+        };
+        Some((|| {
+            let (e, t) = self.expr(*x)?;
+            if !matches!(t, E::F32 | E::F64) {
+                return self.not_yet(
+                    *x,
+                    format!("`{name}` of a {t:?} value (it takes a float or double)"),
+                );
+            }
+            let x2 = || (e.clone(), t);
+            match name {
+                "isnan" => self.binary("!=", x2(), x2(), call),
+                "isinf" => {
+                    let abs = ScalarExpr::Unary(UnaryOp::Abs, Box::new(e.clone()));
+                    self.binary("==", (abs, t), (ScalarExpr::Const(f64::INFINITY), t), call)
+                }
+                _ => {
+                    let diff = self.binary("-", x2(), x2(), call)?;
+                    self.binary("==", diff, (ScalarExpr::Const(0.0), t), call)
+                }
+            }
+        })())
+    }
+
     /// A math call through the frontend's tables, or an atomic that returns the old value (hoisted as a statement).
     pub(super) fn call_expr(&mut self, n: Node<'_>) -> R<(ScalarExpr, E)> {
         let Some(f) = n.child_by_field_name("function") else {
@@ -247,6 +280,9 @@ impl<'s, 't> Walker<'s, 't> {
             return r;
         }
         if let Some(r) = self.half_conversion(n, name) {
+            return r;
+        }
+        if let Some(r) = self.float_class(n, name) {
             return r;
         }
         if self.defines(name) {
