@@ -110,6 +110,6 @@ fn a_field_extent_that_is_arithmetic_on_the_template_argument_folds() {
         void k(float* out, const float* in) { V<float, 16> v; v.fill(in[2]); out[0] = v.at(3); }";
     assert_eq!(run(&lift(src).unwrap(), 1), vec![3.5]);
     // a name in the extent is not folded as a number
-    let named = "template <typename T, int N> struct V { T data[N / M]; };\nvoid k(float* out, const float* in) { V<float, 16> v; out[0] = 1.0f; }";
+    let named = "template <typename T, int N> struct V { T data[N + M]; };\nvoid k(float* out, const float* in) { V<float, 16> v; out[0] = 1.0f; }";
     assert!(lift(named).is_err());
 }
