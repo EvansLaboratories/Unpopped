@@ -963,7 +963,7 @@ impl<'s, 't> Walker<'s, 't> {
         let Some(inner) = inner.filter(|i| i.kind() == "pointer_expression") else {
             return self.not_yet(
                 n,
-                "an atomic whose address is not `&a[i]` (pointer arithmetic is a later slice)",
+                "an atomic or `__ldg` whose address is not a pointer expression (`&a[i]`, `p + i`, ...)",
             );
         };
         let op = inner
@@ -973,7 +973,7 @@ impl<'s, 't> Walker<'s, 't> {
             .child_by_field_name("argument")
             .filter(|a| a.kind() == "subscript_expression");
         let (Some("&"), Some(arg)) = (op, arg) else {
-            return self.not_yet(n, "an atomic whose address is not `&a[i]`");
+            return self.not_yet(n, "an atomic or `__ldg` whose address is not `&p[i]`");
         };
         let (place, elem) = self.element_place(arg)?;
         let scope = if matches!(place, Place::Alloc { .. }) {

@@ -110,7 +110,7 @@ fn other_directives_and_bad_counts_decline() {
     not_yet(&kernel("#pragma unroll x"), "count");
     not_yet(&kernel("#pragma unroll 2 3"), "trailing");
     not_yet(
-        "void k(float* out, const float* a) { out[0] = __ldg(a + 1); }",
+        "void k(float* out, const float* a) { out[0] = __ldg(1.0f); }",
         "address is not",
     );
     // Control: the accepted spelling lifts.

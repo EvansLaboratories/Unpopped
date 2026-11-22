@@ -204,7 +204,11 @@ fn constructs_outside_the_spine_decline_by_name() {
         "assigns",
     );
     not_yet("void k(float* out, long n) { out[0] = 1.0f; }", "`long`");
-    not_yet("void k(float* out) { float* p = out; }", "pointer");
+    // a pointer local lifts since slice 4c-4 (tests/kernel_body_pointers.rs); a pointer used as a number does not
+    not_yet(
+        "void k(float* out) { float* p = out; out[0] = p; }",
+        "array or pointer `p`",
+    );
     // a vector local still needs its initializer (`T x;` of a scalar starts at zero, see the asm tests)
     not_yet(
         "void k(float* out) { float4 v; out[0] = 1.0f; }",

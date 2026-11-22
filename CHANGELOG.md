@@ -37,6 +37,8 @@ Slice 4c-3 adds `asm volatile` from a **closed table of PTX templates**: `ex2`/`
 
 ---
 
+The walker models a C pointer as a base (a buffer parameter or an allocation), a pointee type and a byte offset (an `I64` expression), as ruled for U19 (pm-kernels, Q6): the IR still has no pointer value, and every dereference is lowered to `Place::Raw` or `Place::AllocRaw`. Pointer names, `p + i`, `i + p`, `p - i`, `&p[i]`, `(T*)p` (the same bytes read as another type), `*p`, `p[i]`, pointer locals (`T* q = <pointer expression>;`) and `T*` parameters of inlined functions lift. A pointer local's offset is evaluated into a fresh local at its declaration, so a later change to a variable its expression named cannot move it. `__ldg(p + i)` lifts as a plain load. A pointer that must survive as a value (reassigned, used as a scalar, a pointer difference), an implicit pointer conversion and an atomic through a pointer decline by name. A plain `a[i]` of a buffer or `__shared__` array keeps its typed `Logical`/`Alloc` place. `half` and `nv_bfloat16` are now type names. Verified by `tests/kernel_body_pointers.rs` (byte-level type punning and a shared array carved by a cast, oracle runs against Rust references, 7 seeded mutants caught).
+
 ## `0.56.6` — docs: ROADMAP E3 row points at fishstringer, owner corrected
 
 ROADMAP row E3 named `dtype_lowering_coverage.rs:162-193` as if it were in this repo. The 9 `NotYet` cells live in fishstringer's `fishstringer-slang-emit` tests (16 `NotYet` hits at fishstringer origin/main, verified by pm-kernels 2026-11-21); Unpopped has no Slang crate. Owner is now fishstringer, trigger unchanged. Docs only.

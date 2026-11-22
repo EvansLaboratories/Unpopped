@@ -140,7 +140,7 @@ fn every_thread_of_a_block_adds_into_one_counter() {
 #[test]
 fn atomics_that_are_not_a_plain_address_decline() {
     for (call, needle) in [
-        ("atomicAdd(c + 1, 1)", "address is not"),
+        ("atomicAdd(c + 1, 1)", "through a pointer"),
         ("atomicInc(&c[0], 3)", "`atomicInc`"),
         ("atomicAdd(&c[0])", "1 argument"),
     ] {
