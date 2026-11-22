@@ -38,7 +38,7 @@ fn run(k: &KernelFn) -> Vec<f64> {
 fn a_cast_to_an_alias_converts_like_the_c_cast() {
     // `Idx` is int: the cast truncates 7.9 to 7; `Acc` is float: it keeps the fraction
     let src = "using Idx = int; using Acc = float;\n\
-        void k(float* out, const float* in) { Acc a = (Acc)(in[0] * 2.0f); Idx i = (Idx)(in[0]); out[0] = a; out[1] = (float)i; }";
+        void k(float* out, const float* in) { Acc a = (Acc)(in[0] * 2.0f); out[0] = a; out[1] = (float)((Idx)(in[0])); }";
     let got = run(&lift(src).unwrap());
     assert_eq!(got, vec![f64::from(7.9f32 * 2.0), 7.0]);
 }
