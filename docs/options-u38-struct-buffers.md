@@ -15,3 +15,12 @@ Status: **options for pm-kernels' ruling; no code. Touches struct layout: needs 
 ## Recommendation
 
 B (the caller supplies the layout), then A only if callers should not have to. B avoids the layout-derivation and patent question entirely and is the same shape as the other caller-stated facts. Lane change: baracuda passes the five block layouts via the context.
+
+## Ruling and result (pm-kernels 2026-11-22: option B)
+
+Conditions as ruled: the walker **never computes or infers a layout**; it validates the one the caller gives (offsets plus `count * elem` within `size`, no overlapping fields, named error otherwise) and declines by name on a missing or mismatching one; additive; a test with a seeded wrong offset must fail the oracle result. Baracuda derives its five layouts from a compiled C harness printing `sizeof`/`offsetof` under `nvcc` (the control), not from reading the source (a `[TASK]` to Baracuda after the PR window).
+
+**No layout is computed here, so the U23 patent guard (US20230305845A1, layout only) is not engaged:** the walker maps a source form to an existing byte-offset place (`Place::Raw`) from numbers the caller states, and adds no IR construct (`docs/PATENT-SWEEP.md` 417-419: "still no IR construct added; each maps a source form to an existing statement"; verdict NOT CLEARED, unchanged by this work).
+
+Step 1 built (walls-2, `da7f5f1b`): `LiftContext::with_struct_layout`, `StructLayout`, `FieldLayout`, `StructLayout::validate`, seeded inconsistencies (a field past the end, overlapping fields, size 0, a duplicate, an unknown element type, a zero count, two layouts for one name) each declined by name (`tests/kernel_body_struct_layouts.rs`, 5 mutants caught). Next: an anonymous-struct typedef resolves to a laid-out struct; `(const S*)p` is a byte pointer with stride `size`; `p[i].f` and `p[i].f[k]` read `Place::Raw` at `i * size + offset + k * width`; the oracle test with a seeded wrong offset must produce a wrong result.
+
