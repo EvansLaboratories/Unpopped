@@ -58,6 +58,27 @@ Read with `git grep` at each repo's current checkout, 2026-11-22; test modules n
 | vulkane | `vulkane-hlsl-emit/src/lib.rs:141` and `vulkane-spirv-emit/src/tests.rs`, test code | Same, when it has a launcher that binds a block |
 | rockfish, openclownfish | none found | Unaffected (their backends keep the default `lower_with`) |
 
+## Baracuda's `kernelgen`: how it opts in, and why its output cannot change
+
+`kernelgen` calls `unpopped::generate(..)` / `unpopped::generate_variants(..)` with its `Cuda` backend. **It does not change a line to stay as it is.** Three reasons, each
+checkable:
+
+1. `generate` and `generate_variants` are not touched; `try_generate` is `try_generate_with(.., &CallerCaps::LEGACY)`, and `LEGACY` is what `Default` gives.
+2. `Cuda` implements `lower` only. The new `Backend::lower_with` is **defaulted to `self.lower(plan)`** and ignores `caps`, so for a backend that does not override it the
+   result is **the same call with the same argument**, whatever caps are passed.
+3. Nothing in `unpopped` reads `caps` except a backend's own `lower_with`; the stamp, the plan build and the provenance are the same code path.
+
+**To opt in** (only if Baracuda wants a shape that needs an interface, which its `Cuda` backend does not emit today): replace the call with
+`try_generate_with(&op, &key, &Cuda, &CallerCaps::LEGACY.with_interface())`, and carry `GeneratedKernel::interface()` into its artifact contract so Fuel can bind it.
+Until then there is nothing to do, and a plan that would need the interface is refused for it with `UnsupportedPlanShape`.
+
+**The test that pins "byte-identical"** (written with the code, in `unpopped` and in `unpopped-cpu-c`, which is the in-tree backend that overrides nothing): a Baracuda-shaped
+plan, elementwise, a reduction, a scatter, lowered through `try_generate`, `try_generate_with(LEGACY)`, **and** `try_generate_with(with_interface())`; the three `GeneratedKernel`s
+compare equal field by field (source, name, interface, provenance), with a stub backend that overrides only `lower` (Baracuda's situation). **Mutant:** make the default
+`lower_with` return `lower` plus any change (an interface, a different name) and the test goes red. Control: a stub that *does* override `lower_with` and refuses under `LEGACY`
+shows `try_generate` refusing and `try_generate_with(with_interface())` succeeding, so the test can see a difference. **Baracuda's own side:** after the release, one test in
+`baracuda-cuda-emit` that its `Cuda` output for its golden plans is unchanged, which only its lane can write (Unpopped has no Baracuda dependency).
+
 ## Honest limits
 
 - **The flag is a claim, not a check.** Unpopped cannot verify a caller really binds the interface; a caller that passes `with_interface()` and does not is wrong in its
