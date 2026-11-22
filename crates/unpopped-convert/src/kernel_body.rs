@@ -478,7 +478,10 @@ impl<'s, 't> Walker<'s, 't> {
                 if p.kind() == "comment" {
                     continue;
                 }
-                if p.kind() != "parameter_declaration" {
+                if !matches!(
+                    p.kind(),
+                    "parameter_declaration" | "optional_parameter_declaration"
+                ) {
                     return self.not_yet(p, format!("a `{}` parameter", p.kind()));
                 }
                 raw.push(self.parameter(p)?);
