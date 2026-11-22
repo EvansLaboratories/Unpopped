@@ -94,6 +94,9 @@ impl<'s, 't> Walker<'s, 't> {
         arg: Node<'_>,
         out: &mut Vec<Stmt>,
     ) -> R<(String, Sym)> {
+        if let Some(sname) = self.struct_type_of(p) {
+            return self.bind_struct_argument(p, arg, &sname, out);
+        }
         let ty = self.type_of(p.child_by_field_name("type"), p)?;
         let Some(d) = p.child_by_field_name("declarator") else {
             return self.not_yet(p, "an unnamed parameter");
@@ -160,6 +163,44 @@ impl<'s, 't> Walker<'s, 't> {
                 ),
             ),
         }
+    }
+
+    /// The struct a parameter declaration is typed with, if it is one of this source's structs.
+    fn struct_type_of(&self, p: Node<'_>) -> Option<String> {
+        let t = p
+            .child_by_field_name("type")
+            .filter(|t| t.kind() == "type_identifier")?;
+        let name = text(t, self.src);
+        self.is_struct(name).then(|| name.to_string())
+    }
+
+    /// A struct parameter: `S& s` aliases the caller's instance, `const S& s` too (it is read-only), `S s` is a copy.
+    fn bind_struct_argument(
+        &mut self,
+        p: Node<'_>,
+        arg: Node<'_>,
+        sname: &str,
+        out: &mut Vec<Stmt>,
+    ) -> R<(String, Sym)> {
+        let Some(d) = p.child_by_field_name("declarator") else {
+            return self.not_yet(p, "an unnamed parameter");
+        };
+        let (by_ref, id) = match d.kind() {
+            "identifier" => (false, Some(d)),
+            "reference_declarator" => (true, d.named_child(0).filter(|i| i.kind() == "identifier")),
+            other => return self.not_yet(d, format!("a `{other}` parameter of struct type")),
+        };
+        let Some(id) = id else {
+            return self.not_yet(d, "a struct parameter of an unexpected shape");
+        };
+        let pname = text(id, self.src).to_string();
+        let from = self.struct_value(arg, sname)?;
+        if by_ref {
+            return Ok((pname, Sym::Struct(from)));
+        }
+        let copy = self.new_struct(sname, &pname, arg, out)?;
+        self.copy_struct(&copy, &from, out)?;
+        Ok((pname, Sym::Struct(copy)))
     }
 
     /// `T* name` bound to a pointer argument: the pointer, its offset pinned in a local (so it cannot move afterwards).

@@ -5,6 +5,14 @@ use super::*;
 
 impl<'s, 't> Walker<'s, 't> {
     pub(super) fn declaration(&mut self, n: Node<'_>, out: &mut Vec<Stmt>) -> R<()> {
+        let struct_type = n
+            .child_by_field_name("type")
+            .filter(|t| t.kind() == "type_identifier")
+            .map(|t| text(t, self.src))
+            .filter(|t| self.is_struct(t));
+        if let Some(sname) = struct_type {
+            return self.struct_declaration(n, sname, out);
+        }
         let tname = n.child_by_field_name("type").map(|t| {
             text(t, self.src)
                 .split_whitespace()
@@ -207,6 +215,9 @@ impl<'s, 't> Walker<'s, 't> {
         rhs: Node<'_>,
         out: &mut Vec<Stmt>,
     ) -> R<()> {
+        if let Some(m) = self.resolve_member(lhs)? {
+            return self.assign_struct_member(m, lhs, op, rhs, out);
+        }
         let (Some(a), Some(f)) = (
             lhs.child_by_field_name("argument"),
             lhs.child_by_field_name("field"),

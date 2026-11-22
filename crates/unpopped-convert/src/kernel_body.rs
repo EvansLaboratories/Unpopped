@@ -90,6 +90,7 @@ mod inline;
 mod places;
 mod pointer;
 mod statements;
+mod structs;
 
 type R<T> = Result<T, KernelLiftError>;
 
@@ -134,6 +135,7 @@ fn lift_with_launch(
         .ok_or_else(|| KernelLiftError::NoSuchFunction(name.to_string()))?;
     let mut w = Walker::new(src);
     w.functions = all_functions(root, src);
+    w.structs = structs::collect_structs(root, src);
     w.launch = launch;
     w.unary_fn = fe.unary_fn;
     w.binary_fn = fe.binary_fn;
@@ -193,6 +195,8 @@ fn text<'a>(n: Node<'_>, src: &'a str) -> &'a str {
 /// A name in scope.
 #[derive(Clone)]
 enum Sym {
+    /// A struct instance (slice 4d): its fields scalarized, each a scalar local, a private array or a nested instance.
+    Struct(std::rc::Rc<structs::StructInst>),
     /// A pointer local or parameter (slice 4c-4): a base, a pointee type and a byte offset, resolved in the walker.
     Pointer(pointer::PtrVal),
     /// A buffer parameter: its index in `KernelFn::params`, element type and whether the source made it `const`.
@@ -221,6 +225,8 @@ enum Fixed {
 struct Walker<'s, 't> {
     /// Every function defined in the source, by name (the kernel included), for inlining (slice 4c-2).
     functions: HashMap<String, Node<'t>>,
+    /// Every struct defined in the source (slice 4d).
+    structs: HashMap<String, Vec<structs::FieldDef>>,
     /// The functions being inlined now, outermost first.
     inline_stack: Vec<String>,
     src: &'s str,
@@ -246,6 +252,7 @@ impl<'s, 't> Walker<'s, 't> {
     fn new(src: &'s str) -> Self {
         Self {
             functions: HashMap::new(),
+            structs: HashMap::new(),
             inline_stack: Vec::new(),
             src,
             params: Vec::new(),
@@ -297,7 +304,7 @@ impl<'s, 't> Walker<'s, 't> {
         }
         self.compute = pick_compute(&raw);
         for (i, (pname, shape)) in raw.into_iter().enumerate() {
-            self.bind_param(i, pname, shape);
+            self.bind_param(i, pname, shape, f)?;
         }
         let block = self.block_of(body)?;
         let (params, locals, compute) = (
@@ -313,6 +320,9 @@ impl<'s, 't> Walker<'s, 't> {
     }
 
     fn parameter(&self, p: Node<'_>) -> R<(String, PShape)> {
+        if let Some(r) = self.struct_parameter(p) {
+            return r;
+        }
         let ty = self.type_of(p.child_by_field_name("type"), p)?;
         let mut d = p.child_by_field_name("declarator");
         let mut ptr = false;
@@ -340,7 +350,7 @@ impl<'s, 't> Walker<'s, 't> {
         self.not_yet(p, "an unnamed parameter")
     }
 
-    fn bind_param(&mut self, index: usize, name: String, shape: PShape) {
+    fn bind_param(&mut self, index: usize, name: String, shape: PShape, at: Node<'_>) -> R<()> {
         let sym = match shape {
             PShape::Buffer(elem, is_const) => {
                 let role = if is_const {
@@ -357,8 +367,40 @@ impl<'s, 't> Walker<'s, 't> {
                 self.params.push(Param::scalar(name.clone(), ty, local));
                 Sym::Scalar(local, ty, Fixed::Param)
             }
+            PShape::Struct(sname) => self.bind_struct_param(&name, &sname, at)?,
         };
         self.scopes[0].insert(name, sym);
+        Ok(())
+    }
+
+    /// A parameter of struct type passed by value (`const S p`), or `None` if the parameter is not one.
+    fn struct_parameter(&self, p: Node<'_>) -> Option<R<(String, PShape)>> {
+        let ty = p
+            .child_by_field_name("type")
+            .filter(|t| t.kind() == "type_identifier")?;
+        let sname = text(ty, self.src);
+        if !self.is_struct(sname) {
+            return None;
+        }
+        let d = p.child_by_field_name("declarator")?;
+        if d.kind() != "identifier" {
+            return Some(self.not_yet(
+                d,
+                format!("a `{}` parameter of struct type (only by value)", d.kind()),
+            ));
+        }
+        Some(Ok((
+            text(d, self.src).to_string(),
+            PShape::Struct(sname.to_string()),
+        )))
+    }
+
+    /// A defect in the walker's own bookkeeping, reported as a decline rather than a panic.
+    pub(super) fn invalid(&self, what: &str) -> KernelLiftError {
+        KernelLiftError::NotYetLifted {
+            construct: what.to_string(),
+            line: 0,
+        }
     }
 
     fn new_local(&mut self, ty: E) -> u32 {
@@ -447,21 +489,26 @@ fn push(out: &mut Vec<Stmt>, s: Stmt) -> R<()> {
 enum PShape {
     Buffer(E, bool),
     Scalar(E),
+    /// A struct passed by value (its type name).
+    Struct(String),
 }
 
 fn pick_compute(raw: &[(String, PShape)]) -> E {
     let float = |t: E| int_range(t).is_none();
     let all = || {
-        raw.iter().map(|(_, s)| match s {
-            PShape::Buffer(t, _) | PShape::Scalar(t) => *t,
-        })
+        raw.iter()
+            .map(|(_, s)| match s {
+                PShape::Buffer(t, _) | PShape::Scalar(t) => Some(*t),
+                PShape::Struct(_) => None,
+            })
+            .flatten()
     };
     all()
         .find(|t| float(*t))
         .or_else(|| {
             raw.iter().find_map(|(_, s)| match s {
                 PShape::Buffer(t, _) => Some(*t),
-                PShape::Scalar(_) => None,
+                PShape::Scalar(_) | PShape::Struct(_) => None,
             })
         })
         .unwrap_or(E::I32)

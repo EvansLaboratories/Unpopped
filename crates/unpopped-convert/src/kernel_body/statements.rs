@@ -97,6 +97,9 @@ impl<'s, 't> Walker<'s, 't> {
         if let Some(Sym::Vector(ls, elem, lanes)) = self.lookup(name) {
             return self.assign_vector(ls, (elem, lanes), op, rhs, out);
         }
+        if let Some(Sym::Struct(dst)) = self.lookup(name) {
+            return self.assign_struct(&dst, op, rhs, out);
+        }
         let Some(Sym::Scalar(local, ty, fixed)) = self.lookup(name) else {
             return self.not_yet(
                 lhs,

@@ -14,9 +14,11 @@ impl<'s, 't> Walker<'s, 't> {
         ) else {
             return self.not_yet(n, "an index of an unexpected shape");
         };
-        let sym = (arg.kind() == "identifier")
-            .then(|| self.lookup(text(arg, self.src)))
-            .flatten();
+        let sym = match arg.kind() {
+            "identifier" => self.lookup(text(arg, self.src)),
+            "field_expression" => self.resolve_member(arg)?,
+            _ => None,
+        };
         let Some(Sym::Buffer(_, elem) | Sym::Alloc(_, elem)) = sym else {
             // not a plain buffer or array: a pointer expression (`p[i]`, `(T*)p`, `(p + k)[i]`), read through a raw place
             if let Some(p) = self.ptr_expr(arg)? {
@@ -99,6 +101,15 @@ impl<'s, 't> Walker<'s, 't> {
 
     /// `threadIdx.x`, `blockIdx.y`, `blockDim.z`, `gridDim.x`: the launch's execution ids (`U32`).
     pub(super) fn builtin(&self, n: Node<'_>) -> R<(ScalarExpr, E)> {
+        if let Some(m) = self.resolve_member(n)? {
+            return match m {
+                Sym::Scalar(l, t, _) => Ok((ScalarExpr::Local(l), t)),
+                _ => self.not_yet(
+                    n,
+                    "a struct or array member used as a value (read a scalar member)",
+                ),
+            };
+        }
         let (Some(a), Some(f)) = (
             n.child_by_field_name("argument"),
             n.child_by_field_name("field"),
