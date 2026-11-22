@@ -383,10 +383,11 @@ impl<'s, 't> Walker<'s, 't> {
         if down && int_range(ty).is_some_and(|(lo, _)| lo == 0) {
             return Ok(None);
         }
-        let Some(step) = self.for_step(upd, &name, ty, down)? else {
+        let assigned = self.loop_assigned(n);
+        let Some(step) = self.for_step(upd, &name, ty, down, &assigned)? else {
             return Ok(None);
         };
-        self.require_invariant(b)?;
+        self.require_invariant(b, &assigned)?;
         let (be, bt) = self.expr(b)?;
         let mut be = self.convert(be, bt, ty, b)?;
         if op == ">=" {
@@ -422,6 +423,7 @@ impl<'s, 't> Walker<'s, 't> {
         counter: &str,
         ty: E,
         down: bool,
+        assigned: &HashSet<String>,
     ) -> R<Option<ScalarExpr>> {
         // an update that moves the counter the way the condition tests: `++` / `+=` up, `--` / `-=` down
         let (inc, assign) = if down { ("--", "-=") } else { ("++", "+=") };
@@ -446,7 +448,7 @@ impl<'s, 't> Walker<'s, 't> {
                 if text(l, self.src) != counter || text(op, self.src) != assign {
                     return Ok(None);
                 }
-                self.require_invariant(r)?;
+                self.require_invariant(r, assigned)?;
                 let (s, st) = self.expr(r)?;
                 let s = self.convert(s, st, ty, r)?;
                 Ok(Some(if down {
@@ -459,13 +461,37 @@ impl<'s, 't> Walker<'s, 't> {
         }
     }
 
-    /// A `For` bound is read once by the IR and every iteration by C: they agree only if nothing it names is assigned and
-    /// nothing is loaded from memory.
-    pub(super) fn require_invariant(&self, n: Node<'_>) -> R<()> {
+    /// The names that can change while the loop `n` runs: those assigned inside it (its body and update), or, when the body calls
+    /// a function defined in this source (which could assign a caller's variable through a reference), every name the function
+    /// assigns anywhere. A bound naming a variable assigned only *outside* the loop (an enclosing loop's counter, a value set
+    /// before it) is the same on every iteration.
+    fn loop_assigned(&self, n: Node<'_>) -> HashSet<String> {
+        if self.calls_defined(n) {
+            return self.assigned.clone();
+        }
+        let mut out = HashSet::new();
+        collect_assigned(n, self.src, &mut out);
+        out
+    }
+
+    fn calls_defined(&self, n: Node<'_>) -> bool {
+        if n.kind() == "call_expression"
+            && n.child_by_field_name("function")
+                .is_some_and(|f| self.defines(text(f, self.src)))
+        {
+            return true;
+        }
+        let mut c = n.walk();
+        n.named_children(&mut c).any(|k| self.calls_defined(k))
+    }
+
+    /// A `For` bound is read once by the IR and every iteration by C: they agree only if nothing it names is assigned while the
+    /// loop runs (`assigned`, from `loop_assigned`) and nothing is loaded from memory.
+    pub(super) fn require_invariant(&self, n: Node<'_>, assigned: &HashSet<String>) -> R<()> {
         if n.kind() == "subscript_expression" || n.kind() == "call_expression" {
             return self.not_yet(n, "a loop bound that reads memory or calls a function");
         }
-        if n.kind() == "identifier" && self.assigned.contains(text(n, self.src)) {
+        if n.kind() == "identifier" && assigned.contains(text(n, self.src)) {
             return self.not_yet(
                 n,
                 "a loop bound or step that names a variable the function assigns",
@@ -473,7 +499,7 @@ impl<'s, 't> Walker<'s, 't> {
         }
         let mut c = n.walk();
         n.named_children(&mut c)
-            .try_for_each(|k| self.require_invariant(k))
+            .try_for_each(|k| self.require_invariant(k, assigned))
     }
 
     // ---- expressions ----
