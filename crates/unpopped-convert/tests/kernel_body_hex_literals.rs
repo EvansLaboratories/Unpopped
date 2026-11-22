@@ -38,8 +38,9 @@ fn out(src: &str, n: usize) -> Vec<f64> {
 
 #[test]
 fn a_hex_literal_has_the_value_it_spells() {
-    let src = "void k(float* out) { out[0] = (float)0xff; out[1] = (float)0XA0; out[2] = (float)0xffff; out[3] = (float)0x1F; }";
-    assert_eq!(out(src, 4), vec![255.0, 160.0, 65535.0, 31.0]);
+    let src = "void k(float* out) { out[0] = (float)0xff; out[1] = (float)0XA0; out[2] = (float)0xffff; out[3] = (float)0x1F; out[4] = (float)(0xff - 0x100); }";
+    // a small hex is a signed `int`: the subtraction goes negative (an unsigned would wrap)
+    assert_eq!(out(src, 5), vec![255.0, 160.0, 65535.0, 31.0, -1.0]);
 }
 
 #[test]
