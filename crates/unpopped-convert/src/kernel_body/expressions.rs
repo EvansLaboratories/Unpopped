@@ -65,6 +65,11 @@ impl<'s, 't> Walker<'s, 't> {
             ),
             None => match self.global_const(name, n)? {
                 Some(v) => Ok(v),
+                None if self.macros.contains_key(name) => {
+                    let v = self.macros[name];
+                    let t = if i32::try_from(v).is_ok() { E::I32 } else { E::I64 };
+                    Ok((ScalarExpr::ConstInt(v, t), t))
+                }
                 None if self.limit_constant(name).is_some() => {
                     Ok(self.limit_constant(name).expect("checked above"))
                 }

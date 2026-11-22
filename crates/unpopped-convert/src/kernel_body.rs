@@ -222,6 +222,7 @@ fn lift_preprocessed(
     w.type_aliases = aliases::collect_aliases(root, src);
     w.traits = aliases::collect_traits(root, src);
     w.unexpanded = unexpanded;
+    w.macros = pre.macros.clone();
     w.unary_fn = fe.unary_fn;
     w.binary_fn = fe.binary_fn;
     let k = w.function(func, name)?;
@@ -386,6 +387,8 @@ struct Walker<'s, 't> {
     null_buffers: HashSet<String>,
     /// Macros the preprocessor could not expand, with why: a use declines naming the macro (`Walker::unexpanded_or`).
     unexpanded: context::Unexpanded,
+    /// Object-like integer macros with one value (`#define QR4_0 2`), read where a name is used in code.
+    macros: HashMap<String, i64>,
     /// Names of block groups in scope (`cg::thread_block b = cg::this_thread_block();`): handles with no IR of their own.
     groups: HashSet<String>,
     /// Warp tiles in scope (`cg::thread_block_tile<32> w = cg::tiled_partition<32>(block);`) with their width.
@@ -433,6 +436,7 @@ impl<'s, 't> Walker<'s, 't> {
             dyn_shared: 0,
             null_buffers: HashSet::new(),
             unexpanded: Vec::new(),
+            macros: HashMap::new(),
             entry: None,
             type_aliases: HashMap::new(),
             traits: HashMap::new(),

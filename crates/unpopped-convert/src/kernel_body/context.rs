@@ -140,6 +140,10 @@ pub(super) struct Preprocessed {
     pub(super) missing_includes: Vec<String>,
     /// One entry per line of `text`.
     pub(super) origins: Vec<Origin>,
+    /// Object-like integer macros with ONE value over the whole preprocessed text (a `#define NAME <integer expression>` never
+    /// redefined to another value, never `#undef`ed, not an empty flag), by name: what a use in code reads as. A caller's
+    /// definition counts. A name redefined or removed is absent (a use declines).
+    pub(super) macros: HashMap<String, i64>,
 }
 
 /// The pass's running state across the source and every file it splices.
@@ -152,6 +156,8 @@ struct Pass<'a> {
     once: Vec<String>,
     out: String,
     origins: Vec<Origin>,
+    /// Every macro's value history: `Some(v)` while one value only, `None` once redefined, removed or empty.
+    history: HashMap<String, Option<i64>>,
 }
 
 /// Run the preprocessor over `src` with the caller's macro definitions and supplied include files.
@@ -171,6 +177,10 @@ pub(super) fn preprocess(
         once: Vec::new(),
         out: String::with_capacity(src.len()),
         origins: Vec::new(),
+        history: predefined
+            .iter()
+            .map(|(n, v)| (n.clone(), Some(*v)))
+            .collect(),
     };
     pass.run(None, src, &mut Vec::new())?;
     Ok(Preprocessed {
@@ -178,6 +188,11 @@ pub(super) fn preprocess(
         unexpanded: pass.unexpanded,
         missing_includes: pass.missing,
         origins: pass.origins,
+        macros: pass
+            .history
+            .into_iter()
+            .filter_map(|(n, v)| v.map(|v| (n, v)))
+            .collect(),
     })
 }
 
@@ -185,6 +200,32 @@ impl Pass<'_> {
     fn emit(&mut self, line: &str, origin: (&Option<String>, usize)) {
         self.out.push_str(line);
         self.origins.push((origin.0.clone(), origin.1));
+    }
+
+    /// Note the macro a just-handled `#define`/`#undef` line `d` touched in its value history.
+    fn record_macro(&mut self, d: &str) {
+        let rest = d
+            .trim_start_matches(|c: char| c.is_ascii_alphabetic())
+            .trim_start();
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() {
+            return;
+        }
+        let body = strip_comment(&rest[name.len()..]);
+        let now = if d.starts_with("define") && !body.is_empty() {
+            self.defs.get(&name).copied()
+        } else {
+            None
+        };
+        let merged = match (self.history.get(&name), now) {
+            (None, v) => v,
+            (Some(Some(old)), Some(v)) if *old == v => Some(v),
+            _ => None,
+        };
+        self.history.insert(name, merged);
     }
 
     /// A line ending, if the text so far does not end in one (a spliced file's last line may lack it).
@@ -249,6 +290,9 @@ impl Pass<'_> {
             }
             let defs_unexp = (&mut self.defs, &mut self.unexpanded);
             let keep = handle(d, active, &mut stack, defs_unexp)?;
+            if active && (d.starts_with("define") || d.starts_with("undef")) {
+                self.record_macro(d);
+            }
             if keep && physical.len() == 1 {
                 self.emit(line, at);
             } else {
@@ -446,6 +490,8 @@ fn define(rest: &str, defs: &mut Defs, unexpanded: &mut Unexpanded) -> Result<()
         1
     } else if let Ok(n) = v.parse::<i64>() {
         n
+    } else if let Some(n) = constant_body(v, defs) {
+        n
     } else {
         unexpanded.push((
             name.clone(),
@@ -457,6 +503,38 @@ fn define(rest: &str, defs: &mut Defs, unexpanded: &mut Unexpanded) -> Result<()
     unexpanded.retain(|(n, _)| *n != name);
     defs.insert(name, value);
     Ok(())
+}
+
+/// The value of a macro body that is an integer expression over macros already defined (`(QK4_0 / (4 * QR4_0))`), or `None`.
+/// A name that is not a known macro is not read as 0 here (it may be a constant variable, which the preprocessor does not see).
+fn constant_body(body: &str, defs: &Defs) -> Option<i64> {
+    // only a body that is one parenthesised group: an unparenthesised `1 + 2` would regroup inside `N * 2` where it is used
+    let inner = body.trim().strip_prefix('(')?.strip_suffix(')')?;
+    let mut depth = 0i32;
+    for c in inner.chars() {
+        depth += i32::from(c == '(') - i32::from(c == ')');
+        if depth < 0 {
+            return None;
+        }
+    }
+    if depth != 0 {
+        return None;
+    }
+    let mut word = String::new();
+    for c in body.chars().chain(std::iter::once(' ')) {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            word.push(c);
+            continue;
+        }
+        if !word.is_empty() {
+            let starts_digit = word.chars().next().is_some_and(|d| d.is_ascii_digit());
+            if !starts_digit && !defs.contains_key(&word) {
+                return None;
+            }
+            word.clear();
+        }
+    }
+    Expr::new(body, defs).value().ok()
 }
 
 fn strip_comment(s: &str) -> &str {
@@ -574,8 +652,24 @@ impl<'a> Expr<'a> {
 
     fn prod(&mut self) -> Result<i64, String> {
         let mut v = self.unary()?;
-        while self.eat("*") {
-            v *= self.unary()?;
+        loop {
+            if self.eat("*") {
+                v = v
+                    .checked_mul(self.unary()?)
+                    .ok_or("an overflow in a preprocessor expression")?;
+            } else if self.eat("/") {
+                let d = self.unary()?;
+                v = v
+                    .checked_div(d)
+                    .ok_or("a division by zero in a preprocessor expression")?;
+            } else if self.eat("%") {
+                let d = self.unary()?;
+                v = v
+                    .checked_rem(d)
+                    .ok_or("a remainder by zero in a preprocessor expression")?;
+            } else {
+                break;
+            }
         }
         Ok(v)
     }
