@@ -4,8 +4,8 @@
 //! subgroup barrier, `w.thread_rank()` the lane id, `w.shfl*` a shuffle collective and `cg::reduce(w, v, cg::plus<float>())` a
 //! reduce collective: the IR's existing `Stmt::Collective`, no widening. Oracle runs against Rust references.
 
-use unpopped::exec::LaunchShape;
-use unpopped::kernel::KernelFn;
+use unpopped::exec::{LaunchShape, Scope};
+use unpopped::kernel::{KernelFn, Stmt};
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
 use unpopped::oracle::kernel_launch::run_launch_with_subgroup;
@@ -125,4 +125,27 @@ fn what_the_tile_subset_does_not_cover_declines_by_name() {
     not_yet(lift(&method, 32, Some(32)), "mystery");
     let tile16 = "void k(float* out) { auto b = cg::this_thread_block(); cg::thread_block_tile<16> w = cg::tiled_partition<16>(b); out[0] = 1.0f; }";
     not_yet(lift(tile16, 32, Some(32)), "subgroup is exactly 16");
+}
+
+#[test]
+fn a_tile_barrier_is_a_subgroup_barrier_not_a_block_barrier() {
+    // the oracle cannot tell the two apart in a one-warp block, and the checker refuses a barrier under a thread-dependent
+    // branch at either scope, so the scope is read from the lifted IR
+    let tile = format!("void k(float* out) {{ {TILE} warp.sync(); out[0] = 1.0f; }}");
+    let block = "void k(float* out) { auto b = cg::this_thread_block(); b.sync(); out[0] = 1.0f; }";
+    let scope_of = |k: &KernelFn| {
+        k.body
+            .0
+            .iter()
+            .find_map(|s| match s {
+                Stmt::Barrier { scope, .. } => Some(*scope),
+                _ => None,
+            })
+            .expect("a barrier")
+    };
+    assert_eq!(
+        scope_of(&lift(&tile, 32, Some(32)).unwrap()),
+        Scope::Subgroup
+    );
+    assert_eq!(scope_of(&lift(block, 32, Some(32)).unwrap()), Scope::Block);
 }
