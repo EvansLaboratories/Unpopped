@@ -108,24 +108,41 @@ fn a_struct_method_with_an_early_return_and_by_reference_outputs_agrees_with_int
     }
 }
 
-/// **A pinned gap, not a feature** (found lifting Baracuda's flat decode kernel): the real `divmod` computes
-/// `uint32_t((uint64_t(m_) * uint64_t(n)) >> 32)`, a shift on a `U64` in a kernel whose compute type is `U32`. The IR's type
-/// rules (`types::node_ty`) refuse a shift or a bit operation on any integer type other than the compute type, though the oracle
-/// evaluates them at any integer type. A float kernel meets the same refusal on every `>>`, `&` and `|` of index math. When the
-/// rule is relaxed this test flips to a lift, and the differential above should then run the real `divmod`.
+/// The real `uint_fastdiv::divmod`, verbatim from Baracuda's flat decode kernel: the early `return`, the 64-bit multiply, the
+/// shift by 32 and the shift by `l_ - 1`. It lifted only after the kernel layer admitted shifts and bit operators at any integer
+/// type (a `U64` shift in a `U32` kernel; pm-kernels option A, 2026-11-22), and its quotient and remainder must equal Rust's
+/// `n / d` and `n % d` for every divisor whose constants FlashInfer's constructor computes the way `magic` does.
 #[test]
-fn the_real_fastdiv_divmod_is_outside_ir_until_shifts_are_legal_at_every_integer_type() {
-    let r = lift(&format!(
-        "{FASTDIV}void k(unsigned int* out, const unsigned int* a, const __grid_constant__ Cfg cfg) {{          unsigned int q; unsigned int r; cfg.page_size.divmod(a[0], q, r); out[0] = q; out[1] = r; }}"
-    ));
-    match r {
-        Err(KernelLiftError::OutsideIr { construct, .. }) => {
-            assert!(
-                construct.contains("IntegerOperand") && construct.contains("U64"),
-                "{construct}"
-            );
-        }
-        other => panic!("expected the pinned IR gap, got {other:?}"),
+fn the_real_fastdiv_divmod_agrees_with_integer_division() {
+    let k = lift(&format!(
+        "{FASTDIV}void k(unsigned int* out, const unsigned int* a, const __grid_constant__ Cfg cfg) {{          for (int i = 0; i < 8; i++) {{ unsigned int q; unsigned int r; cfg.page_size.divmod(a[i], q, r); out[2 * i] = q; out[2 * i + 1] = r; }} }}"
+    ))
+    .unwrap();
+    let ns = [0u32, 1, 6, 7, 8, 123_456, 4_000_000_000, u32::MAX];
+    // d = 7, 10, 16, 3, 5 take the multiply-shift path (with different l); d = 1 and d = 0 take the early `return`
+    for d in [7u32, 10, 16, 3, 5, 1, 0] {
+        let (m, l) = if d > 1 { magic(d) } else { (0, 0) };
+        let mut args = vec![
+            u32s(&[0; 16]),
+            u32s(&ns),
+            KernelArg::Struct(vec![
+                KernelArg::Int(i128::from(d)),
+                KernelArg::Int(i128::from(m)),
+                KernelArg::Int(i128::from(l)),
+            ]),
+        ];
+        run_kernel(&k, &mut args).expect("runs");
+        let want: Vec<f64> = ns
+            .iter()
+            .flat_map(|&n| {
+                if d <= 1 {
+                    [f64::from(n), 0.0]
+                } else {
+                    [f64::from(n / d), f64::from(n % d)]
+                }
+            })
+            .collect();
+        assert_eq!(out_u32(&args[0]), want, "d = {d}");
     }
 }
 

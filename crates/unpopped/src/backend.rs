@@ -1483,6 +1483,18 @@ pub enum IntOp {
     Select,
     /// A comparison (`CmpEq` .. `CmpGe`) of two integers, yielding the compute type's 1/0.
     Cmp(BinaryOp),
+    /// `a / b`, total (`docs/int-div-shift-semantics.md`: a zero divisor and `MIN / -1` give `a`). Kernel layer only (U19).
+    Div,
+    /// `a << b`, the count read as unsigned bits modulo the promoted width. Kernel layer only.
+    Shl,
+    /// `a >> b`, arithmetic on a signed type and logical on an unsigned one, the count as for `Shl`. Kernel layer only.
+    Shr,
+    /// `a & b`. Kernel layer only.
+    BitAnd,
+    /// `a | b`. Kernel layer only.
+    BitOr,
+    /// `a ^ b`. Kernel layer only.
+    BitXor,
 }
 
 /// The integer form of `op`, when it has one.
@@ -1491,6 +1503,11 @@ fn int_op_of(op: BinaryOp) -> Option<IntOp> {
         BinaryOp::Max => Some(IntOp::Max),
         BinaryOp::Min => Some(IntOp::Min),
         o if o.is_cmp() => Some(IntOp::Cmp(o)),
+        BinaryOp::Shl => Some(IntOp::Shl),
+        BinaryOp::Shr => Some(IntOp::Shr),
+        BinaryOp::BitAnd => Some(IntOp::BitAnd),
+        BinaryOp::BitOr => Some(IntOp::BitOr),
+        BinaryOp::BitXor => Some(IntOp::BitXor),
         _ => None,
     }
 }
@@ -1537,6 +1554,7 @@ fn int_node<'e>(
         ScalarExpr::Add(a, b) => (IntOp::Add, vec![a, b]),
         ScalarExpr::Sub(a, b) => (IntOp::Sub, vec![a, b]),
         ScalarExpr::Mul(a, b) => (IntOp::Mul, vec![a, b]),
+        ScalarExpr::Div(a, b) => (IntOp::Div, vec![a, b]),
         ScalarExpr::Binary(op, a, b) => (int_op_of(*op)?, vec![a, b]),
         ScalarExpr::Select(c, a, b) => (IntOp::Select, vec![c, a, b]),
         _ => return None,
@@ -1560,6 +1578,7 @@ fn int_node_of_dag(
         DagNode::Add(a, b) => (IntOp::Add, vec![a, b]),
         DagNode::Sub(a, b) => (IntOp::Sub, vec![a, b]),
         DagNode::Mul(a, b) => (IntOp::Mul, vec![a, b]),
+        DagNode::Div(a, b) => (IntOp::Div, vec![a, b]),
         DagNode::Binary(op, a, b) => (int_op_of(op)?, vec![a, b]),
         DagNode::Select(c, a, b) => (IntOp::Select, vec![c, a, b]),
         _ => return None,
