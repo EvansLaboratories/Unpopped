@@ -215,10 +215,20 @@ fn constructs_outside_the_spine_decline_by_name() {
         "initializer",
     );
     not_yet("void k(float* out) { return 1; }", "return");
-    not_yet(
-        "void k(float* out, const float* x) { out[0] = x[0] > 0.0f ? x[1] : 0.0f; }",
-        "?:",
-    );
+    // a read in one arm of `?:` lifts since slice 5 (the arm's loads run only when it is taken; tests/kernel_body_decode.rs)
+    let k =
+        lift("void k(float* out, const float* x) { out[0] = x[0] > 0.0f ? x[1] : 0.0f; }").unwrap();
+    for (x, want) in [([1.0f32, 5.0], 5.0), ([-1.0, 5.0], 0.0)] {
+        let mut args = vec![
+            KernelArg::Buffer(TypedBuffer::from_f32(&[1], &[9.0])),
+            KernelArg::Buffer(TypedBuffer::from_f32(&[2], &x)),
+        ];
+        run_kernel(&k, &mut args).expect("runs");
+        let KernelArg::Buffer(o) = &args[0] else {
+            panic!()
+        };
+        assert_eq!(o.to_f64_vec(), vec![want]);
+    }
     not_yet(
         "void k(float* out, const float* x) { out[0] = x[0] > 0.0f && x[1] > 0.0f; }",
         "&&",

@@ -15,9 +15,9 @@ use unpopped::kernel::{CollectiveKind, ShuffleMode, Stmt};
 use unpopped_vocab::ElementKind as E;
 
 /// One operand of an `asm` statement: its constraint (`"=f"`, `"f"`, `"r"`, `"n"`) and its C expression node.
-struct Operand<'n> {
-    constraint: String,
-    value: Node<'n>,
+pub(super) struct Operand<'n> {
+    pub(super) constraint: String,
+    pub(super) value: Node<'n>,
 }
 
 impl<'s, 't> Walker<'s, 't> {
@@ -35,6 +35,11 @@ impl<'s, 't> Walker<'s, 't> {
             "cp.async.commit_group" if outs.is_empty() && ins.is_empty() => {
                 out.push(Stmt::AsyncCommit);
                 Ok(())
+            }
+            h if h.starts_with("cp.async.c") && h != "cp.async.commit_group"
+                || words.contains(&"@p") =>
+            {
+                self.asm_copy_async(e, &words, &ins, out)
             }
             "cp.async.wait_group" => self.asm_wait_group(e, &words, &outs, &ins, out),
             "griddepcontrol.wait" if outs.is_empty() && ins.is_empty() => {

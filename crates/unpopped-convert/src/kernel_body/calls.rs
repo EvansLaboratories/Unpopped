@@ -76,8 +76,12 @@ impl<'s, 't> Walker<'s, 't> {
             };
         }
         let args = self.call_args(n);
-        // a C++ functional cast `uint64_t(x)`: the same conversion as `(uint64_t)x`
-        if let (Ok(to), 1) = (super::c_type(name), args.len()) {
+        // a C++ functional cast `uint64_t(x)` or `static_cast<uint64_t>(x)`: the same conversion as `(uint64_t)x`
+        let cast_to = name
+            .strip_prefix("static_cast<")
+            .and_then(|r| r.strip_suffix('>'))
+            .map_or(name, str::trim);
+        if let (Ok(to), 1) = (super::c_type(cast_to), args.len()) {
             let (v, from) = self.expr(args[0])?;
             return Ok((self.convert(v, from, to, n)?, to));
         }

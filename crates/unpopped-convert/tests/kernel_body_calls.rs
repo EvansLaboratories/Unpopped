@@ -156,9 +156,24 @@ fn atomics_that_are_not_a_plain_address_decline() {
 }
 
 #[test]
-fn an_atomic_in_a_conditionally_evaluated_operand_declines() {
-    let r =
-        one_thread("void k(int* out, int* c, int n) { out[0] = n > 0 ? atomicAdd(&c[0], 1) : 0; }");
+fn an_atomic_in_a_conditional_arm_runs_only_when_that_arm_is_taken() {
+    // since slice 5 a `?:` arm with effects lifts as `If (c) { arm } else { arm }`: the atomic is in the taken arm only
+    let k =
+        one_thread("void k(int* out, int* c, int n) { out[0] = n > 0 ? atomicAdd(&c[0], 1) : 0; }")
+            .unwrap();
+    for (n, want_out, want_c) in [(1, 5.0, 6.0), (0, 0.0, 5.0)] {
+        let mut args = vec![i32s(&[0]), i32s(&[5]), KernelArg::Int(n)];
+        run_launch(&k, &mut args).expect("runs");
+        assert_eq!(
+            (buf(&args[0]), buf(&args[1])),
+            (vec![want_out], vec![want_c]),
+            "n = {n}"
+        );
+    }
+    // the `&&` operand keeps its guard: an effect there is not hoisted unconditionally
+    let r = one_thread(
+        "void k(int* out, int* c, int n) { out[0] = n > 0 && atomicAdd(&c[0], 1) > 0; }",
+    );
     assert!(
         matches!(r, Err(KernelLiftError::NotYetLifted { .. })),
         "{r:?}"

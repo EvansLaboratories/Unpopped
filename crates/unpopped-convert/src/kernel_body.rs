@@ -86,6 +86,7 @@ mod asm;
 mod context;
 pub use context::LiftContext;
 mod calls;
+mod cpasync;
 mod declarations;
 mod expressions;
 mod globals;
@@ -94,8 +95,10 @@ mod methods;
 mod places;
 mod pointer;
 mod returns;
+mod roles;
 mod statements;
 mod structs;
+mod unrolled;
 mod vecmem;
 
 type R<T> = Result<T, KernelLiftError>;
@@ -401,6 +404,7 @@ impl<'s, 't> Walker<'s, 't> {
             self.compute,
         );
         let mut k = KernelFn::new(name, compute, params, locals, block);
+        roles::refine_roles(&mut k);
         if let Some(l) = self.launch.take() {
             k = k.with_launch(l);
         }

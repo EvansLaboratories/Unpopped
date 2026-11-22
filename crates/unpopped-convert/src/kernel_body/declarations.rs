@@ -69,6 +69,18 @@ impl<'s, 't> Walker<'s, 't> {
             }
             // `T x;` is indeterminate in C until it is written; the IR needs a value, so it starts at zero (a refinement: a
             // read before the write is undefined in C)
+            if let Some(v) = value
+                && let Some(mut p) = self.shared_address(v)?
+            {
+                // the integer a `cp.async` takes: a symbolic shared pointer, fixed now
+                self.flush(out);
+                p.off = self.pin_offset(p.off, out);
+                self.scopes
+                    .last_mut()
+                    .expect("a scope is open")
+                    .insert(text(id, self.src).to_string(), Sym::Pointer(p));
+                continue;
+            }
             let is_bool = n
                 .child_by_field_name("type")
                 .is_some_and(|t| text(t, self.src) == "bool");

@@ -354,3 +354,19 @@ fn a_vector_without_an_initializer_and_without_its_address_taken_declines() {
         "without an initializer",
     );
 }
+
+#[test]
+fn a_pointer_compared_with_nullptr_is_the_null_check() {
+    let src = "void k(float* out, const float* m) { if (m != nullptr) { out[0] = 1.0f; } if (nullptr == m) { out[1] = 2.0f; } \
+               out[2] = (m == nullptr) ? 3.0f : 4.0f; }";
+    let present = lift(src, &ctx()).unwrap();
+    assert_eq!(
+        run(&present, 3, vec![f32s(&[0.0])]).unwrap(),
+        vec![1.0, 0.0, 4.0]
+    );
+    let absent = lift(src, &ctx().with_null_buffer("m")).unwrap();
+    assert_eq!(
+        run(&absent, 3, vec![f32s(&[0.0])]).unwrap(),
+        vec![0.0, 2.0, 3.0]
+    );
+}

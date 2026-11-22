@@ -94,16 +94,37 @@ impl Walk<'_> {
         }
     }
 
+    /// Whether buffer parameter `buffer` is declared `Read` (the checker refuses a `Store` to it), so it never changes.
+    fn read_only(&self, buffer: u32) -> bool {
+        self.k.params.get(buffer as usize).is_some_and(|p| {
+            matches!(
+                p.kind,
+                crate::kernel::ParamKind::Buffer {
+                    role: crate::kernel::BufferRole::Read,
+                    ..
+                }
+            )
+        })
+    }
+
     /// Whether a value loaded from `place` may differ between threads.
     fn load_divergent(&self, place: &Place) -> bool {
         match place {
             // another block's array differs from this block's, so the value may differ between threads
-            Place::Logical { .. }
-            | Place::ClusterPeer { .. }
+            Place::ClusterPeer { .. }
             | Place::Peer { .. }
-            | Place::Raw { .. }
             | Place::AllocRaw { .. }
             | Place::Multicast { .. } => true,
+            // A buffer the kernel never writes holds one value per element for the whole launch, so every thread reading the
+            // same element (an index no thread-dependent value reaches) reads the same value.
+            Place::Logical { buffer, coords } => {
+                !self.read_only(*buffer) || coords.iter().any(|c| self.expr(c))
+            }
+            Place::Raw {
+                buffer,
+                byte_offset,
+                ..
+            } => !self.read_only(*buffer) || self.expr(byte_offset),
             Place::Alloc { alloc, index } => {
                 let constant = self
                     .k

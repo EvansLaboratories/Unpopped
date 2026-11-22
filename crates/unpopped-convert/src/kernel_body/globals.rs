@@ -55,6 +55,15 @@ impl<'s, 't> Walker<'s, 't> {
 
     /// An operand tested for truth (`&&`, `||`, `!`, a condition): a **buffer pointer** is a null check, and is `1` (the buffer
     /// is bound) unless the caller declared it null (`LiftContext::with_null_buffer`); anything else is an ordinary expression.
+    /// Whether `n` is the name of a buffer or pointer.
+    pub(super) fn is_pointer_name(&self, n: Node<'_>) -> bool {
+        n.kind() == "identifier"
+            && matches!(
+                self.lookup(text(n, self.src)),
+                Some(super::Sym::Buffer(..) | super::Sym::Pointer(_))
+            )
+    }
+
     pub(super) fn truth_expr(&mut self, n: Node<'_>) -> R<(ScalarExpr, E)> {
         let operand = if n.kind() == "parenthesized_expression" {
             n.named_child(0).unwrap_or(n)

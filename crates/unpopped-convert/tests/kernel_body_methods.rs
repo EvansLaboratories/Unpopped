@@ -212,10 +212,8 @@ fn what_is_not_a_tail_return_or_a_plain_method_declines_by_name() {
         &format!("{s}void k(float* out) {{ float f = 1.0f; out[0] = f.get(); }}"),
         "whose object is not a struct",
     );
-    not_yet(
-        "__device__ float f(float x) { if (x < 0.0f) { return 0.0f; } else { return 1.0f; } }\nvoid k(float* out) { out[0] = f(1.0f); }",
-        "`if`/`else`",
-    );
+    // an `if`/`else` that returns in both arms lifts since slice 5 (tests/kernel_body_decode.rs)
+    assert!(lift("__device__ float f(float x) { if (x < 0.0f) { return 0.0f; } else { return 1.0f; } }\nvoid k(float* out) { out[0] = f(1.0f); }").is_ok());
     not_yet(
         "__device__ float f(float x) { for (int i = 0; i < 2; i++) { if (x < 0.0f) { return 0.0f; } } return x; }\nvoid k(float* out) { out[0] = f(1.0f); }",
         "inside a loop",

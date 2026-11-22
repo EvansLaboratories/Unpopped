@@ -316,6 +316,9 @@ impl<'s, 't> Walker<'s, 't> {
         unroll: Unroll,
     ) -> R<()> {
         let Some(shape) = self.counted_for(n)? else {
+            if self.constant_for(n, out)? {
+                return Ok(());
+            }
             return self.not_yet(
                 n,
                 "a `for` that is not a counted loop `for (T i = a; i < b; i += s)`",

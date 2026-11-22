@@ -58,9 +58,17 @@ impl<'s, 't> Walker<'s, 't> {
             },
             "field_expression" => Ok(match self.resolve_member(n)? {
                 Some(Sym::Pointer(p)) => Some(p),
+                // an array field of a struct is a private allocation: the member decays to a pointer to it
+                Some(Sym::Alloc(i, e)) => Some(PtrVal {
+                    base: PBase::Alloc(i),
+                    pointee: e,
+                    lanes: 1,
+                    off: ScalarExpr::ConstInt(0, E::I64),
+                }),
                 _ => None,
             }),
             "cast_expression" => self.ptr_cast(n),
+            "call_expression" => self.ptr_reinterpret(n),
             "binary_expression" => self.ptr_arith(n),
             "pointer_expression" => self.ptr_address_of(n),
             _ => Ok(None),
@@ -85,6 +93,41 @@ impl<'s, 't> Walker<'s, 't> {
             Sym::Pointer(p) => Some(p),
             _ => None,
         }
+    }
+
+    /// `reinterpret_cast<T*>(p)`: the same place, read as `T` (as `(T*)p`).
+    fn ptr_reinterpret(&mut self, n: Node<'_>) -> R<Option<PtrVal>> {
+        let f = n
+            .child_by_field_name("function")
+            .map_or("", |f| text(f, self.src));
+        let Some(inner) = f
+            .strip_prefix("reinterpret_cast<")
+            .and_then(|r| r.strip_suffix('>'))
+            .map(|t| t.trim().trim_start_matches("const ").trim())
+        else {
+            return Ok(None);
+        };
+        let Some(tname) = inner.strip_suffix('*').map(str::trim) else {
+            return Ok(None);
+        };
+        let args = self.call_args(n);
+        let [a] = args.as_slice() else {
+            return Ok(None);
+        };
+        let Some(mut p) = self.ptr_expr(*a)? else {
+            return self.not_yet(n, "a `reinterpret_cast` of something that is not a pointer");
+        };
+        if let Some((elem, lanes)) = super::vector_type(tname) {
+            (p.pointee, p.lanes) = (elem, lanes);
+        } else {
+            match super::c_type(tname) {
+                Ok(e) => (p.pointee, p.lanes) = (e, 1),
+                Err(why) => {
+                    return self.not_yet(n, format!("a `reinterpret_cast` to `{tname}*`: {why}"));
+                }
+            }
+        }
+        Ok(Some(p))
     }
 
     /// `(T*)p`: the same place, read as `T`.

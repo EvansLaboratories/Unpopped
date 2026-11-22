@@ -2,9 +2,9 @@
 //! `return` inside an inlined function (ROADMAP U19 slice 4e). A callee's `return`s must all be in **tail position**: the last
 //! statement of the body, or the last statement of the block of a top-level `if (c) { ...; return; }` with no `else`. Such an
 //! `if` becomes an `If` whose `else` branch is **the rest of the function**, so control never leaves by any path but the
-//! structured one; the value of a `return e;` is assigned to one result local, declared (zero) before the body. A `return`
-//! inside a loop or a nested block, one followed by more statements, and an `if`/`else` that returns in both arms decline by
-//! name.
+//! structured one; the value of a `return e;` is assigned to one result local, declared (zero) before the body. A final
+//! `if (c) { ... } else { ... }` that returns lifts as an `If`, each arm held to the same rules (so `else if` chains and nested
+//! tail forms lift). A `return` inside a loop or a nested block, and one followed by more statements, decline by name.
 
 use super::{R, Walker};
 use std::collections::HashMap;
@@ -34,6 +34,21 @@ fn is_tail_return_if(n: Node<'_>) -> bool {
     stmts_of(cons)
         .last()
         .is_some_and(|l| l.kind() == "return_statement")
+}
+
+/// An `if` with an `else` that returns somewhere, standing as the last statement of its block.
+fn is_final_branch(n: Node<'_>) -> bool {
+    n.kind() == "if_statement"
+        && n.child_by_field_name("alternative").is_some()
+        && contains_return(n)
+}
+
+/// The statements of an `else` clause (the clause wraps one statement or block).
+fn else_stmts(n: Node<'_>) -> Vec<Node<'_>> {
+    n.child_by_field_name("alternative")
+        .and_then(|a| a.named_child(0))
+        .map(stmts_of)
+        .unwrap_or_default()
 }
 
 fn contains_return(n: Node<'_>) -> bool {
@@ -73,6 +88,13 @@ impl<'s, 't> Walker<'s, 't> {
                         .expect("checked by is_tail_return_if");
                     self.check_seq(&stmts_of(cons), has_value)?;
                     return self.check_seq(&seq[i + 1..], has_value);
+                }
+                _ if i + 1 == seq.len() && is_final_branch(*n) => {
+                    let cons = n
+                        .child_by_field_name("consequence")
+                        .expect("an `if` has a consequence");
+                    self.check_seq(&stmts_of(cons), has_value)?;
+                    return self.check_seq(&else_stmts(*n), has_value);
                 }
                 _ if contains_return(*n) => {
                     return self.not_yet(
@@ -123,6 +145,9 @@ impl<'s, 't> Walker<'s, 't> {
             if is_tail_return_if(*n) {
                 return self.callee_tail_if(*n, &seq[i + 1..], res, out);
             }
+            if i + 1 == seq.len() && is_final_branch(*n) {
+                return self.callee_if_else(*n, res, out);
+            }
             self.stmt(*n, out)?;
         }
         Ok(())
@@ -146,6 +171,26 @@ impl<'s, 't> Walker<'s, 't> {
         self.flush(out);
         let then = self.callee_block(&stmts_of(cons), res)?;
         let els = self.callee_block(rest, res)?;
+        out.push(Stmt::If {
+            cond,
+            then: Block(then),
+            els: Block(els),
+        });
+        Ok(())
+    }
+
+    /// A final `if (c) { A } else { B }` that returns: an `If` whose arms are the callee's tail forms.
+    fn callee_if_else(&mut self, n: Node<'_>, res: Option<(u32, E)>, out: &mut Vec<Stmt>) -> R<()> {
+        let (Some(c), Some(cons)) = (
+            n.child_by_field_name("condition"),
+            n.child_by_field_name("consequence"),
+        ) else {
+            return self.not_yet(n, "an `if` of an unexpected shape");
+        };
+        let cond = self.condition(c)?;
+        self.flush(out);
+        let then = self.callee_block(&stmts_of(cons), res)?;
+        let els = self.callee_block(&else_stmts(n), res)?;
         out.push(Stmt::If {
             cond,
             then: Block(then),

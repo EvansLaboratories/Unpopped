@@ -35,7 +35,9 @@ impl<'s, 't> Walker<'s, 't> {
             },
             "identifier" => self.identifier(n),
             "number_literal" => self.number(n),
-            "true" | "false" => self.not_yet(n, "a boolean literal"),
+            // `true`/`false` promote to `int` 1/0, as in C
+            "true" => Ok((ScalarExpr::ConstInt(1, E::I32), E::I32)),
+            "false" => Ok((ScalarExpr::ConstInt(0, E::I32), E::I32)),
             "binary_expression" => self.binary_node(n),
             "unary_expression" => self.unary_node(n),
             "conditional_expression" => self.conditional(n),
@@ -96,6 +98,23 @@ impl<'s, 't> Walker<'s, 't> {
             return self.not_yet(n, "a binary expression of an unexpected shape");
         };
         let op = text(op, self.src);
+        // `p == nullptr` / `p != nullptr` (also `NULL`, either side): the null check of `truth_expr`
+        if matches!(op, "==" | "!=") {
+            let is_null = |x: Node<'_>| matches!(text(x, self.src), "nullptr" | "NULL");
+            let ptr = if is_null(r) {
+                Some(l)
+            } else if is_null(l) {
+                Some(r)
+            } else {
+                None
+            };
+            if let Some(p) = ptr.filter(|p| self.is_pointer_name(*p)) {
+                // present unless the caller declared it null; the result is a C `int`, whatever the compute type
+                let present = !self.null_buffers.contains(text(p, self.src));
+                let v = i64::from(present == (op == "!="));
+                return Ok((ScalarExpr::ConstInt(v, E::I32), E::I32));
+            }
+        }
         let logical = matches!(op, "&&" | "||");
         let lv = if logical {
             self.truth_expr(l)?
@@ -319,17 +338,40 @@ impl<'s, 't> Walker<'s, 't> {
         let cond = self.truth_expr(c)?.0;
         let before = self.hoisted.len();
         let (av, at) = self.expr(a)?;
+        let mid = self.hoisted.len();
         let (bv, bt) = self.expr(b)?;
-        if self.hoisted.len() != before {
-            return self.not_yet(n, "a memory read inside `?:` (only one arm is evaluated)");
-        }
         let common = self.common_type(at, bt, n)?;
         let av = self.convert(av, at, common, n)?;
         let bv = self.convert(bv, bt, common, n)?;
-        Ok((
-            ScalarExpr::Select(Box::new(cond), Box::new(av), Box::new(bv)),
-            common,
-        ))
+        if self.hoisted.len() == before {
+            return Ok((
+                ScalarExpr::Select(Box::new(cond), Box::new(av), Box::new(bv)),
+                common,
+            ));
+        }
+        // An arm reads memory, and only the arm taken may: `If (c) { loads_a; r = a } else { loads_b; r = b }`, the value in `r`.
+        let mut b_loads = self.hoisted.split_off(mid);
+        let mut a_loads = self.hoisted.split_off(before);
+        let r = self.new_local(common);
+        a_loads.push(Stmt::Assign {
+            local: r,
+            value: av,
+        });
+        b_loads.push(Stmt::Assign {
+            local: r,
+            value: bv,
+        });
+        let zero = self.zero_of(common, n)?;
+        self.hoisted.push(Stmt::Let {
+            local: r,
+            init: zero,
+        });
+        self.hoisted.push(Stmt::If {
+            cond,
+            then: Block(a_loads),
+            els: Block(b_loads),
+        });
+        Ok((ScalarExpr::Local(r), common))
     }
 
     pub(super) fn cast_node(&mut self, n: Node<'_>) -> R<(ScalarExpr, E)> {
