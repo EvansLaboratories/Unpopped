@@ -73,6 +73,17 @@ impl<'s, 't> Walker<'s, 't> {
         }
     }
 
+    /// `otherwise`, unless `name` is a macro the preprocessor could not expand: then the reason it could not (`the function-like
+    /// macro `F``), so a decline names the macro, not an anonymous call or name.
+    pub(super) fn unexpanded_or(&self, name: &str, otherwise: String) -> String {
+        self.unexpanded
+            .iter()
+            .find(|(n, _)| n == name)
+            .map_or(otherwise, |(_, why)| {
+                format!("{why} (expansion is a later slice)")
+            })
+    }
+
     /// Whether `n` is the name of a buffer or pointer.
     pub(super) fn is_pointer_name(&self, n: Node<'_>) -> bool {
         n.kind() == "identifier"

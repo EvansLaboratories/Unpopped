@@ -85,13 +85,43 @@ fn preprocessor_branches_follow_the_contexts_definitions_and_the_files_own_defin
 
 #[test]
 fn a_directive_the_pass_cannot_model_declines_and_line_numbers_survive_blanking() {
+    // a macro the pass cannot expand declines at its USE, naming it; an unused one never stops the kernel
     not_yet(
         lift(
-            "#define SQ(x) ((x) * (x))\nvoid k(float* out) { out[0] = 1.0f; }",
+            "#define SQ(x) ((x) * (x))\nvoid k(float* out) { out[0] = SQ(2.0f); }",
             &ctx(),
         ),
         "function-like macro `SQ`",
     );
+    not_yet(
+        lift(
+            "#define SCALE 2.5f\nvoid k(float* out) { out[0] = SCALE; }",
+            &ctx(),
+        ),
+        "the macro `SCALE` with the non-integer body `2.5f`",
+    );
+    assert!(
+        lift(
+            "#define SQ(x) ((x) * (x))\n#define SCALE 2.5f\nvoid k(float* out) { out[0] = 1.0f; }",
+            &ctx(),
+        )
+        .is_ok(),
+        "unused macros are not the kernel's concern (85% of Baracuda's kernels were refused for one)"
+    );
+    // a grammar error in ANOTHER function of the file is not this kernel's
+    assert!(
+        lift(
+            "void other() { int x = ; }\nvoid k(float* out) { out[0] = 1.0f; }",
+            &ctx()
+        )
+        .is_ok(),
+        "a syntax error in another function must not decline this kernel"
+    );
+    // and one INSIDE the kernel still does, as a syntax error
+    assert!(matches!(
+        lift("void k(float* out) { out[0] = 1.0f + ; }", &ctx()),
+        Err(KernelLiftError::SyntaxError { .. })
+    ));
     not_yet(
         lift(
             "#if __X__ ?\nvoid k(float* out) { out[0] = 1.0f; }\n#endif",

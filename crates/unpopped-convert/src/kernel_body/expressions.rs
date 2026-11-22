@@ -66,8 +66,11 @@ impl<'s, 't> Walker<'s, 't> {
                 Some(v) => Ok(v),
                 None => self.not_yet(
                     n,
-                    format!(
-                        "the name `{name}`, which is not a parameter, local or file-scope constant"
+                    self.unexpanded_or(
+                        name,
+                        format!(
+                            "the name `{name}`, which is not a parameter, local or file-scope constant"
+                        ),
                     ),
                 ),
             },

@@ -38,7 +38,7 @@ impl<'s, 't> Walker<'s, 't> {
                 e,
                 "`__syncthreads` without a launch (use `lift_kernel_launched`) or with arguments",
             ),
-            (Some(f), _) => self.not_yet(e, format!("a call to `{f}`")),
+            (Some(f), _) => self.not_yet(e, self.unexpanded_or(f, format!("a call to `{f}`"))),
             (None, _) => self.not_yet(e, "a call"),
         }
     }
@@ -100,7 +100,10 @@ impl<'s, 't> Walker<'s, 't> {
             2 if (self.binary_fn)(name).is_some() => self.math_binary(n, name, args[0], args[1]),
             _ => self.not_yet(
                 n,
-                format!("a call to `{name}` with {} argument(s)", args.len()),
+                self.unexpanded_or(
+                    name,
+                    format!("a call to `{name}` with {} argument(s)", args.len()),
+                ),
             ),
         }
     }
@@ -122,7 +125,7 @@ impl<'s, 't> Walker<'s, 't> {
         a: Node<'_>,
     ) -> R<(ScalarExpr, E)> {
         let Some(op) = (self.unary_fn)(name) else {
-            return self.not_yet(n, format!("a call to `{name}`"));
+            return self.not_yet(n, self.unexpanded_or(name, format!("a call to `{name}`")));
         };
         let (v, t) = self.expr(a)?;
         let at = Self::math_type(name, t);
@@ -140,7 +143,7 @@ impl<'s, 't> Walker<'s, 't> {
         b: Node<'_>,
     ) -> R<(ScalarExpr, E)> {
         let Some(op) = (self.binary_fn)(name) else {
-            return self.not_yet(n, format!("a call to `{name}`"));
+            return self.not_yet(n, self.unexpanded_or(name, format!("a call to `{name}`")));
         };
         let (x, xt) = self.expr(a)?;
         let (y, yt) = self.expr(b)?;

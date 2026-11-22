@@ -344,3 +344,37 @@ fn a_c_remainder_in_a_float_kernel_runs_on_the_oracle() {
         vec![1.0, -1.0, 1.0, 0.0, 0.0, 1.0]
     );
 }
+
+#[test]
+fn a_frontends_residue_list_does_not_stop_the_walker() {
+    // Found by the census over Baracuda's real CUDA frontend (2026-11-22): `lift_kernel*` went through the legacy `prepared`, which
+    // refuses any source containing a word of the frontend's RESIDUE list (`__shared__`, `atomicAdd`, `__syncthreads`, `asm`, ...)
+    // as `NotAKernel`. Every test here used a frontend with an empty list. The walker lifts those constructs and declines each one
+    // it cannot by name, so the list must not gate it.
+    const RESIDUE: &[&str] = &[
+        "__shared__",
+        "atomicAdd",
+        "__syncthreads",
+        "asm",
+        "cp.async",
+        "__shfl",
+    ];
+    let fe = Frontend::new("c", "void", RESIDUE, "out", "in", parse);
+    let src = "void k(float* out, int* c) { extern __shared__ float s[]; s[0] = 2.0f; __syncthreads(); atomicAdd(&c[0], 1); out[0] = s[0]; }";
+    let k = lift_kernel_in(&fe, src, "k", &ctx()).expect("lifts despite the residue words");
+    let mut args = vec![
+        f32s(&[0.0]),
+        KernelArg::Buffer(TypedBuffer::from_i32(&[1], &[5])),
+    ];
+    run_launch(&k, &mut args).expect("runs");
+    let KernelArg::Buffer(o) = &args[0] else {
+        panic!()
+    };
+    assert_eq!(o.to_f64_vec(), vec![2.0]);
+    // a source that does not contain the frontend's marker is still not a kernel
+    let none = Frontend::new("c", "__global__", RESIDUE, "out", "in", parse);
+    assert!(matches!(
+        lift_kernel_in(&none, src, "k", &ctx()),
+        Err(KernelLiftError::NotAKernel)
+    ));
+}

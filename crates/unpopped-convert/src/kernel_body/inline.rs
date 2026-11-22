@@ -40,7 +40,10 @@ impl<'s, 't> Walker<'s, 't> {
         out: &mut Vec<Stmt>,
     ) -> R<Option<(ScalarExpr, E)>> {
         let Some(&func) = self.functions.get(name) else {
-            return self.not_yet(call, format!("a call to `{name}`"));
+            return self.not_yet(
+                call,
+                self.unexpanded_or(name, format!("a call to `{name}`")),
+            );
         };
         self.inline_function(call, func, name, None, out)
     }

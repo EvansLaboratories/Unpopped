@@ -20,7 +20,7 @@
 //! the first floating-point parameter type, else the first buffer's element type, else `I32`; a floating-point literal must
 //! have that type.
 
-use crate::{Frontend, prepared};
+use crate::Frontend;
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
@@ -147,18 +147,26 @@ fn lift_in(
     name: &str,
     ctx: &LiftContext,
 ) -> Result<KernelFn, KernelLiftError> {
-    let pre = context::preprocess(src, &ctx.defines)
+    let (pre, unexpanded) = context::preprocess(src, &ctx.defines)
         .map_err(|construct| KernelLiftError::NotYetLifted { construct, line: 0 })?;
     let src = pre.as_str();
-    let tree = prepared(fe, src).map_err(|_| KernelLiftError::NotAKernel)?;
+    // Not `prepared`: that applies the frontend's RESIDUE list (`__shared__`, `atomicAdd`, `__syncthreads`, `asm`, ...), the legacy
+    // elementwise lifters' "not expressible" gate, which maps a hit to `NotAKernel`. The kernel-body walker lifts those and declines
+    // each construct it cannot by name, so only the marker is checked. Found by running the census over Baracuda's real CUDA
+    // frontend (2026-11-22): every kernel containing one of those words was refused as `NotAKernel`.
+    if !src.contains(fe.kernel_marker) {
+        return Err(KernelLiftError::NotAKernel);
+    }
+    let tree = (fe.parse)(src).ok_or(KernelLiftError::SyntaxError { line: 0 })?;
     let root = tree.root_node();
-    if let Some(bad) = first_error(root) {
+    let func = find_function(root, src, name)
+        .ok_or_else(|| KernelLiftError::NoSuchFunction(name.to_string()))?;
+    // only an error INSIDE the kernel stops it: a grammar error in another function of the file is not this kernel's
+    if let Some(bad) = first_error(func) {
         return Err(KernelLiftError::SyntaxError {
             line: bad.start_position().row + 1,
         });
     }
-    let func = find_function(root, src, name)
-        .ok_or_else(|| KernelLiftError::NoSuchFunction(name.to_string()))?;
     let mut w = Walker::new(src);
     w.functions = all_functions(root, src);
     w.structs = structs::collect_structs(root, src);
@@ -167,6 +175,7 @@ fn lift_in(
     w.dyn_shared = ctx.dynamic_shared_bytes;
     w.null_buffers = ctx.null_buffers.iter().cloned().collect();
     w.consts = collect_consts(root, src);
+    w.unexpanded = unexpanded;
     w.unary_fn = fe.unary_fn;
     w.binary_fn = fe.binary_fn;
     let k = w.function(func, name)?;
@@ -325,6 +334,8 @@ struct Walker<'s, 't> {
     dyn_shared: u32,
     /// Buffer parameters the caller declared null.
     null_buffers: HashSet<String>,
+    /// Macros the preprocessor could not expand, with why: a use declines naming the macro (`Walker::unexpanded_or`).
+    unexpanded: context::Unexpanded,
     /// File-scope `constexpr`/`const` constants by name: the declared type text and the initialiser.
     consts: HashMap<String, (String, Node<'t>)>,
     allocs: Vec<AllocDecl>,
@@ -352,6 +363,7 @@ impl<'s, 't> Walker<'s, 't> {
             launch: None,
             dyn_shared: 0,
             null_buffers: HashSet::new(),
+            unexpanded: Vec::new(),
             consts: HashMap::new(),
             allocs: Vec::new(),
             pending_unroll: Unroll::None,

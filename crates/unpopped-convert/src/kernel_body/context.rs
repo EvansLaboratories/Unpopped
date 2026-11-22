@@ -5,8 +5,9 @@
 //! (`__CUDACC_VER_MAJOR__`, `__CUDA_ARCH__`). Before parsing, [`preprocess`] keeps only the **active** branch of every conditional
 //! (evaluating the condition over the caller's definitions and then the file's own `#define`s, in order) and blanks the rest,
 //! directive lines included, to spaces: every byte offset and line number is unchanged, so a diagnostic still points at the
-//! source line. A source that defines its own feature macros lifts as it would compile. A condition it cannot evaluate, and a
-//! function-like macro, decline by name. Only integer macros are modelled; `#include` is dropped, `#pragma` is kept.
+//! source line. A source that defines its own feature macros lifts as it would compile. A condition it cannot evaluate declines by name; a
+//! function-like macro, or one with a non-integer body, is recorded and declines at its **use** (a file's unused macros never
+//! stop a kernel: the census over Baracuda's real corpus, 2026-11-22, found 85% of kernels refused for a macro they never used). Only integer macros are modelled; `#include` is dropped, `#pragma` is kept.
 
 use std::collections::HashMap;
 use unpopped::exec::LaunchShape;
@@ -81,8 +82,16 @@ struct Frame {
 
 /// The source with every inactive region and every directive (but an active `#pragma`) blanked to spaces, or the first thing it
 /// could not model. Offsets and line numbers are preserved.
-pub(super) fn preprocess(src: &str, predefined: &[(String, i64)]) -> Result<String, String> {
+/// The macros the pass could not expand, by name, each with why (`the function-like macro `F``): a definition is recorded, never an
+/// error, because most kernels never use most of a file's macros. The walker declines at a **use**.
+pub(super) type Unexpanded = Vec<(String, String)>;
+
+pub(super) fn preprocess(
+    src: &str,
+    predefined: &[(String, i64)],
+) -> Result<(String, Unexpanded), String> {
     let mut defs: Defs = predefined.iter().cloned().collect();
+    let mut unexpanded: Unexpanded = Vec::new();
     let mut stack: Vec<Frame> = Vec::new();
     let mut out = String::with_capacity(src.len());
     let mut continued = false;
@@ -108,12 +117,12 @@ pub(super) fn preprocess(src: &str, predefined: &[(String, i64)]) -> Result<Stri
             body.trim_start()[1..].trim_start(),
             active,
             &mut stack,
-            &mut defs,
+            (&mut defs, &mut unexpanded),
         )?;
         out.push_str(&if keep { line.to_string() } else { blank(line) });
     }
     if stack.is_empty() {
-        Ok(out)
+        Ok((out, unexpanded))
     } else {
         Err("an `#if` with no `#endif`".to_string())
     }
@@ -127,7 +136,12 @@ fn blank(line: &str) -> String {
 }
 
 /// One directive (the text after `#`); `true` if the line is kept verbatim (an active `#pragma`).
-fn handle(d: &str, active: bool, stack: &mut Vec<Frame>, defs: &mut Defs) -> Result<bool, String> {
+fn handle(
+    d: &str,
+    active: bool,
+    stack: &mut Vec<Frame>,
+    (defs, unexpanded): (&mut Defs, &mut Unexpanded),
+) -> Result<bool, String> {
     let kw: String = d.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
     let rest = strip_comment(d[kw.len()..].trim());
     match kw.as_str() {
@@ -153,7 +167,7 @@ fn handle(d: &str, active: bool, stack: &mut Vec<Frame>, defs: &mut Defs) -> Res
         "endif" => {
             stack.pop().ok_or("an `#endif` with no `#if`")?;
         }
-        "define" if active => define(rest, defs)?,
+        "define" if active => define(rest, defs, unexpanded)?,
         "undef" if active => {
             defs.remove(rest.split_whitespace().next().unwrap_or(""));
         }
@@ -174,22 +188,31 @@ fn cond_truth(kw: &str, rest: &str, defs: &Defs) -> Result<bool, String> {
 }
 
 /// `#define NAME`, `#define NAME <integer>`; a macro with parameters or a non-integer body declines.
-fn define(rest: &str, defs: &mut Defs) -> Result<(), String> {
+fn define(rest: &str, defs: &mut Defs, unexpanded: &mut Unexpanded) -> Result<(), String> {
     let name: String = rest
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
         .collect();
     let after = &rest[name.len()..];
     if after.starts_with('(') {
-        return Err(format!("the function-like macro `{name}`"));
+        unexpanded.push((name.clone(), format!("the function-like macro `{name}`")));
+        defs.remove(&name);
+        return Ok(());
     }
     let v = after.trim();
     let value = if v.is_empty() {
         1
+    } else if let Ok(n) = v.parse::<i64>() {
+        n
     } else {
-        v.parse::<i64>()
-            .map_err(|_| format!("the macro `{name}` with the non-integer body `{v}`"))?
+        unexpanded.push((
+            name.clone(),
+            format!("the macro `{name}` with the non-integer body `{v}`"),
+        ));
+        defs.remove(&name);
+        return Ok(());
     };
+    unexpanded.retain(|(n, _)| *n != name);
     defs.insert(name, value);
     Ok(())
 }
