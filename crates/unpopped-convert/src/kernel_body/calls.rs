@@ -163,6 +163,38 @@ impl<'s, 't> Walker<'s, 't> {
         })())
     }
 
+    /// `__half2float(h)`, `__bfloat162float(b)` (exact widening) and `__float2half[_rn](f)`, `__float2bfloat16[_rn](f)` (round to
+    /// nearest even): one `Cast`. The widening takes only an argument of the 16-bit type it names (C would not compile any
+    /// other); a narrowing overflows to infinity, as the intrinsic does. `None` when `name` is not one.
+    fn half_conversion(&mut self, call: Node<'_>, name: &str) -> Option<R<(ScalarExpr, E)>> {
+        let (from, to) = match name {
+            "__half2float" => (Some(E::F16), E::F32),
+            "__bfloat162float" => (Some(E::Bf16), E::F32),
+            "__float2half" | "__float2half_rn" => (None, E::F16),
+            "__float2bfloat16" | "__float2bfloat16_rn" => (None, E::Bf16),
+            _ => return None,
+        };
+        let args = self.call_args(call);
+        let [x] = args.as_slice() else {
+            return Some(self.not_yet(call, format!("`{name}` with {} argument(s)", args.len())));
+        };
+        Some((|| {
+            let (e, t) = self.expr(*x)?;
+            if let Some(want) = from
+                && t != want
+            {
+                return self.not_yet(*x, format!("`{name}` of a {t:?} value (it takes {want:?})"));
+            }
+            let e = if from.is_none() { self.convert(e, t, E::F32, *x)? } else { e };
+            let spec = CastSpec {
+                to,
+                round: RoundMode::NearestEven,
+                sat: Saturation::Wrap,
+            };
+            Ok((ScalarExpr::Cast(Box::new(e), spec), to))
+        })())
+    }
+
     /// A math call through the frontend's tables, or an atomic that returns the old value (hoisted as a statement).
     pub(super) fn call_expr(&mut self, n: Node<'_>) -> R<(ScalarExpr, E)> {
         let Some(f) = n.child_by_field_name("function") else {
@@ -191,6 +223,9 @@ impl<'s, 't> Walker<'s, 't> {
             return r;
         }
         if let Some(r) = self.fast_math(n, name) {
+            return r;
+        }
+        if let Some(r) = self.half_conversion(n, name) {
             return r;
         }
         if self.defines(name) {

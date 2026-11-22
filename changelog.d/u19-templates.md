@@ -41,3 +41,5 @@ The rounding-named single-precision arithmetic intrinsics `__f{add,sub,mul,div,r
 The CUDA fast-math intrinsics `__expf`, `__exp10f`, `__log2f`, `__logf`, `__log10f` and `__fdividef` lift as the hardware sequences they are (`__expf(x)` is `ex2.approx(x * log2 e)`, `__logf(x)` is `lg2.approx(x) * ln 2`): an `approx` node, which the oracle evaluates within a few ulp of the exact function, the intrinsic's own contract. `__sinf`, `__cosf`, `__tanf` and `__powf` have no approximate form in the IR and still decline.
 
 A counted loop whose test is `!=` (`for (int ii = i_start; ii != i_end; ii += i_step)`) lifts: the direction is the update's, or the run-time step's sign, and the IR's `For` stops when the counter is no longer below (above) the bound. C stops only on reaching the bound, so the two agree wherever the C loop terminates at all; a loop C would never end (stepping past the bound) stops in the IR. An unsigned counter that counts down still declines.
+
+`__half2float`, `__bfloat162float` (exact widening, taking only the 16-bit type they name) and `__float2half[_rn]`, `__float2bfloat16[_rn]` (round to nearest even, overflow to infinity) lift to one `Cast`.
