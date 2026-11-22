@@ -242,6 +242,12 @@ impl<'s, 't> Walker<'s, 't> {
             "FLT_MAX" => float(f32::MAX),
             "FLT_MIN" => float(f32::MIN_POSITIVE),
             "FLT_EPSILON" => float(f32::EPSILON),
+            // CUDA's `math_constants.h` single-precision names
+            "CUDART_INF_F" => float(f32::INFINITY),
+            "CUDART_NAN_F" => float(f32::NAN),
+            "CUDART_PI_F" => float(std::f32::consts::PI),
+            "CUDART_ZERO_F" => float(0.0),
+            "CUDART_ONE_F" => float(1.0),
             "INT_MAX" => int(i64::from(i32::MAX), E::I32),
             "INT_MIN" => int(i64::from(i32::MIN), E::I32),
             "UINT_MAX" => int(i64::from(u32::MAX), E::U32),
