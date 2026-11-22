@@ -75,6 +75,9 @@ impl<'s, 't> Walker<'s, 't> {
         if let Some(r) = self.tile_reduce(n, name) {
             return r;
         }
+        if let Some(r) = self.sync_shuffle(n, name) {
+            return r;
+        }
         if self.defines(name) {
             let mut body = Vec::new();
             let r = self.inline_call(n, name, &mut body)?;

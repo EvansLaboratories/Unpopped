@@ -255,6 +255,62 @@ impl<'s, 't> Walker<'s, 't> {
         })())
     }
 
+    /// `__shfl_sync(mask, v, lane[, width])`, `__shfl_up_sync`, `__shfl_down_sync`, `__shfl_xor_sync`: a shuffle over the subgroup.
+    /// The mask must be all ones and the width (when given) 32, which must be the launch's subgroup when it names one: a
+    /// partial mask or a narrower segment is not a full-participation subgroup collective. `None` when `name` is not one.
+    pub(super) fn sync_shuffle(&mut self, call: Node<'_>, name: &str) -> Option<R<(ScalarExpr, E)>> {
+        let mode = match name {
+            "__shfl_sync" => ShuffleMode::Idx,
+            "__shfl_up_sync" => ShuffleMode::Up,
+            "__shfl_down_sync" => ShuffleMode::Down,
+            "__shfl_xor_sync" => ShuffleMode::Xor,
+            _ => return None,
+        };
+        let args = self.call_args(call);
+        Some((|| {
+            let (mask, v, operand, width) = match args.as_slice() {
+                [m, v, o] => (*m, *v, *o, None),
+                [m, v, o, w] => (*m, *v, *o, Some(*w)),
+                _ => {
+                    return self.not_yet(
+                        call,
+                        format!("`{name}` with {} argument(s)", args.len()),
+                    );
+                }
+            };
+            if self.const_value(mask)? != Some(0xffff_ffff) {
+                return self.not_yet(
+                    mask,
+                    format!("`{name}` with a member mask other than 0xffffffff"),
+                );
+            }
+            if let Some(w) = width
+                && self.const_value(w)? != Some(32)
+            {
+                return self.not_yet(w, format!("`{name}` with a width other than 32"));
+            }
+            if let Some(s) = self.launch.and_then(|l| l.subgroup)
+                && !(s.min == 32 && s.max == 32)
+            {
+                return self.not_yet(
+                    call,
+                    format!("`{name}` (32 lanes) in a launch whose subgroup is not exactly 32"),
+                );
+            }
+            let (value, vt) = self.expr(v)?;
+            let (op, ot) = self.expr(operand)?;
+            let operand = self.convert(op, ot, E::U32, operand)?;
+            let result = self.new_local(vt);
+            self.hoisted.push(Stmt::Collective {
+                kind: CollectiveKind::Shuffle { mode, operand },
+                value,
+                result,
+                scope: Scope::Subgroup,
+            });
+            Ok((ScalarExpr::Local(result), vt))
+        })())
+    }
+
     /// `cg::reduce(tile, v, cg::plus<T>())` (also `cg::greater`, `cg::less`): every lane receives the fold over the tile. `None`
     /// when `name` is not `cg::reduce`.
     pub(super) fn tile_reduce(&mut self, call: Node<'_>, name: &str) -> Option<R<(ScalarExpr, E)>> {

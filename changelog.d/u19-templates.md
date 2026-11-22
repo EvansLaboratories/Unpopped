@@ -29,3 +29,5 @@ A loop whose body calls a source-defined helper no longer falls back to the func
 A halving or other non-counted loop whose start or bound is a `const` integer local initialised from the launch's block extent (`const int block_size = blockDim.x; for (int stride = block_size / 2; stride > 0; stride >>= 1)`, the tree reduction) unrolls over its induction variable, as a loop over a literal constant already did. The unrolled IR is valid for the launch it was lifted for. A non-`const` local, or one from a runtime value, still declines.
 
 A counted loop with an inclusive upward bound, `for (int i = lo; i <= hi; ++i)`, lifts as `i < hi + 1` (the mirror of the existing `i >= b` downward form).
+
+`__shfl_sync`, `__shfl_up_sync`, `__shfl_down_sync` and `__shfl_xor_sync` with an all-ones mask and a width of 32 (given or omitted) lift to the subgroup shuffle collective, the same one a `thread_block_tile` shuffle uses. A partial mask, another width, or a launch whose subgroup is not 32 declines by name.
