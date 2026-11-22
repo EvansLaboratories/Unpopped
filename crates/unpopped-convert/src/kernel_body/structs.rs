@@ -121,7 +121,11 @@ fn field_of(d: Node<'_>, ty: &str, src: &str) -> FieldDef {
                 match t.parse::<u32>() {
                     Ok(n) if n > 0 => Some(ArrSize::Lit(n)),
                     _ if ident => Some(ArrSize::Named(t.to_string())),
-                    _ => None,
+                    // an extent that is arithmetic on literals (`(128) / 4`, from `vec_size / 4`)
+                    _ => super::context::literal_expression(text(s, src))
+                        .and_then(|v| u32::try_from(v).ok())
+                        .filter(|v| *v > 0)
+                        .map(ArrSize::Lit),
                 }
             });
             match (id, n) {

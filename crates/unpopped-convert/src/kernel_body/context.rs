@@ -667,6 +667,12 @@ fn constant_body(body: &str, defs: &Defs) -> Option<i64> {
     Expr::new(body, defs).value().ok()
 }
 
+/// The value of an integer constant expression of literals and operators only (`(128) / 4`, `2 * 8`): no name is read as a macro
+/// or a constant. `None` for anything else (a name, a float, an unbalanced parenthesis).
+pub(super) fn literal_expression(text: &str) -> Option<i64> {
+    constant_body(&format!("({})", text.trim()), &Defs::new())
+}
+
 fn strip_comment(s: &str) -> &str {
     let s = s.split("//").next().unwrap_or("");
     s.split("/*").next().unwrap_or("").trim()

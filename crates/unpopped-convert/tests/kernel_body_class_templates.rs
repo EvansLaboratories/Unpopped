@@ -102,3 +102,14 @@ fn a_partial_specialisation_binding_keeps_the_arguments_grouping_too() {
         void k(float* out, const float* in) { W<float, 2 + 2> w; out[0] = (float)w.n(); }";
     assert_eq!(run(&lift(src).unwrap(), 1), vec![40.0]);
 }
+
+#[test]
+fn a_field_extent_that_is_arithmetic_on_the_template_argument_folds() {
+    // `float data[N / 4]` with N = 16 is 4 floats (the vec_t<float, 128> `float4 data[vec_size / 4]` shape, scalar here)
+    let src = "template <typename T, int N> struct V { T data[N / 4]; __device__ void fill(T x) { for (int i = 0; i < N / 4; ++i) data[i] = x; } __device__ T at(int i) { return data[i]; } };\n\
+        void k(float* out, const float* in) { V<float, 16> v; v.fill(in[2]); out[0] = v.at(3); }";
+    assert_eq!(run(&lift(src).unwrap(), 1), vec![3.5]);
+    // a name in the extent is not folded as a number
+    let named = "template <typename T, int N> struct V { T data[N / M]; };\nvoid k(float* out, const float* in) { V<float, 16> v; out[0] = 1.0f; }";
+    assert!(lift(named).is_err());
+}
