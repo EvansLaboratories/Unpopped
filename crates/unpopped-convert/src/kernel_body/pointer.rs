@@ -343,7 +343,13 @@ impl<'s, 't> Walker<'s, 't> {
     }
 
     /// `T* name = <pointer expression>;`: a pointer local, fixed now (its offset is evaluated into a local).
-    pub(super) fn pointer_declaration(&mut self, n: Node<'_>, ty: E, out: &mut Vec<Stmt>) -> R<()> {
+    pub(super) fn pointer_declaration(
+        &mut self,
+        n: Node<'_>,
+        ty: E,
+        lanes: u8,
+        out: &mut Vec<Stmt>,
+    ) -> R<()> {
         let mut c = n.walk();
         let decls: Vec<_> = n.children_by_field_name("declarator", &mut c).collect();
         for d in decls {
@@ -369,7 +375,7 @@ impl<'s, 't> Walker<'s, 't> {
                     "a pointer local initialised from something that is not a pointer expression",
                 );
             };
-            if p.pointee != ty {
+            if p.pointee != ty || p.lanes != lanes {
                 return self.not_yet(
                     value,
                     format!(

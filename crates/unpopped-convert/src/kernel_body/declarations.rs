@@ -24,6 +24,9 @@ impl<'s, 't> Walker<'s, 't> {
                 .join(" ")
         });
         if let Some((elem, lanes)) = tname.as_deref().and_then(vector_type) {
+            if declares_pointer(n) {
+                return self.pointer_declaration(n, elem, lanes, out);
+            }
             return self.vector_declaration(n, (elem, lanes), out);
         }
         if declares_pointer(n)
@@ -34,7 +37,7 @@ impl<'s, 't> Walker<'s, 't> {
         let ty = self.type_of(n.child_by_field_name("type"), n)?;
         let head = text(n, self.src).trim_start();
         if declares_pointer(n) {
-            return self.pointer_declaration(n, ty, out);
+            return self.pointer_declaration(n, ty, 1, out);
         }
         if head.starts_with("__shared__") {
             return self.array_declaration(n, ty, MemorySpace::Shared, out);
