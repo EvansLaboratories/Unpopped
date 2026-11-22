@@ -51,7 +51,8 @@ impl<'s, 't> Walker<'s, 't> {
         let name = text(n, self.src);
         match self.lookup(name) {
             Some(Sym::Scalar(l, t, _)) => Ok((ScalarExpr::Local(l), t)),
-            Some(Sym::Buffer(..) | Sym::Alloc(..) | Sym::Pointer(..) | Sym::Struct(..)) => {
+            Some(Sym::Struct(i)) => self.struct_as_value(&i, n),
+            Some(Sym::Buffer(..) | Sym::Alloc(..) | Sym::Pointer(..)) => {
                 self.not_yet(n, format!("the array or pointer `{name}` used as a value"))
             }
             Some(Sym::Vector(..)) => self.not_yet(

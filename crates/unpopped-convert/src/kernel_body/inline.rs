@@ -5,8 +5,10 @@
 //! the reference reaches the caller. A callee may `return` once, as its last statement. Pointer and struct parameters,
 //! recursion and a `return` anywhere else decline (4c-4 for pointers).
 
+use super::structs::StructInst;
 use super::{Fixed, R, Sym, Walker, text};
 use std::collections::HashMap;
+use std::rc::Rc;
 use tree_sitter::Node;
 use unpopped::ir::ScalarExpr;
 use unpopped::kernel::Stmt;
@@ -40,14 +42,48 @@ impl<'s, 't> Walker<'s, 't> {
         let Some(&func) = self.functions.get(name) else {
             return self.not_yet(call, format!("a call to `{name}`"));
         };
+        self.inline_function(call, func, name, None, out)
+    }
+
+    /// Inline the method `mname` of `this` (a missing method declines by name).
+    pub(super) fn inline_method(
+        &mut self,
+        call: Node<'_>,
+        this: &Rc<StructInst>,
+        mname: &str,
+        out: &mut Vec<Stmt>,
+    ) -> R<Option<(ScalarExpr, E)>> {
+        let func = self
+            .methods
+            .get(&this.sname)
+            .and_then(|m| m.get(mname))
+            .copied();
+        let Some(func) = func else {
+            return self.not_yet(
+                call,
+                format!(
+                    "the member `{mname}` of struct `{}`, which has no such method",
+                    this.sname
+                ),
+            );
+        };
+        let name = format!("{}::{mname}", this.sname);
+        self.inline_function(call, func, &name, Some(this), out)
+    }
+
+    fn inline_function(
+        &mut self,
+        call: Node<'_>,
+        func: Node<'t>,
+        name: &str,
+        this: Option<&Rc<StructInst>>,
+        out: &mut Vec<Stmt>,
+    ) -> R<Option<(ScalarExpr, E)>> {
         if self.inline_stack.len() >= MAX_DEPTH || self.inline_stack.iter().any(|n| n == name) {
             return self.not_yet(call, format!("a recursive call to `{name}`"));
         }
-        let (Some(plist), Some(body)) = (
-            func.child_by_field_name("declarator")
-                .and_then(|d| d.child_by_field_name("parameters")),
-            func.child_by_field_name("body"),
-        ) else {
+        let (Some(plist), Some(body)) = (callee_params(func), func.child_by_field_name("body"))
+        else {
             return self.not_yet(call, format!("`{name}` without a parameter list or body"));
         };
         let ret_ty = self.return_type(func)?;
@@ -65,6 +101,12 @@ impl<'s, 't> Walker<'s, 't> {
             );
         }
         let mut bound = HashMap::new();
+        if let Some(inst) = this {
+            // inside a method the instance's own fields are in scope by name
+            for (n, s) in &inst.fields {
+                bound.insert(n.clone(), s.clone());
+            }
+        }
         for (p, a) in params.into_iter().zip(args) {
             let (pname, sym) = self.bind_argument(p, a, out)?;
             bound.insert(pname, sym);
@@ -80,6 +122,12 @@ impl<'s, 't> Walker<'s, 't> {
 
     /// `void` is `None`; otherwise the element type.
     fn return_type(&self, func: Node<'_>) -> R<Option<E>> {
+        let conv = func
+            .child_by_field_name("declarator")
+            .filter(|d| d.kind() == "operator_cast");
+        if let Some(c) = conv {
+            return self.type_of(c.child_by_field_name("type"), c).map(Some);
+        }
         let ty = func.child_by_field_name("type");
         if ty.is_some_and(|t| text(t, self.src) == "void") {
             return Ok(None);
@@ -236,74 +284,15 @@ impl<'s, 't> Walker<'s, 't> {
         p.off = self.pin_offset(p.off, out);
         Ok((text(id, self.src).to_string(), Sym::Pointer(p)))
     }
+}
 
-    /// A callee's `return` is allowed only as its last top-level statement (with a value iff it is not `void`).
-    fn check_returns(&self, body: Node<'_>, has_value: bool) -> R<()> {
-        let last = u32::try_from(body.named_child_count().saturating_sub(1))
-            .ok()
-            .and_then(|i| body.named_child(i));
-        let mut stack = vec![body];
-        while let Some(n) = stack.pop() {
-            if n.kind() == "return_statement" {
-                let is_last = last.is_some_and(|l| l.id() == n.id());
-                if !is_last {
-                    return self.not_yet(
-                        n,
-                        "a `return` that is not the last statement of an inlined function",
-                    );
-                }
-                if has_value != (n.named_child_count() > 0) {
-                    return self.not_yet(
-                        n,
-                        "a `return` whose value does not match the function's type",
-                    );
-                }
-            }
-            let mut c = n.walk();
-            stack.extend(n.named_children(&mut c));
-        }
-        Ok(())
-    }
-
-    /// The callee's statements into `out`; the trailing `return`'s value as a fresh local.
-    fn callee_body(
-        &mut self,
-        body: Node<'_>,
-        ret_ty: Option<E>,
-        out: &mut Vec<Stmt>,
-    ) -> R<Option<(ScalarExpr, E)>> {
-        self.scopes.push(HashMap::new());
-        let mut cursor = body.walk();
-        let kids: Vec<_> = body.named_children(&mut cursor).collect();
-        let mut result = Ok(None);
-        for k in kids {
-            if k.kind() == "return_statement" {
-                result = self.callee_return(k, ret_ty, out);
-                break;
-            }
-            if let Err(e) = self.stmt(k, out) {
-                result = Err(e);
-                break;
-            }
-        }
-        self.scopes.pop();
-        result
-    }
-
-    fn callee_return(
-        &mut self,
-        r: Node<'_>,
-        ret_ty: Option<E>,
-        out: &mut Vec<Stmt>,
-    ) -> R<Option<(ScalarExpr, E)>> {
-        let (Some(ty), Some(v)) = (ret_ty, r.named_child(0)) else {
-            return Ok(None);
-        };
-        let (e, et) = self.expr(v)?;
-        let e = self.convert(e, et, ty, v)?;
-        out.append(&mut self.hoisted);
-        let local = self.new_local(ty);
-        out.push(Stmt::Let { local, init: e });
-        Ok(Some((ScalarExpr::Local(local), ty)))
-    }
+/// The parameter list of a function or method (a conversion operator keeps it one level down).
+fn callee_params(func: Node<'_>) -> Option<Node<'_>> {
+    let d = func.child_by_field_name("declarator")?;
+    let d = if d.kind() == "operator_cast" {
+        d.child_by_field_name("declarator")?
+    } else {
+        d
+    };
+    d.child_by_field_name("parameters")
 }

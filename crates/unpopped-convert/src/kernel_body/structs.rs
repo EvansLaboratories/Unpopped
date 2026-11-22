@@ -28,6 +28,8 @@ pub(super) struct FieldDef {
 
 /// An instance of a struct: its fields, each a scalar local, a private array or a nested instance.
 pub(super) struct StructInst {
+    /// The struct's type name (its methods are looked up by it).
+    pub(super) sname: String,
     pub(super) fields: Vec<(String, Sym)>,
 }
 
@@ -146,7 +148,10 @@ impl<'s, 't> Walker<'s, 't> {
             let path = format!("{label}.{}", f.name);
             fields.push((f.name.clone(), self.new_field(&f, &path, at, out)?));
         }
-        Ok(Rc::new(StructInst { fields }))
+        Ok(Rc::new(StructInst {
+            sname: sname.to_string(),
+            fields,
+        }))
     }
 
     fn new_field(&mut self, f: &FieldDef, path: &str, at: Node<'_>, out: &mut Vec<Stmt>) -> R<Sym> {
@@ -376,7 +381,10 @@ impl<'s, 't> Walker<'s, 't> {
             };
             fields.push((f.name, sym));
         }
-        Ok(Rc::new(StructInst { fields }))
+        Ok(Rc::new(StructInst {
+            sname: sname.to_string(),
+            fields,
+        }))
     }
 
     /// `s.x = e` and `s.x += e`: the member's scalar local.

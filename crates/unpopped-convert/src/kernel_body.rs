@@ -87,8 +87,10 @@ mod calls;
 mod declarations;
 mod expressions;
 mod inline;
+mod methods;
 mod places;
 mod pointer;
+mod returns;
 mod statements;
 mod structs;
 
@@ -136,6 +138,7 @@ fn lift_with_launch(
     let mut w = Walker::new(src);
     w.functions = all_functions(root, src);
     w.structs = structs::collect_structs(root, src);
+    w.methods = methods::collect_methods(root, src);
     w.launch = launch;
     w.unary_fn = fe.unary_fn;
     w.binary_fn = fe.binary_fn;
@@ -227,6 +230,8 @@ struct Walker<'s, 't> {
     functions: HashMap<String, Node<'t>>,
     /// Every struct defined in the source (slice 4d).
     structs: HashMap<String, Vec<structs::FieldDef>>,
+    /// The methods of those structs, by struct then method name (slice 4e).
+    methods: HashMap<String, HashMap<String, Node<'t>>>,
     /// The functions being inlined now, outermost first.
     inline_stack: Vec<String>,
     src: &'s str,
@@ -253,6 +258,7 @@ impl<'s, 't> Walker<'s, 't> {
         Self {
             functions: HashMap::new(),
             structs: HashMap::new(),
+            methods: HashMap::new(),
             inline_stack: Vec::new(),
             src,
             params: Vec::new(),

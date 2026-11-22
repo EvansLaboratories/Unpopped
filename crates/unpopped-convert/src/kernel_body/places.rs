@@ -100,10 +100,11 @@ impl<'s, 't> Walker<'s, 't> {
     }
 
     /// `threadIdx.x`, `blockIdx.y`, `blockDim.z`, `gridDim.x`: the launch's execution ids (`U32`).
-    pub(super) fn builtin(&self, n: Node<'_>) -> R<(ScalarExpr, E)> {
+    pub(super) fn builtin(&mut self, n: Node<'_>) -> R<(ScalarExpr, E)> {
         if let Some(m) = self.resolve_member(n)? {
             return match m {
                 Sym::Scalar(l, t, _) => Ok((ScalarExpr::Local(l), t)),
+                Sym::Struct(i) => self.struct_as_value(&i, n),
                 _ => self.not_yet(
                     n,
                     "a struct or array member used as a value (read a scalar member)",

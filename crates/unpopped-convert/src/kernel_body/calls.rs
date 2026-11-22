@@ -6,6 +6,12 @@ use super::*;
 impl<'s, 't> Walker<'s, 't> {
     /// A call statement: only `__syncthreads()` (a block barrier) in slice 2.
     pub(super) fn call_statement(&mut self, e: Node<'_>, out: &mut Vec<Stmt>) -> R<()> {
+        if let Some(f) = e
+            .child_by_field_name("function")
+            .filter(|f| f.kind() == "field_expression")
+        {
+            return self.method_statement(e, f, out);
+        }
         let callee = e.child_by_field_name("function").map(|f| text(f, self.src));
         let nargs = e
             .child_by_field_name("arguments")
@@ -50,6 +56,9 @@ impl<'s, 't> Walker<'s, 't> {
         let Some(f) = n.child_by_field_name("function") else {
             return self.not_yet(n, "a call of an unexpected shape");
         };
+        if f.kind() == "field_expression" {
+            return self.method_value(n, f);
+        }
         let name = text(f, self.src);
         if self.defines(name) {
             let mut body = Vec::new();
@@ -67,6 +76,11 @@ impl<'s, 't> Walker<'s, 't> {
             };
         }
         let args = self.call_args(n);
+        // a C++ functional cast `uint64_t(x)`: the same conversion as `(uint64_t)x`
+        if let (Ok(to), 1) = (super::c_type(name), args.len()) {
+            let (v, from) = self.expr(args[0])?;
+            return Ok((self.convert(v, from, to, n)?, to));
+        }
         if name == "__ldg" && args.len() == 1 {
             // `__ldg(&a[i])` is a read through the read-only cache: a plain load (the cache path is a hint, never a meaning)
             let (place, elem, _) = self.address_of(args[0])?;
