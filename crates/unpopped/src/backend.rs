@@ -664,6 +664,36 @@ impl DtypeSupport {
     }
 }
 
+/// What the caller of a lowering can do with the result. A backend that would emit something needing more refuses instead
+/// (`docs/options-caller-caps.md`).
+///
+/// **The flag is a claim, not a check**: Unpopped cannot verify a caller really honours the interface. The point is the
+/// default: [`CallerCaps::LEGACY`] is what [`Default`] gives and what [`crate::try_generate`] passes, so a caller written
+/// before the interface existed is refused a shape that needs it, never mis-bound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CallerCaps {
+    /// The caller reads [`GeneratedKernel::interface`] and honours it: the `bindings` slots and the `params_block` layout.
+    pub interface: bool,
+}
+
+impl CallerCaps {
+    /// Binds buffers by the kernel's declaration order and passes no params block: every caller before this existed.
+    pub const LEGACY: Self = Self { interface: false };
+
+    /// This, with `interface` on.
+    #[must_use]
+    pub const fn with_interface(self) -> Self {
+        Self { interface: true }
+    }
+}
+
+impl Default for CallerCaps {
+    fn default() -> Self {
+        Self::LEGACY
+    }
+}
+
 /// Lowers a neutral [`crate::plan::KernelPlan`] to concrete kernel source.
 pub trait Backend {
     /// Short backend identifier / target language (e.g. `"cuda"`, `"cpu_c"`,
@@ -706,6 +736,24 @@ pub trait Backend {
     /// numerical bug, which is strictly worse — see the "decline, do not fall
     /// through" note in `tests/neutral_spelling.rs`.
     fn lower(&self, plan: &crate::plan::KernelPlan<'_>) -> Result<GeneratedKernel, LowerError>;
+    /// [`Backend::lower`] for a caller that states what it can do with the result ([`CallerCaps`]).
+    ///
+    /// **Defaulted to `self.lower(plan)`, ignoring `caps`**, so every existing backend compiles and behaves unchanged. A
+    /// backend that can emit a shape needing a caller that binds [`GeneratedKernel::interface`] overrides this, refuses
+    /// with [`LowerError::UnsupportedPlanShape`] (naming the capability) when `!caps.interface`, and makes its `lower`
+    /// `lower_with(plan, &CallerCaps::LEGACY)`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Backend::lower`].
+    fn lower_with(
+        &self,
+        plan: &crate::plan::KernelPlan<'_>,
+        caps: &CallerCaps,
+    ) -> Result<GeneratedKernel, LowerError> {
+        let _ = caps;
+        self.lower(plan)
+    }
     /// Lower a kernel-layer [`KernelFn`](crate::kernel::KernelFn) to source, or say why it
     /// cannot (`docs/e1-emit-from-the-kernel-layer.md`; PM ruling 2026-10-30).
     ///

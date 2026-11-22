@@ -113,7 +113,7 @@ pub mod window_taps;
 #[cfg(test)]
 mod kiss_ref_diff;
 
-pub use backend::{Backend, DtypeSupport, GeneratedKernel, Variant, VariantFidelity};
+pub use backend::{Backend, CallerCaps, DtypeSupport, GeneratedKernel, Variant, VariantFidelity};
 pub use contract::{bundle, bundle_kisc, contract, front_matter};
 pub use dispatch_artifact::{emit_dispatch_table, parse_dispatch_table};
 pub use exactness::{
@@ -232,7 +232,24 @@ pub fn try_generate(
     key: &StructureKey,
     backend: &dyn Backend,
 ) -> Result<GeneratedKernel, backend::LowerError> {
-    let mut k = backend.lower(&plan::try_build_plan_for(op, key, backend)?)?;
+    try_generate_with(op, key, backend, &backend::CallerCaps::LEGACY)
+}
+
+/// [`try_generate`] for a caller that states what it can do with the result: `caps` reaches
+/// [`Backend::lower_with`], so a backend that would emit a shape needing a caller that binds
+/// [`GeneratedKernel::interface`] can refuse a [`backend::CallerCaps::LEGACY`] caller instead of letting it
+/// bind blindly. `try_generate(op, key, b)` is `try_generate_with(op, key, b, &CallerCaps::LEGACY)`.
+///
+/// # Errors
+///
+/// As [`try_generate`], plus whatever the backend's `lower_with` refuses for these caps.
+pub fn try_generate_with(
+    op: &OpDef,
+    key: &StructureKey,
+    backend: &dyn Backend,
+    caps: &backend::CallerCaps,
+) -> Result<GeneratedKernel, backend::LowerError> {
+    let mut k = backend.lower_with(&plan::try_build_plan_for(op, key, backend)?, caps)?;
     k.stamp(provenance_for(key, backend));
     Ok(k)
 }
