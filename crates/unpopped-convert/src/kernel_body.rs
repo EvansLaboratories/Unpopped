@@ -82,6 +82,8 @@ impl std::fmt::Display for KernelLiftError {
 
 impl std::error::Error for KernelLiftError {}
 
+mod inline;
+
 type R<T> = Result<T, KernelLiftError>;
 
 /// Lift the function `name` of `src` into a [`KernelFn`] (ROADMAP U19 slice 1).
@@ -124,12 +126,32 @@ fn lift_with_launch(
     let func = find_function(root, src, name)
         .ok_or_else(|| KernelLiftError::NoSuchFunction(name.to_string()))?;
     let mut w = Walker::new(src);
+    w.functions = all_functions(root, src);
     w.launch = launch;
     w.unary_fn = fe.unary_fn;
     w.binary_fn = fe.binary_fn;
     let k = w.function(func, name)?;
     check_kernel(&k).map_err(KernelLiftError::Invalid)?;
     Ok(k)
+}
+
+/// Every function defined in the source, by name.
+fn all_functions<'t>(root: Node<'t>, src: &str) -> HashMap<String, Node<'t>> {
+    let mut out = HashMap::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "function_definition" {
+            let id = n
+                .child_by_field_name("declarator")
+                .and_then(|d| d.child_by_field_name("declarator"));
+            if let Some(i) = id.filter(|i| i.kind() == "identifier") {
+                out.insert(text(i, src).to_string(), n);
+            }
+        }
+        let mut c = n.walk();
+        stack.extend(n.children(&mut c));
+    }
+    out
 }
 
 fn first_error(n: Node<'_>) -> Option<Node<'_>> {
@@ -187,7 +209,11 @@ enum Fixed {
     Counter,
 }
 
-struct Walker<'s> {
+struct Walker<'s, 't> {
+    /// Every function defined in the source, by name (the kernel included), for inlining (slice 4c-2).
+    functions: HashMap<String, Node<'t>>,
+    /// The functions being inlined now, outermost first.
+    inline_stack: Vec<String>,
     src: &'s str,
     params: Vec<Param>,
     locals: Vec<LocalDecl>,
@@ -207,9 +233,11 @@ struct Walker<'s> {
     binary_fn: fn(&str) -> Option<BinaryOp>,
 }
 
-impl<'s> Walker<'s> {
+impl<'s, 't> Walker<'s, 't> {
     fn new(src: &'s str) -> Self {
         Self {
+            functions: HashMap::new(),
+            inline_stack: Vec::new(),
             src,
             params: Vec::new(),
             locals: Vec::new(),
@@ -249,7 +277,7 @@ impl<'s> Walker<'s> {
         let (Some(plist), Some(body)) = (plist, f.child_by_field_name("body")) else {
             return self.not_yet(f, "a function without a parameter list or body");
         };
-        collect_assigned(body, self.src, &mut self.assigned);
+        collect_assigned(f.parent().unwrap_or(f), self.src, &mut self.assigned);
         let mut raw = Vec::new();
         let mut c = plist.walk();
         for p in plist.named_children(&mut c) {
@@ -669,6 +697,11 @@ impl<'s> Walker<'s> {
                     kind: BarrierKind::Full,
                 },
             ),
+            (Some(f), _) if self.defines(f) => {
+                self.flush(out);
+                self.inline_call(e, f, out)?;
+                Ok(())
+            }
             (Some(f), _) if f.starts_with("atomic") => {
                 self.atomic(e, f, false)?;
                 self.flush(out);
@@ -742,7 +775,7 @@ impl<'s> Walker<'s> {
         Ok((ScalarExpr::Exec(id), E::U32))
     }
 
-    fn call_args<'t>(&self, n: Node<'t>) -> Vec<Node<'t>> {
+    fn call_args<'n>(&self, n: Node<'n>) -> Vec<Node<'n>> {
         n.child_by_field_name("arguments")
             .map_or_else(Vec::new, |a| {
                 let mut c = a.walk();
@@ -756,6 +789,15 @@ impl<'s> Walker<'s> {
             return self.not_yet(n, "a call of an unexpected shape");
         };
         let name = text(f, self.src);
+        if self.defines(name) {
+            let mut body = Vec::new();
+            let r = self.inline_call(n, name, &mut body)?;
+            self.hoisted.append(&mut body);
+            return match r {
+                Some(v) => Ok(v),
+                None => self.not_yet(n, format!("the result of `{name}`, which returns void")),
+            };
+        }
         if name.starts_with("atomic") {
             return match self.atomic(n, name, true)? {
                 Some(v) => Ok(v),
@@ -1180,10 +1222,10 @@ impl<'s> Walker<'s> {
 
     /// The pieces of `for (T i = a; i < b; i += s) body`, or `None` for any other shape.
     #[allow(clippy::type_complexity)]
-    fn counted_for<'t>(
+    fn counted_for<'n>(
         &mut self,
-        n: Node<'t>,
-    ) -> R<Option<(String, E, ScalarExpr, ScalarExpr, ScalarExpr, Node<'t>)>> {
+        n: Node<'n>,
+    ) -> R<Option<(String, E, ScalarExpr, ScalarExpr, ScalarExpr, Node<'n>)>> {
         let (Some(init), Some(cond), Some(upd), Some(body)) = (
             n.child_by_field_name("initializer"),
             n.child_by_field_name("condition"),
