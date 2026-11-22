@@ -19,7 +19,9 @@ impl<'s, 't> Walker<'s, 't> {
             }
             return self.method_statement(e, f, out);
         }
-        let callee = e.child_by_field_name("function").map(|f| text(f, self.src));
+        let callee = e
+            .child_by_field_name("function")
+            .map(|f| self.short_callee(text(f, self.src)));
         let nargs = e
             .child_by_field_name("arguments")
             .map_or(0, |a| a.named_child_count());
@@ -249,6 +251,18 @@ impl<'s, 't> Walker<'s, 't> {
         })())
     }
 
+    /// A namespace-qualified call (`baracuda::block_reduce_max_f32(..)`) of a function this source defines is that function by its
+    /// short name (the walker is namespace-blind, as for qualified template calls). Any other name is returned as written.
+    fn short_callee<'a>(&self, name: &'a str) -> &'a str {
+        if self.defines(name) {
+            return name;
+        }
+        match name.rsplit_once("::") {
+            Some((_, short)) if self.defines(short) => short,
+            _ => name,
+        }
+    }
+
     /// A math call through the frontend's tables, or an atomic that returns the old value (hoisted as a statement).
     pub(super) fn call_expr(&mut self, n: Node<'_>) -> R<(ScalarExpr, E)> {
         let Some(f) = n.child_by_field_name("function") else {
@@ -263,7 +277,7 @@ impl<'s, 't> Walker<'s, 't> {
             }
             return self.method_value(n, f);
         }
-        let name = text(f, self.src);
+        let name = self.short_callee(text(f, self.src));
         if let Some(r) = self.tile_reduce(n, name) {
             return r;
         }
