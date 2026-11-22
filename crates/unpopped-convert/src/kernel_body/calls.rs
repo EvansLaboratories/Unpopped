@@ -2,6 +2,7 @@
 //! Calls: math functions through the frontend's tables, atomics and call statements (ROADMAP U19).
 
 use super::*;
+use unpopped::ir::QualOp;
 
 impl<'s, 't> Walker<'s, 't> {
     /// A call statement: only `__syncthreads()` (a block barrier) in slice 2.
@@ -78,6 +79,45 @@ impl<'s, 't> Walker<'s, 't> {
         })())
     }
 
+    /// `__fadd_rn(a, b)` and the other rounding-named arithmetic intrinsics (`__f{add,sub,mul,div,rcp,sqrt,maf}_{rn,rz,rd,ru}`,
+    /// single-precision only): the plain operation wrapped in `Qualified` with that rounding, which also keeps
+    /// a compiler from contracting it. A direction the operation does not take (`__frcp_rz`) declines. `None` when `name` is not one.
+    fn rounded_arithmetic(&mut self, call: Node<'_>, name: &str) -> Option<R<(ScalarExpr, E)>> {
+        let (op, ty, round) = rounded_intrinsic(name)?;
+        if round != RoundMode::NearestEven && !op.takes_directed_round() {
+            return Some(self.not_yet(call, format!("`{name}`: that operation takes no rounding but to nearest")));
+        }
+        let args = self.call_args(call);
+        if args.len() != op.arity() {
+            return Some(self.not_yet(call, format!("`{name}` with {} argument(s)", args.len())));
+        }
+        Some((|| {
+            let mut v = Vec::new();
+            for a in &args {
+                let (e, t) = self.expr(*a)?;
+                v.push(Box::new(self.convert(e, t, ty, *a)?));
+            }
+            let mut it = v.into_iter();
+            let (a, b, c) = (it.next(), it.next(), it.next());
+            let plain = match (op, a, b, c) {
+                (QualOp::Add, Some(a), Some(b), _) => ScalarExpr::Add(a, b),
+                (QualOp::Sub, Some(a), Some(b), _) => ScalarExpr::Sub(a, b),
+                (QualOp::Mul, Some(a), Some(b), _) => ScalarExpr::Mul(a, b),
+                (QualOp::Div, Some(a), Some(b), _) => ScalarExpr::Div(a, b),
+                (QualOp::Fma, Some(a), Some(b), Some(c)) => ScalarExpr::Fma(a, b, c),
+                (QualOp::Sqrt, Some(x), _, _) => ScalarExpr::Unary(UnaryOp::Sqrt, x),
+                (QualOp::Recip, Some(x), _, _) => ScalarExpr::Unary(UnaryOp::Recip, x),
+                _ => return self.not_yet(call, format!("`{name}`")),
+            };
+            let n = unpopped::ir::Numerics {
+                round,
+                ftz: false,
+                approx: false,
+            };
+            Ok((ScalarExpr::Qualified(Box::new(plain), n), ty))
+        })())
+    }
+
     /// A math call through the frontend's tables, or an atomic that returns the old value (hoisted as a statement).
     pub(super) fn call_expr(&mut self, n: Node<'_>) -> R<(ScalarExpr, E)> {
         let Some(f) = n.child_by_field_name("function") else {
@@ -100,6 +140,9 @@ impl<'s, 't> Walker<'s, 't> {
             return r;
         }
         if let Some(r) = self.convert_intrinsic(n, name) {
+            return r;
+        }
+        if let Some(r) = self.rounded_arithmetic(n, name) {
             return r;
         }
         if self.defines(name) {
@@ -377,4 +420,28 @@ fn conversion_intrinsic(name: &str) -> Option<(E, E, RoundMode)> {
     let (from, to) = (ty(a)?, ty(b)?);
     // exactly one side is a float
     (matches!(from, E::F32 | E::F64) != matches!(to, E::F32 | E::F64)).then_some((from, to, round))
+}
+
+/// The operation, element type and rounding of a rounding-named arithmetic intrinsic (`__fadd_rn`, `__fmul_rz`, `__fmaf_rd`).
+fn rounded_intrinsic(name: &str) -> Option<(QualOp, E, RoundMode)> {
+    let rest = name.strip_prefix("__")?;
+    let (stem, mode) = rest.rsplit_once('_')?;
+    let round = match mode {
+        "rn" => RoundMode::NearestEven,
+        "rz" => RoundMode::TowardZero,
+        "rd" => RoundMode::TowardNegInf,
+        "ru" => RoundMode::TowardPosInf,
+        _ => return None,
+    };
+    let (op, ty) = match stem {
+        "fadd" => (QualOp::Add, E::F32),
+        "fsub" => (QualOp::Sub, E::F32),
+        "fmul" => (QualOp::Mul, E::F32),
+        "fdiv" => (QualOp::Div, E::F32),
+        "frcp" => (QualOp::Recip, E::F32),
+        "fsqrt" => (QualOp::Sqrt, E::F32),
+        "fmaf" => (QualOp::Fma, E::F32),
+        _ => return None,
+    };
+    Some((op, ty, round))
 }
