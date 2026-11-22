@@ -94,3 +94,11 @@ fn a_value_argument_that_is_an_expression_keeps_its_grouping() {
         void k(float* out, const float* in) { W<float, 2 + 2> w; out[0] = (float)w.n(); }";
     assert_eq!(run(&lift(src).unwrap(), 1), vec![40.0]);
 }
+
+#[test]
+fn a_partial_specialisation_binding_keeps_the_arguments_grouping_too() {
+    let src = "template <typename T, int N> struct W;\n\
+        template <int N> struct W<float, N> { float x; __device__ int n() { return N * 10; } };\n\
+        void k(float* out, const float* in) { W<float, 2 + 2> w; out[0] = (float)w.n(); }";
+    assert_eq!(run(&lift(src).unwrap(), 1), vec![40.0]);
+}
