@@ -2,7 +2,7 @@
 
 `docs/options-u19-census.md` was measured with this. It is **documentation of the method**, not a crate: its `Cargo.toml` is stored as
 `Cargo.toml.scratch` so cargo does not pick it up. To reproduce: copy this directory to a scratch location, rename
-`Cargo.toml.scratch` to `Cargo.toml`, fix its `path =` lines to your checkouts (it depends on this repo's `unpopped*` crates, on
+`Cargo.toml.scratch` to `Cargo.toml` and each `*.rs.txt` to `src/*.rs` (stored as text so the repo's analysers do not read a throwaway tool as source), fix its `path =` lines to your checkouts (it depends on this repo's `unpopped*` crates, on
 `baracuda-cuda-parse` for `parse_cuda`, and on `fishstringer-slang-parse` for `SLANG`), `git archive` each corpus from `origin/main` into a
 scratch `corpus/` directory (never lift from a working tree), then:
 
