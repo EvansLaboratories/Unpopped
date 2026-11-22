@@ -1141,6 +1141,7 @@ mod tests {
             idx: [0; 3],
             lin: 0,
             limit: STEP_LIMIT,
+            lenient: Leniency::default(),
             place: DevicePlace {
                 device: 0,
                 block_base: 0,
