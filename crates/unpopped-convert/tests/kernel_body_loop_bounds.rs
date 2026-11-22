@@ -109,3 +109,11 @@ fn a_helper_called_by_value_leaves_the_bound_alone() {
         "void bump(int& m) { m += 1; }         void k(float* out) { int m = 2; float s = 0.0f; for (int i = 0; i < m; i++) { bump(m); s += 1.0f; } out[0] = s; }",
     );
 }
+
+#[test]
+fn a_bound_used_in_a_pointer_offset_argument_is_not_assigned_by_the_call() {
+    // `put(out + n, ..)` gives the callee elements to write, never `n` itself (the decode kernel's shape)
+    let src = "void put(float* p, float v) { p[0] = v; } \
+        void k(float* out) { int n = 2; for (int i = 0; i < n; i++) { put(out + n + i, 1.0f); } }";
+    assert_eq!(out(&lift(src).unwrap(), 4), vec![0.0, 0.0, 1.0, 1.0]);
+}

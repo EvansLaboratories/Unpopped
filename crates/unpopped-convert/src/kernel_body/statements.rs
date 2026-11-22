@@ -499,10 +499,17 @@ impl<'s, 't> Walker<'s, 't> {
             }
             for (p, a) in params.into_iter().zip(args) {
                 let t = text(p, self.src);
-                // a by-value parameter is the callee's own copy; anything else may alias the argument
-                if t.contains('&') || t.contains('*') || p.kind() != "parameter_declaration" {
+                if p.kind() != "parameter_declaration" {
+                    // a shape not understood (a variadic, a default): anything in the argument may alias
                     collect_identifiers(a, self.src, out);
+                } else if t.contains('&') {
+                    // a reference: the callee assigns the argument's variable itself
+                    lvalue_roots(a, self.src, out);
+                } else if t.contains('*') {
+                    // a pointer: a scalar local is reachable only as `&local`; an offset (`p + n`) only names elements
+                    address_taken(a, self.src, out);
                 }
+                // a by-value parameter is the callee's own copy
             }
         }
         let mut c = n.walk();
@@ -537,5 +544,39 @@ fn collect_identifiers(n: Node<'_>, src: &str, out: &mut HashSet<String>) {
     let mut c = n.walk();
     for k in n.named_children(&mut c) {
         collect_identifiers(k, src, out);
+    }
+}
+
+/// The variables an lvalue argument names: `x`, `x.f`, `x[i]` and `(x)` give `x`; any other shape gives every identifier in it.
+fn lvalue_roots(n: Node<'_>, src: &str, out: &mut HashSet<String>) {
+    match n.kind() {
+        "identifier" => {
+            out.insert(text(n, src).to_string());
+        }
+        "parenthesized_expression" => {
+            if let Some(k) = n.named_child(0) {
+                lvalue_roots(k, src, out);
+            }
+        }
+        "subscript_expression" | "field_expression" => {
+            if let Some(k) = n.child_by_field_name("argument") {
+                lvalue_roots(k, src, out);
+            }
+        }
+        _ => collect_identifiers(n, src, out),
+    }
+}
+
+/// The variables whose address an argument takes (`&x`, `&x.f`, `&x[i]`): the only scalars a pointer parameter can reach.
+fn address_taken(n: Node<'_>, src: &str, out: &mut HashSet<String>) {
+    if n.kind() == "pointer_expression"
+        && n.child_by_field_name("operator").is_some_and(|o| text(o, src) == "&")
+        && let Some(k) = n.child_by_field_name("argument")
+    {
+        lvalue_roots(k, src, out);
+    }
+    let mut c = n.walk();
+    for k in n.named_children(&mut c) {
+        address_taken(k, src, out);
     }
 }
