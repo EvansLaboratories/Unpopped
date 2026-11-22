@@ -189,4 +189,9 @@ kernel by itself: the 39 FlashInfer kernels it unblocked each stop at the next c
 initialiser, 14 `baracuda::elementwise::DimsI32` (a namespace-qualified struct type), 13 `cg::thread_block` (cooperative groups), 11 loop bounds the function assigns, 8 `__shared__` with two dimensions,
 8 `shape.d` ("the field cannot be copied": a struct parameter's array field used whole), 8 `vec_t<float, 128>`, 7 `qualified_identifier` expressions, 7 `fast_sigmoid` (a helper outside the corpus' headers).
 
+
+Then **local arrays with a brace initialiser** (`int a[4] = {1, 2};`: the listed elements in order, the rest zero, as C does): **166 of 535** (was 157). Next first declines: 14 `baracuda::elementwise::DimsI32`
+(a namespace-qualified struct type), 13 `cg::thread_block`, 11 loop bounds the function assigns, 10 `baracuda::atomic::add<float>` (a namespaced helper call), 8 two-dimensional `__shared__`, 8 `shape.d`
+(a struct parameter's array field used whole), 8 `vec_t<float, 128>`, 7 `qualified_identifier` expressions.
+
 — lane: unpopped
