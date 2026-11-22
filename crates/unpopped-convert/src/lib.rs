@@ -46,7 +46,11 @@
 //! parser are Vulkane's: `vulkane-slang-emit`, `vulkane-slang-parse`). The tests build their own
 //! Slang `Frontend` from a dev-dependency.
 
+mod entry_model;
 mod kernel_body;
+pub use entry_model::{
+    EntryModel, EntryModelError, EntryModelFn, Resource, ResourceKind, Semantic,
+};
 pub use kernel_body::{
     KernelLiftError, LiftContext, lift_kernel, lift_kernel_in, lift_kernel_launched,
 };
@@ -124,6 +128,9 @@ pub struct Frontend {
     pub unary_fn: fn(&str) -> Option<UnaryOp>,
     /// The two-argument counterpart of [`Frontend::unary_fn`]; same default and override.
     pub binary_fn: fn(&str) -> Option<BinaryOp>,
+    /// How this language's entry point differs from "a function whose parameters are the buffers" (Slang: file-scope resources and
+    /// semantic parameters), or `None` (the default, and CUDA's). [`Frontend::with_entry_model`] sets it.
+    pub entry_model: Option<EntryModelFn>,
 }
 
 impl Frontend {
@@ -148,6 +155,16 @@ impl Frontend {
             parse,
             unary_fn: unpopped::lift::unary_fn,
             binary_fn: unpopped::lift::binary_fn,
+            entry_model: None,
+        }
+    }
+
+    /// This frontend with a reader of the language's entry points (`docs/options-u19-slang-entry-model.md`).
+    #[must_use]
+    pub const fn with_entry_model(self, entry_model: EntryModelFn) -> Self {
+        Self {
+            entry_model: Some(entry_model),
+            ..self
         }
     }
 

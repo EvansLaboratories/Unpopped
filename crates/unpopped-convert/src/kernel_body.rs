@@ -88,6 +88,7 @@ pub use context::LiftContext;
 mod calls;
 mod cpasync;
 mod declarations;
+mod entry;
 mod expressions;
 mod globals;
 mod inline;
@@ -192,6 +193,27 @@ fn lift_preprocessed(
     w.structs = structs::collect_structs(root, src);
     w.methods = methods::collect_methods(root, src);
     w.launch = ctx.launch;
+    // an entry point read through the frontend's model (Slang): its `numthreads` wins over the context's block, and the caller
+    // still supplies the grid
+    if let Some(read) = fe.entry_model {
+        let model = read(&tree, src, name).map_err(|e| KernelLiftError::NotYetLifted {
+            construct: format!("the entry point `{name}`: {}", e.reason),
+            line: 0,
+        })?;
+        if let Some(block) = model.block {
+            let Some(mut launch) = w.launch else {
+                return Err(KernelLiftError::NotYetLifted {
+                    construct: format!(
+                        "the entry point `{name}` declares its block but the caller gave no launch (its grid)"
+                    ),
+                    line: 0,
+                });
+            };
+            launch.block = block;
+            w.launch = Some(launch);
+        }
+        w.entry = Some(model);
+    }
     w.dyn_shared = ctx.dynamic_shared_bytes;
     w.null_buffers = ctx.null_buffers.iter().cloned().collect();
     w.consts = collect_consts(root, src);
@@ -360,6 +382,8 @@ struct Walker<'s, 't> {
     null_buffers: HashSet<String>,
     /// Macros the preprocessor could not expand, with why: a use declines naming the macro (`Walker::unexpanded_or`).
     unexpanded: context::Unexpanded,
+    /// The entry model the frontend read, consumed by `function` (Slang: resources and semantic parameters).
+    entry: Option<crate::EntryModel>,
     /// File-scope `constexpr`/`const` constants by name: the declared type text and the initialiser.
     consts: HashMap<String, (String, Node<'t>)>,
     allocs: Vec<AllocDecl>,
@@ -388,6 +412,7 @@ impl<'s, 't> Walker<'s, 't> {
             dyn_shared: 0,
             null_buffers: HashSet::new(),
             unexpanded: Vec::new(),
+            entry: None,
             consts: HashMap::new(),
             allocs: Vec::new(),
             pending_unroll: Unroll::None,
@@ -421,23 +446,38 @@ impl<'s, 't> Walker<'s, 't> {
             return self.not_yet(f, "a function without a parameter list or body");
         };
         collect_assigned(f.parent().unwrap_or(f), self.src, &mut self.assigned);
+        let entry = self.entry.take();
         let mut raw = Vec::new();
-        let mut c = plist.walk();
-        for p in plist.named_children(&mut c) {
-            // a comment between parameters is not one (the census over Baracuda's kernels: 94 kernels stopped on it)
-            if p.kind() == "comment" {
-                continue;
+        if let Some(m) = &entry {
+            // the resources are the parameters; the entry's own parameters are execution ids (bound below)
+            raw = self.entry_resources(m, f)?;
+        } else {
+            let mut c = plist.walk();
+            for p in plist.named_children(&mut c) {
+                // a comment between parameters is not one (the census over Baracuda's kernels: 94 kernels stopped on it)
+                if p.kind() == "comment" {
+                    continue;
+                }
+                if p.kind() != "parameter_declaration" {
+                    return self.not_yet(p, format!("a `{}` parameter", p.kind()));
+                }
+                raw.push(self.parameter(p)?);
             }
-            if p.kind() != "parameter_declaration" {
-                return self.not_yet(p, format!("a `{}` parameter", p.kind()));
-            }
-            raw.push(self.parameter(p)?);
         }
         self.compute = pick_compute(&raw);
         for (i, (pname, shape)) in raw.into_iter().enumerate() {
             self.bind_param(i, pname, shape, f)?;
         }
-        let block = self.block_of(body)?;
+        let mut prologue = Vec::new();
+        if let Some(m) = &entry {
+            let shape = self.launch.map_or([1, 1, 1], |l| l.block);
+            prologue = self.bind_entry_semantics(m, plist, shape)?;
+        }
+        let mut block = self.block_of(body)?;
+        if !prologue.is_empty() {
+            prologue.append(&mut block.0);
+            block.0 = prologue;
+        }
         let (params, locals, compute) = (
             std::mem::take(&mut self.params),
             std::mem::take(&mut self.locals),
@@ -687,7 +727,7 @@ fn c_type(t: &str) -> Result<E, String> {
         "float" => E::F32,
         "double" => E::F64,
         "int" | "signed" | "signed int" | "int32_t" => E::I32,
-        "unsigned" | "unsigned int" | "uint32_t" => E::U32,
+        "unsigned" | "unsigned int" | "uint32_t" | "uint" => E::U32,
         "short" | "signed short" | "int16_t" => E::I16,
         "unsigned short" | "uint16_t" => E::U16,
         "signed char" | "int8_t" => E::I8,
