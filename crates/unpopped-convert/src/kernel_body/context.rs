@@ -203,13 +203,14 @@ impl Pass<'_> {
     ) -> Result<(), String> {
         let origin = file.map(str::to_string);
         let mut stack: Vec<Frame> = Vec::new();
-        let mut continued = false;
-        for (idx, line) in src.split_inclusive('\n').enumerate() {
+        let lines: Vec<&str> = src.split_inclusive('\n').collect();
+        let mut idx = 0;
+        while idx < lines.len() {
+            let line = lines[idx];
             let at = (&origin, idx + 1);
             let body = line.trim_end_matches(['\n', '\r']);
             let active = stack.iter().all(|f| f.taken);
-            let directive = continued || body.trim_start().starts_with('#');
-            if !directive {
+            if !body.trim_start().starts_with('#') {
                 self.emit(
                     &if active {
                         line.to_string()
@@ -218,17 +219,22 @@ impl Pass<'_> {
                     },
                     at,
                 );
+                idx += 1;
                 continue;
             }
-            let was_continued = continued;
-            continued = body.trim_end().ends_with('\\');
-            if was_continued {
-                self.emit(&blank(line), at);
-                continue;
-            }
-            let d = body.trim_start()[1..].trim_start();
+            // a directive may continue over lines ending in a backslash (`#if defined(A) && \`): evaluate the joined text and blank
+            // every physical line, so the line count is unchanged
+            let (joined, last) = join_directive(&lines, idx);
+            let d = joined.trim_start()[1..].trim_start();
+            let physical: Vec<(usize, &str)> = (idx..=last).map(|i| (i, lines[i])).collect();
+            let blank_all = |pass: &mut Self| {
+                for (i, l) in &physical {
+                    pass.emit(&blank(l), (&origin, i + 1));
+                }
+            };
+            idx = last + 1;
             if active && d.starts_with("include") {
-                self.emit(&blank(line), at);
+                blank_all(self);
                 self.include(d["include".len()..].trim(), chain)?;
                 continue;
             }
@@ -238,12 +244,16 @@ impl Pass<'_> {
                 && d["pragma".len()..].trim() == "once"
             {
                 self.once.push(file.unwrap_or_default().to_string());
-                self.emit(&blank(line), at);
+                blank_all(self);
                 continue;
             }
             let defs_unexp = (&mut self.defs, &mut self.unexpanded);
             let keep = handle(d, active, &mut stack, defs_unexp)?;
-            self.emit(&if keep { line.to_string() } else { blank(line) }, at);
+            if keep && physical.len() == 1 {
+                self.emit(line, at);
+            } else {
+                blank_all(self);
+            }
         }
         if stack.is_empty() {
             Ok(())
@@ -338,6 +348,25 @@ pub(super) fn report(e: KernelLiftError, pre: &Preprocessed) -> KernelLiftError 
             line: place(line).0,
         },
         other => other,
+    }
+}
+
+/// The directive that starts at line `start` of `lines`, with its backslash continuations joined into one, and the index of its last
+/// physical line.
+fn join_directive(lines: &[&str], start: usize) -> (String, usize) {
+    let mut joined = String::new();
+    let mut last = start;
+    loop {
+        let body = lines[last].trim_end_matches(['\n', '\r']);
+        let trimmed = body.trim_end();
+        if trimmed.ends_with('\\') && last + 1 < lines.len() {
+            joined.push_str(trimmed.trim_end_matches('\\'));
+            joined.push(' ');
+            last += 1;
+        } else {
+            joined.push_str(body);
+            return (joined, last);
+        }
     }
 }
 
@@ -742,6 +771,29 @@ mod include_tests {
         assert_eq!(p.text.lines().count(), p.origins.len());
         // a header that lacks a final newline does not glue to the next line
         assert_eq!(lines(&p), ["m1", "h1", "h2", "m3"]);
+    }
+
+    #[test]
+    fn a_directive_continued_with_a_backslash_is_evaluated_whole_and_the_line_count_is_kept() {
+        // FlashInfer's shape: a condition over several physical lines (39 kernels declined on the `\` token)
+        let src = "#define A\n#define B 3\n#if defined(A) && \\\n    (B >= 2) && \\\n    !defined(C)\nYES\n#else\nNO\n#endif\nEND\n";
+        let p = pp(src, &[]).unwrap();
+        assert_eq!(lines(&p), ["YES", "END"]);
+        assert_eq!(
+            p.text.lines().count(),
+            src.lines().count(),
+            "every physical line is kept"
+        );
+        assert_eq!(p.origins.len(), src.lines().count());
+        // control: with `C` defined the same condition is false
+        let p = pp(&format!("#define C\n{src}"), &[]).unwrap();
+        assert_eq!(lines(&p), ["NO", "END"]);
+        // a continued `#define` takes its whole body, and the lines after it are not swallowed
+        let p = pp("#define N 1 + \\\n  2\nX\n", &[]).unwrap();
+        assert_eq!(lines(&p), ["X"]);
+        // a trailing backslash on the last line does not read past the end
+        let p = pp("#define Q \\", &[]).unwrap();
+        assert!(lines(&p).is_empty());
     }
 
     #[test]
