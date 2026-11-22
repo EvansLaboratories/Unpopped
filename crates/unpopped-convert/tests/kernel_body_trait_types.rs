@@ -59,3 +59,15 @@ fn a_type_without_that_member_still_declines() {
         Err(KernelLiftError::NotYetLifted { .. })
     ));
 }
+
+#[test]
+fn a_nested_member_is_not_read_as_the_outer_traits_member() {
+    // `AccOf<double>::inner::type` names a type nested in the trait, which has none: it must not fall back to `AccOf`'s own `type`
+    let src = format!(
+        "{TRAIT}void k(float* out, const float* in) {{ typename AccOf<double>::inner::type x = in[0]; out[0] = (float)x; }}"
+    );
+    assert!(matches!(
+        lift(&src),
+        Err(KernelLiftError::NotYetLifted { .. })
+    ));
+}
