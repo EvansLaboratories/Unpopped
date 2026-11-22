@@ -79,3 +79,12 @@ fn a_row_address_or_a_one_dimensional_address_is_unchanged() {
     let flat = "void k(float* out) { __shared__ uint8_t u[8]; u[3] = 9; const uint8_t* p = &u[2]; out[0] = (float)p[1]; }";
     assert_eq!(run(&lift(flat).unwrap(), 1), vec![9.0]);
 }
+
+#[test]
+fn the_address_scales_by_the_element_size() {
+    // a 4-byte element: `&t[1][2]` is byte 24 of 32; `p[1]` is t[1][3], `p[-2]` is t[1][0]
+    let src = "void k(float* out) { __shared__ int t[2][4]; \
+        for (int r = 0; r < 2; r++) { for (int c = 0; c < 4; c++) { t[r][c] = r * 10 + c; } } \
+        const int* p = &t[1][2]; out[0] = (float)p[1]; out[1] = (float)p[-2]; }";
+    assert_eq!(run(&lift(src).unwrap(), 2), vec![13.0, 10.0]);
+}
