@@ -8,6 +8,9 @@ impl<'s, 't> Walker<'s, 't> {
         if let Some(r) = self.group_declaration(n) {
             return r;
         }
+        if let Some(r) = self.tile_declaration(n) {
+            return r;
+        }
         let struct_type = n
             .child_by_field_name("type")
             .and_then(|t| self.struct_named(t));

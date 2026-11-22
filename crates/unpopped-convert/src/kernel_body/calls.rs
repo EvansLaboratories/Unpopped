@@ -13,6 +13,9 @@ impl<'s, 't> Walker<'s, 't> {
             if let Some(r) = self.group_statement(e, f, out) {
                 return r;
             }
+            if let Some(r) = self.tile_statement(e, f, out) {
+                return r;
+            }
             return self.method_statement(e, f, out);
         }
         let callee = e.child_by_field_name("function").map(|f| text(f, self.src));
@@ -63,9 +66,15 @@ impl<'s, 't> Walker<'s, 't> {
             if let Some(r) = self.group_value(n, f) {
                 return r;
             }
+            if let Some(r) = self.tile_value(n, f) {
+                return r;
+            }
             return self.method_value(n, f);
         }
         let name = text(f, self.src);
+        if let Some(r) = self.tile_reduce(n, name) {
+            return r;
+        }
         if self.defines(name) {
             let mut body = Vec::new();
             let r = self.inline_call(n, name, &mut body)?;

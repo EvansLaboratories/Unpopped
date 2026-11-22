@@ -65,6 +65,11 @@ impl<'s, 't> Walker<'s, 't> {
             "update_expression" => self.update(e, out),
             "call_expression" => self.call_statement(e, out),
             "gnu_asm_expression" => self.asm_statement(e, out),
+            // `cg::thread_block_tile<32> w = cg::tiled_partition<32>(b);` parses as a comparison chain
+            "binary_expression" => match self.tile_declaration(n) {
+                Some(r) => r,
+                None => self.not_yet(e, "a `binary_expression` expression statement"),
+            },
             other => self.not_yet(e, format!("a `{other}` expression statement")),
         }
     }

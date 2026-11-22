@@ -387,6 +387,8 @@ struct Walker<'s, 't> {
     unexpanded: context::Unexpanded,
     /// Names of block groups in scope (`cg::thread_block b = cg::this_thread_block();`): handles with no IR of their own.
     groups: HashSet<String>,
+    /// Warp tiles in scope (`cg::thread_block_tile<32> w = cg::tiled_partition<32>(block);`) with their width.
+    tiles: HashMap<String, u32>,
     /// The row-major extents of each multi-dimensional array allocation (`__shared__ T a[M][K]`), by allocation index; a one-
     /// dimensional array has no entry. The allocation itself is flat.
     alloc_dims: HashMap<u32, Vec<u32>>,
@@ -418,6 +420,7 @@ impl<'s, 't> Walker<'s, 't> {
             compute: E::I32,
             assigned: HashSet::new(),
             groups: HashSet::new(),
+            tiles: HashMap::new(),
             alloc_dims: HashMap::new(),
             hoisted: Vec::new(),
             launch: None,
