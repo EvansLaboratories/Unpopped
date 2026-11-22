@@ -47,8 +47,8 @@ fn run(k: &KernelFn, input: &[f32]) -> Vec<f64> {
 const PROMOTE: &str = "#ifndef PROMOTE_CUH\n#define PROMOTE_CUH\n\
     template <typename T>\n__device__ __forceinline__ float load_as_acc(T v) { return (float)v * 2.0f; }\n#endif\n";
 
-/// A header whose helper holds a construct the walker declines (a type alias statement), on the header's line 2.
-const BAD: &str = "float bad(float v) {\n  using T = float;\n  return v;\n}\n";
+/// A header whose helper holds a construct the walker declines (a `goto`), on the header's line 2.
+const BAD: &str = "float bad(float v) {\n  goto done;\n  return v;\n}\n";
 
 const KERNEL: &str = "#include \"promote.cuh\"\n#include <cuda_fp16.h>\n\
     template <typename T>\nvoid k(float* out, const T* in) { out[0] = load_as_acc<T>(in[0]) + 1.0f; }";

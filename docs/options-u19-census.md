@@ -179,4 +179,14 @@ not supplied. The control kernel that needs an include is `tests/kernel_body_inc
 39 `#if` conditions the preprocessor cannot read (`defined(X) && ...` over `\`-continued lines in FlashInfer), 27 `using T = ...;`, 21 `static_assert`, 14 local arrays with an
 initialiser, 14 `INFINITY` and the small constant table, 14 `DimsI32` and 11 `floatX` (types from headers: the include slice plus a type alias), 11 loop bounds the function assigns.
 
+
+### Later the same day: the cheap walls (aliases, `static_assert`, limit constants, continued directives)
+
+Same corpus, tool and method (`--args --includes`): **157 of 535** (was 146). Built and mutant-tested, each small: `using X = T;` and `typedef T X;` (file scope or in the function, followed through chains),
+`static_assert` (nothing, unless it evaluates false under the caller's arguments, which is reported), `INFINITY`/`FLT_MAX`/`FLT_MIN`/`FLT_EPSILON`/`INT_MAX`/`INT_MIN`/`UINT_MAX`/`LLONG_*` as constants (a
+file's own constant of the same name wins), and a backslash-continued `#if` or `#define` is joined before it is read (it was truncated at the first line; the `\` token). The `#if` fix moved only 1
+kernel by itself: the 39 FlashInfer kernels it unblocked each stop at the next construct (`vec_t<float, 128>`, `cg::thread_block`). **What is first now** (146 -> 157 lifted, 378 not): 14 local arrays with an
+initialiser, 14 `baracuda::elementwise::DimsI32` (a namespace-qualified struct type), 13 `cg::thread_block` (cooperative groups), 11 loop bounds the function assigns, 8 `__shared__` with two dimensions,
+8 `shape.d` ("the field cannot be copied": a struct parameter's array field used whole), 8 `vec_t<float, 128>`, 7 `qualified_identifier` expressions, 7 `fast_sigmoid` (a helper outside the corpus' headers).
+
 — lane: unpopped
