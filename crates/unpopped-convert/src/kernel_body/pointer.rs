@@ -345,12 +345,60 @@ impl<'s, 't> Walker<'s, 't> {
                 );
             }
             self.flush(out);
-            p.off = self.pin_offset(p.off, out);
+            let name = text(id, self.src).to_string();
+            p.off = if self.assigned.contains(&name) {
+                // the pointer moves (`p += n`): its offset is a local the assignment can update, even when it starts constant
+                let local = self.new_local(E::I64);
+                out.push(Stmt::Let { local, init: p.off });
+                ScalarExpr::Local(local)
+            } else {
+                self.pin_offset(p.off, out)
+            };
             self.scopes
                 .last_mut()
                 .expect("a scope is open")
-                .insert(text(id, self.src).to_string(), Sym::Pointer(p));
+                .insert(name, Sym::Pointer(p));
         }
+        Ok(())
+    }
+
+    /// `p += n` / `p -= n` on a pointer local that was declared as a mover: its offset local moves by `n` elements. Any other
+    /// assignment to a pointer local (a new base, `p = q`) declines.
+    pub(super) fn move_pointer(
+        &mut self,
+        lhs: Node<'_>,
+        p: &PtrVal,
+        op: &str,
+        rhs: Node<'_>,
+        out: &mut Vec<Stmt>,
+    ) -> R<()> {
+        let name = text(lhs, self.src);
+        let (ScalarExpr::Local(local), true) = (&p.off, matches!(op, "+" | "-")) else {
+            return self.not_yet(
+                lhs,
+                format!("an assignment to the pointer `{name}` other than `+=` or `-=`"),
+            );
+        };
+        let Some(size) = byte_size(p.pointee).map(|s| s * i64::from(p.lanes)) else {
+            return self.not_yet(
+                lhs,
+                format!("moving the pointer `{name}`, whose pointee has no whole-byte size"),
+            );
+        };
+        let (r, rt) = self.expr(rhs)?;
+        let n = self.convert(r, rt, E::I64, rhs)?;
+        let delta = ScalarExpr::Mul(Box::new(n), Box::new(ScalarExpr::ConstInt(size, E::I64)));
+        let cur = Box::new(ScalarExpr::Local(*local));
+        let value = if op == "+" {
+            ScalarExpr::Add(cur, Box::new(delta))
+        } else {
+            ScalarExpr::Sub(cur, Box::new(delta))
+        };
+        self.flush(out);
+        out.push(Stmt::Assign {
+            local: *local,
+            value,
+        });
         Ok(())
     }
 

@@ -110,6 +110,9 @@ impl<'s, 't> Walker<'s, 't> {
         if let Some(Sym::Struct(dst)) = self.lookup(name) {
             return self.assign_struct(&dst, op, rhs, out);
         }
+        if let Some(Sym::Pointer(p)) = self.lookup(name) {
+            return self.move_pointer(lhs, &p, op, rhs, out);
+        }
         let Some(Sym::Scalar(local, ty, fixed)) = self.lookup(name) else {
             return self.not_yet(
                 lhs,

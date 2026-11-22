@@ -47,3 +47,5 @@ A counted loop whose test is `!=` (`for (int ii = i_start; ii != i_end; ii += i_
 `typename Trait<Args>::member` (and `using Acc = typename AccOf<T>::type;`) resolves through the source's struct templates: the explicit specialisation with exactly those arguments, else the primary template's `using`/`typedef` member. A kernel parameter with a default value (`int max_entries = 0`) is the same parameter.
 
 `Trait<Args>::member` as a value (`TileShape<T>::Br`) reads the struct template's `static constexpr` integer member with a literal initialiser: the explicit specialisation with exactly those arguments (a template parameter bound by `LiftContext::with_type` read as its type), else the primary template. A non-literal initialiser or a missing member declines.
+
+A pointer local that moves (`unsigned char* sp = smem_raw; T* a = (T*)sp; sp += n * sizeof(T);`) lifts: `p += n` / `p -= n` moves the pointer's byte offset (kept in a local) by `n` elements, in straight-line code and in loops, and a pointer made from `p` before the move keeps the old position. Any other assignment to a pointer local (`p = q`, `p *= 2`) still declines.
