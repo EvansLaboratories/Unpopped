@@ -228,20 +228,16 @@ fn call_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize
                 let is_template = n
                     .parent()
                     .is_some_and(|p| p.kind() == "template_declaration");
-                match (is_template, id) {
-                    (true, Some(id)) => {
-                        templates.insert(text(id, src).to_string(), n);
-                        continue;
-                    }
-                    _ => {}
+                if let (true, Some(id)) = (is_template, id) {
+                    templates.insert(text(id, src).to_string(), n);
+                    continue;
                 }
             }
-            "call_expression" => {
+            "call_expression"
                 if n.child_by_field_name("function")
-                    .is_some_and(|f| f.kind() == "template_function")
-                {
-                    calls.push(n);
-                }
+                    .is_some_and(|f| f.kind() == "template_function") =>
+            {
+                calls.push(n);
             }
             _ => {}
         }

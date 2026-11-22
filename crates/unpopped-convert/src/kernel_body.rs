@@ -158,22 +158,16 @@ fn lift_in(
     if !src.contains(fe.kernel_marker) {
         return Err(KernelLiftError::NotAKernel);
     }
-    let mut tree = (fe.parse)(src).ok_or(KernelLiftError::SyntaxError { line: 0 })?;
-    let first = find_function(tree.root_node(), src, name)
+    let first_tree = (fe.parse)(src).ok_or(KernelLiftError::SyntaxError { line: 0 })?;
+    let first = find_function(first_tree.root_node(), src, name)
         .ok_or_else(|| KernelLiftError::NoSuchFunction(name.to_string()))?;
     // a template kernel is instantiated from the caller's arguments and re-parsed (census slice 1)
     let instantiated = templates::instantiate(src, first, name, ctx)?;
-    let src = match &instantiated {
-        Some(s) => {
-            tree = (fe.parse)(s).ok_or(KernelLiftError::SyntaxError { line: 0 })?;
-            s.as_str()
-        }
-        None => src,
-    };
+    let src = instantiated.as_deref().unwrap_or(src);
     // template helpers called with explicit arguments become plain functions (census slice 2)
     let expanded = templates::expand_calls(fe.parse, src.to_string())?;
     let src = expanded.as_str();
-    tree = (fe.parse)(src).ok_or(KernelLiftError::SyntaxError { line: 0 })?;
+    let tree = (fe.parse)(src).ok_or(KernelLiftError::SyntaxError { line: 0 })?;
     let root = tree.root_node();
     let func = find_function(root, src, name)
         .ok_or_else(|| KernelLiftError::NoSuchFunction(name.to_string()))?;
