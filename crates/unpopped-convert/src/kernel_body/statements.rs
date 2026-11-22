@@ -372,15 +372,25 @@ impl<'s, 't> Walker<'s, 't> {
         let lhs_is_counter = cond
             .child_by_field_name("left")
             .is_some_and(|l| text(l, self.src) == name);
-        if cond.kind() != "binary_expression" || text(op, self.src) != "<" || !lhs_is_counter {
+        let op = text(op, self.src);
+        // `i < b` counts up; `i > b` and `i >= b` count down (a signed counter only: an unsigned `i >= 0` never ends in C)
+        let down = matches!(op, ">" | ">=");
+        if cond.kind() != "binary_expression" || !(op == "<" || down) || !lhs_is_counter {
             return Ok(None);
         }
-        let Some(step) = self.for_step(upd, &name, ty)? else {
+        if down && int_range(ty).is_some_and(|(lo, _)| lo == 0) {
+            return Ok(None);
+        }
+        let Some(step) = self.for_step(upd, &name, ty, down)? else {
             return Ok(None);
         };
         self.require_invariant(b)?;
         let (be, bt) = self.expr(b)?;
-        let be = self.convert(be, bt, ty, b)?;
+        let mut be = self.convert(be, bt, ty, b)?;
+        if op == ">=" {
+            // the IR's limit is exclusive: `i >= b` stops above `b - 1`
+            be = ScalarExpr::Sub(Box::new(be), Box::new(ScalarExpr::ConstInt(1, ty)));
+        }
         Ok(Some((name, ty, a, be, step, body)))
     }
 
@@ -409,7 +419,11 @@ impl<'s, 't> Walker<'s, 't> {
         upd: Node<'_>,
         counter: &str,
         ty: E,
+        down: bool,
     ) -> R<Option<ScalarExpr>> {
+        // an update that moves the counter the way the condition tests: `++` / `+=` up, `--` / `-=` down
+        let (inc, assign) = if down { ("--", "-=") } else { ("++", "+=") };
+        let sign = if down { -1 } else { 1 };
         match upd.kind() {
             "update_expression" => {
                 let ok = upd
@@ -417,8 +431,8 @@ impl<'s, 't> Walker<'s, 't> {
                     .is_some_and(|a| text(a, self.src) == counter)
                     && upd
                         .child_by_field_name("operator")
-                        .is_some_and(|o| text(o, self.src) == "++");
-                Ok(ok.then_some(ScalarExpr::ConstInt(1, ty)))
+                        .is_some_and(|o| text(o, self.src) == inc);
+                Ok(ok.then_some(ScalarExpr::ConstInt(sign, ty)))
             }
             "assignment_expression" => {
                 let l = upd.child_by_field_name("left");
@@ -427,12 +441,17 @@ impl<'s, 't> Walker<'s, 't> {
                 let (Some(l), Some(op), Some(r)) = (l, op, r) else {
                     return Ok(None);
                 };
-                if text(l, self.src) != counter || text(op, self.src) != "+=" {
+                if text(l, self.src) != counter || text(op, self.src) != assign {
                     return Ok(None);
                 }
                 self.require_invariant(r)?;
                 let (s, st) = self.expr(r)?;
-                Ok(Some(self.convert(s, st, ty, r)?))
+                let s = self.convert(s, st, ty, r)?;
+                Ok(Some(if down {
+                    ScalarExpr::Sub(Box::new(ScalarExpr::ConstInt(0, ty)), Box::new(s))
+                } else {
+                    s
+                }))
             }
             _ => Ok(None),
         }

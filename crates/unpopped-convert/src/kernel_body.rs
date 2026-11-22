@@ -305,6 +305,10 @@ enum Sym {
     VecAlloc(u32, E, u8),
     /// A static `__shared__` array: its index in `KernelFn::allocs` and element type.
     Alloc(u32, E),
+    /// An array field of a by-value struct **parameter** (`DimsI32 shape` with `int32_t v[8]`): one scalar local per element, in
+    /// order (census slice 5). A read at a runtime index is a `Select` ladder over the locals (see `structs::param_array_read`);
+    /// an element is never assigned.
+    ParamArray(Vec<u32>, E),
     /// A scalar local (a scalar parameter is one): its id, type and whether the IR forbids assigning it.
     Scalar(u32, E, Fixed),
 }

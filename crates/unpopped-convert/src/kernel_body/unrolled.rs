@@ -122,6 +122,17 @@ impl<'s, 't> Walker<'s, 't> {
         else {
             return Ok(false);
         };
+        // the counter has its type's range: an unsigned counter that steps below zero wraps (C), so `for (unsigned i = 3; i >= 0;
+        // --i)` never ends and is refused by the trip limit below, not run as four trips; a bound outside the type's range is
+        // compared after C's conversion, which is not modelled
+        let range = super::int_range(ty);
+        if range.is_some_and(|(lo, hi)| bound < lo || bound > hi) {
+            return self.not_yet(n, "a loop bound outside the range of the counter's type");
+        }
+        let wrap = |x: i128| match range {
+            Some((lo, hi)) => (x - lo).rem_euclid(hi - lo + 1) + lo,
+            None => x,
+        };
         let holds = |v: i128| match text(op, self.src) {
             "<" => Some(v < bound),
             "<=" => Some(v <= bound),
@@ -134,7 +145,7 @@ impl<'s, 't> Walker<'s, 't> {
         let mut v = start;
         while holds(v) == Some(true) {
             values.push(v);
-            let next = update.apply(v);
+            let next = update.apply(v).map(wrap);
             match next {
                 Some(x) if values.len() < MAX_TRIPS && x != v => v = x,
                 _ => {

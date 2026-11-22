@@ -14,6 +14,9 @@ use unpopped::ir::ScalarExpr;
 use unpopped::kernel::{Block, Param, Place, Stmt, StructField, Unroll};
 use unpopped_vocab::ElementKind as E;
 
+/// The most elements of a struct parameter's array field that are flattened to scalar fields (`Select` ladders grow with it).
+const MAX_PARAM_ARRAY: u32 = 64;
+
 /// The size of an array field, as written.
 #[derive(Clone, Debug)]
 pub(super) enum ArrSize {
@@ -544,8 +547,12 @@ impl<'s, 't> Walker<'s, 't> {
                 let local = self.new_local(e);
                 flat.push(StructField::new(path, e, local));
                 Sym::Scalar(local, e, Fixed::Param)
+            } else if let (Ok(e), Some(size), None) =
+                (super::c_type(&f.ty), &f.array, &f.unsupported)
+            {
+                self.param_array(&path, e, size, at, flat)?
             } else {
-                return self.not_yet(at, format!("the field `{path}` of a struct parameter: only scalar fields and nested structs of them are allowed"));
+                return self.not_yet(at, format!("the field `{path}` of a struct parameter: only scalar fields, arrays of scalars and nested structs of them are allowed"));
             };
             fields.push((f.name, sym));
         }
@@ -553,6 +560,95 @@ impl<'s, 't> Walker<'s, 't> {
             sname: sname.to_string(),
             fields,
         }))
+    }
+
+    /// An array field of a struct parameter, **flattened** to `n` scalar fields `path[0]` .. `path[n-1]` (option A of
+    /// `docs/options-u23b-struct-array-fields.md`: no IR change). The flattened fields lie consecutively with the element's
+    /// alignment, which is the C layout of the array byte for byte. An array larger than [`MAX_PARAM_ARRAY`] declines.
+    fn param_array(
+        &mut self,
+        path: &str,
+        e: E,
+        size: &ArrSize,
+        at: Node<'_>,
+        flat: &mut Vec<StructField>,
+    ) -> R<Sym> {
+        let n = self.arr_count(size, at)?;
+        if n > MAX_PARAM_ARRAY {
+            return self.not_yet(
+                at,
+                format!(
+                    "the array field `{path}` of {n} elements in a struct parameter (at most {MAX_PARAM_ARRAY} are flattened)"
+                ),
+            );
+        }
+        let mut locals = Vec::new();
+        for k in 0..n {
+            let local = self.new_local(e);
+            flat.push(StructField::new(format!("{path}[{k}]"), e, local));
+            locals.push(local);
+        }
+        Ok(Sym::ParamArray(locals, e))
+    }
+
+    /// `p.v[i]` of a struct parameter's array field: the element as an expression. A constant index is the element itself; a
+    /// runtime index is `Select(i == 0, v0, Select(i == 1, v1, ... 0))`. **An index outside `0..n` reads `0`** (C leaves it
+    /// undefined; a total result is the same refinement the integer rules make, `docs/int-div-shift-semantics.md`), and a
+    /// negative index of an unsigned type is a huge one, so also `0`. `None` when `n` is not such an array.
+    pub(super) fn param_array_read(&mut self, n: Node<'_>) -> R<Option<(ScalarExpr, E)>> {
+        let (Some(arg), Some(idx)) = (
+            n.child_by_field_name("argument"),
+            n.child_by_field_name("indices"),
+        ) else {
+            return Ok(None);
+        };
+        if arg.kind() != "field_expression" {
+            return Ok(None);
+        }
+        let Some(Sym::ParamArray(locals, e)) = self.resolve_member(arg)? else {
+            return Ok(None);
+        };
+        let Some(i) = idx.named_child(0).filter(|_| idx.named_child_count() == 1) else {
+            return self.not_yet(idx, "an index with other than one subscript");
+        };
+        let (ie, it) = self.expr(i)?;
+        if super::int_range(it).is_none() {
+            return self.outside(i, "a floating-point index");
+        }
+        let zero = if super::int_range(e).is_some() {
+            ScalarExpr::ConstInt(0, e)
+        } else {
+            self.convert(ScalarExpr::Const(0.0), self.compute, e, n)?
+        };
+        if let Some(k) = super::globals::fold(&ie) {
+            let at = usize::try_from(k).ok().and_then(|k| locals.get(k));
+            return Ok(Some((at.map_or(zero, |l| ScalarExpr::Local(*l)), e)));
+        }
+        // the index is read once per rung: bind a compound one to a local first
+        let ie = if matches!(ie, ScalarExpr::Local(_)) {
+            ie
+        } else {
+            let t = self.new_local(it);
+            self.hoisted.push(Stmt::Let { local: t, init: ie });
+            ScalarExpr::Local(t)
+        };
+        let mut ladder = zero;
+        for (k, l) in locals.iter().enumerate().rev() {
+            let hit = ScalarExpr::Binary(
+                unpopped::ir::BinaryOp::CmpEq,
+                Box::new(ie.clone()),
+                Box::new(ScalarExpr::ConstInt(
+                    i64::try_from(k).unwrap_or(i64::MAX),
+                    it,
+                )),
+            );
+            ladder = ScalarExpr::Select(
+                Box::new(hit),
+                Box::new(ScalarExpr::Local(*l)),
+                Box::new(ladder),
+            );
+        }
+        Ok(Some((ladder, e)))
     }
 
     /// `s.x = e` and `s.x += e`: the member's scalar local.

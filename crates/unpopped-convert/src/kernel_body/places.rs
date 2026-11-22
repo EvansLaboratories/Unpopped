@@ -19,6 +19,9 @@ impl<'s, 't> Walker<'s, 't> {
             "field_expression" => self.resolve_member(arg)?,
             _ => None,
         };
+        if matches!(sym, Some(Sym::ParamArray(..))) {
+            return self.not_yet(arg, "an element of a struct parameter's array used as a place (a parameter is read-only)");
+        }
         let Some(Sym::Buffer(_, elem) | Sym::Alloc(_, elem)) = sym else {
             // not a plain buffer or array: a pointer expression (`p[i]`, `(T*)p`, `(p + k)[i]`), read through a raw place
             if let Some(p) = self.ptr_expr(arg)? {
@@ -93,6 +96,9 @@ impl<'s, 't> Walker<'s, 't> {
     }
 
     pub(super) fn read_element(&mut self, n: Node<'_>) -> R<(ScalarExpr, E)> {
+        if let Some(r) = self.param_array_read(n)? {
+            return Ok(r);
+        }
         let (place, elem) = self.element_place(n)?;
         let local = self.new_local(elem);
         self.hoisted.push(Stmt::Load { local, place });
