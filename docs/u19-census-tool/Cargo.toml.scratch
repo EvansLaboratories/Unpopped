@@ -1,0 +1,20 @@
+[package]
+name = "census"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+unpopped = { path = "C:/Projects/Unpopped-wt-e3/crates/unpopped" }
+unpopped-convert = { path = "C:/Projects/Unpopped-wt-e3/crates/unpopped-convert" }
+unpopped-vocab = { path = "C:/Projects/Unpopped-wt-e3/crates/unpopped-vocab" }
+baracuda-cuda-parse = { path = "C:/Projects/baracuda/crates/baracuda-cuda-parse" }
+fishstringer-slang-parse = { path = "C:/Projects/fishstringer/fishstringer-slang-parse" }
+regex = "1"
+
+[patch.crates-io]
+unpopped = { path = "C:/Projects/Unpopped-wt-e3/crates/unpopped" }
+unpopped-convert = { path = "C:/Projects/Unpopped-wt-e3/crates/unpopped-convert" }
+unpopped-vocab = { path = "C:/Projects/Unpopped-wt-e3/crates/unpopped-vocab" }
