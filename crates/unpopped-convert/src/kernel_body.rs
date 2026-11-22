@@ -220,6 +220,7 @@ fn lift_preprocessed(
     w.null_buffers = ctx.null_buffers.iter().cloned().collect();
     w.consts = collect_consts(root, src);
     w.type_aliases = aliases::collect_aliases(root, src);
+    w.traits = aliases::collect_traits(root, src);
     w.unexpanded = unexpanded;
     w.unary_fn = fe.unary_fn;
     w.binary_fn = fe.binary_fn;
@@ -396,6 +397,8 @@ struct Walker<'s, 't> {
     entry: Option<crate::EntryModel>,
     /// Type aliases in scope (`using X = T;`, `typedef T X;`): file-scope ones from the source, function-local ones as they are met.
     type_aliases: HashMap<String, String>,
+    /// The member types of the source's struct templates (`typename Trait<T>::type`).
+    traits: aliases::Traits,
     /// File-scope `constexpr`/`const` constants by name: the declared type text and the initialiser.
     consts: HashMap<String, (String, Node<'t>)>,
     /// `const` integer locals whose initialiser is known at lift time (a launch extent or a constant), by local: what a constant
@@ -432,6 +435,7 @@ impl<'s, 't> Walker<'s, 't> {
             unexpanded: Vec::new(),
             entry: None,
             type_aliases: HashMap::new(),
+            traits: HashMap::new(),
             consts: HashMap::new(),
             known: HashMap::new(),
             allocs: Vec::new(),

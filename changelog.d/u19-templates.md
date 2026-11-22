@@ -43,3 +43,5 @@ The CUDA fast-math intrinsics `__expf`, `__exp10f`, `__log2f`, `__logf`, `__log1
 A counted loop whose test is `!=` (`for (int ii = i_start; ii != i_end; ii += i_step)`) lifts: the direction is the update's, or the run-time step's sign, and the IR's `For` stops when the counter is no longer below (above) the bound. C stops only on reaching the bound, so the two agree wherever the C loop terminates at all; a loop C would never end (stepping past the bound) stops in the IR. An unsigned counter that counts down still declines.
 
 `__half2float`, `__bfloat162float` (exact widening, taking only the 16-bit type they name) and `__float2half[_rn]`, `__float2bfloat16[_rn]` (round to nearest even, overflow to infinity) lift to one `Cast`.
+
+`typename Trait<Args>::member` (and `using Acc = typename AccOf<T>::type;`) resolves through the source's struct templates: the explicit specialisation with exactly those arguments, else the primary template's `using`/`typedef` member. A kernel parameter with a default value (`int max_entries = 0`) is the same parameter.

@@ -30,6 +30,35 @@ pub(super) fn collect_aliases(root: Node<'_>, src: &str) -> HashMap<String, Stri
     out
 }
 
+/// The member types of the struct templates of the source, for `typename Trait<Args>::member`: by the struct's name, or by
+/// `Name<args>` (spaces removed) for an explicit specialisation (`template <> struct Name<double> { using type = double; };`),
+/// then member name to type text.
+pub(super) type Traits = HashMap<String, HashMap<String, String>>;
+
+pub(super) fn collect_traits(root: Node<'_>, src: &str) -> Traits {
+    let mut out: Traits = HashMap::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if matches!(n.kind(), "struct_specifier" | "class_specifier")
+            && let (Some(name), Some(body)) =
+                (n.child_by_field_name("name"), n.child_by_field_name("body"))
+        {
+            let key: String = text(name, src).split_whitespace().collect();
+            let mut c = body.walk();
+            for m in body.named_children(&mut c) {
+                if let Some((member, ty)) = alias_of(m, src) {
+                    out.entry(key.clone()).or_default().insert(member, ty);
+                }
+            }
+        }
+        if !matches!(n.kind(), "function_definition" | "compound_statement") {
+            let mut c = n.walk();
+            stack.extend(n.children(&mut c));
+        }
+    }
+    out
+}
+
 /// `(name, type text)` of an alias declaration node, if it is one.
 fn alias_of(n: Node<'_>, src: &str) -> Option<(String, String)> {
     let (name, ty) = match n.kind() {
@@ -60,10 +89,30 @@ impl<'s, 't> Walker<'s, 't> {
         for _ in 0..MAX_ALIAS_DEPTH {
             match self.type_aliases.get(&t) {
                 Some(next) => t = next.clone(),
-                None => break,
+                None => match self.trait_member(&t) {
+                    Some(next) => t = next,
+                    None => break,
+                },
             }
         }
         super::c_type(&t)
+    }
+
+    /// `typename Name<args>::member` (or without `typename`): the member type of the explicit specialisation with exactly those
+    /// arguments, else of the primary template. `None` for any other text, or a member the struct does not have.
+    fn trait_member(&self, t: &str) -> Option<String> {
+        let t = t.strip_prefix("typename ").unwrap_or(t);
+        let (head, member) = t.rsplit_once("::")?;
+        let lt = head.find('<')?;
+        if !head.ends_with('>') {
+            return None;
+        }
+        let name = head[..lt].trim();
+        let key: String = head.split_whitespace().collect();
+        let found = self.traits.get(&key).and_then(|m| m.get(member.trim()));
+        found
+            .or_else(|| self.traits.get(name).and_then(|m| m.get(member.trim())))
+            .cloned()
     }
 
     /// `using X = T;` or `typedef T X;` inside a function: the alias is in scope for the rest of the function.
