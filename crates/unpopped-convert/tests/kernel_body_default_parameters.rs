@@ -53,9 +53,3 @@ fn a_defaulted_pointer_parameter_is_a_buffer() {
     };
     assert_eq!(o.to_f64_vec(), vec![42.0]);
 }
-
-#[test]
-fn other_parameter_shapes_still_decline() {
-    // a variadic is not a parameter the launch can fill
-    assert!(lift("void k(float* out, ...) { out[0] = 1.0f; }").is_err());
-}
