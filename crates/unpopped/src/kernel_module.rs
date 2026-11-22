@@ -29,7 +29,7 @@ pub fn check_module(m: &Module, entry: u32) -> Result<(), KernelError> {
     let edges = call_edges(m)?;
     no_cycle(&edges)?;
     let called: BTreeSet<u32> = edges.iter().flatten().copied().collect();
-    for f in called {
+    for f in called.iter().copied() {
         plain_function(&m.fns[f as usize])?;
     }
     let sigs = signatures(m, &edges)?;
@@ -37,14 +37,15 @@ pub fn check_module(m: &Module, entry: u32) -> Result<(), KernelError> {
     let reach = reachable(&edges, entry);
     let launch = m.fns[entry as usize].launch;
     for (i, f) in m.fns.iter().enumerate() {
+        let is_called = u32::try_from(i).is_ok_and(|i| called.contains(&i));
         let inside = u32::try_from(i).is_ok_and(|i| i != entry && reach.contains(&i));
         if inside && launch.is_some() {
             // a callee runs inside the entry's launch: its ids and barriers are the entry's
             let mut g = f.clone();
             g.launch = launch;
-            check_kernel_with(&g, sigs.clone(), externs.clone())?;
+            check_kernel_with(&g, sigs.clone(), externs.clone(), !is_called)?;
         } else {
-            check_kernel_with(f, sigs.clone(), externs.clone())?;
+            check_kernel_with(f, sigs.clone(), externs.clone(), !is_called)?;
         }
     }
     Ok(())

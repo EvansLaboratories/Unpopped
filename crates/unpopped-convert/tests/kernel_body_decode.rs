@@ -76,11 +76,14 @@ fn a_constant_trip_loop_that_is_not_counted_runs_once_per_value() {
         "constexpr unsigned int BDX = 16;\nvoid k(float* out) { float s = 0.0f; float p = 1.0f; \
          for (unsigned int o = BDX / 2; o > 0; o /= 2) { s += (float)o; p = p * 2.0f; } out[0] = s; out[1] = p; \
          float d = 0.0f; for (int i = 10; i >= 2; i -= 3) { d += (float)i; } out[2] = d; \
-         float q = 0.0f; for (unsigned int j = 1; j < 100; j <<= 2) { q += (float)j; } out[3] = q; }",
+         float q = 0.0f; for (unsigned int j = 1; j < 100; j <<= 2) { q += (float)j; } out[3] = q;          float e = 0.0f; for (int i = 1; i <= 3; i++) { e += (float)i; } out[4] = e; }",
     )
     .unwrap();
-    // 8+4+2+1 = 15 over 4 trips (2^4 = 16); 10+7+4 = 21; 1+4+16+64 = 85
-    assert_eq!(run(&k, 4, vec![]).unwrap(), vec![15.0, 16.0, 21.0, 85.0]);
+    // 8+4+2+1 = 15 over 4 trips (2^4 = 16); 10+7+4 = 21; 1+4+16+64 = 85; `<=` includes its bound: 1+2+3 = 6
+    assert_eq!(
+        run(&k, 5, vec![]).unwrap(),
+        vec![15.0, 16.0, 21.0, 85.0, 6.0]
+    );
 }
 
 #[test]
@@ -128,6 +131,12 @@ fn an_if_else_that_returns_in_both_arms_lifts_in_an_inlined_function() {
     assert_eq!(go(1), vec![2.0, 30.0]);
     assert_eq!(go(-4), vec![3.0, 30.0]);
     assert_eq!(go(9), vec![1.0, 10.0]);
+    // a return buried in a loop inside the `else` arm declines too (each arm is held to the same rules)
+    not_yet(
+        lift("float f(int x) { if (x > 0) { return 1.0f; } else { for (int i = 0; i < 2; i++) { return 2.0f; } return 3.0f; } }
+void k(float* out) { out[0] = f(1); }"),
+        "inside a loop",
+    );
     // a return buried in a loop still declines
     not_yet(
         lift(
@@ -239,4 +248,80 @@ fn buffer_roles_follow_use_and_make_a_barrier_under_a_loaded_bound_uniform() {
         Err(KernelLiftError::Invalid(KernelError::BarrierDivergent)) => {}
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn cp_async_into_a_wider_allocation_scales_the_destination_index_and_the_valid_count() {
+    // `__shared__ half s[8]` is a 2-byte-element allocation: the byte offset of `s + 2` is index 2, 4 source bytes are 2 elements
+    let src = |nb: i32| {
+        format!(
+            "void k(float* out, const half* g) {{ extern __shared__ half s[]; for (int i = 0; i < 8; i++) {{ s[i] = (half)9.0f; }}              half* d = s + 2; uint32_t si = static_cast<uint32_t>(__cvta_generic_to_shared(d)); int nb = {nb};              asm volatile(\"cp.async.ca.shared.global [%0], [%1], %2, %3;\n\" ::\"r\"(si), \"l\"(g), \"n\"(8), \"r\"(nb));              asm volatile(\"cp.async.commit_group;\n\" ::); asm volatile(\"cp.async.wait_group %0;\n\" ::\"n\"(0));              __syncthreads(); for (int i = 0; i < 8; i++) {{ out[i] = (float)s[i]; }} }}"
+        )
+    };
+    let g = [1.0, 2.0, 3.0, 4.0];
+    let all = lift(&src(8)).unwrap();
+    assert_eq!(
+        run(&all, 8, vec![halves(&g)]).unwrap(),
+        vec![9.0, 9.0, 1.0, 2.0, 3.0, 4.0, 9.0, 9.0]
+    );
+    let two = lift(&src(4)).unwrap();
+    assert_eq!(
+        run(&two, 8, vec![halves(&g)]).unwrap(),
+        vec![9.0, 9.0, 1.0, 2.0, 0.0, 0.0, 9.0, 9.0]
+    );
+}
+
+#[test]
+fn every_write_form_keeps_a_buffer_read_write_and_a_pure_read_becomes_read() {
+    // params: 0 `out` (written by every kernel), 1 `w` (written in the one form under test), 2 `r` (only read)
+    let role = |k: &KernelFn, i: usize| match &k.params[i].kind {
+        ParamKind::Buffer { role, .. } => *role,
+        other => panic!("{other:?}"),
+    };
+    let forms = [
+        ("a plain store", "w[0] = 1.0f;"),
+        (
+            "a store through a pointer local",
+            "float* p = w + 1; p[0] = 2.0f;",
+        ),
+        ("a store inside an inlined callee", "put(w);"),
+        (
+            "a vector store through a cast",
+            "((float2*)w)[0] = make_float2(1.0f, 2.0f);",
+        ),
+        (
+            "a store through reinterpret_cast",
+            "reinterpret_cast<float*>(w)[1] = 3.0f;",
+        ),
+    ];
+    for (what, body) in forms {
+        let k = lift(&format!(
+            "void put(float* o) {{ o[2] = 3.0f; }}
+void k(float* out, float* w, float* r) {{ out[0] = r[0]; {body} }}"
+        ))
+        .unwrap();
+        assert_eq!(role(&k, 1), BufferRole::ReadWrite, "{what}");
+        assert_eq!(role(&k, 2), BufferRole::Read, "{what}: the pure read");
+    }
+    // the atomic forms, on an integer buffer
+    for (what, body) in [
+        ("atomicAdd", "atomicAdd(&w[0], 1);"),
+        (
+            "an atomic whose old value is read",
+            "out[1] = atomicAdd(&w[0], 1);",
+        ),
+        ("atomicCAS", "out[1] = atomicCAS(&w[0], 0, 1);"),
+    ] {
+        let k = lift(&format!(
+            "void k(int* out, int* w, int* r) {{ out[0] = r[0]; {body} }}"
+        ))
+        .unwrap();
+        assert_eq!(role(&k, 1), BufferRole::ReadWrite, "{what}");
+        assert_eq!(role(&k, 2), BufferRole::Read, "{what}: the pure read");
+    }
+    // a pointer handed to something the lifter does not know declines: no kernel, so no role
+    not_yet(
+        lift("void k(float* out, float* w) { mystery(w); out[0] = 1.0f; }"),
+        "mystery",
+    );
 }

@@ -277,3 +277,74 @@ fn an_unlaunched_entry_cannot_reach_a_barrier() {
         "{r:?}"
     );
 }
+
+// ---- the read-only-buffer uniformity refinement holds for an entry function only ----------------
+
+fn flags_param() -> Param {
+    Param::buffer("flags", ElementKind::I32, BufferRole::Read, Some(1))
+}
+
+/// `c = flags[0]; for i in 0..c { barrier }`: uniform when `flags` is a `Read` buffer the launcher bound.
+fn flag_loop_body() -> Vec<Stmt> {
+    let i32c = |v| ScalarExpr::ConstInt(v, ElementKind::I32);
+    vec![
+        Stmt::Load {
+            local: 0,
+            place: at(0, i32c(0)),
+        },
+        Stmt::For {
+            local: 1,
+            start: i32c(0),
+            end: ScalarExpr::Local(0),
+            step: i32c(1),
+            unroll: unpopped::kernel::Unroll::None,
+            body: Block(vec![barrier()]),
+        },
+    ]
+}
+
+fn flag_locals() -> Vec<LocalDecl> {
+    vec![
+        LocalDecl::scalar(ElementKind::I32),
+        LocalDecl::scalar(ElementKind::I32),
+    ]
+}
+
+#[test]
+fn a_read_buffer_load_is_uniform_in_an_entry_function_but_not_in_a_callee() {
+    let launch = LaunchShape::new([N, 1, 1], [1, 1, 1]);
+    // as the entry of a module (nothing calls it): the launcher bound `flags`, distinct from every other parameter
+    let alone = KernelFn::new(
+        "main",
+        F32,
+        vec![flags_param()],
+        flag_locals(),
+        Block(flag_loop_body()),
+    )
+    .with_launch(launch);
+    assert_eq!(
+        unpopped::kernel::check_module(&Module::new(vec![alone]), 0),
+        Ok(())
+    );
+    // the same body as a callee: a call may pass one buffer under two parameters (`CallArg::Buffer` aliases), so a `Read`
+    // parameter proves nothing about what another parameter of the caller's launch writes
+    let callee = KernelFn::new(
+        "uses_flags",
+        F32,
+        vec![flags_param()],
+        flag_locals(),
+        Block(flag_loop_body()),
+    );
+    let main = KernelFn::new(
+        "main",
+        F32,
+        vec![flags_param()],
+        vec![],
+        Block(vec![call(1, vec![CallArg::Buffer(0)])]),
+    )
+    .with_launch(launch);
+    assert_eq!(
+        unpopped::kernel::check_module(&Module::new(vec![main, callee]), 0),
+        Err(KernelError::BarrierDivergent)
+    );
+}

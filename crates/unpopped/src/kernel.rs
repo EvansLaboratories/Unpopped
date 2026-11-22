@@ -32,7 +32,10 @@ use crate::types::{Ty, TypeError};
 /// What a buffer parameter may do. Checked by [`check_kernel`] against every `Load` and `Store`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BufferRole {
-    /// Loaded from only.
+    /// Loaded from only. For an **entry** function (one nothing in its module calls) the launcher guarantees the buffer is
+    /// distinct storage from every other parameter of the launch (the oracle passes distinct buffers; an emitted kernel states it
+    /// as `BufferGuarantee::restrict`), so no thread of the launch writes it: the barrier-uniformity check treats a load from it
+    /// at a uniform index as uniform. A function reached through a `Call` gets no such guarantee (`CallArg::Buffer` aliases).
     Read,
     /// Stored to only.
     Write,

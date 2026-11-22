@@ -24,15 +24,19 @@ use crate::types::operands;
 /// `barrier_callees[i]` is whether function `i` of the module reaches a barrier: a `Call` of it is a barrier
 /// site (it must sit in uniform control and pass uniform scalar arguments, since the callee was checked
 /// with its scalar parameters uniform).
+///
+/// `entry`: nothing calls `k`, so its buffer parameters are distinct storage the launcher bound (see `read_only`).
 pub(crate) fn check_barriers(
     k: &KernelFn,
     barrier_callees: &[bool],
     externs: &[ExternSig],
+    entry: bool,
 ) -> Result<(), KernelError> {
     let mut w = Walk {
         k,
         barrier_callees,
         externs,
+        entry,
         device: holds_device_barrier(&k.body),
         divergent: vec![false; k.locals.len()],
         changed: false,
@@ -66,6 +70,8 @@ struct Walk<'a> {
     k: &'a KernelFn,
     barrier_callees: &'a [bool],
     externs: &'a [ExternSig],
+    /// Nothing calls this function: its buffer parameters are distinct storage (`read_only` relies on it).
+    entry: bool,
     /// The kernel holds a `Device` barrier, so `BlockIdx` is divergent.
     device: bool,
     divergent: Vec<bool>,
@@ -94,17 +100,21 @@ impl Walk<'_> {
         }
     }
 
-    /// Whether buffer parameter `buffer` is declared `Read` (the checker refuses a `Store` to it), so it never changes.
+    /// Whether buffer parameter `buffer` is declared `Read` (the checker refuses a `Store` to it) **and** is distinct storage
+    /// from every parameter this function writes, so it never changes during the launch. The distinctness is the launcher's
+    /// contract for an entry function (the oracle passes distinct buffers; `BufferGuarantee::restrict` is an emitted kernel's
+    /// statement of it): a function reached through a `Call` may receive one buffer under two parameters, so it gets `false`.
     fn read_only(&self, buffer: u32) -> bool {
-        self.k.params.get(buffer as usize).is_some_and(|p| {
-            matches!(
-                p.kind,
-                crate::kernel::ParamKind::Buffer {
-                    role: crate::kernel::BufferRole::Read,
-                    ..
-                }
-            )
-        })
+        self.entry
+            && self.k.params.get(buffer as usize).is_some_and(|p| {
+                matches!(
+                    p.kind,
+                    crate::kernel::ParamKind::Buffer {
+                        role: crate::kernel::BufferRole::Read,
+                        ..
+                    }
+                )
+            })
     }
 
     /// Whether a value loaded from `place` may differ between threads.

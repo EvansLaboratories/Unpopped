@@ -54,14 +54,19 @@ pub(crate) struct CalleeSig {
 /// The first [`KernelError`], walking statements in program order and each statement's
 /// expressions before its effects.
 pub fn check_kernel(k: &KernelFn) -> Result<(), KernelError> {
-    check_kernel_with(k, Vec::new(), Vec::new())
+    check_kernel_with(k, Vec::new(), Vec::new(), true)
 }
 
 /// [`check_kernel`] with the signatures of the module the function lives in, so a `Call` resolves.
+///
+/// `entry` is whether nothing in the module calls `k`: only then are its buffer parameters bound by the launcher (distinct
+/// storage, `docs/ir-kernel-layer.md`), so only then may the barrier-uniformity check call a load from a `Read` buffer uniform.
+/// A function reached through a `Call` may receive the same buffer under two parameters (`CallArg::Buffer` aliases).
 pub(crate) fn check_kernel_with(
     k: &KernelFn,
     callees: Vec<CalleeSig>,
     externs: Vec<ExternSig>,
+    entry: bool,
 ) -> Result<(), KernelError> {
     check_launch(k)?;
     let n = k.locals.len();
@@ -89,7 +94,7 @@ pub(crate) fn check_kernel_with(
     check_allocs(k)?;
     check_block(k, &k.body, &mut sc)?;
     let barrier_callees: Vec<bool> = sc.callees.iter().map(|c| c.barrier).collect();
-    crate::kernel_uniform::check_barriers(k, &barrier_callees, &sc.externs)
+    crate::kernel_uniform::check_barriers(k, &barrier_callees, &sc.externs, entry)
 }
 
 /// A launch has no zero extent, a subgroup range is non-empty and starts at 1 or more, and clusters (if any) tile the grid.
