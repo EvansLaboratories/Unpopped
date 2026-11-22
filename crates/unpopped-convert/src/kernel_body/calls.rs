@@ -251,6 +251,36 @@ impl<'s, 't> Walker<'s, 't> {
         })())
     }
 
+    /// `(Acc)(x)` where the grammar read `(Acc)` as a parenthesised expression because it did not know `Acc` is a type: when the
+    /// name is a type alias (or scalar type) and no variable of that name is in scope, it is the C cast to it. `None` otherwise.
+    fn parenthesised_type_cast(
+        &mut self,
+        call: Node<'_>,
+        f: Node<'_>,
+    ) -> Option<R<(ScalarExpr, E)>> {
+        if f.kind() != "parenthesized_expression" {
+            return None;
+        }
+        let inner = f
+            .named_child(0)
+            .filter(|i| matches!(i.kind(), "identifier" | "type_identifier"))?;
+        let name = text(inner, self.src);
+        if self.lookup(name).is_some() {
+            return None;
+        }
+        let to = self.ctype(name).ok()?;
+        let args = self.call_args(call);
+        let [x] = args.as_slice() else {
+            return Some(
+                self.not_yet(call, format!("a cast to `{name}` of {} values", args.len())),
+            );
+        };
+        Some((|| {
+            let (e, from) = self.expr(*x)?;
+            Ok((self.convert(e, from, to, *x)?, to))
+        })())
+    }
+
     /// A namespace-qualified call (`baracuda::block_reduce_max_f32(..)`) of a function this source defines is that function by its
     /// short name (the walker is namespace-blind, as for qualified template calls). Any other name is returned as written.
     fn short_callee<'a>(&self, name: &'a str) -> &'a str {
@@ -268,6 +298,9 @@ impl<'s, 't> Walker<'s, 't> {
         let Some(f) = n.child_by_field_name("function") else {
             return self.not_yet(n, "a call of an unexpected shape");
         };
+        if let Some(r) = self.parenthesised_type_cast(n, f) {
+            return r;
+        }
         if f.kind() == "field_expression" {
             if let Some(r) = self.group_value(n, f) {
                 return r;
