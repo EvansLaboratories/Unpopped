@@ -382,14 +382,26 @@ impl<'s, 't> Walker<'s, 't> {
         let op = text(op, self.src);
         // `i < b` and `i <= b` count up; `i > b` and `i >= b` count down (a signed counter only: an unsigned `i >= 0` never ends in C)
         let down = matches!(op, ">" | ">=");
-        if cond.kind() != "binary_expression" || !(matches!(op, "<" | "<=") || down) || !lhs_is_counter {
+        // `i != b`: the direction is the update's (`i++`/`i += s` up, `i--`/`i -= s` down). The IR stops when the counter is no
+        // longer below (above) `b`; C stops only on reaching it, so the two agree wherever the C loop ends at all.
+        let ne = op == "!=";
+        if cond.kind() != "binary_expression"
+            || !(matches!(op, "<" | "<=" | "!=") || down)
+            || !lhs_is_counter
+        {
             return Ok(None);
         }
         if down && int_range(ty).is_some_and(|(lo, _)| lo == 0) {
             return Ok(None);
         }
         let assigned = self.loop_assigned(n);
-        let Some(step) = self.for_step(upd, &name, ty, down, &assigned)? else {
+        let mut down = down;
+        let mut step = self.for_step(upd, &name, ty, down, &assigned)?;
+        if ne && step.is_none() && int_range(ty).is_none_or(|(lo, _)| lo != 0) {
+            down = true;
+            step = self.for_step(upd, &name, ty, down, &assigned)?;
+        }
+        let Some(step) = step else {
             return Ok(None);
         };
         self.require_invariant(b, &assigned)?;
