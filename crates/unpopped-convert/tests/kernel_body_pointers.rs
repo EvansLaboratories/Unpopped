@@ -171,12 +171,12 @@ fn a_pointer_that_must_survive_as_a_value_declines() {
         &format!("{h} const int* q = a; out[0] = 1.0f; }}"),
         "implicit pointer conversion",
     );
+    // an atomic through a pointer that names an element of its own base lifts (the census wall slice: `q` is element 1 of `c`)
+    assert!(lift("void k(int* c) { int* q = c + 1; atomicAdd(q, 1); }").is_ok());
+    assert!(lift("void k(int* c) { atomicAdd(&(c + 1)[0], 1); }").is_ok());
+    // one through a pointer cast to another type names no element of the buffer
     not_yet(
-        "void k(int* c) { int* q = c + 1; atomicAdd(q, 1); }",
-        "through a pointer",
-    );
-    not_yet(
-        "void k(int* c) { atomicAdd(&(c + 1)[0], 1); }",
+        "void k(int* c) { unsigned* q = (unsigned*)c + 1; atomicAdd(q, 1u); }",
         "through a pointer",
     );
     // Control: the plain spelling lifts.
