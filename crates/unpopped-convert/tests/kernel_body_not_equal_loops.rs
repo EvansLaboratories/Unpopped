@@ -64,7 +64,11 @@ fn a_run_time_step_sign_walks_forward_or_backward() {
 fn an_unsigned_counter_that_counts_down_still_declines() {
     // `i != z; i--` on an unsigned counter has no direction the IR can test
     let src = "void k(float* out) { unsigned int z = threadIdx.x; float a = 0.0f; for (unsigned int i = z + 3u; i != z; i--) { a += 1.0f; } out[0] = a; }";
-    assert!(lift(src, 1).is_err());
+    // a clean decline, not an IR the checker then refuses (a negative step constant in an unsigned type)
+    assert!(matches!(
+        lift(src, 1),
+        Err(KernelLiftError::NotYetLifted { .. })
+    ));
     // control: the same loop counting up lifts
     let up = "void k(float* out) { unsigned int z = threadIdx.x; float a = 0.0f; for (unsigned int i = z; i != z + 3u; i++) { a += 1.0f; } out[0] = a; }";
     assert_eq!(run(up, 1, 1), vec![3.0]);
