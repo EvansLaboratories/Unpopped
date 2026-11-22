@@ -29,6 +29,8 @@ pub(super) enum PBase {
 pub(super) struct PtrVal {
     pub(super) base: PBase,
     pub(super) pointee: E,
+    /// `1` for a scalar pointee; `2` or `4` when the pointee is a CUDA vector type (`int4`): then `pointee` is the lane type.
+    pub(super) lanes: u8,
     /// Bytes from the start of the base; an `I64` expression.
     pub(super) off: ScalarExpr,
 }
@@ -54,6 +56,10 @@ impl<'s, 't> Walker<'s, 't> {
                 Some(i) => self.ptr_expr(i),
                 None => Ok(None),
             },
+            "field_expression" => Ok(match self.resolve_member(n)? {
+                Some(Sym::Pointer(p)) => Some(p),
+                _ => None,
+            }),
             "cast_expression" => self.ptr_cast(n),
             "binary_expression" => self.ptr_arith(n),
             "pointer_expression" => self.ptr_address_of(n),
@@ -67,11 +73,13 @@ impl<'s, 't> Walker<'s, 't> {
             Sym::Buffer(i, e) => Some(PtrVal {
                 base: PBase::Buffer(i),
                 pointee: e,
+                lanes: 1,
                 off: zero,
             }),
             Sym::Alloc(i, e) => Some(PtrVal {
                 base: PBase::Alloc(i),
                 pointee: e,
+                lanes: 1,
                 off: zero,
             }),
             Sym::Pointer(p) => Some(p),
@@ -99,7 +107,18 @@ impl<'s, 't> Walker<'s, 't> {
                 "a cast to a pointer type of something that is not a pointer",
             );
         };
-        p.pointee = self.type_of(ty.child_by_field_name("type"), ty)?;
+        let tname = ty.child_by_field_name("type").map(|t| {
+            text(t, self.src)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        });
+        if let Some((elem, lanes)) = tname.as_deref().and_then(super::vector_type) {
+            (p.pointee, p.lanes) = (elem, lanes);
+        } else {
+            p.pointee = self.type_of(ty.child_by_field_name("type"), ty)?;
+            p.lanes = 1;
+        }
         Ok(Some(p))
     }
 
@@ -186,6 +205,12 @@ impl<'s, 't> Walker<'s, 't> {
         let Some(size) = byte_size(pointee) else {
             return self.not_yet(at, format!("a pointer to {pointee:?} (no whole-byte size)"));
         };
+        self.scaled_by(index, size, at)
+    }
+
+    /// `index * size` as an `I64` expression.
+    pub(super) fn scaled_by(&mut self, index: Node<'_>, size: i64, at: Node<'_>) -> R<ScalarExpr> {
+        let _ = at;
         let (i, it) = self.expr(index)?;
         if unpopped::types::int_range(it).is_none() {
             return self.outside(index, "a floating-point pointer offset");

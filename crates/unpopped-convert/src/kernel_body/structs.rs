@@ -14,15 +14,26 @@ use unpopped::ir::ScalarExpr;
 use unpopped::kernel::{Block, Param, Place, Stmt, StructField, Unroll};
 use unpopped_vocab::ElementKind as E;
 
+/// The size of an array field, as written.
+#[derive(Clone, Debug)]
+pub(super) enum ArrSize {
+    /// `T name[8]`.
+    Lit(u32),
+    /// `T name[VEC_SIZE]`: a file-scope `constexpr`.
+    Named(String),
+}
+
 /// One field of a struct definition, as written.
 #[derive(Clone, Debug)]
 pub(super) struct FieldDef {
     pub(super) name: String,
     /// The type text (`float`, `uint32_t`, another struct's name).
     pub(super) ty: String,
-    /// The element count of an array field.
-    pub(super) array: Option<u32>,
-    /// Why this field cannot be scalarized, if it cannot (a pointer, a bit-field, ...).
+    /// The element count of an array field: a literal or the name of a file-scope constant.
+    pub(super) array: Option<ArrSize>,
+    /// A pointer field (`T* name`): held in an instance as a symbolic pointer, so only a brace list or a copy can build it.
+    pub(super) pointer: bool,
+    /// Why this field cannot be scalarized, if it cannot (a bit-field, ...).
     pub(super) unsupported: Option<String>,
 }
 
@@ -80,6 +91,7 @@ fn field_of(d: Node<'_>, ty: &str, src: &str) -> FieldDef {
         name: name.to_string(),
         ty: ty.to_string(),
         array: None,
+        pointer: false,
         unsupported: Some(why.to_string()),
     };
     match d.kind() {
@@ -87,37 +99,49 @@ fn field_of(d: Node<'_>, ty: &str, src: &str) -> FieldDef {
             name: text(d, src).to_string(),
             ty: ty.to_string(),
             array: None,
+            pointer: false,
             unsupported: None,
         },
         "array_declarator" => {
             let id = d
                 .child_by_field_name("declarator")
                 .filter(|i| i.kind() == "field_identifier");
-            let n = d
-                .child_by_field_name("size")
-                .and_then(|s| text(s, src).trim().parse::<u32>().ok())
-                .filter(|n| *n > 0);
+            let n = d.child_by_field_name("size").and_then(|s| {
+                let t = text(s, src).trim();
+                match (t.parse::<u32>(), s.kind()) {
+                    (Ok(n), _) if n > 0 => Some(ArrSize::Lit(n)),
+                    (_, "identifier") => Some(ArrSize::Named(t.to_string())),
+                    _ => None,
+                }
+            });
             match (id, n) {
                 (Some(id), Some(n)) => FieldDef {
                     name: text(id, src).to_string(),
                     ty: ty.to_string(),
                     array: Some(n),
+                    pointer: false,
                     unsupported: None,
                 },
                 _ => bad(
                     text(d, src),
-                    "an array field that is not `T name[N]` with a positive literal `N`",
+                    "an array field that is not `T name[N]` with a positive literal or constant `N`",
                 ),
             }
         }
         "pointer_declarator" => {
             let id = d
                 .child_by_field_name("declarator")
-                .map_or("?", |i| text(i, src));
-            bad(
-                id,
-                "a pointer field (a pointer inside a struct is not modelled)",
-            )
+                .filter(|i| i.kind() == "field_identifier");
+            match id {
+                Some(i) => FieldDef {
+                    name: text(i, src).to_string(),
+                    ty: ty.to_string(),
+                    array: None,
+                    pointer: true,
+                    unsupported: None,
+                },
+                None => bad(text(d, src), "a pointer field that is not `T* name`"),
+            }
         }
         other => bad(text(d, src), &format!("a `{other}` field")),
     }
@@ -146,6 +170,9 @@ impl<'s, 't> Walker<'s, 't> {
                 return self.not_yet(at, format!("the field `{}` of `{sname}`: {why}", f.name));
             }
             let path = format!("{label}.{}", f.name);
+            if f.pointer {
+                return self.not_yet(at, format!("the pointer field `{path}` of `{sname}`: build the struct from a brace list or a copy of another instance"));
+            }
             fields.push((f.name.clone(), self.new_field(&f, &path, at, out)?));
         }
         Ok(Rc::new(StructInst {
@@ -165,7 +192,7 @@ impl<'s, 't> Walker<'s, 't> {
             Ok(e) => e,
             Err(why) => return self.not_yet(at, format!("the field `{path}`: {why}")),
         };
-        match f.array {
+        match f.array.clone() {
             None => {
                 let local = self.new_local(e);
                 out.push(Stmt::Let {
@@ -174,7 +201,8 @@ impl<'s, 't> Walker<'s, 't> {
                 });
                 Ok(Sym::Scalar(local, e, Fixed::No))
             }
-            Some(n) => {
+            Some(sz) => {
+                let n = self.arr_count(&sz, at)?;
                 if self.launch.is_none() {
                     return self.not_yet(
                         at,
@@ -192,6 +220,33 @@ impl<'s, 't> Walker<'s, 't> {
                 let alloc = u32::try_from(self.allocs.len() - 1).unwrap_or(u32::MAX);
                 self.zero_fill(alloc, e, n, at, out)?;
                 Ok(Sym::Alloc(alloc, e))
+            }
+        }
+    }
+
+    /// The element count an array field's size names.
+    fn arr_count(&mut self, sz: &ArrSize, at: Node<'_>) -> R<u32> {
+        match sz {
+            ArrSize::Lit(n) => Ok(*n),
+            ArrSize::Named(name) => {
+                let Some((e, _)) = self.global_const(name, at)? else {
+                    return self.not_yet(
+                        at,
+                        format!("the array size `{name}`, which is not a file-scope constant"),
+                    );
+                };
+                match super::globals::fold(&e)
+                    .and_then(|v| u32::try_from(v).ok())
+                    .filter(|v| *v > 0)
+                {
+                    Some(n) => Ok(n),
+                    None => self.not_yet(
+                        at,
+                        format!(
+                            "the array size `{name}`, which is not a positive integer constant"
+                        ),
+                    ),
+                }
             }
         }
     }
@@ -218,6 +273,114 @@ impl<'s, 't> Walker<'s, 't> {
         Ok(())
     }
 
+    /// `S x = { e0, e1, ... };`: one element per field, in order. A scalar field is a fresh local, a nested struct a copy of the
+    /// struct value, a pointer field the pointer expression (fixed now). An array field and a short list decline.
+    pub(super) fn struct_init(
+        &mut self,
+        sname: &str,
+        label: &str,
+        list: Node<'_>,
+        out: &mut Vec<Stmt>,
+    ) -> R<Rc<StructInst>> {
+        let Some(defs) = self.structs.get(sname).cloned() else {
+            return self.not_yet(list, format!("the struct `{sname}`"));
+        };
+        let mut c = list.walk();
+        let elems: Vec<_> = list.named_children(&mut c).collect();
+        if elems.len() != defs.len() {
+            return self.not_yet(list, format!("a brace list of {} element(s) for `{sname}`, which has {} field(s) (every field must be given)", elems.len(), defs.len()));
+        }
+        let mut fields = Vec::new();
+        for (f, e) in defs.iter().zip(elems) {
+            let path = format!("{label}.{}", f.name);
+            fields.push((f.name.clone(), self.init_field(f, &path, e, out)?));
+        }
+        Ok(Rc::new(StructInst {
+            sname: sname.to_string(),
+            fields,
+        }))
+    }
+
+    fn init_field(&mut self, f: &FieldDef, path: &str, e: Node<'_>, out: &mut Vec<Stmt>) -> R<Sym> {
+        if f.pointer {
+            let Some(mut p) = self.ptr_expr(e)? else {
+                return self.not_yet(e, format!("the pointer field `{path}` initialised from something that is not a pointer expression"));
+            };
+            let want = match super::c_type(&f.ty) {
+                Ok(t) => t,
+                Err(why) => return self.not_yet(e, format!("the pointer field `{path}`: {why}")),
+            };
+            if p.pointee != want {
+                return self.not_yet(e, format!("the pointer field `{path}` of type {want:?}* initialised from a {:?}* (cast it)", p.pointee));
+            }
+            out.append(&mut self.hoisted);
+            p.off = self.pin_offset(p.off, out);
+            return Ok(Sym::Pointer(p));
+        }
+        if self.is_struct(&f.ty) && f.array.is_none() {
+            let from = self.struct_value(e, &f.ty)?;
+            return Ok(Sym::Struct(self.clone_struct(&from, path, e, out)?));
+        }
+        let (Ok(t), None, None) = (super::c_type(&f.ty), &f.array, &f.unsupported) else {
+            return self.not_yet(e, format!("the field `{path}`: only scalar, pointer and struct fields take a brace element"));
+        };
+        let (v, vt) = self.expr(e)?;
+        let v = self.convert(v, vt, t, e)?;
+        out.append(&mut self.hoisted);
+        let local = self.new_local(t);
+        out.push(Stmt::Let { local, init: v });
+        Ok(Sym::Scalar(local, t, Fixed::No))
+    }
+
+    /// A fresh instance holding `src`'s values: scalars copied into new locals, arrays copied into new allocations, nested
+    /// structs cloned, pointers shared (a pointer value is immutable).
+    pub(super) fn clone_struct(
+        &mut self,
+        src: &StructInst,
+        label: &str,
+        at: Node<'_>,
+        out: &mut Vec<Stmt>,
+    ) -> R<Rc<StructInst>> {
+        let mut fields = Vec::new();
+        for (name, s) in &src.fields {
+            let path = format!("{label}.{name}");
+            let copy = match s {
+                Sym::Scalar(l, t, _) => {
+                    let local = self.new_local(*t);
+                    out.push(Stmt::Let {
+                        local,
+                        init: ScalarExpr::Local(*l),
+                    });
+                    Sym::Scalar(local, *t, Fixed::No)
+                }
+                Sym::Alloc(a, e) => {
+                    let Extent::Static(n) = self.allocs[*a as usize].extent else {
+                        return Err(self.invalid("a struct array field with a dynamic size"));
+                    };
+                    self.allocs.push(AllocDecl::new(
+                        path,
+                        MemorySpace::Private,
+                        *e,
+                        Extent::Static(n),
+                    ));
+                    let alloc = u32::try_from(self.allocs.len() - 1).unwrap_or(u32::MAX);
+                    self.copy_array(alloc, *a, *e, out)?;
+                    Sym::Alloc(alloc, *e)
+                }
+                Sym::Struct(inner) => Sym::Struct(self.clone_struct(inner, &path, at, out)?),
+                Sym::Pointer(p) => Sym::Pointer(p.clone()),
+                _ => {
+                    return self.not_yet(at, format!("the field `{path}`, which cannot be copied"));
+                }
+            };
+            fields.push((name.clone(), copy));
+        }
+        Ok(Rc::new(StructInst {
+            sname: src.sname.clone(),
+            fields,
+        }))
+    }
+
     /// `S name;`, `S name = other;`, `S a, b;`: instances, copied from another struct value when initialised.
     pub(super) fn struct_declaration(
         &mut self,
@@ -239,11 +402,16 @@ impl<'s, 't> Walker<'s, 't> {
                 return self.not_yet(d, "a struct declarator that is not a plain name");
             };
             let name = text(id, self.src).to_string();
-            let inst = self.new_struct(sname, &name, d, out)?;
-            if let Some(v) = value {
-                let from = self.struct_value(v, sname)?;
-                self.copy_struct(&inst, &from, out)?;
-            }
+            let inst = match value {
+                None => self.new_struct(sname, &name, d, out)?,
+                Some(v) if v.kind() == "initializer_list" => {
+                    self.struct_init(sname, &name, v, out)?
+                }
+                Some(v) => {
+                    let from = self.struct_value(v, sname)?;
+                    self.clone_struct(&from, &name, v, out)?
+                }
+            };
             self.scopes
                 .last_mut()
                 .expect("a scope is open")
@@ -372,7 +540,7 @@ impl<'s, 't> Walker<'s, 't> {
             let path = format!("{label}.{}", f.name);
             let sym = if self.is_struct(&f.ty) && f.array.is_none() {
                 Sym::Struct(self.param_struct(&f.ty, &path, at, flat)?)
-            } else if let (Ok(e), None, None) = (super::c_type(&f.ty), f.array, &f.unsupported) {
+            } else if let (Ok(e), None, None) = (super::c_type(&f.ty), &f.array, &f.unsupported) {
                 let local = self.new_local(e);
                 flat.push(StructField::new(path, e, local));
                 Sym::Scalar(local, e, Fixed::Param)

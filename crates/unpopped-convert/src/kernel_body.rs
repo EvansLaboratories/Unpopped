@@ -83,9 +83,12 @@ impl std::fmt::Display for KernelLiftError {
 impl std::error::Error for KernelLiftError {}
 
 mod asm;
+mod context;
+pub use context::LiftContext;
 mod calls;
 mod declarations;
 mod expressions;
+mod globals;
 mod inline;
 mod methods;
 mod places;
@@ -93,6 +96,7 @@ mod pointer;
 mod returns;
 mod statements;
 mod structs;
+mod vecmem;
 
 type R<T> = Result<T, KernelLiftError>;
 
@@ -101,7 +105,21 @@ type R<T> = Result<T, KernelLiftError>;
 /// # Errors
 /// [`KernelLiftError`]: the kernel is declined whole, naming the first construct that stopped it.
 pub fn lift_kernel(fe: &Frontend, src: &str, name: &str) -> Result<KernelFn, KernelLiftError> {
-    lift_with_launch(fe, src, name, None)
+    lift_in(fe, src, name, &LiftContext::without_launch())
+}
+
+/// [`lift_kernel`] under a full [`LiftContext`]: the launch shape, the dynamic shared-memory size and the macro definitions the
+/// source's `#if` and `#ifdef` read (ROADMAP U19 slice 5).
+///
+/// # Errors
+/// As [`lift_kernel`].
+pub fn lift_kernel_in(
+    fe: &Frontend,
+    src: &str,
+    name: &str,
+    ctx: &LiftContext,
+) -> Result<KernelFn, KernelLiftError> {
+    lift_in(fe, src, name, ctx)
 }
 
 /// [`lift_kernel`] for a kernel that runs under `launch` (ROADMAP U19 slice 2). The launch shape is the **caller's**: a CUDA
@@ -117,15 +135,18 @@ pub fn lift_kernel_launched(
     name: &str,
     launch: LaunchShape,
 ) -> Result<KernelFn, KernelLiftError> {
-    lift_with_launch(fe, src, name, Some(launch))
+    lift_in(fe, src, name, &LiftContext::new(launch))
 }
 
-fn lift_with_launch(
+fn lift_in(
     fe: &Frontend,
     src: &str,
     name: &str,
-    launch: Option<LaunchShape>,
+    ctx: &LiftContext,
 ) -> Result<KernelFn, KernelLiftError> {
+    let pre = context::preprocess(src, &ctx.defines)
+        .map_err(|construct| KernelLiftError::NotYetLifted { construct, line: 0 })?;
+    let src = pre.as_str();
     let tree = prepared(fe, src).map_err(|_| KernelLiftError::NotAKernel)?;
     let root = tree.root_node();
     if let Some(bad) = first_error(root) {
@@ -139,7 +160,10 @@ fn lift_with_launch(
     w.functions = all_functions(root, src);
     w.structs = structs::collect_structs(root, src);
     w.methods = methods::collect_methods(root, src);
-    w.launch = launch;
+    w.launch = ctx.launch;
+    w.dyn_shared = ctx.dynamic_shared_bytes;
+    w.null_buffers = ctx.null_buffers.iter().cloned().collect();
+    w.consts = collect_consts(root, src);
     w.unary_fn = fe.unary_fn;
     w.binary_fn = fe.binary_fn;
     let k = w.function(func, name)?;
@@ -164,6 +188,52 @@ fn all_functions<'t>(root: Node<'t>, src: &str) -> HashMap<String, Node<'t>> {
         stack.extend(n.children(&mut c));
     }
     out
+}
+
+/// The file-scope `constexpr` and `const` constants (namespace members included) with an initialiser, by name.
+fn collect_consts<'t>(root: Node<'t>, src: &str) -> HashMap<String, (String, Node<'t>)> {
+    let mut out = HashMap::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "declaration" && at_file_scope(n) {
+            let quals: Vec<&str> = {
+                let mut c = n.walk();
+                n.children(&mut c)
+                    .filter(|k| k.kind() == "type_qualifier")
+                    .map(|k| text(k, src))
+                    .collect()
+            };
+            let ty = n.child_by_field_name("type").map(|t| {
+                text(t, src)
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            });
+            let is_const = quals.iter().any(|q| matches!(*q, "constexpr" | "const"));
+            if let (true, Some(ty)) = (is_const, ty) {
+                let mut c = n.walk();
+                for d in n.children_by_field_name("declarator", &mut c) {
+                    let id = d
+                        .child_by_field_name("declarator")
+                        .filter(|i| i.kind() == "identifier");
+                    if let (Some(id), Some(v)) = (id, d.child_by_field_name("value")) {
+                        out.insert(text(id, src).to_string(), (ty.clone(), v));
+                    }
+                }
+            }
+        }
+        if !matches!(n.kind(), "function_definition" | "compound_statement") {
+            let mut c = n.walk();
+            stack.extend(n.children(&mut c));
+        }
+    }
+    out
+}
+
+/// Whether `n` sits directly in the translation unit or a namespace body (not in a function).
+fn at_file_scope(n: Node<'_>) -> bool {
+    n.parent()
+        .is_some_and(|p| matches!(p.kind(), "translation_unit" | "declaration_list"))
 }
 
 fn first_error(n: Node<'_>) -> Option<Node<'_>> {
@@ -245,6 +315,12 @@ struct Walker<'s, 't> {
     hoisted: Vec<Stmt>,
     /// The caller's launch shape, if any (slice 2).
     launch: Option<LaunchShape>,
+    /// Bytes of dynamic shared memory the caller gave (`extern __shared__ T a[];`).
+    dyn_shared: u32,
+    /// Buffer parameters the caller declared null.
+    null_buffers: HashSet<String>,
+    /// File-scope `constexpr`/`const` constants by name: the declared type text and the initialiser.
+    consts: HashMap<String, (String, Node<'t>)>,
     allocs: Vec<AllocDecl>,
     /// A `#pragma unroll` read and not yet given to a loop (it applies to the very next statement only).
     pending_unroll: Unroll,
@@ -268,6 +344,9 @@ impl<'s, 't> Walker<'s, 't> {
             assigned: HashSet::new(),
             hoisted: Vec::new(),
             launch: None,
+            dyn_shared: 0,
+            null_buffers: HashSet::new(),
+            consts: HashMap::new(),
             allocs: Vec::new(),
             pending_unroll: Unroll::None,
             unary_fn: |_| None,
@@ -500,22 +579,25 @@ enum PShape {
 }
 
 fn pick_compute(raw: &[(String, PShape)]) -> E {
-    let float = |t: E| int_range(t).is_none();
-    let all = || {
-        raw.iter().filter_map(|(_, s)| match s {
-            PShape::Buffer(t, _) | PShape::Scalar(t) => Some(*t),
-            PShape::Struct(_) => None,
-        })
-    };
-    all()
-        .find(|t| float(*t))
-        .or_else(|| {
-            raw.iter().find_map(|(_, s)| match s {
-                PShape::Buffer(t, _) => Some(*t),
-                PShape::Scalar(_) | PShape::Struct(_) => None,
-            })
-        })
-        .unwrap_or(E::I32)
+    let types = raw.iter().filter_map(|(_, s)| match s {
+        PShape::Buffer(t, _) | PShape::Scalar(t) => Some(*t),
+        PShape::Struct(_) => None,
+    });
+    // a compute float is `F32` or `F64`; a narrow float (`half`) is an element type, never the compute type
+    let mut types = types.collect::<Vec<_>>();
+    if let Some(f) = types.iter().find(|t| matches!(t, E::F32 | E::F64)) {
+        return *f;
+    }
+    let first_buffer = raw.iter().find_map(|(_, s)| match s {
+        PShape::Buffer(t, _) => Some(*t),
+        PShape::Scalar(_) | PShape::Struct(_) => None,
+    });
+    types.clear();
+    match first_buffer {
+        Some(E::F16 | E::Bf16) => E::F32,
+        Some(t) => t,
+        None => E::I32,
+    }
 }
 
 fn has_const(p: Node<'_>, src: &str) -> bool {
@@ -553,7 +635,8 @@ fn c_type(t: &str) -> Result<E, String> {
         "unsigned char" | "uint8_t" => E::U8,
         "long long" | "long long int" | "int64_t" => E::I64,
         "unsigned long long" | "uint64_t" | "size_t" => E::U64,
-        "bool" => E::Bool,
+        // a C `bool` is a byte holding 0 or 1 (an initialiser is normalised: any non-zero value is 1)
+        "bool" => E::U8,
         "half" | "__half" => E::F16,
         "__nv_bfloat16" | "nv_bfloat16" => E::Bf16,
         "char" => return Err("`char` (its signedness is implementation-defined)".into()),

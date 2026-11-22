@@ -246,8 +246,7 @@ impl<'s, 't> Walker<'s, 't> {
         if by_ref {
             return Ok((pname, Sym::Struct(from)));
         }
-        let copy = self.new_struct(sname, &pname, arg, out)?;
-        self.copy_struct(&copy, &from, out)?;
+        let copy = self.clone_struct(&from, &pname, arg, out)?;
         Ok((pname, Sym::Struct(copy)))
     }
 

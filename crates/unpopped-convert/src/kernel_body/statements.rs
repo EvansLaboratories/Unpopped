@@ -79,6 +79,9 @@ impl<'s, 't> Walker<'s, 't> {
         match lhs.kind() {
             "identifier" => self.assign_local(lhs, &op, rhs, out),
             "subscript_expression" | "pointer_expression" => {
+                if self.vector_store(lhs, &op, rhs, out)? {
+                    return Ok(());
+                }
                 self.assign_element(lhs, &op, rhs, out)
             }
             "field_expression" => self.assign_member(lhs, &op, rhs, out),
@@ -220,7 +223,7 @@ impl<'s, 't> Walker<'s, 't> {
         let Some(inner) = inner else {
             return self.not_yet(n, "a condition with a declaration");
         };
-        Ok(self.expr(inner)?.0)
+        Ok(self.truth_expr(inner)?.0)
     }
 
     pub(super) fn if_statement(&mut self, n: Node<'_>, out: &mut Vec<Stmt>) -> R<()> {

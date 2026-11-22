@@ -31,6 +31,9 @@ impl<'s, 't> Walker<'s, 't> {
             return self.array_declaration(n, ty, MemorySpace::Shared);
         }
         let has_array = declares_array(n);
+        if has_array && head.starts_with("extern") && head.contains("__shared__") {
+            return self.dynamic_shared_declaration(n, ty);
+        }
         if has_array && !head.starts_with("extern") {
             return self.array_declaration(n, ty, MemorySpace::Private);
         }
@@ -66,7 +69,27 @@ impl<'s, 't> Walker<'s, 't> {
             }
             // `T x;` is indeterminate in C until it is written; the IR needs a value, so it starts at zero (a refinement: a
             // read before the write is undefined in C)
+            let is_bool = n
+                .child_by_field_name("type")
+                .is_some_and(|t| text(t, self.src) == "bool");
             let e = match value {
+                // `bool b = e;` is `e != 0`: normalised, so a value other than 0 or 1 still gives 1
+                Some(v) if is_bool => {
+                    // `e != 0` is the compute type's 1 or 0 (a comparison), cast to a byte. Not a `Select` of two byte
+                    // constants: an integer `Select` with a float-typed condition passes `check_kernel` but the oracle
+                    // refuses it ("comparison of a non-integer operand").
+                    let (e, et) = self.expr(v)?;
+                    let zero = self.zero_of(et, v)?;
+                    let nonzero = ScalarExpr::Binary(BinaryOp::CmpNe, Box::new(e), Box::new(zero));
+                    ScalarExpr::Cast(
+                        Box::new(nonzero),
+                        CastSpec {
+                            to: E::U8,
+                            round: RoundMode::TowardZero,
+                            sat: Saturation::Clamp,
+                        },
+                    )
+                }
                 Some(v) => {
                     let (e, et) = self.expr(v)?;
                     self.convert(e, et, ty, v)?
@@ -150,6 +173,9 @@ impl<'s, 't> Walker<'s, 't> {
                     "a vector value that is not a vector local of the same type",
                 ),
             };
+        }
+        if let Some(v) = self.vector_load(n, (elem, lanes))? {
+            return Ok(v);
         }
         let callee = (n.kind() == "call_expression")
             .then(|| n.child_by_field_name("function").map(|f| text(f, self.src)))
@@ -269,10 +295,7 @@ impl<'s, 't> Walker<'s, 't> {
             ) else {
                 return self.not_yet(d, format!("{what} declarator that is not a sized array `T name[N]` (an initializer is a later slice)"));
             };
-            let count = match parse_literal(text(size, self.src)) {
-                Some(Lit::Int(v, _)) if v > 0 => u32::try_from(v).ok(),
-                _ => None,
-            };
+            let count = self.fold_size(size)?;
             let Some(count) = count else {
                 return self.not_yet(
                     size,

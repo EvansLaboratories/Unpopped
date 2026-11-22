@@ -135,9 +135,9 @@ fn what_cannot_be_scalarized_declines_by_name() {
     );
     not_yet(
         &format!(
-            "struct P {{ float v; float get() {{ return v; }} }};\n{h} P x; out[0] = x.get(); }}"
+            "struct P {{ float v; float get() {{ return v; }} }};\n{h} P x; out[0] = x.nope(); }}"
         ),
-        "`x.get`",
+        "no such method",
     );
     not_yet(
         "struct P { float v; };\nvoid k(float* out, const P p) { p.v = 1.0f; out[0] = 1.0f; }",

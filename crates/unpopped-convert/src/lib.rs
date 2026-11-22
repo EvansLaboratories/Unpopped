@@ -47,7 +47,9 @@
 //! Slang `Frontend` from a dev-dependency.
 
 mod kernel_body;
-pub use kernel_body::{KernelLiftError, lift_kernel, lift_kernel_launched};
+pub use kernel_body::{
+    KernelLiftError, LiftContext, lift_kernel, lift_kernel_in, lift_kernel_launched,
+};
 
 use tree_sitter::{Node, Tree};
 use unpopped::ir::{BinaryOp, Expr, OpDef, ReduceOp, ScalarExpr, UnaryOp};

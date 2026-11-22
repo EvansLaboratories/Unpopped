@@ -43,6 +43,7 @@ impl<'s, 't> Walker<'s, 't> {
             "subscript_expression" | "pointer_expression" => self.read_element(n),
             "field_expression" => self.builtin(n),
             "call_expression" => self.call_expr(n),
+            "sizeof_expression" => self.sizeof_expr(n),
             other => self.not_yet(n, format!("a `{other}` expression")),
         }
     }
@@ -59,10 +60,15 @@ impl<'s, 't> Walker<'s, 't> {
                 n,
                 format!("the vector `{name}` used as a scalar (read a member, or assign it whole)"),
             ),
-            None => self.not_yet(
-                n,
-                format!("the name `{name}`, which is not a parameter or local"),
-            ),
+            None => match self.global_const(name, n)? {
+                Some(v) => Ok(v),
+                None => self.not_yet(
+                    n,
+                    format!(
+                        "the name `{name}`, which is not a parameter, local or file-scope constant"
+                    ),
+                ),
+            },
         }
     }
 
@@ -90,10 +96,30 @@ impl<'s, 't> Walker<'s, 't> {
             return self.not_yet(n, "a binary expression of an unexpected shape");
         };
         let op = text(op, self.src);
-        let lv = self.expr(l)?;
+        let logical = matches!(op, "&&" | "||");
+        let lv = if logical {
+            self.truth_expr(l)?
+        } else {
+            self.expr(l)?
+        };
+        // A constant left operand decides the right one before it runs: `1 && r` and `0 || r` always evaluate `r` (so a read in
+        // it is unconditional and may be hoisted); `0 && r` and `1 || r` never do (so it is not evaluated at all).
+        let known = if logical { const_truth(&lv.0) } else { None };
+        if let Some(t) = known {
+            let short = (op == "&&") != t;
+            if short {
+                return Ok(self.constant(i64::from(t)));
+            }
+            let rv = self.truth_expr(r)?;
+            return Ok(self.logical(op, lv.0, rv.0));
+        }
         let before = self.hoisted.len();
-        let rv = self.expr(r)?;
-        if matches!(op, "&&" | "||") {
+        let rv = if logical {
+            self.truth_expr(r)?
+        } else {
+            self.expr(r)?
+        };
+        if logical {
             if self.hoisted.len() != before {
                 return self.not_yet(r, "a memory read in the right operand of `&&`/`||` (it is conditionally evaluated)");
             }
@@ -253,7 +279,12 @@ impl<'s, 't> Walker<'s, 't> {
         ) else {
             return self.not_yet(n, "a unary expression of an unexpected shape");
         };
-        let (v, t) = self.expr(arg)?;
+        let negation = text(op, self.src) == "!";
+        let (v, t) = if negation {
+            self.truth_expr(arg)?
+        } else {
+            self.expr(arg)?
+        };
         match text(op, self.src) {
             "+" => Ok((v, t)),
             "-" if int_range(t).is_some() => {
@@ -285,7 +316,7 @@ impl<'s, 't> Walker<'s, 't> {
         ) else {
             return self.not_yet(n, "a conditional of an unexpected shape");
         };
-        let cond = self.expr(c)?.0;
+        let cond = self.truth_expr(c)?.0;
         let before = self.hoisted.len();
         let (av, at) = self.expr(a)?;
         let (bv, bt) = self.expr(b)?;
@@ -311,5 +342,14 @@ impl<'s, 't> Walker<'s, 't> {
         let to = self.type_of(ty.child_by_field_name("type"), ty)?;
         let (e, from) = self.expr(v)?;
         Ok((self.convert(e, from, to, n)?, to))
+    }
+}
+
+/// The truth of a constant expression, if it is one.
+fn const_truth(e: &ScalarExpr) -> Option<bool> {
+    match e {
+        ScalarExpr::ConstInt(v, _) => Some(*v != 0),
+        ScalarExpr::Const(v) => Some(*v != 0.0),
+        _ => None,
     }
 }

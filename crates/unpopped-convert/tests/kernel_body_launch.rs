@@ -151,7 +151,7 @@ fn the_rest_of_the_cuda_surface_declines_by_name() {
     not_yet(
         "void k(float* out) { extern __shared__ float t[]; out[0] = 1.0f; }",
         true,
-        "storage class",
+        "no dynamic shared memory given",
     );
     not_yet(
         "void k(float* out) { __syncwarp(); out[0] = 1.0f; }",

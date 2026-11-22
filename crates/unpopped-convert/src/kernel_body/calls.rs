@@ -81,6 +81,9 @@ impl<'s, 't> Walker<'s, 't> {
             let (v, from) = self.expr(args[0])?;
             return Ok((self.convert(v, from, to, n)?, to));
         }
+        if matches!(name, "min" | "max") && args.len() == 2 {
+            return self.min_max(n, name == "min", args[0], args[1]);
+        }
         if name == "__ldg" && args.len() == 1 {
             // `__ldg(&a[i])` is a read through the read-only cache: a plain load (the cache path is a hint, never a meaning)
             let (place, elem, _) = self.address_of(args[0])?;
@@ -208,6 +211,31 @@ impl<'s, 't> Walker<'s, 't> {
                 }
             }
         })
+    }
+
+    /// CUDA `min(a, b)` and `max(a, b)`: the plain integer minimum or maximum, and on floats `fminf`/`fmaxf` (the IEEE form that
+    /// returns the other operand when one is NaN). Both operands convert to their common type first.
+    fn min_max(
+        &mut self,
+        n: Node<'_>,
+        is_min: bool,
+        a: Node<'_>,
+        b: Node<'_>,
+    ) -> R<(ScalarExpr, E)> {
+        let (x, xt) = self.expr(a)?;
+        let (y, yt) = self.expr(b)?;
+        let common = self.common_type(xt, yt, n)?;
+        let x = self.convert(x, xt, common, a)?;
+        let y = self.convert(y, yt, common, b)?;
+        let op = match (is_min, int_range(common).is_some()) {
+            (true, true) => BinaryOp::Min,
+            (false, true) => BinaryOp::Max,
+            (true, false) => BinaryOp::FminIeee,
+            (false, false) => BinaryOp::FmaxIeee,
+        };
+        let e = ScalarExpr::Binary(op, Box::new(x), Box::new(y));
+        let ty = self.ty_of(&e, n)?;
+        Ok((e, ty))
     }
 }
 
