@@ -1,0 +1,116 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//! Type aliases, `static_assert` and the C library's limit constants (ROADMAP U19 census slices 5/6: `using T = ...;` stopped 27 of
+//! Baracuda's kernels, `static_assert` 21, `INFINITY` and kin 14). An alias (`using AccT = float;`, `typedef float floatX;`, at file
+//! scope or in the function) is resolved where a type name is read; `static_assert` is a compile-time check the real compiler already
+//! passed, so it lifts to nothing unless it evaluates to **false** under the caller's arguments (a bad instantiation, reported);
+//! `INFINITY`, `FLT_MAX`, `INT_MAX` and kin are constants.
+
+use super::{R, Walker, text};
+use std::collections::HashMap;
+use tree_sitter::Node;
+use unpopped::ir::ScalarExpr;
+use unpopped_vocab::ElementKind as E;
+
+/// The deepest alias chain followed (`using A = B; using B = C; ...`).
+const MAX_ALIAS_DEPTH: usize = 8;
+
+/// The file-scope aliases of the source (`using X = T;` and `typedef T X;`, outside every function), name to type text.
+pub(super) fn collect_aliases(root: Node<'_>, src: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if let Some((name, ty)) = alias_of(n, src) {
+            out.insert(name, ty);
+        }
+        if !matches!(n.kind(), "function_definition" | "compound_statement") {
+            let mut c = n.walk();
+            stack.extend(n.children(&mut c));
+        }
+    }
+    out
+}
+
+/// `(name, type text)` of an alias declaration node, if it is one.
+fn alias_of(n: Node<'_>, src: &str) -> Option<(String, String)> {
+    let (name, ty) = match n.kind() {
+        "alias_declaration" => (
+            n.child_by_field_name("name")?,
+            n.child_by_field_name("type")?,
+        ),
+        "type_definition" => (
+            n.child_by_field_name("declarator")?,
+            n.child_by_field_name("type")?,
+        ),
+        _ => return None,
+    };
+    if name.kind() != "type_identifier" {
+        return None;
+    }
+    let ty = text(ty, src)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some((text(name, src).to_string(), ty))
+}
+
+impl<'s, 't> Walker<'s, 't> {
+    /// The element type a C type name denotes, through the aliases in scope.
+    pub(super) fn ctype(&self, t: &str) -> Result<E, String> {
+        let mut t = t.to_string();
+        for _ in 0..MAX_ALIAS_DEPTH {
+            match self.type_aliases.get(&t) {
+                Some(next) => t = next.clone(),
+                None => break,
+            }
+        }
+        super::c_type(&t)
+    }
+
+    /// `using X = T;` or `typedef T X;` inside a function: the alias is in scope for the rest of the function.
+    pub(super) fn alias_statement(&mut self, n: Node<'_>) -> R<()> {
+        match alias_of(n, self.src) {
+            Some((name, ty)) => {
+                self.type_aliases.insert(name, ty);
+                Ok(())
+            }
+            None => self.not_yet(n, "a type alias of an unexpected shape"),
+        }
+    }
+
+    /// `static_assert(cond, "msg")`: nothing, unless its condition is a constant the walker can evaluate and it is **false**.
+    pub(super) fn static_assert(&mut self, n: Node<'_>) -> R<()> {
+        let Some(cond) = n.child_by_field_name("condition") else {
+            return Ok(());
+        };
+        if self.const_value(cond).ok().flatten() == Some(0) {
+            return self.not_yet(
+                n,
+                format!(
+                    "a `static_assert` that does not hold for these arguments: `{}`",
+                    text(cond, self.src).trim()
+                ),
+            );
+        }
+        Ok(())
+    }
+
+    /// `INFINITY`, `FLT_MAX`, `INT_MAX` and kin: a C library limit as a constant, or `None` for any other name.
+    pub(super) fn limit_constant(&self, name: &str) -> Option<(ScalarExpr, E)> {
+        let float = |v: f32| Some((ScalarExpr::Const(f64::from(v)), self.compute));
+        let int = |v: i64, t: E| Some((ScalarExpr::ConstInt(v, t), t));
+        match name {
+            "INFINITY" if matches!(self.compute, E::F32 | E::F64) => {
+                Some((ScalarExpr::Const(f64::INFINITY), self.compute))
+            }
+            "FLT_MAX" => float(f32::MAX),
+            "FLT_MIN" => float(f32::MIN_POSITIVE),
+            "FLT_EPSILON" => float(f32::EPSILON),
+            "INT_MAX" => int(i64::from(i32::MAX), E::I32),
+            "INT_MIN" => int(i64::from(i32::MIN), E::I32),
+            "UINT_MAX" => int(i64::from(u32::MAX), E::U32),
+            "LLONG_MAX" => int(i64::MAX, E::I64),
+            "LLONG_MIN" => int(i64::MIN, E::I64),
+            _ => None,
+        }
+    }
+}

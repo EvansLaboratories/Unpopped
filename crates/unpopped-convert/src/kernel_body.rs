@@ -82,6 +82,7 @@ impl std::fmt::Display for KernelLiftError {
 
 impl std::error::Error for KernelLiftError {}
 
+mod aliases;
 mod asm;
 mod context;
 pub use context::LiftContext;
@@ -217,6 +218,7 @@ fn lift_preprocessed(
     w.dyn_shared = ctx.dynamic_shared_bytes;
     w.null_buffers = ctx.null_buffers.iter().cloned().collect();
     w.consts = collect_consts(root, src);
+    w.type_aliases = aliases::collect_aliases(root, src);
     w.unexpanded = unexpanded;
     w.unary_fn = fe.unary_fn;
     w.binary_fn = fe.binary_fn;
@@ -384,6 +386,8 @@ struct Walker<'s, 't> {
     unexpanded: context::Unexpanded,
     /// The entry model the frontend read, consumed by `function` (Slang: resources and semantic parameters).
     entry: Option<crate::EntryModel>,
+    /// Type aliases in scope (`using X = T;`, `typedef T X;`): file-scope ones from the source, function-local ones as they are met.
+    type_aliases: HashMap<String, String>,
     /// File-scope `constexpr`/`const` constants by name: the declared type text and the initialiser.
     consts: HashMap<String, (String, Node<'t>)>,
     allocs: Vec<AllocDecl>,
@@ -413,6 +417,7 @@ impl<'s, 't> Walker<'s, 't> {
             null_buffers: HashSet::new(),
             unexpanded: Vec::new(),
             entry: None,
+            type_aliases: HashMap::new(),
             consts: HashMap::new(),
             allocs: Vec::new(),
             pending_unroll: Unroll::None,
@@ -603,7 +608,7 @@ impl<'s, 't> Walker<'s, 't> {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
-        match c_type(&t) {
+        match self.ctype(&t) {
             Ok(e) => Ok(e),
             Err(why) => self.not_yet(ty, why),
         }

@@ -33,6 +33,8 @@ impl<'s, 't> Walker<'s, 't> {
                 Ok(())
             }
             "declaration" => self.declaration(n, out),
+            "alias_declaration" | "type_definition" => self.alias_statement(n),
+            "static_assert_declaration" => self.static_assert(n),
             "expression_statement" => self.expression_statement(n, out),
             "if_statement" => self.if_statement(n, out),
             "while_statement" => self.while_statement(n, out),

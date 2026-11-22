@@ -40,7 +40,7 @@ impl Update {
 
 impl<'s, 't> Walker<'s, 't> {
     /// A constant expression's value (its loads, if any, are dropped: a constant has none).
-    fn const_value(&mut self, n: Node<'_>) -> R<Option<i128>> {
+    pub(super) fn const_value(&mut self, n: Node<'_>) -> R<Option<i128>> {
         let mark = self.hoisted.len();
         let r = self.expr(n);
         self.hoisted.truncate(mark);

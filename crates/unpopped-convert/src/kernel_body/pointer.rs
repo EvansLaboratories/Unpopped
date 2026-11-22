@@ -122,7 +122,7 @@ impl<'s, 't> Walker<'s, 't> {
         if let Some((elem, lanes)) = super::vector_type(tname) {
             (p.pointee, p.lanes) = (elem, lanes);
         } else {
-            match super::c_type(tname) {
+            match self.ctype(tname) {
                 Ok(e) => (p.pointee, p.lanes) = (e, 1),
                 Err(why) => {
                     return self.not_yet(n, format!("a `reinterpret_cast` to `{tname}*`: {why}"));

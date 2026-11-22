@@ -19,7 +19,7 @@ impl<'s, 't> Walker<'s, 't> {
         let Some((tyname, init)) = self.consts.get(name).cloned() else {
             return Ok(None);
         };
-        let to = match super::c_type(&tyname) {
+        let to = match self.ctype(&tyname) {
             Ok(e) => e,
             Err(why) => return self.not_yet(at, format!("the constant `{name}`: {why}")),
         };
@@ -132,7 +132,7 @@ impl<'s, 't> Walker<'s, 't> {
             let _ = base;
             8
         } else {
-            let known = super::c_type(&name).ok().and_then(byte_size);
+            let known = self.ctype(&name).ok().and_then(byte_size);
             match known {
                 Some(s) => s,
                 None => {

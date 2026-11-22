@@ -191,7 +191,7 @@ impl<'s, 't> Walker<'s, 't> {
             }
             return Ok(Sym::Struct(self.new_struct(&f.ty, path, at, out)?));
         }
-        let e = match super::c_type(&f.ty) {
+        let e = match self.ctype(&f.ty) {
             Ok(e) => e,
             Err(why) => return self.not_yet(at, format!("the field `{path}`: {why}")),
         };
@@ -309,7 +309,7 @@ impl<'s, 't> Walker<'s, 't> {
             let Some(mut p) = self.ptr_expr(e)? else {
                 return self.not_yet(e, format!("the pointer field `{path}` initialised from something that is not a pointer expression"));
             };
-            let want = match super::c_type(&f.ty) {
+            let want = match self.ctype(&f.ty) {
                 Ok(t) => t,
                 Err(why) => return self.not_yet(e, format!("the pointer field `{path}`: {why}")),
             };
@@ -324,7 +324,7 @@ impl<'s, 't> Walker<'s, 't> {
             let from = self.struct_value(e, &f.ty)?;
             return Ok(Sym::Struct(self.clone_struct(&from, path, e, out)?));
         }
-        let (Ok(t), None, None) = (super::c_type(&f.ty), &f.array, &f.unsupported) else {
+        let (Ok(t), None, None) = (self.ctype(&f.ty), &f.array, &f.unsupported) else {
             return self.not_yet(e, format!("the field `{path}`: only scalar, pointer and struct fields take a brace element"));
         };
         let (v, vt) = self.expr(e)?;
@@ -544,13 +544,13 @@ impl<'s, 't> Walker<'s, 't> {
             let sym = if self.is_struct(&f.ty) && f.array.is_none() {
                 Sym::Struct(self.param_struct(&f.ty, &path, at, flat)?)
             } else if let (Ok(e), None, None, false) =
-                (super::c_type(&f.ty), &f.array, &f.unsupported, f.pointer)
+                (self.ctype(&f.ty), &f.array, &f.unsupported, f.pointer)
             {
                 let local = self.new_local(e);
                 flat.push(StructField::new(path, e, local));
                 Sym::Scalar(local, e, Fixed::Param)
             } else if let (Ok(e), Some(size), None, false) =
-                (super::c_type(&f.ty), &f.array, &f.unsupported, f.pointer)
+                (self.ctype(&f.ty), &f.array, &f.unsupported, f.pointer)
             {
                 self.param_array(&path, e, size, at, flat)?
             } else {

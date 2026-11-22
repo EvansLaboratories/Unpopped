@@ -81,7 +81,7 @@ impl<'s, 't> Walker<'s, 't> {
             .strip_prefix("static_cast<")
             .and_then(|r| r.strip_suffix('>'))
             .map_or(name, str::trim);
-        if let (Ok(to), 1) = (super::c_type(cast_to), args.len()) {
+        if let (Ok(to), 1) = (self.ctype(cast_to), args.len()) {
             let (v, from) = self.expr(args[0])?;
             return Ok((self.convert(v, from, to, n)?, to));
         }

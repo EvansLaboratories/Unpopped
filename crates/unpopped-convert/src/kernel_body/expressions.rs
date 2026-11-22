@@ -64,6 +64,9 @@ impl<'s, 't> Walker<'s, 't> {
             ),
             None => match self.global_const(name, n)? {
                 Some(v) => Ok(v),
+                None if self.limit_constant(name).is_some() => {
+                    Ok(self.limit_constant(name).expect("checked above"))
+                }
                 None => self.not_yet(
                     n,
                     self.unexpanded_or(

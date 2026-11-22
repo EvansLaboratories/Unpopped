@@ -3,7 +3,7 @@
 //! `docs/options-u19-slang-entry-model.md`): the file-scope resources become the kernel's parameters in slot order, and the entry's
 //! semantic parameters become locals computed from the execution ids. Everything here maps to IR that exists.
 
-use super::{PShape, R, Sym, Walker, c_type, text};
+use super::{PShape, R, Sym, Walker, text};
 use crate::{EntryModel, ResourceKind, Semantic};
 use tree_sitter::Node;
 use unpopped::exec::ExecId;
@@ -65,13 +65,15 @@ impl<'s, 't> Walker<'s, 't> {
         }
         rs.into_iter()
             .map(|r| match r.kind {
-                ResourceKind::StructuredRO | ResourceKind::StructuredRW => match c_type(&r.elem) {
-                    Ok(e) => Ok((
-                        r.name.clone(),
-                        PShape::Buffer(e, r.kind == ResourceKind::StructuredRO),
-                    )),
-                    Err(why) => self.not_yet(at, format!("the buffer `{}`: {why}", r.name)),
-                },
+                ResourceKind::StructuredRO | ResourceKind::StructuredRW => {
+                    match self.ctype(&r.elem) {
+                        Ok(e) => Ok((
+                            r.name.clone(),
+                            PShape::Buffer(e, r.kind == ResourceKind::StructuredRO),
+                        )),
+                        Err(why) => self.not_yet(at, format!("the buffer `{}`: {why}", r.name)),
+                    }
+                }
                 ResourceKind::ConstantBuffer if self.is_struct(&r.elem) => {
                     Ok((r.name.clone(), PShape::Struct(r.elem.clone())))
                 }
