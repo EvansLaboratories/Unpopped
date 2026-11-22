@@ -392,15 +392,40 @@ impl<'s, 't> Walker<'s, 't> {
                     format!("{what} declarator that is not a sized array `T name[N]`"),
                 );
             };
-            let count = self.fold_size(size)?;
-            let Some(count) = count else {
-                return self.not_yet(
-                    size,
-                    format!("{what} whose size is not a positive integer literal"),
-                );
+            // `T name[M][K]`: nested array declarators, the innermost written first; the allocation is the row-major product
+            let (mut id, mut sizes) = (id, vec![size]);
+            while id.kind() == "array_declarator" {
+                let (Some(inner), Some(s)) = (
+                    id.child_by_field_name("declarator"),
+                    id.child_by_field_name("size"),
+                ) else {
+                    return self.not_yet(id, format!("{what} declarator of an unexpected shape"));
+                };
+                sizes.push(s);
+                id = inner;
+            }
+            sizes.reverse();
+            let mut dims = Vec::new();
+            for s in &sizes {
+                let Some(extent) = self.fold_size(*s)? else {
+                    return self.not_yet(
+                        *s,
+                        format!("{what} whose size is not a positive integer literal"),
+                    );
+                };
+                dims.push(extent);
+            }
+            let Some(count) = dims.iter().try_fold(1u32, |a, &d| a.checked_mul(d)) else {
+                return self.not_yet(d, format!("{what} with more than u32::MAX elements"));
             };
+            if dims.len() > 1 && init.is_some() {
+                return self.not_yet(
+                    d,
+                    format!("{what} with more than one dimension and an initialiser"),
+                );
+            }
             if id.kind() != "identifier" {
-                return self.not_yet(id, format!("{what} with more than one dimension"));
+                return self.not_yet(id, format!("{what} declarator that is not a plain name"));
             }
             let name = text(id, self.src).to_string();
             self.allocs.push(AllocDecl::new(
@@ -410,6 +435,9 @@ impl<'s, 't> Walker<'s, 't> {
                 Extent::Static(count),
             ));
             let index = u32::try_from(self.allocs.len() - 1).unwrap_or(u32::MAX);
+            if dims.len() > 1 {
+                self.alloc_dims.insert(index, dims);
+            }
             self.scopes
                 .last_mut()
                 .expect("a scope is open")

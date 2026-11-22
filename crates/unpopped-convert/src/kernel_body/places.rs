@@ -14,6 +14,9 @@ impl<'s, 't> Walker<'s, 't> {
         ) else {
             return self.not_yet(n, "an index of an unexpected shape");
         };
+        if let Some(r) = self.nd_element_place(n)? {
+            return Ok(r);
+        }
         let sym = match arg.kind() {
             "identifier" => self.lookup(text(arg, self.src)),
             "field_expression" => self.resolve_member(arg)?,
@@ -53,6 +56,66 @@ impl<'s, 't> Walker<'s, 't> {
             _ => unreachable!("matched above"),
         };
         Ok((place, elem))
+    }
+
+    /// `a[i][j]` of a multi-dimensional array allocation: the flat element `(i * J + j)`, row-major, every index converted to
+    /// `I64` first. `None` when `n` is not a chain of subscripts on such an array (a partial chain is declined by the caller).
+    fn nd_element_place(&mut self, n: Node<'_>) -> R<Option<(Place, E)>> {
+        let mut indices = Vec::new();
+        let mut cur = n;
+        while cur.kind() == "subscript_expression" {
+            let (Some(arg), Some(idx)) = (
+                cur.child_by_field_name("argument"),
+                cur.child_by_field_name("indices"),
+            ) else {
+                return Ok(None);
+            };
+            let (Some(one), 1) = (idx.named_child(0), idx.named_child_count()) else {
+                return Ok(None);
+            };
+            indices.push(one);
+            cur = arg;
+        }
+        let Some(Sym::Alloc(alloc, elem)) = (cur.kind() == "identifier")
+            .then(|| self.lookup(text(cur, self.src)))
+            .flatten()
+        else {
+            return Ok(None);
+        };
+        let Some(dims) = self.alloc_dims.get(&alloc).cloned() else {
+            return Ok(None);
+        };
+        if indices.len() != dims.len() {
+            return self.not_yet(
+                n,
+                format!(
+                    "{} subscript(s) on a {}-dimensional array (index every dimension)",
+                    indices.len(),
+                    dims.len()
+                ),
+            );
+        }
+        indices.reverse();
+        let mut flat: Option<ScalarExpr> = None;
+        for (i, node) in indices.into_iter().enumerate() {
+            let (ie, it) = self.expr(node)?;
+            if int_range(it).is_none() {
+                return self.outside(node, "a floating-point index");
+            }
+            let ie = self.convert(ie, it, E::I64, node)?;
+            flat = Some(match flat {
+                None => ie,
+                Some(acc) => ScalarExpr::Add(
+                    Box::new(ScalarExpr::Mul(
+                        Box::new(acc),
+                        Box::new(ScalarExpr::ConstInt(i64::from(dims[i]), E::I64)),
+                    )),
+                    Box::new(ie),
+                ),
+            });
+        }
+        let index = flat.expect("at least two dimensions");
+        Ok(Some((Place::Alloc { alloc, index }, elem)))
     }
 
     /// `*p`: the place a pointer expression points at.
