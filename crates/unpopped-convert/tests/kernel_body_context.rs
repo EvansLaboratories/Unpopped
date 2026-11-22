@@ -296,3 +296,61 @@ fn a_brace_list_must_give_every_field() {
         "every field must be given",
     );
 }
+
+fn halves(v: &[f64]) -> KernelArg {
+    KernelArg::Buffer(TypedBuffer::from_f64_as(
+        unpopped_vocab::ElementKind::F16,
+        &[v.len() as i64],
+        v,
+    ))
+}
+
+#[test]
+fn a_vector_local_whose_address_is_taken_is_memory_backed_and_reads_as_half2() {
+    // the decode kernel's idiom: 16 bytes loaded as int4, viewed as 4 half2, each widened to a float2
+    let k = lift(
+        "void k(float* out, const half* a) { int4 tmp = ((const int4*)a)[0]; \
+         for (int i = 0; i < 4; i++) { ((float2*)out)[i] = __half22float2(((half2*)&tmp)[i]); } }",
+        &ctx(),
+    )
+    .unwrap();
+    let h = [1.0, 2.5, -3.0, 0.5, 8.0, -0.25, 100.0, 0.125];
+    assert_eq!(run(&k, 8, vec![halves(&h)]).unwrap(), h.to_vec());
+}
+
+#[test]
+fn a_half2_is_written_through_the_pun_then_stored_as_int4() {
+    let k = lift(
+        "void k(half* out, const float* a) { int4 tmp; \
+         for (int i = 0; i < 4; i++) { ((half2*)&tmp)[i] = __float22half2_rn(((const float2*)a)[i]); } \
+         ((int4*)out)[0] = tmp; }",
+        &ctx(),
+    )
+    .unwrap();
+    // 0.1 is not exact in half: it rounds to 0.0999755859375; 70000 overflows half to infinity
+    let a = [1.0f32, 2.5, -3.0, 0.1, 8.0, -0.25, 70000.0, 0.125];
+    let mut args = vec![halves(&[0.0; 8]), f32s(&a)];
+    run_launch(&k, &mut args).unwrap();
+    let KernelArg::Buffer(o) = &args[0] else {
+        panic!()
+    };
+    let want = [
+        1.0,
+        2.5,
+        -3.0,
+        0.099_975_585_937_5,
+        8.0,
+        -0.25,
+        f64::INFINITY,
+        0.125,
+    ];
+    assert_eq!(o.to_f64_vec(), want.to_vec());
+}
+
+#[test]
+fn a_vector_without_an_initializer_and_without_its_address_taken_declines() {
+    not_yet(
+        lift("void k(float* out) { float4 v; out[0] = 1.0f; }", &ctx()),
+        "without an initializer",
+    );
+}

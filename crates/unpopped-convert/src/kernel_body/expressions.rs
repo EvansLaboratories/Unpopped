@@ -56,7 +56,7 @@ impl<'s, 't> Walker<'s, 't> {
             Some(Sym::Buffer(..) | Sym::Alloc(..) | Sym::Pointer(..)) => {
                 self.not_yet(n, format!("the array or pointer `{name}` used as a value"))
             }
-            Some(Sym::Vector(..)) => self.not_yet(
+            Some(Sym::Vector(..) | Sym::VecAlloc(..)) => self.not_yet(
                 n,
                 format!("the vector `{name}` used as a scalar (read a member, or assign it whole)"),
             ),

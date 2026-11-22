@@ -6,8 +6,9 @@
 //! the pointer (`->x`) and arithmetic on vector values are not C.
 
 use super::pointer::{PtrVal, byte_size};
-use super::{R, Walker, text};
+use super::{R, Sym, Walker, text, vector_type};
 use tree_sitter::Node;
+use unpopped::exec::{AllocDecl, Extent, MemorySpace};
 use unpopped::ir::ScalarExpr;
 use unpopped::kernel::{Place, Stmt};
 use unpopped_vocab::ElementKind as E;
@@ -124,5 +125,95 @@ impl<'s, 't> Walker<'s, 't> {
             out.push(Stmt::Store { place, value });
         }
         Ok(true)
+    }
+
+    /// Whether the source takes the address of `name` anywhere (`&name`, not followed by more identifier characters).
+    pub(super) fn address_taken(&self, name: &str) -> bool {
+        let pat = format!("&{name}");
+        self.src.match_indices(&pat).any(|(i, _)| {
+            let after = self.src[i + pat.len()..].chars().next();
+            let before = self.src[..i].chars().next_back();
+            !after.is_some_and(|c| c.is_alphanumeric() || c == '_') && before != Some('&')
+        })
+    }
+
+    /// A vector local whose address is taken: a `Private` allocation of `lanes` elements holding the initial lanes.
+    pub(super) fn vector_alloc_declaration(
+        &mut self,
+        name: &str,
+        (elem, lanes): (E, u8),
+        init: Vec<ScalarExpr>,
+        out: &mut Vec<Stmt>,
+    ) -> R<()> {
+        self.allocs.push(AllocDecl::new(
+            name.to_string(),
+            MemorySpace::Private,
+            elem,
+            Extent::Static(u32::from(lanes)),
+        ));
+        let alloc = u32::try_from(self.allocs.len() - 1).unwrap_or(u32::MAX);
+        let size = byte_size(elem).unwrap_or(1);
+        for (k, value) in init.into_iter().enumerate() {
+            out.push(Stmt::Store {
+                place: Place::AllocRaw {
+                    alloc,
+                    byte_offset: ScalarExpr::ConstInt(k as i64 * size, E::I64),
+                    elem,
+                },
+                value,
+            });
+        }
+        self.scopes
+            .last_mut()
+            .expect("a scope is open")
+            .insert(name.to_string(), Sym::VecAlloc(alloc, elem, lanes));
+        Ok(())
+    }
+
+    /// The lanes of a memory-backed vector local, each loaded into a fresh local.
+    pub(super) fn vecalloc_lanes(&mut self, alloc: u32, (elem, lanes): (E, u8)) -> Vec<ScalarExpr> {
+        let size = byte_size(elem).unwrap_or(1);
+        (0..i64::from(lanes))
+            .map(|k| {
+                let local = self.new_local(elem);
+                self.hoisted.push(Stmt::Load {
+                    local,
+                    place: Place::AllocRaw {
+                        alloc,
+                        byte_offset: ScalarExpr::ConstInt(k * size, E::I64),
+                        elem,
+                    },
+                });
+                ScalarExpr::Local(local)
+            })
+            .collect()
+    }
+
+    /// `__half22float2(h)` and `__float22half2_rn(f)`: each lane converted, the vector shape kept.
+    pub(super) fn vector_convert(
+        &mut self,
+        n: Node<'_>,
+        (elem, lanes): (E, u8),
+    ) -> R<Option<Vec<ScalarExpr>>> {
+        if n.kind() != "call_expression" {
+            return Ok(None);
+        }
+        let callee = n.child_by_field_name("function").map(|f| text(f, self.src));
+        let from = match (callee, elem) {
+            (Some("__half22float2"), E::F32) => E::F16,
+            (Some("__float22half2_rn"), E::F16) => E::F32,
+            _ => return Ok(None),
+        };
+        let args = self.call_args(n);
+        let [a] = args.as_slice() else {
+            return self.not_yet(n, "a vector conversion with other than one argument");
+        };
+        debug_assert!(vector_type("half2").is_some());
+        let lanes_in = self.vector_value(*a, (from, lanes))?;
+        let mut out = Vec::new();
+        for v in lanes_in {
+            out.push(self.convert(v, from, elem, *a)?);
+        }
+        Ok(Some(out))
     }
 }

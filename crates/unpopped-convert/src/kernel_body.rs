@@ -278,6 +278,9 @@ enum Sym {
     /// the array), the lane type and the lane count. Not an IR packed value: the oracle cannot run a packed local
     /// (`tests/kernel_packed.rs`, the pinned gap), and a scalarized vector is exact.
     Vector([u32; 4], E, u8),
+    /// A vector local whose address is taken (`&tmp`): backed by a `Private` allocation of `lanes` elements so a pointer can
+    /// reinterpret it (`(half2*)&tmp`); the allocation's index, lane type and lane count.
+    VecAlloc(u32, E, u8),
     /// A static `__shared__` array: its index in `KernelFn::allocs` and element type.
     Alloc(u32, E),
     /// A scalar local (a scalar parameter is one): its id, type and whether the IR forbids assigning it.
@@ -523,6 +526,7 @@ fn vector_type(t: &str) -> Option<(E, u8)> {
         "double" => E::F64,
         "int" => E::I32,
         "uint" => E::U32,
+        "half" => E::F16,
         _ => return None,
     };
     Some((elem, lanes))

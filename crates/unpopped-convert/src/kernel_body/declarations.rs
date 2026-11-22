@@ -132,14 +132,26 @@ impl<'s, 't> Walker<'s, 't> {
                 ),
                 _ => (Some(d), None),
             };
-            let (Some(id), Some(value)) = (id, value) else {
-                return self.not_yet(d, "a vector local without an initializer");
+            let Some(id) = id else {
+                return self.not_yet(d, "a vector local declarator of an unexpected shape");
             };
             if id.kind() != "identifier" {
                 return self.not_yet(id, format!("a `{}` declarator", id.kind()));
             }
-            let init = self.vector_value(value, (elem, lanes))?;
+            let init = match value {
+                Some(v) => self.vector_value(v, (elem, lanes))?,
+                // no initializer: only for a vector whose address is taken (it is then filled through the pointer); zero
+                None if self.address_taken(text(id, self.src)) => {
+                    let zero = self.zero_of(elem, id)?;
+                    vec![zero; usize::from(lanes)]
+                }
+                None => return self.not_yet(d, "a vector local without an initializer"),
+            };
             self.flush(out);
+            if self.address_taken(text(id, self.src)) {
+                self.vector_alloc_declaration(text(id, self.src), (elem, lanes), init, out)?;
+                continue;
+            }
             let mut ls = [0u32; 4];
             for (k, v) in init.into_iter().enumerate() {
                 ls[k] = self.new_local(elem);
@@ -162,6 +174,15 @@ impl<'s, 't> Walker<'s, 't> {
         n: Node<'_>,
         (elem, lanes): (E, u8),
     ) -> R<Vec<ScalarExpr>> {
+        if n.kind() == "identifier"
+            && let Some(Sym::VecAlloc(i, e, k)) = self.lookup(text(n, self.src))
+            && (e, k) == (elem, lanes)
+        {
+            return Ok(self.vecalloc_lanes(i, (e, k)));
+        }
+        if let Some(v) = self.vector_convert(n, (elem, lanes))? {
+            return Ok(v);
+        }
         if n.kind() == "identifier" {
             return match self.lookup(text(n, self.src)) {
                 Some(Sym::Vector(ls, e, k)) if (e, k) == (elem, lanes) => Ok(ls[..usize::from(k)]

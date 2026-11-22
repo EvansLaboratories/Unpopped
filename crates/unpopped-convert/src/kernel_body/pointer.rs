@@ -155,6 +155,18 @@ impl<'s, 't> Walker<'s, 't> {
         if op != Some("&") {
             return Ok(None);
         }
+        if let Some(a) = n
+            .child_by_field_name("argument")
+            .filter(|a| a.kind() == "identifier")
+            && let Some(Sym::VecAlloc(i, e, _)) = self.lookup(text(a, self.src))
+        {
+            return Ok(Some(PtrVal {
+                base: PBase::Alloc(i),
+                pointee: e,
+                lanes: 1,
+                off: ScalarExpr::ConstInt(0, E::I64),
+            }));
+        }
         let arg = n
             .child_by_field_name("argument")
             .filter(|a| a.kind() == "subscript_expression");
