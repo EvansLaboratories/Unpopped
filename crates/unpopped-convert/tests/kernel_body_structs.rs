@@ -58,14 +58,17 @@ fn a_struct_local_has_scalar_array_and_nested_members_that_start_at_zero() {
 #[test]
 fn a_struct_is_copied_by_value() {
     let k = lift(&format!(
-        "{DEFS}void k(float* out) {{ State a; a.m = 3.0f; a.o[1] = 5.0f; a.in.d = 9u; \
+        "{DEFS}void k(float* out) {{ State a; a.m = 3.0f; a.o[1] = 5.0f; a.o[3] = 11.0f; a.in.d = 9u; \
          State b = a; a.m = 100.0f; a.o[1] = 200.0f; \
          State c; c = b; b.in.d = 1u; \
-         out[0] = b.m; out[1] = b.o[1]; out[2] = (float)b.in.d; out[3] = c.m; out[4] = c.o[1]; out[5] = (float)c.in.d; }}"
+         out[0] = b.m; out[1] = b.o[1]; out[2] = (float)b.in.d; out[3] = c.m; out[4] = c.o[1]; out[5] = (float)c.in.d; out[6] = b.o[3]; out[7] = c.o[3]; }}"
     ))
     .unwrap();
     // b and c took a's values at the copy; later writes to a (and to b.in.d) reach neither c nor each other
-    assert_eq!(run(&k, 6, vec![]), vec![3.0, 5.0, 1.0, 3.0, 5.0, 9.0]);
+    assert_eq!(
+        run(&k, 8, vec![]),
+        vec![3.0, 5.0, 1.0, 3.0, 5.0, 9.0, 11.0, 11.0]
+    );
 }
 
 #[test]

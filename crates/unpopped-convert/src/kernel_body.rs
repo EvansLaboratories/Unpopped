@@ -496,12 +496,10 @@ enum PShape {
 fn pick_compute(raw: &[(String, PShape)]) -> E {
     let float = |t: E| int_range(t).is_none();
     let all = || {
-        raw.iter()
-            .map(|(_, s)| match s {
-                PShape::Buffer(t, _) | PShape::Scalar(t) => Some(*t),
-                PShape::Struct(_) => None,
-            })
-            .flatten()
+        raw.iter().filter_map(|(_, s)| match s {
+            PShape::Buffer(t, _) | PShape::Scalar(t) => Some(*t),
+            PShape::Struct(_) => None,
+        })
     };
     all()
         .find(|t| float(*t))
