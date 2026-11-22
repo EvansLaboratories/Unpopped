@@ -143,8 +143,10 @@ fn what_cannot_be_scalarized_declines_by_name() {
         "struct P { float v; };\nvoid k(float* out, const P p) { p.v = 1.0f; out[0] = 1.0f; }",
         "struct parameter",
     );
+    // an array of scalars is a struct parameter's flattened field since census slice 5 (tests/kernel_body_param_arrays.rs);
+    // a pointer field is still not a parameter
     not_yet(
-        "struct P { float v[2]; };\nvoid k(float* out, const P p) { out[0] = 1.0f; }",
+        "struct P { float* v; };\nvoid k(float* out, const P p) { out[0] = 1.0f; }",
         "only scalar fields",
     );
     // Control: the plain spelling lifts.
