@@ -148,9 +148,19 @@ fn lift_in(
     name: &str,
     ctx: &LiftContext,
 ) -> Result<KernelFn, KernelLiftError> {
-    let (pre, unexpanded) = context::preprocess(src, &ctx.defines)
+    let pre = context::preprocess(src, &ctx.defines, &ctx.includes)
         .map_err(|construct| KernelLiftError::NotYetLifted { construct, line: 0 })?;
-    let src = pre.as_str();
+    lift_preprocessed(fe, name, ctx, &pre).map_err(|e| context::report(e, &pre))
+}
+
+fn lift_preprocessed(
+    fe: &Frontend,
+    name: &str,
+    ctx: &LiftContext,
+    pre: &context::Preprocessed,
+) -> Result<KernelFn, KernelLiftError> {
+    let src = pre.text.as_str();
+    let unexpanded = pre.unexpanded.clone();
     // Not `prepared`: that applies the frontend's RESIDUE list (`__shared__`, `atomicAdd`, `__syncthreads`, `asm`, ...), the legacy
     // elementwise lifters' "not expressible" gate, which maps a hit to `NotAKernel`. The kernel-body walker lifts those and declines
     // each construct it cannot by name, so only the marker is checked. Found by running the census over Baracuda's real CUDA

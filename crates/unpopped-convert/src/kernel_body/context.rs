@@ -9,6 +9,7 @@
 //! function-like macro, or one with a non-integer body, is recorded and declines at its **use** (a file's unused macros never
 //! stop a kernel: the census over Baracuda's real corpus, 2026-11-22, found 85% of kernels refused for a macro they never used). Only integer macros are modelled; `#include` is dropped, `#pragma` is kept.
 
+use crate::KernelLiftError;
 use std::collections::HashMap;
 use unpopped::exec::LaunchShape;
 
@@ -29,6 +30,8 @@ pub struct LiftContext {
     pub type_args: Vec<(String, String)>,
     /// Template **non-type** arguments of the kernel (`N` is `128`, `kCausal` is `1`), by parameter name.
     pub const_args: Vec<(String, i64)>,
+    /// Include files the caller supplies, by the exact name the source writes (`#include "baracuda_loss.cuh"` is `baracuda_loss.cuh`).
+    pub includes: Vec<(String, String)>,
 }
 
 impl LiftContext {
@@ -42,6 +45,7 @@ impl LiftContext {
             null_buffers: Vec::new(),
             type_args: Vec::new(),
             const_args: Vec::new(),
+            includes: Vec::new(),
         }
     }
 
@@ -54,6 +58,7 @@ impl LiftContext {
             null_buffers: Vec::new(),
             type_args: Vec::new(),
             const_args: Vec::new(),
+            includes: Vec::new(),
         }
     }
 
@@ -86,6 +91,16 @@ impl LiftContext {
         self
     }
 
+    /// With the file `name` available to `#include "name"` (or `<name>`): its `text` is spliced where the directive is, after being
+    /// preprocessed itself (so a header's own guards, `#pragma once`, conditionals and nested includes work). **Nothing is read
+    /// from disk.** The name is matched exactly; the same name given twice with different text declines. A quoted include
+    /// the caller did not supply is named in the decline of anything the file could have defined (a call, a type, a name).
+    #[must_use]
+    pub fn with_include(mut self, name: impl Into<String>, text: impl Into<String>) -> Self {
+        self.includes.push((name.into(), text.into()));
+        self
+    }
+
     /// With the macro `name` defined as `value` (a flag such as `FOO` is `1`).
     #[must_use]
     pub fn with_define(mut self, name: impl Into<String>, value: i64) -> Self {
@@ -103,51 +118,226 @@ struct Frame {
     parent_active: bool,
 }
 
-/// The source with every inactive region and every directive (but an active `#pragma`) blanked to spaces, or the first thing it
-/// could not model. Offsets and line numbers are preserved.
 /// The macros the pass could not expand, by name, each with why (`the function-like macro `F``): a definition is recorded, never an
 /// error, because most kernels never use most of a file's macros. The walker declines at a **use**.
 pub(super) type Unexpanded = Vec<(String, String)>;
 
+/// The deepest `#include` nesting spliced (a cycle with no guard reaches it and is named).
+const MAX_INCLUDE_DEPTH: usize = 16;
+
+/// Where one line of the preprocessed text came from: the file (`None` is the source being lifted) and its 1-based line there.
+pub(super) type Origin = (Option<String>, usize);
+
+/// What the preprocessor pass produced.
+pub(super) struct Preprocessed {
+    /// The source with every inactive region and directive (but an active `#pragma`) blanked to spaces, each supplied `#include`
+    /// replaced by that file's own preprocessed text. For a source with no supplied include the offsets and line numbers equal the input's.
+    pub(super) text: String,
+    /// The macros it could not expand.
+    pub(super) unexpanded: Unexpanded,
+    /// Quoted includes (`#include "x.cuh"`) that were active and not supplied: the walker names them where it declines on
+    /// something such a file could have defined. A `<system>` include is not listed (the toolchain's headers are modelled by the walker).
+    pub(super) missing_includes: Vec<String>,
+    /// One entry per line of `text`.
+    pub(super) origins: Vec<Origin>,
+}
+
+/// The pass's running state across the source and every file it splices.
+struct Pass<'a> {
+    includes: &'a [(String, String)],
+    defs: Defs,
+    unexpanded: Unexpanded,
+    missing: Vec<String>,
+    /// Files that said `#pragma once`: spliced at most once.
+    once: Vec<String>,
+    out: String,
+    origins: Vec<Origin>,
+}
+
+/// Run the preprocessor over `src` with the caller's macro definitions and supplied include files.
+///
+/// # Errors
+/// An `#if` that cannot be evaluated, an unbalanced conditional, or an include nest deeper than [`MAX_INCLUDE_DEPTH`].
 pub(super) fn preprocess(
     src: &str,
     predefined: &[(String, i64)],
-) -> Result<(String, Unexpanded), String> {
-    let mut defs: Defs = predefined.iter().cloned().collect();
-    let mut unexpanded: Unexpanded = Vec::new();
-    let mut stack: Vec<Frame> = Vec::new();
-    let mut out = String::with_capacity(src.len());
-    let mut continued = false;
-    for line in src.split_inclusive('\n') {
-        let body = line.trim_end_matches(['\n', '\r']);
-        let active = stack.iter().all(|f| f.taken);
-        let directive = continued || body.trim_start().starts_with('#');
-        if !directive {
-            out.push_str(&if active {
-                line.to_string()
-            } else {
-                blank(line)
-            });
-            continue;
-        }
-        let was_continued = continued;
-        continued = body.trim_end().ends_with('\\');
-        if was_continued {
-            out.push_str(&blank(line));
-            continue;
-        }
-        let keep = handle(
-            body.trim_start()[1..].trim_start(),
-            active,
-            &mut stack,
-            (&mut defs, &mut unexpanded),
-        )?;
-        out.push_str(&if keep { line.to_string() } else { blank(line) });
+    includes: &[(String, String)],
+) -> Result<Preprocessed, String> {
+    let mut pass = Pass {
+        includes,
+        defs: predefined.iter().cloned().collect(),
+        unexpanded: Vec::new(),
+        missing: Vec::new(),
+        once: Vec::new(),
+        out: String::with_capacity(src.len()),
+        origins: Vec::new(),
+    };
+    pass.run(None, src, &mut Vec::new())?;
+    Ok(Preprocessed {
+        text: pass.out,
+        unexpanded: pass.unexpanded,
+        missing_includes: pass.missing,
+        origins: pass.origins,
+    })
+}
+
+impl Pass<'_> {
+    fn emit(&mut self, line: &str, origin: (&Option<String>, usize)) {
+        self.out.push_str(line);
+        self.origins.push((origin.0.clone(), origin.1));
     }
-    if stack.is_empty() {
-        Ok((out, unexpanded))
-    } else {
-        Err("an `#if` with no `#endif`".to_string())
+
+    /// A line ending, if the text so far does not end in one (a spliced file's last line may lack it).
+    fn end_line(&mut self) {
+        if !self.out.is_empty() && !self.out.ends_with('\n') {
+            self.out.push('\n');
+        }
+    }
+
+    /// One file's lines. `chain` is the include path that reached it (for a cycle's message). The conditionals must balance within the file.
+    fn run(
+        &mut self,
+        file: Option<&str>,
+        src: &str,
+        chain: &mut Vec<String>,
+    ) -> Result<(), String> {
+        let origin = file.map(str::to_string);
+        let mut stack: Vec<Frame> = Vec::new();
+        let mut continued = false;
+        for (idx, line) in src.split_inclusive('\n').enumerate() {
+            let at = (&origin, idx + 1);
+            let body = line.trim_end_matches(['\n', '\r']);
+            let active = stack.iter().all(|f| f.taken);
+            let directive = continued || body.trim_start().starts_with('#');
+            if !directive {
+                self.emit(
+                    &if active {
+                        line.to_string()
+                    } else {
+                        blank(line)
+                    },
+                    at,
+                );
+                continue;
+            }
+            let was_continued = continued;
+            continued = body.trim_end().ends_with('\\');
+            if was_continued {
+                self.emit(&blank(line), at);
+                continue;
+            }
+            let d = body.trim_start()[1..].trim_start();
+            if active && d.starts_with("include") {
+                self.emit(&blank(line), at);
+                self.include(d["include".len()..].trim(), chain)?;
+                continue;
+            }
+            if active
+                && file.is_some()
+                && d.starts_with("pragma")
+                && d["pragma".len()..].trim() == "once"
+            {
+                self.once.push(file.unwrap_or_default().to_string());
+                self.emit(&blank(line), at);
+                continue;
+            }
+            let defs_unexp = (&mut self.defs, &mut self.unexpanded);
+            let keep = handle(d, active, &mut stack, defs_unexp)?;
+            self.emit(&if keep { line.to_string() } else { blank(line) }, at);
+        }
+        if stack.is_empty() {
+            Ok(())
+        } else {
+            Err("an `#if` with no `#endif`".to_string())
+        }
+    }
+
+    /// `#include "name"` or `<name>`: the supplied file's text spliced here, exactly once for a `#pragma once` file.
+    fn include(&mut self, arg: &str, chain: &mut Vec<String>) -> Result<(), String> {
+        let (name, quoted) = match (arg.strip_prefix('"'), arg.strip_prefix('<')) {
+            (Some(r), _) => (r.split('"').next().unwrap_or(""), true),
+            (_, Some(r)) => (r.split('>').next().unwrap_or(""), false),
+            _ => return Ok(()),
+        };
+        let found: Vec<&(String, String)> =
+            self.includes.iter().filter(|(n, _)| n == name).collect();
+        let Some((_, text)) = found.first().copied() else {
+            if quoted && !self.missing.iter().any(|m| m == name) {
+                self.missing.push(name.to_string());
+            }
+            return Ok(());
+        };
+        if found.iter().any(|(_, t)| t != text) {
+            return Err(format!(
+                "the include `{name}` was supplied twice with different text"
+            ));
+        }
+        if self.once.iter().any(|o| o == name) {
+            return Ok(());
+        }
+        if chain.len() >= MAX_INCLUDE_DEPTH {
+            return Err(format!(
+                "the include depth limit ({MAX_INCLUDE_DEPTH}) was exceeded (a cycle with no guard?): {} -> {name}",
+                chain.join(" -> ")
+            ));
+        }
+        chain.push(name.to_string());
+        let text = text.clone();
+        // each file starts on its own line, and the line after it does too, whether or not it ends in a newline
+        self.end_line();
+        let r = self.run(Some(name), &text, chain);
+        self.end_line();
+        chain.pop();
+        r
+    }
+}
+
+/// A lift error as the caller should see it: its line is the **source's own** line (a line inside a spliced include is reported
+/// at the `#include` that brought it in, with the file and line named in the text), and a decline on something a file the
+/// caller did not supply could have defined (a call, a type, a name) names that file.
+pub(super) fn report(e: KernelLiftError, pre: &Preprocessed) -> KernelLiftError {
+    let place = |line: usize| -> (usize, Option<String>) {
+        let Some(row) = line.checked_sub(1).filter(|r| *r < pre.origins.len()) else {
+            return (line, None);
+        };
+        match &pre.origins[row] {
+            (None, n) => (*n, None),
+            (Some(f), n) => {
+                let at = pre.origins[..row]
+                    .iter()
+                    .rev()
+                    .find_map(|(f, n)| f.is_none().then_some(*n))
+                    .unwrap_or(0);
+                (at, Some(format!(" (in the include `{f}`, line {n})")))
+            }
+        }
+    };
+    match e {
+        KernelLiftError::NotYetLifted { construct, line } => {
+            let (line, within) = place(line);
+            let mut construct = construct;
+            construct.push_str(&within.unwrap_or_default());
+            let unknown = ["a call to ", "the type ", "the name "]
+                .iter()
+                .any(|p| construct.starts_with(p));
+            if unknown && !pre.missing_includes.is_empty() {
+                let names: Vec<String> = pre
+                    .missing_includes
+                    .iter()
+                    .map(|n| format!("`{n}`"))
+                    .collect();
+                construct.push_str(&format!(
+                    "; the source includes {}, which {} not supplied (`LiftContext::with_include`)",
+                    names.join(", "),
+                    if names.len() == 1 { "was" } else { "were" }
+                ));
+            }
+            KernelLiftError::NotYetLifted { construct, line }
+        }
+        KernelLiftError::SyntaxError { line } => KernelLiftError::SyntaxError {
+            line: place(line).0,
+        },
+        other => other,
     }
 }
 
@@ -398,5 +588,167 @@ impl<'a> Expr<'a> {
             return Ok(self.defs.get(&tok).copied().unwrap_or(0));
         }
         Err(format!("the token `{tok}` in a preprocessor condition"))
+    }
+}
+
+#[cfg(test)]
+mod include_tests {
+    use super::*;
+
+    fn pp(src: &str, inc: &[(&str, &str)]) -> Result<Preprocessed, String> {
+        let inc: Vec<(String, String)> = inc
+            .iter()
+            .map(|(n, t)| ((*n).into(), (*t).into()))
+            .collect();
+        preprocess(src, &[], &inc)
+    }
+
+    fn lines(p: &Preprocessed) -> Vec<&str> {
+        p.text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn a_supplied_include_is_spliced_where_the_directive_is_and_by_exact_name() {
+        let p = pp("a\n#include \"h.cuh\"\nb\n", &[("h.cuh", "H1\nH2\n")]).unwrap();
+        assert_eq!(lines(&p), ["a", "H1", "H2", "b"]);
+        // `<h.cuh>` is the same name; a different name is a different file
+        assert_eq!(
+            lines(&pp("#include <h.cuh>\n", &[("h.cuh", "H\n")]).unwrap()),
+            ["H"]
+        );
+        let p = pp(
+            "#include \"h.cuh\"\n",
+            &[("x/h.cuh", "H\n"), ("H.cuh", "H\n"), ("h.cu", "H\n")],
+        )
+        .unwrap();
+        assert!(lines(&p).is_empty(), "no near match resolves: {:?}", p.text);
+        assert_eq!(p.missing_includes, ["h.cuh"]);
+    }
+
+    #[test]
+    fn an_unsupplied_quoted_include_is_listed_and_a_system_include_is_not() {
+        let p = pp(
+            "#include <cuda_fp16.h>\n#include \"mine.cuh\"\n#include \"mine.cuh\"\n",
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            p.missing_includes,
+            ["mine.cuh"],
+            "named once, and the system header is not"
+        );
+        // an include in an inactive region is not needed
+        let p = pp("#if 0\n#include \"never.cuh\"\n#endif\n", &[]).unwrap();
+        assert!(p.missing_includes.is_empty());
+    }
+
+    #[test]
+    fn a_guarded_or_pragma_once_header_is_spliced_once() {
+        let guarded = "#ifndef G\n#define G\nBODY\n#endif\n";
+        let p = pp("#include \"g.h\"\n#include \"g.h\"\n", &[("g.h", guarded)]).unwrap();
+        assert_eq!(lines(&p), ["BODY"]);
+        let once = "#pragma once\nBODY\n";
+        let p = pp("#include \"o.h\"\n#include \"o.h\"\n", &[("o.h", once)]).unwrap();
+        assert_eq!(lines(&p), ["BODY"]);
+        // control: an unguarded header is spliced each time it is included
+        let p = pp("#include \"u.h\"\n#include \"u.h\"\n", &[("u.h", "BODY\n")]).unwrap();
+        assert_eq!(lines(&p), ["BODY", "BODY"]);
+    }
+
+    #[test]
+    fn nested_includes_and_the_headers_own_conditionals_and_defines_work() {
+        let outer = "#include \"inner.h\"\n#if INNER_VALUE >= 2\nBIG\n#else\nSMALL\n#endif\n";
+        let inner = "#define INNER_VALUE 3\nINNER\n";
+        let p = pp(
+            "#include \"outer.h\"\nMAIN\n",
+            &[("outer.h", outer), ("inner.h", inner)],
+        )
+        .unwrap();
+        assert_eq!(lines(&p), ["INNER", "BIG", "MAIN"]);
+    }
+
+    #[test]
+    fn a_cycle_with_no_guard_and_a_deep_nest_are_named_not_followed_forever() {
+        let e = pp(
+            "#include \"a.h\"\n",
+            &[("a.h", "#include \"b.h\"\n"), ("b.h", "#include \"a.h\"\n")],
+        )
+        .err()
+        .unwrap();
+        assert!(
+            e.contains("depth limit (16)") && e.contains("a.h -> b.h -> a.h"),
+            "{e}"
+        );
+        // a guarded cycle is fine: the guard stops it
+        let a = "#ifndef A\n#define A\n#include \"b.h\"\nA_BODY\n#endif\n";
+        let b = "#ifndef B\n#define B\n#include \"a.h\"\nB_BODY\n#endif\n";
+        let p = pp("#include \"a.h\"\n", &[("a.h", a), ("b.h", b)]).unwrap();
+        assert_eq!(lines(&p), ["B_BODY", "A_BODY"]);
+        // a chain of exactly the limit is accepted, one more is not
+        let chain = |n: usize| -> Vec<(String, String)> {
+            (0..n)
+                .map(|i| {
+                    (
+                        format!("h{i}.h"),
+                        if i + 1 < n {
+                            format!("#include \"h{}.h\"\n", i + 1)
+                        } else {
+                            "LEAF\n".into()
+                        },
+                    )
+                })
+                .collect()
+        };
+        let run = |n: usize| {
+            let inc = chain(n);
+            preprocess("#include \"h0.h\"\n", &[], &inc)
+        };
+        assert_eq!(lines(&run(16).unwrap()), ["LEAF"]);
+        assert!(run(17).is_err());
+    }
+
+    #[test]
+    fn the_same_name_with_different_text_is_an_error_and_with_the_same_text_is_not() {
+        let e = pp("#include \"h.h\"\n", &[("h.h", "A\n"), ("h.h", "B\n")])
+            .err()
+            .unwrap();
+        assert!(e.contains("supplied twice with different text"), "{e}");
+        assert_eq!(
+            lines(&pp("#include \"h.h\"\n", &[("h.h", "A\n"), ("h.h", "A\n")]).unwrap()),
+            ["A"]
+        );
+    }
+
+    #[test]
+    fn every_output_line_knows_where_it_came_from() {
+        let p = pp("m1\n#include \"h.h\"\nm3", &[("h.h", "h1\nh2")]).unwrap();
+        let o: Vec<(Option<&str>, usize)> =
+            p.origins.iter().map(|(f, n)| (f.as_deref(), *n)).collect();
+        // main line 1, the (blanked) directive line 2, the header's two lines, then main line 3
+        assert_eq!(
+            o,
+            [
+                (None, 1),
+                (None, 2),
+                (Some("h.h"), 1),
+                (Some("h.h"), 2),
+                (None, 3)
+            ]
+        );
+        assert_eq!(p.text.lines().count(), p.origins.len());
+        // a header that lacks a final newline does not glue to the next line
+        assert_eq!(lines(&p), ["m1", "h1", "h2", "m3"]);
+    }
+
+    #[test]
+    fn a_source_with_no_supplied_include_is_unchanged() {
+        let src = "int a;\n#include \"x.h\"\nint b;";
+        let p = pp(src, &[]).unwrap();
+        assert_eq!(p.text.len(), src.len(), "offsets are preserved");
+        assert_eq!(p.text.lines().count(), 3);
     }
 }
