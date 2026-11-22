@@ -85,7 +85,7 @@ impl std::error::Error for KernelLiftError {}
 mod aliases;
 mod asm;
 mod context;
-pub use context::LiftContext;
+pub use context::{FieldLayout, LiftContext, StructLayout};
 mod calls;
 mod cpasync;
 mod declarations;
@@ -151,6 +151,8 @@ fn lift_in(
     name: &str,
     ctx: &LiftContext,
 ) -> Result<KernelFn, KernelLiftError> {
+    ctx.validate_layouts()
+        .map_err(|construct| KernelLiftError::NotYetLifted { construct, line: 0 })?;
     let pre = context::preprocess(src, &ctx.defines, &ctx.includes)
         .map_err(|construct| KernelLiftError::NotYetLifted { construct, line: 0 })?;
     lift_preprocessed(fe, name, ctx, &pre).map_err(|e| context::report(e, &pre))

@@ -52,7 +52,8 @@ pub use entry_model::{
     EntryModel, EntryModelError, EntryModelFn, Resource, ResourceKind, Semantic,
 };
 pub use kernel_body::{
-    KernelLiftError, LiftContext, lift_kernel, lift_kernel_in, lift_kernel_launched,
+    FieldLayout, KernelLiftError, LiftContext, StructLayout, lift_kernel, lift_kernel_in,
+    lift_kernel_launched,
 };
 
 use tree_sitter::{Node, Tree};

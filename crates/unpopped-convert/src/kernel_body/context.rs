@@ -32,6 +32,107 @@ pub struct LiftContext {
     pub const_args: Vec<(String, i64)>,
     /// Include files the caller supplies, by the exact name the source writes (`#include "baracuda_loss.cuh"` is `baracuda_loss.cuh`).
     pub includes: Vec<(String, String)>,
+    /// Memory layouts of C structs the CALLER states (`sizeof` and `offsetof` from its own compiler), by struct name. The walker
+    /// never derives a layout: a struct read through a pointer into a byte buffer lifts only with one of these (ROADMAP U38d).
+    pub struct_layouts: Vec<(String, StructLayout)>,
+}
+
+/// One field of a [`StructLayout`]: `count` consecutive elements of the C scalar type `elem` at byte `offset` (an array field has
+/// `count > 1`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FieldLayout {
+    /// The field's name.
+    pub name: String,
+    /// Bytes from the start of the struct.
+    pub offset: u32,
+    /// The C element type (`float`, `uint8_t`, `half`, `int16_t`, ...).
+    pub elem: String,
+    /// The number of elements (`1` for a scalar field).
+    pub count: u32,
+}
+
+impl FieldLayout {
+    /// A field `name` of `count` elements of `elem` at byte `offset`.
+    #[must_use]
+    pub fn new(name: impl Into<String>, offset: u32, elem: impl Into<String>, count: u32) -> Self {
+        Self {
+            name: name.into(),
+            offset,
+            elem: elem.into(),
+            count,
+        }
+    }
+}
+
+/// The memory layout of a C struct, as the CALLER's compiler reports it (`sizeof(S)` and `offsetof(S, f)`, e.g. printed by a
+/// compiled harness under `nvcc`). **The walker derives no layout**: it applies this one, after checking it is self-consistent
+/// ([`StructLayout::validate`]), and declines by name where the source disagrees with it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct StructLayout {
+    /// `sizeof` the struct, in bytes (the stride of an array of them).
+    pub size: u32,
+    /// Its fields.
+    pub fields: Vec<FieldLayout>,
+}
+
+impl StructLayout {
+    /// A layout of `size` bytes with `fields`.
+    #[must_use]
+    pub fn new(size: u32, fields: Vec<FieldLayout>) -> Self {
+        Self { size, fields }
+    }
+
+    /// Checks the layout is self-consistent: a positive size, named fields without duplicates, a known scalar element type with
+    /// a positive count, every field inside `size`, and no two fields overlapping.
+    ///
+    /// # Errors
+    /// The first inconsistency, in words naming the field.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.size == 0 {
+            return Err("a size of 0".to_string());
+        }
+        let mut spans: Vec<(u64, u64, &str)> = Vec::new();
+        for f in &self.fields {
+            if f.name.is_empty() {
+                return Err("a field with no name".to_string());
+            }
+            if spans.iter().any(|(_, _, n)| *n == f.name) {
+                return Err(format!("the field `{}` twice", f.name));
+            }
+            let elem = super::c_type(&f.elem)
+                .map_err(|why| format!("the field `{}` of type `{}`: {why}", f.name, f.elem))?;
+            let Some(width) = super::pointer::byte_size(elem) else {
+                return Err(format!(
+                    "the field `{}` of type `{}`, which has no whole-byte size",
+                    f.name, f.elem
+                ));
+            };
+            if f.count == 0 {
+                return Err(format!("the field `{}` with a count of 0", f.name));
+            }
+            let start = u64::from(f.offset);
+            let end = start + u64::from(f.count) * u64::try_from(width).unwrap_or(0);
+            if end > u64::from(self.size) {
+                return Err(format!(
+                    "the field `{}` ends at byte {end}, past the struct's size {}",
+                    f.name, self.size
+                ));
+            }
+            spans.push((start, end, &f.name));
+        }
+        spans.sort_unstable();
+        for pair in spans.windows(2) {
+            if pair[0].1 > pair[1].0 {
+                return Err(format!(
+                    "the fields `{}` and `{}` overlap",
+                    pair[0].2, pair[1].2
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl LiftContext {
@@ -46,6 +147,7 @@ impl LiftContext {
             type_args: Vec::new(),
             const_args: Vec::new(),
             includes: Vec::new(),
+            struct_layouts: Vec::new(),
         }
     }
 
@@ -59,6 +161,7 @@ impl LiftContext {
             type_args: Vec::new(),
             const_args: Vec::new(),
             includes: Vec::new(),
+            struct_layouts: Vec::new(),
         }
     }
 
@@ -99,6 +202,33 @@ impl LiftContext {
     pub fn with_include(mut self, name: impl Into<String>, text: impl Into<String>) -> Self {
         self.includes.push((name.into(), text.into()));
         self
+    }
+
+    /// With the C struct `name` laid out as `layout` (the caller's `sizeof` and `offsetof`; **the walker never derives one**). The
+    /// same name given twice with different layouts, or a layout that is not self-consistent ([`StructLayout::validate`]),
+    /// declines the lift by name.
+    #[must_use]
+    pub fn with_struct_layout(mut self, name: impl Into<String>, layout: StructLayout) -> Self {
+        self.struct_layouts.push((name.into(), layout));
+        self
+    }
+
+    /// Checks every supplied struct layout.
+    pub(super) fn validate_layouts(&self) -> Result<(), String> {
+        for (i, (name, layout)) in self.struct_layouts.iter().enumerate() {
+            layout
+                .validate()
+                .map_err(|why| format!("the struct layout `{name}`: {why}"))?;
+            if self.struct_layouts[..i]
+                .iter()
+                .any(|(n, l)| n == name && l != layout)
+            {
+                return Err(format!(
+                    "the struct layout `{name}` was supplied twice with different layouts"
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// With the macro `name` defined as `value` (a flag such as `FOO` is `1`).
