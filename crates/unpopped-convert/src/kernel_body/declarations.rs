@@ -28,14 +28,14 @@ impl<'s, 't> Walker<'s, 't> {
             return self.pointer_declaration(n, ty, out);
         }
         if head.starts_with("__shared__") {
-            return self.array_declaration(n, ty, MemorySpace::Shared);
+            return self.array_declaration(n, ty, MemorySpace::Shared, out);
         }
         let has_array = declares_array(n);
         if has_array && head.starts_with("extern") && head.contains("__shared__") {
             return self.dynamic_shared_declaration(n, ty);
         }
         if has_array && !head.starts_with("extern") {
-            return self.array_declaration(n, ty, MemorySpace::Private);
+            return self.array_declaration(n, ty, MemorySpace::Private, out);
         }
         if head.starts_with("extern")
             || head.starts_with("__constant__")
@@ -306,8 +306,61 @@ impl<'s, 't> Walker<'s, 't> {
         Ok(())
     }
 
+    /// `T name[N] = { e0, e1, ... };`: the elements stored in order, the rest zero (C zero-fills a short brace list). A `__shared__`
+    /// array has no initialiser, a nested brace or a designator declines (an element is an ordinary expression).
+    fn array_initialiser(
+        &mut self,
+        (alloc, ty, count): (u32, E, u32),
+        list: Node<'_>,
+        space: MemorySpace,
+        out: &mut Vec<Stmt>,
+    ) -> R<()> {
+        if space == MemorySpace::Shared {
+            return self.not_yet(list, "a `__shared__` array with an initialiser");
+        }
+        if list.kind() != "initializer_list" {
+            return self.not_yet(list, "an array initialiser that is not a brace list");
+        }
+        let mut c = list.walk();
+        let els: Vec<_> = list
+            .named_children(&mut c)
+            .filter(|e| e.kind() != "comment")
+            .collect();
+        if els.len() > count as usize {
+            return self.not_yet(
+                list,
+                format!(
+                    "{} initialisers for an array of {count} elements",
+                    els.len()
+                ),
+            );
+        }
+        if els.len() < count as usize {
+            self.zero_fill(alloc, ty, count, list, out)?;
+        }
+        for (i, el) in els.into_iter().enumerate() {
+            let (v, vt) = self.expr(el)?;
+            let value = self.convert(v, vt, ty, el)?;
+            self.flush(out);
+            out.push(Stmt::Store {
+                place: Place::Alloc {
+                    alloc,
+                    index: ScalarExpr::ConstInt(i64::try_from(i).unwrap_or(i64::MAX), E::I32),
+                },
+                value,
+            });
+        }
+        Ok(())
+    }
+
     /// `__shared__ T name[N];` with a literal `N`: one `Shared` allocation, named by the array.
-    pub(super) fn array_declaration(&mut self, n: Node<'_>, ty: E, space: MemorySpace) -> R<()> {
+    pub(super) fn array_declaration(
+        &mut self,
+        n: Node<'_>,
+        ty: E,
+        space: MemorySpace,
+        out: &mut Vec<Stmt>,
+    ) -> R<()> {
         let what = if space == MemorySpace::Shared {
             "`__shared__`"
         } else {
@@ -322,11 +375,21 @@ impl<'s, 't> Walker<'s, 't> {
         let mut c = n.walk();
         let decls: Vec<_> = n.children_by_field_name("declarator", &mut c).collect();
         for d in decls {
+            // `T name[N] = { ... }`: a private array with an initialiser list
+            let (d, init) = if d.kind() == "init_declarator" {
+                let inner = d.child_by_field_name("declarator").unwrap_or(d);
+                (inner, d.child_by_field_name("value"))
+            } else {
+                (d, None)
+            };
             let (Some(id), Some(size)) = (
                 d.child_by_field_name("declarator"),
                 d.child_by_field_name("size"),
             ) else {
-                return self.not_yet(d, format!("{what} declarator that is not a sized array `T name[N]` (an initializer is a later slice)"));
+                return self.not_yet(
+                    d,
+                    format!("{what} declarator that is not a sized array `T name[N]`"),
+                );
             };
             let count = self.fold_size(size)?;
             let Some(count) = count else {
@@ -350,6 +413,9 @@ impl<'s, 't> Walker<'s, 't> {
                 .last_mut()
                 .expect("a scope is open")
                 .insert(name, Sym::Alloc(index, ty));
+            if let Some(list) = init {
+                self.array_initialiser((index, ty, count), list, space, out)?;
+            }
         }
         Ok(())
     }

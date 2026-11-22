@@ -256,7 +256,14 @@ impl<'s, 't> Walker<'s, 't> {
 
     /// A loop storing zero into every element of a private array (the oracle traps a read of an unwritten one; C leaves it
     /// indeterminate).
-    fn zero_fill(&mut self, alloc: u32, e: E, n: u32, at: Node<'_>, out: &mut Vec<Stmt>) -> R<()> {
+    pub(super) fn zero_fill(
+        &mut self,
+        alloc: u32,
+        e: E,
+        n: u32,
+        at: Node<'_>,
+        out: &mut Vec<Stmt>,
+    ) -> R<()> {
         let counter = self.new_local(E::I32);
         let store = Stmt::Store {
             place: Place::Alloc {
