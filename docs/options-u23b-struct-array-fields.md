@@ -1,6 +1,6 @@
 # Options: struct parameters with array fields (U23b, census slice 5)
 
-Status: **options note for pm-kernels' ruling, no code** (`[TASK]` 2026-11-22). Source: `docs/options-u19-census.md`, which stopped **~67 of Baracuda's 535
+Status: **option A implemented (branch `lane/u19-templates`; pm-kernels approved 2026-11-22)**; see *Result* at the end. Originally: options note for pm-kernels' ruling, no code (`[TASK]` 2026-11-22). Source: `docs/options-u19-census.md`, which stopped **~67 of Baracuda's 535
 kernel definitions** (heuristically instantiated) on "the field `shape.v` of a struct parameter: only scalar fields and nested structs of them are allowed".
 
 ## The real shape
@@ -58,5 +58,10 @@ walker already lowers as a `Private` allocation, not a parameter).
 
 **Patent guard:** an array extent and a read are layout and access; neither adds a thread-set, memory-kind or copy-count annotation to the struct
 (`docs/PATENT-SWEEP.md`, U23; `kernel_interface::layout_only_guard`). Option A adds nothing to the IR at all.
+
+
+## Result (2026-11-22)
+
+Option A as written: an array field of a struct parameter flattens to `N` scalar fields (`shape.v[0]` .. `shape.v[N-1]`, the one `ParamKind::Struct`), a constant index is the element and a runtime index a `Select` ladder. **Decisions recorded:** an index outside `0..N` (constant or not, negative, or a huge unsigned) reads **`0`**; a kernel that really indexes out of range reads whatever memory held under C and `0` through this lift, so a consumer sees a difference exactly there and nowhere else, and the lift never traps. Arrays above **64** elements decline (`NotYetLifted`, "at most 64"), as do arrays of structs and assignment to an element. The layout equals the C array's byte for byte (`ParamsBlock::of_struct` over eight `int64_t`: offsets 0, 8 .. 56, size 64, align 8). No IR change; option B stays held unless an emitter measures the ladder as a cost. Tests: `tests/kernel_body_param_arrays.rs`. **One thing the note missed:** Baracuda's strided kernels iterate `for (int d = rank - 1; d >= 0; --d)`, which the walker did not lift (counted loops counted up only), so the slice would not have unlocked them; counted loops may now count down (`tests/kernel_body_descending_for.rs`). The census has not been re-run on this branch, so how many of the ~67 kernels now lift is **not measured**.
 
 — lane: unpopped
