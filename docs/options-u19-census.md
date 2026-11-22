@@ -13,7 +13,7 @@ unlocks. **No GPU, no emitter, no run: only the lift.**
 | the same, `kernels/` only (Baracuda's own) | `ce2911956` | 431 (319 templates) | 7 | 37 |
 | fishstringer `fishstringer-kernels-source` (Slang, the current home of Fuel's) | `8c203f2` | 153 entry points in 149 files | **0** | n/a |
 | Fuel `fuel-kernels-source` (Slang), the 2026-09-25 corpus | `ded9bed` | 151 entry points in 147 files | **0** | n/a |
-| FlashInfer `attention/prefill.cuh` (second goal kernel) | `ce2911956` (vendored) | 3 (all templates) | **0** | 0 |
+| FlashInfer `attention/prefill.cuh` (second goal kernel) | `ce2911956` (vendored) | 3 (all templates) | **0** | not measurable (see below) |
 | **Control**: the decode fixture | Baracuda `ce2911956` | 1 | **1 of 1** | n/a |
 
 Walker: this lane's `lane/u19-structs` at `dd67e9c5` (unpushed; the stack on #385). The control lifts under Baracuda's **real** CUDA frontend
@@ -34,7 +34,7 @@ never read from a working tree. Counts are **first decline per kernel**.
   and which only Baracuda's own list of instantiation sites knows. Counts are of definitions.
 - **The first decline hides the rest.** A kernel stopped on a template parameter is not known to lift once it is given. `--instantiate` is a
   **heuristic** (type parameters to `float`, non-type to `128`, file-wide, header blanked) to see one layer deeper; it is **not** an instantiation, a real
-  one is the caller's. Numbers from it are labelled.
+  one is the caller's. Numbers from it are labelled. **It has a known artifact: substituting `float` for a *class-typed* template parameter (a functor `F`, a policy `POLICY`, a traits class `KTraits`) writes invalid C++ (`float::init()`), which then fails to parse. Those "grammar errors" are mine, not the parser's (checked: the unsubstituted `T acc = F::init();` and `__launch_bounds__(KTraits::NUM_THREADS)` both parse); they are excluded below.**
 - **One generic context** for every kernel (block 128, dynamic shared 49152 B, `__CUDA_ARCH__` 800, `__CUDACC_VER_MAJOR__` 13): a kernel needing another launch
   shape is not penalised by a wrong guess, because the walker takes it as given.
 - Noise: 11 prototype-only matches and 9 names taken from comments (`points`, `problem`) are counted as `NoSuchFunction`. 9 of 535 is the error bar on "found".
@@ -77,7 +77,7 @@ anything else is visible.**
 | 8 | `cg::thread_block` (cooperative groups) | walker slice, or IR (`Collective` exists) | `vendor/mhc/src/sinkhorn_knopp.cuh:31 sinkhorn_knopp_warp_optimized_kernel` |
 | 8 | `vec_t<float, 128>` (FlashInfer's vector class template) | walker slice (class templates) | `vendor/flashinfer/include/flashinfer/attention/cascade.cuh:184 AttentionSumKernel` |
 | 6 | `__shared__` with more than one dimension | walker slice | `include/baracuda_bin_rcr_sm89.cuh:83` |
-| 18 (12 templates, 6 not; 10 as is) | **grammar errors** in `tree-sitter-cuda` 0.21: `T acc = F::init();` (a dependent name), `using AccT = typename POLICY::AccT;`, `extern __shared__ __align__(alignof(T)) uint8_t smem[]` (`sampling.cuh`, 6), `__launch_bounds__(KTraits::NUM_THREADS)` (all 3 of prefill) | **parser** (Baracuda's lane), not the walker | `include/baracuda_elementwise.cuh:2864 reduce_axis_kernel` |
+| 10 as is (6 not templates, 4 templates; the 12 more that appear under `--instantiate` are the artifact above) | the **one real `tree-sitter-cuda` 0.21 gap**: `extern __shared__ __align__(alignof(TempStorage)) uint8_t smem[];` | **parser** (Baracuda's lane), not the walker | `vendor/flashinfer/include/flashinfer/sampling.cuh:303 OnlineSoftmaxFusedKernel` (also 430, 509, 739, 788) |
 
 Then, each under 10: intrinsics missing from the frontend's math table (`__double2int_rn`, `__frcp_rn`, `__powf`, `fast_sigmoid`, `INFINITY`, 4 to 6 each), a loop
 bound naming an assigned variable (5), `static_assert` (3), an optional-parameter default (3), `a call to op` (functor, 11), statements (24, unclassified `X statement`).
@@ -104,11 +104,11 @@ ref; Fuel's is the same shape):
 
 ## FlashInfer `prefill.cuh` (second goal kernel): not near
 
-Three kernels (`SinglePrefillWithKVCacheKernel`, `BatchPrefillWithRaggedKVCacheKernel`, `BatchPrefillWithPagedKVCacheKernel`), all templates over a `KTraits`
-class. As is, all three stop on `the type `Params``. Heuristically instantiated they stop **before the walker**, on a grammar error at
-`__launch_bounds__(KTraits::NUM_THREADS)`. Present in all three: `cp.async`, `mma`/tensor cores, `asm volatile`, `__shared__`, barriers, vector and half types,
-`struct`/`class` and `cutlass::`/`std::` types. The decode kernel needed none of the class-template machinery; prefill is built on it. **I would not promise
-it from slices of this size.**
+Three kernels (`SinglePrefillWithKVCacheKernel`, `BatchPrefillWithRaggedKVCacheKernel`, `BatchPrefillWithPagedKVCacheKernel`), all templates over a `KTraits` class. As is, all
+three stop on `the type `Params``, a template parameter. **What is behind that is not measured:** `KTraits` is a traits class, so the `float` substitution cannot instantiate it
+(it writes invalid C++), and a real instantiation needs the caller's class definitions. What is present, statically, in all three: `cp.async`, `mma`/tensor cores, `asm volatile`,
+`__shared__`, barriers, vector and half types, `struct`/`class` types and `cutlass::`/`std::` library types. The decode kernel needed none of the class-template machinery; prefill is
+built on it. **The verdict "not near" rests on those constructs and on `KTraits`, not on a parser error**, and I would not promise it from slices of this size.
 
 ## The next slices, by how many real kernels each is stopping
 
@@ -124,8 +124,8 @@ A count is the kernels **stopped** by the class (an upper bound on what the slic
    corpus, and 0 Slang kernels lift without it. fishstringer owns the Slang front end: ask whether the model lives in the walker or in `SLANG`.
 5. **Struct parameters with array fields (~67): an IR decision first** (ask pm-kernels), then the walker.
 6. **Type aliases and cross-header types** (`using`, `floatX`, `DimsI32`: ~45) and **small tables** (intrinsics, `INFINITY`, multi-dimensional `__shared__`: ~30).
-7. **Parser gaps (18 CUDA heuristically instantiated, 10 as is; 13 Slang):** `tree-sitter-cuda` (dependent names, `__align__(alignof(..))`, `__launch_bounds__(X::Y)`) and `tree-sitter-slang`
-   (`var`, `is`). Not the walker's; report to Baracuda and fishstringer.
+7. **Parser gaps (CUDA: one construct, 10 kernels; Slang: 13):** `tree-sitter-cuda` rejects `extern __shared__ __align__(alignof(T)) uint8_t smem[];`; `tree-sitter-slang`
+   rejects `var` and `is` as identifiers. Not the walker's; filed as issues with the lines.
 
 **Not in this note, and needed before anyone plans past slice 3:** the instantiated population (Baracuda's list), the second layer under Slang's gate (needs
 slice 4 built), and a macro-expansion slice (`#define F(x)` appears in 456 of the 535 kernels' files; the walker now only declines at a use, which this run found
