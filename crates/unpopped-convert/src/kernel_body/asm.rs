@@ -27,7 +27,7 @@ impl<'s, 't> Walker<'s, 't> {
         let outs = self.asm_operands(e, "output_operands");
         let ins = self.asm_operands(e, "input_operands");
         let words: Vec<&str> = template
-            .split(|c: char| c == ' ' || c == ',')
+            .split([' ', ','])
             .filter(|w| !w.is_empty())
             .collect();
         let head = words.first().copied().unwrap_or("");

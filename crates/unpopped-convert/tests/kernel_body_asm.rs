@@ -182,6 +182,11 @@ fn an_unknown_template_or_a_partial_form_declines_with_its_text() {
         "void k(float* out, int n) { asm volatile(\"cp.async.wait_group %0;\" :: \"n\"(n)); out[0] = 1.0f; }",
         "wait_group",
     );
+    // a width other than the full 32 (`0x1f`) is a segmented shuffle: not this table's form
+    not_yet(
+        "void k(float* out, float x) { float y; asm volatile(\"shfl.sync.bfly.b32 %0, %1, %2, 0xf, 0xffffffff;\" : \"=f\"(y) : \"f\"(x), \"r\"(1)); out[0] = y; }",
+        "shfl.sync.bfly",
+    );
     // Control: the table's own spelling lifts.
     assert!(lift(&one("ex2.approx.ftz.f32 %0, %1;")).is_ok());
 }
