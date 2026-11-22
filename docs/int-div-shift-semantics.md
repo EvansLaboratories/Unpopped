@@ -153,6 +153,9 @@ change, was a bare C `/` that crashed on a zero divisor in a float kernel: found
   the 63 only for `I64`, so a `U64` operand would get 31 *if* it reached that speller (not verified; its dtype gate was not read).
   **Reported by their lanes, read not run** (pm-kernels `[FINDING]`, 2026-11-22, `rockfish-hip-emit/src/lib.rs:1745-1943` and `openclownfish-clc/kernel.rs@d7ed879`):
   `rockfish-hip-emit` **emits** integer `Div`/`Shl`/`Shr` at `i32`/`i64`/`u32`/`u64` through guarded helpers (`b == 0` gives `a`, signed `MIN / -1` gives `MIN`, shift count
-  `& (N-1)`, left shift through unsigned; `And`/`Or`/`Xor` bare), which matches the ruling by reading, and is tested by text and a clang syntax check only, **no value-level
-  run**. `openclownfish-clc` **declines** them by name in `lower_kernel` (`Div`: "a Div other than of two floats"; the others: "the binary op {op:?}"); its older fused
+  `& (N-1)`, left shift through unsigned; `And`/`Or`/`Xor` bare), which matches the ruling by reading. **Update, rockfish lane 2026-11-22 (`rockfish-wt-solver@4ff4377`, reported by pm-kernels):
+  host-run, mask read-only.** The 12 integer `Div`/`Shl`/`Shr` kernels (`i32`/`i64`/`u32`/`u64`) were compiled with host `clang++` and **run** on boundary vectors
+  (`b == 0`, signed `MIN / -1`, shift counts at and past the width; 190 to 286 pairs each): every result equals the Rust wrapping operation, which is the ruled rule, and two
+  hand mutants (no `MIN / -1` guard, a logical signed `Shr`) were caught. **Not observable on x86:** the count mask (the hardware masks), so that part stays read-only. There is no
+  `hipcc` and no device in that run: **not device-verified.** `openclownfish-clc` **declines** them by name in `lower_kernel` (`Div`: "a Div other than of two floats"; the others: "the binary op {op:?}"); its older fused
   path masks shifts and uses `ocl_idiv` at the compute type only. Neither was read by this lane.
