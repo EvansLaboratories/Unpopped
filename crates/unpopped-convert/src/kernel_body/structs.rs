@@ -543,12 +543,14 @@ impl<'s, 't> Walker<'s, 't> {
             let path = format!("{label}.{}", f.name);
             let sym = if self.is_struct(&f.ty) && f.array.is_none() {
                 Sym::Struct(self.param_struct(&f.ty, &path, at, flat)?)
-            } else if let (Ok(e), None, None) = (super::c_type(&f.ty), &f.array, &f.unsupported) {
+            } else if let (Ok(e), None, None, false) =
+                (super::c_type(&f.ty), &f.array, &f.unsupported, f.pointer)
+            {
                 let local = self.new_local(e);
                 flat.push(StructField::new(path, e, local));
                 Sym::Scalar(local, e, Fixed::Param)
-            } else if let (Ok(e), Some(size), None) =
-                (super::c_type(&f.ty), &f.array, &f.unsupported)
+            } else if let (Ok(e), Some(size), None, false) =
+                (super::c_type(&f.ty), &f.array, &f.unsupported, f.pointer)
             {
                 self.param_array(&path, e, size, at, flat)?
             } else {
