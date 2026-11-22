@@ -45,3 +45,5 @@ A counted loop whose test is `!=` (`for (int ii = i_start; ii != i_end; ii += i_
 `__half2float`, `__bfloat162float` (exact widening, taking only the 16-bit type they name) and `__float2half[_rn]`, `__float2bfloat16[_rn]` (round to nearest even, overflow to infinity) lift to one `Cast`.
 
 `typename Trait<Args>::member` (and `using Acc = typename AccOf<T>::type;`) resolves through the source's struct templates: the explicit specialisation with exactly those arguments, else the primary template's `using`/`typedef` member. A kernel parameter with a default value (`int max_entries = 0`) is the same parameter.
+
+`Trait<Args>::member` as a value (`TileShape<T>::Br`) reads the struct template's `static constexpr` integer member with a literal initialiser: the explicit specialisation with exactly those arguments (a template parameter bound by `LiftContext::with_type` read as its type), else the primary template. A non-literal initialiser or a missing member declines.

@@ -71,3 +71,54 @@ fn a_nested_member_is_not_read_as_the_outer_traits_member() {
         Err(KernelLiftError::NotYetLifted { .. })
     ));
 }
+
+const SHAPE: &str = "template <typename T> struct TileShape { static constexpr int Br = 64; static constexpr int Bc = 8; };\n\
+    template <> struct TileShape<double> { static constexpr int Br = 32; static constexpr int Bc = 4; };\n";
+
+fn out_of(k: &KernelFn) -> Vec<f64> {
+    let mut args = vec![
+        KernelArg::Buffer(TypedBuffer::from_f32(&[2], &[0.0, 0.0])),
+        KernelArg::Buffer(TypedBuffer::from_f32(&[1], &[0.0])),
+    ];
+    run_launch(k, &mut args).expect("runs");
+    let KernelArg::Buffer(o) = &args[0] else {
+        panic!()
+    };
+    o.to_f64_vec()
+}
+
+#[test]
+fn a_traits_static_member_is_its_value_for_those_arguments() {
+    let src = format!(
+        "{SHAPE}void k(float* out, const float* in) {{ constexpr int br = TileShape<float>::Br; \
+         out[0] = (float)(br * 100 + TileShape<float>::Bc); out[1] = (float)(TileShape<double>::Br * 100 + TileShape<double>::Bc); }}"
+    );
+    assert_eq!(out_of(&lift(&src).unwrap()), vec![6408.0, 3204.0]);
+}
+
+#[test]
+fn a_template_parameter_bound_to_a_type_selects_the_specialisation() {
+    let src = format!(
+        "{SHAPE}template <typename T> void k(float* out, const float* in) {{ out[0] = (float)TileShape<T>::Br; out[1] = (float)TileShape<T>::Bc; }}"
+    );
+    for (ty, want) in [("float", vec![64.0, 8.0]), ("double", vec![32.0, 4.0])] {
+        let ctx = unpopped_convert::LiftContext::new(LaunchShape::new([1, 1, 1], [1, 1, 1]))
+            .with_type("T", ty);
+        let k = unpopped_convert::lift_kernel_in(&C, &src, "k", &ctx).unwrap();
+        assert_eq!(out_of(&k), want, "T = {ty}");
+    }
+}
+
+#[test]
+fn a_member_that_is_not_a_literal_or_not_there_declines() {
+    let src = "struct S { static constexpr int A = 2 + 3; };\nvoid k(float* out, const float* in) { out[0] = (float)S::A; }";
+    assert!(matches!(
+        lift(src),
+        Err(KernelLiftError::NotYetLifted { .. })
+    ));
+    let src = "struct S { static constexpr int A = 2; };\nvoid k(float* out, const float* in) { out[0] = (float)S::B; }";
+    assert!(matches!(
+        lift(src),
+        Err(KernelLiftError::NotYetLifted { .. })
+    ));
+}

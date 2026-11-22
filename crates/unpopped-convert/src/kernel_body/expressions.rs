@@ -46,6 +46,7 @@ impl<'s, 't> Walker<'s, 't> {
             "field_expression" => self.builtin(n),
             "call_expression" => self.call_expr(n),
             "sizeof_expression" => self.sizeof_expr(n),
+            "qualified_identifier" => self.qualified_value(n),
             other => self.not_yet(n, format!("a `{other}` expression")),
         }
     }

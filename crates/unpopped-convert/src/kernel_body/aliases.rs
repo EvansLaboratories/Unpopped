@@ -48,6 +48,8 @@ pub(super) fn collect_traits(root: Node<'_>, src: &str) -> Traits {
             for m in body.named_children(&mut c) {
                 if let Some((member, ty)) = alias_of(m, src) {
                     out.entry(key.clone()).or_default().insert(member, ty);
+                } else if let Some((member, entry)) = static_member(m, src) {
+                    out.entry(key.clone()).or_default().insert(member, entry);
                 }
             }
         }
@@ -57,6 +59,26 @@ pub(super) fn collect_traits(root: Node<'_>, src: &str) -> Traits {
         }
     }
     out
+}
+
+/// A `static constexpr T name = init;` member: `("#name", "T|init")`, the `#` keeping it apart from the type members.
+fn static_member(m: Node<'_>, src: &str) -> Option<(String, String)> {
+    if m.kind() != "field_declaration" {
+        return None;
+    }
+    let ty = text(m.child_by_field_name("type")?, src).trim().to_string();
+    let d = m.child_by_field_name("declarator")?;
+    let (name, init) = match d.kind() {
+        "init_declarator" => (
+            d.child_by_field_name("declarator")?,
+            d.child_by_field_name("value")?,
+        ),
+        _ => (d, m.child_by_field_name("default_value")?),
+    };
+    Some((
+        format!("#{}", text(name, src).trim()),
+        format!("{ty}|{}", text(init, src).trim()),
+    ))
 }
 
 /// `(name, type text)` of an alias declaration node, if it is one.
@@ -103,16 +125,82 @@ impl<'s, 't> Walker<'s, 't> {
     fn trait_member(&self, t: &str) -> Option<String> {
         let t = t.strip_prefix("typename ").unwrap_or(t);
         let (head, member) = t.rsplit_once("::")?;
+        self.trait_entry(head, member.trim())
+    }
+
+    /// The entry `member` of the trait `head` (`Name<args>`, the arguments read through the type aliases in scope, so a template
+    /// parameter bound to `float` is `float`): the specialisation with exactly those arguments, else the primary template.
+    fn trait_entry(&self, head: &str, member: &str) -> Option<String> {
         let lt = head.find('<')?;
         if !head.ends_with('>') {
             return None;
         }
         let name = head[..lt].trim();
-        let key: String = head.split_whitespace().collect();
-        let found = self.traits.get(&key).and_then(|m| m.get(member.trim()));
-        found
-            .or_else(|| self.traits.get(name).and_then(|m| m.get(member.trim())))
+        let inner = &head[lt + 1..head.len() - 1];
+        let mut args = Vec::new();
+        let (mut depth, mut cur) = (0usize, String::new());
+        for c in inner.chars() {
+            match c {
+                '<' | '(' => depth += 1,
+                '>' | ')' => depth = depth.saturating_sub(1),
+                ',' if depth == 0 => {
+                    args.push(std::mem::take(&mut cur));
+                    continue;
+                }
+                _ => {}
+            }
+            cur.push(c);
+        }
+        args.push(cur);
+        let args: Vec<String> = args
+            .iter()
+            .map(|a| {
+                let mut a = a.split_whitespace().collect::<Vec<_>>().join(" ");
+                for _ in 0..MAX_ALIAS_DEPTH {
+                    match self.type_aliases.get(&a) {
+                        Some(next) => a = next.clone(),
+                        None => break,
+                    }
+                }
+                a.split_whitespace().collect::<String>()
+            })
+            .collect();
+        let key = format!("{name}<{}>", args.join(","));
+        self.traits
+            .get(&key)
+            .and_then(|m| m.get(member))
+            .or_else(|| self.traits.get(name).and_then(|m| m.get(member)))
             .cloned()
+    }
+
+    /// `Trait<Args>::member` as a value: the trait's `static constexpr` integer member.
+    pub(super) fn qualified_value(&self, n: Node<'_>) -> R<(ScalarExpr, E)> {
+        let t = text(n, self.src).to_string();
+        let found = t
+            .rsplit_once("::")
+            .and_then(|(head, member)| self.trait_entry(head, &format!("#{}", member.trim())));
+        let Some((ty, init)) = found.as_deref().and_then(|e| e.split_once('|')) else {
+            return self.not_yet(
+                n,
+                format!("a `qualified_identifier` expression `{}`", t.trim()),
+            );
+        };
+        let value = match super::parse_literal(init) {
+            Some(super::Lit::Int(v, _)) => v,
+            _ => {
+                return self.not_yet(
+                    n,
+                    format!(
+                        "the member `{}` with the non-literal initialiser `{init}`",
+                        t.trim()
+                    ),
+                );
+            }
+        };
+        match self.ctype(ty) {
+            Ok(e) if super::int_range(e).is_some() => Ok((ScalarExpr::ConstInt(value, e), e)),
+            _ => self.not_yet(n, format!("the member `{}` of type `{ty}`", t.trim())),
+        }
     }
 
     /// `using X = T;` or `typedef T X;` inside a function: the alias is in scope for the rest of the function.
