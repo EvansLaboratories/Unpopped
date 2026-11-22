@@ -10,6 +10,9 @@ impl<'s, 't> Walker<'s, 't> {
             .child_by_field_name("function")
             .filter(|f| f.kind() == "field_expression")
         {
+            if let Some(r) = self.group_statement(e, f, out) {
+                return r;
+            }
             return self.method_statement(e, f, out);
         }
         let callee = e.child_by_field_name("function").map(|f| text(f, self.src));
@@ -57,6 +60,9 @@ impl<'s, 't> Walker<'s, 't> {
             return self.not_yet(n, "a call of an unexpected shape");
         };
         if f.kind() == "field_expression" {
+            if let Some(r) = self.group_value(n, f) {
+                return r;
+            }
             return self.method_value(n, f);
         }
         let name = text(f, self.src);

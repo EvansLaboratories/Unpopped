@@ -92,6 +92,7 @@ mod declarations;
 mod entry;
 mod expressions;
 mod globals;
+mod groups;
 mod inline;
 mod methods;
 mod places;
@@ -384,6 +385,8 @@ struct Walker<'s, 't> {
     null_buffers: HashSet<String>,
     /// Macros the preprocessor could not expand, with why: a use declines naming the macro (`Walker::unexpanded_or`).
     unexpanded: context::Unexpanded,
+    /// Names of block groups in scope (`cg::thread_block b = cg::this_thread_block();`): handles with no IR of their own.
+    groups: HashSet<String>,
     /// The entry model the frontend read, consumed by `function` (Slang: resources and semantic parameters).
     entry: Option<crate::EntryModel>,
     /// Type aliases in scope (`using X = T;`, `typedef T X;`): file-scope ones from the source, function-local ones as they are met.
@@ -411,6 +414,7 @@ impl<'s, 't> Walker<'s, 't> {
             scopes: vec![HashMap::new()],
             compute: E::I32,
             assigned: HashSet::new(),
+            groups: HashSet::new(),
             hoisted: Vec::new(),
             launch: None,
             dyn_shared: 0,
