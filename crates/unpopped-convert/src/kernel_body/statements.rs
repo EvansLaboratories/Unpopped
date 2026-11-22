@@ -380,9 +380,9 @@ impl<'s, 't> Walker<'s, 't> {
             .child_by_field_name("left")
             .is_some_and(|l| text(l, self.src) == name);
         let op = text(op, self.src);
-        // `i < b` counts up; `i > b` and `i >= b` count down (a signed counter only: an unsigned `i >= 0` never ends in C)
+        // `i < b` and `i <= b` count up; `i > b` and `i >= b` count down (a signed counter only: an unsigned `i >= 0` never ends in C)
         let down = matches!(op, ">" | ">=");
-        if cond.kind() != "binary_expression" || !(op == "<" || down) || !lhs_is_counter {
+        if cond.kind() != "binary_expression" || !(matches!(op, "<" | "<=") || down) || !lhs_is_counter {
             return Ok(None);
         }
         if down && int_range(ty).is_some_and(|(lo, _)| lo == 0) {
@@ -398,6 +398,9 @@ impl<'s, 't> Walker<'s, 't> {
         if op == ">=" {
             // the IR's limit is exclusive: `i >= b` stops above `b - 1`
             be = ScalarExpr::Sub(Box::new(be), Box::new(ScalarExpr::ConstInt(1, ty)));
+        } else if op == "<=" {
+            // `i <= b` stops at `b + 1`
+            be = ScalarExpr::Add(Box::new(be), Box::new(ScalarExpr::ConstInt(1, ty)));
         }
         Ok(Some((name, ty, a, be, step, body)))
     }

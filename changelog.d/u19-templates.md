@@ -27,3 +27,5 @@ And **a struct parameter with an array field passed whole** to a helper (`pc_axi
 A loop whose body calls a source-defined helper no longer falls back to the function-wide assigned set: only names passed to a reference or pointer parameter of a called helper count as assigned inside the loop (a by-value parameter is the callee's own copy). Triangular loops that call helpers (`for j < k` inside `for k`) now lift; a helper that assigns the bound through a reference still declines.
 
 A halving or other non-counted loop whose start or bound is a `const` integer local initialised from the launch's block extent (`const int block_size = blockDim.x; for (int stride = block_size / 2; stride > 0; stride >>= 1)`, the tree reduction) unrolls over its induction variable, as a loop over a literal constant already did. The unrolled IR is valid for the launch it was lifted for. A non-`const` local, or one from a runtime value, still declines.
+
+A counted loop with an inclusive upward bound, `for (int i = lo; i <= hi; ++i)`, lifts as `i < hi + 1` (the mirror of the existing `i >= b` downward form).
