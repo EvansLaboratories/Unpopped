@@ -295,7 +295,7 @@ fn instance_of(
         id.start_byte() - def.start_byte(),
         id.end_byte() - def.start_byte(),
     );
-    inst.text.push_str("\n");
+    inst.text.push('\n');
     inst.text.push_str(&substitute(&body[..a], &subs));
     inst.text.push_str(&name);
     inst.text.push_str(&substitute(&body[b..], &subs));
