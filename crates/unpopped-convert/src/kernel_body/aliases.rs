@@ -131,6 +131,14 @@ impl<'s, 't> Walker<'s, 't> {
     /// The entry `member` of the trait `head` (`Name<args>`, the arguments read through the type aliases in scope, so a template
     /// parameter bound to `float` is `float`): the specialisation with exactly those arguments, else the primary template.
     fn trait_entry(&self, head: &str, member: &str) -> Option<String> {
+        // a class template already instantiated as a plain struct (`AccOf__t1`, from `AccOf<float>`) is looked up by its own name
+        if !head.contains('<') {
+            return self
+                .traits
+                .get(head.trim())
+                .and_then(|m| m.get(member))
+                .cloned();
+        }
         let lt = head.find('<')?;
         if !head.ends_with('>') {
             return None;

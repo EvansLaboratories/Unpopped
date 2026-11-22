@@ -86,3 +86,11 @@ fn a_kernels_own_template_arguments_reach_the_class_template() {
     let k = lift_kernel_in(&C, src, "k", &ctx).unwrap();
     assert_eq!(run(&k, 1), vec![3.5]);
 }
+
+#[test]
+fn a_value_argument_that_is_an_expression_keeps_its_grouping() {
+    // N = `2 + 2` must stay one value: `N * 10` is 40, not `2 + 2 * 10` = 22
+    let src = "template <typename T, int N> struct W { T x; __device__ int n() { return N * 10; } };\n\
+        void k(float* out, const float* in) { W<float, 2 + 2> w; out[0] = (float)w.n(); }";
+    assert_eq!(run(&lift(src).unwrap(), 1), vec![40.0]);
+}
