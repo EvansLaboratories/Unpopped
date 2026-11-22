@@ -219,3 +219,26 @@ fn a_missing_field_a_missing_layout_or_a_whole_struct_declines_by_name() {
     let scalar_subscript = "void k(float* out, const void* vx) { const block_q* x = (const block_q*)vx; out[0] = (float)x[0].d[1]; }";
     decline(scalar_subscript, Some(q6()), "subscripted");
 }
+
+#[test]
+fn an_array_field_of_wider_elements_scales_by_the_element_width() {
+    // `typedef struct { int16_t a[3]; } blk16;` is 6 bytes; a = 10, -20, 30 (little endian)
+    let src = "typedef struct { int16_t a[3]; } blk16;\n\
+        void k(float* out, const void* vx) { const blk16* x = (const blk16*)vx; out[0] = (float)x[0].a[2]; out[1] = (float)x[0].a[1]; }";
+    let layout = StructLayout::new(6, vec![FieldLayout::new("a", 0, "int16_t", 3)]);
+    let ctx = ctx().with_struct_layout("blk16", layout);
+    let k = lift_kernel_in(&C, src, "k", &ctx).unwrap();
+    let bytes: Vec<u8> = [10i16, -20, 30]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    let mut args = vec![
+        KernelArg::Buffer(TypedBuffer::from_f32(&[2], &[0.0; 2])),
+        KernelArg::Buffer(TypedBuffer::from_u8(&[6], &bytes)),
+    ];
+    run_launch(&k, &mut args).expect("runs");
+    let KernelArg::Buffer(o) = &args[0] else {
+        panic!()
+    };
+    assert_eq!(o.to_f64_vec(), vec![30.0, -20.0]);
+}
