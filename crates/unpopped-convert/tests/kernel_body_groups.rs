@@ -13,10 +13,7 @@ use unpopped_convert::{
 };
 
 fn parse(src: &str) -> Option<tree_sitter::Tree> {
-    let mut b = src.to_string();
-    for q in ["__shared__"] {
-        b = b.replace(q, &" ".repeat(q.len()));
-    }
+    let b = src.replace("__shared__", &" ".repeat("__shared__".len()));
     let mut p = tree_sitter::Parser::new();
     p.set_language(&tree_sitter_cpp::LANGUAGE.into()).ok()?;
     p.parse(b, None)
