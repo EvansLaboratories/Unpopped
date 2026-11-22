@@ -170,3 +170,24 @@ template <typename T>
 void k(T* out) { out[0] = (T)1; }";
     assert!(lift(src, &ctx().with_type("T", "float")).is_ok());
 }
+
+#[test]
+fn a_negative_value_is_parenthesised_so_a_unary_minus_cannot_fuse_with_it() {
+    // `-N` with N = -3 must be `-(-3)`, not `--3` (a decrement, which does not lift)
+    let src = "template <int N>\nvoid k(float* out) { out[0] = (float)(-N); }";
+    assert_eq!(
+        run(&lift(src, &ctx().with_const("N", -3)).unwrap(), 1, vec![]).unwrap(),
+        vec![3.0]
+    );
+}
+
+#[test]
+fn the_substitution_stops_at_the_end_of_the_kernels_template() {
+    // a later function's own parameter named `N` is not the template's `N`: substituting through the end of the file would turn
+    // `int twice(int N)` into `int twice(int (7))`, which does not parse, and the kernel that calls it would decline
+    let src = "template <int N>\nvoid k(float* out) { out[0] = (float)twice(5); out[1] = (float)N; }\nint twice(int N) { return N * 2; }";
+    assert_eq!(
+        run(&lift(src, &ctx().with_const("N", 7)).unwrap(), 2, vec![]).unwrap(),
+        vec![10.0, 7.0]
+    );
+}
