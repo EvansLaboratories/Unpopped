@@ -31,3 +31,5 @@ A halving or other non-counted loop whose start or bound is a `const` integer lo
 A counted loop with an inclusive upward bound, `for (int i = lo; i <= hi; ++i)`, lifts as `i < hi + 1` (the mirror of the existing `i >= b` downward form).
 
 `__shfl_sync`, `__shfl_up_sync`, `__shfl_down_sync` and `__shfl_xor_sync` with an all-ones mask and a width of 32 (given or omitted) lift to the subgroup shuffle collective, the same one a `thread_block_tile` shuffle uses. A partial mask, another width, or a launch whose subgroup is not 32 declines by name.
+
+Hexadecimal integer literals lift (`0xffffffff`, `0x1Fu`, `0xFFll`), typed as C types them: the first of `int`, `unsigned int`, `long long`, `unsigned long long` that holds the value, so `0xffffffff` is an unsigned 32-bit (and `0xffffffff + 1` is 0). A value above `i64::MAX` still declines.

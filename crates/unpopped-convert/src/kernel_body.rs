@@ -769,8 +769,11 @@ enum Lit {
 
 fn parse_literal(s: &str) -> Option<Lit> {
     let lower = s.to_ascii_lowercase();
-    if lower.starts_with("0x") || lower.starts_with("-0x") {
+    if lower.starts_with("-0x") {
         return None;
+    }
+    if let Some(hex) = lower.strip_prefix("0x") {
+        return parse_hex(hex);
     }
     if lower.contains('.') || lower.contains('e') {
         let (digits, ty) = match lower.strip_suffix('f') {
@@ -794,6 +797,30 @@ fn parse_literal(s: &str) -> Option<Lit> {
         "u" => E::U64,
         "ll" | "l" => E::I64,
         "ull" | "ul" | "lu" | "llu" => E::U64,
+        _ => return None,
+    };
+    Some(Lit::Int(v, ty))
+}
+
+/// A hexadecimal integer literal (the digits after `0x`), typed as C types it: the first of `int`, `unsigned int`, `long long`,
+/// `unsigned long long` that holds it (`u` skips the signed types, `l`/`ll` the 32-bit ones). A value above `i64::MAX` is not
+/// representable here and declines.
+fn parse_hex(hex: &str) -> Option<Lit> {
+    let digits = hex.trim_end_matches(['u', 'l']);
+    let suffix = &hex[digits.len()..];
+    if digits.is_empty() {
+        return None;
+    }
+    let v = i64::from_str_radix(digits, 16).ok()?;
+    let fits32 = i32::try_from(v).is_ok();
+    let fitsu32 = u32::try_from(v).is_ok();
+    let ty = match suffix {
+        "" if fits32 => E::I32,
+        "" if fitsu32 => E::U32,
+        "" => E::I64,
+        "u" if fitsu32 => E::U32,
+        "u" | "ull" | "ul" | "lu" | "llu" => E::U64,
+        "l" | "ll" => E::I64,
         _ => return None,
     };
     Some(Lit::Int(v, ty))
