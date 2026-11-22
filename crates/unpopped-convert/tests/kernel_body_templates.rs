@@ -307,3 +307,14 @@ fn a_helper_with_a_void_pointer_parameter_takes_any_pointer_and_reads_it_through
     };
     assert_eq!(o.to_f64_vec(), vec![6.5]);
 }
+
+#[test]
+fn explicit_specialisations_do_not_hide_the_primary_template_and_an_exact_one_wins() {
+    // Baracuda's `baracuda_loss.cuh` shape: a primary `load_as_acc`, then `template <>` specialisations for other types
+    let src = "namespace n {\ntemplate <typename T>\nfloat conv(T x) { return (float)x; }\n\
+               template <>\nfloat conv<double>(double x) { return 100.0f; }\n\
+               template <typename T>\nvoid k(float* out, const T* in) { out[0] = conv<T>(in[0]); out[1] = conv<double>((double)in[0]); }\n}\n";
+    let k = lift(src, &ctx().with_type("T", "float")).unwrap();
+    // the primary for `float`, the specialisation for `double`
+    assert_eq!(run(&k, 2, vec![f32s(&[2.5])]).unwrap(), vec![2.5, 100.0]);
+}

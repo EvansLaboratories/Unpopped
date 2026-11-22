@@ -217,6 +217,7 @@ pub(super) fn expand_calls(parse: fn(&str) -> Option<Tree>, mut src: String) -> 
 /// The call sites to rewrite this round, as `(start, end, instance name)`, in source order.
 fn call_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize, String)> {
     let mut templates: HashMap<String, Node<'_>> = HashMap::new();
+    let mut specs: HashMap<String, (Node<'_>, Node<'_>)> = HashMap::new();
     let mut calls: Vec<Node<'_>> = Vec::new();
     let mut stack = vec![tree.root_node()];
     while let Some(n) = stack.pop() {
@@ -229,7 +230,14 @@ fn call_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize
                     .parent()
                     .is_some_and(|p| p.kind() == "template_declaration");
                 if let (true, Some(id)) = (is_template, id) {
-                    templates.insert(text(id, src).to_string(), n);
+                    if id.kind() == "template_function" {
+                        // an explicit specialisation (`template <> float f<double>(double)`): kept apart, keyed by its arguments
+                        if let Some(key) = specialisation_key(id, src) {
+                            specs.insert(key, (n, id));
+                        }
+                    } else {
+                        templates.insert(text(id, src).to_string(), n);
+                    }
                     continue;
                 }
             }
@@ -256,20 +264,65 @@ fn call_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize
             continue;
         };
         let helper = text(name, src);
-        let Some(&def) = templates.get(helper) else {
-            continue;
-        };
         let mut c = args.walk();
         let given: Vec<String> = args
             .named_children(&mut c)
             .map(|a| text(a, src).trim().to_string())
             .collect();
-        if let Some(instance) = instance_of(src, def, helper, &given, inst) {
+        // an explicit specialisation with exactly these arguments wins over the primary template
+        let key = format!("{helper}<{}>", given.join(","));
+        let instance = match (specs.get(&key), templates.get(helper)) {
+            (Some(&(def, id)), _) => specialisation_instance(src, def, id, &key, inst),
+            (None, Some(&def)) => instance_of(src, def, helper, &given, inst),
+            (None, None) => None,
+        };
+        if let Some(instance) = instance {
             edits.push((f.start_byte(), f.end_byte(), instance));
         }
     }
     edits.sort_by_key(|e| e.0);
     edits
+}
+
+/// `name<a,b>` of an explicit specialisation's declarator, spelled as a call's key is.
+fn specialisation_key(id: Node<'_>, src: &str) -> Option<String> {
+    let name = text(id.child_by_field_name("name")?, src);
+    let args = id.child_by_field_name("arguments")?;
+    let mut c = args.walk();
+    let parts: Vec<String> = args
+        .named_children(&mut c)
+        .map(|a| text(a, src).trim().to_string())
+        .collect();
+    Some(format!("{name}<{}>", parts.join(",")))
+}
+
+/// An explicit specialisation as a plain function (its declarator `f<double>` renamed to the instance's name).
+fn specialisation_instance(
+    src: &str,
+    def: Node<'_>,
+    id: Node<'_>,
+    key: &str,
+    inst: &mut Instances,
+) -> Option<String> {
+    if let Some(n) = inst.by_key.get(key) {
+        return Some(n.clone());
+    }
+    let name = format!(
+        "{}__t{}",
+        text(id.child_by_field_name("name")?, src),
+        inst.by_key.len()
+    );
+    let (a, b) = (
+        id.start_byte() - def.start_byte(),
+        id.end_byte() - def.start_byte(),
+    );
+    let body = &src[def.start_byte()..def.end_byte()];
+    inst.text.push('\n');
+    inst.text.push_str(&body[..a]);
+    inst.text.push_str(&name);
+    inst.text.push_str(&body[b..]);
+    inst.by_key.insert(key.to_string(), name.clone());
+    Some(name)
 }
 
 /// The name of `helper` instantiated with `given`, creating it on first use; `None` when the arguments do not fit.
