@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! **A struct field as a dynamic allocation extent** (ROADMAP U23 slice 2). An integer field of a `ParamKind::Struct`
-//! may size an `Extent::Param` allocation, exactly as a scalar parameter does. Layout only: no storage location is
+//! may size an `Extent::Param` allocation, exactly as a scalar parameter does. The U23 guard holds: no storage location is
 //! chosen per thread set (`kernel_interface::layout_only_guard`).
 //!
 //! Each behaviour has a program that shows it and a control that does not.
