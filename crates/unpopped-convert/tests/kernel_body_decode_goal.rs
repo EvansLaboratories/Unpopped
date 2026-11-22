@@ -109,7 +109,7 @@ fn run_case_scaled(
     };
     let k = lift_kernel_in(
         &c,
-        &src,
+        src,
         "BatchDecodeWithPagedKVCacheKernel_f16_d128_g1_none",
         &ctx,
     )
@@ -172,10 +172,10 @@ fn run_case_scaled(
             want_l[r * h + hh] = (m + den.ln()) / std::f64::consts::LN_2;
             for d in 0..D {
                 let mut acc = 0.0;
-                for t in 0..n {
+                for (t, st) in s.iter().enumerate() {
                     let (pg, e) = (t / page, t % page);
                     let phys = indices[indptr[r] as usize + pg] as usize;
-                    acc += (s[t] - m).exp() / den * vr[((phys * h + hh) * page + e) * D + d];
+                    acc += (st - m).exp() / den * vr[((phys * h + hh) * page + e) * D + d];
                 }
                 want_o[(r * h + hh) * D + d] = acc;
             }
@@ -251,13 +251,6 @@ fn run_case_scaled(
             el = el.max((got_l[i] - want_l[i]).abs());
         }
     }
-    println!("LSE got={:?} want={:?}", &got_l, &want_l);
-    println!(
-        "O got[0..8]={:?}
-  want[0..8]={:?}",
-        &got_o[..8],
-        &want_o[..8]
-    );
     println!("MAXERR o={eo:e} lse={el:e}");
     if expect_ok {
         assert!(eo < 1e-3, "o error {eo}");
