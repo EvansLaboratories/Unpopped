@@ -148,12 +148,19 @@ impl<'s, 't> Walker<'s, 't> {
         if let Some(sname) = self.struct_type_of(p) {
             return self.bind_struct_argument(p, arg, &sname, out);
         }
-        let ty = self.type_of(p.child_by_field_name("type"), p)?;
         let Some(d) = p.child_by_field_name("declarator") else {
             return self.not_yet(p, "an unnamed parameter");
         };
+        // `void*` takes any pointer argument unchanged (the helper casts it to what it reads; census slice 3)
+        let void_ptr = d.kind() == "pointer_declarator"
+            && p.child_by_field_name("type")
+                .is_some_and(|t| text(t, self.src).trim() == "void");
+        if void_ptr {
+            return self.bind_pointer_argument(d, None, arg, out);
+        }
+        let ty = self.type_of(p.child_by_field_name("type"), p)?;
         if d.kind() == "pointer_declarator" {
-            return self.bind_pointer_argument(d, ty, arg, out);
+            return self.bind_pointer_argument(d, Some(ty), arg, out);
         }
         let (kind, id) = match d.kind() {
             "identifier" => (Bind::Value(ty), d),
@@ -257,7 +264,7 @@ impl<'s, 't> Walker<'s, 't> {
     fn bind_pointer_argument(
         &mut self,
         d: Node<'_>,
-        ty: E,
+        ty: Option<E>,
         arg: Node<'_>,
         out: &mut Vec<Stmt>,
     ) -> R<(String, Sym)> {
@@ -273,7 +280,7 @@ impl<'s, 't> Walker<'s, 't> {
                 "a pointer parameter given something that is not a pointer expression",
             );
         };
-        if p.pointee != ty {
+        if let Some(ty) = ty.filter(|t| *t != p.pointee) {
             return self.not_yet(
                 arg,
                 format!(

@@ -289,3 +289,21 @@ fn a_void_pointer_is_u8_and_a_bare_void_parameter_declines() {
         "a parameter of type `void`",
     );
 }
+
+#[test]
+fn a_helper_with_a_void_pointer_parameter_takes_any_pointer_and_reads_it_through_a_cast() {
+    // Baracuda's gguf kernels pass `const void* vx` to a templated helper that casts it
+    let src = "float first(const void* p) { const float* f = static_cast<const float*>(p); return f[0] + f[1]; }\n\
+               void k(float* out, const void* p) { out[0] = first(p); }";
+    let k = lift(src, &ctx()).unwrap();
+    let bytes: Vec<u8> = [2.5f32, 4.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let mut args = vec![
+        f32s(&[0.0]),
+        KernelArg::Buffer(TypedBuffer::from_u8(&[8], &bytes)),
+    ];
+    run_launch(&k, &mut args).unwrap();
+    let KernelArg::Buffer(o) = &args[0] else {
+        panic!()
+    };
+    assert_eq!(o.to_f64_vec(), vec![6.5]);
+}
