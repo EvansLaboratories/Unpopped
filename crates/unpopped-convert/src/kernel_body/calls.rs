@@ -162,6 +162,43 @@ impl<'s, 't> Walker<'s, 't> {
         Ok((e, ty))
     }
 
+    /// The element place a raw (byte-offset) place names, when it is an element of the base's own type: an atomic's place is an
+    /// element, and a pointer into a buffer or array (`T* p = &a[i]`, a helper's `T* addr`) is the byte offset `i * sizeof(T)`.
+    /// A place at another type (a cast pointer) stays raw and the atomic declines.
+    fn unraw(&self, place: Place) -> Place {
+        match place {
+            Place::Raw {
+                buffer,
+                byte_offset,
+                elem,
+            } if matches!(
+                self.params.get(buffer as usize).map(|p| &p.kind),
+                Some(unpopped::kernel::ParamKind::Buffer { elem: be, rank: Some(1), .. }) if *be == elem
+            ) =>
+            {
+                Place::Logical {
+                    buffer,
+                    coords: vec![element_index(byte_offset, elem)],
+                }
+            }
+            Place::AllocRaw {
+                alloc,
+                byte_offset,
+                elem,
+            } if self
+                .allocs
+                .get(alloc as usize)
+                .is_some_and(|a| a.elem == elem) =>
+            {
+                Place::Alloc {
+                    alloc,
+                    index: element_index(byte_offset, elem),
+                }
+            }
+            other => other,
+        }
+    }
+
     /// `atomicAdd(&a[i], v)` and its kin: one `AtomicRmw` (or `AtomicCas`), relaxed, at device scope (block scope on a
     /// `__shared__` array), as CUDA's are. With `want_old` the old value is a fresh local and the result.
     pub(super) fn atomic(
@@ -179,6 +216,7 @@ impl<'s, 't> Walker<'s, 't> {
             return self.not_yet(n, format!("`{name}` with {} argument(s)", args.len()));
         }
         let (place, elem, scope) = self.address_of(args[0])?;
+        let place = self.unraw(place);
         if matches!(place, Place::Raw { .. } | Place::AllocRaw { .. }) {
             return self.not_yet(
                 n,
@@ -266,4 +304,13 @@ fn atomic_op(name: &str) -> Option<Option<AtomicOp>> {
         "atomicCAS" => None,
         _ => return None,
     })
+}
+
+/// The element index of a byte offset into storage of `elem`-typed elements (`elem` has a whole byte size).
+fn element_index(byte_offset: ScalarExpr, elem: E) -> ScalarExpr {
+    let size = super::pointer::byte_size(elem).unwrap_or(1);
+    ScalarExpr::Div(
+        Box::new(byte_offset),
+        Box::new(ScalarExpr::ConstInt(size, E::I64)),
+    )
 }

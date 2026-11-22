@@ -214,6 +214,16 @@ pub(super) fn expand_calls(parse: fn(&str) -> Option<Tree>, mut src: String) -> 
     ))
 }
 
+/// The `f<T>` of a callee spelled `f<T>` or `ns::inner::f<T>` (a template helper is found by its last segment, since helpers
+/// are collected by short name across namespaces).
+fn template_callee(f: Node<'_>) -> Option<Node<'_>> {
+    match f.kind() {
+        "template_function" => Some(f),
+        "qualified_identifier" => f.child_by_field_name("name").and_then(template_callee),
+        _ => None,
+    }
+}
+
 /// The call sites to rewrite this round, as `(start, end, instance name)`, in source order.
 fn call_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize, String)> {
     let mut templates: HashMap<String, Node<'_>> = HashMap::new();
@@ -243,7 +253,8 @@ fn call_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize
             }
             "call_expression"
                 if n.child_by_field_name("function")
-                    .is_some_and(|f| f.kind() == "template_function") =>
+                    .and_then(template_callee)
+                    .is_some() =>
             {
                 calls.push(n);
             }
@@ -257,9 +268,13 @@ fn call_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize
         let Some(f) = call.child_by_field_name("function") else {
             continue;
         };
+        // the call's callee, whole (`ns::f<T>` is replaced with its qualifier), and the `f<T>` inside it
+        let Some(tf) = template_callee(f) else {
+            continue;
+        };
         let (Some(name), Some(args)) = (
-            f.child_by_field_name("name"),
-            f.child_by_field_name("arguments"),
+            tf.child_by_field_name("name"),
+            tf.child_by_field_name("arguments"),
         ) else {
             continue;
         };
