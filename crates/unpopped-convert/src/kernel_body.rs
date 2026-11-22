@@ -414,18 +414,7 @@ impl<'s> Walker<'s> {
         if head.starts_with("__shared__") {
             return self.array_declaration(n, ty, MemorySpace::Shared);
         }
-        let has_array = {
-            let mut c = n.walk();
-            let found = n.children_by_field_name("declarator", &mut c).any(|d| {
-                let inner = if d.kind() == "init_declarator" {
-                    d.child_by_field_name("declarator")
-                } else {
-                    Some(d)
-                };
-                inner.is_some_and(|i| i.kind() == "array_declarator")
-            });
-            found
-        };
+        let has_array = declares_array(n);
         if has_array && !head.starts_with("extern") {
             return self.array_declaration(n, ty, MemorySpace::Private);
         }
@@ -1668,6 +1657,19 @@ fn lane_of(member: &str, lanes: u8) -> Option<u8> {
         _ => return None,
     };
     (i < lanes).then_some(i)
+}
+
+/// Whether a declaration declares an array (`T a[N]`, with or without an initializer).
+fn declares_array(n: Node<'_>) -> bool {
+    let mut c = n.walk();
+    n.children_by_field_name("declarator", &mut c).any(|d| {
+        let inner = if d.kind() == "init_declarator" {
+            d.child_by_field_name("declarator")
+        } else {
+            Some(d)
+        };
+        inner.is_some_and(|i| i.kind() == "array_declarator")
+    })
 }
 
 fn push(out: &mut Vec<Stmt>, s: Stmt) -> R<()> {

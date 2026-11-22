@@ -78,7 +78,7 @@ fn not_yet(r: Result<KernelFn, KernelLiftError>, needle: &str) {
 fn what_is_not_a_plain_sized_array_declines() {
     not_yet(
         lift_kernel(&C, "void k(float* out) { float v[4]; out[0] = 1.0f; }", "k"),
-        "without a launch",
+        "a local array without a launch",
     );
     not_yet(
         launched(

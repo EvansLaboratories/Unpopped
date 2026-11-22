@@ -117,7 +117,7 @@ fn every_builtin_needs_the_callers_launch() {
     not_yet(
         "void k(float* out) { __shared__ float t[4]; out[0] = 1.0f; }",
         false,
-        "without a launch",
+        "`__shared__` without a launch",
     );
     // Control: the same sources lift with a launch.
     assert!(launched("void k(float* out) { out[threadIdx.x] = 1.0f; }", 8, 1).is_ok());
