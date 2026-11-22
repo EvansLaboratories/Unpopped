@@ -88,8 +88,8 @@ refusal the IR already makes.
 ## Slang: one gate, then the layer behind it
 
 All 153 (and Fuel's 151) entry points stop on the **same first construct**: 140 (138) on `the type `uint3`` at the entry parameter
-`uint3 gid : SV_DispatchThreadID`, and 13 on a **grammar error** (`tree-sitter-slang` 0.3 rejects `float var = ...` and `uint is = ...`: `var` and `is` are
-legal identifiers in the sources, which `slangc` compiles; the fishstringer parser lane). The walker's kernel model is a function whose **parameters are the
+`uint3 gid : SV_DispatchThreadID`, and 13 on a **grammar error** in the parser (the first ERROR node starts at `float var = ...` in 8 `layer_norm*` kernels, `uint is = ...` in `dequant_q4_km`, and `out[...] = ...` in the 4 `rope*` kernels;
+minimal sources reproduce each, and a renamed control parses; the cause and any report are fishstringer's to establish). The walker's kernel model is a function whose **parameters are the
 buffers**; a Slang kernel declares its resources **at file scope** and gets its thread id from a **semantic**. What is present (static, per kernel, `fishstringer`
 ref; Fuel's is the same shape):
 
@@ -125,7 +125,7 @@ A count is the kernels **stopped** by the class (an upper bound on what the slic
 5. **Struct parameters with array fields (~67): an IR decision first** (ask pm-kernels), then the walker.
 6. **Type aliases and cross-header types** (`using`, `floatX`, `DimsI32`: ~45) and **small tables** (intrinsics, `INFINITY`, multi-dimensional `__shared__`: ~30).
 7. **Parser gaps (CUDA: one construct, 10 kernels; Slang: 13):** `tree-sitter-cuda` rejects `extern __shared__ __align__(alignof(T)) uint8_t smem[];`; `tree-sitter-slang`
-   rejects `var` and `is` as identifiers. Not the walker's; filed as issues with the lines.
+   stops on the 13 Slang kernels above ("stopped on grammar"; the cause is fishstringer's to establish). Not the walker's. The CUDA one is Baracuda issue #420.
 
 **Not in this note, and needed before anyone plans past slice 3:** the instantiated population (Baracuda's list), the second layer under Slang's gate (needs
 slice 4 built), and a macro-expansion slice (`#define F(x)` appears in 456 of the 535 kernels' files; the walker now only declines at a use, which this run found

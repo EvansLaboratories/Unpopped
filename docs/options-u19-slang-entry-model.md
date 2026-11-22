@@ -62,7 +62,7 @@ The lifted corpus already has that order (buffers `0..k`, the constant buffer at
 
 Whether `numthreads` overrides or must equal the context's block (recommend: the attribute is the authority, a context block that disagrees declines); entry points that
 share a file (`autodiff_poc.slang`: two kernels, each lifted with the resources it references); `ByteAddressBuffer`, `Texture*` and
-`Ptr<T>` (absent from the corpus). **The 13 grammar errors are not this walker's**: `tree-sitter-slang` 0.3 rejects `float var = ...` and `uint is = ...`, where `var` and `is`
-are ordinary identifiers to `slangc`; an issue for fishstringer, with the lines (`dequant_q4_km.slang:110`, `layer_norm_last_dim.slang:88`).
+`Ptr<T>` (absent from the corpus). **The 13 grammar errors are not this walker's**: the parser stops on them (first ERROR node at `float var = ...` in 8 `layer_norm*` kernels, `uint is = ...` in
+`dequant_q4_km.slang:110`, `out[...] = ...` in the 4 `rope*` kernels); the cause, and whether to report it, is fishstringer's to establish.
 
 — lane: unpopped
