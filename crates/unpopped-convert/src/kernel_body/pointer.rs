@@ -100,8 +100,10 @@ impl<'s, 't> Walker<'s, 't> {
         let f = n
             .child_by_field_name("function")
             .map_or("", |f| text(f, self.src));
+        // `static_cast<T*>(p)` between pointer types (a `void*` to `T*` is the usual one) reads the same place as `reinterpret_cast`
         let Some(inner) = f
             .strip_prefix("reinterpret_cast<")
+            .or_else(|| f.strip_prefix("static_cast<"))
             .and_then(|r| r.strip_suffix('>'))
             .map(|t| t.trim().trim_start_matches("const ").trim())
         else {

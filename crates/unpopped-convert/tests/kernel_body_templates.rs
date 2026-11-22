@@ -254,3 +254,38 @@ fn a_call_that_cannot_be_instantiated_declines_at_its_use() {
         Err(KernelLiftError::NotYetLifted { .. })
     ));
 }
+
+// ---- census slice 3: `void*` parameters are byte buffers ----
+
+#[test]
+fn a_void_pointer_parameter_is_a_byte_buffer_read_through_a_cast() {
+    let src = "void k(float* out, const void* p) { const float* f = static_cast<const float*>(p); out[0] = f[0]; out[1] = f[1] + 1.0f; }";
+    let k = lift(src, &ctx()).unwrap();
+    assert_eq!(k.params[1].name, "p");
+    // the bytes of [2.5, 4.0] as f32, given as the U8 buffer the parameter is (the cast reads them back as floats)
+    let bytes: Vec<u8> = [2.5f32, 4.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let mut args = vec![
+        f32s(&[0.0, 0.0]),
+        KernelArg::Buffer(TypedBuffer::from_u8(&[8], &bytes)),
+    ];
+    run_launch(&k, &mut args).unwrap();
+    let KernelArg::Buffer(o) = &args[0] else {
+        panic!()
+    };
+    assert_eq!(o.to_f64_vec(), vec![2.5, 5.0]);
+}
+
+#[test]
+fn a_void_pointer_is_u8_and_a_bare_void_parameter_declines() {
+    let src = "void k(float* out, void* p) { out[0] = 1.0f; }";
+    let k = lift(src, &ctx()).unwrap();
+    assert!(
+        format!("{:?}", k.params[1]).contains("U8"),
+        "{:?}",
+        k.params[1]
+    );
+    not_yet(
+        lift("void k(float* out, void p) { out[0] = 1.0f; }", &ctx()),
+        "a parameter of type `void`",
+    );
+}

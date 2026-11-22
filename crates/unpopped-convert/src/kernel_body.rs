@@ -447,7 +447,15 @@ impl<'s, 't> Walker<'s, 't> {
         if let Some(r) = self.struct_parameter(p) {
             return r;
         }
-        let ty = self.type_of(p.child_by_field_name("type"), p)?;
+        // `void*` is an untyped byte buffer (census slice 3): its element is a byte, and the kernel reads it through a cast
+        let is_void = p
+            .child_by_field_name("type")
+            .is_some_and(|t| text(t, self.src).trim() == "void");
+        let ty = if is_void {
+            E::U8
+        } else {
+            self.type_of(p.child_by_field_name("type"), p)?
+        };
         let mut d = p.child_by_field_name("declarator");
         let mut ptr = false;
         while let Some(x) = d {
@@ -461,6 +469,9 @@ impl<'s, 't> Walker<'s, 't> {
                 }
                 "identifier" => {
                     let is_const = has_const(p, self.src);
+                    if is_void && !ptr {
+                        return self.not_yet(x, "a parameter of type `void`");
+                    }
                     let shape = if ptr {
                         PShape::Buffer(ty, is_const)
                     } else {
