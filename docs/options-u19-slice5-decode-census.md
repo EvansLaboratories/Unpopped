@@ -56,4 +56,16 @@ eight of them. The order I would build, each an oracle differential with seeded 
 
 **Q7 values from Baracuda** (a `LiftContext`, to be built): launch block (16,1,8), grid (batch, kv_heads); dynamic shared memory 36864 B (32768 for the kv tiles plus 4096 for offsets); `__CUDACC_VER_MAJOR__` 13; **`__CUDA_ARCH__` 800** (the `cp.async` path; `griddepcontrol` is off at 800 and at the validated 890; 900 turns the `griddepcontrol` asm on and Baracuda did not validate it); `FLASHINFER_CP_ASYNC_ENABLED` is **not** predefined, the file defines it itself when the version is at least 11 and the arch at least 800.
 
+## Census of the real decode kernel (walked 2026-11-22; `LiftContext` built, committed `ff03d210`/`92822c63` on `lane/u19-structs`)
+
+Walked with `LiftContext::new(LaunchShape::new([16,1,8],[4,2,1]))`, dynamic shared 36864, `__CUDACC_VER_MAJOR__` 13, `__CUDA_ARCH__` 800. Declines cleared, in the order met (each has a test in `kernel_body_context.rs`, `kernel_body_structs.rs` or `kernel_body_methods.rs`): `extern __shared__`; pointer fields and brace-list init of `PagedKvHalf`; compute type (an F16-only kernel computes in F32); `bool` initialiser (normalised to a byte via `Cast(CmpNe)`); a buffer pointer as a truth value (a null check, true unless `with_null_buffer`); the short-circuit hoist guard (a constant side decides whether the other is evaluated); a struct pointer member as a base; `min`/`max`; `sizeof(half)`; constant array sizes; a vector load through a cast pointer.
+
+**The decline now (line 284): `((float2*)dst)[i] = __half22float2(((half2*)&tmp)[i]);`.** Three rows, none a one-liner:
+
+1. **`half2`/`float2` vector types and `__half22float2`/`__float22half2_rn`.** Lane-wise, the same shape as `float2`; needs F16 as a vector lane.
+2. **Address-of a vector local (`&tmp`, then `(half2*)` of it).** A bit-pun: the `int4` local's four 32-bit lanes read back as eight halves. The scalarized per-lane local cannot express it, so a vector local whose address is taken has to be backed by a Private alloc and addressed with `Place::AllocRaw` (the pointer machinery of 4c-4 already does `AllocRaw` for arrays). Design: decide at declaration, by scanning the enclosing function for `&name`.
+3. **`float4` memory copy loops** (`((float4*)ptr)[i] = ((const float4*)src)[i]`) are the vector load and store already built (`vecmem.rs`), to be re-run once rows 1 and 2 clear.
+
+Still ahead after those (not yet reached by the walk): `cp.async` asm whose operands are pointers (`__cvta_generic_to_shared`), a masked load inside `?:`, `size_t` loop counters.
+
 — lane: unpopped
