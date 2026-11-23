@@ -10,7 +10,7 @@
 //! local (a local assigned a divergent value anywhere is divergent everywhere) and iterated to a
 //! fixed point, so a value carried round a loop is still seen. A `Barrier` is rejected under an
 //! `If` or `While` with a divergent condition, a `For` with a divergent bound, or after a `Break`
-//! or `Continue` that sat under such control. It rejects some correct programs and never accepts
+//! or `Continue` that sat under such control **in the same loop body** (the poison ends with its loop). It rejects some correct programs and never accepts
 //! a divergent barrier; the four known over-rejections are pinned in `tests/kernel_barrier.rs`.
 //!
 //! **Warp-uniform control.** A second taint, *lane-divergent*, says a value may differ between the lanes of ONE subgroup. A
@@ -282,13 +282,17 @@ impl Walk<'_> {
     }
 
     /// A loop body. A `Break` or `Continue` under divergent control late in the body also skips
-    /// the start of the next pass, so a body that poisons is walked again as poisoned.
+    /// the start of the next pass, so a body that poisons is walked again as poisoned. The poison belongs to **its loop**: a
+    /// `Break` ends only the innermost loop and a `Continue` only its pass, so every thread that left or skipped meets the
+    /// statements after the loop, and at loop exit the state is what it was BEFORE the loop (an outer poison stays). A `Return`
+    /// is not poison here (the checker has always accepted one before a barrier and the oracle traps a stranded peer).
     fn loop_body(&mut self, b: &Block, div: bool, poisoned: &mut bool) -> Result<(), KernelError> {
         let before = *poisoned;
         self.block(b, div, poisoned)?;
         if !before && *poisoned {
             self.block(b, div, poisoned)?;
         }
+        *poisoned = before;
         Ok(())
     }
 

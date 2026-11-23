@@ -422,6 +422,7 @@ fn a_vote_and_a_shuffle_with_one_subgroup_taking_part_read_only_that_subgroup() 
 
 const X: u32 = 4;
 const I: u32 = 5;
+const INNER: u32 = 6;
 
 /// The guarded statements of [`kernel`]: a subgroup sum of `tid + 1`, stored to `out[tid]`.
 fn guarded() -> Vec<Stmt> {
@@ -444,6 +445,7 @@ fn with(rest: Vec<Stmt>) -> KernelFn {
     ];
     body.extend(rest);
     k.body = Block(body);
+    k.locals.push(LocalDecl::scalar(I32));
     k.locals.push(LocalDecl::scalar(I32));
     k.locals.push(LocalDecl::scalar(I32));
     k
@@ -487,9 +489,14 @@ fn a_value_assigned_under_warp_uniform_control_is_still_warp_uniform() {
 }
 
 fn counted(end: ScalarExpr, body: Vec<Stmt>) -> Stmt {
+    counter(I, end, body)
+}
+
+/// A counted loop on its own counter local (a nested loop needs one of its own).
+fn counter(local: u32, end: ScalarExpr, body: Vec<Stmt>) -> Stmt {
     Stmt::For {
         unroll: Unroll::None,
-        local: I,
+        local,
         start: ci(0),
         end,
         step: ci(1),
@@ -539,18 +546,120 @@ fn a_tuple_collective_follows_the_same_scope_rule() {
     );
 }
 
+// ---- the poison of a divergent Break/Continue belongs to its loop (PM TASK 2026-11-23, second core change) -----------------
+
+fn continue_if_lane_zero() -> Stmt {
+    if_(lane_is_zero(), vec![Stmt::Continue])
+}
+
+fn break_if_lane_zero() -> Stmt {
+    if_(lane_is_zero(), vec![Stmt::Break])
+}
+
 #[test]
-fn known_over_rejection_a_divergent_continue_inside_a_loop_poisons_what_follows_the_loop() {
-    // `for (..) { if (lane == 0) continue; ... } <subgroup sum>`: the sum is reached by every lane (a `continue` ends only its own
-    // pass), but the poison a divergent `continue` sets is not reset when the loop ends, so the checker refuses it. This is what
-    // keeps the 9 `prelu_dweight_kernel` instances (a `continue` in the accumulation loop, then the same block reduce) Invalid.
-    // Pinned so that scoping the poison to its loop flips this test on purpose (a separate core ruling).
+fn a_divergent_continue_or_break_poisons_only_the_rest_of_its_loop() {
+    // `for (..) { if (lane == 0) continue; } <subgroup sum>`: every lane reaches the sum (a `continue` ends only its own pass),
+    // so it is accepted; the control (an assignment in place of the `continue`) is accepted too, and the same sum INSIDE the
+    // loop after the `continue` is still refused. A Break behaves alike, and so does a Block barrier after the loop.
     let after = |inside: Stmt| {
         let mut body = vec![counted(ci(4), vec![inside])];
         body.extend(guarded());
         with(body)
     };
-    // the control: the same loop with the `continue` replaced by an assignment is accepted, so the refusal below is the poison
     accepted(&after(if_(lane_is_zero(), vec![set_x(1)])));
-    refused(&after(if_(lane_is_zero(), vec![Stmt::Continue])));
+    accepted(&after(continue_if_lane_zero()));
+    accepted(&after(break_if_lane_zero()));
+    accepted(&with(vec![
+        counted(ci(4), vec![continue_if_lane_zero()]),
+        Stmt::barrier(Scope::Block),
+    ]));
+    // inside the loop, after the divergent exit, the rest of the body (and the next pass) is still skipped by some lanes
+    for exit in [continue_if_lane_zero(), break_if_lane_zero()] {
+        let mut body = vec![exit];
+        body.extend(guarded());
+        refused(&with(vec![counted(ci(4), body)]));
+    }
+    let barrier_after_continue = with(vec![counted(
+        ci(4),
+        vec![continue_if_lane_zero(), Stmt::barrier(Scope::Block)],
+    )]);
+    refused(&barrier_after_continue);
+}
+
+#[test]
+fn leaving_a_loop_restores_the_poison_to_what_it_was_before_the_loop_not_to_clean() {
+    // `for (..) { if (lane == 0) continue; for (..) { if (lane == 0) break; } <sum> }`: the inner loop ends, but the OUTER
+    // `continue` still poisons the rest of the outer body, so the sum after the inner loop is refused
+    let mut outer = vec![
+        continue_if_lane_zero(),
+        counter(INNER, ci(2), vec![break_if_lane_zero()]),
+    ];
+    outer.extend(guarded());
+    refused(&with(vec![counted(ci(4), outer)]));
+    // the control: without the outer `continue` the same shape is accepted
+    let mut clean = vec![counter(INNER, ci(2), vec![break_if_lane_zero()])];
+    clean.extend(guarded());
+    accepted(&with(vec![counted(ci(4), clean)]));
+}
+
+#[test]
+fn a_collective_after_an_inner_divergent_loop_inside_a_divergent_region_is_refused() {
+    // `if (lane == 0) { for (..) { .. } <sum> }`: the region is lane-divergent whatever the loop did
+    let mut region = vec![counted(ci(2), vec![set_x(1)])];
+    region.extend(guarded());
+    refused(&with(vec![if_(lane_is_zero(), region)]));
+    let mut region = vec![counted(ci(2), vec![continue_if_lane_zero()])];
+    region.extend(guarded());
+    refused(&with(vec![if_(lane_is_zero(), region)]));
+}
+
+#[test]
+fn a_return_is_not_poison_and_a_loop_exit_changes_nothing_about_it() {
+    // The checker has always accepted a `Return` under divergent control before a barrier (the oracle traps a stranded peer at
+    // run time: `kernel_barriers_run.rs`), and the 57 gguf mmvq kernels (`if (row >= nrows) return;` then a warp shuffle) rely on
+    // it. Pinned unchanged, outside and inside a loop.
+    let ret = || if_(lane_is_zero(), vec![Stmt::Return]);
+    let mut plain = vec![ret()];
+    plain.extend(guarded());
+    accepted(&with(plain));
+    let mut looped = vec![counted(ci(4), vec![ret()])];
+    looped.extend(guarded());
+    accepted(&with(looped));
+}
+
+#[test]
+fn the_oracle_block_reduce_after_a_loop_where_some_lanes_continued_reaches_every_lane() {
+    // 8 threads: `for i in 0..2 { if ((tid & 1) == 0) continue; x += 1; }` leaves x = 2 on odd lanes, 0 on even lanes; a BLOCK sum
+    // after the loop then gives every lane 4 * 2 = 8 (every lane arrived, none stranded)
+    let mut k = with(vec![
+        counted(
+            ci(2),
+            vec![
+                if_(
+                    is_zero(bin(BinaryOp::BitAnd, tid(), ci(1))),
+                    vec![Stmt::Continue],
+                ),
+                Stmt::Assign {
+                    local: X,
+                    value: add(ScalarExpr::Local(X), ci(1)),
+                },
+            ],
+        ),
+        Stmt::Collective {
+            kind: sum(),
+            value: ScalarExpr::Local(X),
+            result: RESULT,
+            scope: Scope::Block,
+        },
+        Stmt::Store {
+            place: Place::Logical {
+                buffer: 0,
+                coords: vec![tid_u32()],
+            },
+            value: ScalarExpr::Local(RESULT),
+        },
+    ]);
+    // the fixture's `warp` and `value` lets stay unused
+    k.launch = standard().launch;
+    assert_eq!(run(&k, 8), vec![8; 8]);
 }
