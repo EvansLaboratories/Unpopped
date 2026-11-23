@@ -12,12 +12,22 @@
 //! `If` or `While` with a divergent condition, a `For` with a divergent bound, or after a `Break`
 //! or `Continue` that sat under such control. It rejects some correct programs and never accepts
 //! a divergent barrier; the four known over-rejections are pinned in `tests/kernel_barrier.rs`.
+//!
+//! **Warp-uniform control.** A second taint, *lane-divergent*, says a value may differ between the lanes of ONE subgroup. A
+//! thread index is lane-divergent, but `tid >> k` and `tid / 2^k` with `2^k` equal to the subgroup size the launch STATES
+//! (`with_subgroup(N, N)`, one size, not a range) are not, when the block's x extent is a multiple of that size (so a subgroup
+//! lies in one row of x): every lane of a subgroup has the same warp number. A **Subgroup-scope** `Collective` is accepted
+//! under control that is warp-uniform (`if (warp == 0) { shuffle }`), because only its own subgroup must reach it; a `Block`
+//! barrier or collective still needs block-uniform control, and so does anything else that is a rendezvous. `lane == c` is
+//! lane-divergent. A target that cannot pin the subgroup size to the launch's stated one declines the launch; the checker takes
+//! the stated size as the contract.
 
 use crate::exec::{ExecId, MemorySpace, Scope};
-use crate::ir::ScalarExpr;
+use crate::ir::{BinaryOp, ScalarExpr};
 use crate::kernel::{BarrierKind, Block, CallArg, KernelError, KernelFn, Place, Stmt};
 use crate::kernel_extern::ExternSig;
 use crate::types::operands;
+use unpopped_vocab::ElementKind;
 
 /// Reject a `Barrier` that may not be reached by every thread of its scope.
 ///
@@ -39,9 +49,14 @@ pub(crate) fn check_barriers(
         entry,
         device: holds_device_barrier(&k.body),
         divergent: vec![false; k.locals.len()],
+        lane: vec![false; k.locals.len()],
+        tid_like: vec![false; k.locals.len()],
+        warp: stated_warp(k),
+        lane_ctx: false,
         changed: false,
         check: false,
     };
+    w.find_tid_like();
     loop {
         w.changed = false;
         w.block(&k.body, false, &mut false)?;
@@ -66,6 +81,13 @@ fn holds_device_barrier(b: &Block) -> bool {
     })
 }
 
+/// The subgroup size the launch states (`min == max`) when a subgroup lies in one x-row of the block (`block.x % N == 0`).
+fn stated_warp(k: &KernelFn) -> Option<u32> {
+    let l = k.launch.as_ref()?;
+    let s = l.subgroup?;
+    (s.min == s.max && s.min >= 1 && l.block[0] % s.min == 0).then_some(s.min)
+}
+
 struct Walk<'a> {
     k: &'a KernelFn,
     barrier_callees: &'a [bool],
@@ -75,12 +97,32 @@ struct Walk<'a> {
     /// The kernel holds a `Device` barrier, so `BlockIdx` is divergent.
     device: bool,
     divergent: Vec<bool>,
+    /// Per local: may differ between the lanes of one subgroup (a subset of `divergent`).
+    lane: Vec<bool>,
+    /// Per local: always a copy of the thread index along x (defined once, by a `Let` of `ThreadIdx(0)` or a cast of one).
+    tid_like: Vec<bool>,
+    /// The subgroup size the launch states, when it states exactly one and the block's x extent is a multiple of it: only then
+    /// is `tid >> log2(N)` the same for every lane of a subgroup.
+    warp: Option<u32>,
+    /// Control reaching the statements being walked may differ between the lanes of one subgroup.
+    lane_ctx: bool,
     changed: bool,
     check: bool,
 }
 
 impl Walk<'_> {
+    /// The local may differ between threads of the block and between lanes of a subgroup.
     fn mark(&mut self, local: u32) {
+        self.mark_block(local);
+        let l = &mut self.lane[local as usize];
+        if !*l {
+            *l = true;
+            self.changed = true;
+        }
+    }
+
+    /// The local may differ between threads of the block (not necessarily between lanes of one subgroup).
+    fn mark_block(&mut self, local: u32) {
         let d = &mut self.divergent[local as usize];
         if !*d {
             *d = true;
@@ -88,15 +130,99 @@ impl Walk<'_> {
         }
     }
 
+    /// Mark `local` as block-divergent when `block`, and also lane-divergent when `lane`.
+    fn mark_by(&mut self, local: u32, block: bool, lane: bool) {
+        if lane {
+            self.mark(local);
+        } else if block {
+            self.mark_block(local);
+        }
+    }
+
+    /// May `e` differ between threads of the block?
     fn expr(&self, e: &ScalarExpr) -> bool {
+        self.expr_at(e, false)
+    }
+
+    /// May `e` differ between the lanes of one subgroup?
+    fn expr_lane(&self, e: &ScalarExpr) -> bool {
+        self.expr_at(e, true)
+    }
+
+    fn expr_at(&self, e: &ScalarExpr, lane: bool) -> bool {
         match e {
             ScalarExpr::Exec(ExecId::BlockIdx(_)) => self.device,
+            // every lane of a subgroup is in the same subgroup
+            ScalarExpr::Exec(ExecId::SubgroupId) if lane => false,
             ScalarExpr::Exec(id) => !matches!(
                 id,
                 ExecId::BlockDim(_) | ExecId::GridDim(_) | ExecId::DeviceCount
             ),
-            ScalarExpr::Local(i) => self.divergent[*i as usize],
-            _ => operands(e).into_iter().any(|x| self.expr(x)),
+            ScalarExpr::Local(i) => {
+                if lane {
+                    self.lane[*i as usize]
+                } else {
+                    self.divergent[*i as usize]
+                }
+            }
+            _ if lane && self.warp_number(e) => false,
+            _ => operands(e).into_iter().any(|x| self.expr_at(x, lane)),
+        }
+    }
+
+    /// Is `e` the thread index along x, or a copy of it (an integer cast, or a local that only ever holds it)?
+    fn is_tid(&self, e: &ScalarExpr) -> bool {
+        match e {
+            ScalarExpr::Exec(ExecId::ThreadIdx(0)) => true,
+            ScalarExpr::Cast(inner, spec) => {
+                matches!(
+                    spec.to,
+                    ElementKind::I32 | ElementKind::U32 | ElementKind::I64 | ElementKind::U64
+                ) && self.is_tid(inner)
+            }
+            ScalarExpr::Local(i) => self.tid_like[*i as usize],
+            _ => false,
+        }
+    }
+
+    /// Is `e` the number of the thread's subgroup: `tid >> k` or `tid / n` with `n == 2^k` the subgroup size the launch states
+    /// (so every lane of a subgroup computes the same value)? A shift or divisor of any other size, and a launch that states
+    /// no one size, are not.
+    fn warp_number(&self, e: &ScalarExpr) -> bool {
+        let Some(n) = self.warp else { return false };
+        match e {
+            ScalarExpr::Binary(BinaryOp::Shr, a, b) => {
+                matches!(**b, ScalarExpr::ConstInt(k, _) if (0..32).contains(&k) && 1u64 << k == u64::from(n))
+                    && self.is_tid(a)
+            }
+            ScalarExpr::Div(a, b) => {
+                matches!(**b, ScalarExpr::ConstInt(c, _) if c == i64::from(n)) && self.is_tid(a)
+            }
+            _ => false,
+        }
+    }
+
+    /// The locals that only ever hold the thread index along x: defined by exactly one `Let` whose initialiser is
+    /// [`Walk::is_tid`], and by nothing else. The least fixed point, so a copy of a copy counts.
+    fn find_tid_like(&mut self) {
+        if self.warp.is_none() {
+            return;
+        }
+        let n = self.k.locals.len();
+        let mut defs = vec![0u32; n];
+        let mut lets: Vec<Option<&ScalarExpr>> = vec![None; n];
+        collect_defs(&self.k.body, &mut defs, &mut lets);
+        loop {
+            let mut grew = false;
+            for l in 0..n {
+                if !self.tid_like[l] && defs[l] == 1 && lets[l].is_some_and(|e| self.is_tid(e)) {
+                    self.tid_like[l] = true;
+                    grew = true;
+                }
+            }
+            if !grew {
+                break;
+            }
         }
     }
 
@@ -117,8 +243,8 @@ impl Walk<'_> {
             })
     }
 
-    /// Whether a value loaded from `place` may differ between threads.
-    fn load_divergent(&self, place: &Place) -> bool {
+    /// Whether a value loaded from `place` may differ between threads (`lane`: between the lanes of one subgroup).
+    fn load_divergent(&self, place: &Place, lane: bool) -> bool {
         match place {
             // another block's array differs from this block's, so the value may differ between threads
             Place::ClusterPeer { .. }
@@ -128,20 +254,20 @@ impl Walk<'_> {
             // A buffer the kernel never writes holds one value per element for the whole launch, so every thread reading the
             // same element (an index no thread-dependent value reaches) reads the same value.
             Place::Logical { buffer, coords } => {
-                !self.read_only(*buffer) || coords.iter().any(|c| self.expr(c))
+                !self.read_only(*buffer) || coords.iter().any(|c| self.expr_at(c, lane))
             }
             Place::Raw {
                 buffer,
                 byte_offset,
                 ..
-            } => !self.read_only(*buffer) || self.expr(byte_offset),
+            } => !self.read_only(*buffer) || self.expr_at(byte_offset, lane),
             Place::Alloc { alloc, index } => {
                 let constant = self
                     .k
                     .allocs
                     .get(*alloc as usize)
                     .is_some_and(|a| a.space == MemorySpace::Constant);
-                !constant || self.expr(index)
+                !constant || self.expr_at(index, lane)
             }
         }
     }
@@ -230,7 +356,7 @@ impl Walk<'_> {
             | Stmt::CollectiveTuple { .. }
             | Stmt::Call { .. }
             | Stmt::CallTuple { .. }
-            | Stmt::ExternCall { .. } => self.defines(st, div || *poisoned)?,
+            | Stmt::ExternCall { .. } => self.defines(st, div, *poisoned)?,
             Stmt::If { .. } | Stmt::For { .. } | Stmt::While { .. } => {
                 self.control(st, div, poisoned)?;
             }
@@ -277,19 +403,22 @@ impl Walk<'_> {
         Ok(())
     }
 
-    /// The statements that define a local. `skipped`: control reaching it, or what precedes it, may
-    /// differ between threads.
-    fn defines(&mut self, st: &Stmt, skipped: bool) -> Result<(), KernelError> {
+    /// The statements that define a local. `div`: control reaching it may differ between threads of the block; `poisoned`: a
+    /// `Break` or `Continue` under such control precedes it (so some threads may have skipped it). The same control may or may
+    /// not differ between the lanes of one subgroup (`self.lane_ctx`).
+    fn defines(&mut self, st: &Stmt, div: bool, poisoned: bool) -> Result<(), KernelError> {
+        let skipped = div || poisoned;
+        let skipped_lane = self.lane_ctx || poisoned;
         match st {
             Stmt::Let { local, init } => {
-                if self.expr(init) {
-                    self.mark(*local);
-                }
+                self.mark_by(*local, self.expr(init), self.expr_lane(init));
             }
             Stmt::Load { local, place } => {
-                if self.load_divergent(place) {
-                    self.mark(*local);
-                }
+                self.mark_by(
+                    *local,
+                    self.load_divergent(place, false),
+                    self.load_divergent(place, true),
+                );
             }
             Stmt::MaskedLoad {
                 local,
@@ -297,14 +426,18 @@ impl Walk<'_> {
                 mask,
                 fill,
             } => {
-                if self.load_divergent(place) || self.expr(mask) || self.expr(fill) {
-                    self.mark(*local);
-                }
+                let block = self.load_divergent(place, false) || self.expr(mask) || self.expr(fill);
+                let lane = self.load_divergent(place, true)
+                    || self.expr_lane(mask)
+                    || self.expr_lane(fill);
+                self.mark_by(*local, block, lane);
             }
             Stmt::Assign { local, value } => {
-                if skipped || self.expr(value) {
-                    self.mark(*local);
-                }
+                self.mark_by(
+                    *local,
+                    skipped || self.expr(value),
+                    skipped_lane || self.expr_lane(value),
+                );
             }
             // read at different moments by different threads, so the value may differ between them
             Stmt::MulticastLoadReduce { local, .. } => self.mark(*local),
@@ -325,17 +458,29 @@ impl Walk<'_> {
             } => self.extern_call(*decl, args, results, skipped)?,
             // A collective is a rendezvous like a barrier: every lane of its scope must reach it, and a lane's
             // result differs from another's.
-            Stmt::Collective { result, .. } => {
+            // Only the lanes of a `Subgroup` collective's own subgroup must reach it, so control that is warp-uniform does not
+            // skip any of them; every other scope needs block-uniform control.
+            Stmt::Collective { result, scope, .. } => {
                 self.mark(*result);
-                if self.check && skipped {
+                let skips = if *scope == Scope::Subgroup {
+                    skipped_lane
+                } else {
+                    skipped
+                };
+                if self.check && skips {
                     return Err(KernelError::BarrierDivergent);
                 }
             }
-            Stmt::CollectiveTuple { results, .. } => {
+            Stmt::CollectiveTuple { results, scope, .. } => {
                 for r in results {
                     self.mark(*r);
                 }
-                if self.check && skipped {
+                let skips = if *scope == Scope::Subgroup {
+                    skipped_lane
+                } else {
+                    skipped
+                };
+                if self.check && skips {
                     return Err(KernelError::BarrierDivergent);
                 }
             }
@@ -357,8 +502,13 @@ impl Walk<'_> {
         match st {
             Stmt::If { cond, then, els } => {
                 let d = div || self.expr(cond);
-                self.block(then, d, poisoned)?;
-                self.block(els, d, poisoned)?;
+                let saved = self.lane_ctx;
+                self.lane_ctx = saved || self.expr_lane(cond);
+                let r = self
+                    .block(then, d, poisoned)
+                    .and_then(|()| self.block(els, d, poisoned));
+                self.lane_ctx = saved;
+                r?;
             }
             Stmt::For {
                 local,
@@ -369,17 +519,61 @@ impl Walk<'_> {
                 ..
             } => {
                 let bound = [start, end, step].into_iter().any(|e| self.expr(e));
-                if bound {
-                    self.mark(*local);
-                }
-                self.loop_body(body, div || bound, poisoned)?;
+                let bound_lane = [start, end, step].into_iter().any(|e| self.expr_lane(e));
+                self.mark_by(*local, bound, bound_lane);
+                let saved = self.lane_ctx;
+                self.lane_ctx = saved || bound_lane;
+                let r = self.loop_body(body, div || bound, poisoned);
+                self.lane_ctx = saved;
+                r?;
             }
             Stmt::While { cond, body } => {
                 let d = div || self.expr(cond);
-                self.loop_body(body, d, poisoned)?;
+                let saved = self.lane_ctx;
+                self.lane_ctx = saved || self.expr_lane(cond);
+                let r = self.loop_body(body, d, poisoned);
+                self.lane_ctx = saved;
+                r?;
             }
             _ => unreachable!("control is called for If, For and While only"),
         }
         Ok(())
+    }
+}
+
+/// Count the statements that define each local, and keep the initialiser of the `Let` that defines one.
+fn collect_defs<'a>(b: &'a Block, defs: &mut [u32], lets: &mut [Option<&'a ScalarExpr>]) {
+    let one = |l: u32, defs: &mut [u32]| defs[l as usize] += 1;
+    for st in &b.0 {
+        match st {
+            Stmt::Let { local, init } => {
+                one(*local, defs);
+                lets[*local as usize] = Some(init);
+            }
+            Stmt::Load { local, .. }
+            | Stmt::MaskedLoad { local, .. }
+            | Stmt::Assign { local, .. }
+            | Stmt::MulticastLoadReduce { local, .. } => one(*local, defs),
+            Stmt::Collective { result, .. } => one(*result, defs),
+            Stmt::CollectiveTuple { results, .. }
+            | Stmt::CallTuple { results, .. }
+            | Stmt::ExternCall { results, .. } => results.iter().for_each(|r| one(*r, defs)),
+            Stmt::Call { result, .. } => result.as_slice().iter().for_each(|r| one(*r, defs)),
+            Stmt::AtomicRmw { old, .. } | Stmt::AtomicCas { old, .. } => {
+                if let Some(l) = old {
+                    one(*l, defs);
+                }
+            }
+            Stmt::If { then, els, .. } => {
+                collect_defs(then, defs, lets);
+                collect_defs(els, defs, lets);
+            }
+            Stmt::For { local, body, .. } => {
+                one(*local, defs);
+                collect_defs(body, defs, lets);
+            }
+            Stmt::While { body, .. } => collect_defs(body, defs, lets),
+            _ => {}
+        }
     }
 }
