@@ -86,8 +86,9 @@ fn an_update_in_a_loop_body_and_a_ternary_arm_runs_when_the_c_runs_it() {
 #[test]
 fn an_update_that_may_not_run_or_is_not_an_integer_local_declines() {
     for src in [
-        // the right operand of `&&` runs only when the left is true
-        "void k(float* out, const float* in) { int i = 0; int a = 0; if (a > 0 && in[i++] > 1.0f) { out[0] = 1.0f; } out[1] = (float)i; }",
+        // the right operand of `&&` runs only when the left is true, and that of `||` only when it is false
+        "void k(float* out, const float* in) { int i = 0; int a = 0; if (a > 0 && i++ > 0) { out[0] = 1.0f; } out[1] = (float)i; }",
+        "void k(float* out, const float* in) { int i = 0; int a = 1; if (a > 0 || i++ > 0) { out[0] = 1.0f; } out[1] = (float)i; }",
         // a float is not an integer local
         "void k(float* out, const float* in) { float f = 1.0f; out[0] = f++; }",
         // a kernel parameter is read-only
