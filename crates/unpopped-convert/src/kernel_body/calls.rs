@@ -22,6 +22,11 @@ impl<'s, 't> Walker<'s, 't> {
         if let Some(r) = self.memcpy_statement(e, out) {
             return r;
         }
+        if let Some(f) = e.child_by_field_name("function") {
+            if let Some(r) = self.functor_call(e, f, out) {
+                return r.map(|_| ());
+            }
+        }
         let callee = e
             .child_by_field_name("function")
             .map(|f| self.short_callee(text(f, self.src)));
@@ -365,6 +370,15 @@ impl<'s, 't> Walker<'s, 't> {
                 return r;
             }
             return self.method_value(n, f);
+        }
+        let mut body = Vec::new();
+        if let Some(r) = self.functor_call(n, f, &mut body) {
+            let r = r?;
+            self.hoisted.append(&mut body);
+            return match r {
+                Some(v) => Ok(v),
+                None => self.not_yet(n, "the result of a functor call that returns void"),
+            };
         }
         let name = self.short_callee(text(f, self.src));
         if let Some(r) = self.tile_reduce(n, name) {
