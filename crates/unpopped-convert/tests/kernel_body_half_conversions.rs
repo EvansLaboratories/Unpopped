@@ -110,3 +110,15 @@ fn the_wrong_argument_type_or_count_declines() {
         );
     }
 }
+
+#[test]
+fn the_lanes_of_a_half2_as_half_and_as_float() {
+    // h[0] = (1.5, -2.0) as two halves; __low2half/__high2half keep the half, __low2float/__high2float widen it
+    let src = "void k(float* out, const float* in, const half* h) { half2 p = make_half2(h[0], h[1]); \
+        out[0] = __half2float(__low2half(p)); out[1] = __half2float(__high2half(p)); out[2] = __low2float(p); out[3] = __high2float(p); }";
+    let got = run(src, &[0.0], &[0x3e00, 0xc000], 4);
+    assert_eq!(got, vec![1.5, -2.0, 1.5, -2.0]);
+    // a float2 is not a half2
+    let bad = "void k(float* out, const float* in, const half* h) { float2 p = make_float2(1.0f, 2.0f); out[0] = __low2float(p); }";
+    assert!(lift(bad).is_err());
+}

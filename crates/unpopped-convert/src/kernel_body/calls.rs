@@ -218,6 +218,35 @@ impl<'s, 't> Walker<'s, 't> {
         })())
     }
 
+    /// `__low2half(h)`, `__high2half(h)` (a lane of a `half2`, as `half`) and `__low2float(h)`, `__high2float(h)` (as `float`).
+    /// `None` when `name` is not one.
+    fn half2_lane(&mut self, call: Node<'_>, name: &str) -> Option<R<(ScalarExpr, E)>> {
+        let (lane, to) = match name {
+            "__low2half" => (0, E::F16),
+            "__high2half" => (1, E::F16),
+            "__low2float" => (0, E::F32),
+            "__high2float" => (1, E::F32),
+            _ => return None,
+        };
+        let args = self.call_args(call);
+        let [x] = args.as_slice() else {
+            return Some(self.not_yet(call, format!("`{name}` with {} argument(s)", args.len())));
+        };
+        Some((|| {
+            let mut lanes = self.vector_value(*x, (E::F16, 2))?;
+            let v = lanes.swap_remove(lane);
+            if to == E::F16 {
+                return Ok((v, E::F16));
+            }
+            let spec = CastSpec {
+                to,
+                round: RoundMode::NearestEven,
+                sat: Saturation::Wrap,
+            };
+            Ok((ScalarExpr::Cast(Box::new(v), spec), to))
+        })())
+    }
+
     /// `isnan(x)`, `isinf(x)`, `isfinite(x)` on a float: `x != x`; `|x| == inf`; `x - x == 0` (NaN and infinity both make
     /// `x - x` not equal to zero). `None` when `name` is not one.
     fn float_class(&mut self, call: Node<'_>, name: &str) -> Option<R<(ScalarExpr, E)>> {
@@ -327,6 +356,9 @@ impl<'s, 't> Walker<'s, 't> {
             return r;
         }
         if let Some(r) = self.half_conversion(n, name) {
+            return r;
+        }
+        if let Some(r) = self.half2_lane(n, name) {
             return r;
         }
         if let Some(r) = self.float_class(n, name) {
