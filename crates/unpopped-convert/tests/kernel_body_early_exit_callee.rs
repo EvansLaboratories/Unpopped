@@ -75,4 +75,13 @@ fn a_call_that_is_not_last_does_not_end_the_kernel_with_its_return() {
     .unwrap();
     assert_eq!(run(&k, 0), vec![0.0, 5.0]);
     assert_eq!(run(&k, 1), vec![1.0, 5.0]);
+    // a helper's own last call is not the kernel's last: the guard in `leaf` leaves `leaf` (and `mid`), not the kernel
+    let k = lift(
+        "static void leaf(float* out, const float* in, int nrows) { if (nrows <= 0) return; if (threadIdx.x == 0) out[0] = in[0]; }
+         static void mid(float* out, const float* in, int nrows) { leaf(out, in, nrows); }
+         extern \"C\" void k(float* out, const float* in, int nrows) { mid(out, in, nrows); if (threadIdx.x == 0) out[1] = 5.0f; }",
+    )
+    .unwrap();
+    assert_eq!(run(&k, 0), vec![0.0, 5.0]);
+    assert_eq!(run(&k, 1), vec![1.0, 5.0]);
 }
