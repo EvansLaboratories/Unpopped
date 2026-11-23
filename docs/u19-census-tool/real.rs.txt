@@ -1,0 +1,182 @@
+/// REAL instantiations (`--real`): what the corpus itself instantiates, never a guess. For a template kernel `name`, every place that
+/// writes `name<args>(` or `name<args><<<` (a host launch, an explicit specialisation) is a candidate. Arguments that name the
+/// enclosing template's own parameters (a launcher `launch_x<T>` calling `x<T><<<`) or a macro's parameters are substituted from the
+/// enclosing function's / macro's own use sites, up to three levels. A kernel with no candidate is "no instantiation".
+#[derive(Clone, Debug)]
+struct TParam { name: String, is_type: bool, has_default: bool }
+
+fn split_top(s: &str) -> Vec<String> {
+    let (mut d, mut cur, mut out) = (0i32, String::new(), Vec::new());
+    for c in s.chars() {
+        match c {
+            '<' | '(' | '[' | '{' => d += 1,
+            '>' | ')' | ']' | '}' => d -= 1,
+            ',' if d == 0 => { out.push(std::mem::take(&mut cur)); continue; }
+            _ => {}
+        }
+        cur.push(c);
+    }
+    if !cur.trim().is_empty() { out.push(cur); }
+    out.into_iter().map(|x| x.trim().to_string()).collect()
+}
+
+/// The text between the `open` delimiter at `at` and its match, and the index after the closer.
+fn balanced(text: &str, at: usize, open: char, close: char) -> Option<(String, usize)> {
+    let b = text.as_bytes();
+    if b.get(at).map(|c| *c as char) != Some(open) { return None; }
+    let mut d = 0i32;
+    for (i, c) in text[at..].char_indices() {
+        if c == open { d += 1; }
+        else if c == close { d -= 1; if d == 0 { return Some((text[at + 1..at + i].to_string(), at + i + 1)); } }
+        else if (c == ';' || c == '{' || c == '}') && open == '<' { return None; }
+    }
+    None
+}
+
+fn header_params(header: &str) -> Vec<TParam> {
+    let mut out = Vec::new();
+    for p in split_top(header) {
+        let has_default = p.contains('=');
+        let head = p.split('=').next().unwrap_or("").trim().to_string();
+        let words: Vec<&str> = head.split_whitespace().collect();
+        let Some(name) = words.last().map(|w| w.trim_start_matches('.').to_string()) else { continue };
+        if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') { continue; }
+        let is_type = matches!(words.first().copied(), Some("typename" | "class"));
+        out.push(TParam { name, is_type, has_default });
+    }
+    out
+}
+
+fn line_of(text: &str, pos: usize) -> usize { text[..pos].matches('\n').count() + 1 }
+
+enum Encl { Macro(String, Vec<String>), Func(String, Vec<TParam>) }
+
+fn enclosing(text: &str, pos: usize) -> Option<Encl> {
+    // a `#define NAME(params) ...` logical line
+    let line_start = text[..pos].rfind('\n').map_or(0, |i| i + 1);
+    let mut s = line_start;
+    loop {
+        if s == 0 { break; }
+        let prev_end = s - 1;
+        let prev_start = text[..prev_end].rfind('\n').map_or(0, |i| i + 1);
+        if text[prev_start..prev_end].trim_end().ends_with('\\') { s = prev_start; } else { break; }
+    }
+    let first = text[s..].lines().next().unwrap_or("").trim_start();
+    if let Some(rest) = first.strip_prefix('#') {
+        let rest = rest.trim_start();
+        if let Some(d) = rest.strip_prefix("define") {
+            let d = d.trim_start();
+            let name: String = d.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+            let after = &d[name.len()..];
+            if after.starts_with('(') {
+                if let Some((ps, _)) = balanced(after, 0, '(', ')') {
+                    return Some(Encl::Macro(name, split_top(&ps)));
+                }
+            }
+        }
+        return None;
+    }
+    // the nearest preceding `template <...>` whose function body holds `pos`
+    let t = text[..pos].rfind("template")?;
+    let open = t + text[t..].find('<')?;
+    let (hdr, after) = balanced(text, open, '<', '>')?;
+    let p = after + text[after..].find('(')?;
+    let name: String = text[..p].trim_end().chars().rev().take_while(|c| c.is_alphanumeric() || *c == '_').collect::<Vec<_>>().into_iter().rev().collect();
+    let (_, pend) = balanced(text, p, '(', ')')?;
+    let b = pend + text[pend..].find('{')?;
+    let (_, bend) = balanced(text, b, '{', '}')?;
+    if pos > b && pos < bend && !name.is_empty() { Some(Encl::Func(name, header_params(&hdr))) } else { None }
+}
+
+fn subst(arg: &str, names: &[String], vals: &[String]) -> String {
+    let mut out = arg.to_string();
+    for (n, v) in names.iter().zip(vals) {
+        let re = regex::Regex::new(&format!(r"\b{}\b", regex::escape(n))).unwrap();
+        out = re.replace_all(&out, regex::NoExpand(v)).to_string();
+    }
+    out
+}
+
+fn mentions(arg: &str, names: &[String]) -> bool {
+    names.iter().any(|n| regex::Regex::new(&format!(r"\b{}\b", regex::escape(n))).unwrap().is_match(arg))
+}
+
+type Cand = (Vec<String>, String, String);
+
+/// Argument lists `name<...>` is written with, at call or specialisation sites; unresolved ones are substituted from the enclosing
+/// definition's own use sites.
+fn candidates(name: &str, corpus: &[(String, String)], depth: u32, seen: &mut Vec<String>) -> Vec<Cand> {
+    let mut out = Vec::new();
+    if depth > 3 || seen.iter().any(|s| s == name) { return out; }
+    seen.push(name.to_string());
+    let re = regex::Regex::new(&format!(r"\b{}\s*<", regex::escape(name))).unwrap();
+    for (rel, text) in corpus {
+        for m in re.find_iter(text) {
+            let lt = m.end() - 1;
+            let Some((inner, after)) = balanced(text, lt, '<', '>') else { continue };
+            let tail = text[after..].trim_start();
+            if !(tail.starts_with('(') || tail.starts_with("<<<")) { continue; }
+            let args = split_top(&inner);
+            let origin = format!("{rel}:{}", line_of(text, m.start()));
+            match enclosing(text, m.start()) {
+                None => out.push((args, origin, rel.clone())),
+                Some(Encl::Func(f, ps)) => {
+                    let names: Vec<String> = ps.iter().map(|p| p.name.clone()).collect();
+                    if !args.iter().any(|a| mentions(a, &names)) { out.push((args, origin, rel.clone())); continue; }
+                    for (outer, o2, tu2) in candidates(&f, corpus, depth + 1, seen) {
+                        if outer.len() > names.len() { continue; }
+                        let (ns, vs): (Vec<String>, Vec<String>) = names.iter().cloned().zip(outer.iter().cloned()).unzip();
+                        let sub: Vec<String> = args.iter().map(|a| subst(a, &ns, &vs)).collect();
+                        if !sub.iter().any(|a| mentions(a, &names[outer.len()..])) { out.push((sub, format!("{origin} via {f}<..> at {o2}"), tu2.clone())); }
+                    }
+                }
+                Some(Encl::Macro(mname, mps)) => {
+                    if !args.iter().any(|a| mentions(a, &mps)) { out.push((args, origin, rel.clone())); continue; }
+                    let mre = regex::Regex::new(&format!(r"\b{}\s*\(", regex::escape(&mname))).unwrap();
+                    for (mrel, mtext) in corpus {
+                        for mm in mre.find_iter(mtext) {
+                            let ls = mtext[..mm.start()].rfind('\n').map_or(0, |i| i + 1);
+                            if mtext[ls..mm.start()].contains("define") { continue; }
+                            let Some((margs, _)) = balanced(mtext, mm.end() - 1, '(', ')') else { continue };
+                            let vals = split_top(&margs);
+                            if vals.len() != mps.len() { continue; }
+                            let sub: Vec<String> = args.iter().map(|a| subst(a, &mps, &vals)).collect();
+                            if !sub.iter().any(|a| mentions(a, &mps)) { out.push((sub, format!("{origin} via macro {mname} used at {mrel}:{}", line_of(mtext, mm.start())), mrel.clone())); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    seen.pop();
+    out
+}
+
+/// The first candidate that fits `params`: every type argument non-empty, every value argument an integer or bool literal.
+fn pick(params: &[TParam], cands: &[Cand]) -> Option<(Vec<(String, bool, String)>, String, String)> {
+    'c: for (args, origin, tu) in cands {
+        let required = params.iter().filter(|p| !p.has_default).count();
+        if args.len() > params.len() || args.len() < required { continue; }
+        let mut out = Vec::new();
+        for (p, a) in params.iter().zip(args) {
+            let a = a.trim();
+            if a.is_empty() { continue 'c; }
+            if p.is_type {
+                if a.chars().next().is_some_and(|c| c.is_ascii_digit()) { continue 'c; }
+                out.push((p.name.clone(), true, a.to_string()));
+            } else {
+                let v = match a { "true" => Some(1), "false" => Some(0), _ => a.trim_end_matches(|c| c == 'u' || c == 'U' || c == 'l' || c == 'L').parse::<i64>().ok() };
+                let Some(v) = v else { continue 'c };
+                out.push((p.name.clone(), false, v.to_string()));
+            }
+        }
+        return Some((out, origin.clone(), tu.clone()));
+    }
+    None
+}
+
+fn kernel_header(src: &str, kernel_at: usize) -> Option<String> {
+    let t = src[..kernel_at].rfind("template")?;
+    let open = t + src[t..].find('<')?;
+    balanced(src, open, '<', '>').map(|(h, _)| h)
+}

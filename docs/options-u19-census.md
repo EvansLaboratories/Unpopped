@@ -5,6 +5,10 @@ pm-kernels `[TASK]` 2026-11-22: run `lift_kernel` read-only and parse-only over 
 (`NotYetLifted`) or an IR row (`OutsideIr`); counts with their ref, the command and a control; order the next slices by how many real kernels each
 unlocks. **No GPU, no emitter, no run: only the lift.**
 
+**Reading note (2026-11-23, after a review of #386): the Baracuda figures in this note (56, 80, 91, 141, 146, 157, 166) and the 253 of the PR are GUESS-MODE figures**: every template
+parameter is set to `float` or `128`, whatever the real call sites use, so each is an upper bound on what lifts as built. The real-instantiation census at the head of #386 is in
+the last paragraph and in `docs/u19-census-tool/README.md`.
+
 ## Headline
 
 | Corpus | Ref | Kernels | Lifted as is | Lifted with heuristic template instantiation |
@@ -194,6 +198,6 @@ Then **local arrays with a brace initialiser** (`int a[4] = {1, 2};`: the listed
 (a namespace-qualified struct type), 13 `cg::thread_block`, 11 loop bounds the function assigns, 10 `baracuda::atomic::add<float>` (a namespaced helper call), 8 two-dimensional `__shared__`, 8 `shape.d`
 (a struct parameter's array field used whole), 8 `vec_t<float, 128>`, 7 `qualified_identifier` expressions.
 
-**Re-measured 2026-11-23 at the head of #386 (`6ba67c7c`, no `.rs` file differs from `1a55b0e6`) with the stored tool, `--args --includes`: 253 of 535 kernels lifted (228 of the 408 templates); the same tool, flags and corpus at the base of the last six slices (`ebf5342e`) give 205 of 535.** The progression above (56 to 166) was measured by earlier copies of the tool and is kept as the history of that work; the 253 is the only figure of the head and the control is what shows the tool can tell two walkers apart. Method, corpus identity and the exact run lines are in `docs/u19-census-tool/README.md`.
+**Re-measured 2026-11-23 at the head of #386 (`6ba67c7c`, no `.rs` file differs from `1a55b0e6`) with the stored tool (same corpus and flags for the control at `ebf5342e`).** Guess mode (`--args --includes`): **253 of 535** kernels (228 of 408 templates); control 205 (194). **Real mode** (`--real --includes`, each kernel at its real instantiations): **201 of 535** kernels lift (176 templates); of the 433 kernels with a real instantiation, **ALL instantiations lift for 130, MIXED 71, NONE 232**; **748 of 2014 real instantiations (37.1%) lift**; 102 kernels have no instantiation to try; control at `ebf5342e`: 163 of 535, 75 / 88 / 270, 472 of 2014 (23.4%). So the 253 and every earlier headline are guess-mode upper bounds, and the figure for the corpus as it is built is the real-mode one. The progression 56 to 166 above was measured by earlier copies of the tool and is kept as the history of that work. Method, corpus identity and run lines: `docs/u19-census-tool/README.md`.
 
 — lane: unpopped
