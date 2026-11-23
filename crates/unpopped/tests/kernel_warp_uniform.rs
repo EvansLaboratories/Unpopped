@@ -15,12 +15,16 @@ use unpopped::exec::{ExecId, LaunchShape, Scope};
 use unpopped::ir::{BinaryOp, CastSpec, ReduceOp, RoundMode, Saturation, ScalarExpr};
 use unpopped::kernel::{
     Block, BufferRole, CollectiveKind, KernelError, KernelFn, LocalDecl, Param, Place, ShuffleMode,
-    Stmt, Unroll, VoteKind, check_kernel,
+    Stmt, Unroll, VoteKind, check_kernel, check_module,
 };
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
 use unpopped::oracle::kernel_launch::run_launch;
 use unpopped_vocab::ElementKind;
+
+#[path = "support/collective_tuple.rs"]
+#[allow(dead_code)]
+mod fixture;
 
 const I32: ElementKind = ElementKind::I32;
 const U32: ElementKind = ElementKind::U32;
@@ -235,7 +239,7 @@ fn a_launch_that_does_not_state_one_size_or_whose_rows_are_not_whole_subgroups_s
     // a range of sizes, even one that contains N
     refused(&kernel(
         8,
-        (2, 8),
+        (4, 8),
         shr(2),
         is_zero(warp()),
         sum(),
@@ -243,7 +247,7 @@ fn a_launch_that_does_not_state_one_size_or_whose_rows_are_not_whole_subgroups_s
     ));
     refused(&kernel(
         8,
-        (1, 4),
+        (4, 32),
         shr(2),
         is_zero(warp()),
         sum(),
@@ -507,4 +511,27 @@ fn a_collective_after_a_divergent_break_is_refused_even_when_the_break_is_warp_u
     let mut body = vec![if_(is_zero(warp()), vec![Stmt::Break])];
     body.extend(guarded());
     refused(&with(vec![counted(ci(4), body)]));
+}
+
+#[test]
+fn a_tuple_collective_follows_the_same_scope_rule() {
+    // the argmax fixture (8 threads, subgroup 4) with its tuple collective and stores moved under `if (warp == 0)`, where
+    // `warp = t >> 2` and `t` is the fixture's `(int)threadIdx.x`
+    let guarded = |scope| {
+        let mut m = fixture::argmax_module(false, scope);
+        let main = &mut m.fns[0];
+        main.locals.push(LocalDecl::scalar(I32));
+        let rest: Vec<Stmt> = main.body.0.drain(2..).collect();
+        main.body.0.push(Stmt::Let {
+            local: 4,
+            init: bin(BinaryOp::Shr, ScalarExpr::Local(1), ci(2)),
+        });
+        main.body.0.push(if_(is_zero(ScalarExpr::Local(4)), rest));
+        m
+    };
+    assert_eq!(check_module(&guarded(Scope::Subgroup), 0), Ok(()));
+    assert_eq!(
+        check_module(&guarded(Scope::Block), 0),
+        Err(KernelError::BarrierDivergent)
+    );
 }
