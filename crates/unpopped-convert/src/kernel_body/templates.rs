@@ -186,6 +186,9 @@ pub(super) fn instantiate(
 /// Rounds of rewriting before a chain of template helpers is declined (each round resolves one nesting level).
 const MAX_ROUNDS: usize = 16;
 
+/// Rounds of class template rewriting: an argument's own parentheses are normalised so an instance key never grows.
+const MAX_TYPE_ROUNDS: usize = 16;
+
 /// The instance each distinct `(helper, arguments)` became: a plain function appended to the source, so it is walked and inlined
 /// like any other helper.
 #[derive(Default)]
@@ -397,7 +400,7 @@ struct ClassTemplate<'t> {
 /// A chain of instantiations deeper than [`MAX_ROUNDS`], or a source that stops parsing.
 pub(super) fn expand_types(parse: fn(&str) -> Option<Tree>, mut src: String) -> Res<String> {
     let mut inst = Instances::default();
-    for _ in 0..MAX_ROUNDS {
+    for _ in 0..MAX_TYPE_ROUNDS {
         let tree = parse(&src).ok_or(KernelLiftError::SyntaxError { line: 0 })?;
         let edits = type_edits(&tree, &src, &mut inst);
         if edits.is_empty() {
@@ -409,7 +412,7 @@ pub(super) fn expand_types(parse: fn(&str) -> Option<Tree>, mut src: String) -> 
         src.push_str(&std::mem::take(&mut inst.text));
     }
     decline(format!(
-        "class templates nested deeper than {MAX_ROUNDS} levels"
+        "class templates nested deeper than {MAX_TYPE_ROUNDS} levels"
     ))
 }
 
@@ -514,12 +517,24 @@ fn template_args(list: Node<'_>, src: &str) -> Vec<String> {
         .collect()
 }
 
-/// `x` without whitespace and without one pair of outer parentheses (an argument substituted as `(128)` equals `128`).
+/// `x` without whitespace and without any outer parentheses that enclose the whole text (an argument substituted as `(128)` or
+/// `((128))` equals `128`; `(a)+(b)` keeps its parentheses).
 fn bare(x: &str) -> String {
-    let s: String = x.split_whitespace().collect();
-    match s.strip_prefix('(').and_then(|r| r.strip_suffix(')')) {
-        Some(inner) if !inner.contains('(') && !inner.contains(')') => inner.to_string(),
-        _ => s,
+    let mut s: String = x.split_whitespace().collect();
+    loop {
+        let Some(inner) = s.strip_prefix('(').and_then(|r| r.strip_suffix(')')) else {
+            return s;
+        };
+        // the opening parenthesis must close at the very end, not earlier
+        let mut depth = 0i32;
+        let encloses = inner.chars().all(|c| {
+            depth += i32::from(c == '(') - i32::from(c == ')');
+            depth >= 0
+        }) && depth == 0;
+        if !encloses {
+            return s;
+        }
+        s = inner.to_string();
     }
 }
 
@@ -616,7 +631,7 @@ fn bind_explicit(params: &[TParam], given: &[String]) -> Option<Vec<(String, Str
         .map(|(i, p)| {
             let v = match given.get(i) {
                 Some(a) if p.is_type => a.clone(),
-                Some(a) => format!("({a})"),
+                Some(a) => format!("({})", bare(a)),
                 None => p.default.clone()?,
             };
             Some((p.name.clone(), v))
