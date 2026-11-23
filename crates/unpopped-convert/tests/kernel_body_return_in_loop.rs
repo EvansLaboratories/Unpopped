@@ -70,9 +70,9 @@ fn a_return_in_a_nested_loop_stops_both_loops() {
     .expect("lifts");
     for t in [0, 6, 9, 12, 15, 30] {
         let mut want = -1.0;
-        'o: for i in 0..4 {
-            for j in 0..4 {
-                if IN[i] + IN[j + 4] > t as f32 {
+        'o: for (i, a) in IN[..4].iter().enumerate() {
+            for (j, b) in IN[4..].iter().enumerate() {
+                if a + b > t as f32 {
                     want = (i * 10 + j) as f64;
                     break 'o;
                 }
