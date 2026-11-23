@@ -21,8 +21,8 @@ fn parse(src: &str) -> Option<tree_sitter::Tree> {
 const C: Frontend = Frontend::new("c", "void", &[], "out", "in", parse);
 
 const SRC: &str = "template <typename T> struct MinR { static T init(); T operator()(T a, T b) const { return b < a ? b : a; } };\n\
-    template <> float MinR<float>::init() { return 3.5f; }\n\
     template <> double MinR<double>::init() { return 77.0; }\n\
+    template <> float MinR<float>::init() { return 3.5f; }\n\
     template <typename T, typename F> void k(T* out, const T* in, int n) { F op{}; T acc = F::init(); \
         for (int i = 0; i < n; ++i) { acc = op(acc, in[i]); } out[0] = acc; }";
 
