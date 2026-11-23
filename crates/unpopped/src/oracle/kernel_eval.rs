@@ -18,6 +18,16 @@
 //!   an `OpDef` body, with `Input(k)` read from a buffer; here it is read from a local.
 //! * Anything else (a packed value, an integer operation outside the subset above, a float
 //!   expression that reads a non-compute local) is [`KernelTrap::Unsupported`], never a guess.
+//!
+//! # Rounding: once per STATEMENT, at f64, not once per operation
+//!
+//! A float expression is evaluated at `f64` and rounded to the compute dtype **once, where it is stored** (`settle` for a local, the
+//! element store for a buffer): `a*b - c*d` computes both products exactly. This is a higher-precision REFERENCE that a device is
+//! compared against inside a fidelity band (`oracle/fidelity.rs`), not an interpreter of C semantics: it is neither C's unfused
+//! per-operation `float` arithmetic nor a literal fused multiply-add. A kernel whose result depends on per-operation rounding
+//! (a cancellation such as `cuCmulf((x, 1 + 2^-11), (x, 1)).re` with `x = 1 + 2^-12`: `2^-24` here and in a fused kernel, `0` in
+//! unfused `f32`) is therefore NOT discriminated by value, only by the shape of the IR (`tests/kernel_body_complex.rs` pins
+//! the shape). A per-operation mode for bit-exact device tests is ROADMAP U45.
 
 use super::kernel_mem::{AccessKind, ThreadCtx};
 pub use super::kernel_trap::KernelTrap;
