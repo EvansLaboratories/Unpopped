@@ -43,12 +43,12 @@ impl<'s, 't> Walker<'s, 't> {
             "static_assert_declaration" => self.static_assert(n),
             "expression_statement" => self.expression_statement(n, out),
             "if_statement" => self.if_statement(n, out),
-            "while_statement" | "for_statement" => {
+            "while_statement" | "for_statement" | "do_statement" => {
                 self.loop_depth += 1;
-                let r = if n.kind() == "while_statement" {
-                    self.while_statement(n, out)
-                } else {
-                    self.for_statement(n, out, unroll)
+                let r = match n.kind() {
+                    "while_statement" => self.while_statement(n, out),
+                    "do_statement" => self.do_statement(n, out),
+                    _ => self.for_statement(n, out, unroll),
                 };
                 self.loop_depth -= 1;
                 r?;
@@ -283,6 +283,39 @@ impl<'s, 't> Walker<'s, 't> {
             None => Block::default(),
         };
         out.push(Stmt::If { cond, then, els });
+        Ok(())
+    }
+
+    /// `do { body } while (c);` as `while (1) { body; if (!c) break; }`: the body runs once before the first test. A `continue` in
+    /// the body (outside a nested loop) would skip the test at the end, so it declines.
+    pub(super) fn do_statement(&mut self, n: Node<'_>, out: &mut Vec<Stmt>) -> R<()> {
+        let (Some(c), Some(body)) = (
+            n.child_by_field_name("condition"),
+            n.child_by_field_name("body"),
+        ) else {
+            return self.not_yet(n, "a `do` of an unexpected shape");
+        };
+        if has_continue(body) {
+            return self.not_yet(
+                n,
+                "a `continue` in a `do`/`while` body (it must still test the condition)",
+            );
+        }
+        self.flush(out);
+        let mut body = self.block_of(body)?;
+        let cond = self.condition(c)?;
+        // the condition's own loads run at the end of every pass, after the body
+        body.0.append(&mut self.hoisted);
+        let (zero, _) = self.constant(0);
+        body.0.push(Stmt::If {
+            cond: ScalarExpr::Select(Box::new(cond), Box::new(zero), Box::new(self.constant(1).0)),
+            then: Block(vec![Stmt::Break]),
+            els: Block::default(),
+        });
+        out.push(Stmt::While {
+            cond: ScalarExpr::ConstInt(1, E::I32),
+            body,
+        });
         Ok(())
     }
 
