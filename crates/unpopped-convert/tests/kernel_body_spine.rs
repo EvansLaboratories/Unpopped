@@ -234,7 +234,7 @@ fn constructs_outside_the_spine_decline_by_name() {
         "&&",
     );
     not_yet(
-        "void k(float* out, int n) { for (int i = 0; i * 2 < n; i++) { out[i] = 1.0f; } }",
+        "void k(float* out, int n) { for (int i = 0; i * 2 < n; i++) { if (i == 1) continue; out[i] = 1.0f; } }",
         "counted loop",
     );
 }
