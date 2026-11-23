@@ -94,6 +94,7 @@ mod expressions;
 mod globals;
 mod groups;
 mod inline;
+mod memcpy;
 mod methods;
 mod places;
 mod pointer;
