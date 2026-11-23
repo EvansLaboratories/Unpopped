@@ -65,3 +65,10 @@ fn a_reference_to_the_wrong_shape_or_a_non_vector_declines() {
         );
     }
 }
+
+#[test]
+fn a_const_reference_vector_takes_any_vector_value_not_only_a_local() {
+    let src = "typedef float2 dfloat2;\n__device__ float sum(const dfloat2 & w) { return w.x + w.y; }\n\
+        void k(float* out, const float* in) { out[0] = sum(make_float2(in[0], in[1])); }";
+    assert_eq!(run(src, 1), vec![7.0]);
+}
