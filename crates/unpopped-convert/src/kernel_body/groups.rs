@@ -242,14 +242,16 @@ impl<'s, 't> Walker<'s, 't> {
                 let (value, vt) = self.expr(*v)?;
                 let (op, ot) = self.expr(*operand)?;
                 let operand = self.convert(op, ot, E::U32, *operand)?;
-                let result = self.new_local(vt);
+                let wt = collective_type(vt);
+                let value = self.convert(value, vt, wt, *v)?;
+                let result = self.new_local(wt);
                 self.hoisted.push(Stmt::Collective {
                     kind: CollectiveKind::Shuffle { mode, operand },
                     value,
                     result,
                     scope: Scope::Subgroup,
                 });
-                Ok((ScalarExpr::Local(result), vt))
+                Ok((self.convert(ScalarExpr::Local(result), wt, vt, *v)?, vt))
             }
             _ => self.not_yet(call, format!("the tile method `{m}`")),
         })())
@@ -301,14 +303,17 @@ impl<'s, 't> Walker<'s, 't> {
             let (value, vt) = self.expr(v)?;
             let (op, ot) = self.expr(operand)?;
             let operand = self.convert(op, ot, E::U32, operand)?;
-            let result = self.new_local(vt);
+            // a half is moved as an F32 (exact both ways): the checker's collective values are integers, F32 and F64
+            let wt = collective_type(vt);
+            let value = self.convert(value, vt, wt, v)?;
+            let result = self.new_local(wt);
             self.hoisted.push(Stmt::Collective {
                 kind: CollectiveKind::Shuffle { mode, operand },
                 value,
                 result,
                 scope: Scope::Subgroup,
             });
-            Ok((ScalarExpr::Local(result), vt))
+            Ok((self.convert(ScalarExpr::Local(result), wt, vt, v)?, vt))
         })())
     }
 
@@ -343,14 +348,32 @@ impl<'s, 't> Walker<'s, 't> {
         };
         Some((|| {
             let (value, vt) = self.expr(*v)?;
-            let result = self.new_local(vt);
+            let wt = collective_type(vt);
+            // Max and Min pick one of the operands, so they are exact through F32; a half Sum would round once instead of per step
+            if wt != vt && rop == ReduceOp::Sum {
+                return self.not_yet(
+                    call,
+                    "`cg::reduce` with `plus` over a half value (C rounds to half at every step)",
+                );
+            }
+            let value = self.convert(value, vt, wt, *v)?;
+            let result = self.new_local(wt);
             self.hoisted.push(Stmt::Collective {
                 kind: CollectiveKind::Reduce(rop),
                 value,
                 result,
                 scope: Scope::Subgroup,
             });
-            Ok((ScalarExpr::Local(result), vt))
+            Ok((self.convert(ScalarExpr::Local(result), wt, vt, *v)?, vt))
         })())
+    }
+}
+
+/// The type a collective moves a value as: a half or bfloat16 travels as an F32 (the checker takes integers, F32 and F64).
+fn collective_type(t: E) -> E {
+    if matches!(t, E::F16 | E::Bf16) {
+        E::F32
+    } else {
+        t
     }
 }
