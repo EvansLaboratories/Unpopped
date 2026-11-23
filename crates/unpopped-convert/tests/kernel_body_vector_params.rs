@@ -88,9 +88,13 @@ fn address_of_an_element_and_a_moving_pointer_step_whole_vectors() {
 
 #[test]
 fn a_vector_by_value_parameter_still_declines() {
-    let r = lift("void k(float* out, float2 v) { out[0] = v.x; }");
-    assert!(
-        matches!(r, Err(KernelLiftError::NotYetLifted { .. })),
-        "{r:?}"
-    );
+    match lift("void k(float* out, float2 v) { out[0] = 1.0f; }") {
+        Err(KernelLiftError::NotYetLifted { construct, .. }) => {
+            assert!(
+                construct.contains("vector type passed by value"),
+                "{construct}"
+            );
+        }
+        other => panic!("expected a decline, got {other:?}"),
+    }
 }
