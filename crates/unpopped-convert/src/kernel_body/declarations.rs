@@ -159,7 +159,11 @@ impl<'s, 't> Walker<'s, 't> {
     /// The zero of `ty`, as an expression.
     pub(super) fn zero_of(&self, ty: E, at: Node<'_>) -> R<ScalarExpr> {
         if int_range(ty).is_some() {
-            return Ok(ScalarExpr::ConstInt(0, ty));
+            // an integer leaf is I32, I64, U32 or U64 only: a narrower zero is an `I32` zero converted
+            if matches!(ty, E::I32 | E::I64 | E::U32 | E::U64) {
+                return Ok(ScalarExpr::ConstInt(0, ty));
+            }
+            return self.convert(ScalarExpr::ConstInt(0, E::I32), E::I32, ty, at);
         }
         self.convert(ScalarExpr::Const(0.0), self.compute, ty, at)
     }
