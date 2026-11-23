@@ -134,12 +134,23 @@ impl<'s, 't> Walker<'s, 't> {
                     let (e, et) = self.expr(v)?;
                     let zero = self.zero_of(et, v)?;
                     let nonzero = ScalarExpr::Binary(BinaryOp::CmpNe, Box::new(e), Box::new(zero));
+                    // the comparison is 0 or 1 at the compute type: from a float it narrows to a byte exactly, from an integer it
+                    // wraps (the oracle's integer evaluator reads only a wrapping cast)
+                    let int_compute = int_range(self.compute).is_some();
                     ScalarExpr::Cast(
                         Box::new(nonzero),
                         CastSpec {
                             to: E::U8,
-                            round: RoundMode::TowardZero,
-                            sat: Saturation::Clamp,
+                            round: if int_compute {
+                                RoundMode::NearestEven
+                            } else {
+                                RoundMode::TowardZero
+                            },
+                            sat: if int_compute {
+                                Saturation::Wrap
+                            } else {
+                                Saturation::Clamp
+                            },
                         },
                     )
                 }
