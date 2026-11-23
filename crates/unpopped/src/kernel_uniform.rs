@@ -192,12 +192,10 @@ impl Walk<'_> {
         let Some(n) = self.warp else { return false };
         match e {
             ScalarExpr::Binary(BinaryOp::Shr, a, b) => {
-                matches!(**b, ScalarExpr::ConstInt(k, _) if (0..32).contains(&k) && 1u64 << k == u64::from(n))
+                matches!(const_int(b), Some(k) if (0..32).contains(&k) && 1u64 << k == u64::from(n))
                     && self.is_tid(a)
             }
-            ScalarExpr::Div(a, b) => {
-                matches!(**b, ScalarExpr::ConstInt(c, _) if c == i64::from(n)) && self.is_tid(a)
-            }
+            ScalarExpr::Div(a, b) => const_int(b) == Some(i64::from(n)) && self.is_tid(a),
             _ => false,
         }
     }
@@ -542,6 +540,23 @@ impl Walk<'_> {
             _ => unreachable!("control is called for If, For and While only"),
         }
         Ok(())
+    }
+}
+
+/// The value of an integer constant, possibly under integer casts (`Cast(ConstInt(32, I32), U32)`, how a front end writes
+/// `threadIdx.x / 32` with an `unsigned` thread index).
+fn const_int(e: &ScalarExpr) -> Option<i64> {
+    match e {
+        ScalarExpr::ConstInt(v, _) => Some(*v),
+        ScalarExpr::Cast(inner, spec)
+            if matches!(
+                spec.to,
+                ElementKind::I32 | ElementKind::U32 | ElementKind::I64 | ElementKind::U64
+            ) =>
+        {
+            const_int(inner)
+        }
+        _ => None,
     }
 }
 

@@ -190,6 +190,23 @@ fn a_subgroup_collective_under_a_condition_on_the_warp_number_is_accepted() {
         sum(),
         Scope::Subgroup,
     ));
+    // the divisor and the shift count under an integer cast, as a front end writes `threadIdx.x / 32` for an unsigned index
+    accepted(&kernel(
+        8,
+        (N, N),
+        cast(div(tid_u32(), cast(ci(4), U32)), I32),
+        is_zero(warp()),
+        sum(),
+        Scope::Subgroup,
+    ));
+    accepted(&kernel(
+        8,
+        (N, N),
+        cast(bin(BinaryOp::Shr, tid_u32(), cast(ci(2), U32)), I32),
+        is_zero(warp()),
+        sum(),
+        Scope::Subgroup,
+    ));
     accepted(&kernel(
         8,
         (N, N),
