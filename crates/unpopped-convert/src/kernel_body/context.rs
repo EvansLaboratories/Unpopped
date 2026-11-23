@@ -156,6 +156,9 @@ struct Pass<'a> {
     once: Vec<String>,
     out: String,
     origins: Vec<Origin>,
+    /// Object-like macros whose whole body is function qualifiers (`#define FLASHINFER_INLINE __forceinline__ __device__`): each use
+    /// is blanked, as the qualifiers themselves are.
+    quals: Vec<String>,
     /// Every macro's value history: `Some(v)` while one value only, `None` once redefined, removed or empty.
     history: HashMap<String, Option<i64>>,
 }
@@ -177,6 +180,7 @@ pub(super) fn preprocess(
         once: Vec::new(),
         out: String::with_capacity(src.len()),
         origins: Vec::new(),
+        quals: Vec::new(),
         history: predefined
             .iter()
             .map(|(n, v)| (n.clone(), Some(*v)))
@@ -184,7 +188,7 @@ pub(super) fn preprocess(
     };
     pass.run(None, src, &mut Vec::new())?;
     Ok(Preprocessed {
-        text: pass.out,
+        text: blank_words(&pass.out, &pass.quals),
         unexpanded: pass.unexpanded,
         missing_includes: pass.missing,
         origins: pass.origins,
@@ -215,6 +219,13 @@ impl Pass<'_> {
             return;
         }
         let body = strip_comment(&rest[name.len()..]);
+        if d.starts_with("define")
+            && !rest[name.len()..].starts_with('(')
+            && !body.is_empty()
+            && body.split_whitespace().all(is_qualifier)
+        {
+            self.quals.push(name.clone());
+        }
         let now = if d.starts_with("define") && !body.is_empty() {
             self.defs.get(&name).copied()
         } else {
@@ -541,6 +552,47 @@ fn constant_body(body: &str, defs: &Defs) -> Option<i64> {
 /// or a constant. `None` for anything else (a name, a float, an unbalanced parenthesis).
 pub(super) fn literal_expression(text: &str) -> Option<i64> {
     constant_body(&format!("({})", text.trim()), &Defs::new())
+}
+
+/// A function qualifier a macro body may consist of.
+fn is_qualifier(w: &str) -> bool {
+    matches!(
+        w,
+        "inline"
+            | "__inline__"
+            | "__forceinline__"
+            | "__noinline__"
+            | "__device__"
+            | "__host__"
+            | "__global__"
+            | "static"
+    )
+}
+
+/// `text` with every whole-identifier occurrence of a name in `names` replaced by spaces of the same length.
+fn blank_words(text: &str, names: &[String]) -> String {
+    if names.is_empty() {
+        return text.to_string();
+    }
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        if word(c) {
+            let end = rest.find(|c: char| !word(c)).unwrap_or(rest.len());
+            let (id, tail) = rest.split_at(end);
+            if names.iter().any(|n| n == id) {
+                out.extend(id.chars().map(|_| ' '));
+            } else {
+                out.push_str(id);
+            }
+            rest = tail;
+        } else {
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    out
 }
 
 fn strip_comment(s: &str) -> &str {
