@@ -358,3 +358,15 @@ fn a_scalar_field_is_not_a_pointer() {
         Err(KernelLiftError::NotYetLifted { .. })
     ));
 }
+
+#[test]
+fn a_byte_scalar_field_is_still_not_a_pointer() {
+    // the element type matches `uint8_t*`, so only the array/scalar distinction can refuse it
+    let layout = StructLayout::new(2, vec![FieldLayout::new("b", 0, "uint8_t", 1)]);
+    let src = "typedef struct { uint8_t b; } blk;\nvoid k(float* out, const void* vx) { const blk* x = (const blk*)vx; const uint8_t* q = x->b; out[0] = (float)q[0]; }";
+    let ctx = ctx().with_struct_layout("blk", layout);
+    assert!(matches!(
+        lift_kernel_in(&C, src, "k", &ctx),
+        Err(KernelLiftError::NotYetLifted { .. })
+    ));
+}
