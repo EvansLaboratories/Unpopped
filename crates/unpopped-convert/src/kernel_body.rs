@@ -197,6 +197,7 @@ fn lift_preprocessed(
         });
     }
     let mut w = Walker::new(src);
+    w.root = Some(root);
     w.functions = all_functions(root, src);
     w.structs = structs::collect_structs(root, src);
     w.methods = methods::collect_methods(root, src);
@@ -386,6 +387,10 @@ struct Walker<'s, 't> {
     callee_exits_kernel: bool,
     /// Inside an inlined function with a `return` in a loop: (result local, `done` flag local). See `returns.rs`.
     flag_ret: Option<(Option<(u32, E)>, u32)>,
+    /// The tree being walked (a lambda declared in the kernel is found again in it by byte range, as a `Node<'t>`).
+    root: Option<Node<'t>>,
+    /// The scalar locals visible where each lambda was declared, by name: a call that sees one of them shadowed declines.
+    lambda_env: HashMap<String, Vec<(String, Option<u32>)>>,
     /// Loops open inside the current inlined function body (a flagged `return` breaks out of them).
     loop_depth: u32,
     src: &'s str,
@@ -444,6 +449,8 @@ impl<'s, 't> Walker<'s, 't> {
             inline_stack: Vec::new(),
             callee_exits_kernel: false,
             flag_ret: None,
+            root: None,
+            lambda_env: HashMap::new(),
             loop_depth: 0,
             src,
             params: Vec::new(),

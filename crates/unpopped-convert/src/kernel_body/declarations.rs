@@ -48,6 +48,9 @@ impl<'s, 't> Walker<'s, 't> {
         {
             return self.struct_pointer_declaration(n, &sname, out);
         }
+        if let Some(r) = self.lambda_declaration(n) {
+            return r;
+        }
         // `auto x = e;`: the type of `e` (a scalar; a pointer, array or aggregate initialiser still declines)
         if tname.as_deref() == Some("auto") && !declares_pointer(n) && !declares_array(n) {
             return self.scalar_declaration_in(n, None, out);
