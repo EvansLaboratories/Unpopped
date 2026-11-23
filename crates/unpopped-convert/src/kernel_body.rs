@@ -376,6 +376,9 @@ struct Walker<'s, 't> {
     methods: HashMap<String, HashMap<String, Node<'t>>>,
     /// The functions being inlined now, outermost first.
     inline_stack: Vec<String>,
+    /// Set while a `void` callee that stands last in the kernel's own body is inlined: a bare `return;` leaves the kernel, so it
+    /// lowers as `Stmt::Return` and the rest of the callee stays in line (not under an `else`, which a barrier cannot sit in).
+    callee_exits_kernel: bool,
     src: &'s str,
     params: Vec<Param>,
     locals: Vec<LocalDecl>,
@@ -428,6 +431,7 @@ impl<'s, 't> Walker<'s, 't> {
             structs: HashMap::new(),
             methods: HashMap::new(),
             inline_stack: Vec::new(),
+            callee_exits_kernel: false,
             src,
             params: Vec::new(),
             locals: Vec::new(),
