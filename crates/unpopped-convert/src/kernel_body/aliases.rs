@@ -125,7 +125,9 @@ impl<'s, 't> Walker<'s, 't> {
     fn trait_member(&self, t: &str) -> Option<String> {
         let t = t.strip_prefix("typename ").unwrap_or(t);
         let (head, member) = t.rsplit_once("::")?;
-        self.trait_entry(head, member.trim())
+        // `using DT = Lse<T>; typename DT::Compute`: the head may itself be an alias of the trait
+        let head = self.resolve_alias_text(head.trim());
+        self.trait_entry(&head, member.trim())
     }
 
     /// The entry `member` of the trait `head` (`Name<args>`, the arguments read through the type aliases in scope, so a template
@@ -215,6 +217,16 @@ impl<'s, 't> Walker<'s, 't> {
     pub(super) fn alias_statement(&mut self, n: Node<'_>) -> R<()> {
         match alias_of(n, self.src) {
             Some((name, ty)) => {
+                // an alias of a struct is also a way to call its static members (`using DT = Lse__t0; DT::load(x)`)
+                let target = self.resolve_alias_text(&ty);
+                let prefix = format!("{name}::");
+                self.functions.retain(|k, _| !k.starts_with(&prefix));
+                let own = format!("{target}::");
+                for (key, f) in super::methods::static_members(&self.methods, self.src) {
+                    if let Some(member) = key.strip_prefix(&own) {
+                        self.functions.insert(format!("{prefix}{member}"), f);
+                    }
+                }
                 self.type_aliases.insert(name, ty);
                 Ok(())
             }
