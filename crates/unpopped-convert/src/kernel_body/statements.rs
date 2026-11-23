@@ -10,7 +10,13 @@ impl<'s, 't> Walker<'s, 't> {
         let r = if n.kind() == "compound_statement" {
             let mut c = n.walk();
             let kids: Vec<_> = n.named_children(&mut c).collect();
-            kids.into_iter().try_for_each(|k| self.stmt(k, &mut out))
+            if self.flag_ret.is_some() {
+                self.flag_seq(&kids, &mut out)
+            } else {
+                kids.into_iter().try_for_each(|k| self.stmt(k, &mut out))
+            }
+        } else if self.flag_ret.is_some() {
+            self.flag_seq(&[n], &mut out)
         } else {
             self.stmt(n, &mut out)
         };
@@ -37,10 +43,21 @@ impl<'s, 't> Walker<'s, 't> {
             "static_assert_declaration" => self.static_assert(n),
             "expression_statement" => self.expression_statement(n, out),
             "if_statement" => self.if_statement(n, out),
-            "while_statement" => self.while_statement(n, out),
-            "for_statement" => self.for_statement(n, out, unroll),
+            "while_statement" | "for_statement" => {
+                self.loop_depth += 1;
+                let r = if n.kind() == "while_statement" {
+                    self.while_statement(n, out)
+                } else {
+                    self.for_statement(n, out, unroll)
+                };
+                self.loop_depth -= 1;
+                r?;
+                self.flag_after_loop(n, out);
+                Ok(())
+            }
             "break_statement" => push(out, Stmt::Break),
             "continue_statement" => push(out, Stmt::Continue),
+            "return_statement" if self.flag_ret.is_some() => self.flag_return(n, out),
             "return_statement" => {
                 if n.named_child_count() > 0 {
                     return self.not_yet(n, "a `return` with a value");

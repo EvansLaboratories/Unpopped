@@ -214,14 +214,9 @@ fn what_is_not_a_tail_return_or_a_plain_method_declines_by_name() {
     );
     // an `if`/`else` that returns in both arms lifts since slice 5 (tests/kernel_body_decode.rs)
     assert!(lift("__device__ float f(float x) { if (x < 0.0f) { return 0.0f; } else { return 1.0f; } }\nvoid k(float* out) { out[0] = f(1.0f); }").is_ok());
-    not_yet(
-        "__device__ float f(float x) { for (int i = 0; i < 2; i++) { if (x < 0.0f) { return 0.0f; } } return x; }\nvoid k(float* out) { out[0] = f(1.0f); }",
-        "inside a loop",
-    );
-    not_yet(
-        "__device__ float f(float x) { return x; float y = 1.0f; }\nvoid k(float* out) { out[0] = f(1.0f); }",
-        "followed by more statements",
-    );
+    // a `return` in a loop, or followed by (dead) statements, lifts through the flag form (tests/kernel_body_return_in_loop.rs)
+    assert!(lift("__device__ float f(float x) { for (int i = 0; i < 2; i++) { if (x < 0.0f) { return 0.0f; } } return x; }\nvoid k(float* out) { out[0] = f(1.0f); }").is_ok());
+    assert!(lift("__device__ float f(float x) { return x; float y = 1.0f; }\nvoid k(float* out) { out[0] = f(1.0f); }").is_ok());
     not_yet(
         &format!("{s}void k(float* out) {{ A a; out[0] = a; }}"),
         "no conversion operator",

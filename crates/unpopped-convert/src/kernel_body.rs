@@ -384,6 +384,10 @@ struct Walker<'s, 't> {
     /// Set while a `void` callee that stands last in the kernel's own body is inlined: a bare `return;` leaves the kernel, so it
     /// lowers as `Stmt::Return` and the rest of the callee stays in line (not under an `else`, which a barrier cannot sit in).
     callee_exits_kernel: bool,
+    /// Inside an inlined function with a `return` in a loop: (result local, `done` flag local). See `returns.rs`.
+    flag_ret: Option<(Option<(u32, E)>, u32)>,
+    /// Loops open inside the current inlined function body (a flagged `return` breaks out of them).
+    loop_depth: u32,
     src: &'s str,
     params: Vec<Param>,
     locals: Vec<LocalDecl>,
@@ -439,6 +443,8 @@ impl<'s, 't> Walker<'s, 't> {
             methods: HashMap::new(),
             inline_stack: Vec::new(),
             callee_exits_kernel: false,
+            flag_ret: None,
+            loop_depth: 0,
             src,
             params: Vec::new(),
             locals: Vec::new(),
