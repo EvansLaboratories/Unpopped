@@ -808,9 +808,27 @@ impl<'a> Machine<'a> {
             Ty::Scalar(t) if types::int_range(t).is_some() && self.is_float_to_int_cast(e) => {
                 self.eval_mixed(e)
             }
+            // an integer `Bitcast` of a float (`__float_as_int`): the bits of the operand, read as the integer type
+            Ty::Scalar(t) if types::int_range(t).is_some() && self.is_float_bitcast(e) => {
+                match self.eval_mixed(e)? {
+                    Val::Raw(bits, _) => Ok(int_val(wrap(t, bits as i128), t)),
+                    other => Ok(other),
+                }
+            }
             Ty::Scalar(t) if types::int_range(t).is_some() => Ok(int_val(self.eval_int(e, t)?, t)),
             Ty::Scalar(t) => self.eval_float(e, t),
         }
+    }
+
+    /// Whether `e` is a `Bitcast` whose operand is a float (the integer evaluator cannot read one).
+    fn is_float_bitcast(&self, e: &ScalarExpr) -> bool {
+        let ScalarExpr::Bitcast(x, _) = e else {
+            return false;
+        };
+        matches!(
+            types::infer_ty_in(x, self.k.compute, &self.local_tys),
+            Ok(Ty::Scalar(from)) if types::is_cast_float(from)
+        )
     }
 
     /// Whether `e` is a `Cast` whose operand is a float (a value the integer evaluator cannot read).
