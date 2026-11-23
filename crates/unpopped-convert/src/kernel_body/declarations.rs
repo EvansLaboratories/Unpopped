@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Declarations: scalar, vector, array and `__shared__` locals (ROADMAP U19).
 
+use super::pointer::{PBase, PtrVal};
 use super::*;
 
 impl<'s, 't> Walker<'s, 't> {
@@ -27,6 +28,15 @@ impl<'s, 't> Walker<'s, 't> {
             if declares_pointer(n) {
                 return self.pointer_declaration(n, elem, lanes, out);
             }
+            if declares_array(n) {
+                // `float4 d[N];`: N vectors, held as one allocation of N * lanes scalars read and written as vectors
+                let space = if text(n, self.src).trim_start().starts_with("__shared__") {
+                    MemorySpace::Shared
+                } else {
+                    MemorySpace::Private
+                };
+                return self.array_declaration(n, elem, space, lanes, out);
+            }
             return self.vector_declaration(n, (elem, lanes), out);
         }
         let ty = self.type_of(n.child_by_field_name("type"), n)?;
@@ -35,14 +45,14 @@ impl<'s, 't> Walker<'s, 't> {
             return self.pointer_declaration(n, ty, 1, out);
         }
         if head.starts_with("__shared__") {
-            return self.array_declaration(n, ty, MemorySpace::Shared, out);
+            return self.array_declaration(n, ty, MemorySpace::Shared, 1, out);
         }
         let has_array = declares_array(n);
         if has_array && head.starts_with("extern") && head.contains("__shared__") {
             return self.dynamic_shared_declaration(n, ty);
         }
         if has_array && !head.starts_with("extern") {
-            return self.array_declaration(n, ty, MemorySpace::Private, out);
+            return self.array_declaration(n, ty, MemorySpace::Private, 1, out);
         }
         if head.starts_with("extern")
             || head.starts_with("__constant__")
@@ -301,6 +311,23 @@ impl<'s, 't> Walker<'s, 't> {
         ) else {
             return self.not_yet(lhs, "a member assignment of an unexpected shape");
         };
+        if let Some((place, elem)) = self.vector_lane_place(a, f)? {
+            // `d[i].x = e` (and `+=`): the lane read, combined, written back
+            let (r, rt) = self.expr(rhs)?;
+            let value = if op.is_empty() {
+                self.convert(r, rt, elem, rhs)?
+            } else {
+                let local = self.new_local(elem);
+                self.hoisted.push(Stmt::Load {
+                    local,
+                    place: place.clone(),
+                });
+                self.compound(ScalarExpr::Local(local), elem, op, (r, rt), lhs)?
+            };
+            self.flush(out);
+            out.push(Stmt::Store { place, value });
+            return Ok(());
+        }
         let Some(Sym::Vector(ls, elem, lanes)) = self.lookup(text(a, self.src)) else {
             return self.not_yet(
                 lhs,
@@ -377,6 +404,7 @@ impl<'s, 't> Walker<'s, 't> {
         n: Node<'_>,
         ty: E,
         space: MemorySpace,
+        lanes: u8,
         out: &mut Vec<Stmt>,
     ) -> R<()> {
         let what = if space == MemorySpace::Shared {
@@ -432,9 +460,18 @@ impl<'s, 't> Walker<'s, 't> {
                 };
                 dims.push(extent);
             }
-            let Some(count) = dims.iter().try_fold(1u32, |a, &d| a.checked_mul(d)) else {
+            let Some(count) = dims
+                .iter()
+                .try_fold(u32::from(lanes), |a, &d| a.checked_mul(d))
+            else {
                 return self.not_yet(d, format!("{what} with more than u32::MAX elements"));
             };
+            if lanes > 1 && (dims.len() > 1 || init.is_some()) {
+                return self.not_yet(
+                    d,
+                    format!("{what} of vectors with more than one dimension or an initialiser"),
+                );
+            }
             if dims.len() > 1 && init.is_some() {
                 return self.not_yet(
                     d,
@@ -455,10 +492,22 @@ impl<'s, 't> Walker<'s, 't> {
             if dims.len() > 1 {
                 self.alloc_dims.insert(index, dims);
             }
+            let sym = if lanes > 1 {
+                // an array of vectors is a pointer whose pointee is the vector: `d[i]` is then a vector read or write
+                Sym::Pointer(PtrVal {
+                    base: PBase::Alloc(index),
+                    pointee: ty,
+                    lanes,
+                    off: ScalarExpr::ConstInt(0, E::I64),
+                    strukt: None,
+                })
+            } else {
+                Sym::Alloc(index, ty)
+            };
             self.scopes
                 .last_mut()
                 .expect("a scope is open")
-                .insert(name, Sym::Alloc(index, ty));
+                .insert(name, sym);
             if let Some(list) = init {
                 self.array_initialiser((index, ty, count), list, space, out)?;
             }

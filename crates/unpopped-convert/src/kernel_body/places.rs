@@ -192,6 +192,11 @@ impl<'s, 't> Walker<'s, 't> {
         {
             return self.vector_member(f, ls, (elem, lanes));
         }
+        if let Some((place, elem)) = self.vector_lane_place(a, f)? {
+            let local = self.new_local(elem);
+            self.hoisted.push(Stmt::Load { local, place });
+            return Ok((ScalarExpr::Local(local), elem));
+        }
         if a.kind() != "identifier" || self.lookup(base).is_some() {
             return self.not_yet(
                 n,
