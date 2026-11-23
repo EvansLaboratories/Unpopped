@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! **Census wall: `x++` / `++x` / `x--` / `--x` used as a value** (`c = bcast_coord[bi++];`, 12 real instantiations). The update is
 //! hoisted before the statement and the value is a copy of the local taken before it (postfix) or after it (prefix). An update in
-//! the right operand of `&&`/`||` declines (it runs only sometimes), and so does one on something that is not an integer local.
+//! the right operand of `&&`/`||` declines (the walker declines any hoisted statement there: it runs only sometimes), and so does one on something that is not an integer local.
 //! Oracle runs against Rust references.
 
 use unpopped::exec::LaunchShape;
@@ -85,19 +85,35 @@ fn an_update_in_a_loop_body_and_a_ternary_arm_runs_when_the_c_runs_it() {
 
 #[test]
 fn an_update_that_may_not_run_or_is_not_an_integer_local_declines() {
-    for src in [
+    for (src, why) in [
         // the right operand of `&&` runs only when the left is true, and that of `||` only when it is false
-        "void k(float* out, const float* in) { int i = 0; int a = 0; if (a > 0 && i++ > 0) { out[0] = 1.0f; } out[1] = (float)i; }",
-        "void k(float* out, const float* in) { int i = 0; int a = 1; if (a > 0 || i++ > 0) { out[0] = 1.0f; } out[1] = (float)i; }",
+        (
+            "void k(float* out, const float* in) { int i = 0; int a = 0; if (a > 0 && i++ > 0) { out[0] = 1.0f; } out[1] = (float)i; }",
+            "right operand",
+        ),
+        (
+            "void k(float* out, const float* in) { int i = 0; int a = 1; if (a > 0 || i++ > 0) { out[0] = 1.0f; } out[1] = (float)i; }",
+            "right operand",
+        ),
         // a float is not an integer local
-        "void k(float* out, const float* in) { float f = 1.0f; out[0] = f++; }",
+        (
+            "void k(float* out, const float* in) { float f = 1.0f; out[0] = f++; }",
+            "not an integer local",
+        ),
         // a kernel parameter is read-only
-        "void k(float* out, const float* in, int n) { out[0] = (float)(n++); }",
+        (
+            "void k(float* out, const float* in, int n) { out[0] = (float)(n++); }",
+            "parameter or loop counter",
+        ),
     ] {
-        let r = lift(src);
-        assert!(
-            matches!(r, Err(KernelLiftError::NotYetLifted { .. })),
-            "{src}: {r:?}"
-        );
+        match lift(src) {
+            Err(KernelLiftError::NotYetLifted { construct, .. }) => {
+                assert!(
+                    construct.contains(why),
+                    "{src}: `{construct}` lacks `{why}`"
+                );
+            }
+            other => panic!("{src}: expected a decline, got {other:?}"),
+        }
     }
 }
