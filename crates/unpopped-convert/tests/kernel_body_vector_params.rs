@@ -87,6 +87,17 @@ fn address_of_an_element_and_a_moving_pointer_step_whole_vectors() {
 }
 
 #[test]
+fn a_lane_of_an_element_is_read_and_written_in_place() {
+    // `out[i].z = v` writes lane z of element i: byte offset i * 16 + 8 in a float4 buffer; `in[i].y` reads the second lane
+    let k = lift(
+        "void k(float4* out, const float4* in) { out[0].x = 1.0f; out[1].z = in[1].y; out[1].w = in[0].w + 7.0f; }",
+    )
+    .expect("lifts (was a decline: the type `float4`)");
+    // in = [1,2,3,4, 5,6,7,8]: in[1].y = 6, in[0].w = 4
+    assert_eq!(run(&k, 8), vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 6.0, 11.0]);
+}
+
+#[test]
 fn a_vector_by_value_parameter_still_declines() {
     match lift("void k(float* out, float2 v) { out[0] = 1.0f; }") {
         Err(KernelLiftError::NotYetLifted { construct, .. }) => {

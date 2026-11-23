@@ -112,7 +112,8 @@ fn what_is_not_a_vector_local_declines_by_name() {
         "void k(float* out) { float2 v = make_float2(1.0f, 2.0f); v += v; out[0] = v.x; }",
         "compound assignment",
     );
-    not_yet("void k(float4* out) { out[0].x = 1.0f; }", "`float4`");
+    // a `float4*` parameter lifts since the vector-pointer-parameter slice (tests/kernel_body_vector_params.rs): a lane store is in place
+    assert!(lift("void k(float4* out) { out[0].x = 1.0f; }").is_ok());
     // Control: the accepted spelling lifts.
     assert!(
         lift("void k(float* out) { float2 v = make_float2(1.0f, 2.0f); out[0] = v.y; }").is_ok()
