@@ -77,10 +77,14 @@ fn comparisons_and_what_is_declined() {
     let k = lift(
         "void k(float* out, const half* in) { half a = in[0]; half b = in[1]; \
          out[0] = (float)__hlt(a, b); out[1] = (float)__hgt(a, b); out[2] = (float)__heq(a, a); out[3] = (float)__hne(a, b); \
-         out[4] = (float)__hle(a, b); out[5] = (float)__hge(a, b); }",
+         out[4] = (float)__hle(a, b); out[5] = (float)__hge(a, b); \n         out[6] = (float)__hlt(a, a); out[7] = (float)__hgt(a, a); out[8] = (float)__hle(a, a); out[9] = (float)__hge(a, a); }",
     )
     .expect("lifts");
-    assert_eq!(run(&k, &[ONE, TWO], 6), vec![1.0, 0.0, 1.0, 1.0, 1.0, 0.0]);
+    // the last four compare a value with itself: strict is false, non-strict is true
+    assert_eq!(
+        run(&k, &[ONE, TWO], 10),
+        vec![1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0]
+    );
     // an f32 argument is not a half; `__hfma` is not lifted
     for src in [
         "void k(float* out, const float* in) { out[0] = __habs(in[0]); }",
