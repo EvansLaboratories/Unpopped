@@ -221,7 +221,8 @@ impl Pass<'_> {
         if name.is_empty() {
             return;
         }
-        let body = strip_comment(&rest[name.len()..]);
+        let body = strip_body_comments(&rest[name.len()..]);
+        let body = body.as_str();
         if d.starts_with("define")
             && !rest[name.len()..].starts_with('(')
             && !body.is_empty()
@@ -269,7 +270,7 @@ impl Pass<'_> {
             .map(|p| p.trim().to_string())
             .filter(|p| !p.is_empty())
             .collect();
-        let body = strip_comment(&after[close + 1..]).trim().to_string();
+        let body = strip_body_comments(&after[close + 1..]);
         let plain = params
             .iter()
             .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
@@ -600,7 +601,8 @@ fn handle(
     (defs, unexpanded): (&mut Defs, &mut Unexpanded),
 ) -> Result<bool, String> {
     let kw: String = d.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
-    let rest = strip_comment(d[kw.len()..].trim());
+    let rest = strip_body_comments(d[kw.len()..].trim());
+    let rest = rest.as_str();
     match kw.as_str() {
         "if" | "ifdef" | "ifndef" => {
             let t = active && cond_truth(&kw, rest, defs)?;
@@ -755,9 +757,44 @@ fn blank_words(text: &str, names: &[String]) -> String {
     out
 }
 
-fn strip_comment(s: &str) -> &str {
-    let s = s.split("//").next().unwrap_or("");
-    s.split("/*").next().unwrap_or("").trim()
+/// A macro body with its comments removed, as C does it after splicing the continuation lines: a complete `/* ... */` is one space
+/// (the code on both sides stays: `void* c, /* note; text */ void* s`), a `/*` that never closes and a `//` end the body (a `//`
+/// comment runs to the end of the logical line), and a string or character literal is copied whole (`"http://x"` has no comment).
+fn strip_body_comments(s: &str) -> String {
+    let mut out = String::new();
+    let mut rest = s;
+    while let Some(c) = rest.chars().next() {
+        if rest.starts_with("/*") {
+            match rest[2..].find("*/") {
+                Some(end) => {
+                    out.push(' ');
+                    rest = &rest[2 + end + 2..];
+                }
+                None => break,
+            }
+        } else if rest.starts_with("//") {
+            break;
+        } else if c == '"' || c == '\'' {
+            let mut len = c.len_utf8();
+            let mut escaped = false;
+            for d in rest[len..].chars() {
+                len += d.len_utf8();
+                if escaped {
+                    escaped = false;
+                } else if d == '\\' {
+                    escaped = true;
+                } else if d == c {
+                    break;
+                }
+            }
+            out.push_str(&rest[..len]);
+            rest = &rest[len..];
+        } else {
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    out.trim().to_string()
 }
 
 /// A recursive-descent evaluator of an integer preprocessor expression.
