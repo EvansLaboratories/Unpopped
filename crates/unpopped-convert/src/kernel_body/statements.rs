@@ -341,6 +341,9 @@ impl<'s, 't> Walker<'s, 't> {
             if self.constant_for(n, out)? {
                 return Ok(());
             }
+            if self.general_for(n, out)? {
+                return Ok(());
+            }
             return self.not_yet(
                 n,
                 "a `for` that is not a counted loop `for (T i = a; i < b; i += s)`",
@@ -366,6 +369,72 @@ impl<'s, 't> Walker<'s, 't> {
             body: body?,
         });
         Ok(())
+    }
+
+    /// Any other `for (T i = a; cond; update) body` (`k <<= 1`, `j >>= 1`, a condition on a product): `T i = a; while (cond) { body;
+    /// update }`. A `continue` in the body would skip the update, so a body with one (outside a nested loop) is left to decline.
+    /// `false` when the loop is not of that shape.
+    fn general_for(&mut self, n: Node<'_>, out: &mut Vec<Stmt>) -> R<bool> {
+        let (Some(init), Some(cond), Some(upd), Some(body)) = (
+            n.child_by_field_name("initializer"),
+            n.child_by_field_name("condition"),
+            n.child_by_field_name("update"),
+            n.child_by_field_name("body"),
+        ) else {
+            return Ok(false);
+        };
+        if has_continue(body)
+            || !matches!(upd.kind(), "assignment_expression" | "update_expression")
+        {
+            return Ok(false);
+        }
+        let Some((name, ty, a)) = self.for_init(init)? else {
+            return Ok(false);
+        };
+        self.flush(out);
+        let local = self.new_local(ty);
+        out.push(Stmt::Let { local, init: a });
+        self.scopes.push(HashMap::new());
+        self.scopes
+            .last_mut()
+            .expect("a scope is open")
+            .insert(name, Sym::Scalar(local, ty, Fixed::No));
+        let built = (|| {
+            let cond = self.condition(cond)?;
+            let mut lead = std::mem::take(&mut self.hoisted);
+            let mut body = self.block_of(body)?;
+            let mut update = Vec::new();
+            if upd.kind() == "assignment_expression" {
+                self.assignment(upd, &mut update)?;
+            } else {
+                self.update(upd, &mut update)?;
+            }
+            self.flush(&mut update);
+            body.0.append(&mut update);
+            Ok::<_, super::KernelLiftError>((cond, lead.drain(..).collect::<Vec<_>>(), body))
+        })();
+        self.scopes.pop();
+        let (cond, mut lead, mut body) = built?;
+        if lead.is_empty() {
+            out.push(Stmt::While { cond, body });
+            return Ok(true);
+        }
+        // the condition reads memory: re-read it every pass, `while (1) { loads; if (!c) break; body }`
+        lead.push(Stmt::If {
+            cond: ScalarExpr::Select(
+                Box::new(cond),
+                Box::new(self.constant(0).0),
+                Box::new(self.constant(1).0),
+            ),
+            then: Block(vec![Stmt::Break]),
+            els: Block::default(),
+        });
+        lead.append(&mut body.0);
+        out.push(Stmt::While {
+            cond: ScalarExpr::ConstInt(1, E::I32),
+            body: Block(lead),
+        });
+        Ok(true)
     }
 
     /// The pieces of `for (T i = a; i < b; i += s) body`, or `None` for any other shape.
@@ -612,4 +681,19 @@ fn address_taken(n: Node<'_>, src: &str, out: &mut HashSet<String>) {
     for k in n.named_children(&mut c) {
         address_taken(k, src, out);
     }
+}
+
+/// Whether `n` holds a `continue` that belongs to the loop around it (one inside a nested loop belongs to that loop).
+fn has_continue(n: Node<'_>) -> bool {
+    if n.kind() == "continue_statement" {
+        return true;
+    }
+    if matches!(
+        n.kind(),
+        "for_statement" | "while_statement" | "do_statement"
+    ) {
+        return false;
+    }
+    let mut c = n.walk();
+    n.children(&mut c).any(has_continue)
 }
