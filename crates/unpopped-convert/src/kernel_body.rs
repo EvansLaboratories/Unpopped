@@ -558,8 +558,18 @@ impl<'s, 't> Walker<'s, 't> {
         let is_void = p
             .child_by_field_name("type")
             .is_some_and(|t| text(t, self.src).trim() == "void");
+        // `const float2* z` / `cuFloatComplex* z`: a vector element type (through the aliases in scope)
+        let vector = p.child_by_field_name("type").and_then(|t| {
+            let written = text(t, self.src)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            vector_type(&self.resolve_alias_text(&written))
+        });
         let ty = if is_void {
             E::U8
+        } else if let Some((lane, _)) = vector {
+            lane
         } else {
             self.type_of(p.child_by_field_name("type"), p)?
         };
@@ -579,10 +589,13 @@ impl<'s, 't> Walker<'s, 't> {
                     if is_void && !ptr {
                         return self.not_yet(x, "a parameter of type `void`");
                     }
-                    let shape = if ptr {
-                        PShape::Buffer(ty, is_const)
-                    } else {
-                        PShape::Scalar(ty)
+                    let shape = match (ptr, vector) {
+                        (true, Some((lane, lanes))) => PShape::VecBuffer(lane, lanes, is_const),
+                        (false, Some(_)) => {
+                            return self.not_yet(x, "a parameter of a vector type passed by value");
+                        }
+                        (true, None) => PShape::Buffer(ty, is_const),
+                        (false, None) => PShape::Scalar(ty),
                     };
                     return Ok((text(x, self.src).to_string(), shape));
                 }
@@ -603,6 +616,22 @@ impl<'s, 't> Walker<'s, 't> {
                 self.params
                     .push(Param::buffer(name.clone(), elem, role, Some(1)));
                 Sym::Buffer(u32::try_from(index).unwrap_or(u32::MAX), elem)
+            }
+            PShape::VecBuffer(elem, lanes, is_const) => {
+                let role = if is_const {
+                    BufferRole::Read
+                } else {
+                    BufferRole::ReadWrite
+                };
+                self.params
+                    .push(Param::buffer(name.clone(), elem, role, Some(1)));
+                // the buffer holds the lanes; the parameter is a pointer that reads `lanes` of them at a time
+                Sym::Pointer(pointer::PtrVal {
+                    base: pointer::PBase::Buffer(u32::try_from(index).unwrap_or(u32::MAX)),
+                    pointee: elem,
+                    lanes,
+                    off: ScalarExpr::ConstInt(0, E::I64),
+                })
             }
             PShape::Scalar(ty) => {
                 let local = self.new_local(ty);
@@ -725,6 +754,9 @@ fn push(out: &mut Vec<Stmt>, s: Stmt) -> R<()> {
 
 enum PShape {
     Buffer(E, bool),
+    /// A pointer to a CUDA vector type (`const float2* p`, `cuFloatComplex* z`): a buffer of the lane type read two or four lanes
+    /// at a time (lane type, lane count, `const`).
+    VecBuffer(E, u8, bool),
     Scalar(E),
     /// A struct passed by value (its type name).
     Struct(String),
@@ -732,7 +764,7 @@ enum PShape {
 
 fn pick_compute(raw: &[(String, PShape)]) -> E {
     let types = raw.iter().filter_map(|(_, s)| match s {
-        PShape::Buffer(t, _) | PShape::Scalar(t) => Some(*t),
+        PShape::Buffer(t, _) | PShape::VecBuffer(t, _, _) | PShape::Scalar(t) => Some(*t),
         PShape::Struct(_) => None,
     });
     // a compute float is `F32` or `F64`; a narrow float (`half`) is an element type, never the compute type
@@ -746,7 +778,7 @@ fn pick_compute(raw: &[(String, PShape)]) -> E {
         return E::F32;
     }
     let first_buffer = raw.iter().find_map(|(_, s)| match s {
-        PShape::Buffer(t, _) => Some(*t),
+        PShape::Buffer(t, _) | PShape::VecBuffer(t, _, _) => Some(*t),
         PShape::Scalar(_) | PShape::Struct(_) => None,
     });
     types.clear();

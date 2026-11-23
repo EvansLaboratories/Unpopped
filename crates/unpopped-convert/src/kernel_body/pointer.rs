@@ -323,7 +323,11 @@ impl<'s, 't> Walker<'s, 't> {
         negate: bool,
         at: Node<'_>,
     ) -> R<PtrVal> {
-        let step = self.scaled(delta, p.pointee, at)?;
+        // a pointer to a vector type (`float2*`) moves a whole vector (all its lanes) per element
+        let step = match byte_size(p.pointee) {
+            Some(size) => self.scaled_by(delta, size * i64::from(p.lanes), at)?,
+            None => self.scaled(delta, p.pointee, at)?,
+        };
         p.off = if negate {
             ScalarExpr::Sub(Box::new(p.off), Box::new(step))
         } else {
