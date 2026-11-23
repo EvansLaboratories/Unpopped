@@ -70,8 +70,20 @@ impl<'s, 't> Walker<'s, 't> {
                 Some(r) => r,
                 None => self.not_yet(e, "a `binary_expression` expression statement"),
             },
+            // `(void)x;` silences an unused-variable warning and does nothing: only a plain name or literal, never a call or an assignment
+            "cast_expression" if self.is_void_discard(e) => Ok(()),
             other => self.not_yet(e, format!("a `{other}` expression statement")),
         }
+    }
+
+    /// `(void)name;` / `(void)3;`: a cast to `void` of something with no effect.
+    fn is_void_discard(&self, e: Node<'_>) -> bool {
+        let void = e
+            .child_by_field_name("type")
+            .is_some_and(|t| text(t, self.src).trim() == "void");
+        void && e
+            .child_by_field_name("value")
+            .is_some_and(|v| matches!(v.kind(), "identifier" | "number_literal"))
     }
 
     pub(super) fn assignment(&mut self, n: Node<'_>, out: &mut Vec<Stmt>) -> R<()> {
