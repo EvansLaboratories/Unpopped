@@ -312,9 +312,10 @@ impl<'s, 't> Walker<'s, 't> {
 
     /// A namespace-qualified call (`baracuda::block_reduce_max_f32(..)`) of a function this source defines is that function by its
     /// short name (the walker is namespace-blind, as for qualified template calls). Any other name is returned as written.
-    fn short_callee<'a>(&self, name: &'a str) -> &'a str {
-        // `(f)(x)`: a callee in parentheses (a function substituted for a template parameter, once per level) is `f`
-        let mut name = name.trim();
+    fn short_callee<'a>(&self, written: &'a str) -> &'a str {
+        // `(f)(x)`: a callee in parentheses (a function substituted for a template parameter, once per level) is `f`, but only
+        // when `f` is a function this source defines: `(Idx)(x)` with a local `Idx` is not a call of it
+        let mut name = written.trim();
         while let Some(inner) = name
             .strip_prefix('(')
             .and_then(|r| r.strip_suffix(')'))
@@ -327,6 +328,14 @@ impl<'s, 't> Walker<'s, 't> {
             })
         {
             name = inner;
+        }
+        let known = |n: &str| {
+            self.defines(n)
+                || n.rsplit_once("::")
+                    .is_some_and(|(_, short)| self.defines(short))
+        };
+        if name.len() != written.trim().len() && !known(name) {
+            return written;
         }
         if self.defines(name) {
             return name;
