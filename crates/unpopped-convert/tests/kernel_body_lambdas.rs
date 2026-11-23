@@ -74,12 +74,13 @@ fn a_value_lambda_reads_the_callers_locals_and_a_void_lambda_writes_them() {
 #[test]
 fn a_lambda_without_parameters_and_one_with_no_capture_lift() {
     let k = lift(
-        "void k(float* out, const float* in, int n) { int c = 0; auto tick = [&] { c = c + 2; };\n\
+        "void k(float* out, const float* in, int n) { int c = 0; int x = 3; auto tick = [&] { c = c + 2; };\n\
            auto sq = [](float x) -> float { return x * x; };\n\
-           tick(); tick(); out[0] = (float)c; out[1] = sq(in[2]); }",
+           tick(); tick(); out[0] = (float)c; out[1] = sq(in[2]); out[2] = (float)x; }",
     )
     .expect("lifts");
-    assert_eq!(run(&k, 0)[..2], [4.0, 16.0]);
+    // the lambda's parameter `x` must not outlive the call: the caller's own `x` is still 3
+    assert_eq!(run(&k, 0)[..3], [4.0, 16.0, 3.0]);
 }
 
 #[test]
