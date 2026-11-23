@@ -25,8 +25,8 @@ impl<'s, 't> Walker<'s, 't> {
     }
 
     /// `x++`, `++x`, `x--`, `--x` as a value (`a[bi++]`): the update goes before the statement and the value is a copy of the local
-    /// taken at the right moment (before the update for the postfix form, after it for the prefix form). The right operand of `&&`
-    /// or `||` runs only sometimes, so an update there declines (hoisting it would run it every time).
+    /// taken at the right moment (before the update for the postfix form, after it for the prefix form). In the right operand of `&&`
+    /// or `||` (which runs only sometimes) the hoisted statement makes the walker decline, as for a memory read there.
     fn update_value(&mut self, n: Node<'_>) -> R<(ScalarExpr, E)> {
         let (Some(arg), Some(op)) = (
             n.child_by_field_name("argument"),
@@ -34,23 +34,6 @@ impl<'s, 't> Walker<'s, 't> {
         ) else {
             return self.not_yet(n, "an increment of an unexpected shape");
         };
-        let mut child = n;
-        while let Some(p) = child.parent() {
-            if p.kind() == "binary_expression"
-                && p.child_by_field_name("right") == Some(child)
-                && p.child_by_field_name("operator")
-                    .is_some_and(|o| matches!(text(o, self.src), "&&" | "||"))
-            {
-                return self.not_yet(
-                    n,
-                    "an increment inside the right operand of `&&` or `||` (it runs only sometimes)",
-                );
-            }
-            if p.kind().ends_with("_statement") || p.kind() == "compound_statement" {
-                break;
-            }
-            child = p;
-        }
         let Some(Sym::Scalar(local, ty, _)) = self.lookup(text(arg, self.src)) else {
             return self.not_yet(
                 arg,
