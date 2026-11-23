@@ -51,6 +51,64 @@ pub(super) fn byte_size(t: E) -> Option<i64> {
 impl<'s, 't> Walker<'s, 't> {
     /// `Some` if `n` is a pointer expression this walker models (a pointer name, `p + i`, `p - i`, `i + p`, `&p[i]`, a cast to
     /// a pointer type, a parenthesis of one); `None` if it is not a pointer expression; a decline if it is one it cannot model.
+    /// `(da != nullptr) ? da + off : nullptr` (either arm the `nullptr`): the optional-pointer idiom. Whether a buffer is null is
+    /// known when lifting (`LiftContext::with_null_buffer`), so the condition must be a constant there and picks its arm. A chosen
+    /// `nullptr` stands for the other arm's own base when that base is a buffer the caller declared null (so a later `if (p)` is
+    /// false and a read through it declines); any other `nullptr` has no representation here and declines.
+    fn ptr_conditional(&mut self, n: Node<'_>) -> R<Option<PtrVal>> {
+        let (Some(c), Some(a), Some(b)) = (
+            n.child_by_field_name("condition"),
+            n.child_by_field_name("consequence"),
+            n.child_by_field_name("alternative"),
+        ) else {
+            return Ok(None);
+        };
+        let is_null = |x: Node<'_>| {
+            let mut x = x;
+            while x.kind() == "parenthesized_expression" {
+                match x.named_child(0) {
+                    Some(i) => x = i,
+                    None => break,
+                }
+            }
+            matches!(text(x, self.src), "nullptr" | "NULL")
+        };
+        let (ptr_arm, null_on_true) = match (is_null(a), is_null(b)) {
+            (false, true) => (a, false),
+            (true, false) => (b, true),
+            _ => return Ok(None),
+        };
+        let (cv, _) = self.truth_expr(c)?;
+        let ScalarExpr::ConstInt(v, _) = cv else {
+            return self.not_yet(
+                c,
+                "a pointer chosen by a condition that is not known when lifting",
+            );
+        };
+        let null_chosen = (v != 0) == null_on_true;
+        let Some(p) = self.ptr_expr(ptr_arm)? else {
+            return Ok(None);
+        };
+        if !null_chosen {
+            return Ok(Some(p));
+        }
+        let declared_null = match &p.base {
+            PBase::Buffer(i) => self
+                .params
+                .get(*i as usize)
+                .is_some_and(|q| self.null_buffers.contains(&q.name)),
+            PBase::Alloc(_) => false,
+        };
+        if declared_null {
+            Ok(Some(p))
+        } else {
+            self.not_yet(
+                n,
+                "a `nullptr` pointer value that is not a buffer the caller declared null",
+            )
+        }
+    }
+
     pub(super) fn ptr_expr(&mut self, n: Node<'_>) -> R<Option<PtrVal>> {
         match n.kind() {
             "identifier" => Ok(self.pointer_named(text(n, self.src))),
@@ -75,6 +133,7 @@ impl<'s, 't> Walker<'s, 't> {
                     _ => None,
                 })
             }
+            "conditional_expression" => self.ptr_conditional(n),
             "cast_expression" => self.ptr_cast(n),
             "call_expression" => self.ptr_reinterpret(n),
             "binary_expression" => self.ptr_arith(n),
