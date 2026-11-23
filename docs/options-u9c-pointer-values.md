@@ -68,7 +68,7 @@ Place::AllocRaw { alloc: u32,  byte_offset: ScalarExpr, elem: ElementKind }
   an emitter must keep the vector as one access, and that also meets the U15 patent hold (lowering to a vector load or store).
 * **Patent read** (owed before code, per the portfolio rule): raw byte addressing is the CUDA/PTX `(T*)` cast and `ld`/`st`
   with a byte address, public-domain mechanism, but no claims have been read; `docs/PATENT-SWEEP.md` gets a U9c section in the
-  code PR, with the U23 guard (layout only, no thread-set or memory-kind annotation) kept.
+  code PR, with the U23 guard (no thread-set, memory-kind or copy-count annotation) kept.
 * **Host side**: `KernelInterface` needs no field for `Raw` (buffers bind by position); the flag parameter of option A is an
   ordinary scalar parameter.
 

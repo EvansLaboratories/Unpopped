@@ -76,8 +76,9 @@ pub enum ParamKind {
         local: u32,
     },
     /// A group of scalar arguments passed together (ROADMAP U23): each field is readable as its own local, exactly as a
-    /// [`ParamKind::Scalar`] is. The group describes a **layout only**; it carries no thread-set, memory-kind or copy-count
-    /// annotation and chooses no storage (`docs/PATENT-SWEEP.md`, U23 section; `kernel_interface::layout_only_guard`).
+    /// [`ParamKind::Scalar`] is. The group describes a layout (offsets, size, alignment) and carries no thread-set, memory-kind
+    /// or copy-count annotation and chooses no storage: that no-annotation rule is the U23 patent guard (`docs/PATENT-SWEEP.md`,
+    /// U23 section; its test module is still named `kernel_interface::layout_only_guard`, a historical name).
     /// An emitter may pass it by value or by address, or flatten it; `KernelInterface::params_block` records the layout.
     Struct {
         /// The fields, in declaration order.

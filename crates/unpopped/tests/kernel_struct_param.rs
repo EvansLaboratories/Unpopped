@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! **Struct-typed scalar parameters** (ROADMAP U23, `docs/PATENT-SWEEP.md` U23 section). A `ParamKind::Struct` groups
 //! scalar fields the kernel reads as locals, so an emitter can pass the group by value (`__grid_constant__`, Slang
-//! `ConstantBuffer`) instead of flattening it. It describes a LAYOUT only: no thread-set, memory-kind or copy-count
+//! `ConstantBuffer`) instead of flattening it. It describes a layout and carries no thread-set, memory-kind or copy-count
 //! annotation (`kernel_interface::layout_only_guard`).
 //!
 //! Each behaviour has a program that shows it and a control that does not.

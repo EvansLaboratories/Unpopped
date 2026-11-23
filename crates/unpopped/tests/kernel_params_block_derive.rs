@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! **`ParamsBlock::of_struct`** (ROADMAP U23, derivation slice): the layout of a struct parameter, derived from its fields
-//! with the natural C rules (each field aligned to its own size, the block aligned to its widest field). Layout only
-//! (`docs/PATENT-SWEEP.md` U23 section). Consumers: fishstringer and Baracuda.
+//! with the natural C rules (each field aligned to its own size, the block aligned to its widest field). No thread-set, memory-kind or copy-count
+//! annotation is carried (the U23 guard, `docs/PATENT-SWEEP.md`). Consumers: fishstringer and Baracuda.
 //!
 //! The expected offsets are written out by hand from the C rules, with distinct sizes so a wrong alignment cannot hide.
 
