@@ -380,6 +380,10 @@ impl<'s, 't> Walker<'s, 't> {
         };
         let mut c = list.walk();
         let elems: Vec<_> = list.named_children(&mut c).collect();
+        // `S x{};` value-initialises: every field zero (a struct with no field takes no statement at all)
+        if elems.is_empty() {
+            return self.new_struct(sname, label, list, out);
+        }
         if elems.len() != defs.len() {
             return self.not_yet(list, format!("a brace list of {} element(s) for `{sname}`, which has {} field(s) (every field must be given)", elems.len(), defs.len()));
         }
