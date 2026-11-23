@@ -125,3 +125,15 @@ fn a_bfloat16_shuffle_moves_the_rounded_value() {
     let want: Vec<f64> = (0..32).map(|i| bf(input[i ^ 1])).collect();
     assert_eq!(o.to_f64_vec(), want);
 }
+
+#[test]
+fn a_tile_method_shuffle_of_a_half_moves_it_too() {
+    let k = lift(
+        "void k(float* out, const half* in) { cg::thread_block block = cg::this_thread_block(); \
+         cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block); half v = in[threadIdx.x]; \
+         half x = warp.shfl_xor(v, 4); out[threadIdx.x] = __half2float(x); }",
+    )
+    .expect("lifts");
+    let want: Vec<f64> = (0..32).map(|i| f64::from(lane_value(i ^ 4))).collect();
+    assert_eq!(run(&k), want);
+}
