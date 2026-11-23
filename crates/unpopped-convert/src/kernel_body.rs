@@ -721,6 +721,11 @@ fn pick_compute(raw: &[(String, PShape)]) -> E {
     if let Some(f) = types.iter().find(|t| matches!(t, E::F32 | E::F64)) {
         return *f;
     }
+    // a narrow float anywhere (`__half* dst`) makes the kernel float arithmetic: its literals are `float`, not the type of a
+    // leading byte buffer (`const void* vx`)
+    if types.iter().any(|t| matches!(t, E::F16 | E::Bf16)) {
+        return E::F32;
+    }
     let first_buffer = raw.iter().find_map(|(_, s)| match s {
         PShape::Buffer(t, _) => Some(*t),
         PShape::Scalar(_) | PShape::Struct(_) => None,
