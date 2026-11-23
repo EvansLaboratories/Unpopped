@@ -19,6 +19,9 @@ impl<'s, 't> Walker<'s, 't> {
             }
             return self.method_statement(e, f, out);
         }
+        if let Some(r) = self.memcpy_statement(e, out) {
+            return r;
+        }
         let callee = e
             .child_by_field_name("function")
             .map(|f| self.short_callee(text(f, self.src)));

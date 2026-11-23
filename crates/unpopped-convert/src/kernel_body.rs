@@ -95,6 +95,7 @@ mod globals;
 mod groups;
 mod inline;
 mod layouts;
+mod memcpy;
 mod methods;
 mod places;
 mod pointer;
