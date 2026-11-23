@@ -76,22 +76,23 @@ fn add_sub_mul_conj_real_imag_follow_the_header_formulas() {
 }
 
 #[test]
-fn the_multiply_is_unfused_two_roundings_where_a_fused_one_would_give_one() {
-    // x = 1 + 2^-12: x * x = 1 + 2^-11 + 2^-24 needs 25 bits, so an f32 multiply rounds it (a tie, to even).
-    // real = x*x - x*x: two equal roundings cancel to exactly 0.0; a fused (x*x) - round(x*x) would be 2^-24.
-    // imag = x*x + x*x = 2 * round(x*x); fused fma(x, x, round(x*x)) would add the unrounded product once.
-    let x = 1.0f32 + 2f32.powi(-12);
+fn the_multiply_lowers_to_plain_mul_add_sub_nodes_and_never_a_fused_one() {
+    // `cuCmulf` is written in the header with plain `*`, `-`, `+`. The lowered IR must carry exactly those: a `Fma` node would be a
+    // different operation (one rounding) than the header's. The ORACLE cannot tell them apart by value in general: it evaluates the
+    // whole expression of a statement at f64 and rounds once at the statement (kernel_eval.rs `settle`), so `a*b - c*d` is exact
+    // there where C rounds each product to f32. Example (x = 1 + 2^-12): `cuCmulf((x, 1 + 2^-11), (x, 1)).re` is `0` in C's unfused
+    // f32 (both products round to 1 + 2^-11) and `2^-24` in the oracle and in a fused evaluation. So the contract is the IR shape,
+    // which this test pins, and the emitters must spell it with no contraction (reported to pm-kernels).
     let k = lift(&format!(
         "void k(float* out, const float* in) {{ {DECLS} cuFloatComplex p = cuCmulf(a, b); out[0] = cuCrealf(p); out[1] = cuCimagf(p); }}"
     ))
     .expect("lifts");
-    let r = run_f32(&k, &[x, x, x, x], 2);
-    let rounded = x * x;
-    assert_eq!(r[0], 0.0, "unfused: round(x*x) - round(x*x)");
-    assert_eq!(r[1], f64::from(rounded + rounded));
-    // the fused values, to show the test is not vacuous
-    let exact = f64::from(x) * f64::from(x);
-    assert_ne!(exact - f64::from(rounded), 0.0);
+    let body = format!("{:?}", k.body);
+    assert!(!body.contains("Fma"), "a fused node: {body}");
+    // two Muls per lane, one Sub (real) and one Add (imag)
+    assert_eq!(body.matches("Mul(").count(), 4, "{body}");
+    assert_eq!(body.matches("Sub(").count(), 1, "{body}");
+    assert_eq!(body.matches("Add(").count(), 1, "{body}");
 }
 
 #[test]
