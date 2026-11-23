@@ -745,3 +745,23 @@ fn a_seam_that_spells_the_operation_receives_its_operands_in_order() {
     assert_eq!(seen[0].0, QualOp::Fma);
     assert_eq!(seen[0].2.round, RoundMode::TowardZero);
 }
+
+#[test]
+fn a_qualifier_needs_f32_operands_at_the_type_check_for_every_other_float() {
+    use unpopped::types::{TypeError, infer};
+    let q = (input(0) + input(1)).rounded(RoundMode::TowardZero);
+    // Control: f32 and f32s type (the plan gate's own dtypes).
+    assert_eq!(infer(&q.0, F32), Ok(F32));
+    assert_eq!(
+        infer(&q.0, ElementKind::F32Strict),
+        Ok(ElementKind::F32Strict)
+    );
+    // f64 has no ftz form and no reference for a directed rounding; the half types compute through f32: all are named errors, not a
+    // panic in the oracle (`oracle/expr_eval.rs`, which asserts f32/f32s).
+    for dtype in [ElementKind::F64, ElementKind::F16, ElementKind::Bf16] {
+        assert!(
+            matches!(infer(&q.0, dtype), Err(TypeError::IllegalQualifier { .. })),
+            "{dtype:?}"
+        );
+    }
+}
