@@ -402,6 +402,9 @@ impl<'s, 't> Walker<'s, 't> {
         if let Some(r) = self.fast_math(n, name) {
             return r;
         }
+        if let Some(r) = self.bitcast_intrinsic(n, name) {
+            return r;
+        }
         if let Some(r) = self.half_conversion(n, name) {
             return r;
         }
@@ -448,7 +451,7 @@ impl<'s, 't> Walker<'s, 't> {
         }
         match args.len() {
             1 if self.unary_op(name).is_some() => self.math_unary(n, name, args[0]),
-            2 if (self.binary_fn)(name).is_some() => self.math_binary(n, name, args[0], args[1]),
+            2 if self.binary_op(name).is_some() => self.math_binary(n, name, args[0], args[1]),
             _ => self.not_yet(
                 n,
                 self.unexpanded_or(
@@ -535,6 +538,44 @@ impl<'s, 't> Walker<'s, 't> {
         Ok((e, ty))
     }
 
+    /// A two-argument math function: the frontend's table, then the C library's exact `fmod` (`RemTrunc`, sign of the dividend),
+    /// `atan2`, `copysign` and `nextafter`, each in its `f` and plain spelling.
+    pub(super) fn binary_op(&self, name: &str) -> Option<BinaryOp> {
+        if let Some(op) = (self.binary_fn)(name) {
+            return Some(op);
+        }
+        let base = name.strip_suffix('f').unwrap_or(name);
+        Some(match base {
+            "fmod" => BinaryOp::RemTrunc,
+            "atan2" => BinaryOp::Atan2,
+            "copysign" => BinaryOp::Copysign,
+            "nextafter" => BinaryOp::Nextafter,
+            _ => return None,
+        })
+    }
+
+    /// `__float_as_int(x)`, `__int_as_float(i)` and the `uint`, `double`/`longlong` forms: the same bits at the other type.
+    fn bitcast_intrinsic(&mut self, n: Node<'_>, name: &str) -> Option<R<(ScalarExpr, E)>> {
+        let (from, to) = match name {
+            "__float_as_int" => (E::F32, E::I32),
+            "__float_as_uint" => (E::F32, E::U32),
+            "__int_as_float" => (E::I32, E::F32),
+            "__uint_as_float" => (E::U32, E::F32),
+            "__double_as_longlong" => (E::F64, E::I64),
+            "__longlong_as_double" => (E::I64, E::F64),
+            _ => return None,
+        };
+        let args = self.call_args(n);
+        let [a] = args.as_slice() else {
+            return Some(self.not_yet(n, format!("`{name}` with {} argument(s)", args.len())));
+        };
+        Some((|| {
+            let (v, t) = self.expr(*a)?;
+            let v = self.convert(v, t, from, *a)?;
+            Ok((ScalarExpr::Bitcast(Box::new(v), to), to))
+        })())
+    }
+
     pub(super) fn math_binary(
         &mut self,
         n: Node<'_>,
@@ -542,7 +583,7 @@ impl<'s, 't> Walker<'s, 't> {
         a: Node<'_>,
         b: Node<'_>,
     ) -> R<(ScalarExpr, E)> {
-        let Some(op) = (self.binary_fn)(name) else {
+        let Some(op) = self.binary_op(name) else {
             return self.not_yet(n, self.unexpanded_or(name, format!("a call to `{name}`")));
         };
         let (x, xt) = self.expr(a)?;
