@@ -297,6 +297,18 @@ impl<'s, 't> Walker<'s, 't> {
             }
             "CUDART_ZERO_F" => float(0.0),
             "CUDART_ONE_F" => float(1.0),
+            // `<stdint.h>`: each is an `int` (or `unsigned int`, `long long`) constant, as the C macros expand
+            "INT8_MAX" => int(i64::from(i8::MAX), E::I32),
+            "INT8_MIN" => int(i64::from(i8::MIN), E::I32),
+            "UINT8_MAX" => int(i64::from(u8::MAX), E::I32),
+            "INT16_MAX" => int(i64::from(i16::MAX), E::I32),
+            "INT16_MIN" => int(i64::from(i16::MIN), E::I32),
+            "UINT16_MAX" => int(i64::from(u16::MAX), E::I32),
+            "INT32_MAX" => int(i64::from(i32::MAX), E::I32),
+            "INT32_MIN" => int(i64::from(i32::MIN), E::I32),
+            "UINT32_MAX" => int(i64::from(u32::MAX), E::U32),
+            "INT64_MAX" => int(i64::MAX, E::I64),
+            "INT64_MIN" => int(i64::MIN, E::I64),
             "INT_MAX" => int(i64::from(i32::MAX), E::I32),
             "INT_MIN" => int(i64::from(i32::MIN), E::I32),
             "UINT_MAX" => int(i64::from(u32::MAX), E::U32),
