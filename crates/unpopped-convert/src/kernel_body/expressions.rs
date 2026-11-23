@@ -354,22 +354,23 @@ impl<'s, 't> Walker<'s, 't> {
             return self.not_yet(n, "a conditional of an unexpected shape");
         };
         let cond = self.truth_expr(c)?.0;
-        let before = self.hoisted.len();
+        // each arm's statements are taken apart as they arrive: an inlined call in an arm flushes `hoisted`, so positions in it
+        // are not stable across an arm
+        let outer = std::mem::take(&mut self.hoisted);
         let (av, at) = self.expr(a)?;
-        let mid = self.hoisted.len();
+        let mut a_loads = std::mem::take(&mut self.hoisted);
         let (bv, bt) = self.expr(b)?;
+        let mut b_loads = std::mem::replace(&mut self.hoisted, outer);
         let common = self.common_type(at, bt, n)?;
         let av = self.convert(av, at, common, n)?;
         let bv = self.convert(bv, bt, common, n)?;
-        if self.hoisted.len() == before {
+        if a_loads.is_empty() && b_loads.is_empty() {
             return Ok((
                 ScalarExpr::Select(Box::new(cond), Box::new(av), Box::new(bv)),
                 common,
             ));
         }
         // An arm reads memory, and only the arm taken may: `If (c) { loads_a; r = a } else { loads_b; r = b }`, the value in `r`.
-        let mut b_loads = self.hoisted.split_off(mid);
-        let mut a_loads = self.hoisted.split_off(before);
         let r = self.new_local(common);
         a_loads.push(Stmt::Assign {
             local: r,
