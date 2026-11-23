@@ -66,3 +66,24 @@ fn a_narrow_limit_converts_to_the_narrow_type_it_is_stored_in() {
     };
     assert_eq!(o.to_f64_vec(), vec![0.0, f64::from(i32::MAX - 1)]);
 }
+
+#[test]
+fn the_double_limits_exist_only_at_double_compute() {
+    let k =
+        lift("void k(double* out) { out[0] = DBL_MAX; out[1] = DBL_MIN; out[2] = DBL_EPSILON; }")
+            .expect("lifts at double compute");
+    let mut args = vec![KernelArg::Buffer(TypedBuffer::from_f64(&[3], &[0.0; 3]))];
+    run_launch(&k, &mut args).expect("runs");
+    let KernelArg::Buffer(o) = &args[0] else {
+        panic!()
+    };
+    assert_eq!(
+        o.to_f64_vec(),
+        vec![f64::MAX, f64::MIN_POSITIVE, f64::EPSILON]
+    );
+    // a float kernel cannot hold a double limit: it declines like a double literal
+    assert!(matches!(
+        lift("void k(float* out) { out[0] = DBL_MAX; }"),
+        Err(KernelLiftError::NotYetLifted { .. })
+    ));
+}

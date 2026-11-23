@@ -278,6 +278,14 @@ impl<'s, 't> Walker<'s, 't> {
             "INFINITY" if matches!(self.compute, E::F32 | E::F64) => {
                 Some((ScalarExpr::Const(f64::INFINITY), self.compute))
             }
+            // the double limits exist only where a double is the compute type (a double constant in a float kernel declines)
+            "DBL_MAX" if self.compute == E::F64 => Some((ScalarExpr::Const(f64::MAX), E::F64)),
+            "DBL_MIN" if self.compute == E::F64 => {
+                Some((ScalarExpr::Const(f64::MIN_POSITIVE), E::F64))
+            }
+            "DBL_EPSILON" if self.compute == E::F64 => {
+                Some((ScalarExpr::Const(f64::EPSILON), E::F64))
+            }
             "FLT_MAX" => float(f32::MAX),
             "FLT_MIN" => float(f32::MIN_POSITIVE),
             "FLT_EPSILON" => float(f32::EPSILON),
