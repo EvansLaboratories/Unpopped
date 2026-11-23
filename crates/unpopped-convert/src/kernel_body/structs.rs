@@ -224,6 +224,9 @@ impl<'s, 't> Walker<'s, 't> {
             }
             return Ok(Sym::Struct(self.new_struct(&f.ty, path, at, out)?));
         }
+        if let Some(shape) = super::vector_type(&f.ty) {
+            return self.new_vector_field(f, path, shape, at, out);
+        }
         let e = match self.ctype(&f.ty) {
             Ok(e) => e,
             Err(why) => return self.not_yet(at, format!("the field `{path}`: {why}")),
@@ -289,6 +292,53 @@ impl<'s, 't> Walker<'s, 't> {
 
     /// A loop storing zero into every element of a private array (the oracle traps a read of an unwritten one; C leaves it
     /// indeterminate).
+    /// A field of CUDA vector type: `float4 v;` is one scalar local per lane; `float4 data[N];` is an allocation of `N * lanes`
+    /// scalars held as a pointer whose pointee is the vector (so `data[i]`, `data[i].x` and `((float*)data)[k]` work as for a
+    /// local vector array), zero at construction.
+    fn new_vector_field(
+        &mut self,
+        f: &FieldDef,
+        path: &str,
+        (elem, lanes): (E, u8),
+        at: Node<'_>,
+        out: &mut Vec<Stmt>,
+    ) -> R<Sym> {
+        let Some(sz) = f.array.clone() else {
+            let mut ls = [0u32; 4];
+            for l in ls.iter_mut().take(usize::from(lanes)) {
+                *l = self.new_local(elem);
+                out.push(Stmt::Let {
+                    local: *l,
+                    init: self.zero_of(elem, at)?,
+                });
+            }
+            return Ok(Sym::Vector(ls, elem, lanes));
+        };
+        let n = self.arr_count(&sz, at)?;
+        if self.launch.is_none() {
+            return self.not_yet(
+                at,
+                format!("the array field `{path}` without a launch (use `lift_kernel_launched`)"),
+            );
+        }
+        let count = n * u32::from(lanes);
+        self.allocs.push(AllocDecl::new(
+            path,
+            MemorySpace::Private,
+            elem,
+            Extent::Static(count),
+        ));
+        let alloc = u32::try_from(self.allocs.len() - 1).unwrap_or(u32::MAX);
+        self.zero_fill(alloc, elem, count, at, out)?;
+        Ok(Sym::Pointer(super::pointer::PtrVal {
+            base: super::pointer::PBase::Alloc(alloc),
+            pointee: elem,
+            lanes,
+            off: ScalarExpr::ConstInt(0, E::I64),
+            strukt: None,
+        }))
+    }
+
     pub(super) fn zero_fill(
         &mut self,
         alloc: u32,
@@ -411,6 +461,16 @@ impl<'s, 't> Walker<'s, 't> {
                     Sym::Alloc(alloc, *e)
                 }
                 Sym::Struct(inner) => Sym::Struct(self.clone_struct(inner, &path, at, out)?),
+                Sym::Pointer(p)
+                    if p.lanes > 1 && matches!(p.base, super::pointer::PBase::Alloc(_)) =>
+                {
+                    return self.not_yet(
+                        at,
+                        format!(
+                            "the field `{path}`, an array of vectors, copied (copy its elements)"
+                        ),
+                    );
+                }
                 Sym::Pointer(p) => Sym::Pointer(p.clone()),
                 // a struct parameter's array is a row of immutable locals (an element is never assigned): the copy shares them
                 Sym::ParamArray(ls, e) => Sym::ParamArray(ls.clone(), *e),
