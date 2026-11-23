@@ -109,3 +109,36 @@ fn a_wrong_argument_count_or_an_unclosed_call_or_stringising_still_declines() {
 extern \"C\" void k(float* out) { out[0] = ADD(1.0f, 2.0f); }",
     ));
 }
+
+#[test]
+fn a_block_comment_inside_a_macro_body_does_not_cut_the_body_short() {
+    // The body was cut at the FIRST `/*`, so everything after a mid-body comment was lost. Found in the flce header: a continued macro
+    // body `void* count_out, /* [1] int64_t; caller pre-zeroes */ \ void* stream_ptr)` expanded to a function cut off after `count_out,`,
+    // and that unterminated text at the end of the file swallowed every template instance appended after it (12 real instantiations
+    // failed with "a call to `store_from_acc__t0`").
+    let k = lift(
+        "#define ADD(a, b) ((a) /* the left */ + (b) /* the right; text */)\n\
+         #define TWO (1 /* one */ + 1)\n\
+         #define NOTE(a) (a) // runs to the end of the logical line\n\
+         extern \"C\" void k(float* out) { out[0] = ADD(1.0f, 2.5f); out[1] = TWO; out[2] = NOTE(4.0f); }",
+    )
+    .expect("lifts");
+    assert_eq!(out(&k, 3), vec![3.5, 2.0, 4.0]);
+}
+
+#[test]
+fn a_continued_definition_macro_with_a_comment_before_the_backslash_keeps_its_whole_body() {
+    // the body is a whole function; a comment sits at the end of a continued line (before the backslash); a template function after it
+    // is instantiated from the kernel, and its appended instance must still parse
+    let k = lift(
+        "#define DEFINE_PAIR_SUM()                           \\\n\
+         static float pair_sum(float a, /* [1] first; note */ \\\n\
+                               float b)                       \\\n\
+         { return a + b; }\n\
+         DEFINE_PAIR_SUM()\n\
+         template <typename T> T store(float v) { return (T)v; }\n\
+         extern \"C\" void k(float* out) { out[0] = pair_sum(1.0f, 2.0f) + store<float>(3.0f); }",
+    )
+    .expect("lifts");
+    assert_eq!(out(&k, 1), vec![6.0]);
+}
