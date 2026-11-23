@@ -214,7 +214,10 @@ fn a_subgroup_collective_under_a_condition_on_the_warp_number_is_accepted() {
 #[test]
 fn a_shift_or_divisor_that_is_not_the_stated_subgroup_size_stays_divergent() {
     // N = 4: `tid >> 3` (warps of 8), `tid >> 1` (pairs), `tid / 8`, `tid / 2`
-    for def in [shr(3), shr(1), div(tid(), ci(8))] {
+    // and a shift of something that is not the thread index: `(tid + 1) >> 2` is 1 for lane 3 of warp 0
+    let shifted = bin(BinaryOp::Shr, add(tid(), ci(1)), ci(2));
+    let divided = div(add(tid(), ci(1)), ci(4));
+    for def in [shr(3), shr(1), div(tid(), ci(8)), shifted, divided] {
         refused(&kernel(
             8,
             (N, N),
