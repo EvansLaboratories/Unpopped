@@ -142,3 +142,13 @@ fn a_continued_definition_macro_with_a_comment_before_the_backslash_keeps_its_wh
     .expect("lifts");
     assert_eq!(out(&k, 1), vec![6.0]);
 }
+
+#[test]
+fn a_closed_comment_inside_an_if_condition_keeps_the_rest_of_the_condition() {
+    // `#if A /* c */ && B` was read as `#if A`: the comment cut the condition, so the wrong branch was taken
+    let k = lift(
+        "#define A 1\n#define B 0\n#if A /* both */ && B\nextern \"C\" void k(float* out) { out[0] = 1.0f; }\n#else\nextern \"C\" void k(float* out) { out[0] = 2.0f; }\n#endif",
+    )
+    .expect("lifts");
+    assert_eq!(out(&k, 1), vec![2.0]);
+}
