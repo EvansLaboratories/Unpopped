@@ -39,6 +39,11 @@ impl<'s, 't> Walker<'s, 't> {
     /// `p[i].f` or `p->f` (a scalar field) and `p[i].f[k]` (an array field) of a pointer to a laid-out struct, as a load. `None`
     /// when `n` is not a member access through such a pointer.
     pub(super) fn layout_member(&mut self, n: Node<'_>) -> R<Option<(ScalarExpr, E)>> {
+        if n.kind() == "field_expression"
+            && let Some(r) = self.layout_lane(n)?
+        {
+            return Ok(Some(r));
+        }
         let (fe, index) = match n.kind() {
             "subscript_expression" => {
                 let (Some(a), Some(idx)) = (
@@ -90,14 +95,17 @@ impl<'s, 't> Walker<'s, 't> {
             .map(|p| (p, element)))
     }
 
-    fn load_field(
+    /// The byte offset, lane element type and lane count of the field `field` of the struct `p` points at (the element `element`
+    /// of an array of structs when given, the element `index` of an array field when given). A scalar field has one lane; a
+    /// vector-typed field (`half2 dm`) has its lane count.
+    fn field_location(
         &mut self,
         n: Node<'_>,
         p: &PtrVal,
         element: Option<Node<'_>>,
         field: &str,
         index: Option<Node<'_>>,
-    ) -> R<(ScalarExpr, E)> {
+    ) -> R<(ScalarExpr, E, u8)> {
         let sname = p.strukt.clone().unwrap_or_default();
         let layout = self
             .struct_layouts
@@ -110,11 +118,14 @@ impl<'s, 't> Walker<'s, 't> {
                 format!("the field `{field}`, which the layout of `{sname}` does not give"),
             );
         };
-        let elem = match self.ctype(&f.elem) {
-            Ok(e) => e,
-            Err(why) => return self.not_yet(n, why),
+        let (elem, lanes) = match super::vector_type(&f.elem) {
+            Some(shape) => shape,
+            None => match self.ctype(&f.elem) {
+                Ok(e) => (e, 1),
+                Err(why) => return self.not_yet(n, why),
+            },
         };
-        let width = byte_size(elem).unwrap_or(1);
+        let width = byte_size(elem).unwrap_or(1) * i64::from(lanes);
         let mut off = p.off.clone();
         if let Some(e) = element {
             off = ScalarExpr::Add(
@@ -144,7 +155,11 @@ impl<'s, 't> Walker<'s, 't> {
                 );
             }
         }
-        let place = match p.base {
+        Ok((off, elem, lanes))
+    }
+
+    fn raw_place(p: &PtrVal, off: ScalarExpr, elem: E) -> Place {
+        match p.base {
             PBase::Buffer(buffer) => Place::Raw {
                 buffer,
                 byte_offset: off,
@@ -155,10 +170,130 @@ impl<'s, 't> Walker<'s, 't> {
                 byte_offset: off,
                 elem,
             },
-        };
+        }
+    }
+
+    fn load_at(&mut self, place: Place, elem: E) -> ScalarExpr {
         let local = self.new_local(elem);
         self.hoisted.push(Stmt::Load { local, place });
-        Ok((ScalarExpr::Local(local), elem))
+        ScalarExpr::Local(local)
+    }
+
+    fn load_field(
+        &mut self,
+        n: Node<'_>,
+        p: &PtrVal,
+        element: Option<Node<'_>>,
+        field: &str,
+        index: Option<Node<'_>>,
+    ) -> R<(ScalarExpr, E)> {
+        let (off, elem, lanes) = self.field_location(n, p, element, field, index)?;
+        if lanes > 1 {
+            return self.not_yet(
+                n,
+                format!("the vector field `{field}` used as a scalar (read a lane, or convert it as a vector)"),
+            );
+        }
+        let value = self.load_at(Self::raw_place(p, off, elem), elem);
+        Ok((value, elem))
+    }
+
+    /// `x[i].dm` (a vector-typed field) as a vector value of `shape`: one load per lane. `None` when `n` is not a member of a
+    /// laid-out struct.
+    pub(super) fn layout_vector(
+        &mut self,
+        n: Node<'_>,
+        shape: (E, u8),
+    ) -> R<Option<Vec<ScalarExpr>>> {
+        let (fe, index) = match n.kind() {
+            "subscript_expression" => {
+                let (Some(a), Some(idx)) = (
+                    n.child_by_field_name("argument"),
+                    n.child_by_field_name("indices")
+                        .and_then(|i| i.named_child(0)),
+                ) else {
+                    return Ok(None);
+                };
+                (a, Some(idx))
+            }
+            "field_expression" => (n, None),
+            _ => return Ok(None),
+        };
+        let (Some(obj), Some(field)) = (
+            fe.child_by_field_name("argument"),
+            fe.child_by_field_name("field"),
+        ) else {
+            return Ok(None);
+        };
+        let Some((p, element)) = self.struct_object(obj)? else {
+            return Ok(None);
+        };
+        let (off, elem, lanes) =
+            self.field_location(n, &p, element, text(field, self.src), index)?;
+        if (elem, lanes) != shape {
+            return self.not_yet(
+                n,
+                format!(
+                    "the field `{}` read as a {}-lane {:?} vector",
+                    text(field, self.src),
+                    shape.1,
+                    shape.0
+                ),
+            );
+        }
+        let width = byte_size(elem).unwrap_or(1);
+        let mut out = Vec::new();
+        for k in 0..i64::from(lanes) {
+            let at = ScalarExpr::Add(
+                Box::new(off.clone()),
+                Box::new(ScalarExpr::ConstInt(k * width, E::I64)),
+            );
+            out.push(self.load_at(Self::raw_place(&p, at, elem), elem));
+        }
+        Ok(Some(out))
+    }
+
+    /// `x[i].dm.x`: one lane of a vector-typed field of a laid-out struct. `None` when `n` is not one.
+    fn layout_lane(&mut self, n: Node<'_>) -> R<Option<(ScalarExpr, E)>> {
+        let (Some(inner), Some(lane)) = (
+            n.child_by_field_name("argument"),
+            n.child_by_field_name("field"),
+        ) else {
+            return Ok(None);
+        };
+        if inner.kind() != "field_expression" {
+            return Ok(None);
+        }
+        let (Some(obj), Some(field)) = (
+            inner.child_by_field_name("argument"),
+            inner.child_by_field_name("field"),
+        ) else {
+            return Ok(None);
+        };
+        let Some((p, element)) = self.struct_object(obj)? else {
+            return Ok(None);
+        };
+        let (off, elem, lanes) =
+            self.field_location(n, &p, element, text(field, self.src), None)?;
+        let Some(k) = super::lane_of(text(lane, self.src), lanes).filter(|_| lanes > 1) else {
+            return self.not_yet(
+                lane,
+                format!(
+                    "the member `{}` of the field `{}`",
+                    text(lane, self.src),
+                    text(field, self.src)
+                ),
+            );
+        };
+        let at = ScalarExpr::Add(
+            Box::new(off),
+            Box::new(ScalarExpr::ConstInt(
+                i64::from(k) * byte_size(elem).unwrap_or(1),
+                E::I64,
+            )),
+        );
+        let value = self.load_at(Self::raw_place(&p, at, elem), elem);
+        Ok(Some((value, elem)))
     }
 
     /// `const S* x = <pointer expression>;` for a laid-out struct `S`: a pointer local with the struct's stride.

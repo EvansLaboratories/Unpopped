@@ -242,3 +242,81 @@ fn an_array_field_of_wider_elements_scales_by_the_element_width() {
     };
     assert_eq!(o.to_f64_vec(), vec![30.0, -20.0]);
 }
+
+// ---- step 3: vector-typed fields (`half2 dm`) ----
+
+fn vec_layout() -> StructLayout {
+    // block_q4_1 as nvcc lays it out: half2 dm (4 bytes) at 0, uint8_t qs[4] at 4 (shortened); size 8
+    StructLayout::new(
+        8,
+        vec![
+            FieldLayout::new("dm", 0, "half2", 1),
+            FieldLayout::new("qs", 4, "uint8_t", 4),
+        ],
+    )
+}
+
+fn run_vec(src: &str, layout: StructLayout, n: usize) -> Vec<f64> {
+    let ctx = ctx().with_struct_layout("block_q", layout);
+    let k = lift_kernel_in(&C, src, "k", &ctx).unwrap();
+    // two 8-byte blocks: dm0 = (1.5, 2.0), qs0 = 1..4; dm1 = (-2.0, 0.5), qs1 = 5..8
+    let bytes: Vec<u8> = vec![
+        0x00, 0x3e, 0x00, 0x40, 1, 2, 3, 4, 0x00, 0xc0, 0x00, 0x38, 5, 6, 7, 8,
+    ];
+    let mut args = vec![
+        KernelArg::Buffer(TypedBuffer::from_f32(&[n as i64], &vec![0.0; n])),
+        KernelArg::Buffer(TypedBuffer::from_u8(&[16], &bytes)),
+    ];
+    run_launch(&k, &mut args).expect("runs");
+    let KernelArg::Buffer(o) = &args[0] else {
+        panic!()
+    };
+    o.to_f64_vec()
+}
+
+const BLOCK2: &str = "typedef struct { half2 dm; uint8_t qs[4]; } block_q;\n";
+
+#[test]
+fn a_vector_field_is_read_whole_and_by_lane() {
+    let src = format!(
+        "{BLOCK2}void k(float* out, const void* vx) {{ const block_q* x = (const block_q*)vx; \
+         float2 a = __half22float2(x[0].dm); out[0] = a.x; out[1] = a.y; \
+         out[2] = __half2float(x[1].dm.x); out[3] = __half2float(x[1].dm.y); out[4] = (float)x[1].qs[3]; }}"
+    );
+    assert_eq!(
+        run_vec(&src, vec_layout(), 5),
+        vec![1.5, 2.0, -2.0, 0.5, 8.0]
+    );
+}
+
+#[test]
+fn a_vector_field_used_as_a_scalar_or_a_wrong_shape_declines() {
+    let decline = |src: &str, needle: &str| {
+        let c = ctx().with_struct_layout("block_q", vec_layout());
+        match lift_kernel_in(&C, &format!("{BLOCK2}{src}"), "k", &c) {
+            Err(KernelLiftError::NotYetLifted { construct, .. }) => {
+                assert!(construct.contains(needle), "`{construct}` lacks `{needle}`");
+            }
+            other => panic!("{needle}: {other:?}"),
+        }
+    };
+    decline(
+        "void k(float* out, const void* vx) { const block_q* x = (const block_q*)vx; out[0] = __half2float(x[0].dm); }",
+        "vector field",
+    );
+    decline(
+        "void k(float* out, const void* vx) { const block_q* x = (const block_q*)vx; float4 a = x[0].dm; out[0] = a.x; }",
+        "read as a",
+    );
+    decline(
+        "void k(float* out, const void* vx) { const block_q* x = (const block_q*)vx; out[0] = __half2float(x[0].dm.w); }",
+        "member",
+    );
+}
+
+#[test]
+fn a_vector_field_that_runs_past_the_struct_is_an_inconsistent_layout() {
+    let bad = StructLayout::new(6, vec![FieldLayout::new("dm", 4, "half2", 1)]);
+    let msg = lift(&ctx().with_struct_layout("S", bad)).expect_err("must decline");
+    assert!(msg.contains("past the struct's size"), "{msg}");
+}

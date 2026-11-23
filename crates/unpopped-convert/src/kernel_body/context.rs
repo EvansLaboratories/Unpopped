@@ -101,9 +101,17 @@ impl StructLayout {
             if spans.iter().any(|(_, _, n)| *n == f.name) {
                 return Err(format!("the field `{}` twice", f.name));
             }
-            let elem = super::c_type(&f.elem)
-                .map_err(|why| format!("the field `{}` of type `{}`: {why}", f.name, f.elem))?;
-            let Some(width) = super::pointer::byte_size(elem) else {
+            // a vector-typed field (`half2 dm`) is `lanes` consecutive lane elements
+            let (elem, lanes) = match super::vector_type(&f.elem) {
+                Some(shape) => shape,
+                None => (
+                    super::c_type(&f.elem).map_err(|why| {
+                        format!("the field `{}` of type `{}`: {why}", f.name, f.elem)
+                    })?,
+                    1,
+                ),
+            };
+            let Some(width) = super::pointer::byte_size(elem).map(|w| w * i64::from(lanes)) else {
                 return Err(format!(
                     "the field `{}` of type `{}`, which has no whole-byte size",
                     f.name, f.elem

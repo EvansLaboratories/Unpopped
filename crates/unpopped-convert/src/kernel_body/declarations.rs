@@ -243,6 +243,9 @@ impl<'s, 't> Walker<'s, 't> {
         if let Some(v) = self.vector_load(n, (elem, lanes))? {
             return Ok(v);
         }
+        if let Some(v) = self.layout_vector(n, (elem, lanes))? {
+            return Ok(v);
+        }
         let callee = (n.kind() == "call_expression")
             .then(|| n.child_by_field_name("function").map(|f| text(f, self.src)))
             .flatten();
