@@ -154,3 +154,64 @@ fn a_backend_that_needs_the_interface_refuses_legacy_and_serves_the_opted_in_cal
             .is_err()
     );
 }
+
+/// A backend that BREAKS the documented convention (its `lower` is `lower_with(plan, LEGACY)`): `lower` serves the old shape while
+/// `lower_with` refuses a LEGACY caller. Found by a reviewer of #386 (Medium 1): `generate_variants` called `lower`, so it served it.
+struct BreaksConvention;
+
+impl Backend for BreaksConvention {
+    fn name(&self) -> &str {
+        "breaks_convention"
+    }
+    fn provider(&self) -> &str {
+        "unpopped-test"
+    }
+    fn supports_dtype(&self, _dtype: ElementKind, _target: TargetId) -> DtypeSupport {
+        DtypeSupport::Supported
+    }
+    fn lower(&self, plan: &KernelPlan<'_>) -> Result<GeneratedKernel, LowerError> {
+        Ok(GeneratedKernel::new(
+            format!("old_{}", plan.op_name),
+            "/* old shape */".to_string(),
+        ))
+    }
+    fn lower_with(
+        &self,
+        plan: &KernelPlan<'_>,
+        caps: &CallerCaps,
+    ) -> Result<GeneratedKernel, LowerError> {
+        if !caps.interface {
+            return Err(LowerError::UnsupportedPlanShape {
+                detail: "refuses a LEGACY caller".to_string(),
+            });
+        }
+        self.lower(plan)
+    }
+}
+
+#[test]
+#[should_panic(expected = "declined to lower")]
+fn generate_variants_refuses_a_backend_that_refuses_legacy_even_if_its_lower_serves_the_old_shape()
+{
+    let key = key_for(7, ElementKind::F32);
+    // control, in the same body so the panic is the refusal and not a setup failure: try_generate refuses it too
+    assert!(try_generate(&ops()[0], &key, &BreaksConvention).is_err());
+    let _ = unpopped::generate_variants(&ops()[0], &key, &BreaksConvention);
+}
+
+/// The control for the test above: a lower-only backend is unchanged by routing the base kernel through `lower_with`.
+#[test]
+fn generate_variants_still_serves_a_lower_only_backend_exactly_as_before() {
+    let key = key_for(7, ElementKind::F32);
+    for op in ops() {
+        let vs = unpopped::generate_variants(&op, &key, &StubBackend);
+        let base = &vs[0];
+        assert_eq!(base.tag, "base");
+        let plain = try_generate(&op, &key, &StubBackend).expect("plain");
+        assert!(
+            same(&base.kernels[0], &plain),
+            "{}: the base variant is the plain kernel",
+            op.name
+        );
+    }
+}
