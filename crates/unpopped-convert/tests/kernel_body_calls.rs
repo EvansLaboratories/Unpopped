@@ -73,7 +73,9 @@ fn math_calls_lift_through_the_frontends_table_with_c_semantics() {
 #[test]
 fn a_fast_math_spelling_and_unknown_calls_decline_instead_of_lifting_as_the_accurate_op() {
     for (call, needle) in [
-        ("__expf(a[0])", "`__expf`"),
+        // `__expf` and the other approximable ones lift as approx nodes (tests/kernel_body_fast_math.rs); `__sinf` has no
+        // approximate form in the IR, so it must decline rather than lift as the accurate sine
+        ("__sinf(a[0])", "`__sinf`"),
         ("frobnicate(a[0])", "`frobnicate`"),
         ("sqrtf(a[0], a[1])", "2 argument"),
     ] {
@@ -140,7 +142,7 @@ fn every_thread_of_a_block_adds_into_one_counter() {
 #[test]
 fn atomics_that_are_not_a_plain_address_decline() {
     for (call, needle) in [
-        ("atomicAdd(c + 1, 1)", "through a pointer"),
+        ("atomicAdd((unsigned*)c, 1u)", "through a pointer"),
         ("atomicInc(&c[0], 3)", "`atomicInc`"),
         ("atomicAdd(&c[0])", "1 argument"),
     ] {
@@ -153,12 +155,29 @@ fn atomics_that_are_not_a_plain_address_decline() {
         }
     }
     assert!(one_thread("void k(int* c) { atomicAdd(&c[0], 1); }").is_ok());
+    // since the census wall slice, a pointer that names an element of its own base is that element
+    assert!(one_thread("void k(int* c) { atomicAdd(c + 1, 1); }").is_ok());
 }
 
 #[test]
-fn an_atomic_in_a_conditionally_evaluated_operand_declines() {
-    let r =
-        one_thread("void k(int* out, int* c, int n) { out[0] = n > 0 ? atomicAdd(&c[0], 1) : 0; }");
+fn an_atomic_in_a_conditional_arm_runs_only_when_that_arm_is_taken() {
+    // since slice 5 a `?:` arm with effects lifts as `If (c) { arm } else { arm }`: the atomic is in the taken arm only
+    let k =
+        one_thread("void k(int* out, int* c, int n) { out[0] = n > 0 ? atomicAdd(&c[0], 1) : 0; }")
+            .unwrap();
+    for (n, want_out, want_c) in [(1, 5.0, 6.0), (0, 0.0, 5.0)] {
+        let mut args = vec![i32s(&[0]), i32s(&[5]), KernelArg::Int(n)];
+        run_launch(&k, &mut args).expect("runs");
+        assert_eq!(
+            (buf(&args[0]), buf(&args[1])),
+            (vec![want_out], vec![want_c]),
+            "n = {n}"
+        );
+    }
+    // the `&&` operand keeps its guard: an effect there is not hoisted unconditionally
+    let r = one_thread(
+        "void k(int* out, int* c, int n) { out[0] = n > 0 && atomicAdd(&c[0], 1) > 0; }",
+    );
     assert!(
         matches!(r, Err(KernelLiftError::NotYetLifted { .. })),
         "{r:?}"

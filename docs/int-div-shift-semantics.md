@@ -121,3 +121,41 @@ reason, not for this rule.
 Every quote was read from the spec text on 2026-10-30: N1570 (port70.net mirror), the C++ draft (eel.is), PTX ISA 9.4
 HTML, LLVM LangRef (llvm.org), OpenCL C 3.0 unified, GLSL 4.60.8, SPIR-V unified1, WGSL candidate recommendation draft.
 Section numbers are the specs' own headings. Quotes were located by text search of the downloaded pages, not recalled.
+
+## The kernel layer admits these at any integer type (2026-11-22; pm-kernels option A, found lifting Baracuda's decode kernel)
+
+**What changed.** `types::infer_ty_in` (the kernel layer's typing, used by `check_kernel` and the kernel oracle) admits integer `Div`
+and the shifts and bitwise operators (`Shl`, `Shr`, `BitAnd`, `BitOr`, `BitXor`) at **any** integer type, not only the kernel's compute
+type. Before, a float kernel could not shift or mask an index and a `U32` kernel could not shift a `U64` (the real
+`uint_fastdiv::divmod`: `uint32_t((uint64_t(m_) * uint64_t(n)) >> 32)`), though the oracle already evaluated them at every integer type.
+`types::infer_ty` (the plan layer) is unchanged: the plan gate still opts integer operators in per backend
+(`Backend::total_integer_ops`). The float-only operators (`Pow`, `Rem`, `RemTrunc`, `Atan2`, `Copysign`, `Nextafter`, `FmaxIeee`,
+`FminIeee`) and the logical operators stay refused on integers.
+
+**Semantics are the ruled ones above**, at every width `I8` to `U64`, signed and unsigned: `Div` is total; a shift count is read as
+unsigned bits modulo the promoted width (64 for a 64-bit type, 32 for every narrower one); `<<` discards what leaves the type; `>>` is
+arithmetic on a signed type and logical on an unsigned one. Checked in the oracle by `crates/unpopped/tests/kernel_int_ops_any_width.rs`
+(six operators, eight widths, asymmetric operands, counts past the width, an independent reference written from this note).
+
+**Emitters.** `IntOp` (the shared lowering's typed integer seam, `#[non_exhaustive]`) gained `Div`, `Shl`, `Shr`, `BitAnd`, `BitOr`,
+`BitXor`, and the lowering routes these nodes to it when the operand type is an integer other than the compute type, so an emitter
+that does not spell them gets a typed `UnsupportedOp` decline from the seam instead of the compute-typed spelling (which, before this
+change, was a bare C `/` that crashed on a zero divisor in a float kernel: found by the cpu-c differential).
+- **cpu-c** spells `Div`, `Shl`, `Shr` at `I32`/`I64`/`U32`/`U64` through the total helpers and the bitwise operators at every width as C
+  operators, and declines `Div`/`Shl`/`Shr` at `I8`/`U8`/`I16`/`U16` by name (`cpu_c has no integer div at I8`). 36 of the 48
+  (operator, width) pairs lower and every one matches the interpreter byte for byte
+  (`crates/unpopped-cpu-c/tests/kernel_emit_int_ops_off_compute_agrees.rs`, with seeded mutants of the emitted C).
+- **Read at `origin/main` on 2026-11-22, not run:** `baracuda-cuda-emit/src/kernel.rs` refuses an integer `Div` by name ("integer
+  `Div` is not lowered yet") and reaches a shift or bitwise `Binary` only through its `other =>` arm ("expression node `Binary` is not
+  lowered by the CUDA backend yet"); its locals are limited to `f32`/`f64`/`i32`/`u32`/`i64`. `vulkane-kernel-text` documents integer
+  kernels (`I32`/`U32`) with `BitAnd`/`BitOr`/`BitXor` and `Shl`/`Shr` (the count masked to the width) and "anything else a typed
+  `UnsupportedKernel`". `fishstringer-slang-emit` `slang_binary_int` spells the same operators with the mask `& 31` or `& 63`, choosing
+  the 63 only for `I64`, so a `U64` operand would get 31 *if* it reached that speller (not verified; its dtype gate was not read).
+  **Reported by their lanes, read not run** (pm-kernels `[FINDING]`, 2026-11-22, `rockfish-hip-emit/src/lib.rs:1745-1943` and `openclownfish-clc/kernel.rs@d7ed879`):
+  `rockfish-hip-emit` **emits** integer `Div`/`Shl`/`Shr` at `i32`/`i64`/`u32`/`u64` through guarded helpers (`b == 0` gives `a`, signed `MIN / -1` gives `MIN`, shift count
+  `& (N-1)`, left shift through unsigned; `And`/`Or`/`Xor` bare), which matches the ruling by reading. **Update, rockfish lane 2026-11-22 (`rockfish-wt-solver@4ff4377`, reported by pm-kernels):
+  host-run, mask read-only.** The 12 integer `Div`/`Shl`/`Shr` kernels (`i32`/`i64`/`u32`/`u64`) were compiled with host `clang++` and **run** on boundary vectors
+  (`b == 0`, signed `MIN / -1`, shift counts at and past the width; 190 to 286 pairs each): every result equals the Rust wrapping operation, which is the ruled rule, and two
+  hand mutants (no `MIN / -1` guard, a logical signed `Shr`) were caught. **Not observable on x86:** the count mask (the hardware masks), so that part stays read-only. There is no
+  `hipcc` and no device in that run: **not device-verified.** `openclownfish-clc` **declines** them by name in `lower_kernel` (`Div`: "a Div other than of two floats"; the others: "the binary op {op:?}"); its older fused
+  path masks shifts and uses `ocl_idiv` at the compute type only. Neither was read by this lane.

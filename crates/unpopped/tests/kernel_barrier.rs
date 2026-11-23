@@ -418,9 +418,52 @@ fn rejected_1_a_condition_that_is_always_true_but_reads_an_exec_id() {
 }
 
 #[test]
-fn rejected_2_a_loop_bounded_by_a_value_every_thread_loads_identically() {
-    // for i in 0..flags[0] { barrier }: data-dependent but uniform trip count.
-    divergent(vec![load_flag(V), for_(I, local(V), vec![barrier()])]);
+fn accepted_2_a_loop_bounded_by_a_value_every_thread_loads_identically_from_a_read_only_buffer() {
+    // for i in 0..flags[0] { barrier }: `flags` is `Read` and the index is constant, so every thread reads one value
+    // (flipped from a pinned over-rejection, 2026-11-22, for the decode kernel's `block_valid_mask[bx]`).
+    ok(vec![load_flag(V), for_(I, local(V), vec![barrier()])]);
+}
+
+fn load_at(buffer: u32, coord: ScalarExpr, into: u32) -> Stmt {
+    Stmt::Load {
+        local: into,
+        place: Place::Logical {
+            buffer,
+            coords: vec![coord],
+        },
+    }
+}
+
+fn kernel_rw(body: Vec<Stmt>) -> KernelFn {
+    let mut k = kernel(body);
+    k.params[0] = Param::buffer("flags", I32, BufferRole::ReadWrite, Some(1));
+    k
+}
+
+#[test]
+fn a_loaded_flag_stays_divergent_when_the_buffer_is_written_or_the_index_is_thread_dependent() {
+    // the same shape, three ways to be divergent: a ReadWrite buffer (another thread may have stored to it) ...
+    let body = vec![load_flag(V), for_(I, local(V), vec![barrier()])];
+    assert_eq!(
+        check_kernel(&kernel_rw(body)),
+        Err(KernelError::BarrierDivergent)
+    );
+    // ... an index that reads a thread id ...
+    divergent(vec![
+        load_at(0, exec(ExecId::ThreadIdx(0)), V),
+        for_(I, local(V), vec![barrier()]),
+    ]);
+    // ... and an index carried through a local that was loaded from the Read buffer at a thread-dependent place.
+    divergent(vec![
+        load_at(0, exec(ExecId::ThreadIdx(0)), W),
+        load_at(0, local(W), V),
+        for_(I, local(V), vec![barrier()]),
+    ]);
+    // Control: a block-uniform index (BlockIdx) is uniform.
+    ok(vec![
+        load_at(0, exec(ExecId::BlockIdx(0)), V),
+        for_(I, local(V), vec![barrier()]),
+    ]);
 }
 
 #[test]
@@ -440,9 +483,9 @@ fn rejected_3_a_local_assigned_from_subgroup_size() {
 }
 
 #[test]
-fn rejected_4_a_barrier_after_a_loop_with_a_break_guarded_by_a_uniform_loaded_flag() {
-    // for i in 0..n { f = flags[0]; if f { break } }; barrier
-    divergent(vec![
+fn accepted_4_a_barrier_after_a_loop_with_a_break_guarded_by_a_uniform_loaded_flag() {
+    // for i in 0..n { f = flags[0]; if f { break } }; barrier (flipped with accepted_2: `flags` is a `Read` buffer)
+    ok(vec![
         for_(
             I,
             local(N),

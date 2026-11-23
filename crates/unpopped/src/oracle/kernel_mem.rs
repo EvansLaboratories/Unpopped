@@ -83,9 +83,12 @@ pub(super) fn touch(
     now: Stamp,
     kind: AccessKind,
     sync: &Edges,
+    same_value: bool,
 ) -> Result<(), KernelTrap> {
     let a = log.entry(key).or_default();
-    if a.writer.is_some_and(|w| unordered(w, now, sync)) {
+    // a write of the value the element already holds, in a launch that allows it, does not race another unordered write
+    let benign = same_value && kind == AccessKind::Write;
+    if !benign && a.writer.is_some_and(|w| unordered(w, now, sync)) {
         return Err(KernelTrap::DataRace);
     }
     if kind != AccessKind::Atomic && a.atomics.iter().any(|t| unordered(*t, now, sync)) {
@@ -164,6 +167,9 @@ pub(super) struct BlockMem {
     pub(super) mbar: std::collections::HashMap<(u32, usize), super::kernel_mbar::MbarState>,
     /// The named barriers of the block, by id.
     pub(super) named: std::collections::HashMap<u32, super::kernel_named::NamedState>,
+    /// A `Shared` store of the value the element already holds is not a race with another thread's unordered store
+    /// (`Leniency::same_value_writes`).
+    pub(super) same_value_writes: bool,
 }
 
 /// The linear id of the cluster the block at `idx` belongs to (`0` when the launch has no clusters).
@@ -351,6 +357,19 @@ impl ThreadCtx<'_> {
         space: MemorySpace,
         kind: AccessKind,
     ) -> Result<(), KernelTrap> {
+        self.log_shared_write(alloc, i, space, kind, false)
+    }
+
+    /// [`Self::log_shared`] for a store that may write the value the element already holds (`same_value`).
+    pub(super) fn log_shared_write(
+        &mut self,
+        alloc: u32,
+        i: usize,
+        space: MemorySpace,
+        kind: AccessKind,
+        same_value: bool,
+    ) -> Result<(), KernelTrap> {
+        let same_value = same_value && self.block.same_value_writes;
         if matches!(space, MemorySpace::Shared | MemorySpace::Tensor) {
             let now = self.stamp(kind);
             let owner = self.peer.unwrap_or(self.block_lin);
@@ -358,7 +377,7 @@ impl ThreadCtx<'_> {
                 Some(o) => &mut self.peers.get(o).log,
                 None => &mut self.block.log,
             };
-            touch(log, (alloc, i), now, kind, self.sync)?;
+            touch(log, (alloc, i), now, kind, self.sync, same_value)?;
             self.after(now, kind, (1, owner, alloc, i));
         }
         Ok(())

@@ -101,6 +101,13 @@ The backward kernels are unassessed.
 > (seeded mutation, run at the committed head). What follows describes the
 > defect as it stood; the `Approx` qualifier in §4.3 is still the full fix.
 
+> **Update (U19 census, lane/u19-templates).** The C-family kernel-body walker (`unpopped-convert`, `kernel_body/calls.rs`
+> `fast_math`) now lifts `__expf`, `__exp10f`, `__log2f`, `__logf`, `__log10f` and `__fdividef` as the hardware sequences they
+> are, each wrapped in `Qualified(.., Numerics { approx: true })` (`__expf(x)` is `ex2.approx(x * log2 e)`): the numerics-changing
+> marker is present, as rule 2 asks. The exact-spelling hint of §4.3 is NOT carried, so a CUDA re-emit does not reproduce the
+> token `__expf`. `lift.rs`/`convert.rs` `unary_fn` still refuse. `__sinf`, `__cosf`, `__tanf`, `__powf` have no approximate form
+> in the IR and still refuse (`tests/kernel_body_calls.rs`).
+
 `crates/unpopped/src/lift.rs:436-440`:
 
 ```rust

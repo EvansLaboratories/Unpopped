@@ -149,6 +149,17 @@ pub fn check_int_leaf(ty: ElementKind, value: Option<i64>) -> Result<(), TypeErr
     Ok(())
 }
 
+/// The integer-only operators the **kernel** layer admits at any integer type, not just the compute type: the shifts and the
+/// bitwise operators, which the kernel oracle evaluates at the operand's own type (`docs/int-div-shift-semantics.md`). The
+/// logical operators are not in the list: the oracle has no meaning for them.
+#[must_use]
+pub const fn kernel_int_op(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Shl | BinaryOp::Shr | BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
+    )
+}
+
 /// The binary operators defined on floating-point values only: no integer type takes them, as an operand or as the compute
 /// type.
 #[must_use]
@@ -407,7 +418,18 @@ pub fn infer(e: &ScalarExpr, compute: ElementKind) -> Result<ElementKind, TypeEr
 ///
 /// The first [`TypeError`] found, walking children before parents.
 pub fn infer_ty(e: &ScalarExpr, compute: ElementKind) -> Result<Ty, TypeError> {
-    infer_ty_in(e, compute, &[])
+    infer_ty_mode(e, compute, &[], TyMode::Plan)
+}
+
+/// Which layer is typing an expression. The **plan** layer keeps the rule that an integer operand other than the compute type may
+/// only be compared, ordered (`Min`/`Max`) or added, subtracted and multiplied; the **kernel** layer (ROADMAP U19, pm-kernels
+/// 2026-11-22, option A) also admits integer `Div` and the bitwise and shift operators (`Shl`, `Shr`, `BitAnd`, `BitOr`,
+/// `BitXor`) at any integer type, with the semantics of `docs/int-div-shift-semantics.md` that the kernel oracle already
+/// evaluates. The plan gate is untouched: it opts integer operators in per backend (`Backend::total_integer_ops`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TyMode {
+    Plan,
+    Kernel,
 }
 
 /// [`infer_ty`] inside a kernel: `locals[i]` is the declared type of `Local(i)`. A `Local`
@@ -419,21 +441,30 @@ pub fn infer_ty(e: &ScalarExpr, compute: ElementKind) -> Result<Ty, TypeError> {
 ///
 /// The first [`TypeError`] found, walking children before parents.
 pub fn infer_ty_in(e: &ScalarExpr, compute: ElementKind, locals: &[Ty]) -> Result<Ty, TypeError> {
+    infer_ty_mode(e, compute, locals, TyMode::Kernel)
+}
+
+fn infer_ty_mode(
+    e: &ScalarExpr,
+    compute: ElementKind,
+    locals: &[Ty],
+    mode: TyMode,
+) -> Result<Ty, TypeError> {
     match e {
         ScalarExpr::Local(i) => locals
             .get(*i as usize)
             .copied()
             .ok_or(TypeError::LocalOutsideKernel),
-        ScalarExpr::Pack(xs) => pack_ty(xs, compute, locals),
+        ScalarExpr::Pack(xs) => pack_ty(xs, compute, locals, mode),
         ScalarExpr::BitcastPacked(x, elem, lanes) => {
-            bitcast_packed_ty(x, *elem, *lanes, compute, locals)
+            bitcast_packed_ty(x, *elem, *lanes, compute, locals, mode)
         }
-        ScalarExpr::Extract(x, i) => match infer_ty_in(x, compute, locals)? {
+        ScalarExpr::Extract(x, i) => match infer_ty_mode(x, compute, locals, mode)? {
             Ty::Packed(t, lanes) if *i < lanes => Ok(Ty::Scalar(t)),
             Ty::Packed(_, lanes) => Err(TypeError::BadLane { index: *i, lanes }),
             Ty::Scalar(_) => Err(TypeError::NotPacked { node: "Extract" }),
         },
-        _ => operator_ty(e, compute, locals),
+        _ => operator_ty(e, compute, locals, mode),
     }
 }
 
@@ -450,14 +481,19 @@ fn check_packed_width(elem: ElementKind, lanes: u8) -> Result<(), TypeError> {
 }
 
 /// The type of a `Pack`: 2, 4, 8 or 16 scalar children of one type (8 and 16 only within 128 bits).
-fn pack_ty(xs: &[ScalarExpr], compute: ElementKind, locals: &[Ty]) -> Result<Ty, TypeError> {
+fn pack_ty(
+    xs: &[ScalarExpr],
+    compute: ElementKind,
+    locals: &[Ty],
+    mode: TyMode,
+) -> Result<Ty, TypeError> {
     let lanes = u8::try_from(xs.len()).unwrap_or(u8::MAX);
     if !matches!(lanes, 2 | 4 | 8 | 16) {
         return Err(TypeError::BadLanes { lanes });
     }
-    let first = child("Pack", &xs[0], compute, locals)?;
+    let first = child("Pack", &xs[0], compute, locals, mode)?;
     for x in &xs[1..] {
-        let t = child("Pack", x, compute, locals)?;
+        let t = child("Pack", x, compute, locals, mode)?;
         if t != first {
             return Err(TypeError::Mismatch {
                 node: "Pack",
@@ -477,22 +513,28 @@ fn bitcast_packed_ty(
     lanes: u8,
     compute: ElementKind,
     locals: &[Ty],
+    mode: TyMode,
 ) -> Result<Ty, TypeError> {
     if !matches!(lanes, 2 | 4 | 8 | 16) {
         return Err(TypeError::BadLanes { lanes });
     }
     check_packed_width(elem, lanes)?;
-    let from = child("BitcastPacked", x, compute, locals)?;
+    let from = child("BitcastPacked", x, compute, locals, mode)?;
     check_packed_bitcast(elem, lanes, from)?;
     Ok(Ty::Packed(elem, lanes))
 }
 
 /// The type of every other node: scalar rules when no operand is packed, the lane-wise rules
 /// otherwise.
-fn operator_ty(e: &ScalarExpr, compute: ElementKind, locals: &[Ty]) -> Result<Ty, TypeError> {
+fn operator_ty(
+    e: &ScalarExpr,
+    compute: ElementKind,
+    locals: &[Ty],
+    mode: TyMode,
+) -> Result<Ty, TypeError> {
     let tys = operands(e)
         .into_iter()
-        .map(|x| infer_ty_in(x, compute, locals))
+        .map(|x| infer_ty_mode(x, compute, locals, mode))
         .collect::<Result<Vec<_>, _>>()?;
     let elems: Vec<ElementKind> = tys.iter().map(|t| elem_of(*t)).collect();
     let lanes = tys.iter().find_map(|t| match t {
@@ -500,7 +542,7 @@ fn operator_ty(e: &ScalarExpr, compute: ElementKind, locals: &[Ty]) -> Result<Ty
         Ty::Scalar(_) => None,
     });
     let Some(lanes) = lanes else {
-        return node_ty(e, compute, &elems).map(Ty::Scalar);
+        return node_ty(e, compute, &elems, mode).map(Ty::Scalar);
     };
     let node = node_name(e);
     // A `Bitcast` of a packed value to a scalar of the same total bits; the inverse
@@ -525,7 +567,7 @@ fn operator_ty(e: &ScalarExpr, compute: ElementKind, locals: &[Ty]) -> Result<Ty
     {
         return Err(TypeError::PackedOperand { node });
     }
-    Ok(Ty::Packed(node_ty(e, compute, &elems)?, lanes))
+    Ok(Ty::Packed(node_ty(e, compute, &elems, mode)?, lanes))
 }
 
 /// Check that a `Bitcast` of `Packed(elem, lanes)` to the scalar `to` is defined: lane bits
@@ -616,8 +658,9 @@ fn child(
     x: &ScalarExpr,
     compute: ElementKind,
     locals: &[Ty],
+    mode: TyMode,
 ) -> Result<ElementKind, TypeError> {
-    match infer_ty_in(x, compute, locals)? {
+    match infer_ty_mode(x, compute, locals, mode)? {
         Ty::Scalar(t) => Ok(t),
         Ty::Packed(..) => Err(TypeError::PackedOperand { node }),
     }
@@ -707,6 +750,7 @@ fn node_ty(
     e: &ScalarExpr,
     compute: ElementKind,
     k: &[ElementKind],
+    mode: TyMode,
 ) -> Result<ElementKind, TypeError> {
     let same = |node: &'static str, l: ElementKind, r: ElementKind| {
         if l == r {
@@ -749,7 +793,14 @@ fn node_ty(
         ScalarExpr::Add(..) => same("Add", k[0], k[1]),
         ScalarExpr::Sub(..) => same("Sub", k[0], k[1]),
         ScalarExpr::Mul(..) => same("Mul", k[0], k[1]),
-        ScalarExpr::Div(..) => no_int("Div", same("Div", k[0], k[1])?),
+        ScalarExpr::Div(..) => {
+            let t = same("Div", k[0], k[1])?;
+            // the kernel layer admits an integer `Div` at any integer type (total, `docs/int-div-shift-semantics.md`)
+            if mode == TyMode::Kernel && is_cast_int(t) {
+                return Ok(t);
+            }
+            no_int("Div", t)
+        }
         ScalarExpr::Binary(op, ..) => {
             let t = same("Binary", k[0], k[1])?;
             // The float-only operators have no integer meaning anywhere (the oracle defines none, and a C emitter would
@@ -762,7 +813,7 @@ fn node_ty(
                 });
             }
             if t != compute && is_cast_int(t) {
-                if !int_binary_ok(*op) {
+                if !(int_binary_ok(*op) || (mode == TyMode::Kernel && kernel_int_op(*op))) {
                     return Err(TypeError::IntegerOperand {
                         node: "Binary",
                         ty: t,

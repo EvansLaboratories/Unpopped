@@ -151,17 +151,19 @@ fn the_rest_of_the_cuda_surface_declines_by_name() {
     not_yet(
         "void k(float* out) { extern __shared__ float t[]; out[0] = 1.0f; }",
         true,
-        "storage class",
+        "no dynamic shared memory given",
     );
     not_yet(
         "void k(float* out) { __syncwarp(); out[0] = 1.0f; }",
         true,
         "`__syncwarp`",
     );
+    // a two-dimensional `__shared__` array lifts since the census wall slice (`tests/kernel_body_multidim_arrays.rs`); a row of it
+    // used as a value does not
     not_yet(
-        "void k(float* out) { __shared__ float t[2][2]; out[0] = 1.0f; }",
+        "void k(float* out) { __shared__ float t[2][2]; out[0] = t[1]; }",
         true,
-        "more than one dimension",
+        "2-dimensional",
     );
     not_yet(
         "void k(float* out) { __shared__ float t[4]; out[0] = t; }",

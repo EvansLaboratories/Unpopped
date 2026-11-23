@@ -215,10 +215,20 @@ fn constructs_outside_the_spine_decline_by_name() {
         "initializer",
     );
     not_yet("void k(float* out) { return 1; }", "return");
-    not_yet(
-        "void k(float* out, const float* x) { out[0] = x[0] > 0.0f ? x[1] : 0.0f; }",
-        "?:",
-    );
+    // a read in one arm of `?:` lifts since slice 5 (the arm's loads run only when it is taken; tests/kernel_body_decode.rs)
+    let k =
+        lift("void k(float* out, const float* x) { out[0] = x[0] > 0.0f ? x[1] : 0.0f; }").unwrap();
+    for (x, want) in [([1.0f32, 5.0], 5.0), ([-1.0, 5.0], 0.0)] {
+        let mut args = vec![
+            KernelArg::Buffer(TypedBuffer::from_f32(&[1], &[9.0])),
+            KernelArg::Buffer(TypedBuffer::from_f32(&[2], &x)),
+        ];
+        run_kernel(&k, &mut args).expect("runs");
+        let KernelArg::Buffer(o) = &args[0] else {
+            panic!()
+        };
+        assert_eq!(o.to_f64_vec(), vec![want]);
+    }
     not_yet(
         "void k(float* out, const float* x) { out[0] = x[0] > 0.0f && x[1] > 0.0f; }",
         "&&",
@@ -243,13 +253,19 @@ fn a_decline_is_the_whole_kernel_never_a_partial_one() {
 
 #[test]
 fn the_irs_own_refusals_are_outside_ir_not_not_yet() {
-    // integer division in a kernel whose compute type is a float: the IR's type rules refuse it
+    // integer division in a kernel whose compute type is a float lifts since the kernel layer admits it at any integer type
+    // (pm-kernels option A, `docs/int-div-shift-semantics.md`); it was an OutsideIr refusal before
+    assert!(lift("void k(float* out, const float* x, int n) { for (int i = 0; i < n / 2; i++) { out[i] = x[i]; } }").is_ok());
+    // what the IR still refuses is named OutsideIr, not NotYetLifted: a floating-point pointer offset has no meaning
     let r = declined(
-        "void k(float* out, const float* x, int n) { for (int i = 0; i < n / 2; i++) { out[i] = x[i]; } }",
+        "void k(float* out, const float* a) { const float* q = a + 1.5f; out[0] = q[0]; }",
     );
     assert!(matches!(r, KernelLiftError::OutsideIr { .. }), "{r:?}");
-    // Control: the same division in an integer kernel lifts (see integer_kernels_promote_and_convert_as_c_does).
-    assert!(lift("void k(int* out, const int* x, int n) { for (int i = 0; i < n / 2; i++) { out[i] = x[i]; } }").is_ok());
+    // Control: an integer offset lifts.
+    assert!(
+        lift("void k(float* out, const float* a) { const float* q = a + 1; out[0] = q[0]; }")
+            .is_ok()
+    );
 }
 
 #[test]

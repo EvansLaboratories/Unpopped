@@ -55,8 +55,13 @@ impl Machine<'_> {
     }
 
     /// Evaluate, align- and bounds-check a `Place::Raw`, and log the access for the race detector.
-    pub(super) fn raw_at(&mut self, place: &Place, kind: AccessKind) -> Result<RawAt, KernelTrap> {
-        self.raw_span(place, kind, 1)
+    pub(super) fn raw_at(
+        &mut self,
+        place: &Place,
+        kind: AccessKind,
+        new: Option<[u8; 16]>,
+    ) -> Result<RawAt, KernelTrap> {
+        self.raw_span(place, kind, 1, new)
     }
 
     /// [`Self::raw_at`] for `count` consecutive values (the source of an async copy): aligned to one value, bounds-checked
@@ -66,6 +71,7 @@ impl Machine<'_> {
         place: &Place,
         kind: AccessKind,
         count: usize,
+        new: Option<[u8; 16]>,
     ) -> Result<RawAt, KernelTrap> {
         let Place::Raw {
             buffer,
@@ -95,8 +101,10 @@ impl Machine<'_> {
         if span == 0 || at.checked_add(span).is_none_or(|end| end > tb.bytes.len()) {
             return Err(oob);
         }
+        // a store of the very bytes already there: a benign race when the launch allows it (`Leniency::same_value_writes`)
+        let same = new.is_some_and(|nb| tb.bytes[at..at + span] == nb[..span]);
         for e in at / esz..=(at + span - 1) / esz {
-            self.note_global(root, e, kind)?;
+            self.note_global_write(root, e, kind, same)?;
         }
         Ok(RawAt {
             root,
@@ -113,6 +121,7 @@ impl Machine<'_> {
         &mut self,
         place: &Place,
         kind: AccessKind,
+        new: Option<[u8; 16]>,
     ) -> Result<(u32, MemorySpace, usize, ElementKind, usize), KernelTrap> {
         let Place::AllocRaw {
             alloc,
@@ -139,18 +148,23 @@ impl Machine<'_> {
             .ok()
             .filter(|o| o.checked_add(size).is_some_and(|end| end <= total))
             .ok_or(KernelTrap::AllocOutOfBounds { alloc: *alloc })?;
+        // a store of the very bytes the span already holds (every element already stored): a benign race when allowed
+        let same = new.is_some_and(|nb| {
+            (at / esz..=(at + size - 1) / esz).all(|e| m.init[e])
+                && m.bytes[at..at + size] == nb[..size]
+        });
         for e in at / esz..=(at + size - 1) / esz {
             if c.peer.is_none() && c.asyncq.covers(*alloc, e) {
                 return Err(KernelTrap::AsyncRace { alloc: *alloc });
             }
-            c.log_shared(*alloc, e, space, kind)?;
+            c.log_shared_write(*alloc, e, space, kind, same)?;
         }
         Ok((*alloc, space, at, *elem, size))
     }
 
     /// A raw load from an allocation: every element the bytes touch must already be fully stored.
     pub(super) fn alloc_raw_load(&mut self, place: &Place) -> Result<Val, KernelTrap> {
-        let (alloc, space, at, elem, size) = self.alloc_raw_at(place, AccessKind::Read)?;
+        let (alloc, space, at, elem, size) = self.alloc_raw_at(place, AccessKind::Read, None)?;
         let c = self
             .ctx
             .as_mut()
@@ -173,9 +187,13 @@ impl Machine<'_> {
 
     /// A raw store into an allocation: the bytes land little-endian; an element counts as stored only when the store covers all of it.
     pub(super) fn alloc_raw_store(&mut self, place: &Place, v: Val) -> Result<(), KernelTrap> {
-        let (alloc, space, at, elem, size) = self.alloc_raw_at(place, AccessKind::Write)?;
+        let Place::AllocRaw { elem: stored, .. } = place else {
+            unreachable!("alloc_raw_store is called on an AllocRaw place");
+        };
         let mut tmp = [0u8; 16];
-        store_val(v, elem, &mut tmp, 0);
+        store_val(v, *stored, &mut tmp, 0);
+        let (alloc, space, at, _elem, size) =
+            self.alloc_raw_at(place, AccessKind::Write, Some(tmp))?;
         let c = self
             .ctx
             .as_mut()
@@ -195,7 +213,7 @@ impl Machine<'_> {
 
     /// `n` consecutive raw values from `src`, read now (the source of an async copy), each as `elem` bits.
     pub(super) fn raw_read_n(&mut self, src: &Place, n: usize) -> Result<Vec<Val>, KernelTrap> {
-        let a = self.raw_span(src, AccessKind::Read, n)?;
+        let a = self.raw_span(src, AccessKind::Read, n, None)?;
         let KernelArg::Buffer(tb) = &self.args[a.root] else {
             unreachable!("raw_span returned a buffer");
         };
@@ -213,7 +231,7 @@ impl Machine<'_> {
 
     /// The value of a raw load: the stored bytes, little-endian, as `elem` bits.
     pub(super) fn raw_load(&mut self, place: &Place) -> Result<Val, KernelTrap> {
-        let a = self.raw_at(place, AccessKind::Read)?;
+        let a = self.raw_at(place, AccessKind::Read, None)?;
         let KernelArg::Buffer(tb) = &self.args[a.root] else {
             unreachable!("raw_at returned a buffer");
         };
@@ -226,9 +244,12 @@ impl Machine<'_> {
 
     /// A raw store: `v` encoded as `elem` (verbatim when it already is one), written little-endian at the byte position.
     pub(super) fn raw_store(&mut self, place: &Place, v: Val) -> Result<(), KernelTrap> {
-        let a = self.raw_at(place, AccessKind::Write)?;
+        let Place::Raw { elem: stored, .. } = place else {
+            unreachable!("raw_store is called on a Raw place");
+        };
         let mut tmp = [0u8; 16];
-        store_val(v, a.elem, &mut tmp, 0);
+        store_val(v, *stored, &mut tmp, 0);
+        let a = self.raw_at(place, AccessKind::Write, Some(tmp))?;
         let KernelArg::Buffer(tb) = &mut self.args[a.root] else {
             unreachable!("raw_at returned a buffer");
         };

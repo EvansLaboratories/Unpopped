@@ -93,14 +93,19 @@ fn what_is_not_a_plain_sized_array_declines() {
     );
     not_yet(
         launched(
-            "void k(float* out) { float v[2] = {1.0f, 2.0f}; out[0] = v[0]; }",
+            "void k(float* out) { float v[2] = {1.0f, 2.0f, 3.0f}; out[0] = v[0]; }",
             1,
         ),
-        "initializer",
+        // a brace initialiser lifts since census slice 6 (`tests/kernel_body_array_init.rs`); one with too many elements does not
+        "3 initialisers for an array of 2 elements",
     );
+    // a multi-dimensional array lifts since the census wall slice (`tests/kernel_body_multidim_arrays.rs`); a bare name does not
     not_yet(
-        launched("void k(float* out) { float v[2][2]; out[0] = 1.0f; }", 1),
-        "more than one dimension",
+        launched(
+            "void k(float* out) { float v[2][2]; v[0][0] = 1.0f; out[0] = v; }",
+            1,
+        ),
+        "used as a value",
     );
     // Control: the plain spelling lifts.
     assert!(

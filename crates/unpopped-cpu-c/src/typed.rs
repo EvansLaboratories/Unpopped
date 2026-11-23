@@ -401,6 +401,15 @@ pub(crate) fn cpu_int_op(
                 operands[0], operands[1]
             )
         }
+        // the kernel layer's integer `Div`, shifts and bitwise operators off the compute type (U19, pm-kernels option A):
+        // `Div`, `Shl` and `Shr` through the total helpers (32- and 64-bit types; a narrower one declines by name below),
+        // the bitwise operators as C operators (an in-range result of two in-range operands stays in range)
+        IntOp::Div => return int_helper_call("div", operands[0].clone(), operands[1].clone(), t),
+        IntOp::Shl => return int_helper_call("shl", operands[0].clone(), operands[1].clone(), t),
+        IntOp::Shr => return int_helper_call("shr", operands[0].clone(), operands[1].clone(), t),
+        IntOp::BitAnd => format!("(({c})(({}) & ({})))", operands[0], operands[1]),
+        IntOp::BitOr => format!("(({c})(({}) | ({})))", operands[0], operands[1]),
+        IntOp::BitXor => format!("(({c})(({}) ^ ({})))", operands[0], operands[1]),
         other => {
             return decline(
                 DeclinedOp::Integer,

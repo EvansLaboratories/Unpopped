@@ -664,6 +664,36 @@ impl DtypeSupport {
     }
 }
 
+/// What the caller of a lowering can do with the result. A backend that would emit something needing more refuses instead
+/// (`docs/options-caller-caps.md`).
+///
+/// **The flag is a claim, not a check**: Unpopped cannot verify a caller really honours the interface. The point is the
+/// default: [`CallerCaps::LEGACY`] is what [`Default`] gives and what [`crate::try_generate`] passes, so a caller written
+/// before the interface existed is refused a shape that needs it, never mis-bound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CallerCaps {
+    /// The caller reads [`GeneratedKernel::interface`] and honours it: the `bindings` slots and the `params_block` layout.
+    pub interface: bool,
+}
+
+impl CallerCaps {
+    /// Binds buffers by the kernel's declaration order and passes no params block: every caller before this existed.
+    pub const LEGACY: Self = Self { interface: false };
+
+    /// This, with `interface` on.
+    #[must_use]
+    pub const fn with_interface(self) -> Self {
+        Self { interface: true }
+    }
+}
+
+impl Default for CallerCaps {
+    fn default() -> Self {
+        Self::LEGACY
+    }
+}
+
 /// Lowers a neutral [`crate::plan::KernelPlan`] to concrete kernel source.
 pub trait Backend {
     /// Short backend identifier / target language (e.g. `"cuda"`, `"cpu_c"`,
@@ -706,6 +736,24 @@ pub trait Backend {
     /// numerical bug, which is strictly worse — see the "decline, do not fall
     /// through" note in `tests/neutral_spelling.rs`.
     fn lower(&self, plan: &crate::plan::KernelPlan<'_>) -> Result<GeneratedKernel, LowerError>;
+    /// [`Backend::lower`] for a caller that states what it can do with the result ([`CallerCaps`]).
+    ///
+    /// **Defaulted to `self.lower(plan)`, ignoring `caps`**, so every existing backend compiles and behaves unchanged. A
+    /// backend that can emit a shape needing a caller that binds [`GeneratedKernel::interface`] overrides this, refuses
+    /// with [`LowerError::UnsupportedPlanShape`] (naming the capability) when `!caps.interface`, and makes its `lower`
+    /// `lower_with(plan, &CallerCaps::LEGACY)`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Backend::lower`].
+    fn lower_with(
+        &self,
+        plan: &crate::plan::KernelPlan<'_>,
+        caps: &CallerCaps,
+    ) -> Result<GeneratedKernel, LowerError> {
+        let _ = caps;
+        self.lower(plan)
+    }
     /// Lower a kernel-layer [`KernelFn`](crate::kernel::KernelFn) to source, or say why it
     /// cannot (`docs/e1-emit-from-the-kernel-layer.md`; PM ruling 2026-10-30).
     ///
@@ -1483,6 +1531,18 @@ pub enum IntOp {
     Select,
     /// A comparison (`CmpEq` .. `CmpGe`) of two integers, yielding the compute type's 1/0.
     Cmp(BinaryOp),
+    /// `a / b`, total (`docs/int-div-shift-semantics.md`: a zero divisor and `MIN / -1` give `a`). Kernel layer only (U19).
+    Div,
+    /// `a << b`, the count read as unsigned bits modulo the promoted width. Kernel layer only.
+    Shl,
+    /// `a >> b`, arithmetic on a signed type and logical on an unsigned one, the count as for `Shl`. Kernel layer only.
+    Shr,
+    /// `a & b`. Kernel layer only.
+    BitAnd,
+    /// `a | b`. Kernel layer only.
+    BitOr,
+    /// `a ^ b`. Kernel layer only.
+    BitXor,
 }
 
 /// The integer form of `op`, when it has one.
@@ -1491,6 +1551,11 @@ fn int_op_of(op: BinaryOp) -> Option<IntOp> {
         BinaryOp::Max => Some(IntOp::Max),
         BinaryOp::Min => Some(IntOp::Min),
         o if o.is_cmp() => Some(IntOp::Cmp(o)),
+        BinaryOp::Shl => Some(IntOp::Shl),
+        BinaryOp::Shr => Some(IntOp::Shr),
+        BinaryOp::BitAnd => Some(IntOp::BitAnd),
+        BinaryOp::BitOr => Some(IntOp::BitOr),
+        BinaryOp::BitXor => Some(IntOp::BitXor),
         _ => None,
     }
 }
@@ -1537,6 +1602,7 @@ fn int_node<'e>(
         ScalarExpr::Add(a, b) => (IntOp::Add, vec![a, b]),
         ScalarExpr::Sub(a, b) => (IntOp::Sub, vec![a, b]),
         ScalarExpr::Mul(a, b) => (IntOp::Mul, vec![a, b]),
+        ScalarExpr::Div(a, b) => (IntOp::Div, vec![a, b]),
         ScalarExpr::Binary(op, a, b) => (int_op_of(*op)?, vec![a, b]),
         ScalarExpr::Select(c, a, b) => (IntOp::Select, vec![c, a, b]),
         _ => return None,
@@ -1560,6 +1626,7 @@ fn int_node_of_dag(
         DagNode::Add(a, b) => (IntOp::Add, vec![a, b]),
         DagNode::Sub(a, b) => (IntOp::Sub, vec![a, b]),
         DagNode::Mul(a, b) => (IntOp::Mul, vec![a, b]),
+        DagNode::Div(a, b) => (IntOp::Div, vec![a, b]),
         DagNode::Binary(op, a, b) => (int_op_of(op)?, vec![a, b]),
         DagNode::Select(c, a, b) => (IntOp::Select, vec![c, a, b]),
         _ => return None,

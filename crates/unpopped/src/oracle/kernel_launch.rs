@@ -61,7 +61,86 @@ pub fn run_launch_with_subgroup(
     subgroup: Option<u32>,
 ) -> Result<(), KernelTrap> {
     check_kernel(k).map_err(KernelTrap::Malformed)?;
-    launch_checked(k, None, args, (subgroup, STEP_LIMIT))
+    launch_checked(k, None, args, (subgroup, STEP_LIMIT, Leniency::default()))
+}
+
+/// What [`run_launch_lenient`] tolerates that [`run_launch`] refuses. Both are things real kernels do on purpose and hardware
+/// shrugs off; the strict default stays the default because each one could also hide a missing barrier.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Leniency {
+    /// Every `Shared` element starts as a stored zero, so a read of one no thread stored is `0` rather than
+    /// [`KernelTrap::UninitializedShared`]. For a kernel that reads unwritten shared slots and masks the result afterwards, as
+    /// FlashInfer's paged decode does for the tokens past a request's length (a predicated `cp.async` that does not fill, then
+    /// `s = in_range ? s : -INF`).
+    pub zero_shared: bool,
+    /// A `Shared` store of the value the element already holds is not a [`KernelTrap::DataRace`] with another thread's unordered
+    /// store of it. For the idiom where every thread of a row stores the same replicated value (FlashInfer's `sync_state`
+    /// writes `smem_md[(tz * BDY + ty) * 2] = st.m` from all 16 `tx` threads). A store of a *different* value still races, and
+    /// so does a read racing a store.
+    pub same_value_writes: bool,
+    /// Every `Shared` element starts as a stored **non-zero** byte pattern derived from this seed (byte `i` is
+    /// `1 + (37 * i + seed) % 58`, so every byte is in `1..=58` and any half, `f32` or `u64` read from it is finite). Takes
+    /// precedence over `zero_shared`. Run a kernel once with zeros and once with a pattern and compare: if the output differs,
+    /// it depends on slots the kernel never filled, and `zero_shared` was hiding that.
+    pub shared_pattern: Option<u8>,
+}
+
+impl Leniency {
+    /// Nothing tolerated: the same as [`run_launch`].
+    #[must_use]
+    pub const fn strict() -> Self {
+        Self {
+            zero_shared: false,
+            same_value_writes: false,
+            shared_pattern: None,
+        }
+    }
+
+    /// With `zero_shared` on.
+    #[must_use]
+    pub const fn with_zero_shared(mut self) -> Self {
+        self.zero_shared = true;
+        self
+    }
+
+    /// With `same_value_writes` on.
+    #[must_use]
+    pub const fn with_same_value_writes(mut self) -> Self {
+        self.same_value_writes = true;
+        self
+    }
+
+    /// With the non-zero shared pattern of `seed` (see [`Leniency::shared_pattern`]).
+    #[must_use]
+    pub const fn with_shared_pattern(mut self, seed: u8) -> Self {
+        self.shared_pattern = Some(seed);
+        self
+    }
+
+    /// Both allowances on (zeroed shared, same-value writes).
+    #[must_use]
+    pub const fn all() -> Self {
+        Self {
+            zero_shared: true,
+            same_value_writes: true,
+            shared_pattern: None,
+        }
+    }
+}
+
+/// [`run_launch`] with the [`Leniency`] given. Every other check and trap is unchanged.
+///
+/// # Errors
+///
+/// A [`KernelTrap`].
+pub fn run_launch_lenient(
+    k: &KernelFn,
+    args: &mut [KernelArg],
+    leniency: Leniency,
+) -> Result<(), KernelTrap> {
+    check_kernel(k).map_err(KernelTrap::Malformed)?;
+    launch_checked(k, None, args, (None, STEP_LIMIT, leniency))
 }
 
 /// [`run_launch`] with a lower statement limit per thread than [`STEP_LIMIT`]: a kernel that waits on a block that has
@@ -77,7 +156,7 @@ pub fn run_launch_with_limit(
     max_steps: u64,
 ) -> Result<(), KernelTrap> {
     check_kernel(k).map_err(KernelTrap::Malformed)?;
-    launch_checked(k, None, args, (None, max_steps))
+    launch_checked(k, None, args, (None, max_steps, Leniency::default()))
 }
 
 /// [`run_launch`] for function `entry` of a [`Module`]: a thread may `Call` the module's plain functions
@@ -92,7 +171,7 @@ pub fn run_launch_module(m: &Module, entry: u32, args: &mut [KernelArg]) -> Resu
         &m.fns[entry as usize],
         Some((m, entry)),
         args,
-        (None, STEP_LIMIT),
+        (None, STEP_LIMIT, Leniency::default()),
     )
 }
 
@@ -119,7 +198,7 @@ pub fn run_launch_devices(k: &KernelFn, devices: &mut [Vec<KernelArg>]) -> Resul
         ));
     }
     let mut flat: Vec<KernelArg> = devices.iter_mut().flat_map(|d| d.drain(..)).collect();
-    let r = launch_checked(k, None, &mut flat, (None, STEP_LIMIT));
+    let r = launch_checked(k, None, &mut flat, (None, STEP_LIMIT, Leniency::default()));
     let mut rest = flat.into_iter();
     for d in devices.iter_mut() {
         d.extend(rest.by_ref().take(np));
@@ -132,7 +211,7 @@ fn launch_checked(
     k: &KernelFn,
     module: Option<(&Module, u32)>,
     args: &mut [KernelArg],
-    (subgroup, limit): (Option<u32>, u64),
+    (subgroup, limit, lenient): (Option<u32>, u64, Leniency),
 ) -> Result<(), KernelTrap> {
     let Some(launch) = k.launch else {
         return Err(KernelTrap::ArgMismatch(
@@ -173,6 +252,7 @@ fn launch_checked(
                         idx: [gx, gy, gz],
                         lin: dev * per_device + gx + launch.grid[0] * (gy + launch.grid[1] * gz),
                         limit,
+                        lenient,
                         place: DevicePlace {
                             device: dev,
                             block_base: dev * per_device,
@@ -437,6 +517,8 @@ struct BlockRun<'a> {
     /// The block's index in the launch, devices end to end.
     lin: u32,
     limit: u64,
+    /// What the launch tolerates (`run_launch_lenient`).
+    lenient: Leniency,
     place: DevicePlace,
 }
 
@@ -527,12 +609,28 @@ enum BlockStop {
 fn start_mem(b: &BlockRun<'_>) -> BlockMem {
     let [bx, by, bz] = b.launch.block;
     BlockMem {
-        shared: instances(b.k, b.lens, MemorySpace::Shared),
+        shared: instances(b.k, b.lens, MemorySpace::Shared)
+            .into_iter()
+            .map(|m| {
+                m.map(|mut m| {
+                    if let Some(seed) = b.lenient.shared_pattern {
+                        for (i, byte) in m.bytes.iter_mut().enumerate() {
+                            *byte = 1 + ((37 * i as u64 + u64::from(seed)) % 58) as u8;
+                        }
+                        m.init.fill(true);
+                    } else if b.lenient.zero_shared {
+                        m.init.fill(true);
+                    }
+                    m
+                })
+            })
+            .collect(),
         log: Log::new(),
         block_epoch: 0,
         sub_epoch: vec![0; (bx * by * bz).div_ceil(b.sg) as usize],
         mbar: Default::default(),
         named: Default::default(),
+        same_value_writes: b.lenient.same_value_writes,
     }
 }
 
@@ -1043,6 +1141,7 @@ mod tests {
             idx: [0; 3],
             lin: 0,
             limit: STEP_LIMIT,
+            lenient: Leniency::default(),
             place: DevicePlace {
                 device: 0,
                 block_base: 0,
@@ -1084,6 +1183,7 @@ mod tests {
             sub_epoch: vec![0; n.div_ceil(sg) as usize],
             mbar: Default::default(),
             named: Default::default(),
+            same_value_writes: false,
         };
         let r = release(&b, &mut threads, &mut mem);
         let now = threads.iter().map(|t| t.status).collect();
