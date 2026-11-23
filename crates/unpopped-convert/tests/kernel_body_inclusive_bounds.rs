@@ -62,9 +62,8 @@ fn a_stride_and_the_other_directions_are_unchanged() {
     assert_eq!(out(&lift(strided).unwrap(), 1), vec![9.0]); // 0, 3, 6
     let down = "void k(float* out) { float s = 0.0f; for (int i = 5; i >= 2; i--) { s += (float)i; } out[0] = s; }";
     assert_eq!(out(&lift(down).unwrap(), 1), vec![14.0]);
-    // a counter on the right of `<=` is not the counted form
-    assert!(
-        lift("void k(float* out) { float s = 0.0f; for (int i = 0; 3 <= i; i++) { s += 1.0f; } out[0] = s; }")
-            .is_err()
-    );
+    // a counter on the right of `<=` is not the counted form: it is the general `for`, a `while` with the update at the end of the
+    // body, and still C's loop (i = 5, 4, 3 pass `3 <= i`)
+    let flipped = "void k(float* out) { float s = 0.0f; for (int i = 5; 3 <= i; i--) { s += 1.0f; } out[0] = s; }";
+    assert_eq!(out(&lift(flipped).unwrap(), 1), vec![3.0]);
 }
