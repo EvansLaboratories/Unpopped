@@ -154,6 +154,19 @@ impl<'s, 't> Walker<'s, 't> {
     }
 
     /// Whether the source takes the address of `name` anywhere (`&name`, not followed by more identifier characters).
+    /// [`Walker::address_taken`] for an address used by anything but `memcpy(&name, ...)`, which a scalar local serves without living in
+    /// memory (`memcpy.rs` assembles the bytes into the local).
+    pub(super) fn address_escapes(&self, name: &str) -> bool {
+        let pat = format!("&{name}");
+        self.src.match_indices(&pat).any(|(i, _)| {
+            let after = self.src[i + pat.len()..].chars().next();
+            let before = self.src[..i].chars().next_back();
+            !after.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                && before != Some('&')
+                && !self.src[..i].trim_end().ends_with("memcpy(")
+        })
+    }
+
     pub(super) fn address_taken(&self, name: &str) -> bool {
         let pat = format!("&{name}");
         self.src.match_indices(&pat).any(|(i, _)| {

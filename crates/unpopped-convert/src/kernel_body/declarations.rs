@@ -169,6 +169,16 @@ impl<'s, 't> Walker<'s, 't> {
                 }
                 None => self.zero_of(ty, d)?,
             };
+            // a scalar whose address is taken (`unsigned char* p = (unsigned char*)&zero;`) lives in memory: a `Private` allocation of
+            // one element, so a byte pointer into it reads and writes the same bytes as the name does
+            if (int_range(ty).is_some() || matches!(ty, E::F16 | E::Bf16 | E::F32 | E::F64))
+                && self.address_escapes(text(id, self.src))
+                && super::pointer::byte_size(ty).is_some()
+            {
+                self.flush(out);
+                self.vector_alloc_declaration(text(id, self.src), (ty, 1), vec![e], out)?;
+                continue;
+            }
             self.flush(out);
             let local = self.new_local(ty);
             self.scopes.last_mut().expect("a scope is open").insert(

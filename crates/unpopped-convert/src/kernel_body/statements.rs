@@ -142,6 +142,26 @@ impl<'s, 't> Walker<'s, 't> {
         if let Some(Sym::Pointer(p)) = self.lookup(name) {
             return self.move_pointer(lhs, &p, op, rhs, out);
         }
+        if let Some(Sym::VecAlloc(alloc, elem, 1)) = self.lookup(name) {
+            // a scalar kept in memory (its address is taken): a store, a read-modify-write for `+=`
+            let (r, rt) = self.expr(rhs)?;
+            let value = if op.is_empty() {
+                self.convert(r, rt, elem, rhs)?
+            } else {
+                let cur = self.vecalloc_lanes(alloc, (elem, 1))[0].clone();
+                self.compound(cur, elem, op, (r, rt), lhs)?
+            };
+            self.flush(out);
+            out.push(Stmt::Store {
+                place: Place::AllocRaw {
+                    alloc,
+                    byte_offset: ScalarExpr::ConstInt(0, E::I64),
+                    elem,
+                },
+                value,
+            });
+            return Ok(());
+        }
         let Some(Sym::Scalar(local, ty, fixed)) = self.lookup(name) else {
             return self.not_yet(
                 lhs,
