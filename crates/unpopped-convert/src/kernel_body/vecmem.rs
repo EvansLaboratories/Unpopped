@@ -163,6 +163,21 @@ impl<'s, 't> Walker<'s, 't> {
         })
     }
 
+    /// Whether the source passes `name` as a call argument anywhere (`f(a, name)`, `f(name)`).
+    pub(super) fn passed_as_argument(&self, name: &str) -> bool {
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        self.src.match_indices(name).any(|(i, _)| {
+            let before = self.src[..i].trim_end().chars().next_back();
+            let after = self.src[i + name.len()..].trim_start().chars().next();
+            let whole = !self.src[..i].chars().next_back().is_some_and(is_word)
+                && !self.src[i + name.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(is_word);
+            whole && matches!(before, Some('(' | ',')) && matches!(after, Some(')' | ','))
+        })
+    }
+
     /// A vector local whose address is taken: a `Private` allocation of `lanes` elements holding the initial lanes.
     pub(super) fn vector_alloc_declaration(
         &mut self,

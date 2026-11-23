@@ -151,6 +151,9 @@ impl<'s, 't> Walker<'s, 't> {
         let Some(d) = p.child_by_field_name("declarator") else {
             return self.not_yet(p, "an unnamed parameter");
         };
+        if let Some(shape) = self.vector_param_shape(p) {
+            return self.bind_vector_argument(p, d, shape, arg, out);
+        }
         // `void*` takes any pointer argument unchanged (the helper casts it to what it reads; census slice 3)
         let void_ptr = d.kind() == "pointer_declarator"
             && p.child_by_field_name("type")
@@ -187,6 +190,73 @@ impl<'s, 't> Walker<'s, 't> {
             Bind::Value(t) => self.bind_value(pname, t, arg, out),
             Bind::Reference(t) => self.bind_reference(pname, t, arg),
         }
+    }
+
+    /// The shape of a parameter typed as a CUDA vector (`float2`, or an alias of it: `dfloat2`), if it is one.
+    fn vector_param_shape(&self, p: Node<'_>) -> Option<(E, u8)> {
+        let t = p.child_by_field_name("type")?;
+        let mut name = text(t, self.src)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for _ in 0..8 {
+            match self.type_aliases.get(&name) {
+                Some(next) => name = next.clone(),
+                None => break,
+            }
+        }
+        super::vector_type(&name)
+    }
+
+    /// A vector parameter: `V& v` aliases the caller's vector local (it must have the same shape), `V v` and `const V& v` are a
+    /// copy of the argument's lanes in fresh locals.
+    fn bind_vector_argument(
+        &mut self,
+        p: Node<'_>,
+        d: Node<'_>,
+        (elem, lanes): (E, u8),
+        arg: Node<'_>,
+        out: &mut Vec<Stmt>,
+    ) -> R<(String, Sym)> {
+        let (by_ref, id) = match d.kind() {
+            "identifier" => (false, Some(d)),
+            "reference_declarator" => (
+                !super::has_const(p, self.src),
+                d.named_child(0).filter(|i| i.kind() == "identifier"),
+            ),
+            other => return self.not_yet(d, format!("a `{other}` parameter of vector type")),
+        };
+        let Some(id) = id else {
+            return self.not_yet(d, "a vector parameter of an unexpected shape");
+        };
+        let pname = text(id, self.src).to_string();
+        if by_ref {
+            let target = (arg.kind() == "identifier")
+                .then(|| self.lookup(text(arg, self.src)))
+                .flatten();
+            return match target {
+                Some(Sym::Vector(ls, e, k)) if (e, k) == (elem, lanes) => {
+                    Ok((pname, Sym::Vector(ls, e, k)))
+                }
+                _ => self.not_yet(
+                    arg,
+                    format!(
+                        "a reference argument that is not a {lanes}-lane {elem:?} vector local"
+                    ),
+                ),
+            };
+        }
+        let values = self.vector_value(arg, (elem, lanes))?;
+        out.append(&mut self.hoisted);
+        let mut ls = [0u32; 4];
+        for (k, v) in values.into_iter().enumerate() {
+            ls[k] = self.new_local(elem);
+            out.push(Stmt::Let {
+                local: ls[k],
+                init: v,
+            });
+        }
+        Ok((pname, Sym::Vector(ls, elem, lanes)))
     }
 
     /// A by-value parameter: a fresh local holding the converted argument.

@@ -24,7 +24,11 @@ impl<'s, 't> Walker<'s, 't> {
                 .collect::<Vec<_>>()
                 .join(" ")
         });
-        if let Some((elem, lanes)) = tname.as_deref().and_then(vector_type) {
+        let vector = tname
+            .as_deref()
+            .map(|t| self.resolve_alias_text(t))
+            .and_then(|t| vector_type(&t));
+        if let Some((elem, lanes)) = vector {
             if declares_pointer(n) {
                 return self.pointer_declaration(n, elem, lanes, out);
             }
@@ -186,7 +190,11 @@ impl<'s, 't> Walker<'s, 't> {
             let init = match value {
                 Some(v) => self.vector_value(v, (elem, lanes))?,
                 // no initializer: only for a vector whose address is taken (it is then filled through the pointer); zero
-                None if self.address_taken(text(id, self.src)) => {
+                // no initializer: only for a vector filled later, through its address or as an argument (a reference parameter);
+                // it starts at zero
+                None if self.address_taken(text(id, self.src))
+                    || self.passed_as_argument(text(id, self.src)) =>
+                {
                     let zero = self.zero_of(elem, id)?;
                     vec![zero; usize::from(lanes)]
                 }
