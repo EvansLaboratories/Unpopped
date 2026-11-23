@@ -83,4 +83,13 @@ fn a_non_static_member_called_through_the_struct_name_declines() {
         matches!(r, Err(KernelLiftError::NotYetLifted { .. })),
         "{r:?}"
     );
+    // a storage-class keyword that is not `static` does not make a member static
+    let r = lift(
+        "struct S { inline float f(float x) { return x; } };
+         extern \"C\" void k(float* out, const float* in) { out[0] = S::f(in[0]); }",
+    );
+    assert!(
+        matches!(r, Err(KernelLiftError::NotYetLifted { .. })),
+        "{r:?}"
+    );
 }
