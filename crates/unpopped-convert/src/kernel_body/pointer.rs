@@ -58,18 +58,23 @@ impl<'s, 't> Walker<'s, 't> {
                 Some(i) => self.ptr_expr(i),
                 None => Ok(None),
             },
-            "field_expression" => Ok(match self.resolve_member(n)? {
-                Some(Sym::Pointer(p)) => Some(p),
-                // an array field of a struct is a private allocation: the member decays to a pointer to it
-                Some(Sym::Alloc(i, e)) => Some(PtrVal {
-                    base: PBase::Alloc(i),
-                    pointee: e,
-                    lanes: 1,
-                    off: ScalarExpr::ConstInt(0, E::I64),
-                    strukt: None,
-                }),
-                _ => None,
-            }),
+            "field_expression" => {
+                if let Some(p) = self.layout_field_pointer(n)? {
+                    return Ok(Some(p));
+                }
+                Ok(match self.resolve_member(n)? {
+                    Some(Sym::Pointer(p)) => Some(p),
+                    // an array field of a struct is a private allocation: the member decays to a pointer to it
+                    Some(Sym::Alloc(i, e)) => Some(PtrVal {
+                        base: PBase::Alloc(i),
+                        pointee: e,
+                        lanes: 1,
+                        off: ScalarExpr::ConstInt(0, E::I64),
+                        strukt: None,
+                    }),
+                    _ => None,
+                })
+            }
             "cast_expression" => self.ptr_cast(n),
             "call_expression" => self.ptr_reinterpret(n),
             "binary_expression" => self.ptr_arith(n),

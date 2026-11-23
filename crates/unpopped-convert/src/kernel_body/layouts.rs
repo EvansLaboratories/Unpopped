@@ -105,6 +105,7 @@ impl<'s, 't> Walker<'s, 't> {
         element: Option<Node<'_>>,
         field: &str,
         index: Option<Node<'_>>,
+        decay: bool,
     ) -> R<(ScalarExpr, E, u8)> {
         let sname = p.strukt.clone().unwrap_or_default();
         let layout = self
@@ -139,6 +140,8 @@ impl<'s, 't> Walker<'s, 't> {
         );
         match (f.count, index) {
             (1, None) => {}
+            // an array field named without an index decays to a pointer to its first element (`x->qs + 4`)
+            (c, None) if c > 1 && decay => {}
             (c, Some(k)) if c > 1 => {
                 off = ScalarExpr::Add(Box::new(off), Box::new(self.scaled_by(k, width, n)?));
             }
@@ -187,7 +190,7 @@ impl<'s, 't> Walker<'s, 't> {
         field: &str,
         index: Option<Node<'_>>,
     ) -> R<(ScalarExpr, E)> {
-        let (off, elem, lanes) = self.field_location(n, p, element, field, index)?;
+        let (off, elem, lanes) = self.field_location(n, p, element, field, index, false)?;
         if lanes > 1 {
             return self.not_yet(
                 n,
@@ -229,7 +232,7 @@ impl<'s, 't> Walker<'s, 't> {
             return Ok(None);
         };
         let (off, elem, lanes) =
-            self.field_location(n, &p, element, text(field, self.src), index)?;
+            self.field_location(n, &p, element, text(field, self.src), index, false)?;
         if (elem, lanes) != shape {
             return self.not_yet(
                 n,
@@ -253,6 +256,38 @@ impl<'s, 't> Walker<'s, 't> {
         Ok(Some(out))
     }
 
+    /// `x->qs` / `x[i].qs` (an array field named whole) as a pointer to its first element in the buffer; `None` when `n` is not a
+    /// member of a laid-out struct, or is not an array field.
+    pub(super) fn layout_field_pointer(&mut self, n: Node<'_>) -> R<Option<PtrVal>> {
+        let (Some(obj), Some(field)) = (
+            n.child_by_field_name("argument"),
+            n.child_by_field_name("field"),
+        ) else {
+            return Ok(None);
+        };
+        let Some((p, element)) = self.struct_object(obj)? else {
+            return Ok(None);
+        };
+        let name = text(field, self.src);
+        let sname = p.strukt.clone().unwrap_or_default();
+        let is_array = self
+            .struct_layouts
+            .get(&sname)
+            .and_then(|l| l.fields.iter().find(|f| f.name == name))
+            .is_some_and(|f| f.count > 1);
+        if !is_array {
+            return Ok(None);
+        }
+        let (off, elem, lanes) = self.field_location(n, &p, element, name, None, true)?;
+        Ok(Some(PtrVal {
+            base: p.base,
+            pointee: elem,
+            lanes,
+            off,
+            strukt: None,
+        }))
+    }
+
     /// `x[i].dm.x`: one lane of a vector-typed field of a laid-out struct. `None` when `n` is not one.
     fn layout_lane(&mut self, n: Node<'_>) -> R<Option<(ScalarExpr, E)>> {
         let (Some(inner), Some(lane)) = (
@@ -274,7 +309,7 @@ impl<'s, 't> Walker<'s, 't> {
             return Ok(None);
         };
         let (off, elem, lanes) =
-            self.field_location(n, &p, element, text(field, self.src), None)?;
+            self.field_location(n, &p, element, text(field, self.src), None, false)?;
         let Some(k) = super::lane_of(text(lane, self.src), lanes).filter(|_| lanes > 1) else {
             return self.not_yet(
                 lane,

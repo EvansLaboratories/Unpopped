@@ -320,3 +320,41 @@ fn a_vector_field_that_runs_past_the_struct_is_an_inconsistent_layout() {
     let msg = lift(&ctx().with_struct_layout("S", bad)).expect_err("must decline");
     assert!(msg.contains("past the struct's size"), "{msg}");
 }
+
+#[test]
+fn an_array_field_named_whole_is_a_pointer_into_the_buffer() {
+    // `const uint8_t* q = x->qs + 1;` then q[k]: block 1's qs starts at byte 6 + 2 = 8
+    let src = format!(
+        "{BLOCK}void k(float* out, const void* vx) {{ const block_q* x = (const block_q*)vx + 1; \
+         const uint8_t* q = x->qs + 1; out[0] = (float)q[0]; out[1] = (float)q[2]; out[2] = (float)(*(x->qs)); }}"
+    );
+    // x = block 1: qs = 5, 6, 7, 8; q = &qs[1]: q[0] = 6, q[2] = 8; *(x->qs) = 5
+    assert_eq!(read3(&src), vec![6.0, 8.0, 5.0]);
+}
+
+fn read3(src: &str) -> Vec<f64> {
+    let ctx = ctx().with_struct_layout("block_q", q6());
+    let k = lift_kernel_in(&C, src, "k", &ctx).unwrap();
+    let mut args = vec![
+        KernelArg::Buffer(TypedBuffer::from_f32(&[3], &[0.0; 3])),
+        KernelArg::Buffer(TypedBuffer::from_u8(&[12], &blocks())),
+    ];
+    run_launch(&k, &mut args).expect("runs");
+    let KernelArg::Buffer(o) = &args[0] else {
+        panic!()
+    };
+    o.to_f64_vec()
+}
+
+#[test]
+fn a_scalar_field_is_not_a_pointer() {
+    // `x->d` is a value; taking it as a pointer must not become one
+    let src = format!(
+        "{BLOCK}void k(float* out, const void* vx) {{ const block_q* x = (const block_q*)vx; const uint8_t* q = x->d; out[0] = (float)q[0]; }}"
+    );
+    let ctx = ctx().with_struct_layout("block_q", q6());
+    assert!(matches!(
+        lift_kernel_in(&C, &src, "k", &ctx),
+        Err(KernelLiftError::NotYetLifted { .. })
+    ));
+}
