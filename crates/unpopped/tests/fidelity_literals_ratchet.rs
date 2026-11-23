@@ -48,6 +48,11 @@ const ALLOWED: &[(&str, usize, &str)] = &[
         "tests of the derivation (they read the band out and assert on it)",
     ),
     (
+        "crates/unpopped/tests/oracle_cancellation_band.rs",
+        3,
+        "tests of `compare` on hand-built f32 buffers that reproduce the band `required_fidelity` derives for a 3-node body (abs: 0) to show what it refuses in a cancellation (ROADMAP U45); no plan can make the unfused device value",
+    ),
+    (
         "crates/unpopped-cpu-c/tests/complex_domain.rs",
         5,
         "tests of `compare` on hand-built complex buffers (no plan exists, so `compare_for_plan` cannot apply)",
