@@ -87,6 +87,7 @@ mod asm;
 mod context;
 pub use context::LiftContext;
 mod calls;
+mod complex;
 mod cpasync;
 mod declarations;
 mod entry;
@@ -230,6 +231,7 @@ fn lift_preprocessed(
     w.null_buffers = ctx.null_buffers.iter().cloned().collect();
     w.consts = collect_consts(root, src);
     w.type_aliases = aliases::collect_aliases(root, src);
+    w.seed_complex_aliases();
     w.traits = aliases::collect_traits(root, src);
     w.unexpanded = unexpanded;
     w.macros = pre.macros.clone();
