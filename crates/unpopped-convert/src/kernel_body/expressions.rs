@@ -24,6 +24,59 @@ impl<'s, 't> Walker<'s, 't> {
         }
     }
 
+    /// `x++`, `++x`, `x--`, `--x` as a value (`a[bi++]`): the update goes before the statement and the value is a copy of the local
+    /// taken at the right moment (before the update for the postfix form, after it for the prefix form). The right operand of `&&`
+    /// or `||` runs only sometimes, so an update there declines (hoisting it would run it every time).
+    fn update_value(&mut self, n: Node<'_>) -> R<(ScalarExpr, E)> {
+        let (Some(arg), Some(op)) = (
+            n.child_by_field_name("argument"),
+            n.child_by_field_name("operator"),
+        ) else {
+            return self.not_yet(n, "an increment of an unexpected shape");
+        };
+        let mut child = n;
+        while let Some(p) = child.parent() {
+            if p.kind() == "binary_expression"
+                && p.child_by_field_name("right") == Some(child)
+                && p.child_by_field_name("operator")
+                    .is_some_and(|o| matches!(text(o, self.src), "&&" | "||"))
+            {
+                return self.not_yet(
+                    n,
+                    "an increment inside the right operand of `&&` or `||` (it runs only sometimes)",
+                );
+            }
+            if p.kind().ends_with("_statement") || p.kind() == "compound_statement" {
+                break;
+            }
+            child = p;
+        }
+        let Some(Sym::Scalar(local, ty, _)) = self.lookup(text(arg, self.src)) else {
+            return self.not_yet(
+                arg,
+                "an increment of something that is not an integer local",
+            );
+        };
+        let postfix = arg.start_byte() < op.start_byte();
+        let copy = self.new_local(ty);
+        let mut stmts = Vec::new();
+        if postfix {
+            stmts.push(Stmt::Let {
+                local: copy,
+                init: ScalarExpr::Local(local),
+            });
+        }
+        self.update(n, &mut stmts)?;
+        if !postfix {
+            stmts.push(Stmt::Let {
+                local: copy,
+                init: ScalarExpr::Local(local),
+            });
+        }
+        self.hoisted.append(&mut stmts);
+        Ok((ScalarExpr::Local(copy), ty))
+    }
+
     pub(super) fn expr(&mut self, n: Node<'_>) -> R<(ScalarExpr, E)> {
         let (e, _) = self.expr_raw(n)?;
         let t = self.ty_of(&e, n)?;
@@ -45,6 +98,7 @@ impl<'s, 't> Walker<'s, 't> {
             "unary_expression" => self.unary_node(n),
             "conditional_expression" => self.conditional(n),
             "cast_expression" => self.cast_node(n),
+            "update_expression" => self.update_value(n),
             "subscript_expression" | "pointer_expression" => self.read_element(n),
             "field_expression" => self.builtin(n),
             "call_expression" => self.call_expr(n),
