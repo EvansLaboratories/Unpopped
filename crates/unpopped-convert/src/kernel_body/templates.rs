@@ -420,12 +420,14 @@ fn type_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize
     let mut primary: HashMap<String, ClassTemplate<'_>> = HashMap::new();
     let mut specs: HashMap<String, Vec<ClassTemplate<'_>>> = HashMap::new();
     let mut uses: Vec<Node<'_>> = Vec::new();
+    let mut members: HashMap<String, Vec<MemberDef>> = HashMap::new();
     let mut stack = vec![tree.root_node()];
     while let Some(n) = stack.pop() {
         match n.kind() {
             // generic code (a function or class template) is instantiated as a whole, not rewritten in place
             "template_declaration" => {
                 register_class(n, src, &mut primary, &mut specs);
+                register_member_specialization(n, src, &mut members);
                 continue;
             }
             "template_type" => {
@@ -447,7 +449,9 @@ fn type_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize
         };
         let class = text(name, src);
         let given = template_args(args, src);
-        if let Some(instance) = class_instance(src, class, &given, &primary, &specs, inst) {
+        if let Some(instance) =
+            class_instance(src, class, &given, (&primary, &specs, &members), inst)
+        {
             edits.push((u.start_byte(), u.end_byte(), instance));
         }
     }
@@ -507,6 +511,92 @@ fn register_class<'t>(
         }
         return;
     }
+}
+
+/// An out-of-class definition of a member of an explicit specialisation of a class template, as an in-class one.
+struct MemberDef {
+    name: String,
+    text: String,
+}
+
+/// `template <> float AccMin<float>::identity() { ... }`: keyed by the class use it names (`AccMin<float>`), with the qualifier removed.
+fn register_member_specialization(
+    decl: Node<'_>,
+    src: &str,
+    out: &mut HashMap<String, Vec<MemberDef>>,
+) {
+    // only `template <>`: a partial member specialisation is not modelled
+    let Ok(Some((_, params))) = params_of_decl(decl, src) else {
+        return;
+    };
+    if !params.is_empty() {
+        return;
+    }
+    let mut c = decl.walk();
+    let Some(def) = decl
+        .named_children(&mut c)
+        .find(|k| k.kind() == "function_definition")
+    else {
+        return;
+    };
+    let Some(q) = def
+        .child_by_field_name("declarator")
+        .filter(|d| d.kind() == "function_declarator")
+        .and_then(|fd| fd.child_by_field_name("declarator"))
+        .filter(|d| d.kind() == "qualified_identifier")
+    else {
+        return;
+    };
+    let (Some(scope), Some(name)) = (
+        q.child_by_field_name("scope"),
+        q.child_by_field_name("name"),
+    ) else {
+        return;
+    };
+    let (Some(cname), Some(args)) = (
+        scope
+            .child_by_field_name("name")
+            .filter(|_| scope.kind() == "template_type"),
+        scope.child_by_field_name("arguments"),
+    ) else {
+        return;
+    };
+    let key = format!(
+        "{}<{}>",
+        text(cname, src),
+        template_args(args, src)
+            .iter()
+            .map(|g| bare(g))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let body = format!(
+        "{}{}{}",
+        &src[def.start_byte()..q.start_byte()],
+        text(name, src),
+        &src[q.end_byte()..def.end_byte()]
+    );
+    out.entry(key).or_default().push(MemberDef {
+        name: text(name, src).to_string(),
+        text: body,
+    });
+}
+
+/// Whether `body` (a class body) declares `name` as a `static` member: the statement holding `name(` mentions `static`.
+fn declared_static(body: &str, name: &str) -> bool {
+    let needle = format!("{name}(");
+    body.match_indices(&needle).any(|(i, _)| {
+        let before = &body[..i];
+        if before
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        {
+            return false;
+        }
+        let start = before.rfind([';', '{', '}']).map_or(0, |p| p + 1);
+        before[start..].contains("static")
+    })
 }
 
 /// The texts of a template argument list, trimmed.
@@ -576,8 +666,11 @@ fn class_instance(
     src: &str,
     class: &str,
     given: &[String],
-    primary: &HashMap<String, ClassTemplate<'_>>,
-    specs: &HashMap<String, Vec<ClassTemplate<'_>>>,
+    (primary, specs, members): (
+        &HashMap<String, ClassTemplate<'_>>,
+        &HashMap<String, Vec<ClassTemplate<'_>>>,
+        &HashMap<String, Vec<MemberDef>>,
+    ),
     inst: &mut Instances,
 ) -> Option<String> {
     let key = format!(
@@ -612,8 +705,20 @@ fn class_instance(
     inst.text
         .push_str(&substitute(&src[spec.start_byte()..id.start_byte()], &subs));
     inst.text.push_str(&name);
-    inst.text
-        .push_str(&substitute(&src[id.end_byte()..spec.end_byte()], &subs));
+    let mut body = substitute(&src[id.end_byte()..spec.end_byte()], &subs);
+    // out-of-class definitions of this instance's members (`template <> float AccMin<float>::identity() { .. }`) go inside it
+    if let (Some(defs), Some(close)) = (members.get(&key), body.rfind('}')) {
+        let mut extra = String::new();
+        for d in defs {
+            if declared_static(&body, &d.name) && !d.text.trim_start().starts_with("static") {
+                extra.push_str("static ");
+            }
+            extra.push_str(&d.text);
+            extra.push('\n');
+        }
+        body.insert_str(close, &extra);
+    }
+    inst.text.push_str(&body);
     inst.text.push(';');
     inst.by_key.insert(key, name.clone());
     Some(name)

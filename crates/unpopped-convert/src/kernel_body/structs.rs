@@ -83,6 +83,10 @@ fn struct_fields(body: Node<'_>, src: &str) -> Vec<FieldDef> {
             .unwrap_or_default();
         let mut dc = f.walk();
         for d in f.children_by_field_name("declarator", &mut dc) {
+            // `static T init();` is a method declaration (its definition may follow out of the class), not data
+            if d.kind() == "function_declarator" {
+                continue;
+            }
             out.push(field_of(d, &ty, src));
         }
     }
