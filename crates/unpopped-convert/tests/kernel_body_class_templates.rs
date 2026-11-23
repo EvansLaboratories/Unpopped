@@ -113,3 +113,11 @@ fn a_field_extent_that_is_arithmetic_on_the_template_argument_folds() {
     let named = "template <typename T, int N> struct V { T data[N + M]; };\nvoid k(float* out, const float* in) { V<float, 16> v; out[0] = 1.0f; }";
     assert!(lift(named).is_err());
 }
+
+#[test]
+fn a_class_template_naming_itself_reaches_a_fixed_point() {
+    // the instance's body spells `V<T, N>` again: substituted as `V<float, (4)>` it must be the SAME instance, not a deeper one
+    let src = "template <typename T, int N> struct V { T x; __device__ int n() { V<T, N> other; return N; } };\n\
+        void k(float* out, const float* in) { V<float, 4> v; out[0] = (float)v.n(); }";
+    assert_eq!(run(&lift(src).unwrap(), 1), vec![4.0]);
+}
