@@ -401,7 +401,7 @@ impl<'s, 't> Walker<'s, 't> {
             .insert(name, Sym::Scalar(local, ty, Fixed::No));
         let built = (|| {
             let cond = self.condition(cond)?;
-            let mut lead = std::mem::take(&mut self.hoisted);
+            let lead = std::mem::take(&mut self.hoisted);
             let mut body = self.block_of(body)?;
             let mut update = Vec::new();
             if upd.kind() == "assignment_expression" {
@@ -411,7 +411,7 @@ impl<'s, 't> Walker<'s, 't> {
             }
             self.flush(&mut update);
             body.0.append(&mut update);
-            Ok::<_, super::KernelLiftError>((cond, lead.drain(..).collect::<Vec<_>>(), body))
+            Ok::<_, super::KernelLiftError>((cond, lead, body))
         })();
         self.scopes.pop();
         let (cond, mut lead, mut body) = built?;
