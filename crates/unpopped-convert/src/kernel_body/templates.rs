@@ -271,6 +271,18 @@ fn call_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize
         let mut c = n.walk();
         stack.extend(n.children(&mut c));
     }
+    // the class templates of the file, to read a member alias (`typename WelfordAcc<float>::type`) of one
+    let mut class_primary: HashMap<String, ClassTemplate<'_>> = HashMap::new();
+    let mut class_specs: HashMap<String, Vec<ClassTemplate<'_>>> = HashMap::new();
+    let mut walk = vec![tree.root_node()];
+    while let Some(n) = walk.pop() {
+        if n.kind() == "template_declaration" {
+            register_class(n, src, &mut class_primary, &mut class_specs);
+            continue;
+        }
+        let mut c = n.walk();
+        walk.extend(n.children(&mut c));
+    }
     let mut edits = Vec::new();
     for call in calls {
         let Some(f) = call.child_by_field_name("function") else {
@@ -288,9 +300,14 @@ fn call_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize
         };
         let helper = text(name, src);
         let mut c = args.walk();
+        // an argument that names a `using Acc = ...;` of the enclosing function is that type (`welford_sqrt<Acc>`)
         let given: Vec<String> = args
             .named_children(&mut c)
-            .map(|a| text(a, src).trim().to_string())
+            .map(|a| {
+                let written = text(a, src).trim().to_string();
+                local_alias_arg(call, &written, src, (&class_primary, &class_specs))
+                    .unwrap_or(written)
+            })
             .collect();
         // an explicit specialisation with exactly these arguments wins over the primary template
         let key = format!("{helper}<{}>", given.join(","));
@@ -305,6 +322,96 @@ fn call_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize
     }
     edits.sort_by_key(|e| e.0);
     edits
+}
+
+/// `ident` when it names a `using ident = <type>;` of the function around `call`, declared before it: that type's text. A type written
+/// `typename C<args>::member` is read one step through the class template `C` for those arguments (the specialisation that matches,
+/// else the primary), taking its own `using member = X;` or `typedef X member;` with the class's parameters substituted.
+fn local_alias_arg(
+    call: Node<'_>,
+    ident: &str,
+    src: &str,
+    (primary, specs): (
+        &HashMap<String, ClassTemplate<'_>>,
+        &HashMap<String, Vec<ClassTemplate<'_>>>,
+    ),
+) -> Option<String> {
+    if ident.is_empty() || !ident.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    let mut p = call.parent();
+    let func = loop {
+        match p {
+            Some(n) if n.kind() == "function_definition" => break n,
+            Some(n) => p = n.parent(),
+            None => return None,
+        }
+    };
+    let mut stack = vec![func.child_by_field_name("body")?];
+    let mut written = None;
+    while let Some(n) = stack.pop() {
+        if n.kind() == "alias_declaration"
+            && n.end_byte() <= call.start_byte()
+            && n.child_by_field_name("name").map(|x| text(x, src)) == Some(ident)
+        {
+            written = n
+                .child_by_field_name("type")
+                .map(|t| text(t, src).trim().to_string());
+            break;
+        }
+        let mut c = n.walk();
+        stack.extend(n.children(&mut c));
+    }
+    let written = written?;
+    let Some((head, member)) = written
+        .trim_start_matches("typename ")
+        .trim()
+        .rsplit_once("::")
+    else {
+        return Some(written);
+    };
+    let (class, inner) = head.trim().split_once('<')?;
+    let given: Vec<String> = inner
+        .strip_suffix('>')?
+        .split(',')
+        .map(|g| g.trim().to_string())
+        .collect();
+    let mut best: Option<(&ClassTemplate<'_>, Vec<(String, String)>, usize)> = None;
+    for sp in specs.get(class.trim()).into_iter().flatten() {
+        let (_, params) = params_of_decl(sp.decl, src).ok().flatten()?;
+        let pattern = sp.pattern.as_deref()?;
+        if let Some((subs, fixed)) = match_pattern(&params, pattern, &given)
+            && best.as_ref().is_none_or(|b| fixed > b.2)
+        {
+            best = Some((sp, subs, fixed));
+        }
+    }
+    let (ct, subs) = match best {
+        Some((ct, subs, _)) => (ct, subs),
+        None => {
+            let ct = primary.get(class.trim())?;
+            let (_, params) = params_of_decl(ct.decl, src).ok().flatten()?;
+            (ct, bind_explicit(&params, &given)?)
+        }
+    };
+    let body = ct.spec.child_by_field_name("body")?;
+    let mut c = body.walk();
+    for k in body.named_children(&mut c) {
+        let (name, ty) = match k.kind() {
+            "alias_declaration" => (k.child_by_field_name("name"), k.child_by_field_name("type")),
+            "type_definition" => (
+                k.child_by_field_name("declarator"),
+                k.child_by_field_name("type"),
+            ),
+            _ => continue,
+        };
+        if let (Some(name), Some(ty)) = (name, ty)
+            && text(name, src) == member.trim()
+        {
+            return Some(substitute(text(ty, src).trim(), &subs));
+        }
+    }
+    None
 }
 
 /// `name<a,b>` of an explicit specialisation's declarator, spelled as a call's key is.
