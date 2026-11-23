@@ -102,6 +102,7 @@ mod returns;
 mod roles;
 mod statements;
 mod structs;
+mod switch;
 mod templates;
 mod unrolled;
 mod vecmem;
@@ -182,6 +183,7 @@ fn lift_preprocessed(
     let expanded = templates::expand_calls(fe.parse, src.to_string())?;
     // class templates used with explicit arguments become plain structs (U38b-1)
     let expanded = templates::expand_types(fe.parse, expanded)?;
+    let expanded = switch::expand_switches(fe.parse, expanded)?;
     let src = expanded.as_str();
     let tree = (fe.parse)(src).ok_or(KernelLiftError::SyntaxError { line: 0 })?;
     let root = tree.root_node();
