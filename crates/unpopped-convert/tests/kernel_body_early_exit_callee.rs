@@ -85,3 +85,22 @@ fn a_call_that_is_not_last_does_not_end_the_kernel_with_its_return() {
     assert_eq!(run(&k, 0), vec![0.0, 5.0]);
     assert_eq!(run(&k, 1), vec![1.0, 5.0]);
 }
+
+#[test]
+fn a_call_inside_a_branch_or_a_loop_is_never_a_kernel_exit() {
+    // the call is the LAST statement of its own block, but that block is an `if` / `for` body: the callee's guard `return`
+    // leaves only the callee, and the kernel's later `out[1] = 5` still runs
+    for wrapper in [
+        "if (nrows < 100) { inner(out, in, nrows); }",
+        "for (int r = 0; r < 1; ++r) { inner(out, in, nrows); }",
+        "{ inner(out, in, nrows); }",
+    ] {
+        let k = lift(&format!(
+            "static void inner(float* out, const float* in, int nrows) {{ if (nrows <= 0) return; if (threadIdx.x == 0) out[0] = in[0]; }}
+             extern \"C\" void k(float* out, const float* in, int nrows) {{ {wrapper} if (threadIdx.x == 0) out[1] = 5.0f; }}"
+        ))
+        .unwrap();
+        assert_eq!(run(&k, 0), vec![0.0, 5.0], "{wrapper}");
+        assert_eq!(run(&k, 1), vec![1.0, 5.0], "{wrapper}");
+    }
+}
