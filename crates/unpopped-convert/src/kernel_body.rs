@@ -199,6 +199,10 @@ fn lift_preprocessed(
     w.functions = all_functions(root, src);
     w.structs = structs::collect_structs(root, src);
     w.methods = methods::collect_methods(root, src);
+    // a `static` member is a plain function under its qualified name: `S::load(p)` inlines like a free function
+    for (key, f) in methods::static_members(&w.methods, src) {
+        w.functions.entry(key).or_insert(f);
+    }
     w.launch = ctx.launch;
     // an entry point read through the frontend's model (Slang): its `numthreads` wins over the context's block, and the caller
     // still supplies the grid
