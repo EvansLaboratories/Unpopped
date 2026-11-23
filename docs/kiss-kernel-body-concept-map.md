@@ -107,7 +107,7 @@ bit ops, shifts, `Max`/`Min`/`FmaxIeee`/`FminIeee`/`Pow`/`Rem`/...), `Select`, `
 ## 7. Collectives
 
 `Stmt::Collective { kind, value, result, scope }`, a rendezvous that exchanges registers (it is **not** a fence: it orders no memory).
-Scopes `Subgroup` or `Block`, full participation required (in uniform control, like a barrier).
+Scopes `Subgroup` or `Block`, full participation required (in uniform control, like a barrier). A `Subgroup` collective needs only its own subgroup to arrive, so it may also sit under control that is **warp-uniform** (`warp = tid >> 5; if (warp == 0) { shuffle }`): the checker takes `tid >> k` and `tid / 2^k` as warp-uniform only when the launch states ONE subgroup size `N` (`with_subgroup(N, N)`) with `2^k == N` and a block x extent that is a multiple of `N`; a `Block` collective or barrier still needs block-uniform control, and `lane == c` is divergent. A target that cannot pin the launch's stated subgroup size declines the launch by name.
 
 | Kind | Behaviour | Common / Target |
 |---|---|---|
