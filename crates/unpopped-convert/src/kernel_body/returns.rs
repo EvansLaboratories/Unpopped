@@ -126,10 +126,113 @@ impl<'s, 't> Walker<'s, 't> {
             }
             None => None,
         };
+        // every `return` in tail position: the structured form. Otherwise (a `return` in a loop, in a nested block, or followed by
+        // statements) the flag form: `done` is set by a `return`, which also breaks out of the open loops; what follows a statement
+        // that may have returned runs under `if (done == 0)`
+        let flag = self.check_returns(body, ret_ty.is_some()).is_err();
         self.scopes.push(HashMap::new());
-        let r = self.callee_seq(&stmts_of(body), res, out);
+        let r = if flag {
+            let done = self.new_local(E::I32);
+            out.push(Stmt::Let {
+                local: done,
+                init: ScalarExpr::ConstInt(0, E::I32),
+            });
+            let saved = (self.flag_ret.replace((res, done)), self.loop_depth);
+            self.loop_depth = 0;
+            let r = self.flag_seq(&stmts_of(body), out);
+            self.flag_ret = saved.0;
+            self.loop_depth = saved.1;
+            r
+        } else {
+            let saved = (self.flag_ret.take(), self.loop_depth);
+            let r = self.callee_seq(&stmts_of(body), res, out);
+            self.flag_ret = saved.0;
+            self.loop_depth = saved.1;
+            r
+        };
         self.scopes.pop();
         r.map(|()| res.map(|(l, t)| (ScalarExpr::Local(l), t)))
+    }
+
+    /// A statement sequence of a flagged callee: a `return` ends it, and what follows a statement that may have returned runs
+    /// only while `done` is clear.
+    pub(super) fn flag_seq(&mut self, seq: &[Node<'_>], out: &mut Vec<Stmt>) -> R<()> {
+        for (i, n) in seq.iter().enumerate() {
+            self.stmt(*n, out)?;
+            if n.kind() == "return_statement" {
+                return Ok(());
+            }
+            if !contains_return(*n) {
+                continue;
+            }
+            let rest = &seq[i + 1..];
+            if rest.iter().all(|r| matches!(r.kind(), "comment" | ";")) {
+                return Ok(());
+            }
+            let (_, done) = self.flag_ret.expect("in a flagged callee");
+            let mut then = Vec::new();
+            self.scopes.push(HashMap::new());
+            let r = self.flag_seq(rest, &mut then);
+            self.scopes.pop();
+            r?;
+            out.push(Stmt::If {
+                cond: ScalarExpr::Binary(
+                    unpopped::ir::BinaryOp::CmpEq,
+                    Box::new(ScalarExpr::Local(done)),
+                    Box::new(ScalarExpr::ConstInt(0, E::I32)),
+                ),
+                then: Block(then),
+                els: Block(Vec::new()),
+            });
+            return Ok(());
+        }
+        Ok(())
+    }
+
+    /// `return e;` of a flagged callee: the result local, the flag, and a `break` out of the loop it is in.
+    pub(super) fn flag_return(&mut self, r: Node<'_>, out: &mut Vec<Stmt>) -> R<()> {
+        let (res, done) = self.flag_ret.expect("in a flagged callee");
+        match (res, r.named_child(0)) {
+            (Some((local, ty)), Some(v)) => {
+                let (e, et) = self.expr(v)?;
+                let value = self.convert(e, et, ty, v)?;
+                out.append(&mut self.hoisted);
+                out.push(Stmt::Assign { local, value });
+            }
+            (None, None) => {}
+            _ => {
+                return self.not_yet(
+                    r,
+                    "a `return` whose value does not match the function's type",
+                );
+            }
+        }
+        out.push(Stmt::Assign {
+            local: done,
+            value: ScalarExpr::ConstInt(1, E::I32),
+        });
+        if self.loop_depth > 0 {
+            out.push(Stmt::Break);
+        }
+        Ok(())
+    }
+
+    /// After a loop of a flagged callee that holds a `return`: an enclosing loop must stop too.
+    pub(super) fn flag_after_loop(&self, n: Node<'_>, out: &mut Vec<Stmt>) {
+        if let Some((_, done)) = self.flag_ret
+            && self.loop_depth > 0
+            && contains_return(n)
+        {
+            out.push(Stmt::If {
+                cond: ScalarExpr::Binary(
+                    unpopped::ir::BinaryOp::CmpNe,
+                    Box::new(ScalarExpr::Local(done)),
+                    Box::new(ScalarExpr::ConstInt(0, E::I32)),
+                ),
+                then: Block(vec![Stmt::Break]),
+                els: Block(Vec::new()),
+            });
+        }
     }
 
     fn callee_seq(

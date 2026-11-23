@@ -141,7 +141,6 @@ impl<'s, 't> Walker<'s, 't> {
             let (pname, sym) = self.bind_argument(p, a, out)?;
             bound.insert(pname, sym);
         }
-        self.check_returns(body, ret_ty.is_some())?;
         let exits = ret_ty.is_none() && self.inline_stack.is_empty() && is_kernel_tail_call(call);
         self.inline_stack.push(name.to_string());
         let saved = std::mem::replace(&mut self.scopes, vec![bound]);
