@@ -285,6 +285,16 @@ impl<'s, 't> Walker<'s, 't> {
             "CUDART_INF_F" => float(f32::INFINITY),
             "CUDART_NAN_F" => float(f32::NAN),
             "CUDART_PI_F" => float(std::f32::consts::PI),
+            // the double-precision names: infinity and NaN are exact at either compute type, pi only at F64
+            "CUDART_INF" if matches!(self.compute, E::F32 | E::F64) => {
+                Some((ScalarExpr::Const(f64::INFINITY), self.compute))
+            }
+            "CUDART_NAN" if matches!(self.compute, E::F32 | E::F64) => {
+                Some((ScalarExpr::Const(f64::NAN), self.compute))
+            }
+            "CUDART_PI" if self.compute == E::F64 => {
+                Some((ScalarExpr::Const(std::f64::consts::PI), E::F64))
+            }
             "CUDART_ZERO_F" => float(0.0),
             "CUDART_ONE_F" => float(1.0),
             "INT_MAX" => int(i64::from(i32::MAX), E::I32),
