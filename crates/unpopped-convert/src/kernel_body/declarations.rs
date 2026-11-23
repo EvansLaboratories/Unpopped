@@ -316,6 +316,9 @@ impl<'s, 't> Walker<'s, 't> {
             }
             return Ok(xs);
         }
+        if let Some(v) = self.complex_lanes(n, (elem, lanes))? {
+            return Ok(v);
+        }
         let callee = (n.kind() == "call_expression")
             .then(|| n.child_by_field_name("function").map(|f| text(f, self.src)))
             .flatten();
