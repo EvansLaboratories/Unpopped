@@ -88,7 +88,7 @@ fn a_directive_the_pass_cannot_model_declines_and_line_numbers_survive_blanking(
     // a macro the pass cannot expand declines at its USE, naming it; an unused one never stops the kernel
     not_yet(
         lift(
-            "#define SQ(x) ((x) * (x))\nvoid k(float* out) { out[0] = SQ(2.0f); }",
+            "#define SQ(x) #x\nvoid k(float* out) { out[0] = SQ(2.0f); }",
             &ctx(),
         ),
         "function-like macro `SQ`",

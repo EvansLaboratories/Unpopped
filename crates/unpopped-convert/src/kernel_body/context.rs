@@ -161,6 +161,8 @@ struct Pass<'a> {
     quals: Vec<String>,
     /// Every macro's value history: `Some(v)` while one value only, `None` once redefined, removed or empty.
     history: HashMap<String, Option<i64>>,
+    /// Function-like macros with a plain body (parameters, text): each call whose arguments sit on one line is replaced by the body.
+    functions: HashMap<String, (Vec<String>, String)>,
 }
 
 /// Run the preprocessor over `src` with the caller's macro definitions and supplied include files.
@@ -185,6 +187,7 @@ pub(super) fn preprocess(
             .iter()
             .map(|(n, v)| (n.clone(), Some(*v)))
             .collect(),
+        functions: HashMap::new(),
     };
     pass.run(None, src, &mut Vec::new())?;
     Ok(Preprocessed {
@@ -239,6 +242,49 @@ impl Pass<'_> {
         self.history.insert(name, merged);
     }
 
+    /// A `#define NAME(params) body` with a plain body (no `#`/`##`, no variadic) is kept to expand its uses; a `#undef` drops one.
+    /// `true` when the directive was a function-like definition taken here (the caller blanks the line).
+    fn function_directive(&mut self, d: &str) -> bool {
+        if let Some(r) = d.strip_prefix("undef") {
+            self.functions.remove(r.trim());
+            return false;
+        }
+        let Some(r) = d.strip_prefix("define") else {
+            return false;
+        };
+        let r = r.trim_start();
+        let name: String = r
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        let after = &r[name.len()..];
+        if name.is_empty() || !after.starts_with('(') {
+            return false;
+        }
+        let Some(close) = after.find(')') else {
+            return false;
+        };
+        let params: Vec<String> = after[1..close]
+            .split(',')
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
+        let body = strip_comment(&after[close + 1..]).trim().to_string();
+        let plain = params
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+            && !body.is_empty()
+            && !body.contains('#')
+            && !body.contains("...");
+        if !plain {
+            return false;
+        }
+        self.unexpanded.retain(|(n, _)| *n != name);
+        self.defs.remove(&name);
+        self.functions.insert(name, (params, body));
+        true
+    }
+
     /// A line ending, if the text so far does not end in one (a spliced file's last line may lack it).
     fn end_line(&mut self) {
         if !self.out.is_empty() && !self.out.ends_with('\n') {
@@ -265,7 +311,7 @@ impl Pass<'_> {
             if !body.trim_start().starts_with('#') {
                 self.emit(
                     &if active {
-                        line.to_string()
+                        expand_calls(line, &self.functions)
                     } else {
                         blank(line)
                     },
@@ -296,6 +342,10 @@ impl Pass<'_> {
                 && d["pragma".len()..].trim() == "once"
             {
                 self.once.push(file.unwrap_or_default().to_string());
+                blank_all(self);
+                continue;
+            }
+            if active && self.function_directive(d) {
                 blank_all(self);
                 continue;
             }
@@ -430,6 +480,116 @@ fn blank(line: &str) -> String {
     line.chars()
         .map(|c| if c == '\n' || c == '\r' { c } else { ' ' })
         .collect()
+}
+
+/// The deepest rescan of a macro's result (`Y` inside `Z`).
+const MAX_MACRO_DEPTH: usize = 8;
+
+/// `line` with each call of a known function-like macro replaced by its body, the parameters replaced by the arguments as written.
+/// A call whose arguments do not close on the line, or with the wrong argument count, is left as it is (it declines at its use).
+fn expand_calls(line: &str, functions: &HashMap<String, (Vec<String>, String)>) -> String {
+    if functions.is_empty() {
+        return line.to_string();
+    }
+    expand_text(line, functions, 0)
+}
+
+fn expand_text(
+    text: &str,
+    functions: &HashMap<String, (Vec<String>, String)>,
+    depth: usize,
+) -> String {
+    let b = text.as_bytes();
+    let is_word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < b.len() {
+        if !is_word(b[i]) {
+            let ch = text[i..].chars().next().unwrap_or(' ');
+            out.push(ch);
+            i += ch.len_utf8();
+            continue;
+        }
+        let start = i;
+        while i < b.len() && is_word(b[i]) {
+            i += 1;
+        }
+        let word = &text[start..i];
+        let mut j = i;
+        while j < b.len() && (b[j] == b' ' || b[j] == b'\t') {
+            j += 1;
+        }
+        let entry = functions.get(word);
+        let callable = entry.is_some() && j < b.len() && b[j] == b'(' && depth < MAX_MACRO_DEPTH;
+        if let (true, Some((params, body))) = (callable, entry) {
+            if let Some((args, end)) = call_arguments(text, j) {
+                if args.len() == params.len() || (params.is_empty() && args == [String::new()]) {
+                    out.push_str(&substitute(body, params, &args, functions, depth));
+                    i = end;
+                    continue;
+                }
+            }
+        }
+        out.push_str(word);
+    }
+    out
+}
+
+/// The arguments of the call whose `(` is at `open`, split at top-level commas, and the offset after its `)`; `None` if it does not close.
+fn call_arguments(text: &str, open: usize) -> Option<(Vec<String>, usize)> {
+    let mut depth = 0i32;
+    let mut args = vec![String::new()];
+    for (k, c) in text[open..].char_indices() {
+        match c {
+            '(' | '[' | '{' => {
+                depth += 1;
+                if depth > 1 {
+                    args.last_mut()?.push(c);
+                }
+            }
+            ')' | ']' | '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    let trimmed = args.iter().map(|a| a.trim().to_string()).collect();
+                    return Some((trimmed, open + k + 1));
+                }
+                args.last_mut()?.push(c);
+            }
+            ',' if depth == 1 => args.push(String::new()),
+            _ => args.last_mut()?.push(c),
+        }
+    }
+    None
+}
+
+/// `body` with each whole-word parameter replaced by its argument, then rescanned for further macro calls.
+fn substitute(
+    body: &str,
+    params: &[String],
+    args: &[String],
+    functions: &HashMap<String, (Vec<String>, String)>,
+    depth: usize,
+) -> String {
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut out = String::new();
+    let mut word = String::new();
+    for c in body.chars().chain(std::iter::once('\u{0}')) {
+        if is_word(c) {
+            word.push(c);
+            continue;
+        }
+        if !word.is_empty() {
+            match params.iter().position(|p| *p == word) {
+                Some(k) => out.push_str(&args[k]),
+                None => out.push_str(&word),
+            }
+            word.clear();
+        }
+        if c != '\u{0}' {
+            out.push(c);
+        }
+    }
+    expand_text(&out, functions, depth + 1)
 }
 
 /// One directive (the text after `#`); `true` if the line is kept verbatim (an active `#pragma`).
