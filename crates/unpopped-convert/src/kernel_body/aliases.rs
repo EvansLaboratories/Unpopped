@@ -147,11 +147,17 @@ impl<'s, 't> Walker<'s, 't> {
     fn trait_entry(&self, head: &str, member: &str) -> Option<String> {
         // a class template already instantiated as a plain struct (`AccOf__t1`, from `AccOf<float>`) is looked up by its own name
         if !head.contains('<') {
-            return self
-                .traits
-                .get(head.trim())
-                .and_then(|m| m.get(member))
-                .cloned();
+            // `ns::Acc__t0`: namespaces are not scopes here, so try each trailing part of the qualified name
+            let mut rest = head.trim();
+            loop {
+                if let Some(v) = self.traits.get(rest).and_then(|m| m.get(member)) {
+                    return Some(v.clone());
+                }
+                match rest.split_once("::") {
+                    Some((_, tail)) => rest = tail,
+                    None => return None,
+                }
+            }
         }
         let lt = head.find('<')?;
         if !head.ends_with('>') {
@@ -233,7 +239,8 @@ impl<'s, 't> Walker<'s, 't> {
                 let target = self.resolve_alias_text(&ty);
                 let prefix = format!("{name}::");
                 self.functions.retain(|k, _| !k.starts_with(&prefix));
-                let own = format!("{target}::");
+                // a struct named through namespaces (`a::b::Acc__t0`) is registered by its own name
+                let own = format!("{}::", target.rsplit("::").next().unwrap_or(&target));
                 for (key, f) in super::methods::static_members(&self.methods, self.src) {
                     if let Some(member) = key.strip_prefix(&own) {
                         self.functions.insert(format!("{prefix}{member}"), f);

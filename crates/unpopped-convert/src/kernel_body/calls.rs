@@ -348,10 +348,16 @@ impl<'s, 't> Walker<'s, 't> {
         if self.defines(name) {
             return name;
         }
-        match name.rsplit_once("::") {
-            Some((_, short)) if self.defines(short) => short,
-            _ => name,
+        // `ns::Struct::f` or `ns::f`: the namespace is not a scope the walker keeps, so each leading `x::` is dropped until a
+        // function this source defines is named (`ns::Acc__t0::init` is `Acc__t0::init`, then `init`)
+        let mut rest = name;
+        while let Some((_, tail)) = rest.split_once("::") {
+            if self.defines(tail) {
+                return tail;
+            }
+            rest = tail;
         }
+        name
     }
 
     /// A math call through the frontend's tables, or an atomic that returns the old value (hoisted as a statement).
