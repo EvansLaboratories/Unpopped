@@ -139,6 +139,20 @@ asserts `approx_within` rejects a deliberately sloppy value).
   `ftz` adds nothing for normal results (its effect is a flush the budget cannot express and the
   contract's input domain excludes subnormals, as it already must for the unqualified op).
 
+### 6b. What the oracle does not model: per-operation rounding
+
+The oracle evaluates one statement's whole expression at `f64` and rounds once, where the value is stored (`oracle/kernel_eval.rs`,
+`settle`; the plan oracle likewise). It is a higher-precision reference compared inside a fidelity band, **not** an interpreter of C
+semantics: it is neither unfused per-operation `float` arithmetic (`a*b - c*d` has exact products here) nor a literal fused
+multiply-add. Consequences: (1) a kernel whose result depends on per-operation rounding, typically a cancellation, is **not
+discriminated by value**: `cuCmulf((x, 1 + 2^-11), (x, 1)).re` with `x = 1 + 2^-12` is `2^-24` in the oracle and in a fused `f32`
+kernel and `0` in unfused `f32`, and the derived band has `abs: 0` (`oracle/fidelity.rs`, "`abs` is zero, and that is a stated
+limit"), so an unfused device result of `0` is **outside** `Tolerant { rel, abs: 0 }` against the oracle's `2^-24`
+(`tests/oracle_cancellation_band.rs`): a caller whose cell cancels must widen `abs` and say why; (2) what separates fused from unfused
+is the **shape of the IR** (a `Fma` node or not), pinned where a lift depends on it (`tests/kernel_body_complex.rs`), and the emitter's
+spelling (no contraction); (3) an opt-in per-operation evaluation, for bit-exact device tests, is ROADMAP U45; the default does not
+change, since every lane's tests are written against this reference.
+
 ## 7. Tests (each can fail, each has the control that proves it)
 
 1. **`Qualified` unchanged is the child**: with `Numerics::default()`, `Qualified(Add(a, b))` and
