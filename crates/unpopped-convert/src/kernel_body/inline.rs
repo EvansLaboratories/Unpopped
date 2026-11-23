@@ -25,6 +25,24 @@ enum Bind {
     Reference(E),
 }
 
+/// Whether the call statement `call` is the last statement of the kernel's own body (not inside a loop, an `if` or a block), so a
+/// `return` in the callee ends the kernel too.
+fn is_kernel_tail_call(call: Node<'_>) -> bool {
+    let Some(stmt) = call.parent().filter(|p| p.kind() == "expression_statement") else {
+        return false;
+    };
+    let Some(block) = stmt.parent().filter(|b| b.kind() == "compound_statement") else {
+        return false;
+    };
+    block
+        .parent()
+        .is_some_and(|f| f.kind() == "function_definition")
+        && u32::try_from(block.named_child_count().saturating_sub(1))
+            .ok()
+            .and_then(|last| block.named_child(last))
+            == Some(stmt)
+}
+
 impl<'s, 't> Walker<'s, 't> {
     /// Whether `name` is a function defined in this source (so a call to it is inlined).
     pub(super) fn defines(&self, name: &str) -> bool {
@@ -115,9 +133,12 @@ impl<'s, 't> Walker<'s, 't> {
             bound.insert(pname, sym);
         }
         self.check_returns(body, ret_ty.is_some())?;
+        let exits = ret_ty.is_none() && self.inline_stack.is_empty() && is_kernel_tail_call(call);
         self.inline_stack.push(name.to_string());
         let saved = std::mem::replace(&mut self.scopes, vec![bound]);
+        let saved_exit = std::mem::replace(&mut self.callee_exits_kernel, exits);
         let r = self.callee_body(body, ret_ty, out);
+        self.callee_exits_kernel = saved_exit;
         self.scopes = saved;
         self.inline_stack.pop();
         r
