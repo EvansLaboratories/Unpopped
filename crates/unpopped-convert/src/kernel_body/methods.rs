@@ -48,6 +48,26 @@ pub(super) fn collect_methods<'t>(
     out
 }
 
+/// The `static` members among `methods`, each as `Struct::name` and its definition (called without an instance).
+pub(super) fn static_members<'t>(
+    methods: &HashMap<String, HashMap<String, Node<'t>>>,
+    src: &str,
+) -> Vec<(String, Node<'t>)> {
+    let mut out = Vec::new();
+    for (sname, ms) in methods {
+        for (mname, f) in ms {
+            let mut c = f.walk();
+            let is_static = f
+                .children(&mut c)
+                .any(|k| k.kind() == "storage_class_specifier" && text(k, src) == "static");
+            if is_static {
+                out.push((format!("{sname}::{mname}"), *f));
+            }
+        }
+    }
+    out
+}
+
 fn method_key(f: Node<'_>, src: &str) -> Option<String> {
     let d = f.child_by_field_name("declarator")?;
     match d.kind() {
