@@ -5,8 +5,11 @@ use super::*;
 
 impl<'s, 't> Walker<'s, 't> {
     pub(super) fn constant(&self, v: i64) -> (ScalarExpr, E) {
-        if int_range(self.compute).is_some() {
+        if matches!(self.compute, E::I32 | E::I64 | E::U32 | E::U64) {
             (ScalarExpr::ConstInt(v, self.compute), self.compute)
+        } else if int_range(self.compute).is_some() {
+            // a narrow integer compute type (`uint8_t` buffers): an integer leaf is I32 at the narrowest, which is also C's `int`
+            (ScalarExpr::ConstInt(v, E::I32), E::I32)
         } else {
             (ScalarExpr::Const(v as f64), self.compute)
         }
@@ -166,7 +169,7 @@ impl<'s, 't> Walker<'s, 't> {
     }
 
     pub(super) fn logical(&self, op: &str, l: ScalarExpr, r: ScalarExpr) -> (ScalarExpr, E) {
-        let (one, _) = self.constant(1);
+        let (one, ty) = self.constant(1);
         let (zero, _) = self.constant(0);
         let truth = ScalarExpr::Select(Box::new(r), Box::new(one.clone()), Box::new(zero.clone()));
         let e = if op == "&&" {
@@ -174,7 +177,7 @@ impl<'s, 't> Walker<'s, 't> {
         } else {
             ScalarExpr::Select(Box::new(l), Box::new(one), Box::new(truth))
         };
-        (e, self.compute)
+        (e, ty)
     }
 
     pub(super) fn binary(
