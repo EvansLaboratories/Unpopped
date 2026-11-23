@@ -254,6 +254,29 @@ impl<'s, 't> Walker<'s, 't> {
         if let Some(v) = self.layout_vector(n, (elem, lanes))? {
             return Ok(v);
         }
+        if n.kind() == "initializer_list" {
+            // `float4 s = {a, b}`: the lanes in order, the rest zero (aggregate initialisation)
+            let mut c = n.walk();
+            let els: Vec<_> = n
+                .named_children(&mut c)
+                .filter(|e| e.kind() != "comment")
+                .collect();
+            if els.len() > usize::from(lanes) {
+                return self.not_yet(
+                    n,
+                    format!("{} initialisers for a vector of {lanes} lanes", els.len()),
+                );
+            }
+            let mut xs = Vec::new();
+            for e in els {
+                let (v, t) = self.expr(e)?;
+                xs.push(self.convert(v, t, elem, e)?);
+            }
+            while xs.len() < usize::from(lanes) {
+                xs.push(self.zero_of(elem, n)?);
+            }
+            return Ok(xs);
+        }
         let callee = (n.kind() == "call_expression")
             .then(|| n.child_by_field_name("function").map(|f| text(f, self.src)))
             .flatten();
