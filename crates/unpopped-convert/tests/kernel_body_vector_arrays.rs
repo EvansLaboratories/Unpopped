@@ -81,3 +81,24 @@ fn a_lane_of_an_element_is_assigned_in_place() {
         out[0] = d[1].x; out[1] = d[1].y; out[2] = d[1].z; out[3] = d[1].w; }";
     assert_eq!(run(src, 4), vec![1.0, 20.0, 8.0, 4.0]);
 }
+
+#[test]
+fn a_struct_with_a_vector_field_and_a_vector_array_field() {
+    // the vec_t shape: `float4 data[N / 4]` with a scalar view `((float*)data)[i]`, a fill and a load/store by vectors
+    let src = "struct V { float4 head; float4 data[2];\n\
+        float at(int i) { return ((float*)data)[i]; }\n\
+        void fill(float x) { for (int i = 0; i < 2; ++i) { data[i] = make_float4(x, x, x, x); } head = make_float4(x, 0.0f, 0.0f, 0.0f); } };\n\
+        void k(float* out, const float* in) { V v; v.fill(in[1]); v.data[1].w = 1.0f; v.head.y = in[0]; \
+        out[0] = v.at(0); out[1] = v.at(7); out[2] = v.at(6); out[3] = v.head.x; out[4] = v.head.y; }";
+    // data lanes all 20; element 1's w (scalar 7) is overwritten with 1; head = (20, 10, 0, 0)
+    assert_eq!(run(src, 5), vec![20.0, 1.0, 20.0, 20.0, 10.0]);
+}
+
+#[test]
+fn copying_a_struct_that_holds_an_array_of_vectors_declines() {
+    let src = "struct V { float4 data[2]; };\nvoid k(float* out, const float* in) { V a; V b = a; out[0] = b.data[0].x; }";
+    assert!(matches!(
+        lift(src),
+        Err(KernelLiftError::NotYetLifted { .. })
+    ));
+}

@@ -192,6 +192,12 @@ impl<'s, 't> Walker<'s, 't> {
         {
             return self.vector_member(f, ls, (elem, lanes));
         }
+        // a lane of a vector that is a field of a struct (`v.head.x`)
+        if a.kind() == "field_expression"
+            && let Some(Sym::Vector(ls, elem, lanes)) = self.resolve_member(a)?
+        {
+            return self.vector_member(f, ls, (elem, lanes));
+        }
         if let Some((place, elem)) = self.vector_lane_place(a, f)? {
             let local = self.new_local(elem);
             self.hoisted.push(Stmt::Load { local, place });

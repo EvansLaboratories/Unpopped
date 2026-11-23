@@ -328,7 +328,13 @@ impl<'s, 't> Walker<'s, 't> {
             out.push(Stmt::Store { place, value });
             return Ok(());
         }
-        let Some(Sym::Vector(ls, elem, lanes)) = self.lookup(text(a, self.src)) else {
+        // the vector may itself be a field of a struct (`v.head.y = e`)
+        let vector = if a.kind() == "field_expression" {
+            self.resolve_member(a)?
+        } else {
+            self.lookup(text(a, self.src))
+        };
+        let Some(Sym::Vector(ls, elem, lanes)) = vector else {
             return self.not_yet(
                 lhs,
                 "an assignment to a member of something that is not a vector local",
