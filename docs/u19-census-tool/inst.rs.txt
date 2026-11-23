@@ -61,3 +61,57 @@ fn instantiate(src: &str, kernel_at: usize) -> String {
     }
     out
 }
+
+/// The same heuristic as real arguments: `(name, is_type, value)` for the kernel's own template header, to pass as
+/// `LiftContext::with_type` / `with_const` (type parameters `float`, non-type `128`, bool `1`).
+fn template_args(src: &str, kernel_at: usize) -> Vec<(String, bool, i64)> {
+    let Some(t) = src[..kernel_at].rfind("template") else { return Vec::new() };
+    let rest = &src[t..];
+    let Some(open) = rest.find('<') else { return Vec::new() };
+    let (mut depth, mut end) = (0i32, None);
+    for (i, c) in rest[open..].char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(open + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(end) = end else { return Vec::new() };
+    let mut params = Vec::new();
+    let (mut d, mut cur) = (0i32, String::new());
+    for c in rest[open + 1..end].chars() {
+        match c {
+            '<' | '(' => d += 1,
+            '>' | ')' => d -= 1,
+            ',' if d == 0 => {
+                params.push(std::mem::take(&mut cur));
+                continue;
+            }
+            _ => {}
+        }
+        cur.push(c);
+    }
+    params.push(cur);
+    let mut out = Vec::new();
+    for p in params {
+        let p = p.split('=').next().unwrap_or("").trim().to_string();
+        let words: Vec<&str> = p.split_whitespace().collect();
+        let Some(name) = words.last().map(|w| w.trim_start_matches('.').to_string()) else { continue };
+        if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        match words.first().copied() {
+            Some("typename" | "class") => out.push((name, true, 0)),
+            Some("bool") => out.push((name, false, 1)),
+            Some(_) if words.len() >= 2 => out.push((name, false, 128)),
+            _ => {}
+        }
+    }
+    out
+}

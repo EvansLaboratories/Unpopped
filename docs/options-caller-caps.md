@@ -1,6 +1,6 @@
 # Options: `CallerCaps`, so a backend can refuse a plan a legacy caller would bind blindly
 
-Status: **options note, no code** (pm-kernels `[TASK]` 2026-11-22; code after #385 merges, never on its stack). Asked for by fishstringer's E17 slice 3
+Status: **implemented in #386** (`CallerCaps`, `try_generate_with`, `Backend::lower_with`; `crates/unpopped/src/backend.rs`, `lib.rs`, tests `tests/caller_caps.rs` and `unpopped-cpu-c/tests/caller_caps_unchanged.rs`); it began as an options note (pm-kernels `[TASK]` 2026-11-22; code after #385 merges, never on its stack). Asked for by fishstringer's E17 slice 3
 (`docs/options-e17-slice3-abi.md` in its repo, branch `cefa057`): a plan kernel that needs an `n` guard, a params block or several outputs
 carries a `KernelInterface` that a consumer written before it existed would ignore and bind wrongly.
 
@@ -44,7 +44,7 @@ fn lower_with(&self, plan: &KernelPlan<'_>, caps: &CallerCaps) -> Result<Generat
 - **The refusal reuses an existing variant**, `LowerError::UnsupportedPlanShape { detail }`, with a detail that names the capability ("needs a caller that binds
   `GeneratedKernel::interface`; call `try_generate_with` with `CallerCaps::LEGACY.with_interface()`"). `LowerError` is `#[non_exhaustive]` and is **not**
   extended, and no exhaustive enum is touched. No existing signature changes; the additions are a type, a function, and a defaulted trait method.
-- **`generate_variants`** is untouched in this slice. A `generate_variants_with` is the same pattern if a consumer needs it; none does today.
+- **`generate_variants`** is untouched in this slice, and that is a GAP in the guarantee, not only a scope note: it calls `backend.lower(&plan)` (`lib.rs`), not `lower_with`, so a backend that refuses LEGACY callers in `lower_with` is still served through `generate_variants`; the refusal covers `try_generate` and `try_generate_with` only. The fix (route `generate_variants` through `lower_with(&plan, &CallerCaps::LEGACY)`, with a test that the stub's refusal reaches it) is scheduled for the walls-2 PR 1. A `generate_variants_with` is the same pattern if a consumer needs it; none does today.
 
 ## Who calls `generate` today, and how each would opt in
 
@@ -73,13 +73,16 @@ checkable:
 Until then there is nothing to do, and a plan that would need the interface is refused for it with `UnsupportedPlanShape`.
 
 **The test that pins "byte-identical"** (written with the code, in `unpopped` and in `unpopped-cpu-c`, which is the in-tree backend that overrides nothing): a Baracuda-shaped
-plan, elementwise, a reduction, a scatter, lowered through `try_generate`, `try_generate_with(LEGACY)`, **and** `try_generate_with(with_interface())`; the three `GeneratedKernel`s
+plan, lowered through `try_generate`, `try_generate_with(LEGACY)`, **and** `try_generate_with(with_interface())`; the three `GeneratedKernel`s
 compare equal field by field (source, name, interface, provenance), with a stub backend that overrides only `lower` (Baracuda's situation). **Mutant:** make the default
 `lower_with` return `lower` plus any change (an interface, a different name) and the test goes red. Control: a stub that *does* override `lower_with` and refuses under `LEGACY`
 shows `try_generate` refusing and `try_generate_with(with_interface())` succeeding, so the test can see a difference. **Baracuda's own side:** after the release, one test in
 `baracuda-cuda-emit` that its `Cuda` output for its golden plans is unchanged, which only its lane can write (Unpopped has no Baracuda dependency).
 
 ## Honest limits
+
+- **What the byte-identical tests cover.** Only elementwise `add` and `mul` plans (`ops()` in `tests/caller_caps.rs`; `caller_caps_unchanged.rs`). A reduction and a scatter are NOT covered: the sentence above that names them is what the test is meant to grow to, not what it does today.
+- **No in-tree backend overrides `lower_with`.** `CpuC` overrides only `lower` and `lower_kernel`; the refusal fires only for the test stub `NeedsInterface` (`tests/caller_caps.rs`) until an external backend (fishstringer, Vulkane) overrides it. The hook has a test-only producer in this repository: flagged, not blocked.
 
 - **The flag is a claim, not a check.** Unpopped cannot verify a caller really binds the interface; a caller that passes `with_interface()` and does not is wrong in its
   own code. The point is the **default**: a legacy caller is refused, not mis-bound.

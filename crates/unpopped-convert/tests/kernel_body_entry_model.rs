@@ -235,3 +235,27 @@ fn the_parameter_order_is_the_slot_order_not_the_declaration_order() {
     run_launch(&k, &mut args).unwrap();
     assert_eq!(out_of(&args, 1), vec![11.0, 21.0]);
 }
+
+#[test]
+fn an_aliased_element_type_is_read_through_the_alias_it_does_not_decline() {
+    // The doc once said "an alias declines by name". The walker resolves `elem` through `type_aliases` (`Walker::ctype`), so `F` with
+    // `typedef float F;` lifts as `float` (found by a reviewer's read of the code; this pins the behaviour the doc now states).
+    let src = "typedef float F;\n\
+        [[vk::binding(0, 0)]] StructuredBuffer<F> input;\n\
+        [[vk::binding(1, 0)]] RWStructuredBuffer<F> output;\n\
+        [shader(\"compute\")] [numthreads(4, 1, 1)]\n\
+        void main(uint3 gid : SV_DispatchThreadID) { output[gid.x] = input[gid.x] + 1.0f; }";
+    let k = lift(src, [1, 1, 1], [4, 1, 1]).expect("an aliased element lifts");
+    let elems: Vec<_> = k
+        .params
+        .iter()
+        .map(|p| match &p.kind {
+            ParamKind::Buffer { elem, .. } => *elem,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(elems, [unpopped_vocab::ElementKind::F32; 2]);
+    let mut args = vec![f32s(&[1.0, 2.0, 3.0, 4.0]), f32s(&[0.0; 4])];
+    run_launch(&k, &mut args).expect("runs");
+    assert_eq!(out_of(&args, 1), vec![2.0, 3.0, 4.0, 5.0]);
+}

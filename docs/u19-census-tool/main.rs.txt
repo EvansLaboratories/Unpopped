@@ -71,6 +71,20 @@ fn main() {
     let a: Vec<String> = std::env::args().collect();
     let (lang, label, dir) = (a[1].as_str(), a[2].as_str(), PathBuf::from(&a[3]));
     let instantiate_mode = a.iter().any(|x| x == "--instantiate");
+    let includes_mode = a.iter().any(|x| x == "--includes");
+    let args_mode = a.iter().any(|x| x == "--args");
+    let mut index: std::collections::HashMap<String, Vec<(String, String)>> = std::collections::HashMap::new();
+    if includes_mode {
+        let mut all = Vec::new();
+        walk(&dir, &["cu", "cuh", "h", "hpp"], &mut all);
+        all.sort();
+        for f in all {
+            if let Ok(b) = std::fs::read(&f) {
+                let base = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                { let rel = f.strip_prefix(&dir).unwrap_or(&f).to_string_lossy().replace('\\', "/"); index.entry(base).or_default().push((rel, String::from_utf8_lossy(&b).to_string())); }
+            }
+        }
+    }
     let filter = a.iter().skip(4).find(|x| !x.starts_with("--")).cloned().unwrap_or_default();
     let (fe, exts, extract): (Frontend, &[&str], fn(&str) -> Vec<(String, bool, bool, usize)>) = match lang {
         "cuda" => (cuda_frontend(), &["cu", "cuh"], cuda_kernels),
@@ -128,6 +142,14 @@ fn main() {
             } else {
                 &src
             };
+            let ctx = if args_mode && is_template {
+                let at_orig = src.find(&format!("{name}(")).or_else(|| src.find(&name)).unwrap_or(at);
+                let k_at = src[..at_orig].rfind("__global__").unwrap_or(at_orig);
+                template_args(&src, k_at).into_iter().fold(ctx, |c, (n, is_type, v)| if is_type { c.with_type(n, "float") } else { c.with_const(n, v) })
+            } else {
+                ctx
+            };
+            let ctx = if includes_mode { add_includes(ctx, use_src, &index, &rel) } else { ctx };
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lift_kernel_in(&fe, use_src, &name, &ctx)));
             let (class, line) = match r {
                 Err(_) => ("PANIC in the walker".to_string(), 0),
@@ -149,7 +171,7 @@ fn main() {
                 Ok(Err(KernelLiftError::NoSuchFunction { .. })) => ("NoSuchFunction (prototype / macro-generated / out of the CST)".to_string(), 0),
                 Ok(Err(KernelLiftError::NotAKernel { .. })) => ("NotAKernel".to_string(), 0),
                 Ok(Err(KernelLiftError::SyntaxError { line })) => {
-                    if syntax_examples.len() < 8 {
+                    if syntax_examples.len() < 30 {
                         let text = src.lines().nth(line.saturating_sub(1)).unwrap_or("").trim().chars().take(110).collect::<String>();
                         syntax_examples.push(format!("{rel}:{line} `{name}`: {text}"));
                     }
@@ -201,4 +223,29 @@ fn main() {
             println!("  {l}");
         }
     }
+}
+
+/// Supply every quoted include of `src`, transitively, from the corpus index (matched by the written name's basename, first file wins).
+fn add_includes(mut ctx: LiftContext, src: &str, index: &std::collections::HashMap<String, Vec<(String, String)>>, from: &str) -> LiftContext {
+    let re = Regex::new(r#"(?m)^[ 	]*#[ 	]*include[ 	]*"([^"]+)""#).unwrap();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut work: Vec<(String, String)> = vec![(src.to_string(), from.to_string())];
+    while let Some((text, from)) = work.pop() {
+        for c in re.captures_iter(&text) {
+            let name = c[1].to_string();
+            if !seen.insert(name.clone()) || seen.len() > 400 {
+                continue;
+            }
+            let base = name.rsplit('/').next().unwrap_or(&name).to_string();
+            if let Some(cands) = index.get(&base) {
+                let common = |p: &str| p.split('/').zip(from.split('/')).take_while(|(a, b)| a == b).count();
+                let pick = if std::env::var("CENSUS_OLD_INCLUDES").is_ok() { cands.first() } else { cands.iter().max_by_key(|(p, _)| (common(p), std::cmp::Reverse(p.clone()))) };
+                if let Some((path, body)) = pick {
+                    ctx = ctx.with_include(name, body.clone());
+                    work.push((body.clone(), path.clone()));
+                }
+            }
+        }
+    }
+    ctx
 }

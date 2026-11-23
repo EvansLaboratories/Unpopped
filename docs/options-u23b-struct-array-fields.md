@@ -27,7 +27,7 @@ existing `ParamKind::Struct`) and lowers `shape.v[e]` as a `Select` ladder on `e
 - **Oracle, checker, `unpopped-cpu-c`:** nothing to change; they already run `Select` and struct parameters (`KernelArg::Struct` takes the flattened values in order).
 - **`params_block`:** `of_struct` over the flattened fields equals the C layout of the array byte for byte (consecutive, same alignment), so a launcher that fills the C
   struct fills the block.
-- **Cost:** 7 selects per access, and emitters see ladders, not an index. **Correctness is exact**; speed is not the oracle's concern, and an emitter that wants
+- **Cost:** 8 `Select` nodes per access for N = 8 (`param_array_read` starts from the `0` base and wraps once per element, so the last arm is `0`, not `v7`), and emitters see ladders, not an index. **Correctness is exact**; speed is not the oracle's concern, and an emitter that wants
   the index back can pattern-match the ladder or wait for B. Eight elements, four reads per loop trip in Baracuda's strided kernels.
 - **Unlocks:** the ~67 kernels stopped here (each then meets the next layer: re-measure).
 

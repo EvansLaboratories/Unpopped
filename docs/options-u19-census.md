@@ -23,7 +23,7 @@ deleted on 2026-11-07 (#638) and live in fishstringer's `fishstringer-kernels-so
 too, for a different and now named reason.
 
 Command (the tool is stored in `docs/u19-census-tool/`, scratch, not a workspace member): `census cuda baracuda-all corpus/baracuda`,
-`... --instantiate`, `census slang fishstringer-kernels corpus/fishstringer`; each corpus exported with `git archive <ref> <path>` from the stated ref,
+`... --instantiate`, `census slang fishstringer-kernels corpus/fishstringer`; the measurements from 141 onward add `--args --includes` (the stored tool carries both flags since the review of #386, see its README); each corpus exported with `git archive <ref> <path>` from the stated ref,
 never read from a working tree. Counts are **first decline per kernel**.
 
 ## Method, and what it cannot see
@@ -193,5 +193,7 @@ initialiser, 14 `baracuda::elementwise::DimsI32` (a namespace-qualified struct t
 Then **local arrays with a brace initialiser** (`int a[4] = {1, 2};`: the listed elements in order, the rest zero, as C does): **166 of 535** (was 157). Next first declines: 14 `baracuda::elementwise::DimsI32`
 (a namespace-qualified struct type), 13 `cg::thread_block`, 11 loop bounds the function assigns, 10 `baracuda::atomic::add<float>` (a namespaced helper call), 8 two-dimensional `__shared__`, 8 `shape.d`
 (a struct parameter's array field used whole), 8 `vec_t<float, 128>`, 7 `qualified_identifier` expressions.
+
+**Re-measured 2026-11-23 at the head of #386 (`6ba67c7c`, no `.rs` file differs from `1a55b0e6`) with the stored tool, `--args --includes`: 253 of 535 kernels lifted (228 of the 408 templates); the same tool, flags and corpus at the base of the last six slices (`ebf5342e`) give 205 of 535.** The progression above (56 to 166) was measured by earlier copies of the tool and is kept as the history of that work; the 253 is the only figure of the head and the control is what shows the tool can tell two walkers apart. Method, corpus identity and the exact run lines are in `docs/u19-census-tool/README.md`.
 
 — lane: unpopped

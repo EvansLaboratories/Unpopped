@@ -35,7 +35,7 @@ Measured over the 153 entry points (text occurrences, not kernels): `numthreads(
 5. **What sits behind the gate** (static counts in `docs/options-u19-census.md`, all in IR already): `groupshared T a[N]` to a `Shared` allocation (38 kernels' files),
    `GroupMemoryBarrierWithGroupSync()` to `Barrier`, `InterlockedCompareExchange/Or/Xor(dst, ..., orig)` to `AtomicCas`/`AtomicRmw` with the old value assigned to the
    out argument, `WaveActiveSum/Max/Min` to `Collective`, `WaveGetLaneCount()` to `ExecId::SubgroupSize`, `WaveIsFirstLane()` to `LaneId == 0`, `while`/`do` loops
-   (12; the walker lifts only counted `for` today, the IR has `While`), a helper function returning a value (60; the walker inlines these).
+   (12 when this was measured; the walker lifts `while` since (`kernel_body/statements.rs` `while_statement`) and `do`-`while` has no handler), a helper function returning a value (60 when measured; the walker inlines these).
 
 ## Where it lives: the decision for fishstringer
 
@@ -52,7 +52,7 @@ fishstringer's slice 3 proposes, for a plan kernel that needs them: explicit `[[
 `ConstantBuffer<Params_> pb_` last**, `n` first in `Params_`, and a `KernelInterface` with `bindings` and `params_block` (offsets checked against `slangc` reflection).
 The lifted corpus already has that order (buffers `0..k`, the constant buffer at the next slot). To keep the two one convention:
 
-- **Slot order = parameter order, buffers before the struct**, both directions (lift reads it, `lower_kernel` writes it).
+- **Slot order = parameter order, buffers before the struct**, both directions (lift reads it, `lower_kernel` writes it). "Buffers before the struct" holds for the measured corpus and is not enforced: `entry_resources` (`kernel_body/entry.rs`) sorts by slot only, so a `ConstantBuffer` at slot 0 would precede the buffers.
 - **Names differ** (a lifted struct is `p`/`Params`, the emitter's is `pb_`/`Params_`): the round trip renames, **the layout must not move**. `ParamsBlock::of_struct` is the
   natural C layout, equal to Slang's for 4-byte scalars and **not authoritative for the size** (std140 rounding, vec types): `slangc` reflection stays the authority, as already agreed.
 - **The `CallerCaps` hook** (`docs/options-caller-caps.md`) is what lets a plan lowering refuse an interface-needing shape for a caller that cannot bind it; a lifted kernel
@@ -60,7 +60,7 @@ The lifted corpus already has that order (buffers `0..k`, the constant buffer at
 
 ## Not decided here
 
-Whether `numthreads` overrides or must equal the context's block (recommend: the attribute is the authority, a context block that disagrees declines); entry points that
+Whether `numthreads` overrides or must equal the context's block (recommend: the attribute is the authority, a context block that disagrees declines; **what landed**: the attribute wins and the context's block is overwritten WITHOUT a decline, `kernel_body.rs` `launch.block = block`); entry points that
 share a file (`autodiff_poc.slang`: two kernels, each lifted with the resources it references); `ByteAddressBuffer`, `Texture*` and
 `Ptr<T>` (absent from the corpus). **The 13 grammar errors are not this walker's**: the parser stops on them (first ERROR node at `float var = ...` in 8 `layer_norm*` kernels, `uint is = ...` in
 `dequant_q4_km.slang:110`, `out[...] = ...` in the 4 `rope*` kernels); the cause, and whether to report it, is fishstringer's to establish.
@@ -72,8 +72,8 @@ Option B as agreed. `Frontend::with_entry_model(fn(&Tree, &str, &str) -> Result<
 resources: Vec<Resource> }`, `Resource { name, kind: ResourceKind, elem: String, slot: u32 }`, `ResourceKind { StructuredRO, StructuredRW, ConstantBuffer }`,
 `Semantic { DispatchThreadId, GroupId, GroupThreadId, GroupIndex }`, all `#[non_exhaustive]` with `new` constructors. The walker: resources in slot order are the parameters (a gap, repeat or non-zero
 start declines), `numthreads` wins over the context block, each entry parameter must carry a semantic. **Decided here and not in the note above:** `elem` is the source's type text and
-the walker resolves it (`float`, `uint`, ...; a vector type or an alias declines by name); a `ConstantBuffer<S>`'s `S` must be a struct defined in the same source. **Measured:** nothing yet on the
+the walker resolves it (`float`, `uint`, ...; a vector type declines by name; an alias of a scalar type is read through `type_aliases` (`Walker::ctype`), so `elem: "F"` with `using F = float;` in the source lifts); a `ConstantBuffer<S>`'s `S` must be a struct defined in the same source. **Measured:** nothing yet on the
 153 fishstringer entry points: that needs fishstringer's reader (`fishstringer-slang-parse`), which does not exist; the walker half is proven against a test-only reader over `tree-sitter-slang`
-(`tests/kernel_body_entry_model.rs`). The second layer under this gate (`groupshared`, `Interlocked*`, `Wave*`, `while`, value-returning helpers) is untouched and unmeasured.
+(`tests/kernel_body_entry_model.rs`). The second layer under this gate (`groupshared`, `Interlocked*`, `Wave*`) is untouched and unmeasured; `while` and value-returning helpers lift since slices 4 and 5 (only `do`-`while` has no handler).
 
 — lane: unpopped
