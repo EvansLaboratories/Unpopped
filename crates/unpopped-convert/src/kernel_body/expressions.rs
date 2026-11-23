@@ -90,6 +90,12 @@ impl<'s, 't> Walker<'s, 't> {
         match parse_literal(text(n, self.src)) {
             Some(Lit::Int(v, t)) => Ok((ScalarExpr::ConstInt(v, t), t)),
             Some(Lit::Float(v, t)) if t == self.compute => Ok((ScalarExpr::Const(v), t)),
+            // `0.5f` in a `double` kernel is a `float`: its value rounded to `f32`, widened where C widens it (`x * 0.5f` with a
+            // `double` x), and `float` arithmetic on two of them stays `float`
+            Some(Lit::Float(v, E::F32)) if self.compute == E::F64 => {
+                let e = self.convert(ScalarExpr::Const(v), E::F64, E::F32, n)?;
+                Ok((e, E::F32))
+            }
             Some(Lit::Float(_, t)) => self.not_yet(
                 n,
                 format!(
