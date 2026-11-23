@@ -121,3 +121,11 @@ fn a_class_template_naming_itself_reaches_a_fixed_point() {
         void k(float* out, const float* in) { V<float, 4> v; out[0] = (float)v.n(); }";
     assert_eq!(run(&lift(src).unwrap(), 1), vec![4.0]);
 }
+
+#[test]
+fn a_parenthesised_argument_matches_the_specialisation_for_its_value() {
+    let src = "template <typename T, int N> struct V { T x; __device__ int n() { return 1; } };\n\
+        template <> struct V<float, 4> { float x; __device__ int n() { return 7; } };\n\
+        void k(float* out, const float* in) { V<float, ((4))> v; out[0] = (float)v.n(); }";
+    assert_eq!(run(&lift(src).unwrap(), 1), vec![7.0]);
+}
