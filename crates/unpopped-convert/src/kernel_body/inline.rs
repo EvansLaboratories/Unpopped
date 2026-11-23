@@ -110,7 +110,11 @@ impl<'s, 't> Walker<'s, 't> {
         let ret_ty = self.return_type(func)?;
         let args = self.call_args(call);
         let mut cursor = plist.walk();
-        let params: Vec<_> = plist.named_children(&mut cursor).collect();
+        // a comment among the parameters (`float /*unused*/`) is not one
+        let params: Vec<_> = plist
+            .named_children(&mut cursor)
+            .filter(|p| p.kind() != "comment")
+            .collect();
         if params.len() != args.len() {
             return self.not_yet(
                 call,
@@ -129,6 +133,11 @@ impl<'s, 't> Walker<'s, 't> {
             }
         }
         for (p, a) in params.into_iter().zip(args) {
+            // an unnamed parameter (`float /*p1*/`) is passed and never read: the argument is still evaluated, as C does
+            if p.child_by_field_name("declarator").is_none() && self.struct_type_of(p).is_none() {
+                self.expr(a)?;
+                continue;
+            }
             let (pname, sym) = self.bind_argument(p, a, out)?;
             bound.insert(pname, sym);
         }
