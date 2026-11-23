@@ -538,3 +538,19 @@ fn a_tuple_collective_follows_the_same_scope_rule() {
         Err(KernelError::BarrierDivergent)
     );
 }
+
+#[test]
+fn known_over_rejection_a_divergent_continue_inside_a_loop_poisons_what_follows_the_loop() {
+    // `for (..) { if (lane == 0) continue; ... } <subgroup sum>`: the sum is reached by every lane (a `continue` ends only its own
+    // pass), but the poison a divergent `continue` sets is not reset when the loop ends, so the checker refuses it. This is what
+    // keeps the 9 `prelu_dweight_kernel` instances (a `continue` in the accumulation loop, then the same block reduce) Invalid.
+    // Pinned so that scoping the poison to its loop flips this test on purpose (a separate core ruling).
+    let after = |inside: Stmt| {
+        let mut body = vec![counted(ci(4), vec![inside])];
+        body.extend(guarded());
+        with(body)
+    };
+    // the control: the same loop with the `continue` replaced by an assignment is accepted, so the refusal below is the poison
+    accepted(&after(if_(lane_is_zero(), vec![set_x(1)])));
+    refused(&after(if_(lane_is_zero(), vec![Stmt::Continue])));
+}
