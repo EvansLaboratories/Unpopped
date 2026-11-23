@@ -3,8 +3,9 @@
 //! `cuCrealf`, `cuCimagf` and the `double` forms: 12 real instantiations). The header is not in the census corpus, so the names are
 //! builtins pinned to the text of CUDA 13.3's `include/cuComplex.h` (formulas and line numbers in `kernel_body/complex.rs`). The
 //! typedefs are the vector types `float2`/`double2`. `cuCmulf` is `((x.x * y.x) - (x.y * y.y), (x.x * y.y) + (x.y * y.x))` with NO
-//! fused multiply-add: the oracle evaluates each `Mul` and `Add` on its own, and the first test below has values that a fused
-//! evaluation would get visibly wrong. `NaN` and infinity follow the formula. `cuCdivf` and `cuCabsf` decline by name. Oracle runs
+//! fused multiply-add: the IR shape is pinned (no `Fma`: 4 `Mul`, 1 `Sub`, 1 `Add`), because the ORACLE cannot tell fused from unfused
+//! by value (it evaluates a statement's expression at f64 and rounds once: `docs/ir-numerics-qualifiers.md` 6b). `NaN` and infinity
+//! follow the formula. `cuCdivf` and `cuCabsf` decline by name. Oracle runs
 //! against Rust references written from the header's formulas.
 
 use unpopped::exec::LaunchShape;

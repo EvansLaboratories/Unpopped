@@ -10,8 +10,10 @@
 //! - `cuConjf(x)` = `(x.x, -x.y)` (98-100); `cuCaddf(x, y)` = `(x.x + y.x, x.y + y.y)` (102-106); `cuCsubf` the same with `-`
 //!   (109-113);
 //! - `cuCmulf(x, y)` = `((x.x * y.x) - (x.y * y.y), (x.x * y.y) + (x.y * y.x))` (121-128): the header's own plain operations, **no
-//!   fused multiply-add**. The oracle evaluates every `Mul` and `Add` separately, so a backend that contracts them (nvcc's default
-//!   `-fmad=true`) must spell the result with no contraction; `tests/kernel_body_complex.rs` has values that tell the two apart.
+//!   fused multiply-add**: the lowered IR carries plain `Mul`/`Sub`/`Add` nodes and never a `Fma` (`tests/kernel_body_complex.rs` pins
+//!   that shape). A backend must spell it with no contraction (nvcc's default `-fmad=true` would fuse). The ORACLE cannot tell fused from
+//!   unfused by value: it evaluates a statement's expression at f64 and rounds once (`oracle/kernel_eval.rs`), see
+//!   `docs/ir-numerics-qualifiers.md` 6b.
 //!
 //! `NaN` and infinity follow the formula, not a complex-arithmetic convention (`(inf, 0) * (0, inf)` is `(NaN, inf)` here).
 //! `cuCdivf` (scaling inside), `cuCabsf` (a `hypot` inside), `cuCfmaf` and their double forms decline by name.
