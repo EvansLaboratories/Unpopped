@@ -120,6 +120,18 @@ impl<'s, 't> Walker<'s, 't> {
         super::c_type(&t)
     }
 
+    /// The type text `t` followed through the type aliases in scope (`dfloat2` is `float2`).
+    pub(super) fn resolve_alias_text(&self, t: &str) -> String {
+        let mut t = t.to_string();
+        for _ in 0..MAX_ALIAS_DEPTH {
+            match self.type_aliases.get(&t) {
+                Some(next) => t = next.clone(),
+                None => break,
+            }
+        }
+        t
+    }
+
     /// `typename Name<args>::member` (or without `typename`): the member type of the explicit specialisation with exactly those
     /// arguments, else of the primary template. `None` for any other text, or a member the struct does not have.
     fn trait_member(&self, t: &str) -> Option<String> {
