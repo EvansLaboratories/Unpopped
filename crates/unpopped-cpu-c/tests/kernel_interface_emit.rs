@@ -8,7 +8,10 @@ use unpopped::kernel_interface::KernelInterface;
 use unpopped_cpu_c::CpuC;
 
 // The fixture shared with the oracle's tests; this file uses one kernel of it.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/device_peer.rs"]
 mod fixture;
 

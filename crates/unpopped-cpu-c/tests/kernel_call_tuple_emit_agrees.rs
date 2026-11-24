@@ -17,11 +17,17 @@ use unpopped_vocab::ElementKind;
 #[path = "support/cc.rs"]
 mod cc;
 // The shared compile-and-run driver; this file uses the part that runs an already generated source.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/kernel_run.rs"]
 mod kernel_run;
 // The fixture shared with the oracle's test; each file uses part of it.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/call_tuple.rs"]
 mod fixture;
 use fixture::{F32, I32, argmax_loop, pairwise_launch};

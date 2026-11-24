@@ -15,20 +15,35 @@ use unpopped_vocab::ElementKind;
 #[path = "support/cc.rs"]
 mod cc;
 // The shared compile-and-run drivers; this file uses a subset of them.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/devices_run.rs"]
 mod devices_run;
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/kernel_run.rs"]
 mod kernel_run;
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/launch_run.rs"]
 mod launch_run;
 // The fixtures shared with the oracle's test; each file uses part of them.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/device_peer.rs"]
 mod fixture;
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/multicast.rs"]
 mod mc;
 use devices_run::{run_c_devices, written_devices};

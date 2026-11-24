@@ -11,7 +11,10 @@ use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
 use unpopped::oracle::kernel_launch::run_launch;
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/cluster_peer.rs"]
 mod fixture;
 use fixture::{I32, N, block, c, kernel, launch, load, local, peer, rank, sh, thread};

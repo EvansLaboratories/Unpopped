@@ -19,10 +19,16 @@ use unpopped_vocab::layout_algebra::Layout;
 #[path = "support/cc.rs"]
 mod cc;
 // The shared compile-and-run drivers; this file uses a subset of them.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/kernel_run.rs"]
 mod kernel_run;
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/launch_run.rs"]
 mod launch_run;
 use launch_run::agree_launch;

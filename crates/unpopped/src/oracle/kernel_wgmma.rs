@@ -53,7 +53,10 @@ fn position(t: usize, v: usize) -> (usize, usize) {
 }
 
 /// The rows of `A` (64) and of `B` (`n`) the threads read, in row order.
-#[allow(clippy::type_complexity)]
+#[allow(
+    clippy::type_complexity,
+    reason = "the pair of row-reference vectors is local to this one helper; a named type would add nothing"
+)]
 fn tile_rows(lanes: &[WgmmaContribution]) -> Result<(Vec<&Vec<Val>>, Vec<&Vec<Val>>), KernelTrap> {
     let a: Vec<&Vec<Val>> = (0..M)
         .map(|r| {
