@@ -112,10 +112,6 @@ fn what_cannot_be_inlined_declines_by_name() {
         "recursive call to `f`",
     );
     not_yet(
-        "__device__ float f(float x) { for (int i = 0; i < 2; i++) { if (x < 0.0f) { return 0.0f; } } return x; }\nvoid k(float* out) { out[0] = f(1.0f); }",
-        "inside a loop",
-    );
-    not_yet(
         "__device__ float f(float* p) { return 1.0f; }\nvoid k(float* out) { out[0] = f(1.0f); }",
         "not a pointer expression",
     );

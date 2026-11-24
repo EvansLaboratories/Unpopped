@@ -69,27 +69,17 @@ fn the_trip_count_follows_the_launch_axis_it_names() {
 }
 
 #[test]
-fn a_local_that_is_not_known_at_lift_time_still_declines() {
-    fn declines(r: Result<KernelFn, KernelLiftError>) {
-        match r {
-            Err(KernelLiftError::NotYetLifted { construct, .. }) => {
-                assert!(construct.contains("not a counted loop"), "{construct}");
-            }
-            other => panic!("expected the counted-loop decline, got {other:?}"),
-        }
-    }
-    // not `const`: it may have changed before the loop
-    declines(lift(
+fn a_local_that_is_not_known_at_lift_time_is_not_unrolled_but_lowers_as_a_while() {
+    // the constant-loop path (which unrolls) needs a start known at lift time; these are not, so they take the general `for`
+    // (`T i = a; while (cond) { body; update }`), a loop over runtime values, still C's loop
+    for src in [
+        // not `const`: it may have changed before the loop
         "void k(float* out) { int bs = blockDim.x; bs = 4; for (int st = bs / 2; st > 0; st >>= 1) { out[0] = 1.0f; } }",
-        [8, 1, 1],
-        0,
-    ));
-    // `const`, but from a runtime value
-    declines(lift(
+        // `const`, but from a runtime value
         "void k(float* out, int n) { const int bs = n; for (int st = bs / 2; st > 0; st >>= 1) { out[0] = 1.0f; } }",
-        [8, 1, 1],
-        0,
-    ));
+    ] {
+        assert!(lift(src, [8, 1, 1], 0).is_ok(), "{src}");
+    }
     // control: the same loop from a `const` of the launch lifts
     assert!(
         lift(

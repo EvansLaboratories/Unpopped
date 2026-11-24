@@ -131,19 +131,17 @@ fn an_if_else_that_returns_in_both_arms_lifts_in_an_inlined_function() {
     assert_eq!(go(1), vec![2.0, 30.0]);
     assert_eq!(go(-4), vec![3.0, 30.0]);
     assert_eq!(go(9), vec![1.0, 10.0]);
-    // a return buried in a loop inside the `else` arm declines too (each arm is held to the same rules)
-    not_yet(
-        lift("float f(int x) { if (x > 0) { return 1.0f; } else { for (int i = 0; i < 2; i++) { return 2.0f; } return 3.0f; } }
-void k(float* out) { out[0] = f(1); }"),
-        "inside a loop",
-    );
-    // a return buried in a loop still declines
-    not_yet(
-        lift(
-            "float f(int x) { for (int i = 0; i < 3; i++) { if (i == x) { return 1.0f; } } return 0.0f; }\nvoid k(float* out) { out[0] = f(1); }",
-        ),
-        "inside a loop",
-    );
+    // a return buried in a loop lifts through the flag form (kernel_body_return_in_loop): each case gives C's value
+    let k = lift(
+        "float f(int x) { if (x > 0) { return 1.0f; } else { for (int i = 0; i < 2; i++) { return 2.0f; } return 3.0f; } }\n\
+         float h(int x) { for (int i = 0; i < 3; i++) { if (i == x) { return 1.0f; } } return 0.0f; }\n\
+         void k(float* out, int n) { out[0] = f(n); out[1] = h(n); }",
+    )
+    .unwrap();
+    let go = |n: i32| run(&k, 2, vec![KernelArg::Int(i128::from(n))]).unwrap();
+    assert_eq!(go(1), vec![1.0, 1.0]);
+    assert_eq!(go(0), vec![2.0, 1.0]);
+    assert_eq!(go(-1), vec![2.0, 0.0]);
 }
 
 #[test]

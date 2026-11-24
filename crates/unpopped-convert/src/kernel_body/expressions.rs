@@ -5,8 +5,11 @@ use super::*;
 
 impl<'s, 't> Walker<'s, 't> {
     pub(super) fn constant(&self, v: i64) -> (ScalarExpr, E) {
-        if int_range(self.compute).is_some() {
+        if matches!(self.compute, E::I32 | E::I64 | E::U32 | E::U64) {
             (ScalarExpr::ConstInt(v, self.compute), self.compute)
+        } else if int_range(self.compute).is_some() {
+            // a narrow integer compute type (`uint8_t` buffers): an integer leaf is I32 at the narrowest, which is also C's `int`
+            (ScalarExpr::ConstInt(v, E::I32), E::I32)
         } else {
             (ScalarExpr::Const(v as f64), self.compute)
         }
@@ -90,6 +93,12 @@ impl<'s, 't> Walker<'s, 't> {
         match parse_literal(text(n, self.src)) {
             Some(Lit::Int(v, t)) => Ok((ScalarExpr::ConstInt(v, t), t)),
             Some(Lit::Float(v, t)) if t == self.compute => Ok((ScalarExpr::Const(v), t)),
+            // `0.5f` in a `double` kernel is a `float`: its value rounded to `f32`, widened where C widens it (`x * 0.5f` with a
+            // `double` x), and `float` arithmetic on two of them stays `float`
+            Some(Lit::Float(v, E::F32)) if self.compute == E::F64 => {
+                let e = self.convert(ScalarExpr::Const(v), E::F64, E::F32, n)?;
+                Ok((e, E::F32))
+            }
             Some(Lit::Float(_, t)) => self.not_yet(
                 n,
                 format!(
@@ -160,7 +169,7 @@ impl<'s, 't> Walker<'s, 't> {
     }
 
     pub(super) fn logical(&self, op: &str, l: ScalarExpr, r: ScalarExpr) -> (ScalarExpr, E) {
-        let (one, _) = self.constant(1);
+        let (one, ty) = self.constant(1);
         let (zero, _) = self.constant(0);
         let truth = ScalarExpr::Select(Box::new(r), Box::new(one.clone()), Box::new(zero.clone()));
         let e = if op == "&&" {
@@ -168,7 +177,7 @@ impl<'s, 't> Walker<'s, 't> {
         } else {
             ScalarExpr::Select(Box::new(l), Box::new(one), Box::new(truth))
         };
-        (e, self.compute)
+        (e, ty)
     }
 
     pub(super) fn binary(
@@ -348,22 +357,23 @@ impl<'s, 't> Walker<'s, 't> {
             return self.not_yet(n, "a conditional of an unexpected shape");
         };
         let cond = self.truth_expr(c)?.0;
-        let before = self.hoisted.len();
+        // each arm's statements are taken apart as they arrive: an inlined call in an arm flushes `hoisted`, so positions in it
+        // are not stable across an arm
+        let outer = std::mem::take(&mut self.hoisted);
         let (av, at) = self.expr(a)?;
-        let mid = self.hoisted.len();
+        let mut a_loads = std::mem::take(&mut self.hoisted);
         let (bv, bt) = self.expr(b)?;
+        let mut b_loads = std::mem::replace(&mut self.hoisted, outer);
         let common = self.common_type(at, bt, n)?;
         let av = self.convert(av, at, common, n)?;
         let bv = self.convert(bv, bt, common, n)?;
-        if self.hoisted.len() == before {
+        if a_loads.is_empty() && b_loads.is_empty() {
             return Ok((
                 ScalarExpr::Select(Box::new(cond), Box::new(av), Box::new(bv)),
                 common,
             ));
         }
         // An arm reads memory, and only the arm taken may: `If (c) { loads_a; r = a } else { loads_b; r = b }`, the value in `r`.
-        let mut b_loads = self.hoisted.split_off(mid);
-        let mut a_loads = self.hoisted.split_off(before);
         let r = self.new_local(common);
         a_loads.push(Stmt::Assign {
             local: r,

@@ -10,7 +10,13 @@ impl<'s, 't> Walker<'s, 't> {
         let r = if n.kind() == "compound_statement" {
             let mut c = n.walk();
             let kids: Vec<_> = n.named_children(&mut c).collect();
-            kids.into_iter().try_for_each(|k| self.stmt(k, &mut out))
+            if self.flag_ret.is_some() {
+                self.flag_seq(&kids, &mut out)
+            } else {
+                kids.into_iter().try_for_each(|k| self.stmt(k, &mut out))
+            }
+        } else if self.flag_ret.is_some() {
+            self.flag_seq(&[n], &mut out)
         } else {
             self.stmt(n, &mut out)
         };
@@ -37,10 +43,21 @@ impl<'s, 't> Walker<'s, 't> {
             "static_assert_declaration" => self.static_assert(n),
             "expression_statement" => self.expression_statement(n, out),
             "if_statement" => self.if_statement(n, out),
-            "while_statement" => self.while_statement(n, out),
-            "for_statement" => self.for_statement(n, out, unroll),
+            "while_statement" | "for_statement" => {
+                self.loop_depth += 1;
+                let r = if n.kind() == "while_statement" {
+                    self.while_statement(n, out)
+                } else {
+                    self.for_statement(n, out, unroll)
+                };
+                self.loop_depth -= 1;
+                r?;
+                self.flag_after_loop(n, out);
+                Ok(())
+            }
             "break_statement" => push(out, Stmt::Break),
             "continue_statement" => push(out, Stmt::Continue),
+            "return_statement" if self.flag_ret.is_some() => self.flag_return(n, out),
             "return_statement" => {
                 if n.named_child_count() > 0 {
                     return self.not_yet(n, "a `return` with a value");
@@ -70,8 +87,20 @@ impl<'s, 't> Walker<'s, 't> {
                 Some(r) => r,
                 None => self.not_yet(e, "a `binary_expression` expression statement"),
             },
+            // `(void)x;` silences an unused-variable warning and does nothing: only a plain name or literal, never a call or an assignment
+            "cast_expression" if self.is_void_discard(e) => Ok(()),
             other => self.not_yet(e, format!("a `{other}` expression statement")),
         }
+    }
+
+    /// `(void)name;` / `(void)3;`: a cast to `void` of something with no effect.
+    fn is_void_discard(&self, e: Node<'_>) -> bool {
+        let void = e
+            .child_by_field_name("type")
+            .is_some_and(|t| text(t, self.src).trim() == "void");
+        void && e
+            .child_by_field_name("value")
+            .is_some_and(|v| matches!(v.kind(), "identifier" | "number_literal"))
     }
 
     pub(super) fn assignment(&mut self, n: Node<'_>, out: &mut Vec<Stmt>) -> R<()> {
@@ -329,6 +358,9 @@ impl<'s, 't> Walker<'s, 't> {
             if self.constant_for(n, out)? {
                 return Ok(());
             }
+            if self.general_for(n, out)? {
+                return Ok(());
+            }
             return self.not_yet(
                 n,
                 "a `for` that is not a counted loop `for (T i = a; i < b; i += s)`",
@@ -354,6 +386,72 @@ impl<'s, 't> Walker<'s, 't> {
             body: body?,
         });
         Ok(())
+    }
+
+    /// Any other `for (T i = a; cond; update) body` (`k <<= 1`, `j >>= 1`, a condition on a product): `T i = a; while (cond) { body;
+    /// update }`. A `continue` in the body would skip the update, so a body with one (outside a nested loop) is left to decline.
+    /// `false` when the loop is not of that shape.
+    fn general_for(&mut self, n: Node<'_>, out: &mut Vec<Stmt>) -> R<bool> {
+        let (Some(init), Some(cond), Some(upd), Some(body)) = (
+            n.child_by_field_name("initializer"),
+            n.child_by_field_name("condition"),
+            n.child_by_field_name("update"),
+            n.child_by_field_name("body"),
+        ) else {
+            return Ok(false);
+        };
+        if has_continue(body)
+            || !matches!(upd.kind(), "assignment_expression" | "update_expression")
+        {
+            return Ok(false);
+        }
+        let Some((name, ty, a)) = self.for_init(init)? else {
+            return Ok(false);
+        };
+        self.flush(out);
+        let local = self.new_local(ty);
+        out.push(Stmt::Let { local, init: a });
+        self.scopes.push(HashMap::new());
+        self.scopes
+            .last_mut()
+            .expect("a scope is open")
+            .insert(name, Sym::Scalar(local, ty, Fixed::No));
+        let built = (|| {
+            let cond = self.condition(cond)?;
+            let lead = std::mem::take(&mut self.hoisted);
+            let mut body = self.block_of(body)?;
+            let mut update = Vec::new();
+            if upd.kind() == "assignment_expression" {
+                self.assignment(upd, &mut update)?;
+            } else {
+                self.update(upd, &mut update)?;
+            }
+            self.flush(&mut update);
+            body.0.append(&mut update);
+            Ok::<_, super::KernelLiftError>((cond, lead, body))
+        })();
+        self.scopes.pop();
+        let (cond, mut lead, mut body) = built?;
+        if lead.is_empty() {
+            out.push(Stmt::While { cond, body });
+            return Ok(true);
+        }
+        // the condition reads memory: re-read it every pass, `while (1) { loads; if (!c) break; body }`
+        lead.push(Stmt::If {
+            cond: ScalarExpr::Select(
+                Box::new(cond),
+                Box::new(self.constant(0).0),
+                Box::new(self.constant(1).0),
+            ),
+            then: Block(vec![Stmt::Break]),
+            els: Block::default(),
+        });
+        lead.append(&mut body.0);
+        out.push(Stmt::While {
+            cond: ScalarExpr::ConstInt(1, E::I32),
+            body: Block(lead),
+        });
+        Ok(true)
     }
 
     /// The pieces of `for (T i = a; i < b; i += s) body`, or `None` for any other shape.
@@ -600,4 +698,19 @@ fn address_taken(n: Node<'_>, src: &str, out: &mut HashSet<String>) {
     for k in n.named_children(&mut c) {
         address_taken(k, src, out);
     }
+}
+
+/// Whether `n` holds a `continue` that belongs to the loop around it (one inside a nested loop belongs to that loop).
+fn has_continue(n: Node<'_>) -> bool {
+    if n.kind() == "continue_statement" {
+        return true;
+    }
+    if matches!(
+        n.kind(),
+        "for_statement" | "while_statement" | "do_statement"
+    ) {
+        return false;
+    }
+    let mut c = n.walk();
+    n.children(&mut c).any(has_continue)
 }

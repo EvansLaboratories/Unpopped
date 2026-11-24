@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.12` — U19 walker C: C library math names, auto, general for, functors, trait aliases, return inside a loop, F64 literals
+
+Added (`unpopped-convert`, source-to-source in the walker, no IR change): C library math names beyond the frontend table (double `exp`/`log`/`sqrt`, `log1p`, `expm1`, `log2`, `log10`, inverse and hyperbolic trig, `cbrt`, `erf`, `lgamma`, `rint`); `(void)x;` as a statement; `auto x = e;` takes the type of its initialiser; a `for` loop that is not counted lowers to a `while` (`k <<= 1`, `j >>= 1`); a float literal in a double kernel is an f32 value; a trait reached through a local alias (`using DT = Lse<T>; typename DT::Compute`); a functor instance called like a function inlines its `operator()`; namespace-qualified static members and trait types of class instances; a comment among the parameters is not one; the zero of a narrow integer is an I32 zero converted, and walker-made constants are I32 under a narrow integer compute type; `return` inside a loop (or followed by statements) of an inlined function lowers with a result local and a done flag. Each has a test with oracle runs and the mutants that closed their survivors.
+
+Not here: the caller-stated struct layouts (U38d, `docs/PATENT-SWEEP.md`: "outside as read", NOT CLEARED) and what imports them. The F64 per-op accuracy test and the U42 ROADMAP row were already on main (0.56.9), so those cherry-picks were empty.
+
+---
+
 ## `0.56.11` — U19 walker B: function-like macros, static member functions, parenthesised callees, guard return in the last called function, brace-initialised vectors, memcpy into a scalar
 
 Added (`unpopped-convert`, source-to-source in the walker, no IR change): function-like macros expand at their uses; static member functions are called through their struct or class-template instance; a parenthesised function name `(f)(x)` is a callee when it names a defined function; a guard `return` in the kernel's last called function leaves the kernel (needs the warp-uniform checker of 0.56.9; a helper's last call that is not the kernel's last, and a call under an `if`, a `for` or a bare block, are never a kernel exit); a brace-initialised vector local `float4 s = {a, b}` (the rest zero); `memcpy(&x, p, sizeof(x))` into a 4- or 8-byte scalar local, assembled from byte loads; `__low2half`/`__high2half`/`__low2float`/`__high2float`. Each has a test with oracle runs and the mutants that closed their survivors.

@@ -39,6 +39,10 @@ impl<'s, 't> Walker<'s, 't> {
             }
             return self.vector_declaration(n, (elem, lanes), out);
         }
+        // `auto x = e;`: the type of `e` (a scalar; a pointer, array or aggregate initialiser still declines)
+        if tname.as_deref() == Some("auto") && !declares_pointer(n) && !declares_array(n) {
+            return self.scalar_declaration_in(n, None, out);
+        }
         let ty = self.type_of(n.child_by_field_name("type"), n)?;
         let head = text(n, self.src).trim_start();
         if declares_pointer(n) {
@@ -68,6 +72,16 @@ impl<'s, 't> Walker<'s, 't> {
 
     /// `T x = e;` and `T x;` (a scalar local, zero when not initialised).
     pub(super) fn scalar_declaration(&mut self, n: Node<'_>, ty: E, out: &mut Vec<Stmt>) -> R<()> {
+        self.scalar_declaration_in(n, Some(ty), out)
+    }
+
+    /// [`Walker::scalar_declaration`] where `declared` of `None` is `auto`: each declarator takes the type of its initialiser.
+    fn scalar_declaration_in(
+        &mut self,
+        n: Node<'_>,
+        declared: Option<E>,
+        out: &mut Vec<Stmt>,
+    ) -> R<()> {
         let mut c = n.walk();
         let decls: Vec<_> = n.children_by_field_name("declarator", &mut c).collect();
         for d in decls {
@@ -101,6 +115,7 @@ impl<'s, 't> Walker<'s, 't> {
             let is_bool = n
                 .child_by_field_name("type")
                 .is_some_and(|t| text(t, self.src) == "bool");
+            let mut ty = declared.unwrap_or(E::I32);
             let e = match value {
                 // `bool b = e;` is `e != 0`: normalised, so a value other than 0 or 1 still gives 1
                 Some(v) if is_bool => {
@@ -110,18 +125,35 @@ impl<'s, 't> Walker<'s, 't> {
                     let (e, et) = self.expr(v)?;
                     let zero = self.zero_of(et, v)?;
                     let nonzero = ScalarExpr::Binary(BinaryOp::CmpNe, Box::new(e), Box::new(zero));
+                    // the comparison is 0 or 1 at the compute type: from a float it narrows to a byte exactly, from an integer it
+                    // wraps (the oracle's integer evaluator reads only a wrapping cast)
+                    let int_compute = int_range(self.compute).is_some();
                     ScalarExpr::Cast(
                         Box::new(nonzero),
                         CastSpec {
                             to: E::U8,
-                            round: RoundMode::TowardZero,
-                            sat: Saturation::Clamp,
+                            round: if int_compute {
+                                RoundMode::NearestEven
+                            } else {
+                                RoundMode::TowardZero
+                            },
+                            sat: if int_compute {
+                                Saturation::Wrap
+                            } else {
+                                Saturation::Clamp
+                            },
                         },
                     )
                 }
                 Some(v) => {
                     let (e, et) = self.expr(v)?;
+                    if declared.is_none() {
+                        ty = et;
+                    }
                     self.convert(e, et, ty, v)?
+                }
+                None if declared.is_none() => {
+                    return self.not_yet(d, "an `auto` declaration with no initialiser");
                 }
                 None => self.zero_of(ty, d)?,
             };
@@ -150,7 +182,11 @@ impl<'s, 't> Walker<'s, 't> {
     /// The zero of `ty`, as an expression.
     pub(super) fn zero_of(&self, ty: E, at: Node<'_>) -> R<ScalarExpr> {
         if int_range(ty).is_some() {
-            return Ok(ScalarExpr::ConstInt(0, ty));
+            // an integer leaf is I32, I64, U32 or U64 only: a narrower zero is an `I32` zero converted
+            if matches!(ty, E::I32 | E::I64 | E::U32 | E::U64) {
+                return Ok(ScalarExpr::ConstInt(0, ty));
+            }
+            return self.convert(ScalarExpr::ConstInt(0, E::I32), E::I32, ty, at);
         }
         self.convert(ScalarExpr::Const(0.0), self.compute, ty, at)
     }

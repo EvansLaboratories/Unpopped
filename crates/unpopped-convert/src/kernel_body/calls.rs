@@ -22,6 +22,11 @@ impl<'s, 't> Walker<'s, 't> {
         if let Some(r) = self.memcpy_statement(e, out) {
             return r;
         }
+        if let Some(f) = e.child_by_field_name("function") {
+            if let Some(r) = self.functor_call(e, f, out) {
+                return r.map(|_| ());
+            }
+        }
         let callee = e
             .child_by_field_name("function")
             .map(|f| self.short_callee(text(f, self.src)));
@@ -343,10 +348,16 @@ impl<'s, 't> Walker<'s, 't> {
         if self.defines(name) {
             return name;
         }
-        match name.rsplit_once("::") {
-            Some((_, short)) if self.defines(short) => short,
-            _ => name,
+        // `ns::Struct::f` or `ns::f`: the namespace is not a scope the walker keeps, so each leading `x::` is dropped until a
+        // function this source defines is named (`ns::Acc__t0::init` is `Acc__t0::init`, then `init`)
+        let mut rest = name;
+        while let Some((_, tail)) = rest.split_once("::") {
+            if self.defines(tail) {
+                return tail;
+            }
+            rest = tail;
         }
+        name
     }
 
     /// A math call through the frontend's tables, or an atomic that returns the old value (hoisted as a statement).
@@ -365,6 +376,15 @@ impl<'s, 't> Walker<'s, 't> {
                 return r;
             }
             return self.method_value(n, f);
+        }
+        let mut body = Vec::new();
+        if let Some(r) = self.functor_call(n, f, &mut body) {
+            let r = r?;
+            self.hoisted.append(&mut body);
+            return match r {
+                Some(v) => Ok(v),
+                None => self.not_yet(n, "the result of a functor call that returns void"),
+            };
         }
         let name = self.short_callee(text(f, self.src));
         if let Some(r) = self.tile_reduce(n, name) {
@@ -427,7 +447,7 @@ impl<'s, 't> Walker<'s, 't> {
             return Ok((ScalarExpr::Local(local), elem));
         }
         match args.len() {
-            1 if (self.unary_fn)(name).is_some() => self.math_unary(n, name, args[0]),
+            1 if self.unary_op(name).is_some() => self.math_unary(n, name, args[0]),
             2 if (self.binary_fn)(name).is_some() => self.math_binary(n, name, args[0], args[1]),
             _ => self.not_yet(
                 n,
@@ -441,12 +461,61 @@ impl<'s, 't> Walker<'s, 't> {
 
     /// The type a math function computes at: the `f`-suffixed C names are `float`, the others take their argument's type.
     pub(super) fn math_type(name: &str, arg: E) -> E {
-        let single = name.ends_with('f') && !matches!(name, "fabs" | "abs");
+        let single = name.ends_with('f') && !matches!(name, "fabs" | "abs" | "erf");
         if single && name != "__fsqrt_rn" {
             E::F32
+        } else if super::int_range(arg).is_some() {
+            // C promotes an integer argument of a `double` function to `double`
+            E::F64
         } else {
             arg
         }
+    }
+
+    /// A unary math function: the frontend's table, then the C library's other exact names (the `double` forms `exp`, `log`, `sqrt`,
+    /// and the `f` and plain forms of `log1p`, `expm1`, `log2`, `log10`, the inverse and hyperbolic trigonometry, `cbrt`, `erf`, `erfc`,
+    /// `lgamma`, and `rint`/`nearbyint`, which round to nearest even like `UnaryOp::Round`). `round`/`roundf` (ties away from zero) and the
+    /// fast-math `__sinf` family are not here.
+    pub(super) fn unary_op(&self, name: &str) -> Option<UnaryOp> {
+        if let Some(op) = (self.unary_fn)(name) {
+            return Some(op);
+        }
+        let base = match name.strip_suffix('f') {
+            Some(b) if !matches!(b, "" | "er" | "ab") => b,
+            _ => name,
+        };
+        Some(match base {
+            "exp" => UnaryOp::Exp,
+            "log" => UnaryOp::Log,
+            "sqrt" => UnaryOp::Sqrt,
+            "rsqrt" => UnaryOp::Rsqrt,
+            "tanh" => UnaryOp::Tanh,
+            "sin" => UnaryOp::Sin,
+            "cos" => UnaryOp::Cos,
+            "floor" => UnaryOp::Floor,
+            "ceil" => UnaryOp::Ceil,
+            "trunc" => UnaryOp::Trunc,
+            "exp2" => UnaryOp::Exp2,
+            "expm1" => UnaryOp::Expm1,
+            "log2" => UnaryOp::Log2,
+            "log10" => UnaryOp::Log10,
+            "log1p" => UnaryOp::Log1p,
+            "sinh" => UnaryOp::Sinh,
+            "cosh" => UnaryOp::Cosh,
+            "tan" => UnaryOp::Tan,
+            "asin" => UnaryOp::Asin,
+            "acos" => UnaryOp::Acos,
+            "atan" => UnaryOp::Atan,
+            "asinh" => UnaryOp::Asinh,
+            "acosh" => UnaryOp::Acosh,
+            "atanh" => UnaryOp::Atanh,
+            "cbrt" => UnaryOp::Cbrt,
+            "erf" => UnaryOp::Erf,
+            "erfc" => UnaryOp::Erfc,
+            "lgamma" => UnaryOp::Lgamma,
+            "rint" | "nearbyint" => UnaryOp::Round,
+            _ => return None,
+        })
     }
 
     pub(super) fn math_unary(
@@ -455,7 +524,7 @@ impl<'s, 't> Walker<'s, 't> {
         name: &str,
         a: Node<'_>,
     ) -> R<(ScalarExpr, E)> {
-        let Some(op) = (self.unary_fn)(name) else {
+        let Some(op) = self.unary_op(name) else {
             return self.not_yet(n, self.unexpanded_or(name, format!("a call to `{name}`")));
         };
         let (v, t) = self.expr(a)?;

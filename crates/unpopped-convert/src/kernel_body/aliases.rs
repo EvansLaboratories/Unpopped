@@ -120,12 +120,26 @@ impl<'s, 't> Walker<'s, 't> {
         super::c_type(&t)
     }
 
+    /// The type text `t` followed through the type aliases in scope (`dfloat2` is `float2`).
+    pub(super) fn resolve_alias_text(&self, t: &str) -> String {
+        let mut t = t.to_string();
+        for _ in 0..MAX_ALIAS_DEPTH {
+            match self.type_aliases.get(&t) {
+                Some(next) => t = next.clone(),
+                None => break,
+            }
+        }
+        t
+    }
+
     /// `typename Name<args>::member` (or without `typename`): the member type of the explicit specialisation with exactly those
     /// arguments, else of the primary template. `None` for any other text, or a member the struct does not have.
     fn trait_member(&self, t: &str) -> Option<String> {
         let t = t.strip_prefix("typename ").unwrap_or(t);
         let (head, member) = t.rsplit_once("::")?;
-        self.trait_entry(head, member.trim())
+        // `using DT = Lse<T>; typename DT::Compute`: the head may itself be an alias of the trait
+        let head = self.resolve_alias_text(head.trim());
+        self.trait_entry(&head, member.trim())
     }
 
     /// The entry `member` of the trait `head` (`Name<args>`, the arguments read through the type aliases in scope, so a template
@@ -133,11 +147,17 @@ impl<'s, 't> Walker<'s, 't> {
     fn trait_entry(&self, head: &str, member: &str) -> Option<String> {
         // a class template already instantiated as a plain struct (`AccOf__t1`, from `AccOf<float>`) is looked up by its own name
         if !head.contains('<') {
-            return self
-                .traits
-                .get(head.trim())
-                .and_then(|m| m.get(member))
-                .cloned();
+            // `ns::Acc__t0`: namespaces are not scopes here, so try each trailing part of the qualified name
+            let mut rest = head.trim();
+            loop {
+                if let Some(v) = self.traits.get(rest).and_then(|m| m.get(member)) {
+                    return Some(v.clone());
+                }
+                match rest.split_once("::") {
+                    Some((_, tail)) => rest = tail,
+                    None => return None,
+                }
+            }
         }
         let lt = head.find('<')?;
         if !head.ends_with('>') {
@@ -215,6 +235,17 @@ impl<'s, 't> Walker<'s, 't> {
     pub(super) fn alias_statement(&mut self, n: Node<'_>) -> R<()> {
         match alias_of(n, self.src) {
             Some((name, ty)) => {
+                // an alias of a struct is also a way to call its static members (`using DT = Lse__t0; DT::load(x)`)
+                let target = self.resolve_alias_text(&ty);
+                let prefix = format!("{name}::");
+                self.functions.retain(|k, _| !k.starts_with(&prefix));
+                // a struct named through namespaces (`a::b::Acc__t0`) is registered by its own name
+                let own = format!("{}::", target.rsplit("::").next().unwrap_or(&target));
+                for (key, f) in super::methods::static_members(&self.methods, self.src) {
+                    if let Some(member) = key.strip_prefix(&own) {
+                        self.functions.insert(format!("{prefix}{member}"), f);
+                    }
+                }
                 self.type_aliases.insert(name, ty);
                 Ok(())
             }

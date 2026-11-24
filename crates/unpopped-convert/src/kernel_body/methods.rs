@@ -74,8 +74,8 @@ fn method_key(f: Node<'_>, src: &str) -> Option<String> {
         "operator_cast" => Some(CONVERSION.to_string()),
         "function_declarator" => d
             .child_by_field_name("declarator")
-            .filter(|i| i.kind() == "field_identifier")
-            .map(|i| text(i, src).to_string()),
+            .filter(|i| i.kind() == "field_identifier" || i.kind() == "operator_name")
+            .map(|i| text(i, src).split_whitespace().collect::<String>()),
         _ => None,
     }
 }
@@ -92,6 +92,29 @@ impl<'s, 't> Walker<'s, 't> {
             Some(Sym::Struct(i)) => Some(i),
             _ => None,
         })
+    }
+
+    /// `op(args)` where `op` is a struct instance (a functor parameter or local) with an `operator()`: the method, inlined. `None`
+    /// when `callee` is not such a name.
+    pub(super) fn functor_call(
+        &mut self,
+        call: Node<'_>,
+        callee: Node<'_>,
+        out: &mut Vec<Stmt>,
+    ) -> Option<R<Option<(ScalarExpr, E)>>> {
+        if callee.kind() != "identifier" {
+            return None;
+        }
+        let Some(Sym::Struct(inst)) = self.lookup(text(callee, self.src)) else {
+            return None;
+        };
+        self.methods
+            .get(&inst.sname)
+            .is_some_and(|m| m.contains_key("operator()"))
+            .then(|| {
+                self.flush(out);
+                self.inline_method(call, &inst, "operator()", out)
+            })
     }
 
     /// `obj.f(args);` as a statement.
