@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.11` — U19 walker B: function-like macros, static member functions, parenthesised callees, guard return in the last called function, brace-initialised vectors, memcpy into a scalar
+
+Added (`unpopped-convert`, source-to-source in the walker, no IR change): function-like macros expand at their uses; static member functions are called through their struct or class-template instance; a parenthesised function name `(f)(x)` is a callee when it names a defined function; a guard `return` in the kernel's last called function leaves the kernel (needs the warp-uniform checker of 0.56.9; a helper's last call that is not the kernel's last, and a call under an `if`, a `for` or a bare block, are never a kernel exit); a brace-initialised vector local `float4 s = {a, b}` (the rest zero); `memcpy(&x, p, sizeof(x))` into a 4- or 8-byte scalar local, assembled from byte loads; `__low2half`/`__high2half`/`__low2float`/`__high2float`. Each has a test with oracle runs and the mutants that closed their survivors.
+
+Not here: the caller-stated struct layouts (U38d, `docs/PATENT-SWEEP.md`: "outside as read", NOT CLEARED) and what imports them; a `memcpy` whose source is a struct field read through a layout therefore still declines.
+
+---
+
 ## `0.56.10` — U19 walker A: class templates as structs, vector memory, namespace-qualified calls, alias casts, `&a[i][j]`, CUDART constants
 
 Added (all in `unpopped-convert`, source-to-source in the walker, no IR change): namespace-qualified plain calls of a defined function; `(Alias)(x)` is a cast to the alias; `&a[i][j]` of a multi-dimensional array is a flat pointer (U38c); pointers to vector types; CUDART single-precision constants; class templates with explicit arguments instantiate as plain structs, instance keys normalise nested parentheses, trait structs are found by their own name (U38b-1, U38b-4); struct field array extents fold literal arithmetic (U38b-2); arrays of vector types, lane access of vectors in memory and struct fields of vector types (U38b-3); qualifier-only object macros are blanked at their uses; a narrow float parameter makes the compute type float. Each has a test with oracle runs and the mutants that closed their survivors.
