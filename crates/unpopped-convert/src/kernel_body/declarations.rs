@@ -505,7 +505,6 @@ impl<'s, 't> Walker<'s, 't> {
                     pointee: ty,
                     lanes,
                     off: ScalarExpr::ConstInt(0, E::I64),
-                    strukt: None,
                 })
             } else {
                 Sym::Alloc(index, ty)

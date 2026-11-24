@@ -335,7 +335,6 @@ impl<'s, 't> Walker<'s, 't> {
             pointee: elem,
             lanes,
             off: ScalarExpr::ConstInt(0, E::I64),
-            strukt: None,
         }))
     }
 
