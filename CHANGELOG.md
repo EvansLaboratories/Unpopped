@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.10` — U19 walker A: class templates as structs, vector memory, namespace-qualified calls, alias casts, `&a[i][j]`, CUDART constants
+
+Added (all in `unpopped-convert`, source-to-source in the walker, no IR change): namespace-qualified plain calls of a defined function; `(Alias)(x)` is a cast to the alias; `&a[i][j]` of a multi-dimensional array is a flat pointer (U38c); pointers to vector types; CUDART single-precision constants; class templates with explicit arguments instantiate as plain structs, instance keys normalise nested parentheses, trait structs are found by their own name (U38b-1, U38b-4); struct field array extents fold literal arithmetic (U38b-2); arrays of vector types, lane access of vectors in memory and struct fields of vector types (U38b-3); qualifier-only object macros are blanked at their uses; a narrow float parameter makes the compute type float. Each has a test with oracle runs and the mutants that closed their survivors.
+
+Not here: the caller-stated struct layouts (U38d) and everything that imports them. They land in a later cut with the patent lines intact (`docs/PATENT-SWEEP.md`, U38d: "outside as read", NOT CLEARED).
+
+---
+
 ## `0.56.9` — U19 core: warp-uniform Subgroup collectives, a qualified operation needs f32, the oracle's rounding documented, generate_variants through lower_with
 
 Changed: a `Subgroup`-scope collective may sit under warp-uniform control (`warp = tid >> k`, `tid / 2^k`, `warp == c`, `warp < c`) when the launch states one subgroup size and the block's x extent is a multiple of it; a `Block` barrier or collective never may. The poison of a divergent `Break`/`Continue` ends with its loop. A `Return` before a barrier stays checker-accepted (ROADMAP U41 records what each emitter does with it). Tests: `kernel_warp_uniform` (every accepted and refused form, with oracle runs and the mutants that closed their survivors).

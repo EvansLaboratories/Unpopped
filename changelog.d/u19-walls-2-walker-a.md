@@ -1,5 +1,0 @@
-kind: U19 walker A: class templates as structs, vector memory, namespace-qualified calls, alias casts, `&a[i][j]`, CUDART constants
----
-Added (all in `unpopped-convert`, source-to-source in the walker, no IR change): namespace-qualified plain calls of a defined function; `(Alias)(x)` is a cast to the alias; `&a[i][j]` of a multi-dimensional array is a flat pointer (U38c); pointers to vector types; CUDART single-precision constants; class templates with explicit arguments instantiate as plain structs, instance keys normalise nested parentheses, trait structs are found by their own name (U38b-1, U38b-4); struct field array extents fold literal arithmetic (U38b-2); arrays of vector types, lane access of vectors in memory and struct fields of vector types (U38b-3); qualifier-only object macros are blanked at their uses; a narrow float parameter makes the compute type float. Each has a test with oracle runs and the mutants that closed their survivors.
-
-Not here: the caller-stated struct layouts (U38d) and everything that imports them. They land in a later cut with the patent lines intact (`docs/PATENT-SWEEP.md`, U38d: "outside as read", NOT CLEARED).
