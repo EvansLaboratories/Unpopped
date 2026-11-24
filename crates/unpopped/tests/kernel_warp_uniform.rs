@@ -23,7 +23,10 @@ use unpopped::oracle::kernel_launch::run_launch;
 use unpopped_vocab::ElementKind;
 
 #[path = "support/collective_tuple.rs"]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "a shared support file: this test uses only the helpers it needs"
+)]
 mod fixture;
 
 const I32: ElementKind = ElementKind::I32;
