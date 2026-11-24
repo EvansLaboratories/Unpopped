@@ -169,7 +169,18 @@ impl<'s, 't> Walker<'s, 't> {
         };
         let cond = self.condition(c)?;
         self.flush(out);
-        let then = self.callee_block(&stmts_of(cons), res)?;
+        let mut then = self.callee_block(&stmts_of(cons), res)?;
+        if self.callee_exits_kernel && res.is_none() {
+            // `if (c) { A; return; } rest` as `if (c) { A; return; }` then `rest`: the return ends the kernel, so `rest` (a warp
+            // shuffle may follow) is not inside a branch
+            then.push(Stmt::Return);
+            out.push(Stmt::If {
+                cond,
+                then: Block(then),
+                els: Block(Vec::new()),
+            });
+            return self.callee_seq(rest, res, out);
+        }
         let els = self.callee_block(rest, res)?;
         out.push(Stmt::If {
             cond,

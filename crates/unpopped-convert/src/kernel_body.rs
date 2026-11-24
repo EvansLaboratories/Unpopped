@@ -94,6 +94,7 @@ mod expressions;
 mod globals;
 mod groups;
 mod inline;
+mod memcpy;
 mod methods;
 mod places;
 mod pointer;
@@ -196,6 +197,10 @@ fn lift_preprocessed(
     w.functions = all_functions(root, src);
     w.structs = structs::collect_structs(root, src);
     w.methods = methods::collect_methods(root, src);
+    // a `static` member is a plain function under its qualified name: `S::load(p)` inlines like a free function
+    for (key, f) in methods::static_members(&w.methods, src) {
+        w.functions.entry(key).or_insert(f);
+    }
     w.launch = ctx.launch;
     // an entry point read through the frontend's model (Slang): its `numthreads` wins over the context's block, and the caller
     // still supplies the grid
@@ -372,6 +377,9 @@ struct Walker<'s, 't> {
     methods: HashMap<String, HashMap<String, Node<'t>>>,
     /// The functions being inlined now, outermost first.
     inline_stack: Vec<String>,
+    /// Set while a `void` callee that stands last in the kernel's own body is inlined: a bare `return;` leaves the kernel, so it
+    /// lowers as `Stmt::Return` and the rest of the callee stays in line (not under an `else`, which a barrier cannot sit in).
+    callee_exits_kernel: bool,
     src: &'s str,
     params: Vec<Param>,
     locals: Vec<LocalDecl>,
@@ -424,6 +432,7 @@ impl<'s, 't> Walker<'s, 't> {
             structs: HashMap::new(),
             methods: HashMap::new(),
             inline_stack: Vec::new(),
+            callee_exits_kernel: false,
             src,
             params: Vec::new(),
             locals: Vec::new(),
