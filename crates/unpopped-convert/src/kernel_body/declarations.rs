@@ -24,7 +24,12 @@ impl<'s, 't> Walker<'s, 't> {
                 .collect::<Vec<_>>()
                 .join(" ")
         });
-        if let Some((elem, lanes)) = tname.as_deref().and_then(vector_type) {
+        // a typedef of a vector type (`cuFloatComplex` is `float2`) declares that vector
+        let vector = tname
+            .as_deref()
+            .map(|t| self.resolve_alias_text(t))
+            .and_then(|t| vector_type(&t));
+        if let Some((elem, lanes)) = vector {
             if declares_pointer(n) {
                 return self.pointer_declaration(n, elem, lanes, out);
             }
