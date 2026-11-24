@@ -15,6 +15,22 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.9` — U19 core: warp-uniform Subgroup collectives, a qualified operation needs f32, the oracle's rounding documented, generate_variants through lower_with
+
+Changed: a `Subgroup`-scope collective may sit under warp-uniform control (`warp = tid >> k`, `tid / 2^k`, `warp == c`, `warp < c`) when the launch states one subgroup size and the block's x extent is a multiple of it; a `Block` barrier or collective never may. The poison of a divergent `Break`/`Continue` ends with its loop. A `Return` before a barrier stays checker-accepted (ROADMAP U41 records what each emitter does with it). Tests: `kernel_warp_uniform` (every accepted and refused form, with oracle runs and the mutants that closed their survivors).
+
+Changed: `check_kernel` refuses a `Qualified` (rounding/ftz/approx) operation whose operands are not f32/f32s by name (`TypeError::IllegalQualifier`); it used to accept what the oracle cannot run (the oracle panicked). ROADMAP U43 records the lift of that refusal. Emitter lanes: no emitter test or source we could read asserted `Qualified` at F64; the plan gate and cpu_c already refused it.
+
+Added: the oracle evaluates an integer `Bitcast` of a float (the `__float_as_int` family); it answered `Unsupported`.
+
+Documented: the oracle rounds once per statement at f64: neither unfused per-operation `float` arithmetic nor a fused multiply-add (`docs/ir-numerics-qualifiers.md` 6b, `oracle/kernel_eval.rs`). A cancellation such as `cuCmulf((x, 1 + 2^-11), (x, 1)).re` with `x = 1 + 2^-12` is `2^-24` in the oracle and in a fused kernel and `0` in unfused f32, and the derived band has `abs: 0`, so an unfused device value is outside it (`oracle_cancellation_band`); fused vs unfused is told apart by IR shape, not by value (an opt-in per-operation mode is ROADMAP U45). ROADMAP U38 to U45 (census walls that need a decision, the Codacy size refactor, constant tables, Return before a barrier, F64 per-op ratings, directed-rounded F64, hypot, per-operation rounding) and the options notes for U38 and U40. The U23 patent guard is described by what it is (the no-annotation rule), and the U38d reading ('outside as read', NOT cleared) with its re-read triggers is recorded in `docs/PATENT-SWEEP.md`.
+
+Fixed: `generate_variants` lowered the base kernel through `lower`, so a backend that refuses LEGACY callers in `lower_with` but whose `lower` serves the old shape was served there (a review of #386); it now goes through `lower_with(.., &CallerCaps::LEGACY)`, as `try_generate` does, with a test and a lower-only control.
+
+CI: the portfolio workflow pin moves from c72a6e03 (0.47.5) to dc45e363 (installs CodeRipper 0.47.15; coderipper main is 0.47.21).
+
+---
+
 ## `0.56.8` — `CallerCaps`, `try_generate_with` and a defaulted `Backend::lower_with`: a caller states whether it binds `GeneratedKernel::interface`
 
 A caller can now say what it can do with a lowering's result. `CallerCaps { interface }` (`#[non_exhaustive]`, `LEGACY` the default, `with_interface()` to opt in), `try_generate_with(op, key, backend, &caps)`, and a **defaulted** `Backend::lower_with(plan, caps)` that calls `lower` and ignores `caps`. A backend that can emit a shape needing a caller that binds the interface and the params block overrides `lower_with` and refuses a `LEGACY` caller with the existing `LowerError::UnsupportedPlanShape`, so a caller written before the interface existed is refused instead of mis-bound. Additive: `try_generate` is now `try_generate_with(.., &CallerCaps::LEGACY)`, `generate` and `generate_variants` are untouched, no existing signature or enum changes, and a backend that overrides only `lower` (every in-tree and adopter backend today) behaves identically. The flag is a claim, not a check: Unpopped cannot verify a caller binds what it says it binds. Verified by `tests/caller_caps.rs`: a lower-only backend yields the same kernel (name, source, interface, provenance, words, revision hash) through `try_generate`, `try_generate_with(LEGACY)` and `try_generate_with(with_interface())`, and a control backend that overrides `lower_with` is refused under `LEGACY` and served under `with_interface()`, so the equality test can see a difference when there is one.
