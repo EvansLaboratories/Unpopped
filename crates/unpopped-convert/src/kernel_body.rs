@@ -179,6 +179,8 @@ fn lift_preprocessed(
     let src = instantiated.as_deref().unwrap_or(src);
     // template helpers called with explicit arguments become plain functions (census slice 2)
     let expanded = templates::expand_calls(fe.parse, src.to_string())?;
+    // class templates used with explicit arguments become plain structs (U38b-1)
+    let expanded = templates::expand_types(fe.parse, expanded)?;
     let src = expanded.as_str();
     let tree = (fe.parse)(src).ok_or(KernelLiftError::SyntaxError { line: 0 })?;
     let root = tree.root_node();
@@ -711,6 +713,11 @@ fn pick_compute(raw: &[(String, PShape)]) -> E {
     let mut types = types.collect::<Vec<_>>();
     if let Some(f) = types.iter().find(|t| matches!(t, E::F32 | E::F64)) {
         return *f;
+    }
+    // a narrow float anywhere (`__half* dst`) makes the kernel float arithmetic: its literals are `float`, not the type of a
+    // leading byte buffer (`const void* vx`)
+    if types.iter().any(|t| matches!(t, E::F16 | E::Bf16)) {
+        return E::F32;
     }
     let first_buffer = raw.iter().find_map(|(_, s)| match s {
         PShape::Buffer(t, _) => Some(*t),

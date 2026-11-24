@@ -221,6 +221,22 @@ impl<'s, 't> Walker<'s, 't> {
                 "the address of something that is not an array or pointer element `&p[i]`",
             );
         };
+        // `&a[i][j]` of a multi-dimensional array: the flat element's address (the array is one row-major allocation)
+        if let Some((Place::Alloc { alloc, index }, elem)) = self.nd_element_place(arg)? {
+            let Some(size) = byte_size(elem) else {
+                return self.not_yet(arg, format!("a pointer to {elem:?} (no whole-byte size)"));
+            };
+            let off = ScalarExpr::Mul(
+                Box::new(index),
+                Box::new(ScalarExpr::ConstInt(size, E::I64)),
+            );
+            return Ok(Some(PtrVal {
+                base: PBase::Alloc(alloc),
+                pointee: elem,
+                lanes: 1,
+                off,
+            }));
+        }
         let (Some(base), Some(idx)) = (
             arg.child_by_field_name("argument"),
             arg.child_by_field_name("indices"),
@@ -309,7 +325,13 @@ impl<'s, 't> Walker<'s, 't> {
     }
 
     /// `T* name = <pointer expression>;`: a pointer local, fixed now (its offset is evaluated into a local).
-    pub(super) fn pointer_declaration(&mut self, n: Node<'_>, ty: E, out: &mut Vec<Stmt>) -> R<()> {
+    pub(super) fn pointer_declaration(
+        &mut self,
+        n: Node<'_>,
+        ty: E,
+        lanes: u8,
+        out: &mut Vec<Stmt>,
+    ) -> R<()> {
         let mut c = n.walk();
         let decls: Vec<_> = n.children_by_field_name("declarator", &mut c).collect();
         for d in decls {
@@ -335,7 +357,7 @@ impl<'s, 't> Walker<'s, 't> {
                     "a pointer local initialised from something that is not a pointer expression",
                 );
             };
-            if p.pointee != ty {
+            if p.pointee != ty || p.lanes != lanes {
                 return self.not_yet(
                     value,
                     format!(

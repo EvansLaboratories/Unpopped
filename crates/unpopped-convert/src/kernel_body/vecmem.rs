@@ -74,6 +74,32 @@ impl<'s, 't> Walker<'s, 't> {
             .collect())
     }
 
+    /// The place of lane `member` (`x`, `y`, ...) of the vector element `a` names (`d[i]`, `p[i]`, `*p` of a pointer to a vector),
+    /// and its element type; `None` if `a` is not a vector in memory.
+    pub(super) fn vector_lane_place(
+        &mut self,
+        a: Node<'_>,
+        member: Node<'_>,
+    ) -> R<Option<(Place, E)>> {
+        let Some((p, index)) = self.vector_target(a)? else {
+            return Ok(None);
+        };
+        let Some(lane) = super::lane_of(text(member, self.src), p.lanes) else {
+            return self.not_yet(
+                member,
+                format!(
+                    "the member `{}` of a {}-lane vector",
+                    text(member, self.src),
+                    p.lanes
+                ),
+            );
+        };
+        let place = self
+            .lane_places(&p, index, a)?
+            .swap_remove(usize::from(lane));
+        Ok(Some((place, p.pointee)))
+    }
+
     /// A vector read through a pointer, as its lane expressions (the loads are hoisted); `None` if `n` is not one.
     pub(super) fn vector_load(
         &mut self,

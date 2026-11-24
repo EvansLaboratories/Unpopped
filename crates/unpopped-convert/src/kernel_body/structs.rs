@@ -110,11 +110,22 @@ fn field_of(d: Node<'_>, ty: &str, src: &str) -> FieldDef {
                 .child_by_field_name("declarator")
                 .filter(|i| i.kind() == "field_identifier");
             let n = d.child_by_field_name("size").and_then(|s| {
-                let t = text(s, src).trim();
-                match (t.parse::<u32>(), s.kind()) {
-                    (Ok(n), _) if n > 0 => Some(ArrSize::Lit(n)),
-                    (_, "identifier") => Some(ArrSize::Named(t.to_string())),
-                    _ => None,
+                // an extent substituted from a template argument arrives parenthesised (`data[(4)]`)
+                let mut t = text(s, src).trim();
+                while let Some(inner) = t.strip_prefix('(').and_then(|r| r.strip_suffix(')')) {
+                    t = inner.trim();
+                }
+                let ident = !t.is_empty()
+                    && !t.starts_with(|c: char| c.is_ascii_digit())
+                    && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+                match t.parse::<u32>() {
+                    Ok(n) if n > 0 => Some(ArrSize::Lit(n)),
+                    _ if ident => Some(ArrSize::Named(t.to_string())),
+                    // an extent that is arithmetic on literals (`(128) / 4`, from `vec_size / 4`)
+                    _ => super::context::literal_expression(text(s, src))
+                        .and_then(|v| u32::try_from(v).ok())
+                        .filter(|v| *v > 0)
+                        .map(ArrSize::Lit),
                 }
             });
             match (id, n) {
@@ -213,6 +224,9 @@ impl<'s, 't> Walker<'s, 't> {
             }
             return Ok(Sym::Struct(self.new_struct(&f.ty, path, at, out)?));
         }
+        if let Some(shape) = super::vector_type(&f.ty) {
+            return self.new_vector_field(f, path, shape, at, out);
+        }
         let e = match self.ctype(&f.ty) {
             Ok(e) => e,
             Err(why) => return self.not_yet(at, format!("the field `{path}`: {why}")),
@@ -278,6 +292,52 @@ impl<'s, 't> Walker<'s, 't> {
 
     /// A loop storing zero into every element of a private array (the oracle traps a read of an unwritten one; C leaves it
     /// indeterminate).
+    /// A field of CUDA vector type: `float4 v;` is one scalar local per lane; `float4 data[N];` is an allocation of `N * lanes`
+    /// scalars held as a pointer whose pointee is the vector (so `data[i]`, `data[i].x` and `((float*)data)[k]` work as for a
+    /// local vector array), zero at construction.
+    fn new_vector_field(
+        &mut self,
+        f: &FieldDef,
+        path: &str,
+        (elem, lanes): (E, u8),
+        at: Node<'_>,
+        out: &mut Vec<Stmt>,
+    ) -> R<Sym> {
+        let Some(sz) = f.array.clone() else {
+            let mut ls = [0u32; 4];
+            for l in ls.iter_mut().take(usize::from(lanes)) {
+                *l = self.new_local(elem);
+                out.push(Stmt::Let {
+                    local: *l,
+                    init: self.zero_of(elem, at)?,
+                });
+            }
+            return Ok(Sym::Vector(ls, elem, lanes));
+        };
+        let n = self.arr_count(&sz, at)?;
+        if self.launch.is_none() {
+            return self.not_yet(
+                at,
+                format!("the array field `{path}` without a launch (use `lift_kernel_launched`)"),
+            );
+        }
+        let count = n * u32::from(lanes);
+        self.allocs.push(AllocDecl::new(
+            path,
+            MemorySpace::Private,
+            elem,
+            Extent::Static(count),
+        ));
+        let alloc = u32::try_from(self.allocs.len() - 1).unwrap_or(u32::MAX);
+        self.zero_fill(alloc, elem, count, at, out)?;
+        Ok(Sym::Pointer(super::pointer::PtrVal {
+            base: super::pointer::PBase::Alloc(alloc),
+            pointee: elem,
+            lanes,
+            off: ScalarExpr::ConstInt(0, E::I64),
+        }))
+    }
+
     pub(super) fn zero_fill(
         &mut self,
         alloc: u32,
@@ -400,6 +460,16 @@ impl<'s, 't> Walker<'s, 't> {
                     Sym::Alloc(alloc, *e)
                 }
                 Sym::Struct(inner) => Sym::Struct(self.clone_struct(inner, &path, at, out)?),
+                Sym::Pointer(p)
+                    if p.lanes > 1 && matches!(p.base, super::pointer::PBase::Alloc(_)) =>
+                {
+                    return self.not_yet(
+                        at,
+                        format!(
+                            "the field `{path}`, an array of vectors, copied (copy its elements)"
+                        ),
+                    );
+                }
                 Sym::Pointer(p) => Sym::Pointer(p.clone()),
                 // a struct parameter's array is a row of immutable locals (an element is never assigned): the copy shares them
                 Sym::ParamArray(ls, e) => Sym::ParamArray(ls.clone(), *e),

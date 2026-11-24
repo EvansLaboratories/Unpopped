@@ -60,7 +60,7 @@ impl<'s, 't> Walker<'s, 't> {
 
     /// `a[i][j]` of a multi-dimensional array allocation: the flat element `(i * J + j)`, row-major, every index converted to
     /// `I64` first. `None` when `n` is not a chain of subscripts on such an array (a partial chain is declined by the caller).
-    fn nd_element_place(&mut self, n: Node<'_>) -> R<Option<(Place, E)>> {
+    pub(super) fn nd_element_place(&mut self, n: Node<'_>) -> R<Option<(Place, E)>> {
         let mut indices = Vec::new();
         let mut cur = n;
         while cur.kind() == "subscript_expression" {
@@ -191,6 +191,17 @@ impl<'s, 't> Walker<'s, 't> {
             (a.kind() == "identifier", self.lookup(base))
         {
             return self.vector_member(f, ls, (elem, lanes));
+        }
+        // a lane of a vector that is a field of a struct (`v.head.x`)
+        if a.kind() == "field_expression"
+            && let Some(Sym::Vector(ls, elem, lanes)) = self.resolve_member(a)?
+        {
+            return self.vector_member(f, ls, (elem, lanes));
+        }
+        if let Some((place, elem)) = self.vector_lane_place(a, f)? {
+            let local = self.new_local(elem);
+            self.hoisted.push(Stmt::Load { local, place });
+            return Ok((ScalarExpr::Local(local), elem));
         }
         if a.kind() != "identifier" || self.lookup(base).is_some() {
             return self.not_yet(

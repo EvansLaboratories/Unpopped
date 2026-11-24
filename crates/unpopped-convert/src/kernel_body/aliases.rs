@@ -131,6 +131,14 @@ impl<'s, 't> Walker<'s, 't> {
     /// The entry `member` of the trait `head` (`Name<args>`, the arguments read through the type aliases in scope, so a template
     /// parameter bound to `float` is `float`): the specialisation with exactly those arguments, else the primary template.
     fn trait_entry(&self, head: &str, member: &str) -> Option<String> {
+        // a class template already instantiated as a plain struct (`AccOf__t1`, from `AccOf<float>`) is looked up by its own name
+        if !head.contains('<') {
+            return self
+                .traits
+                .get(head.trim())
+                .and_then(|m| m.get(member))
+                .cloned();
+        }
         let lt = head.find('<')?;
         if !head.ends_with('>') {
             return None;
@@ -242,6 +250,12 @@ impl<'s, 't> Walker<'s, 't> {
             "FLT_MAX" => float(f32::MAX),
             "FLT_MIN" => float(f32::MIN_POSITIVE),
             "FLT_EPSILON" => float(f32::EPSILON),
+            // CUDA's `math_constants.h` single-precision names
+            "CUDART_INF_F" => float(f32::INFINITY),
+            "CUDART_NAN_F" => float(f32::NAN),
+            "CUDART_PI_F" => float(std::f32::consts::PI),
+            "CUDART_ZERO_F" => float(0.0),
+            "CUDART_ONE_F" => float(1.0),
             "INT_MAX" => int(i64::from(i32::MAX), E::I32),
             "INT_MIN" => int(i64::from(i32::MIN), E::I32),
             "UINT_MAX" => int(i64::from(u32::MAX), E::U32),

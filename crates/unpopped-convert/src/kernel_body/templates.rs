@@ -33,6 +33,11 @@ fn params_of<'t>(func: Node<'t>, src: &str) -> Res<Option<(Node<'t>, Vec<TParam>
     let Some(decl) = func.parent().filter(|p| p.kind() == "template_declaration") else {
         return Ok(None);
     };
+    params_of_decl(decl, src)
+}
+
+/// The `template<...>` parameters of the template declaration `decl`.
+fn params_of_decl<'t>(decl: Node<'t>, src: &str) -> Res<Option<(Node<'t>, Vec<TParam>)>> {
     let Some(list) = decl.child_by_field_name("parameters") else {
         return Ok(None);
     };
@@ -180,6 +185,9 @@ pub(super) fn instantiate(
 
 /// Rounds of rewriting before a chain of template helpers is declined (each round resolves one nesting level).
 const MAX_ROUNDS: usize = 16;
+
+/// Rounds of class template rewriting: an argument's own parentheses are normalised so an instance key never grows.
+const MAX_TYPE_ROUNDS: usize = 16;
 
 /// The instance each distinct `(helper, arguments)` became: a plain function appended to the source, so it is walked and inlined
 /// like any other helper.
@@ -371,6 +379,246 @@ fn instance_of(
     Some(name)
 }
 
+// ---- class templates (U38b-1) ----
+
+/// A class template of the file: its primary definition, or a partial or explicit specialisation with its pattern arguments.
+struct ClassTemplate<'t> {
+    spec: Node<'t>,
+    decl: Node<'t>,
+    name: Node<'t>,
+    pattern: Option<Vec<String>>,
+}
+
+/// Replace every use of a class template with explicit arguments (`vec_t<float, 128>`) by a **plain struct** that is the template
+/// instantiated with them (`vec_t__t0`), appended to the source: the explicit specialisation or partial specialisation whose
+/// pattern matches (`template <size_t n> struct vec_t<float, n>` matches `vec_t<float, 128>` with `n` = 128), else the primary
+/// template. The instance is then walked like any struct, its member functions included. Repeats until no use is left (an
+/// instance can itself name another instance). A use inside another template's body is left for that template's own
+/// instantiation; a use that matches nothing is left and declines at its use.
+///
+/// # Errors
+/// A chain of instantiations deeper than [`MAX_ROUNDS`], or a source that stops parsing.
+pub(super) fn expand_types(parse: fn(&str) -> Option<Tree>, mut src: String) -> Res<String> {
+    let mut inst = Instances::default();
+    for _ in 0..MAX_TYPE_ROUNDS {
+        let tree = parse(&src).ok_or(KernelLiftError::SyntaxError { line: 0 })?;
+        let edits = type_edits(&tree, &src, &mut inst);
+        if edits.is_empty() {
+            return Ok(src);
+        }
+        for (start, end, name) in edits.into_iter().rev() {
+            src.replace_range(start..end, &name);
+        }
+        src.push_str(&std::mem::take(&mut inst.text));
+    }
+    decline(format!(
+        "class templates nested deeper than {MAX_TYPE_ROUNDS} levels"
+    ))
+}
+
+fn type_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize, String)> {
+    let mut primary: HashMap<String, ClassTemplate<'_>> = HashMap::new();
+    let mut specs: HashMap<String, Vec<ClassTemplate<'_>>> = HashMap::new();
+    let mut uses: Vec<Node<'_>> = Vec::new();
+    let mut stack = vec![tree.root_node()];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            // generic code (a function or class template) is instantiated as a whole, not rewritten in place
+            "template_declaration" => {
+                register_class(n, src, &mut primary, &mut specs);
+                continue;
+            }
+            "template_type" => {
+                uses.push(n);
+                continue;
+            }
+            _ => {}
+        }
+        let mut c = n.walk();
+        stack.extend(n.children(&mut c));
+    }
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for u in uses {
+        let (Some(name), Some(args)) = (
+            u.child_by_field_name("name"),
+            u.child_by_field_name("arguments"),
+        ) else {
+            continue;
+        };
+        let class = text(name, src);
+        let given = template_args(args, src);
+        if let Some(instance) = class_instance(src, class, &given, &primary, &specs, inst) {
+            edits.push((u.start_byte(), u.end_byte(), instance));
+        }
+    }
+    edits.sort_by_key(|e| e.0);
+    edits
+}
+
+/// Registers the class (or struct) a template declaration defines, if it defines one: a primary template, or a specialisation
+/// keyed by its class name with its pattern arguments.
+fn register_class<'t>(
+    decl: Node<'t>,
+    src: &str,
+    primary: &mut HashMap<String, ClassTemplate<'t>>,
+    specs: &mut HashMap<String, Vec<ClassTemplate<'t>>>,
+) {
+    let mut c = decl.walk();
+    let mut cands: Vec<Node<'t>> = decl.named_children(&mut c).collect();
+    let mut deeper: Vec<Node<'t>> = Vec::new();
+    for k in &cands {
+        let mut c2 = k.walk();
+        deeper.extend(k.named_children(&mut c2));
+    }
+    cands.extend(deeper);
+    for n in cands {
+        if !matches!(n.kind(), "struct_specifier" | "class_specifier") {
+            continue;
+        }
+        let (Some(name), Some(_)) = (n.child_by_field_name("name"), n.child_by_field_name("body"))
+        else {
+            continue;
+        };
+        if name.kind() == "template_type" {
+            let key = name
+                .child_by_field_name("name")
+                .map(|k| text(k, src).to_string());
+            let pattern = name
+                .child_by_field_name("arguments")
+                .map(|a| template_args(a, src));
+            if let (Some(key), Some(pattern)) = (key, pattern) {
+                specs.entry(key).or_default().push(ClassTemplate {
+                    spec: n,
+                    decl,
+                    name,
+                    pattern: Some(pattern),
+                });
+            }
+        } else {
+            primary.insert(
+                text(name, src).to_string(),
+                ClassTemplate {
+                    spec: n,
+                    decl,
+                    name,
+                    pattern: None,
+                },
+            );
+        }
+        return;
+    }
+}
+
+/// The texts of a template argument list, trimmed.
+fn template_args(list: Node<'_>, src: &str) -> Vec<String> {
+    let mut c = list.walk();
+    list.named_children(&mut c)
+        .map(|a| text(a, src).trim().to_string())
+        .collect()
+}
+
+/// `x` without whitespace and without any outer parentheses that enclose the whole text (an argument substituted as `(128)` or
+/// `((128))` equals `128`; `(a)+(b)` keeps its parentheses).
+fn bare(x: &str) -> String {
+    let mut s: String = x.split_whitespace().collect();
+    loop {
+        let Some(inner) = s.strip_prefix('(').and_then(|r| r.strip_suffix(')')) else {
+            return s;
+        };
+        // the opening parenthesis must close at the very end, not earlier
+        let mut depth = 0i32;
+        let encloses = inner.chars().all(|c| {
+            depth += i32::from(c == '(') - i32::from(c == ')');
+            depth >= 0
+        }) && depth == 0;
+        if !encloses {
+            return s;
+        }
+        s = inner.to_string();
+    }
+}
+
+/// The bindings a specialisation's pattern gives for `given`, and how many pattern arguments were fixed (not parameters); `None`
+/// when it does not match.
+fn match_pattern(
+    params: &[TParam],
+    pattern: &[String],
+    given: &[String],
+) -> Option<(Vec<(String, String)>, usize)> {
+    if pattern.len() != given.len() {
+        return None;
+    }
+    let mut subs: Vec<(String, String)> = Vec::new();
+    let mut fixed = 0;
+    for (pat, giv) in pattern.iter().zip(given) {
+        match params.iter().find(|p| p.name == *pat) {
+            Some(p) => {
+                let v = if p.is_type {
+                    giv.clone()
+                } else {
+                    format!("({})", bare(giv))
+                };
+                match subs.iter().find(|(n, _)| n == pat) {
+                    Some((_, old)) if bare(old) != bare(&v) => return None,
+                    Some(_) => {}
+                    None => subs.push((pat.clone(), v)),
+                }
+            }
+            None if bare(pat) == bare(giv) => fixed += 1,
+            None => return None,
+        }
+    }
+    Some((subs, fixed))
+}
+
+/// The name of the class template `class` instantiated with `given`, creating the plain struct on first use.
+fn class_instance(
+    src: &str,
+    class: &str,
+    given: &[String],
+    primary: &HashMap<String, ClassTemplate<'_>>,
+    specs: &HashMap<String, Vec<ClassTemplate<'_>>>,
+    inst: &mut Instances,
+) -> Option<String> {
+    let key = format!(
+        "{class}<{}>",
+        given.iter().map(|g| bare(g)).collect::<Vec<_>>().join(",")
+    );
+    if let Some(n) = inst.by_key.get(&key) {
+        return Some(n.clone());
+    }
+    let mut best: Option<(&ClassTemplate<'_>, Vec<(String, String)>, usize)> = None;
+    for sp in specs.get(class).into_iter().flatten() {
+        let (_, params) = params_of_decl(sp.decl, src).ok().flatten()?;
+        let pattern = sp.pattern.as_deref()?;
+        if let Some((subs, fixed)) = match_pattern(&params, pattern, given)
+            && best.as_ref().is_none_or(|b| fixed > b.2)
+        {
+            best = Some((sp, subs, fixed));
+        }
+    }
+    let (ct, subs) = match best {
+        Some((ct, subs, _)) => (ct, subs),
+        None => {
+            let ct = primary.get(class)?;
+            let (_, params) = params_of_decl(ct.decl, src).ok().flatten()?;
+            let subs = bind_explicit(&params, given)?;
+            (ct, subs)
+        }
+    };
+    let name = format!("{class}__t{}", inst.by_key.len());
+    let (spec, id) = (ct.spec, ct.name);
+    inst.text.push('\n');
+    inst.text
+        .push_str(&substitute(&src[spec.start_byte()..id.start_byte()], &subs));
+    inst.text.push_str(&name);
+    inst.text
+        .push_str(&substitute(&src[id.end_byte()..spec.end_byte()], &subs));
+    inst.text.push(';');
+    inst.by_key.insert(key, name.clone());
+    Some(name)
+}
+
 /// Positional arguments to parameters (a non-type value parenthesised), the rest from defaults; `None` when there are too many
 /// arguments or a parameter has neither.
 fn bind_explicit(params: &[TParam], given: &[String]) -> Option<Vec<(String, String)>> {
@@ -383,7 +631,7 @@ fn bind_explicit(params: &[TParam], given: &[String]) -> Option<Vec<(String, Str
         .map(|(i, p)| {
             let v = match given.get(i) {
                 Some(a) if p.is_type => a.clone(),
-                Some(a) => format!("({a})"),
+                Some(a) => format!("({})", bare(a)),
                 None => p.default.clone()?,
             };
             Some((p.name.clone(), v))
