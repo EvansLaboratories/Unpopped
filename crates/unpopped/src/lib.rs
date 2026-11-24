@@ -280,8 +280,11 @@ pub fn generate_variants(op: &OpDef, key: &StructureKey, backend: &dyn Backend) 
     } else {
         String::new()
     };
+    // through `lower_with` for a LEGACY caller, as `try_generate` is: a backend that overrides `lower_with` to refuse LEGACY callers is
+    // refused here too even if its `lower` still serves the old shape (`docs/options-caller-caps.md`); a lower-only backend is unchanged
+    // (the default `lower_with` calls `lower`)
     let base = backend
-        .lower(&plan)
+        .lower_with(&plan, &backend::CallerCaps::LEGACY)
         .unwrap_or_else(|e| panic!("{} backend declined to lower: {e}", backend.name()));
     let mut vs = vec![Variant {
         tag: "base",

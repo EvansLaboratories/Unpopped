@@ -94,7 +94,7 @@ pub enum TypeError {
     /// A [`ScalarExpr::Local`] was typed with no kernel to say what the local is: a local has
     /// meaning only inside a `kernel::KernelFn` (use [`infer_ty_in`]).
     LocalOutsideKernel,
-    /// A [`ScalarExpr::Qualified`] whose rounding mode its operation does not take.
+    /// A [`ScalarExpr::Qualified`] whose rounding mode its operation does not take, or whose operands are not f32/f32s.
     IllegalQualifier {
         /// Why it is rejected.
         why: &'static str,
@@ -846,6 +846,15 @@ fn node_ty(
             if n.round == RoundMode::NearestAway {
                 return Err(TypeError::IllegalQualifier {
                     why: "an arithmetic operation takes no ties-away rounding (RoundMode::NearestAway is a Cast's)",
+                });
+            }
+            // The plan gate (`plan/admissibility.rs`) and cpu_c already say f32/f32s only; the oracle asserts it
+            // (`oracle/expr_eval.rs`). A kernel never went through the gate, so without this a `KernelFn` with a qualified f64 or
+            // half operation passed `check_kernel` and panicked in the oracle. F64 has no ftz form and no exact reference for a
+            // directed rounding (ROADMAP U43).
+            if !matches!(k[0], ElementKind::F32 | ElementKind::F32Strict) {
+                return Err(TypeError::IllegalQualifier {
+                    why: "a rounding/ftz/approx qualifier needs f32 or f32s operands in v1 (f64 has no ftz form and no reference for a directed rounding yet; half types compute through f32)",
                 });
             }
             Ok(k[0])

@@ -122,7 +122,7 @@ impl ParamsBlock {
     /// The block of a [`ParamKind::Struct`] parameter, derived from its fields (ROADMAP U23): each field at the next
     /// offset aligned to its own size (the natural C layout, no packing), the block aligned to its widest field and sized
     /// to a multiple of that alignment. A `Complex64`/`Complex128` field is a pair aligned to one half. By value; chain
-    /// [`ParamsBlock::passed_by_address`] for `__grid_constant__`. **Layout only** (`layout_only_guard`).
+    /// [`ParamsBlock::passed_by_address`] for `__grid_constant__`. **No thread-set, memory-kind or copy-count annotation** (the U23 guard; test module `layout_only_guard`).
     ///
     /// # Errors
     /// [`ParamsBlockError::NotAStruct`] for a buffer or scalar parameter; [`ParamsBlockError::Unsized`] for a field type
@@ -421,7 +421,7 @@ impl KernelInterface {
 }
 
 /// **The U23 patent guard, as a compile-time check** (`docs/PATENT-SWEEP.md`, U23 section; PM 2026-11-17). `Param`,
-/// `ParamKind` and `ParamsBlock` describe a LAYOUT only: no thread-set, memory-kind or copy-count annotation, and no
+/// `ParamKind` and `ParamsBlock` carry a layout and no storage decision: no thread-set, memory-kind or copy-count annotation, and no
 /// choice of where data lives by which threads read it (US20230305845A1, pending, claims 1, 9, 15, 21, 27). Each type is
 /// destructured with every field named and no `..`, and `ParamKind` is matched with no wildcard, so adding a field or a
 /// variant stops this module compiling. The fix is a person reading that section first, not editing this test.
