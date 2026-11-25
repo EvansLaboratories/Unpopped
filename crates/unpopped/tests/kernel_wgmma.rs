@@ -121,6 +121,16 @@ fn copy_tile(src: u32, dst: u32, per: i64, fence: bool, layout: OperandLayout) -
     )
 }
 
+/// **Second-source check of the layout below (2026-11-25).** The layout was read from PTX ISA 9.5 Figure 151 (a page image).
+/// Two other sources, by other methods, agree with it: (1) the PTX text for `mma.m16n8k16` `.f16`/`.bf16` matrix A
+/// (9.7.16.5.8): `groupID = %laneid >> 2`, `row = groupID` for `a0 a1 a4 a5` and `groupID + 8` otherwise,
+/// `col = threadID_in_group * 2 + (i & 1)` (`+ 8` for `i >= 4`): the same per-warp 16 x 16 tile, which `wgmma`'s warp `w`
+/// holds at rows `16 w ..`; (2) CUTLASS `include/cute/atom/mma_traits_sm90_gmma.hpp` (commit 5c179edeb3e2, BSD-3-Clause,
+/// facts only, no code copied), `GMMA::ALayout_64x16 = Layout<Shape<Shape<_4,_8,_4>,Shape<_2,_2,_2>>,
+/// Stride<Stride<_128,_1,_16>,Stride<_64,_8,_512>>>`, the register-source layout of the `SM90_64x*x16_*_RS` atoms, read as
+/// (thread, value) -> `m + 64 k`: thread `l = t0 + 4 t1 + 32 t2` gives `k += 2 t0` (stride 128), `m += t1` (stride 1),
+/// `m += 16 t2` (stride 16); value `i = v0 + 2 v1 + 4 v2` gives `k += v0` (64), `m += 8 v1` (8), `k += 8 v2` (512): the
+/// formulas below, term by term. All three agree.
 /// Each thread loads its 8 elements of `A` into the register fragment (alloc 3), at the (row, column) PTX ISA 9.5
 /// Figure 151 gives them: warp `w` holds rows `16 w ..`; lane `l` holds rows `l / 4` and `l / 4 + 8`, columns
 /// `2 (l % 4)`, `+ 1`, and the same 8 columns on (`a0 a1`, `a2 a3`, `a4 a5`, `a6 a7`). One statement (a one-trip loop), so

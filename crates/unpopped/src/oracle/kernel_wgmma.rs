@@ -54,7 +54,9 @@ fn position(t: usize, v: usize) -> (usize, usize) {
     )
 }
 
-/// The `(row, column)` of `A` that value `i` of thread `t` holds when `A` is in registers (PTX ISA 9.5 Figure 151): warp
+/// The `(row, column)` of `A` that value `i` of thread `t` holds when `A` is in registers (PTX ISA 9.5 Figure 151, a page
+/// image; cross-checked against the PTX text for `mma.m16n8k16` A and CUTLASS's `GMMA::ALayout_64x16`: see
+/// `tests/kernel_wgmma.rs`, `fill_a_fragment`): warp
 /// `w` holds rows `16 w ..`; lane `l` holds rows `l / 4` and `l / 4 + 8`, columns `2 * (l % 4)` and `+ 1`, and the same
 /// again 8 columns on.
 fn a_position(t: usize, i: usize) -> (usize, usize) {
