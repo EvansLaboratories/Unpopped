@@ -11,7 +11,10 @@ use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
 use unpopped::oracle::kernel_launch::{run_launch, run_launch_devices};
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/device_peer.rs"]
 mod fixture;
 use fixture::{D, I32, all_gather, c, chain, kernel, load, peer};

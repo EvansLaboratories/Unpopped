@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.16` — Chore: every `allow` carries a reason (GOV-010: 52 `allow(dead_code)`, 2 `clippy::type_complexity`)
+
+No behaviour change. Each of the 54 `#[allow(..)]` attributes that CodeRipper's GOV-010 flagged now carries a `reason = "..."` saying why the allow is there (test support modules whose items are used by some test binaries and not others, and a return type the type-complexity lint cannot see through). `coderipper check GOV-010` reported 54 findings on `main` and none after this change (see the PR body for the run). Tests, clippy and fmt unchanged.
+
+---
+
 ## `0.56.15` — Docs: the third union re-score at b21af35c (coverage 50% to 57%), summary and three evidence files, ROADMAP 6.7 (part 1 of 2)
 
 Docs only. `docs/ir-union-rescore.md` gains the third measurement section (the index (Yes + half Partial) over the 507 of 519 applicable rows, re-scored at b21af35c by seven read-only agents and normalised to the 519 base), and `docs/ir-union-evidence/rescore-2026-11-25/` holds the per-survey evidence (this part: CUDA, CUTLASS and CuTe; part 2 follows with Mojo, Slang, ThunderKittens and Triton, split at the ~150k-character limit, so those four links in the summary resolve once part 2 merges) with every not-yet-Yes row, its blocker code (READY, DECISION, TRIGGER, PATENT, LANE, OUTSCOPE) and its PR estimate. ROADMAP 6.7 points at them. No code changes.

@@ -508,7 +508,10 @@ impl<'s, 't> Walker<'s, 't> {
     }
 
     /// The pieces of `for (T i = a; i < b; i += s) body`, or `None` for any other shape.
-    #[allow(clippy::type_complexity)]
+    #[allow(
+        clippy::type_complexity,
+        reason = "the tuple is the pieces of a counted for loop, read once by its single caller; a named struct would add a type for one use"
+    )]
     pub(super) fn counted_for<'n>(
         &mut self,
         n: Node<'n>,

@@ -25,10 +25,16 @@ mod cc;
 #[path = "support/kernel_data.rs"]
 mod kernel_data;
 // The shared compile-and-run drivers; this file uses a subset of them.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/kernel_run.rs"]
 mod kernel_run;
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/launch_run.rs"]
 mod launch_run;
 use kernel_data::zeroed;

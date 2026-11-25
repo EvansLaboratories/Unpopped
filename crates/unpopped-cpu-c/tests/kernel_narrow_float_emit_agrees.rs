@@ -17,10 +17,16 @@ use unpopped_vocab::ElementKind;
 
 #[path = "support/cc.rs"]
 mod cc;
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/kernel_run.rs"]
 mod kernel_run;
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "this test re-exports only part of the shared support module it includes"
+)]
 use kernel_run::{agree, run_c_mutated};
 
 const F32: ElementKind = ElementKind::F32;

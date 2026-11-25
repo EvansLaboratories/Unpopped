@@ -11,7 +11,10 @@ use unpopped_cpu_c as _;
 #[path = "support/cc.rs"]
 mod cc;
 // The shared compile-and-run driver; this file uses a subset of it.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/kernel_run.rs"]
 mod kernel_run;
 #[path = "support/padding_modes.rs"]

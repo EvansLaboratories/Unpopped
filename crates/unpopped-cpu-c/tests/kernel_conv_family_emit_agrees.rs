@@ -13,13 +13,22 @@ use unpopped_cpu_c as _;
 mod cc;
 // The shared compile-and-run drivers; this file uses a subset of them.
 // The host references of the shared file are used by the oracle test only.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/conv_family.rs"]
 mod conv_family;
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/kernel_run.rs"]
 mod kernel_run;
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the shared support module is included whole by #[path]; each test file uses a subset of it"
+)]
 #[path = "support/launch_run.rs"]
 mod launch_run;
 use conv_family::{C, H, I32, K, N, P, Q, R, S, W, data, dgrad, fprop, wgrad};
