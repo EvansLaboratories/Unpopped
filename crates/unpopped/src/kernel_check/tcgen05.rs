@@ -7,7 +7,7 @@
 use super::wgmma::{MAX_DESCRIPTOR_OFFSET, check_layout, check_tile};
 use super::{Scope, check_expr};
 use crate::exec::{Extent, MemorySpace};
-use crate::kernel::{KernelError, KernelFn, OperandLayout, Stmt};
+use crate::kernel::{KernelError, KernelFn, Stmt};
 use crate::types::{self, Ty};
 use unpopped_vocab::ElementKind;
 

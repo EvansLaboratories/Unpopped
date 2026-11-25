@@ -1,3 +1,5 @@
 kind: Added: `Tcgen05Mma` takes 8-bit float inputs (`.kind::f8f6f4`, dense, e4m3 and e5m2, A and B independent) through a new `b_ty` field
 ---
 Not breaking on its own (`b_ty` defaults to `None`, meaning B has A's type), but it rides the stacked U8c series. `Tcgen05Mma.ab` may now be `Fp8E4M3FN` or `Fp8E5M2` and `b_ty` the other; with 8-bit inputs `K` is 32 per instruction (PTX ISA 9.5 Table 50), only `RowMajor` tiles are admitted, and the accumulator stays `F32`. The type codes were read from PTX Table 53 and agree with CUTLASS `mma_sm100_desc.hpp`. Not built: FP6/FP4 (no `ElementKind`; U47), block-scaled `mxf8f6f4` (board 501), sparse, `F16` accumulate, canonical layouts for 8-bit tiles. A row-major tile's row is now `k` elements long in the oracle (16 for the 16-bit kinds, unchanged for them).
+
+Slice 2: an 8-bit `Tcgen05Mma` tile may use a `Canonical` layout (no swizzle, or 32/64/128-byte swizzle, K- or MN-major): the core-matrix row is 16 bytes, so `T = 16` elements and K = 32. `OperandLayout::element_offset_sized` takes the element size; `element_offset` is the 16-bit case.

@@ -71,6 +71,10 @@ fn bits(sw: Swizzle) -> u32 {
 }
 
 /// The element offset of `(mn, k)` under `layout` for a 16-bit element (see [`ref_offset_eb`]).
+#[allow(
+    dead_code,
+    reason = "used by some test binaries that include this module and not others"
+)]
 pub(crate) fn ref_offset(layout: OperandLayout, mn: usize, k: usize) -> usize {
     ref_offset_eb(layout, mn, k, 2)
 }
@@ -122,6 +126,10 @@ pub(crate) fn ref_offset_eb(layout: OperandLayout, mn: usize, k: usize, eb: usiz
 }
 
 /// Elements an allocation must hold for `rows` rows under `layout` (16-bit elements).
+#[allow(
+    dead_code,
+    reason = "used by some test binaries that include this module and not others"
+)]
 pub(crate) fn span(layout: OperandLayout, rows: usize) -> u32 {
     span_eb(layout, rows, 2)
 }
@@ -136,6 +144,10 @@ pub(crate) fn span_eb(layout: OperandLayout, rows: usize, eb: usize) -> u32 {
 }
 
 /// [`store_index_eb`] for a 16-bit element.
+#[allow(
+    dead_code,
+    reason = "used by some test binaries that include this module and not others"
+)]
 pub(crate) fn store_index(layout: OperandLayout, i: ScalarExpr) -> ScalarExpr {
     store_index_eb(layout, i, 2)
 }
