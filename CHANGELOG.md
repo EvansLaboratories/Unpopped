@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.20` — Docs: PATENT-SWEEP, the tensor-map and prefetch family charted (patents-2)
+
+Docs only. `docs/PATENT-SWEEP.md` gains the patents-2 reads of US12645455B2, US12657024B2 and US12669996B2 (claims, limb charts, verdict words only). No code changes.
+
+---
+
 ## `0.56.19` — Docs: PATENT-SWEEP rows from the patents-1 reads
 
 Docs only. 241 added lines in `docs/PATENT-SWEEP.md`: the patents-1 sub-lane reads of published claims (limb charts, verdict words only). No code changes.
