@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.18` — Docs: union rulings, asks and ROADMAP rows U46-U58, PATENT-LANES, the 128-bit finding
+
+Docs only. The union rulings and asks documents, the ROADMAP rows U46 to U58 with their patent-hold lines, the PATENT-LANES lanes, the 128-bit integer finding (PTX has no .s128/.u128) and U46 notes. No code changes.
+
+---
+
 ## `0.56.17` — Docs: the third union re-score evidence for Mojo, Slang, ThunderKittens and Triton (part 2 of 2)
 
 Docs only. The per-survey evidence files of the third union re-score at b21af35c for Mojo, Slang, ThunderKittens and Triton (every not-yet-Yes row with its blocker code and PR estimate), the second half of the set whose first half, the summary `docs/ir-union-rescore.md` and the CUDA, CUTLASS and CuTe files, is part 1. Split at the ~150k-character limit. No code changes.
