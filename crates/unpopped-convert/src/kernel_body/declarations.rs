@@ -24,7 +24,12 @@ impl<'s, 't> Walker<'s, 't> {
                 .collect::<Vec<_>>()
                 .join(" ")
         });
-        if let Some((elem, lanes)) = tname.as_deref().and_then(vector_type) {
+        // a typedef of a vector type (`cuFloatComplex` is `float2`) declares that vector
+        let vector = tname
+            .as_deref()
+            .map(|t| self.resolve_alias_text(t))
+            .and_then(|t| vector_type(&t));
+        if let Some((elem, lanes)) = vector {
             if declares_pointer(n) {
                 return self.pointer_declaration(n, elem, lanes, out);
             }
@@ -160,6 +165,16 @@ impl<'s, 't> Walker<'s, 't> {
                 }
                 None => self.zero_of(ty, d)?,
             };
+            // a scalar whose address is taken (`unsigned char* p = (unsigned char*)&zero;`) lives in memory: a `Private` allocation of
+            // one element, so a byte pointer into it reads and writes the same bytes as the name does
+            if (int_range(ty).is_some() || matches!(ty, E::F16 | E::Bf16 | E::F32 | E::F64))
+                && self.address_escapes(text(id, self.src))
+                && super::pointer::byte_size(ty).is_some()
+            {
+                self.flush(out);
+                self.vector_alloc_declaration(text(id, self.src), (ty, 1), vec![e], out)?;
+                continue;
+            }
             self.flush(out);
             let local = self.new_local(ty);
             self.scopes.last_mut().expect("a scope is open").insert(
@@ -299,6 +314,9 @@ impl<'s, 't> Walker<'s, 't> {
                 xs.push(self.zero_of(elem, n)?);
             }
             return Ok(xs);
+        }
+        if let Some(v) = self.complex_lanes(n, (elem, lanes))? {
+            return Ok(v);
         }
         let callee = (n.kind() == "call_expression")
             .then(|| n.child_by_field_name("function").map(|f| text(f, self.src)))

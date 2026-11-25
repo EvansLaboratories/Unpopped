@@ -385,7 +385,7 @@ impl<'s, 't> Walker<'s, 't> {
 
     /// A namespace-qualified call (`baracuda::block_reduce_max_f32(..)`) of a function this source defines is that function by its
     /// short name (the walker is namespace-blind, as for qualified template calls). Any other name is returned as written.
-    fn short_callee<'a>(&self, written: &'a str) -> &'a str {
+    pub(super) fn short_callee<'a>(&self, written: &'a str) -> &'a str {
         // `(f)(x)`: a callee in parentheses (a function substituted for a template parameter, once per level) is `f`, but only
         // when `f` is a function this source defines: `(Idx)(x)` with a local `Idx` is not a call of it
         let mut name = written.trim();
@@ -474,6 +474,9 @@ impl<'s, 't> Walker<'s, 't> {
             return r;
         }
         if let Some(r) = self.half_intrinsic(n, name) {
+            return r;
+        }
+        if let Some(r) = self.complex_scalar(n, name) {
             return r;
         }
         if let Some(r) = self.half2_lane(n, name) {
