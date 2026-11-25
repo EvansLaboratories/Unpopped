@@ -6,23 +6,23 @@ Written 2026-11-25 against `origin/main` b21af35c, from the third re-score (`doc
 
 Format: row | owning lane | the ask (what to build or expose, where, proven by what) | what it unblocks.
 
-### 1a. KISS: element and numerics rows (9 rows)
+### 1a. KISS: element and numerics rows (9 rows; corrected 2026-11-25 against KISS's own RU.1, `origin/union-rows` ff4a9063)
 
-- CUDA 56 | KISS (U1b: packing is convention, unverified against CUTLASS, Mojo and Triton) | record in KISS's dtype token set and key codec (the sk4 seam; ROADMAP C10) the named interleave layouts and the nibble order of packed fp4/fp6, each with its source (CUTLASS or the OCP MX text), proven by a codec round-trip test; Unpopped then adds the oracle sizing and kernel loads and stores | CUDA 56, 61, 62 and the fp4/fp6 GEMM rows (with D5, which is ruled in).
-- CUDA 61 | KISS | the same record for fp6 (e2m3, e3m2) buffer layout; Unpopped's decode exists only as a `Cast` intermediate | CUDA 61.
-- CUDA 62 | KISS | the same for fp4 (e2m1) and the NVFP4 scale pairing (UE4M3 scale per 16 elements) | CUDA 62; with CUTLASS 21, 78, 79 and ThunderKittens 54.
+- CUDA 56 | KISS | **corrected:** the `f4e2m1`, `f6e2m3` and `f6e3m2` tokens and their packing are already pinned (KISS-CLASSIFY-6.1-0014 and -0015, `conformance/src/derivation_vectors.rs:705`, tests `test_classify_mx_f4e2m1_format` and `test_classify_mx_f6_formats`), marked convention. What remains: read a second source (CUTLASS, Mojo or the OCP text) for the packing and any interleave layout, and pin it by a codec round-trip vector in `conformance/src/dtype.rs` (which has no f4/f6 codec today) with the source cited; Unpopped then adds the oracle sizing and kernel loads and stores | CUDA 56, 61, 62 and the fp4/fp6 GEMM rows (D5 is ruled in).
+- CUDA 61 | KISS | **corrected:** the fp6 packing is pinned (6.1-0015); the remaining ask is the second-source check and the `dtype.rs` round-trip vector (same as CUDA 56); Unpopped's decode exists only as a `Cast` intermediate | CUDA 61.
+- CUDA 62 | KISS | **corrected:** fp4 packing is pinned (6.1-0014); the remaining ask is the NVFP4 scale pairing (a UE4M3 scale per 16 elements: whether it fits the keyed scale dtype and block length, 6.6-0022/-0022a, is unread by KISS) plus the second-source check and round-trip vector | CUDA 62; with CUTLASS 21, 78, 79 and ThunderKittens 54.
 - CUDA 64 | KISS | add the `F128` token to the dtype set and key codec; Unpopped then adds oracle arithmetic (a software binary128) and a conformance kernel | CUDA 64.
 - CUDA 65 | KISS | add `I128`/`U128` tokens; Unpopped adds the oracle integer width and 128-bit atomic forms | CUDA 65, Mojo 48.
-- Mojo 44 | KISS (owns the dtype tokens and key codec, ROADMAP C10) | add the `F8E3M4` token; U1 recorded "e3m4 not added" | Mojo 44.
+- Mojo 44 | KISS (owns the dtype tokens and key codec; Unpopped ROADMAP C10 is the codec-clause row) | add the `F8E3M4` token; U1 recorded "e3m4 not added" | Mojo 44.
 - Mojo 48 | KISS | add `I128`/`U128`/`I256`/`U256` tokens (one request with CUDA 65) | Mojo 48.
-- Slang 50 | KISS (ROADMAP I3, "numerics axes ... one synchronized cut", held on the sk4 seam) | agree the per-function precision mode (fast vs precise, contract, NaN/Inf assumptions) as one key-affecting field; Unpopped adds the oracle rule and checker | Slang 50.
-- Slang 52 | KISS (ROADMAP C2, I3) | the NaN/Inf preservation mode as part of the same cut | Slang 52.
+- Slang 50 | KISS (Unpopped ROADMAP I3, "numerics axes ... one synchronized cut", whose status cell still reads `held(KISS, sk4 seam)`; KISS's schema is sk8, so that label is stale) | agree the per-function precision mode (fast vs precise, contract, NaN/Inf assumptions) as one key-affecting field; Unpopped adds the oracle rule and checker | Slang 50.
+- Slang 52 | KISS (Unpopped ROADMAP C2 and I3; the row names C2, C10 and I3 are Unpopped's, not KISS's) | the NaN/Inf preservation mode as part of the same cut | Slang 52.
 
 ### 1b. Fuel and KISS: the plan-layer Contraction generalisation, ruled A now (D2; 11 rows)
 
 The PM ruled Q3 to build it now. `Access::Contraction` is rank-2, single-K, with one batch role; the kernel layer already runs these kernels, so the work is the plan layer and the `StructureKey`. Proposed split (the PM rules): **KISS owns what changes the schema and the key; Fuel owns what changes how the planner and dispatch consume it.**
 
-- CuTe 39 | KISS | allow rank above 2 and batched contraction in the `Contraction` schema; a test that a rank-3 batched case round-trips the key | CuTe 39.
+- CuTe 39 | KISS and Unpopped | **corrected:** rank above 2 and batched are largely keyed already (KISS-CLASSIFY-6.6-0023 pins every `ctr` cell of rank above 3 and a caller-declared batch set; `derivation_vectors` has a rank-4 batched cell). "`Access::Contraction` is rank-2" is Unpopped's plan-layer type, not KISS's. What remains: a rank-3 batched round-trip vector on the Unpopped side, and KISS checking that 6.6-0016's single M/N/K assignment extends | CuTe 39.
 - CUTLASS 3 | KISS | more than one batch role and nested (hierarchical) modes | CUTLASS 3.
 - CUTLASS 4 | KISS | more than one contracted K axis (GETT, tensor contraction) | CUTLASS 4.
 - CUTLASS 5 | KISS | per-operand major-ness (N/T) for A, B, C and D | CUTLASS 5, CUDA 55.
@@ -75,7 +75,7 @@ Format: rows | the trigger | does the consumer exist today (yes/no, where) | wha
 - Slang 5; Triton 2, 13 | U3 remainder: `ProgramModel`/`BlockSpmd` lowering, append/consume buffers, block tensors and `tl.gather`, "each when a consumer needs it" | no: no Triton front end exists in the portfolio | a Triton-source frontend lane (not started) or fishstringer asks.
 - CUDA 4 | U40 constant tables: "a lifted kernel or a lane needs a table" | possibly: the U19 census is measurable | the lane measures how many census kernels carry a `__constant__` table; the lane can fire this itself.
 - CUDA 15, 79 | `setmaxnreg` and warp-specialization launch attributes, "ride on `LaunchShape` fields when a backend needs them" | no: the Baracuda emitter does not spell them | Baracuda records `setmaxnreg` among its requirements (2b line 1).
-- Mojo 49 | U1: index dtype "waits for after the seam hold"; small-int leaves "wait for a consumer" | KISS's seam hold, not a consumer | KISS lifts the sk4 seam hold.
+- Mojo 49 | Unpopped ROADMAP U1 (index dtype of gather and scatter "waits for after the seam hold"; small-int leaves "wait for a consumer"); the hold is the 2026-10-28 seam hold named at ROADMAP line 234 (under it Baracuda does not rank U2-U12; its owner is not confirmed by this lane), **not a KISS hold, and KISS has no sk4 hold (its schema is sk8)** | not a consumer: a hold | the PM says whether the 2026-10-28 seam hold still stands; if it does not, the row is READY.
 - Slang 30 | U38a-2 float atomics (CAS loops), parked 2026-11-22: "revisit when the census shows CAS as the largest remaining wall" | measurable | the lane re-runs the census; it can fire this itself.
 
 Row count: 16 + 7 + 8 + 3 + 2 + 3 + 1 + 2 + 1 + 1 = 44.
