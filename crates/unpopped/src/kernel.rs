@@ -940,6 +940,14 @@ pub enum Stmt {
         /// addresses `0x0000.0XXX | 0x0010.0XXX`, ...). Must be 0 for `m = 128`.
         #[serde(default)]
         d_lane: u32,
+        /// The element type of `B` when it differs from `A`'s (`ab`): `None` (the default) means `ab`. PTX ISA 9.5 Table 53
+        /// gives `.kind::f8f6f4` separate `atype` and `btype` fields (bits 7-9 and 10-12), so `A` and `B` may be different
+        /// 8-bit float types (`Fp8E4M3FN`, `Fp8E5M2`); CUTLASS `mma_sm100_desc.hpp` agrees. For `F16`/`Bf16` the two must
+        /// be the same type (`.kind::f16` has one `atype`/`btype` pair and PTX names no mixed form here). With 8-bit
+        /// inputs `K` is 32 per instruction (`.kind::f8f6f4` dense), only `RowMajor` layouts are admitted (the canonical
+        /// layouts' core matrices are 16 bytes, i.e. 16 elements, which is not built), and `acc`/`D` are `F32`.
+        #[serde(default, with = "crate::text::ek_opt")]
+        b_ty: Option<ElementKind>,
     },
     /// `tcgen05.alloc.cta_group::1` (ROADMAP U8c slice 4): allocate `ncols` columns of tensor memory, the whole of the
     /// declared `Tensor` allocation `d` (`128 * ncols` elements). PTX ISA 9.5 9.7.18.1.2 and 9.7.18.7.1: "The unit of

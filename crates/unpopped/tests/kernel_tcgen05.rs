@@ -15,7 +15,7 @@ use unpopped::kernel::{
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
 use unpopped::oracle::kernel_launch::run_launch;
-use unpopped_vocab::ElementKind;
+use unpopped_vocab::{ElementKind, Fp8E4M3FN, Fp8E5M2};
 
 #[path = "support/operand_layout.rs"]
 mod operand_layout;
@@ -24,7 +24,6 @@ use operand_layout::{k_major, k_major_sw, mn_major, mn_major_sw, span, store_ind
 const U32: ElementKind = ElementKind::U32;
 const BF16: ElementKind = ElementKind::Bf16;
 const F32: ElementKind = ElementKind::F32;
-const K: usize = 16;
 /// Columns of tensor memory before the product's first column.
 const D_COL: i64 = 8;
 
@@ -87,8 +86,14 @@ struct Opt {
     /// Rows of `A` and `D`: 128, or 64 (Layout F) with `d_lane` 0 or 16.
     m: u32,
     d_lane: u32,
+    /// The element types of A and B: bf16 (K = 16) or the 8-bit floats (K = 32).
+    a_ty: ElementKind,
+    b_ty: ElementKind,
 }
 impl Opt {
+    fn k(self) -> usize {
+        if self.a_ty == BF16 { 16 } else { 32 }
+    }
     fn plain(n: u32) -> Self {
         Opt {
             n,
@@ -101,6 +106,15 @@ impl Opt {
             b_layout: OperandLayout::RowMajor,
             m: 128,
             d_lane: 0,
+            a_ty: BF16,
+            b_ty: BF16,
+        }
+    }
+    fn f8(n: u32, a_ty: ElementKind, b_ty: ElementKind) -> Self {
+        Opt {
+            a_ty,
+            b_ty,
+            ..Opt::plain(n)
         }
     }
 }
@@ -113,6 +127,7 @@ fn copy_tile(
     threads: i64,
     fence: bool,
     layout: OperandLayout,
+    tmp: u32,
 ) -> Stmt {
     let per = total / threads;
     counted(
@@ -124,12 +139,12 @@ fn copy_tile(
                 init: add(mul(tid(), u(per)), local(0)),
             },
             Stmt::Load {
-                local: 2,
+                local: tmp,
                 place: buf(src, local(1)),
             },
             Stmt::Store {
                 place: alloc(dst, store_index(layout, local(1))),
-                value: local(2),
+                value: local(tmp),
             },
         ]
         .into_iter()
@@ -148,7 +163,7 @@ fn tmem_cols(n: u32) -> u32 {
 fn mma(o: Opt, scale_d: i64) -> Stmt {
     Stmt::Tcgen05Mma {
         n: o.n,
-        ab: BF16,
+        ab: o.a_ty,
         acc: F32,
         a: alloc(0, u(0)),
         b: alloc(1, u(0)),
@@ -159,6 +174,7 @@ fn mma(o: Opt, scale_d: i64) -> Stmt {
         b_layout: o.b_layout,
         m: o.m,
         d_lane: o.d_lane,
+        b_ty: (o.b_ty != o.a_ty).then_some(o.b_ty),
     }
 }
 
@@ -182,8 +198,16 @@ fn body(o: Opt) -> Vec<Stmt> {
                 count: u(1),
             },
         ]),
-        copy_tile(0, 0, i64::from(o.m) * K as i64, t, o.fence, o.a_layout),
-        copy_tile(1, 1, n * K as i64, t, o.fence, o.b_layout),
+        copy_tile(
+            0,
+            0,
+            i64::from(o.m) * o.k() as i64,
+            t,
+            o.fence,
+            o.a_layout,
+            2,
+        ),
+        copy_tile(1, 1, n * o.k() as i64, t, o.fence, o.b_layout, 4),
         Stmt::barrier(Scope::Block),
         on_thread0(issue),
     ];
@@ -247,15 +271,16 @@ fn kernel(o: Opt) -> KernelFn {
         "tcgen05",
         F32,
         vec![
-            Param::buffer("a_in", BF16, BufferRole::Read, Some(1)),
-            Param::buffer("b_in", BF16, BufferRole::Read, Some(1)),
+            Param::buffer("a_in", o.a_ty, BufferRole::Read, Some(1)),
+            Param::buffer("b_in", o.b_ty, BufferRole::Read, Some(1)),
             Param::buffer("out", F32, BufferRole::ReadWrite, Some(1)),
         ],
         vec![
             LocalDecl::scalar(U32),
             LocalDecl::scalar(U32),
-            LocalDecl::scalar(BF16),
+            LocalDecl::scalar(o.a_ty),
             LocalDecl::scalar(F32),
+            LocalDecl::scalar(o.b_ty),
         ],
         Block(body(o)),
     )
@@ -264,14 +289,14 @@ fn kernel(o: Opt) -> KernelFn {
         AllocDecl::new(
             "a",
             MemorySpace::Shared,
-            BF16,
-            Extent::Static(span(o.a_layout, o.m as usize)),
+            o.a_ty,
+            Extent::Static(span(o.a_layout, o.m as usize) * o.k() as u32 / 16),
         ),
         AllocDecl::new(
             "b",
             MemorySpace::Shared,
-            BF16,
-            Extent::Static(span(o.b_layout, n as usize)),
+            o.b_ty,
+            Extent::Static(span(o.b_layout, n as usize) * o.k() as u32 / 16),
         ),
         AllocDecl::new(
             "tmem",
@@ -296,24 +321,44 @@ fn a_val(m: usize, k: usize) -> f32 {
 fn b_val(n: usize, k: usize) -> f32 {
     ((n * 7 + k * 5) % 13) as f32
 }
-fn bf16_buf(rows: usize, f: impl Fn(usize, usize) -> f32) -> KernelArg {
-    let bytes: Vec<u8> = (0..rows * K)
-        .flat_map(|i| ((f(i / K, i % K).to_bits() >> 16) as u16).to_le_bytes())
-        .collect();
+/// Small non-negative integers (0..=4) are exact in bf16, e4m3 and e5m2 alike, so the f64 reference needs no rounding.
+fn a8_val(m: usize, k: usize) -> f32 {
+    ((m * 3 + k * 2) % 5) as f32
+}
+fn b8_val(n: usize, k: usize) -> f32 {
+    ((n * 2 + k * 3 + 1) % 5) as f32
+}
+fn typed_buf(ty: ElementKind, rows: usize, k: usize, f: impl Fn(usize, usize) -> f32) -> KernelArg {
+    let vals = (0..rows * k).map(|i| f(i / k, i % k));
+    let bytes: Vec<u8> = match ty {
+        BF16 => vals
+            .flat_map(|v| ((v.to_bits() >> 16) as u16).to_le_bytes())
+            .collect(),
+        ElementKind::Fp8E4M3FN => vals.map(|v| Fp8E4M3FN::from_f32(v).0).collect(),
+        ElementKind::Fp8E5M2 => vals.map(|v| Fp8E5M2::from_f32(v).0).collect(),
+        _ => unreachable!("a type this test feeds"),
+    };
     KernelArg::Buffer(TypedBuffer::new(
-        BF16,
-        vec![(rows * K) as i64],
+        ty,
+        vec![(rows * k) as i64],
         vec![1],
         bytes,
     ))
+}
+
+fn val_a(o: Opt) -> fn(usize, usize) -> f32 {
+    if o.a_ty == BF16 { a_val } else { a8_val }
+}
+fn val_b(o: Opt) -> fn(usize, usize) -> f32 {
+    if o.b_ty == BF16 { b_val } else { b8_val }
 }
 
 fn run(k: &KernelFn, o: Opt) -> Result<Vec<f32>, KernelTrap> {
     assert_eq!(check_kernel(k), Ok(()));
     let len = (o.threads * o.n) as usize;
     let mut args = [
-        bf16_buf(128, a_val),
-        bf16_buf(o.n as usize, b_val),
+        typed_buf(o.a_ty, 128, o.k(), val_a(o)),
+        typed_buf(o.b_ty, o.n as usize, o.k(), val_b(o)),
         KernelArg::Buffer(TypedBuffer::new(
             F32,
             vec![len as i64],
@@ -348,12 +393,62 @@ fn expected(o: Opt) -> Vec<f32> {
         };
         for j in 0..o.n as usize {
             out.push(row.map_or(0.0, |r| {
-                let dot: f32 = (0..K).map(|k| a_val(r, k) * b_val(j, k)).sum();
+                let (fa, fb) = (val_a(o), val_b(o));
+                let dot: f32 = (0..o.k()).map(|k| fa(r, k) * fb(j, k)).sum();
                 dot * o.products as f32
             }));
         }
     }
     out
+}
+
+#[test]
+fn fp8_dense_k32_matches_the_reference_for_each_pairing_of_e4m3_and_e5m2() {
+    const E4: ElementKind = ElementKind::Fp8E4M3FN;
+    const E5: ElementKind = ElementKind::Fp8E5M2;
+    for (a, b) in [(E4, E4), (E5, E5), (E4, E5), (E5, E4)] {
+        for n in [8u32, 64] {
+            let o = Opt::f8(n, a, b);
+            assert_eq!(
+                run(&kernel(o), o),
+                Ok(expected(o)),
+                "{a:?} x {b:?}, n = {n}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_fp8_reference_needs_all_32_k_not_the_first_16() {
+    let o = Opt::f8(8, ElementKind::Fp8E4M3FN, ElementKind::Fp8E4M3FN);
+    let full = expected(o);
+    let (fa, fb) = (val_a(o), val_b(o));
+    let half: f32 = (0..16).map(|k| fa(1, k) * fb(0, k)).sum();
+    // thread 1 reads row 1, column 0: the 32-term sum is not the 16-term one
+    assert_ne!(full[8], half);
+}
+
+#[test]
+fn the_checker_applies_the_fp8_rules() {
+    const E4: ElementKind = ElementKind::Fp8E4M3FN;
+    let refuses = |o: Opt| check_kernel(&kernel(o)).is_err();
+    // mixed f16-family types, and an fp8 operand paired with a 16-bit one, are refused
+    assert!(refuses(Opt {
+        b_ty: E4,
+        ..Opt::plain(8)
+    }));
+    assert!(refuses(Opt {
+        a_ty: E4,
+        b_ty: BF16,
+        ..Opt::plain(8)
+    }));
+    // a canonical layout on an 8-bit tile is not built
+    assert!(refuses(Opt {
+        a_layout: dense_k(),
+        ..Opt::f8(8, E4, E4)
+    }));
+    // the accepted shape passes
+    assert_eq!(check_kernel(&kernel(Opt::f8(8, E4, E4))), Ok(()));
 }
 
 #[test]

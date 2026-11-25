@@ -105,9 +105,10 @@ impl Machine<'_> {
         place: &Place,
         rows: usize,
         layout: &crate::kernel::OperandLayout,
+        k: usize,
     ) -> Result<Vec<Vec<Val>>, KernelTrap> {
         (0..rows)
-            .map(|r| self.wgmma_row(place, r, layout))
+            .map(|r| self.wgmma_row(place, r, layout, k))
             .collect()
     }
 
@@ -124,6 +125,7 @@ impl Machine<'_> {
             b_layout,
             m: rows,
             d_lane,
+            ab,
             ..
         } = st
         else {
@@ -137,9 +139,18 @@ impl Machine<'_> {
             .filter(|c| c + n <= cols)
             .ok_or(KernelTrap::AllocOutOfBounds { alloc: d })?;
         let accumulate = self.wgmma_int(scale_d)? != 0;
+        // `.kind::f8f6f4` takes K = 32 per instruction, the 16-bit kinds 16 (PTX ISA 9.5 Table 50)
+        let k = if matches!(
+            ab,
+            unpopped_vocab::ElementKind::Fp8E4M3FN | unpopped_vocab::ElementKind::Fp8E5M2
+        ) {
+            32
+        } else {
+            16
+        };
         let (a, b) = (
-            self.tcgen05_tile(a, *rows as usize, a_layout)?,
-            self.tcgen05_tile(b, n, b_layout)?,
+            self.tcgen05_tile(a, *rows as usize, a_layout, k)?,
+            self.tcgen05_tile(b, n, b_layout, k)?,
         );
         for (m, arow) in a.iter().enumerate() {
             for (j, brow) in b.iter().enumerate() {

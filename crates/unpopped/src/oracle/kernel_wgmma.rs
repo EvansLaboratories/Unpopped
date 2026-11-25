@@ -189,14 +189,14 @@ impl Machine<'_> {
             None => None,
         };
         let a_row = if a_frag.is_none() && t < M {
-            Some(self.wgmma_row(a, t, a_layout)?)
+            Some(self.wgmma_row(a, t, a_layout, K)?)
         } else {
             None
         };
         let mut b_rows = Vec::new();
         for row in [t, t + WARPGROUP] {
             if row < n {
-                b_rows.push((row, self.wgmma_row(b, row, b_layout)?));
+                b_rows.push((row, self.wgmma_row(b, row, b_layout, K)?));
             }
         }
         let scale_d = self.wgmma_int(scale_d)? != 0;
@@ -233,6 +233,7 @@ impl Machine<'_> {
         place: &Place,
         row: usize,
         layout: &OperandLayout,
+        k: usize,
     ) -> Result<Vec<Val>, KernelTrap> {
         let Place::Alloc { alloc, index } = place else {
             return Err(KernelTrap::Unsupported(
@@ -240,9 +241,15 @@ impl Machine<'_> {
             ));
         };
         let first = self.wgmma_int(index)?;
-        (0..K)
+        (0..k)
             .map(|j| {
-                let off = layout.element_offset(row, j).ok_or(KernelTrap::Unsupported(
+                // a row-major tile's row is `k` elements long (16 for the 16-bit kinds, 32 for 8-bit)
+                let off = (if *layout == OperandLayout::RowMajor {
+                    Some(row * k + j)
+                } else {
+                    layout.element_offset(row, j)
+                })
+                .ok_or(KernelTrap::Unsupported(
                     "a wgmma operand layout the oracle does not read (a swizzle, or no leading offset)",
                 ))?;
                 let at_i = first + off as i128;
