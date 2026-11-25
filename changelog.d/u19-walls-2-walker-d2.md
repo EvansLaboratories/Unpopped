@@ -1,7 +1,0 @@
-kind: U19 walker D2: cuComplex names, pointer parameters of a vector type, macro comments, address-taken scalars, member specialisations, alias arguments
----
-Added (`unpopped-convert`, source-to-source in the walker, no IR change): the `cuComplex.h` names pinned to CUDA 13.3's header text (`cuCaddf`/`cuCsubf`/`cuCmulf` unfused/`cuConjf`/`make_`/`real`/`imag`; `cuCdivf` and `cuCabsf` decline by name); pointer parameters of a vector type (`const float2* z`, `cuFloatComplex*`) read and write lane pairs; a scalar local whose address is taken lives in a Private allocation (the `memset`-through-a-byte-pointer idiom); out-of-class member specialisations of a class template are spliced into its instance; an explicit template call whose argument is a local `using` alias (`f<Acc>(x)`) reads the aliased type.
-
-Fixed: `offset_by` ignored the lane count of a vector pointer, so `p + 1` on a `float2*` moved one scalar instead of one vector; a macro body (and any directive) was cut at its first `/*`, even a closed comment, and is now comment-stripped as C does after line splicing.
-
-Not here: the caller-stated struct layouts (U38d, `docs/PATENT-SWEEP.md`: "outside as read", NOT CLEARED) and what imports them, including the U38d step 5 vector parameters of inlined functions. The U44 ROADMAP row and the oracle-rounding docs were already on main, so those cherry-picks were empty or kept only their convert-side part.

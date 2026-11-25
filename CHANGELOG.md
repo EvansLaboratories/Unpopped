@@ -15,6 +15,16 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.14` — U19 walker D2: cuComplex names, pointer parameters of a vector type, macro comments, address-taken scalars, member specialisations, alias arguments
+
+Added (`unpopped-convert`, source-to-source in the walker, no IR change): the `cuComplex.h` names pinned to CUDA 13.3's header text (`cuCaddf`/`cuCsubf`/`cuCmulf` unfused/`cuConjf`/`make_`/`real`/`imag`; `cuCdivf` and `cuCabsf` decline by name); pointer parameters of a vector type (`const float2* z`, `cuFloatComplex*`) read and write lane pairs; a scalar local whose address is taken lives in a Private allocation (the `memset`-through-a-byte-pointer idiom); out-of-class member specialisations of a class template are spliced into its instance; an explicit template call whose argument is a local `using` alias (`f<Acc>(x)`) reads the aliased type.
+
+Fixed: `offset_by` ignored the lane count of a vector pointer, so `p + 1` on a `float2*` moved one scalar instead of one vector; a macro body (and any directive) was cut at its first `/*`, even a closed comment, and is now comment-stripped as C does after line splicing.
+
+Not here: the caller-stated struct layouts (U38d, `docs/PATENT-SWEEP.md`: "outside as read", NOT CLEARED) and what imports them, including the U38d step 5 vector parameters of inlined functions. The U44 ROADMAP row and the oracle-rounding docs were already on main, so those cherry-picks were empty or kept only their convert-side part.
+
+---
+
 ## `0.56.13` — U19 walker D1: named lambdas, half and bfloat16 shuffles, switch, x++ as a value, do-while, the optional-pointer idiom, scalar half intrinsics, double constants
 
 Added (`unpopped-convert`, source-to-source in the walker, no IR change): named lambdas (`auto f = [&](..) -> T {..}`) inline as functions that see the caller's locals; half and bfloat16 values through warp shuffles and `cg::reduce` max/min (as F32, exact); `S x{};` value-initialises a struct; `fmod`/`atan2`/`copysign`/`nextafter` and the `__float_as_int` bit-cast family; `switch` with `break`/`return`/`continue` cases becomes an if chain before the walk; `x++` / `++x` / `x--` / `--x` as a value; `do { } while (c)`; the optional-pointer idiom `(da != nullptr) ? da + off : nullptr`; `CUDART_INF` / `CUDART_NAN` / `CUDART_PI` double constants; the scalar half intrinsics (`__habs`, `__hisnan`, `__hadd`/`__hsub`/`__hmul` and the comparisons, via f32); the `<stdint.h>` limit names; `DBL_MAX` / `DBL_MIN` / `DBL_EPSILON` at double compute.
