@@ -80,7 +80,7 @@ fn tile_rows(lanes: &[WgmmaContribution]) -> Result<(Vec<Vec<Val>>, Vec<&Vec<Val
             ))?;
             for (i, v) in frag.iter().enumerate() {
                 let (row, col) = a_position(t, i);
-                rows[row][col] = Some(v.clone());
+                rows[row][col] = Some(*v);
             }
         }
         rows.into_iter()
