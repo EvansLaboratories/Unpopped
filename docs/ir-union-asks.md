@@ -35,10 +35,10 @@ The PM ruled Q3 to build it now. `Access::Contraction` is rank-2, single-K, with
 - CUTLASS 51 | Fuel | conv fused epilogue (bias, activation, per-channel scale) | CUTLASS 51.
 - (CUDA 44, 55, 81 are the DECISION rows that move with this ruling: higher-rank, mixed-dtype and multi-K (KISS), operand major-ness (KISS), split-K and stream-K as a plan-level `k_split` axis and work division (Fuel).)
 
-### 1c. Emitter lanes (2 rows) and Baracuda (1 row)
+### 1c. Emitter lanes (2 rows) and Baracuda (1 row); Mojo 71 and 72 ruled by the PM 2026-11-25
 
-- Mojo 71 | the AMD and Apple emitter lanes: fishstringer and Vulkane are the nearest, unconfirmed; no HIP owner found | state whether a HIP/Metal emitter is planned; if yes, record the AMD/Apple atom constructors and the memory hints it needs; Unpopped then adds the `MmaAtom` constructors from published ISA tables | Mojo 71.
-- Mojo 72 | the same AMD emitter lane | state which AMD intrinsics (permlane, `ds_read_tr`, buffer resources) it wants as named operations rather than opaque `ExternCall`; Unpopped adds typed externs with declared effects | Mojo 72.
+- Mojo 71 | **ruled (PM 2026-11-25): HIP is Baracuda's (a new emitter crate, after its in-flight rungs and the sm_90 rows); Metal Shading Language is Vulkane's (a ranked row after its in-flight rungs)** | state whether a HIP/Metal emitter is planned; if yes, record the AMD/Apple atom constructors and the memory hints it needs; Unpopped then adds the `MmaAtom` constructors from published ISA tables | Mojo 71.
+- Mojo 72 | **Baracuda, as the HIP emitter owner (PM 2026-11-25)** | state which AMD intrinsics (permlane, `ds_read_tr`, buffer resources) it wants as named operations rather than opaque `ExternCall`; Unpopped adds typed externs with declared effects | Mojo 72.
 - ThunderKittens 58 | Baracuda (target registry and the sm_90 and sm_100 emitters) | the Hopper, Blackwell and Rubin target entries belong in the target registry, not in IR statements: record which targets Baracuda emits and the capability set of each in `unpopped-vocab`'s `target.rs` | ThunderKittens 58, CUTLASS 96.
 
 ## 2. TRIGGER rows (44): the trigger, whether the consumer exists, what makes it fire
