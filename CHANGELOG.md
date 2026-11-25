@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.15` — Docs: the third union re-score at b21af35c (coverage 50% to 57%), summary and three evidence files, ROADMAP 6.7 (part 1 of 2)
+
+Docs only. `docs/ir-union-rescore.md` gains the third measurement section (the index (Yes + half Partial) over the 507 of 519 applicable rows, re-scored at b21af35c by seven read-only agents and normalised to the 519 base), and `docs/ir-union-evidence/rescore-2026-11-25/` holds the per-survey evidence (this part: CUDA, CUTLASS and CuTe; part 2 follows with Mojo, Slang, ThunderKittens and Triton, split at the ~150k-character limit, so those four links in the summary resolve once part 2 merges) with every not-yet-Yes row, its blocker code (READY, DECISION, TRIGGER, PATENT, LANE, OUTSCOPE) and its PR estimate. ROADMAP 6.7 points at them. No code changes.
+
+---
+
 ## `0.56.14` — U19 walker D2: cuComplex names, pointer parameters of a vector type, macro comments, address-taken scalars, member specialisations, alias arguments
 
 Added (`unpopped-convert`, source-to-source in the walker, no IR change): the `cuComplex.h` names pinned to CUDA 13.3's header text (`cuCaddf`/`cuCsubf`/`cuCmulf` unfused/`cuConjf`/`make_`/`real`/`imag`; `cuCdivf` and `cuCabsf` decline by name); pointer parameters of a vector type (`const float2* z`, `cuFloatComplex*`) read and write lane pairs; a scalar local whose address is taken lives in a Private allocation (the `memset`-through-a-byte-pointer idiom); out-of-class member specialisations of a class template are spliced into its instance; an explicit template call whose argument is a local `using` alias (`f<Acc>(x)`) reads the aliased type.
