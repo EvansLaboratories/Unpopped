@@ -1033,6 +1033,27 @@ fn widen(to: ElementKind) -> CastSpec {
     }
 }
 
+/// The dtype a kernel computes an index in: the narrow integer index dtypes (`I8`, `U8`, `I16`,
+/// `U16`) widen to `I64` (every value fits, and the leaves are `I32`/`I64`/`U32`/`U64`); the
+/// others compute in their own type.
+pub(super) fn index_work_dtype(index_dtype: ElementKind) -> ElementKind {
+    match index_dtype {
+        ElementKind::I8 | ElementKind::U8 | ElementKind::I16 | ElementKind::U16 => ElementKind::I64,
+        other => other,
+    }
+}
+
+/// The loaded index as a value in its work dtype: a widening cast for a narrow index.
+pub(super) fn index_value(local_id: u32, index_dtype: ElementKind) -> ScalarExpr {
+    let work = index_work_dtype(index_dtype);
+    let raw = im2col::local(local_id);
+    if work == index_dtype {
+        raw
+    } else {
+        ScalarExpr::Cast(Box::new(raw), widen(work))
+    }
+}
+
 /// `for counter(d) in 0..extent(d) { inner }` for input axis `d` of a rank-`r` kernel.
 fn for_axis(d: u32, r: u32, inner: Block) -> Block {
     Block(vec![Stmt::For {

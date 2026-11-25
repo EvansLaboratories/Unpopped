@@ -19,11 +19,30 @@ use unpopped::plan::try_build_plan;
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, try_structure_key};
 
 const POLICIES: [OobPolicy; 3] = [OobPolicy::Skip, OobPolicy::Clamp, OobPolicy::ZeroFill];
-const INDEX_TYPES: [ElementKind; 3] = [ElementKind::I32, ElementKind::I64, ElementKind::U32];
+const INDEX_TYPES: [ElementKind; 8] = [
+    ElementKind::I32,
+    ElementKind::I64,
+    ElementKind::U32,
+    ElementKind::I8,
+    ElementKind::U8,
+    ElementKind::I16,
+    ElementKind::U16,
+    ElementKind::U64,
+];
+
+/// Whether an index dtype is signed (the unsigned ones have no negatives in the corpus).
+fn signed(dtype: ElementKind) -> bool {
+    matches!(
+        dtype,
+        ElementKind::I8 | ElementKind::I16 | ElementKind::I32 | ElementKind::I64
+    )
+}
 
 fn width(dtype: ElementKind) -> usize {
     match dtype {
-        ElementKind::F64 | ElementKind::I64 => 8,
+        ElementKind::F64 | ElementKind::I64 | ElementKind::U64 => 8,
+        ElementKind::I8 | ElementKind::U8 => 1,
+        ElementKind::I16 | ElementKind::U16 => 2,
         _ => 4,
     }
 }
@@ -74,6 +93,11 @@ fn indices(index_dtype: ElementKind, extent: i64) -> Vec<i128> {
     let (lo, hi): (i128, i128) = match index_dtype {
         ElementKind::I32 => (i128::from(i32::MIN), i128::from(i32::MAX)),
         ElementKind::I64 => (i128::from(i64::MIN), i128::from(i64::MAX)),
+        ElementKind::I8 => (i128::from(i8::MIN), i128::from(i8::MAX)),
+        ElementKind::U8 => (0, i128::from(u8::MAX)),
+        ElementKind::I16 => (i128::from(i16::MIN), i128::from(i16::MAX)),
+        ElementKind::U16 => (0, i128::from(u16::MAX)),
+        ElementKind::U64 => (0, i128::from(u64::MAX)),
         _ => (0, i128::from(u32::MAX)),
     };
     let e = i128::from(extent);
@@ -274,7 +298,7 @@ fn index_at(idx: &TypedBuffer, case: Case, row: i64, col: i64) -> i128 {
     let off = (row * idx.strides[0] + col * idx.strides[1]) as usize * w;
     let mut x = [0u8; 16];
     x[..w].copy_from_slice(&idx.bytes[off..off + w]);
-    if idx.dtype != ElementKind::U32 && x[w - 1] & 0x80 != 0 {
+    if signed(idx.dtype) && x[w - 1] & 0x80 != 0 {
         x[w..].fill(0xff);
     }
     let _ = case;

@@ -172,6 +172,23 @@ pub(super) fn assert_valid_views(op: &OpDef, key: &StructureKey) {
     }
 }
 
+/// Whether `dtype` may address a gather or scatter: any integer index dtype (`I8`, `U8`, `I16`,
+/// `U16`, `I32`, `U32`, `I64`, `U64`); a float address is meaningless (U58, union row Mojo 49).
+#[must_use]
+pub fn is_index_dtype(dtype: ElementKind) -> bool {
+    matches!(
+        dtype,
+        ElementKind::I8
+            | ElementKind::U8
+            | ElementKind::I16
+            | ElementKind::U16
+            | ElementKind::I32
+            | ElementKind::U32
+            | ElementKind::I64
+            | ElementKind::U64
+    )
+}
+
 /// The single **gathered** input of `read_index` (increment 4), or `None` for an
 /// index-free / all-[`ReadIndex::Direct`] op. Returns the gathered input's slot
 /// plus its [`ReadIndex::Indexed`] fields `(gathered_input, index_operand, axis,
@@ -296,12 +313,9 @@ pub(super) fn assert_valid_gather(op: &OpDef, key: &StructureKey) {
          input cannot index itself"
     );
     assert!(
-        matches!(
-            index_dtype,
-            ElementKind::I32 | ElementKind::I64 | ElementKind::U32
-        ),
+        is_index_dtype(index_dtype),
         "OpDef '{name}': gather index_dtype must be an integer index dtype \
-         (I32/I64/U32), got {index_dtype:?} — a float index address is meaningless"
+         (I8/U8/I16/U16/I32/U32/I64/U64), got {index_dtype:?} — a float index address is meaningless"
     );
     assert!(
         (axis as usize) < key.rank as usize,
@@ -440,12 +454,9 @@ pub(super) fn assert_valid_scatter(op: &OpDef, key: &StructureKey) {
         op.n_inputs
     );
     assert!(
-        matches!(
-            index_dtype,
-            ElementKind::I32 | ElementKind::I64 | ElementKind::U32
-        ),
+        is_index_dtype(index_dtype),
         "OpDef '{name}': scatter index_dtype must be an integer index dtype \
-         (I32/I64/U32), got {index_dtype:?} — a float destination address is meaningless"
+         (I8/U8/I16/U16/I32/U32/I64/U64), got {index_dtype:?} — a float destination address is meaningless"
     );
     assert!(
         (axis as usize) < key.rank as usize,

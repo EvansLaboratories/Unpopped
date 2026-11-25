@@ -28,6 +28,13 @@ use kernel_run::{F32, F64, agree, run_c_mutated, width};
 const I32: ElementKind = ElementKind::I32;
 const I64: ElementKind = ElementKind::I64;
 const U32: ElementKind = ElementKind::U32;
+const I8: ElementKind = ElementKind::I8;
+const U8: ElementKind = ElementKind::U8;
+const I16: ElementKind = ElementKind::I16;
+const U16: ElementKind = ElementKind::U16;
+const U64: ElementKind = ElementKind::U64;
+/// Every integer index dtype a gather or scatter may carry (U58).
+const INDEX_TYPES: [ElementKind; 8] = [I32, I64, U32, I8, U8, I16, U16, U64];
 
 /// `data`/`out` shapes (gather) or `src`/`dst` shapes (scatter); the index is full-shape over the
 /// iteration space or, when `ids_1d`, runs along `axis` only (stride 0 on the other axis).
@@ -90,10 +97,15 @@ fn sevens(dtype: ElementKind, shape: [i64; 2]) -> TypedBuffer {
 fn index_pool(index_dtype: ElementKind, extent: i64) -> Vec<i128> {
     let e = i128::from(extent);
     let mut v = vec![0, e - 1, 1, e, e + 7, 2, e - 2];
-    if index_dtype != U32 {
+    if matches!(index_dtype, I8 | I16 | I32 | I64) {
         v.extend([-1, -3]);
     }
     v.push(match index_dtype {
+        I8 => i128::from(i8::MAX),
+        U8 => i128::from(u8::MAX),
+        I16 => i128::from(i16::MAX),
+        U16 => i128::from(u16::MAX),
+        U64 => i128::from(u64::MAX),
         I64 => i128::from(i64::MAX),
         I32 => i128::from(i32::MAX),
         _ => i128::from(u32::MAX),
@@ -175,7 +187,7 @@ fn scatter(
 
 #[test]
 fn gathers_agree_for_every_policy_and_index_type() {
-    for (n, idx) in [I32, I64, U32].into_iter().enumerate() {
+    for (n, idx) in INDEX_TYPES.into_iter().enumerate() {
         for (m, oob) in [OobPolicy::Skip, OobPolicy::Clamp, OobPolicy::ZeroFill]
             .into_iter()
             .enumerate()
@@ -198,7 +210,7 @@ fn gathers_agree_on_the_other_axis_broadcast_ids_and_f64() {
 
 #[test]
 fn scatters_agree_for_assign_and_add() {
-    for (n, idx) in [I32, I64, U32].into_iter().enumerate() {
+    for (n, idx) in INDEX_TYPES.into_iter().enumerate() {
         for (m, add) in [false, true].into_iter().enumerate() {
             let (k, a) = scatter(FULL0, add, F32, idx);
             agree(&format!("scatter_{n}_{m}"), &k, a);
