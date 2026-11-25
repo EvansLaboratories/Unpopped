@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.21` — Docs: the opaque-tile MMA design note (MSL simdgroup_matrix and CUDA WMMA are one class)
+
+Docs only. `docs/design-opaque-tile-mma.md`: the element-to-thread mapping is unspecified in both Apple `simdgroup_matrix` and CUDA `nvcuda::wmma`, so one statement family serves both; written from primary sources. Nothing is built; Q1 (tensor/tile) is not ruled. No code changes.
+
+---
+
 ## `0.56.20` — Docs: PATENT-SWEEP, the tensor-map and prefetch family charted (patents-2)
 
 Docs only. `docs/PATENT-SWEEP.md` gains the patents-2 reads of US12645455B2, US12657024B2 and US12669996B2 (claims, limb charts, verdict words only). No code changes.
