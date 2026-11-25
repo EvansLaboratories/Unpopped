@@ -84,6 +84,9 @@ struct Opt {
     /// How the tiles sit in their allocations.
     a_layout: OperandLayout,
     b_layout: OperandLayout,
+    /// Rows of `A` and `D`: 128, or 64 (Layout F) with `d_lane` 0 or 16.
+    m: u32,
+    d_lane: u32,
 }
 impl Opt {
     fn plain(n: u32) -> Self {
@@ -96,6 +99,8 @@ impl Opt {
             fence: true,
             a_layout: OperandLayout::RowMajor,
             b_layout: OperandLayout::RowMajor,
+            m: 128,
+            d_lane: 0,
         }
     }
 }
@@ -152,6 +157,8 @@ fn mma(o: Opt, scale_d: i64) -> Stmt {
         scale_d: u(scale_d),
         a_layout: o.a_layout,
         b_layout: o.b_layout,
+        m: o.m,
+        d_lane: o.d_lane,
     }
 }
 
@@ -175,7 +182,7 @@ fn body(o: Opt) -> Vec<Stmt> {
                 count: u(1),
             },
         ]),
-        copy_tile(0, 0, 128 * K as i64, t, o.fence, o.a_layout),
+        copy_tile(0, 0, i64::from(o.m) * K as i64, t, o.fence, o.a_layout),
         copy_tile(1, 1, n * K as i64, t, o.fence, o.b_layout),
         Stmt::barrier(Scope::Block),
         on_thread0(issue),
@@ -186,13 +193,13 @@ fn body(o: Opt) -> Vec<Stmt> {
             parity: u(0),
         });
     }
-    body.push(Stmt::Tcgen05Ld {
+    let ld = Stmt::Tcgen05Ld {
         src: 2,
         col: u(D_COL),
         count: o.n,
         dst: 4,
-    });
-    body.push(counted(
+    };
+    let store_out = counted(
         0,
         n,
         vec![
@@ -205,7 +212,24 @@ fn body(o: Opt) -> Vec<Stmt> {
                 value: local(3),
             },
         ],
-    ));
+    );
+    if o.m == 128 {
+        body.push(ld);
+        body.push(store_out);
+    } else {
+        // Layout F: only 16 of a warp's 32 lanes hold rows of D (the half `d_lane` names); the others read nothing
+        let lane = ScalarExpr::Binary(BinaryOp::BitAnd, Box::new(tid()), Box::new(u(31)));
+        let cmp = |op, v: i64| ScalarExpr::Binary(op, Box::new(lane.clone()), Box::new(u(v)));
+        body.push(Stmt::If {
+            cond: cmp(BinaryOp::CmpGe, i64::from(o.d_lane)),
+            then: Block(vec![Stmt::If {
+                cond: cmp(BinaryOp::CmpLt, i64::from(o.d_lane) + 16),
+                then: Block(vec![ld, store_out]),
+                els: Block(vec![]),
+            }]),
+            els: Block(vec![]),
+        });
+    }
     // every warp has read its lanes: free the tensor memory (PTX: all of it must be deallocated before the kernel exits)
     body.push(Stmt::barrier(Scope::Block));
     body.push(on_thread0(vec![Stmt::Tcgen05Dealloc {
@@ -241,7 +265,7 @@ fn kernel(o: Opt) -> KernelFn {
             "a",
             MemorySpace::Shared,
             BF16,
-            Extent::Static(span(o.a_layout, 128)),
+            Extent::Static(span(o.a_layout, o.m as usize)),
         ),
         AllocDecl::new(
             "b",
@@ -313,9 +337,20 @@ fn expected(o: Opt) -> Vec<f32> {
     let mut out = Vec::new();
     for t in 0..o.threads as usize {
         let lane = 32 * ((t / 32) % 4) + t % 32;
+        // the row of D this lane holds: lane r for m = 128; for m = 64 (Layout F) lane 32 w + d_lane + r' holds row
+        // 16 w + r' for r' < 16, and the other 16 lanes of the quadrant hold nothing (their thread reads none)
+        let row = if o.m == 128 {
+            Some(lane)
+        } else {
+            let (w, l) = (lane / 32, lane % 32);
+            (l >= o.d_lane as usize && l < o.d_lane as usize + 16)
+                .then(|| 16 * w + (l - o.d_lane as usize))
+        };
         for j in 0..o.n as usize {
-            let dot: f32 = (0..K).map(|k| a_val(lane, k) * b_val(j, k)).sum();
-            out.push(dot * o.products as f32);
+            out.push(row.map_or(0.0, |r| {
+                let dot: f32 = (0..K).map(|k| a_val(r, k) * b_val(j, k)).sum();
+                dot * o.products as f32
+            }));
         }
     }
     out
@@ -558,6 +593,91 @@ fn the_checker_refuses_an_alloc_that_tensor_memory_cannot_be() {
         refused(Stmt::Tcgen05Alloc { d: 0, ncols: 32 }),
         "a Shared allocation"
     );
+}
+
+// ---- M = 64, Layout F (U8c): PTX ISA 9.5 9.7.18.10.5.6, Figures 221 and 222 -----------------------------------------------
+
+#[test]
+fn m64_puts_16_rows_in_each_warps_lower_or_upper_half_quadrant() {
+    for d_lane in [0u32, 16] {
+        for n in [8u32, 16, 64] {
+            let mut o = Opt::plain(n);
+            (o.m, o.d_lane) = (64, d_lane);
+            assert_eq!(
+                run(&kernel(o), o),
+                Ok(expected(o)),
+                "n = {n}, d_lane = {d_lane}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_other_half_of_a_quadrant_is_not_written_by_an_m64_mma() {
+    // d_lane 0 writes lanes 0..16 of each quadrant: reading lane 16 of warp 0 (never written) traps
+    let mut o = Opt::plain(8);
+    (o.m, o.d_lane) = (64, 0);
+    let mut k = kernel(o);
+    // make every thread read, whatever its lane: drop the lane guards (the Ld sits inside two nested Ifs)
+    let at = k
+        .body
+        .0
+        .iter()
+        .position(|s| {
+            matches!(
+                s,
+                Stmt::If {
+                    cond: ScalarExpr::Binary(BinaryOp::CmpGe, ..),
+                    ..
+                }
+            )
+        })
+        .expect("the guarded readout");
+    if let Stmt::If { then, .. } = k.body.0[at].clone() {
+        if let Some(Stmt::If { then: inner, .. }) = then.0.first() {
+            k.body.0.splice(at..=at, inner.0.clone());
+        }
+    }
+    assert!(
+        matches!(
+            run_unchecked(&k, o),
+            Err(KernelTrap::UninitializedShared { .. }
+                | KernelTrap::UninitializedPrivate { .. }
+                | KernelTrap::Unsupported(_))
+        ),
+        "reading a lane no row was written to must not look like data: {:?}",
+        run_unchecked(&k, o)
+    );
+}
+
+#[test]
+fn the_checker_applies_the_m_and_lane_alignment_rules() {
+    let with = |m: u32, d_lane: u32| {
+        let mut o = Opt::plain(8);
+        (o.m, o.d_lane) = (m, d_lane);
+        let mut k = kernel(o);
+        for st in &mut k.body.0 {
+            if let Stmt::If { then, .. } = st {
+                for t in &mut then.0 {
+                    if let Stmt::Tcgen05Mma {
+                        m: mm, d_lane: dl, ..
+                    } = t
+                    {
+                        (*mm, *dl) = (m, d_lane);
+                    }
+                }
+            }
+        }
+        check_kernel(&k)
+    };
+    assert_eq!(with(128, 0), Ok(()));
+    assert_eq!(with(64, 0), Ok(()));
+    assert_eq!(with(64, 16), Ok(()));
+    let bad = |r: Result<(), KernelError>| matches!(r, Err(KernelError::Tcgen05Unsupported { .. }));
+    assert!(bad(with(64, 8)), "an alignment other than 0 or 16");
+    assert!(bad(with(128, 16)), "an alignment on m = 128");
+    assert!(bad(with(32, 0)), "m = 32 (Layout G) is not built");
+    assert!(bad(with(256, 0)), "m = 256 needs cta_group::2");
 }
 
 #[test]

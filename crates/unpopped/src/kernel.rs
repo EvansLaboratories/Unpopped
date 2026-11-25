@@ -443,6 +443,11 @@ impl OperandLayout {
     }
 }
 
+/// The default `m` of a [`Stmt::Tcgen05Mma`]: 128.
+const fn default_tcgen05_m() -> u32 {
+    128
+}
+
 /// A sequence of statements; a block opens a scope.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct Block(pub Vec<Stmt>);
@@ -919,12 +924,22 @@ pub enum Stmt {
         d_col: ScalarExpr,
         /// Zero: `D = A.B`; nonzero: `D = A.B + D`. An integer expression.
         scale_d: ScalarExpr,
-        /// How the 128-row `A` tile sits in its allocation (default `RowMajor`; see [`OperandLayout`]).
+        /// How the `m`-row `A` tile sits in its allocation (default `RowMajor`; see [`OperandLayout`]).
         #[serde(default)]
         a_layout: OperandLayout,
         /// How the `B` tile sits in its allocation (default `RowMajor`).
         #[serde(default)]
         b_layout: OperandLayout,
+        /// Rows of `A` and `D`: 128 (the default) or 64 (`tcgen05.mma.cta_group::1` with `M = 64`, non-`.ws`, **Layout F**,
+        /// PTX ISA 9.5 9.7.18.10.5.6, Figures 221 and 222: "4x1 (1/2 datapath utilized)"). With `m = 128` row `r` of `D` is
+        /// tensor-memory lane `r`. With `m = 64` row `r` is lane `32 * (r / 16) + d_lane + r % 16`: rows `16 w .. 16 w + 15`
+        /// fill 16 of the 32 lanes of warp `w`'s quadrant, the lower half (`d_lane` 0) or the upper half (`d_lane` 16).
+        #[serde(default = "default_tcgen05_m")]
+        m: u32,
+        /// The tensor-memory lane alignment of `D` for `m = 64`: 0 or 16 (the table's "Layout 0 or 16"; Figure 222's
+        /// addresses `0x0000.0XXX | 0x0010.0XXX`, ...). Must be 0 for `m = 128`.
+        #[serde(default)]
+        d_lane: u32,
     },
     /// `tcgen05.alloc.cta_group::1` (ROADMAP U8c slice 4): allocate `ncols` columns of tensor memory, the whole of the
     /// declared `Tensor` allocation `d` (`128 * ncols` elements). PTX ISA 9.5 9.7.18.1.2 and 9.7.18.7.1: "The unit of

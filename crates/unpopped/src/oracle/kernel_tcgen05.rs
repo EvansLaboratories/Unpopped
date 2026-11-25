@@ -122,6 +122,8 @@ impl Machine<'_> {
             scale_d,
             a_layout,
             b_layout,
+            m: rows,
+            d_lane,
             ..
         } = st
         else {
@@ -136,12 +138,19 @@ impl Machine<'_> {
             .ok_or(KernelTrap::AllocOutOfBounds { alloc: d })?;
         let accumulate = self.wgmma_int(scale_d)? != 0;
         let (a, b) = (
-            self.tcgen05_tile(a, M, a_layout)?,
+            self.tcgen05_tile(a, *rows as usize, a_layout)?,
             self.tcgen05_tile(b, n, b_layout)?,
         );
         for (m, arow) in a.iter().enumerate() {
             for (j, brow) in b.iter().enumerate() {
-                let at = cell(m * cols + col0 + j);
+                // PTX ISA 9.5 Layout D (m = 128): row r is lane r. Layout F (m = 64): rows 16w..16w+15 are in warp w's
+                // quadrant, in the half `d_lane` picks (Figures 221, 222)
+                let lane = if *rows == 64 {
+                    32 * (m / 16) + *d_lane as usize + m % 16
+                } else {
+                    m
+                };
+                let at = cell(lane * cols + col0 + j);
                 let c = if accumulate {
                     self.alloc_load(d, &at)?.f64()
                 } else {

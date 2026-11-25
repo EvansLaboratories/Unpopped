@@ -58,6 +58,8 @@ fn check_mma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
         scale_d,
         a_layout,
         b_layout,
+        m,
+        d_lane,
     } = st
     else {
         unreachable!("check_mma is called for a Tcgen05Mma");
@@ -80,7 +82,13 @@ fn check_mma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
         .map_err(|_| refuse("a B tile that is not a Shared place of the input type"))?;
     // the tcgen05 descriptor's leading field is 15 bits (PTX ISA 9.5 9.7.18.4.1): twice the wgmma range
     let max_lbo = 2 * MAX_DESCRIPTOR_OFFSET + 16;
-    check_layout(k, a, a_layout, 128, max_lbo).map_err(refuse)?;
+    // PTX ISA 9.5 9.7.18.10.5: M = 64 (non-.ws, cta_group::1: Layout F, lane alignment 0 or 16) or M = 128 (Layout D)
+    if !matches!((*m, *d_lane), (128, 0) | (64, 0 | 16)) {
+        return Err(refuse(
+            "an m other than 128 (d_lane 0) or 64 (d_lane 0 or 16)",
+        ));
+    }
+    check_layout(k, a, a_layout, *m as usize, max_lbo).map_err(refuse)?;
     check_layout(k, b, b_layout, *n as usize, max_lbo).map_err(refuse)?;
     check_int(k, d_col, sc)?;
     check_int(k, scale_d, sc)
