@@ -89,8 +89,16 @@ struct Opt {
     /// The element types of A and B: bf16 (K = 16) or the 8-bit floats (K = 32).
     a_ty: ElementKind,
     b_ty: ElementKind,
+    /// `D` is f16 (`dtype` 0): tensor-memory words whose low 16 bits are the element.
+    half_d: bool,
+    neg_a: bool,
+    neg_b: bool,
 }
 impl Opt {
+    /// The type of a tensor-memory cell and of what a thread reads back from it.
+    fn cell(self) -> ElementKind {
+        if self.half_d { ElementKind::U32 } else { F32 }
+    }
     fn k(self) -> usize {
         if self.a_ty == BF16 { 16 } else { 32 }
     }
@@ -115,6 +123,9 @@ impl Opt {
             d_lane: 0,
             a_ty: BF16,
             b_ty: BF16,
+            half_d: false,
+            neg_a: false,
+            neg_b: false,
         }
     }
     fn f8(n: u32, a_ty: ElementKind, b_ty: ElementKind) -> Self {
@@ -172,7 +183,7 @@ fn mma(o: Opt, scale_d: i64) -> Stmt {
     Stmt::Tcgen05Mma {
         n: o.n,
         ab: o.a_ty,
-        acc: F32,
+        acc: if o.half_d { ElementKind::F16 } else { F32 },
         a: alloc(0, u(0)),
         b: alloc(1, u(0)),
         d: 2,
@@ -183,6 +194,8 @@ fn mma(o: Opt, scale_d: i64) -> Stmt {
         m: o.m,
         d_lane: o.d_lane,
         b_ty: (o.b_ty != o.a_ty).then_some(o.b_ty),
+        negate_a: o.neg_a,
+        negate_b: o.neg_b,
     }
 }
 
@@ -282,13 +295,13 @@ fn kernel(o: Opt) -> KernelFn {
         vec![
             Param::buffer("a_in", o.a_ty, BufferRole::Read, Some(1)),
             Param::buffer("b_in", o.b_ty, BufferRole::Read, Some(1)),
-            Param::buffer("out", F32, BufferRole::ReadWrite, Some(1)),
+            Param::buffer("out", o.cell(), BufferRole::ReadWrite, Some(1)),
         ],
         vec![
             LocalDecl::scalar(U32),
             LocalDecl::scalar(U32),
             LocalDecl::scalar(o.a_ty),
-            LocalDecl::scalar(F32),
+            LocalDecl::scalar(o.cell()),
             LocalDecl::scalar(o.b_ty),
         ],
         Block(body(o)),
@@ -310,7 +323,7 @@ fn kernel(o: Opt) -> KernelFn {
         AllocDecl::new(
             "tmem",
             MemorySpace::Tensor,
-            F32,
+            o.cell(),
             Extent::Static(128 * tmem_cols(o.n)),
         ),
         AllocDecl::new(
@@ -319,7 +332,12 @@ fn kernel(o: Opt) -> KernelFn {
             ElementKind::U64,
             Extent::Static(1),
         ),
-        AllocDecl::new("frag", MemorySpace::Private, F32, Extent::Static(n as u32)),
+        AllocDecl::new(
+            "frag",
+            MemorySpace::Private,
+            o.cell(),
+            Extent::Static(n as u32),
+        ),
     ];
     k
 }
@@ -369,7 +387,7 @@ fn run(k: &KernelFn, o: Opt) -> Result<Vec<f32>, KernelTrap> {
         typed_buf(o.a_ty, 128, o.k(), val_a(o)),
         typed_buf(o.b_ty, o.n as usize, o.k(), val_b(o)),
         KernelArg::Buffer(TypedBuffer::new(
-            F32,
+            o.cell(),
             vec![len as i64],
             vec![1],
             vec![0; len * 4],
@@ -381,7 +399,15 @@ fn run(k: &KernelFn, o: Opt) -> Result<Vec<f32>, KernelTrap> {
     };
     Ok(b.bytes
         .chunks(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .map(|c| {
+            let w = u32::from_le_bytes(c.try_into().unwrap());
+            if o.half_d {
+                // the low 16 bits are the binary16 element (PTX: the upper 16 are unspecified, so they are not read)
+                half::f16::from_bits((w & 0xFFFF) as u16).to_f32()
+            } else {
+                f32::from_bits(w)
+            }
+        })
         .collect())
 }
 
@@ -404,7 +430,14 @@ fn expected(o: Opt) -> Vec<f32> {
             out.push(row.map_or(0.0, |r| {
                 let (fa, fb) = (val_a(o), val_b(o));
                 let dot: f32 = (0..o.k()).map(|k| fa(r, k) * fb(j, k)).sum();
-                dot * o.products as f32
+                let dot = if o.neg_a ^ o.neg_b { -dot } else { dot };
+                if o.half_d {
+                    // each product rounds to binary16 once, from the old D plus the exact sum (the `half` crate is a
+                    // codec independent of the oracle's)
+                    (0..o.products).fold(0.0f32, |d, _| half::f16::from_f32(d + dot).to_f32())
+                } else {
+                    dot * o.products as f32
+                }
             }));
         }
     }
@@ -935,4 +968,77 @@ fn the_checker_refuses_what_a_tensor_core_op_cannot_be() {
         assert!(refused(k), "{what}: {:?}", check_kernel(k));
     }
     assert_eq!(check_kernel(&kernel(Opt::plain(8))), Ok(()));
+}
+
+#[test]
+fn negating_a_or_b_flips_the_product_and_negating_both_cancels() {
+    for (na, nb, sign) in [
+        (true, false, -1.0f32),
+        (false, true, -1.0),
+        (true, true, 1.0),
+    ] {
+        let o = Opt {
+            neg_a: na,
+            neg_b: nb,
+            ..Opt::plain(8)
+        };
+        let base = expected(Opt::plain(8));
+        let want: Vec<f32> = base.iter().map(|v| v * sign).collect();
+        assert_eq!(run(&kernel(o), o), Ok(want), "neg_a {na} neg_b {nb}");
+    }
+    // 8-bit inputs honour it too
+    let o = Opt {
+        neg_b: true,
+        ..Opt::f8(8, ElementKind::Fp8E4M3FN, ElementKind::Fp8E5M2)
+    };
+    assert_eq!(run(&kernel(o), o), Ok(expected(o)));
+    assert!(
+        expected(o).iter().any(|v| *v < 0.0),
+        "the reference is not all zero"
+    );
+}
+
+#[test]
+fn an_f16_accumulator_holds_the_rounded_product_in_the_low_half_of_each_word() {
+    // seven accumulated bf16 products reach past 2048, where binary16 steps by 2 and an odd sum is not representable: the rounding is exercised, and each
+    // product rounds once more, from the rounded one before
+    let o = Opt {
+        half_d: true,
+        products: 7,
+        ..Opt::plain(16)
+    };
+    let want = expected(o);
+    assert_eq!(run(&kernel(o), o), Ok(want.clone()));
+    let exact = expected(Opt { half_d: false, ..o });
+    assert!(
+        want.iter().zip(&exact).any(|(h, f)| h != f),
+        "some sum needs rounding, so the control differs from the f32 reference"
+    );
+    // one product, exact in binary16
+    let o1 = Opt { products: 1, ..o };
+    assert_eq!(run(&kernel(o1), o1), Ok(expected(o1)));
+    // 8-bit inputs and negation with an f16 D
+    let o3 = Opt {
+        neg_a: true,
+        half_d: true,
+        ..Opt::f8(8, ElementKind::Fp8E5M2, ElementKind::Fp8E4M3FN)
+    };
+    assert_eq!(run(&kernel(o3), o3), Ok(expected(o3)));
+}
+
+#[test]
+fn the_checker_pairs_an_f16_accumulator_with_u32_words_only() {
+    let ok = Opt {
+        half_d: true,
+        ..Opt::plain(8)
+    };
+    assert_eq!(check_kernel(&kernel(ok)), Ok(()));
+    // f16 D over a float cell, or f32 D over words, is refused
+    let mut k = kernel(ok);
+    k.allocs[2].elem = F32;
+    assert!(check_kernel(&k).is_err());
+    let mut k = kernel(Opt::plain(8));
+    k.allocs[2].elem = ElementKind::U32;
+    k.allocs[4].elem = ElementKind::U32;
+    assert!(check_kernel(&k).is_err());
 }

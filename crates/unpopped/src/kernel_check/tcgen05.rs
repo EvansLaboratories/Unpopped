@@ -61,6 +61,7 @@ fn check_mma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
         m,
         d_lane,
         b_ty,
+        ..
     } = st
     else {
         unreachable!("check_mma is called for a Tcgen05Mma");
@@ -79,8 +80,17 @@ fn check_mma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
             "input types other than f16, bf16 (A and B alike) or two 8-bit floats (e4m3, e5m2)",
         ));
     }
-    if *acc != ElementKind::F32 || check_tmem(k, *d)? != ElementKind::F32 {
-        return Err(refuse("an accumulator that is not f32 in tensor memory"));
+    // dtype F32 (a 32-bit float cell) or F16 (a 32-bit word whose low 16 bits are the element: PTX 9.7.18.10.5)
+    let cell = check_tmem(k, *d)?;
+    let acc_ok = match *acc {
+        ElementKind::F32 => cell == ElementKind::F32,
+        ElementKind::F16 => cell == ElementKind::U32,
+        _ => false,
+    };
+    if !acc_ok {
+        return Err(refuse(
+            "an accumulator that is not f32 (F32 tensor memory) or f16 (U32 tensor memory words)",
+        ));
     }
     check_tile(k, a, *ab, sc)
         .map_err(|_| refuse("an A tile that is not a Shared place of the input type"))?;

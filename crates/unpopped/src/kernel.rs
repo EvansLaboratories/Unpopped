@@ -921,7 +921,14 @@ pub enum Stmt {
         /// The input element type: `F16` or `Bf16`.
         #[serde(with = "crate::text::ek")]
         ab: ElementKind,
-        /// The accumulator element type: `F32`.
+        /// The accumulator element type (`dtype`, instruction-descriptor bits 4-5; `F16 = 0` and `F32 = 1` for `.kind::f16` and
+        /// `.kind::f8f6f4`, PTX ISA 9.5 Tables 52-53; CUTLASS `CFormat` agrees): `F32`, or `F16`. With `F16`, "the
+        /// sub-word elements of matrix D are expected not to be packed within a 32-bit Tensor Memory word ... a Tensor
+        /// Memory word would contain a single 16-bit element in its lower 16 bits" (PTX 9.7.18.10.5): the `Tensor`
+        /// allocation is `U32` (words), the oracle writes the binary16 bits into the low 16 bits and **zero** into the upper
+        /// 16 (PTX does not say what they hold: a kernel must not read them). The sum is rounded to binary16 once, from the
+        /// exact `f64` sum plus the old `D` (PTX does not say how an `F16` accumulator rounds inside the instruction: this is
+        /// the oracle's contract, not a measurement of hardware).
         #[serde(with = "crate::text::ek")]
         acc: ElementKind,
         /// The first element of the `A` tile: a `Place::Alloc` of a `Shared` allocation.
@@ -954,10 +961,18 @@ pub enum Stmt {
         /// gives `.kind::f8f6f4` separate `atype` and `btype` fields (bits 7-9 and 10-12), so `A` and `B` may be different
         /// 8-bit float types (`Fp8E4M3FN`, `Fp8E5M2`); CUTLASS `mma_sm100_desc.hpp` agrees. For `F16`/`Bf16` the two must
         /// be the same type (`.kind::f16` has one `atype`/`btype` pair and PTX names no mixed form here). With 8-bit
-        /// inputs `K` is 32 per instruction (`.kind::f8f6f4` dense), only `RowMajor` layouts are admitted (the canonical
-        /// layouts' core matrices are 16 bytes, i.e. 16 elements, which is not built), and `acc`/`D` are `F32`.
+        /// inputs `K` is 32 per instruction (`.kind::f8f6f4` dense) and a `Canonical` layout's core-matrix row is 16
+        /// elements. `acc` is `F32` (a `Tensor` allocation of `F32`, `I32` or `U32`) or `F16` (see `acc`).
         #[serde(default, with = "crate::text::ek_opt")]
         b_ty: Option<ElementKind>,
+        /// Negate every element of `A` (instruction-descriptor bit 13, PTX ISA 9.5 Tables 52-54 and 9.7.18.10.1 Table 64:
+        /// supported for `.kind::f16`, `.kind::tf32` and `.kind::f8f6f4`; CUTLASS `mma_sm100_desc.hpp` `a_negate_` agrees,
+        /// "valid only for F32F16Format and MXF8F6F4Format"). The product's sign flips; both negated cancel.
+        #[serde(default)]
+        negate_a: bool,
+        /// Negate every element of `B` (bit 14); see `negate_a`.
+        #[serde(default)]
+        negate_b: bool,
     },
     /// `tcgen05.alloc.cta_group::1` (ROADMAP U8c slice 4): allocate `ncols` columns of tensor memory, the whole of the
     /// declared `Tensor` allocation `d` (`128 * ncols` elements). PTX ISA 9.5 9.7.18.1.2 and 9.7.18.7.1: "The unit of

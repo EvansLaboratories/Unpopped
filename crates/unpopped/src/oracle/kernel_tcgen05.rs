@@ -9,6 +9,8 @@
 //! `32x32b` shape: thread `l` of warp `w` reads lane `32 (w % 4) + l`.
 
 use super::Val;
+use super::accum_policy::to_f16;
+use super::float_codec::{f16_to_f64, f32_to_f16_bits};
 use super::kernel_eval::{KernelTrap, Machine};
 use crate::exec::{ExecId, MemorySpace};
 use crate::ir::ScalarExpr;
@@ -126,6 +128,9 @@ impl Machine<'_> {
             m: rows,
             d_lane,
             ab,
+            acc,
+            negate_a,
+            negate_b,
             ..
         } = st
         else {
@@ -139,6 +144,9 @@ impl Machine<'_> {
             .filter(|c| c + n <= cols)
             .ok_or(KernelTrap::AllocOutOfBounds { alloc: d })?;
         let accumulate = self.wgmma_int(scale_d)? != 0;
+        let half_acc = *acc == unpopped_vocab::ElementKind::F16;
+        // negating A's or B's elements flips every product's sign; both cancel
+        let sign = if negate_a ^ negate_b { -1.0 } else { 1.0 };
         // `.kind::f8f6f4` takes K = 32 per instruction, the 16-bit kinds 16 (PTX ISA 9.5 Table 50)
         let k = if matches!(
             ab,
@@ -162,16 +170,26 @@ impl Machine<'_> {
                     m
                 };
                 let at = cell(lane * cols + col0 + j);
-                let c = if accumulate {
-                    self.alloc_load(d, &at)?.f64()
-                } else {
+                let c = if !accumulate {
                     0.0
+                } else if half_acc {
+                    // the old D is a word whose low 16 bits are a binary16
+                    let w = self.alloc_load(d, &at)?.f64() as u64;
+                    f16_to_f64((w & 0xFFFF) as u16)
+                } else {
+                    self.alloc_load(d, &at)?.f64()
                 };
                 let sum = arow
                     .iter()
                     .zip(brow)
-                    .fold(c, |s, (x, y)| s + x.f64() * y.f64());
-                self.alloc_store(d, &at, Val::Float(f64::from(sum as f32)))?;
+                    .fold(c, |s, (x, y)| s + sign * (x.f64() * y.f64()));
+                let out = if half_acc {
+                    let h = to_f16(sum) as f32;
+                    Val::Int(i128::from(f32_to_f16_bits(h)))
+                } else {
+                    Val::Float(f64::from(sum as f32))
+                };
+                self.alloc_store(d, &at, out)?;
             }
         }
         Ok(())
