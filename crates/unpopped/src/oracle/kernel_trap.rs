@@ -76,6 +76,14 @@ pub enum KernelTrap {
     },
     /// A thread finished with `CopyAsync` copies it never waited for (committed or not).
     AsyncUnwaited,
+    /// An async-proxy read ([`Stmt::Wgmma`](crate::kernel::Stmt::Wgmma) or `Tcgen05Mma` tiles) reached a `Shared`
+    /// element whose last write was a generic-proxy store not followed by that writer's own
+    /// [`Stmt::ProxyFence`](crate::kernel::Stmt::ProxyFence) (PTX ISA 9.5, 9.7.17.7.1: "An async proxy fence must be
+    /// used ..."). Hardware may read the old or the new value.
+    MissingProxyFence {
+        /// The allocation index.
+        alloc: u32,
+    },
     /// An `mbarrier` used outside its contract: arriving at or waiting on one never initialised, initialised with an
     /// arrival count below 1, more arrivals than are pending, or a parity other than 0 or 1.
     MbarrierMisuse {

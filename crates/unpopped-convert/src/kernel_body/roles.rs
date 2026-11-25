@@ -37,6 +37,7 @@ fn writes(b: &Block, out: &mut BTreeSet<u32>) -> bool {
             | Stmt::Collective { .. }
             | Stmt::GridDepWait
             | Stmt::GridDepLaunchDependents
+            | Stmt::ProxyFence { .. }
             | Stmt::Return
             | Stmt::Break
             | Stmt::Continue => {}

@@ -71,3 +71,16 @@ fn a_wgmma_is_refused_with_its_reason_and_the_control_lowers() {
         "the control lowers"
     );
 }
+
+#[test]
+fn a_proxy_fence_lowers_as_nothing_because_serial_c_has_one_proxy() {
+    // the serial C has no async proxy to order against, so `fence.proxy.async` has nothing to do (the sibling test shows
+    // a Wgmma is still refused, so a lowerable kernel is not a symptom of the fence)
+    let fenced = kernel(vec![Stmt::ProxyFence {
+        space: MemorySpace::Shared,
+    }]);
+    assert!(
+        CpuC.lower_kernel(&fenced).is_ok(),
+        "a lone ProxyFence lowers"
+    );
+}

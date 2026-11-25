@@ -194,7 +194,10 @@ impl Machine<'_> {
         (0..K as i128)
             .map(|j| {
                 let at = ScalarExpr::ConstInt((first + j) as i64, ElementKind::I64);
-                self.alloc_load(*alloc, &at)
+                let v = self.alloc_load(*alloc, &at)?;
+                // the async proxy reads this tile: a generic write to it needs this writer's `ProxyFence` first
+                self.require_proxy_fenced(*alloc, (first + j) as usize)?;
+                Ok(v)
             })
             .collect()
     }

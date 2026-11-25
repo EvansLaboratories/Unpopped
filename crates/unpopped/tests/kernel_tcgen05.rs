@@ -74,6 +74,8 @@ struct Opt {
     products: u32,
     commit: bool,
     wait: bool,
+    /// Each thread issues `fence.proxy.async` after storing its share of a tile.
+    fence: bool,
 }
 impl Opt {
     fn plain(n: u32) -> Self {
@@ -83,12 +85,13 @@ impl Opt {
             products: 1,
             commit: true,
             wait: true,
+            fence: true,
         }
     }
 }
 
 /// Each thread copies `total / threads` elements of input buffer `src` into `Shared` allocation `dst`.
-fn copy_tile(src: u32, dst: u32, total: i64, threads: i64) -> Stmt {
+fn copy_tile(src: u32, dst: u32, total: i64, threads: i64, fence: bool) -> Stmt {
     let per = total / threads;
     counted(
         0,
@@ -106,7 +109,12 @@ fn copy_tile(src: u32, dst: u32, total: i64, threads: i64) -> Stmt {
                 place: alloc(dst, local(1)),
                 value: local(2),
             },
-        ],
+        ]
+        .into_iter()
+        .chain(fence.then_some(Stmt::ProxyFence {
+            space: MemorySpace::Shared,
+        }))
+        .collect(),
     )
 }
 
@@ -137,8 +145,8 @@ fn body(o: Opt) -> Vec<Stmt> {
             bar: alloc(3, u(0)),
             count: u(1),
         }]),
-        copy_tile(0, 0, 128 * K as i64, t),
-        copy_tile(1, 1, n * K as i64, t),
+        copy_tile(0, 0, 128 * K as i64, t, o.fence),
+        copy_tile(1, 1, n * K as i64, t, o.fence),
         Stmt::barrier(Scope::Block),
         on_thread0(issue),
     ];
@@ -317,6 +325,18 @@ fn the_result_needs_the_commit_and_an_acquire_on_its_barrier() {
         run_unchecked(&kernel(o), o),
         Err(KernelTrap::MbarrierDeadlock)
     );
+}
+
+#[test]
+fn tiles_written_without_the_proxy_fence_trap_when_the_tcgen05_reads_them() {
+    // PTX ISA 9.5 9.7.18.6.5: "The shared memory accesses by tcgen05.mma and tcgen05.cp operations are performed asynchronously
+    // and via the asynchronous proxy ... fence.proxy.async should be used to synchronize memory between generic proxy and the async proxy"
+    let mut o = Opt::plain(8);
+    o.fence = false;
+    assert!(matches!(
+        run_unchecked(&kernel(o), o),
+        Err(KernelTrap::MissingProxyFence { .. })
+    ));
 }
 
 fn run_unchecked(k: &KernelFn, o: Opt) -> Result<Vec<f32>, KernelTrap> {

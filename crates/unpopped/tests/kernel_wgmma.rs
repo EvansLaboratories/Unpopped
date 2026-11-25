@@ -7,7 +7,7 @@
 //! `WgmmaWait` that covers its committed group. Each behaviour has a program that shows it and a control that does not.
 
 use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
-use unpopped::ir::ScalarExpr;
+use unpopped::ir::{BinaryOp, ScalarExpr};
 use unpopped::kernel::{
     Block, BufferRole, KernelError, KernelFn, LocalDecl, Param, Place, Stmt, check_kernel,
 };
@@ -65,6 +65,8 @@ struct Opt {
     commit: bool,
     wait: u32,
     barrier: bool,
+    /// Each thread issues `fence.proxy.async` after storing its share of a tile.
+    fence: bool,
 }
 impl Opt {
     fn plain(n: u32) -> Self {
@@ -74,12 +76,13 @@ impl Opt {
             commit: true,
             wait: 0,
             barrier: true,
+            fence: true,
         }
     }
 }
 
 /// Each thread copies `per` elements of input buffer `src` into `Shared` allocation `dst`.
-fn copy_tile(src: u32, dst: u32, per: i64) -> Stmt {
+fn copy_tile(src: u32, dst: u32, per: i64, fence: bool) -> Stmt {
     counted(
         0,
         per,
@@ -96,14 +99,19 @@ fn copy_tile(src: u32, dst: u32, per: i64) -> Stmt {
                 place: alloc(dst, local(1)),
                 value: local(2),
             },
-        ],
+        ]
+        .into_iter()
+        .chain(fence.then_some(Stmt::ProxyFence {
+            space: MemorySpace::Shared,
+        }))
+        .collect(),
     )
 }
 
 /// The statements of a scenario: fill the tiles, (barrier), initialise `d`, wgmma, (commit), wait, copy `d` out.
 fn body(o: Opt) -> Vec<Stmt> {
     let n = o.n as i64;
-    let copy = copy_tile;
+    let copy = |src, dst, per| copy_tile(src, dst, per, o.fence);
     let mut body = vec![copy(0, 0, 8)];
     // `b` has n * 16 elements: n / 8 per thread
     if n >= 8 {
@@ -327,4 +335,142 @@ fn the_checker_refuses_what_a_warpgroup_mma_cannot_be() {
     }
     // the control
     assert_eq!(check_kernel(&kernel(Opt::plain(8))), Ok(()));
+}
+
+// ---- `ProxyFence` (U8c slice 0): PTX ISA 9.5 9.7.17.7.1 "An async proxy fence must be used to establish an ordering
+// between prior writes to shared memory matrices and subsequent reads of the same matrices in a wgmma.mma_async".
+
+fn on(t: i64, body: Vec<Stmt>) -> Stmt {
+    Stmt::If {
+        cond: ScalarExpr::Binary(BinaryOp::CmpEq, Box::new(tid()), Box::new(u(t))),
+        then: Block(body),
+        els: Block(vec![]),
+    }
+}
+
+fn proxy_fence() -> Stmt {
+    Stmt::ProxyFence {
+        space: MemorySpace::Shared,
+    }
+}
+
+#[test]
+fn a_tile_written_without_the_proxy_fence_traps_when_the_wgmma_reads_it() {
+    let mut o = Opt::plain(8);
+    o.fence = false;
+    assert!(matches!(
+        run_unchecked(&kernel(o)),
+        Err(KernelTrap::MissingProxyFence { .. })
+    ));
+}
+
+#[test]
+fn another_threads_fence_does_not_cover_a_write() {
+    // thread 0 fences after the barrier, but threads 1..127 wrote their share of the tiles
+    let mut o = Opt::plain(8);
+    o.fence = false;
+    let mut k = kernel(o);
+    k.body.0.insert(3, on(0, vec![proxy_fence()]));
+    assert!(matches!(
+        run_unchecked(&k),
+        Err(KernelTrap::MissingProxyFence { .. })
+    ));
+}
+
+#[test]
+fn a_fence_by_every_writer_before_the_barrier_is_enough() {
+    let mut o = Opt::plain(8);
+    o.fence = false;
+    let mut k = kernel(o);
+    // the fence goes before the barrier that publishes the tile (CUTLASS's `fence_view_async_shared()` then a sync)
+    k.body.0.insert(2, proxy_fence());
+    let got = run_unchecked(&k).expect("fenced by each writer, then ordered by the barrier");
+    assert_eq!(got, expected(8, false));
+}
+
+#[test]
+fn bytes_a_bulk_copy_wrote_need_no_fence_but_a_generic_store_does() {
+    // A arrives by `CopyBulk` (the async proxy: completion carries the implicit fence); B is stored by threads
+    let bulk = |fence_b: bool| {
+        let mut o = Opt::plain(8);
+        o.fence = fence_b;
+        let mut k = kernel(o);
+        let mut body = k.body.0.clone();
+        let copy_b = body.remove(1);
+        body.remove(0); // the generic copy of A
+        let bar = Place::Alloc {
+            alloc: 3,
+            index: u(0),
+        };
+        let mut new = vec![
+            on(
+                0,
+                vec![Stmt::MbarInit {
+                    bar: bar.clone(),
+                    count: u(1),
+                }],
+            ),
+            Stmt::barrier(Scope::Block),
+            on(
+                0,
+                vec![
+                    Stmt::MbarArrive {
+                        bar: bar.clone(),
+                        tx: Some(u(64 * 16 * 2)),
+                    },
+                    Stmt::CopyBulk {
+                        dst: alloc(0, u(0)),
+                        src: Place::Logical {
+                            buffer: 0,
+                            coords: vec![u(0)],
+                        },
+                        elems: 64 * 16,
+                        bar: bar.clone(),
+                    },
+                ],
+            ),
+            copy_b,
+            Stmt::MbarWait { bar, parity: u(0) },
+        ];
+        new.extend(body);
+        k.body = Block(new);
+        k.allocs.push(AllocDecl::new(
+            "bar",
+            MemorySpace::Shared,
+            ElementKind::U64,
+            Extent::Static(1),
+        ));
+        k
+    };
+    let got = run_unchecked(&bulk(true)).expect("A by CopyBulk, B fenced");
+    assert_eq!(got, expected(8, false));
+    assert!(
+        matches!(
+            run_unchecked(&bulk(false)),
+            Err(KernelTrap::MissingProxyFence { alloc: 1 })
+        ),
+        "B was stored by threads, so its read needs their fences (A, from the bulk copy, does not)"
+    );
+}
+
+#[test]
+fn the_checker_admits_a_shared_proxy_fence_and_refuses_other_spaces() {
+    let with = |space| {
+        let mut k = kernel(Opt::plain(8));
+        k.body.0.insert(0, Stmt::ProxyFence { space });
+        check_kernel(&k)
+    };
+    assert_eq!(with(MemorySpace::Shared), Ok(()));
+    assert!(matches!(
+        with(MemorySpace::Global),
+        Err(KernelError::SyncUnsupported { .. })
+    ));
+}
+
+#[test]
+fn a_proxy_fence_survives_the_text_round_trip() {
+    let json = serde_json::to_string(&proxy_fence()).expect("serializes");
+    assert!(json.contains("ProxyFence"), "{json}");
+    let back: Stmt = serde_json::from_str(&json).expect("parses");
+    assert_eq!(back, proxy_fence());
 }

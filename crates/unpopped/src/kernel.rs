@@ -681,6 +681,24 @@ pub enum Stmt {
         /// The `Private` allocation (index into [`KernelFn::allocs`]) holding this lane's `2 * count` elements.
         src: u32,
     },
+    /// `fence.proxy.async.shared::cta` (ROADMAP U8c, slice 0): order this thread's earlier **generic-proxy** writes to
+    /// `Shared` memory before later **async-proxy** reads of the same memory by [`Stmt::Wgmma`], [`Stmt::Tcgen05Mma`]
+    /// and the like. PTX ISA 9.5: "Accessing the same memory location across multiple proxies needs a cross-proxy
+    /// fence. For the async proxy, fence.proxy.async should be used to synchronize memory between generic proxy and the
+    /// async proxy" (9.7.17.4, 9.7.10.28.2), and for `wgmma` "An async proxy fence must be used to establish an
+    /// ordering between prior writes to shared memory matrices and subsequent reads of the same matrices in a
+    /// wgmma.mma_async instruction" (9.7.17.7.1). The fence "take[s] effect within a single thread and therefore do[es]
+    /// not have a .scope qualifier": it covers the writes **this thread** made, and its effect composes with a barrier
+    /// as the memory model says (so a thread that reads another thread's stores still needs the barrier, and that
+    /// writer needs its own `ProxyFence`). The completion of an asynchronous-proxy operation (`CopyBulk`, a `wgmma`)
+    /// is followed by an implicit fence the other way (9.7.17.4), so the bytes a `CopyBulk` wrote need none. The
+    /// oracle traps a missing fence: [`KernelTrap::MissingProxyFence`](crate::oracle::kernel_eval::KernelTrap).
+    /// `check_kernel` admits only `Shared` (the `.global` and `.shared::cluster` forms are not modelled). Not modelled:
+    /// the opposite hazard (an async-proxy read followed by a generic write of the same bytes).
+    ProxyFence {
+        /// The state space the fence orders: `Shared` only.
+        space: MemorySpace,
+    },
     /// A warpgroup-level asynchronous matrix multiply-accumulate (`wgmma.mma_async.m64nNk16`; ROADMAP U7 S4, **option
     /// A: no swizzle and no descriptor bits are modelled, and there was no ISA text to check them against**). The 128
     /// threads of a warpgroup (a block of `Scope::Warpgroup` groups, 32-lane subgroups, a launch block `[x, 1, 1]` with

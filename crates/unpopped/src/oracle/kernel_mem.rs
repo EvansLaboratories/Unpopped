@@ -68,6 +68,8 @@ pub(super) enum AccessKind {
 /// the plain readers since.
 #[derive(Default)]
 pub(super) struct Access {
+    /// The `(block, thread)` of a generic-proxy writer whose store no `ProxyFence` of its own has followed yet.
+    pub(super) unfenced: Option<(u32, u32)>,
     writer: Option<Stamp>,
     atomics: Vec<Stamp>,
     readers: Vec<Stamp>,
@@ -102,6 +104,7 @@ pub(super) fn touch(
     }
     match kind {
         AccessKind::Write => {
+            a.unfenced = Some((now.block, now.thread));
             a.writer = Some(now);
             a.atomics.clear();
             a.readers.clear();
@@ -347,6 +350,38 @@ impl ThreadCtx<'_> {
             MemorySpace::Private => self.private[alloc as usize].as_mut(),
             _ => None,
         }
+    }
+
+    /// `fence.proxy.async` by this thread: its earlier generic writes to this block's `Shared` memory are now ordered
+    /// before async-proxy reads.
+    pub(super) fn proxy_fence_here(&mut self) {
+        let me = (self.block_lin, self.thread_lin);
+        for a in self.block.log.values_mut() {
+            if a.unfenced == Some(me) {
+                a.unfenced = None;
+            }
+        }
+    }
+
+    /// An async-proxy write landed on element `i` of `alloc` (a `CopyBulk`): its completion carries the implicit
+    /// fence, so the element is not "unfenced".
+    pub(super) fn mark_async_written(&mut self, alloc: u32, i: usize) {
+        if let Some(a) = self.block.log.get_mut(&(alloc, i)) {
+            a.unfenced = None;
+        }
+    }
+
+    /// An async-proxy read of element `i` of `alloc`: [`KernelTrap::MissingProxyFence`] when its last write was a generic
+    /// store that no `ProxyFence` of the writer has followed.
+    pub(super) fn require_proxy_fenced(&self, alloc: u32, i: usize) -> Result<(), KernelTrap> {
+        let log = match self.peer {
+            Some(_) => return Ok(()),
+            None => &self.block.log,
+        };
+        if log.get(&(alloc, i)).is_some_and(|a| a.unfenced.is_some()) {
+            return Err(KernelTrap::MissingProxyFence { alloc });
+        }
+        Ok(())
     }
 
     /// Log an access to a `Shared` element (a no-op for the other spaces).

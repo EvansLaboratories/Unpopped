@@ -365,6 +365,7 @@ impl Walk<'_> {
             Stmt::Store { .. }
             | Stmt::MaskedStore { .. }
             | Stmt::Fence { .. }
+            | Stmt::ProxyFence { .. }
             | Stmt::CopyAsync { .. }
             | Stmt::CopyBulk { .. }
             | Stmt::WgmmaCommit

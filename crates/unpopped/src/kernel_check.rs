@@ -276,6 +276,13 @@ fn check_sync_stmt(
                 });
             }
         }
+        Stmt::ProxyFence { space } => {
+            if *space != MemorySpace::Shared {
+                return Err(KernelError::SyncUnsupported {
+                    what: "a ProxyFence over a space other than Shared (the .global and .shared::cluster forms are not modelled)",
+                });
+            }
+        }
         Stmt::Collective { .. } => collective::check_collective(k, st, sc, declared_here)?,
         Stmt::CollectiveTuple { .. } => {
             collective::check_collective_tuple(k, st, sc, declared_here)?;
@@ -534,6 +541,7 @@ fn check_stmt(
         Stmt::AtomicRmw { .. }
         | Stmt::AtomicCas { .. }
         | Stmt::Fence { .. }
+        | Stmt::ProxyFence { .. }
         | Stmt::Collective { .. }
         | Stmt::CollectiveTuple { .. }
         | Stmt::Mma { .. }
