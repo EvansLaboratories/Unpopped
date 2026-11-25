@@ -1,5 +1,106 @@
 # The IR union, re-scored: where the seven surveys stand now
 
+## Third measurement (2026-11-25, `origin/main` `b21af35c`, Unpopped 0.56.12)
+
+Asked by CireSnave via the PM on 2026-11-25 (is the full-union IR on schedule). **A dated measurement; docs only, no code changed.** His standard (2026-11-11): *"if Unpopped's IR does not support something one of those kernel languages is capable of then that IR is not yet complete to my standards"*. He set no deadline; his hope (2026-11-25): *"I would be happy if we can have it complete by new years day"*. The second measurement (2026-11-15, `78c7d38e`) and the first (2026-11-03, `a634b09`) are kept below, unedited.
+
+**Union coverage index (Yes + half Partial, over applicable rows): 35% (11-03) -> 50% (11-15) -> 57% (11-25)** (Yes 149 -> 162, Partial 208 -> 251, No 150 -> 94, n/a 12; the same 519 rows, 507 applicable; 56.7%, and 56% to 57% across the judgement calls below). Yes alone: 29.4% -> 32.0%. The pace fell: 1.25 index points a day over 11-03 to 11-15, 0.68 a day over 11-15 to 11-25, because 11-22 to 11-25 went to the U19 frontend (no IR node, so no row moved).
+
+| Survey | Rows | Yes | Partial | No | n/a | Rows changed |
+|---|---|---|---|---|---|---|
+| CUDA C++ | 95 | 27 -> **30** | 40 -> **51** | 28 -> **14** | 0 | 16 (15 up, 1 down) |
+| CuTe / CuTe DSL | 66 | 10 -> **11** | 35 -> **41** | 20 -> **13** | 1 | 8 |
+| CUTLASS | 96 | 25 -> **26** | 40 -> **44** | 29 -> **24** | 2 | 6 |
+| Mojo / MAX | 73 | 26 -> **30** | 27 -> **33** | 17 -> **7** | 3 | 11 |
+| Slang | 61 | 22 -> **22** | 21 -> **24** | 15 -> **12** | 3 | 6 (4 up, 2 down) |
+| ThunderKittens | 58 | 15 -> **19** | 24 -> **29** | 17 -> **8** | 2 | 11 |
+| Triton | 70 | 24 -> **24** | 21 -> **29** | 24 -> **16** | 1 | 8 |
+| **All seven** | 519 | 149 -> **162** | 208 -> **251** | 150 -> **94** | 12 | 66 (63 up, 3 down) |
+
+Per-row evidence for every changed row, and the blocker and PR estimate for every row that is not yet a full Yes, are in `docs/ir-union-evidence/rescore-2026-11-25/<survey>.md`. Method as in the second measurement (a code symbol plus a named test; "absent" claims carry a positive control), with two changes the PM asked for: **two status columns per row** (IR expresses it / the oracle runs it, a headline Yes needs both), and **a downward check of every row that was Yes**.
+
+### What moved
+
+28 commits landed since 78c7d38e. The ones that moved rows: `mbarrier` statements, `Stmt::CopyBulk`, `MatrixLoad`/`MatrixStore` (`ldmatrix`/`stmatrix`), `Wgmma` + `Scope::Warpgroup`, `MemorySpace::Tensor` + `Tcgen05Mma`/`Commit`/`Ld`, named barriers, `GridDepWait`/`GridDepLaunchDependents` (PDL), the `For` unroll hint and `CopyAsync` `valid`/`cache`/`l2_prefetch`, 8- and 16-lane packed values, launch grid from scalar arguments (U22), `Place::Raw`/`AllocRaw` (byte-offset places), `ParamKind::Struct`, the attention backward kernels. **The U19 C-family frontend (#385 to #392) adds no IR node and moved no row.** Moves are mostly No -> Partial (the statement exists; the surrounding feature, the descriptor, the second operand kind, or the conformance kernel does not).
+
+### Three rows went DOWN, and rows the earlier passes had wrong
+
+- **CUDA 60** (block-scaled `F8E8M0`): Yes -> Partial. `F8E8M0` is a scale type the plan gate refuses and the oracle's `raw_to_f64` panics on; only e4m3 and e5m2 run. Overstated at a634b09 and 78c7d38e.
+- **Slang 31** (64-bit atomics): Yes -> Partial. The checker admits `I64`/`U64` and the oracle is generic, but no test executes a 64-bit atomic (the `I64` hits in `kernel_atomic_{rmw,cas,fetch}.rs` are refusals; the same grep finds the 18 `I32` uses in the same file). Checked by hand for this note.
+- **Slang 51** (rounding mode per op): Yes -> Partial. `Qualified` runs in the oracle only at f32, and #388 made `check_kernel` refuse it at f64 and the half types by name; the old Yes overreached for `__dadd_rn`-style operations (ROADMAP U43).
+- Stale evidence restated, status unchanged: CUDA 4, 50, 59, 76 (59's "no vector arithmetic beyond `Select`" was wrong: lane-wise packed operators exist since 0.27.2); CUTLASS 54, 65, 70, 83, 88, 92; CuTe 14 (`View::Layout` of 2026-10-28 predates a634b09 and was missed); Mojo and others cite `decode_mx` and some tests under a wrong crate or path (the files list the corrections). CUDA 95 is a correction that predates a634b09 (`capability.rs::cuda_capabilities` holds the shared-memory table, nothing consults it: Partial).
+- **IR yes, oracle not fully:** CUTLASS 61 and Triton 31 (PDL: the oracle runs `GridDepWait` as a no-op), CUDA 60 (above), CuTe 38 (the checker reads right, no test with A != B). All four are counted Partial, not Yes.
+
+### What this number does NOT mean (additions to the second measurement's list)
+
+- **Nothing was built or run** (read-only). A statement-level check of the 192 `file.rs::test_name` pairs the seven files cite found 191 present at b21af35c (the 192nd is the module name `tests`, a mis-quote) and every cited test file present; presence is not proof the test asserts the claim. One downward move and one test family (`kernel_matrix_store.rs`) were opened by hand.
+- **Oracle semantics for three families have no second source in the repository**: the `mbarrier` phase/parity rule (`docs/options-u8-copy-atoms.md`), the `stmatrix` row rule (ROADMAP U8b says by symmetry), and the `wgmma`/`tcgen05` fragment layouts. The oracle runs them, but a Yes on those rows means "the oracle executes our reading", not "matches hardware".
+- **Judgement calls that move the headline**: CUTLASS 61 (counted Partial; Yes would be 163/250), ThunderKittens 27 and CUDA 23 (`mbarrier`; Yes on a lenient bar, no `inval`, no non-blocking test-wait, no returned token: strict gives -2 Yes), CuTe 58 and Slang 6 and 12 (generous Partials; strict gives -3 Partial, +3 No). Strict: Yes 160, Partial 250, index 56.2%. Lenient: 57% at most. The sums of the seven agents' PR estimates count a capability once per survey it appears in.
+- **Patent rows** are in the "blocked" list below as PATENT. The blocker is the PATENT-SWEEP.md section named in each survey file ("outside as read", NOT CLEARED, unread claims, or a re-read trigger); no capability is called clear, and this is research, not an opinion of counsel. Only sections relevant to each row were read, not all 106 KB.
+- **Equal weight per row** and **a Partial counts half**, as before. 32 rows are OUTSCOPE (host-side or frontend; listed per survey); if the PM rules them n/a rather than gaps the index rises (about 60% at today's counts), but that is a ruling, not a measurement.
+
+### Where the work stands: the 345 rows that are not a full Yes, by what blocks them
+
+| Blocker | Rows (summed over surveys) | Rows that can start today? |
+|---|---|---|
+| READY (Unpopped lane, no external wait) | 149 | yes |
+| DECISION (CireSnave / PM ruling, or an unanswered options note) | 59 | no |
+| TRIGGER (ROADMAP: scheduled, waits for a named consumer or second source) | 44 | no |
+| PATENT (PATENT-SWEEP.md section NOT CLEARED, unread or re-read trigger) | 38 | research first |
+| LANE (another lane or repo: Fuel, KISS, Baracuda, fishstringer, Vulkane) | 23 | no |
+| OUTSCOPE (host-side or frontend; needs a "not IR" ruling) | 32 | n/a |
+
+Every blocked row, by survey (numbers are the survey's row numbers; the survey file names the missing piece and the PATENT-SWEEP section or ROADMAP row for each):
+
+- **PATENT:** CUDA 7, 40, 41, 50, 76; CuTe 33, 34, 43, 44, 45, 46, 49, 52, 64; CUTLASS 49, 59, 62, 63, 64, 67, 70; Mojo 6, 10, 27, 28, 30, 33, 34, 35, 55; Slang 6, 35; ThunderKittens 24; Triton 8, 19, 57, 58, 59.
+- **DECISION:** CUDA 13, 17, 26, 44, 55, 75, 78, 80, 81, 90, 91, 93; CuTe 3, 15, 17, 22, 23, 24, 25, 26, 27, 30, 31, 40, 47, 66; CUTLASS 14, 20, 21, 41, 52, 53, 54, 72, 76, 78, 79; Mojo 17, 38; Slang 19, 25, 26, 36, 49; ThunderKittens 1, 2, 3, 5, 6, 29, 30, 38, 39, 54, 59; Triton 5, 36, 52, 65.
+- **LANE:** CUDA 56, 61, 62, 64, 65; CuTe 39; CUTLASS 3, 4, 5, 15, 23, 31, 35, 38, 51; Mojo 44, 48, 71, 72; Slang 50, 52; ThunderKittens 35, 58.
+- **TRIGGER:** CUDA 4, 15, 25, 38, 39, 42, 46, 47, 48, 59, 79; CuTe 20, 36, 42, 48, 62; CUTLASS 25, 61, 83; Mojo 49, 52, 53, 54; Slang 5, 8, 9, 30; ThunderKittens 9, 22, 23, 25, 26, 48, 55; Triton 2, 10, 11, 12, 13, 18, 30, 31, 56, 60.
+- **OUTSCOPE:** CUDA 8, 14, 16, 27, 92; CuTe 63; Mojo 29, 58, 59, 60, 69, 73, 74; Slang 46, 47, 48, 54, 57; ThunderKittens 49; Triton 3, 44, 47, 48, 49, 61, 63, 68, 69, 70; CUTLASS 3 rows (see its file).
+
+The single largest DECISION is one unmade ruling: **whether the IR gets a tensor/tile value type or CuTe, Triton and ThunderKittens tensors stay recipes over `Alloc` plus `Layout`.** It gates 14 CuTe rows, about 7 ThunderKittens rows and parts of CUDA, Mojo and Triton, and no ROADMAP row covers it; ROADMAP's own stance is "recipes, not nodes", so a ruling of "recipe" would turn those Partials into declined-by-ruling.
+
+### Burn-down by implementation theme (PRs are ~150k-diff-character PRs; one theme counted once across surveys)
+
+The seven agents' sums add to 305 to 393 PRs because a capability appears in several surveys; clustering their themes gives **about 135 to 179 PRs** for the whole union. This is my clustering and my judgement, not a measurement.
+
+| # | Theme | Surveys | Blocker | PRs | Fits 2027-01-01? |
+|---|---|---|---|---|---|
+| 1 | Small additive hooks and leaves: warp masks, `activemask`/`match`/`elect`, cluster rank, `setmaxnreg`, cache hints on plain loads and stores, atomic `Inc`/`Dec` and weak orders, proxy fences, `mbarrier` drop/test-wait, id leaves, bit ops | all seven | READY | 14-18 | yes, first three weeks; one breaking batch (U36 ruling) |
+| 2 | Numerics gaps: U43 (F64 and half `Qualified`), U37 exact-spelling hint, U42 F64 ratings, fast-math, `cvt.pack`, bf16x9/x6, popcount | CUDA, CUTLASS, Triton | READY (ROADMAP U37, U42, U43) | 8-10 | yes |
+| 3 | MMA atom data and flags: wmma shapes, tf32 and fp8 atoms, mixed-dtype contraction, block-scale with fp8 scales, Metal 8x8, A != B tests | CUDA, CuTe, Mojo, TK, Triton | READY (U7 S3); some flags need a second lane-table source (TRIGGER) | 8-10 | mostly |
+| 4 | Kernel-layer conformance kernels (grouped/ptr-array GEMM, stream-K, persistent, epilogue fusion, conv family, attention, pipeline and role recipes) | CUTLASS, CuTe, TK, Mojo | READY (U9 scope A style, U8 S4) | 32-40 | about half at best |
+| 5 | Layout vocabulary completion and the first kernel use of `Swizzle` | CuTe, Mojo, CUDA | READY | 4-5 | yes |
+| 6 | Tensor-map / TMA descriptor operand kind and copies, `cp.async.bulk.tensor`, multicast | CUDA, CuTe, CUTLASS, Mojo, TK, Triton | TRIGGER (U8c: Baracuda's sm_90 emitter asks) plus PATENT re-read of US12645455B2 and the US11803380B2 review | 10-14 | no, unless the trigger fires; the claim reads can start now |
+| 7 | `wgmma`/`tcgen05` completion: descriptors, swizzle, TMEM alloc, CTA pairs, other kinds | CUDA, CuTe, CUTLASS, Mojo, TK, Triton | PATENT (U7 S4 and S5 re-read before building) | 10-14 | no: reads first, at best late January |
+| 8 | Pointer values (U9c, trigger already met) and vector-typed access | CUDA, CuTe, CUTLASS, Mojo, Slang, Triton | PATENT (U9c, U15 claims unread) | 5-8 | only after the re-read |
+| 9 | Sync extras, compile-time evaluation, vector lowering | CuTe, Mojo, Triton | PATENT | 5-8 | no |
+| 10 | Tensor / tile value type, partitioning | CuTe, TK, Mojo, Triton, CUDA | DECISION (one ruling) | 14-20 if "IR value", about 0 if "recipe" | no, until ruled |
+| 11 | Schedule language (P9), persistent and stream-K as a plan feature | CUTLASS, CUDA, TK | DECISION (parked) | 5-8 | no |
+| 12 | D5 formats, `Fp8FastAccum`, tf32 `ElementKind`, `assume` facts | CUTLASS, TK, Triton | DECISION (CireSnave board 290) | 4-7 | no |
+| 13 | Recursion, device launch, special registers, device effects | CUDA | DECISION (scope) | about 7 | no |
+| 14 | Plan-layer contraction generalisation (D2) | CUTLASS, CuTe, CUDA, TK | LANE (Fuel, KISS) | 10-12 | not ours to schedule |
+| 15 | KISS element rows, AMD/Metal breadth | CUDA, Mojo | LANE | about 6 | not ours to schedule |
+| 16 | Host-side and frontend rows | all | OUTSCOPE | 0 | needs a "not IR" ruling |
+
+### The honest date
+
+**100% by 2027-01-01 is not reachable, and it should not be promised.** The reason is not the lane's speed: 164 of the 345 open rows (DECISION 59, TRIGGER 44, PATENT 38, LANE 23; themes 6 to 15) cannot start until someone other than the Unpopped lane acts (patent claim reads and a PM or CireSnave ruling on the PATENT rows; a Baracuda sm_90 emitter for the descriptor family; one tile-value ruling; the D5 board item; Fuel and KISS for D2).
+
+Calibration: over 11-15 to 11-24 the lane merged about 15 IR-feature PRs (11-22 to 11-25 went to U19), and the second measurement moved 0.45 index points per such PR (13 Yes and 43 Partial moves over 15 PRs, 6.8 points). The READY themes (1 to 5) are 66 to 83 PRs; the rest of the union is 135 to 179 in all. 37 days remain to 2027-01-01.
+
+| Scenario (assumption) | PRs by 01-01 | Index on 01-01 | READY themes (66-83 PRs) done | Whole union (135-179 PRs) done |
+|---|---|---|---|---|
+| Today's pace: one PR a day, 80% of days on union rows | about 30 | about 68% to 70% | 2027-02-16 to 2027-03-09 | 2027-05-13 to 2027-07-07 |
+| Best case: catch-up releases keep giving two PRs a day, 80% on union rows | about 59 | about 78% to 83% | 2027-01-05 to 2027-01-16 | 2027-02-17 to 2027-03-17 |
+
+The index figures use the 0.45 points per PR of the last pass and fall as the cheap rows run out, so they are ceilings. The "whole union" dates assume every blocker clears on the first day, so they are lower bounds. **To finish by 2027-01-01 the following would have to change**: (1) the PM rules on the tile-value type, P9, D5 and the 32 OUTSCOPE rows this week; (2) the patent reads for U7 S4/S5, U8c and U9c/U15 are done as research now, in parallel with building, so they do not wait behind it; (3) Baracuda states whether and when an sm_90 emitter will ask for the descriptor family; (4) two PRs a day holds for five weeks with no other work (U19 follow-ups, U39 refactor, publish prep and gate answers also draw on it, which the 80% factor only partly covers). Even then the union stops near the READY themes plus whatever the rulings unlock.
+
+### Unblocked next rows, by order (themes 1, 2, 5, 3, 4)
+
+Take 1, 2 and 5 first (cheap, additive, no patent area, about 26 to 33 PRs between them), then 3, then 4 (the long tail; each conformance kernel closes one to three Partials). Breaking statements batch into one release. Start the claim reads for themes 6 to 9 now as research; raise the tile-value ruling to the PM as one `[ASK]` with its options.
+
+
 ## Second measurement (2026-11-15, `origin/main` `78c7d38e`, Unpopped 0.47.3)
 
 Asked by CireSnave via the PM on 2026-11-15 ("how close are we to the full union"). **A dated measurement; docs only, no code changed.** The first measurement (2026-11-03, `a634b09`, 0.42.14) is kept below, unedited, as the baseline.
