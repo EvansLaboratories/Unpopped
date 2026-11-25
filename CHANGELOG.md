@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.19` — Docs: PATENT-SWEEP rows from the patents-1 reads
+
+Docs only. 241 added lines in `docs/PATENT-SWEEP.md`: the patents-1 sub-lane reads of published claims (limb charts, verdict words only). No code changes.
+
+---
+
 ## `0.56.18` — Docs: union rulings, asks and ROADMAP rows U46-U58, PATENT-LANES, the 128-bit finding
 
 Docs only. The union rulings and asks documents, the ROADMAP rows U46 to U58 with their patent-hold lines, the PATENT-LANES lanes, the 128-bit integer finding (PTX has no .s128/.u128) and U46 notes. No code changes.
