@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.17` — Docs: the third union re-score evidence for Mojo, Slang, ThunderKittens and Triton (part 2 of 2)
+
+Docs only. The per-survey evidence files of the third union re-score at b21af35c for Mojo, Slang, ThunderKittens and Triton (every not-yet-Yes row with its blocker code and PR estimate), the second half of the set whose first half, the summary `docs/ir-union-rescore.md` and the CUDA, CUTLASS and CuTe files, is part 1. Split at the ~150k-character limit. No code changes.
+
+---
+
 ## `0.56.16` — Chore: every `allow` carries a reason (GOV-010: 52 `allow(dead_code)`, 2 `clippy::type_complexity`)
 
 No behaviour change. Each of the 54 `#[allow(..)]` attributes that CodeRipper's GOV-010 flagged now carries a `reason = "..."` saying why the allow is there (test support modules whose items are used by some test binaries and not others, and a return type the type-complexity lint cannot see through). `coderipper check GOV-010` reported 54 findings on `main` and none after this change (see the PR body for the run). Tests, clippy and fmt unchanged.
