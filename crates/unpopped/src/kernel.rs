@@ -916,6 +916,33 @@ pub enum Stmt {
         #[serde(default)]
         b_layout: OperandLayout,
     },
+    /// `tcgen05.alloc.cta_group::1` (ROADMAP U8c slice 4): allocate `ncols` columns of tensor memory, the whole of the
+    /// declared `Tensor` allocation `d` (`128 * ncols` elements). PTX ISA 9.5 9.7.18.1.2 and 9.7.18.7.1: "The unit of
+    /// allocation is 32 columns and the number of columns being allocated must be a power of 2", `nCols` "in the range
+    /// [32, 512]", "All of the Tensor Memory that was allocated in a kernel, must be explicitly deallocated before the
+    /// kernel exits", "it is illegal for a CTA to perform tcgen05.alloc after any of its constituent threads execute
+    /// tcgen05.relinquish_alloc_permit", "The number of columns allocated must not increase between any two allocations
+    /// in the execution order within the CTA". `.sync.aligned` means a whole warp issues it: the oracle acts on the
+    /// warp's first lane and ignores the other lanes. A `Tcgen05Mma` or `Tcgen05Ld` on a `Tensor` allocation that is not
+    /// allocated traps (`KernelTrap::TmemMisuse`). The address `tcgen05.alloc` writes to `[dst]` is not modelled: the
+    /// allocation is named by its index and addressed by column. `.exclusive` and `cta_group::2` are not modelled.
+    Tcgen05Alloc {
+        /// The `Tensor` allocation (index into [`KernelFn::allocs`]).
+        d: u32,
+        /// Columns: a power of two from 32 to 512, equal to the allocation's declared columns.
+        ncols: u32,
+    },
+    /// `tcgen05.dealloc.cta_group::1`: release the `ncols` columns of the allocated `Tensor` allocation `d` (the same
+    /// count it was allocated with). Issued by one warp, as [`Stmt::Tcgen05Alloc`].
+    Tcgen05Dealloc {
+        /// The `Tensor` allocation.
+        d: u32,
+        /// Columns, as allocated.
+        ncols: u32,
+    },
+    /// `tcgen05.relinquish_alloc_permit.cta_group::1`: this CTA will allocate no more tensor memory. A later
+    /// [`Stmt::Tcgen05Alloc`] in the block traps.
+    Tcgen05RelinquishPermit,
     /// `tcgen05.commit`: arrive (a release-class arrival, like [`Stmt::MbarArrive`] without a transaction count) on the
     /// `mbarrier` at `bar` once the thread's earlier [`Stmt::Tcgen05Mma`] have completed. In the oracle they completed at
     /// issue.

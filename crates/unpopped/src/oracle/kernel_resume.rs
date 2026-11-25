@@ -204,6 +204,9 @@ impl<'a> Machine<'a> {
             | Stmt::CopyBulk { .. }
             | Stmt::Tcgen05Mma { .. }
             | Stmt::Tcgen05Ld { .. }
+            | Stmt::Tcgen05Alloc { .. }
+            | Stmt::Tcgen05Dealloc { .. }
+            | Stmt::Tcgen05RelinquishPermit
             | Stmt::AsyncCommit
             | Stmt::AsyncWait { .. }
             | Stmt::GridDepWait

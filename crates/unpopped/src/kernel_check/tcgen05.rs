@@ -130,6 +130,28 @@ fn check_ld(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
 pub(super) fn check_tcgen05(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
     match st {
         Stmt::Tcgen05Mma { .. } => check_mma(k, st, sc),
+        Stmt::Tcgen05Alloc { d, ncols } | Stmt::Tcgen05Dealloc { d, ncols } => {
+            if k.launch.is_none() {
+                return Err(KernelError::ExecWithoutLaunch);
+            }
+            check_tmem(k, *d)?;
+            // PTX ISA 9.5 9.7.18.7.1: "the operand nCols must be a power of 2, in the range [32, 512]"
+            if !ncols.is_power_of_two() || !(32..=512).contains(ncols) {
+                return Err(refuse("an nCols that is not a power of two from 32 to 512"));
+            }
+            match k.allocs[*d as usize].extent {
+                Extent::Static(n) if n == 128 * ncols => Ok(()),
+                _ => Err(refuse(
+                    "an nCols that is not the declared column count of the tensor allocation",
+                )),
+            }
+        }
+        Stmt::Tcgen05RelinquishPermit => {
+            if k.launch.is_none() {
+                return Err(KernelError::ExecWithoutLaunch);
+            }
+            Ok(())
+        }
         _ => check_ld(k, st, sc),
     }
 }

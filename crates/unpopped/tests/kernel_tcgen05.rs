@@ -135,6 +135,11 @@ fn copy_tile(
     )
 }
 
+/// The columns the `tmem` allocation holds: a power of two from 32 (`tcgen05.alloc`'s `nCols`) that fits `D_COL + n`.
+fn tmem_cols(n: u32) -> u32 {
+    (n + D_COL as u32).next_power_of_two().max(32)
+}
+
 fn mma(o: Opt, scale_d: i64) -> Stmt {
     Stmt::Tcgen05Mma {
         n: o.n,
@@ -160,10 +165,16 @@ fn body(o: Opt) -> Vec<Stmt> {
         });
     }
     let mut body = vec![
-        on_thread0(vec![Stmt::MbarInit {
-            bar: alloc(3, u(0)),
-            count: u(1),
-        }]),
+        on_thread0(vec![
+            Stmt::Tcgen05Alloc {
+                d: 2,
+                ncols: tmem_cols(o.n),
+            },
+            Stmt::MbarInit {
+                bar: alloc(3, u(0)),
+                count: u(1),
+            },
+        ]),
         copy_tile(0, 0, 128 * K as i64, t, o.fence, o.a_layout),
         copy_tile(1, 1, n * K as i64, t, o.fence, o.b_layout),
         Stmt::barrier(Scope::Block),
@@ -195,11 +206,17 @@ fn body(o: Opt) -> Vec<Stmt> {
             },
         ],
     ));
+    // every warp has read its lanes: free the tensor memory (PTX: all of it must be deallocated before the kernel exits)
+    body.push(Stmt::barrier(Scope::Block));
+    body.push(on_thread0(vec![Stmt::Tcgen05Dealloc {
+        d: 2,
+        ncols: tmem_cols(o.n),
+    }]));
     body
 }
 
 /// Params: 0 `a_in` `[128 * 16]`, 1 `b_in` `[n * 16]` (bf16), 2 `out` `[threads * n]` (f32). Allocs: 0 `a` Shared, 1 `b`
-/// Shared, 2 `tmem` Tensor `[128 * (n + D_COL)]`, 3 `bar` Shared u64, 4 `frag` Private `[n]`.
+/// Shared, 2 `tmem` Tensor `[128 * tmem_cols(n)]`, 3 `bar` Shared u64, 4 `frag` Private `[n]`.
 fn kernel(o: Opt) -> KernelFn {
     let n = i64::from(o.n);
     let mut k = KernelFn::new(
@@ -236,7 +253,7 @@ fn kernel(o: Opt) -> KernelFn {
             "tmem",
             MemorySpace::Tensor,
             F32,
-            Extent::Static((128 * (n + D_COL)) as u32),
+            Extent::Static(128 * tmem_cols(o.n)),
         ),
         AllocDecl::new(
             "bar",
@@ -404,6 +421,143 @@ fn the_reference_product_holds_under_swizzled_layouts() {
             assert_eq!(run(&kernel(o), o), Ok(expected(o)), "{sw:?} n = {n}");
         }
     }
+}
+
+// ---- tensor-memory allocation (U8c slice 4), PTX ISA 9.5 9.7.18.1.2 and 9.7.18.7.1 ------------------------------------
+
+/// The statements of thread 0's opening `if` (the barrier init, preceded by the `tcgen05.alloc`).
+fn opening(k: &mut KernelFn) -> &mut Vec<Stmt> {
+    match &mut k.body.0[0] {
+        Stmt::If { then, .. } => &mut then.0,
+        _ => panic!("the first statement is thread 0's `if`"),
+    }
+}
+
+fn alloc_of(o: Opt) -> Stmt {
+    Stmt::Tcgen05Alloc {
+        d: 2,
+        ncols: tmem_cols(o.n),
+    }
+}
+
+fn misuse(r: Result<Vec<f32>, KernelTrap>, what: &str) {
+    match r {
+        Err(KernelTrap::TmemMisuse { what: got }) => {
+            assert!(got.contains(what), "wanted `{what}`, got `{got}`");
+        }
+        other => panic!("wanted a TmemMisuse about `{what}`, got {other:?}"),
+    }
+}
+
+#[test]
+fn tensor_memory_used_without_an_allocation_traps() {
+    let o = Opt::plain(8);
+    let mut k = kernel(o);
+    opening(&mut k).remove(0); // no tcgen05.alloc
+    misuse(run_unchecked(&k, o), "before tcgen05.alloc");
+}
+
+#[test]
+fn tensor_memory_never_deallocated_traps_when_the_block_ends() {
+    let o = Opt::plain(8);
+    let mut k = kernel(o);
+    k.body.0.pop(); // no tcgen05.dealloc
+    misuse(run_unchecked(&k, o), "still allocated");
+}
+
+#[test]
+fn allocating_twice_or_after_relinquishing_traps() {
+    let o = Opt::plain(8);
+    let mut twice = kernel(o);
+    opening(&mut twice).insert(1, alloc_of(o));
+    misuse(run_unchecked(&twice, o), "already allocated");
+    let mut late = kernel(o);
+    opening(&mut late).insert(0, Stmt::Tcgen05RelinquishPermit);
+    misuse(run_unchecked(&late, o), "relinquish_alloc_permit");
+    // the control: relinquishing AFTER the allocation is the ordinary sequence
+    let mut fine = kernel(o);
+    opening(&mut fine).insert(1, Stmt::Tcgen05RelinquishPermit);
+    assert_eq!(run_unchecked(&fine, o), Ok(expected(o)));
+}
+
+#[test]
+fn tensor_memory_read_after_its_deallocation_traps() {
+    let o = Opt::plain(8);
+    let mut k = kernel(o);
+    k.body.0.pop(); // the closing dealloc
+    let at = k
+        .body
+        .0
+        .iter()
+        .position(|s| matches!(s, Stmt::Tcgen05Ld { .. }))
+        .expect("the load");
+    k.body.0.insert(
+        at,
+        on_thread0(vec![Stmt::Tcgen05Dealloc {
+            d: 2,
+            ncols: tmem_cols(o.n),
+        }]),
+    );
+    k.body.0.insert(at, Stmt::barrier(Scope::Block));
+    misuse(run_unchecked(&k, o), "after tcgen05.dealloc");
+}
+
+#[test]
+fn a_column_count_that_grows_between_allocations_traps() {
+    let o = Opt::plain(8);
+    let big = |k: &mut KernelFn| {
+        k.allocs.push(AllocDecl::new(
+            "tmem2",
+            MemorySpace::Tensor,
+            F32,
+            Extent::Static(128 * 64),
+        ));
+    };
+    let alloc64 = Stmt::Tcgen05Alloc { d: 5, ncols: 64 };
+    let dealloc64 = Stmt::Tcgen05Dealloc { d: 5, ncols: 64 };
+    // 32 columns, then 64: the count increased
+    let mut grows = kernel(o);
+    big(&mut grows);
+    opening(&mut grows).insert(1, alloc64.clone());
+    misuse(run_unchecked(&grows, o), "increased");
+    // 64 columns, then 32: allowed (and deallocated at the end)
+    let mut shrinks = kernel(o);
+    big(&mut shrinks);
+    opening(&mut shrinks).insert(0, alloc64);
+    shrinks.body.0.push(on_thread0(vec![dealloc64]));
+    assert_eq!(run_unchecked(&shrinks, o), Ok(expected(o)));
+}
+
+#[test]
+fn the_checker_refuses_an_alloc_that_tensor_memory_cannot_be() {
+    let refused = |s: Stmt| {
+        let o = Opt::plain(8);
+        let mut k = kernel(o);
+        opening(&mut k)[0] = s;
+        matches!(
+            check_kernel(&k),
+            Err(KernelError::Tcgen05Unsupported { .. })
+        )
+    };
+    let o = Opt::plain(8);
+    assert!(!refused(alloc_of(o)), "the control is admitted");
+    assert!(
+        refused(Stmt::Tcgen05Alloc { d: 2, ncols: 48 }),
+        "not a power of two"
+    );
+    assert!(refused(Stmt::Tcgen05Alloc { d: 2, ncols: 16 }), "below 32");
+    assert!(
+        refused(Stmt::Tcgen05Alloc { d: 2, ncols: 1024 }),
+        "above 512"
+    );
+    assert!(
+        refused(Stmt::Tcgen05Alloc { d: 2, ncols: 64 }),
+        "not the declared columns (32)"
+    );
+    assert!(
+        refused(Stmt::Tcgen05Alloc { d: 0, ncols: 32 }),
+        "a Shared allocation"
+    );
 }
 
 #[test]

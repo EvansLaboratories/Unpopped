@@ -291,7 +291,11 @@ fn check_sync_stmt(
         Stmt::Wgmma { .. } => wgmma::check_wgmma(k, st, sc)?,
         Stmt::WgmmaCommit | Stmt::WgmmaWait { .. } => {}
         Stmt::GridDepWait | Stmt::GridDepLaunchDependents => {}
-        Stmt::Tcgen05Mma { .. } | Stmt::Tcgen05Ld { .. } => tcgen05::check_tcgen05(k, st, sc)?,
+        Stmt::Tcgen05Mma { .. }
+        | Stmt::Tcgen05Ld { .. }
+        | Stmt::Tcgen05Alloc { .. }
+        | Stmt::Tcgen05Dealloc { .. }
+        | Stmt::Tcgen05RelinquishPermit => tcgen05::check_tcgen05(k, st, sc)?,
         Stmt::MatrixLoad { .. } => matrix::check_matrix_load(k, st, sc)?,
         Stmt::MbarInit { .. }
         | Stmt::MbarArrive { .. }
@@ -553,6 +557,9 @@ fn check_stmt(
         | Stmt::Tcgen05Mma { .. }
         | Stmt::Tcgen05Commit { .. }
         | Stmt::Tcgen05Ld { .. }
+        | Stmt::Tcgen05Alloc { .. }
+        | Stmt::Tcgen05Dealloc { .. }
+        | Stmt::Tcgen05RelinquishPermit
         | Stmt::MatrixLoad { .. }
         | Stmt::MbarInit { .. }
         | Stmt::MbarArrive { .. }

@@ -332,7 +332,12 @@ impl<'a> Machine<'a> {
                 return Err(KernelTrap::Unsupported("Collective"));
             }
             Stmt::Mma { .. } => return Err(KernelTrap::Unsupported("Mma")),
-            Stmt::Tcgen05Mma { .. } | Stmt::Tcgen05Commit { .. } | Stmt::Tcgen05Ld { .. } => {
+            Stmt::Tcgen05Mma { .. }
+            | Stmt::Tcgen05Commit { .. }
+            | Stmt::Tcgen05Ld { .. }
+            | Stmt::Tcgen05Alloc { .. }
+            | Stmt::Tcgen05Dealloc { .. }
+            | Stmt::Tcgen05RelinquishPermit => {
                 return Err(KernelTrap::Unsupported("a tcgen05 statement"));
             }
             Stmt::Wgmma { .. } | Stmt::WgmmaCommit | Stmt::WgmmaWait { .. } => {
@@ -467,6 +472,9 @@ impl<'a> Machine<'a> {
                 bar,
             } => self.copy_bulk(dst, src, *elems, bar)?,
             Stmt::Tcgen05Mma { .. } => self.tcgen05_mma(st)?,
+            Stmt::Tcgen05Alloc { d, ncols } => self.tcgen05_alloc(*d, *ncols, true)?,
+            Stmt::Tcgen05Dealloc { d, ncols } => self.tcgen05_alloc(*d, *ncols, false)?,
+            Stmt::Tcgen05RelinquishPermit => self.tcgen05_relinquish()?,
             Stmt::Tcgen05Ld {
                 src,
                 col,

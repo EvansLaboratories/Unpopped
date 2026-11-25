@@ -74,6 +74,14 @@ pub enum KernelTrap {
         /// The allocation index.
         alloc: u32,
     },
+    /// Tensor memory used outside its contract (PTX ISA 9.5 9.7.18.1.2, 9.7.18.7.1): a `tcgen05` statement on a `Tensor`
+    /// allocation that is not allocated, an allocation twice, a deallocation that does not match, an allocation after
+    /// `tcgen05.relinquish_alloc_permit`, a column count that grows between two allocations, or an allocation never
+    /// deallocated before the block ended.
+    TmemMisuse {
+        /// What went wrong.
+        what: &'static str,
+    },
     /// A thread finished with `CopyAsync` copies it never waited for (committed or not).
     AsyncUnwaited,
     /// An async-proxy read ([`Stmt::Wgmma`](crate::kernel::Stmt::Wgmma) or `Tcgen05Mma` tiles) reached a `Shared`

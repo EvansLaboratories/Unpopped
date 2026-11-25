@@ -173,6 +173,30 @@ pub(super) struct BlockMem {
     /// A `Shared` store of the value the element already holds is not a race with another thread's unordered store
     /// (`Leniency::same_value_writes`).
     pub(super) same_value_writes: bool,
+    /// The block's tensor-memory allocations (`tcgen05.alloc`).
+    pub(super) tmem: TmemState,
+}
+
+/// The tensor-memory allocation state of one block: which `Tensor` allocations are live (and with how many columns),
+/// whether the CTA gave up its right to allocate, and the column count of the latest allocation.
+#[derive(Default)]
+pub(super) struct TmemState {
+    pub(super) live: std::collections::HashMap<u32, u32>,
+    pub(super) relinquished: bool,
+    pub(super) last_cols: Option<u32>,
+}
+
+impl TmemState {
+    /// The block ended: every allocation must have been released (PTX ISA 9.5 9.7.18.1.2).
+    pub(super) fn check_released(&self) -> Result<(), KernelTrap> {
+        if self.live.is_empty() {
+            Ok(())
+        } else {
+            Err(KernelTrap::TmemMisuse {
+                what: "tensor memory still allocated when the block ended",
+            })
+        }
+    }
 }
 
 /// The linear id of the cluster the block at `idx` belongs to (`0` when the launch has no clusters).

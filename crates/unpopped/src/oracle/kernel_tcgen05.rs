@@ -31,6 +31,74 @@ impl Machine<'_> {
             .map_or(0, |m| m.init.len() / M)
     }
 
+    /// `tcgen05.alloc` (`alloc = true`) or `tcgen05.dealloc` for the `Tensor` allocation `d` with `ncols` columns. The
+    /// instruction is issued by a whole warp (`.sync.aligned`): the warp's first lane acts, the others do nothing.
+    pub(super) fn tcgen05_alloc(
+        &mut self,
+        d: u32,
+        ncols: u32,
+        alloc: bool,
+    ) -> Result<(), KernelTrap> {
+        let t = self.exec_val(ExecId::ThreadIdx(0))? as usize;
+        if t % 32 != 0 {
+            return Ok(());
+        }
+        let declared = self.tmem_columns(d) as u32;
+        let Some(c) = self.ctx.as_mut() else {
+            return Err(KernelTrap::Unsupported("tensor memory outside run_launch"));
+        };
+        let misuse = |what| Err(KernelTrap::TmemMisuse { what });
+        let tmem = &mut c.block.tmem;
+        if alloc {
+            if tmem.relinquished {
+                return misuse("a tcgen05.alloc after tcgen05.relinquish_alloc_permit");
+            }
+            if tmem.live.contains_key(&d) {
+                return misuse("a tcgen05.alloc of tensor memory that is already allocated");
+            }
+            if ncols != declared {
+                return misuse("a tcgen05.alloc whose nCols is not the declared column count");
+            }
+            if tmem.last_cols.is_some_and(|last| ncols > last) {
+                return misuse("the number of columns allocated increased between two allocations");
+            }
+            tmem.live.insert(d, ncols);
+            tmem.last_cols = Some(ncols);
+        } else {
+            match tmem.live.get(&d) {
+                None => return misuse("a tcgen05.dealloc of tensor memory that is not allocated"),
+                Some(&n) if n != ncols => {
+                    return misuse("a tcgen05.dealloc whose nCols is not the allocated count");
+                }
+                Some(_) => {
+                    tmem.live.remove(&d);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `tcgen05.relinquish_alloc_permit` (the warp's first lane acts).
+    pub(super) fn tcgen05_relinquish(&mut self) -> Result<(), KernelTrap> {
+        let t = self.exec_val(ExecId::ThreadIdx(0))? as usize;
+        if t % 32 == 0 {
+            if let Some(c) = self.ctx.as_mut() {
+                c.block.tmem.relinquished = true;
+            }
+        }
+        Ok(())
+    }
+
+    /// The `Tensor` allocation `d` must be allocated (PTX ISA 9.5 9.7.18.1.2).
+    fn require_tmem(&self, d: u32) -> Result<(), KernelTrap> {
+        match &self.ctx {
+            Some(c) if !c.block.tmem.live.contains_key(&d) => Err(KernelTrap::TmemMisuse {
+                what: "tensor memory used before tcgen05.alloc or after tcgen05.dealloc",
+            }),
+            _ => Ok(()),
+        }
+    }
+
     /// The `rows` rows of `K` elements of the tile at `place`.
     fn tcgen05_tile(
         &mut self,
@@ -60,6 +128,7 @@ impl Machine<'_> {
             unreachable!("tcgen05_mma is called for a Tcgen05Mma");
         };
         let (n, d) = (*n as usize, *d);
+        self.require_tmem(d)?;
         let cols = self.tmem_columns(d);
         let col0 = usize::try_from(self.wgmma_int(d_col)?)
             .ok()
@@ -97,6 +166,7 @@ impl Machine<'_> {
         dst: u32,
     ) -> Result<(), KernelTrap> {
         let t = self.exec_val(ExecId::ThreadIdx(0))? as usize;
+        self.require_tmem(src)?;
         let lane = 32 * ((t / 32) % 4) + t % 32;
         let cols = self.tmem_columns(src);
         let col0 = usize::try_from(self.wgmma_int(col)?)

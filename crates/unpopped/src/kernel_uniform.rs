@@ -375,6 +375,9 @@ impl Walk<'_> {
             | Stmt::Tcgen05Mma { .. }
             | Stmt::Tcgen05Commit { .. }
             | Stmt::Tcgen05Ld { .. }
+            | Stmt::Tcgen05Alloc { .. }
+            | Stmt::Tcgen05Dealloc { .. }
+            | Stmt::Tcgen05RelinquishPermit
             | Stmt::AsyncCommit
             | Stmt::AsyncWait { .. }
             | Stmt::MbarInit { .. }
