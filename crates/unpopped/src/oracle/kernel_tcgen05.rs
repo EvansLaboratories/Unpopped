@@ -33,7 +33,9 @@ impl Machine<'_> {
 
     /// The `rows` rows of `K` elements of the tile at `place`.
     fn tcgen05_tile(&mut self, place: &Place, rows: usize) -> Result<Vec<Vec<Val>>, KernelTrap> {
-        (0..rows).map(|r| self.wgmma_row(place, r)).collect()
+        (0..rows)
+            .map(|r| self.wgmma_row(place, r, &crate::kernel::OperandLayout::RowMajor))
+            .collect()
     }
 
     /// Run a `Tcgen05Mma`: `D` of `n` columns from `d_col` of the tensor allocation `d`.

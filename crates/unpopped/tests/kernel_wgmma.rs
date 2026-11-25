@@ -9,7 +9,8 @@
 use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
 use unpopped::ir::{BinaryOp, ScalarExpr};
 use unpopped::kernel::{
-    Block, BufferRole, KernelError, KernelFn, LocalDecl, Param, Place, Stmt, check_kernel,
+    Block, BufferRole, KernelError, KernelFn, LocalDecl, Major, OperandLayout, Param, Place, Stmt,
+    Swizzle, check_kernel,
 };
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
@@ -67,6 +68,9 @@ struct Opt {
     barrier: bool,
     /// Each thread issues `fence.proxy.async` after storing its share of a tile.
     fence: bool,
+    /// How the tiles sit in their allocations (the stores below use the layout formulas written in this file).
+    a_layout: OperandLayout,
+    b_layout: OperandLayout,
 }
 impl Opt {
     fn plain(n: u32) -> Self {
@@ -77,12 +81,89 @@ impl Opt {
             wait: 0,
             barrier: true,
             fence: true,
+            a_layout: OperandLayout::RowMajor,
+            b_layout: OperandLayout::RowMajor,
         }
     }
 }
 
+// ---- operand layouts (U8c slice 1): the PTX canonical layouts, written here from PTX ISA 9.5 9.7.17.5.1.2.1.3 ----------
+// K-major, no swizzle:  ((8,m),(T,2)):((1T,SBO),(1,LBO))      T = 8 elements (16 bytes of a 16-bit type)
+// MN-major, no swizzle: ((T,1,m),(8,k)):((1,T,SBO),(1T,LBO))   (LBO, SBO in bytes in the descriptor: /2 here)
+
+fn k_major(lbo: u32, sbo: u32) -> OperandLayout {
+    OperandLayout::Canonical {
+        major: Major::K,
+        swizzle: Swizzle::None,
+        lbo: Some(lbo),
+        sbo,
+    }
+}
+fn mn_major(lbo: u32, sbo: u32) -> OperandLayout {
+    OperandLayout::Canonical {
+        major: Major::MN,
+        swizzle: Swizzle::None,
+        lbo: Some(lbo),
+        sbo,
+    }
+}
+
+/// The element offset of `(mn, k)` under `layout`, by the formulas above.
+fn ref_offset(layout: OperandLayout, mn: usize, k: usize) -> usize {
+    match layout {
+        OperandLayout::RowMajor => mn * 16 + k,
+        OperandLayout::Canonical {
+            major, lbo, sbo, ..
+        } => {
+            let (l, s) = (lbo.unwrap() as usize / 2, sbo as usize / 2);
+            match major {
+                Major::K => (mn % 8) * 8 + (mn / 8) * s + k % 8 + (k / 8) * l,
+                Major::MN => mn % 8 + (mn / 8) * s + (k % 8) * 8 + (k / 8) * l,
+            }
+        }
+    }
+}
+
+/// Elements an allocation must hold for `rows` rows under `layout`.
+fn span(layout: OperandLayout, rows: usize) -> u32 {
+    let last = (0..rows)
+        .flat_map(|mn| (0..K).map(move |k| ref_offset(layout, mn, k)))
+        .max()
+        .unwrap_or(0);
+    (last + 1) as u32
+}
+
+/// The IR expression for the element offset of flat tile index `i` (row `i / 16`, `k = i % 16`) under `layout`.
+fn store_index(layout: OperandLayout, i: ScalarExpr) -> ScalarExpr {
+    // powers of two only: `% b` is `& (b - 1)` and `/ b` is `>> log2(b)` (an integer `Rem` has no kernel-layer meaning)
+    let rem = |a: ScalarExpr, b: i64| {
+        ScalarExpr::Binary(BinaryOp::BitAnd, Box::new(a), Box::new(u(b - 1)))
+    };
+    let div = |a: ScalarExpr, b: i64| {
+        ScalarExpr::Binary(
+            BinaryOp::Shr,
+            Box::new(a),
+            Box::new(u(i64::from(b.trailing_zeros()))),
+        )
+    };
+    let OperandLayout::Canonical {
+        major, lbo, sbo, ..
+    } = layout
+    else {
+        return i;
+    };
+    let (l, s) = (i64::from(lbo.unwrap() / 2), i64::from(sbo / 2));
+    let (mn, k) = (div(i.clone(), 16), rem(i, 16));
+    let (mn0, mn1) = (rem(mn.clone(), 8), div(mn, 8));
+    let (k0, k1) = (rem(k.clone(), 8), div(k, 8));
+    match major {
+        Major::K => add(add(mul(mn0, u(8)), mul(mn1, u(s))), add(k0, mul(k1, u(l)))),
+        Major::MN => add(add(mn0, mul(mn1, u(s))), add(mul(k0, u(8)), mul(k1, u(l)))),
+    }
+}
+
 /// Each thread copies `per` elements of input buffer `src` into `Shared` allocation `dst`.
-fn copy_tile(src: u32, dst: u32, per: i64, fence: bool) -> Stmt {
+fn copy_tile(src: u32, dst: u32, per: i64, fence: bool, layout: OperandLayout) -> Stmt {
     counted(
         0,
         per,
@@ -96,7 +177,7 @@ fn copy_tile(src: u32, dst: u32, per: i64, fence: bool) -> Stmt {
                 place: buf(src, local(1)),
             },
             Stmt::Store {
-                place: alloc(dst, local(1)),
+                place: alloc(dst, store_index(layout, local(1))),
                 value: local(2),
             },
         ]
@@ -111,11 +192,11 @@ fn copy_tile(src: u32, dst: u32, per: i64, fence: bool) -> Stmt {
 /// The statements of a scenario: fill the tiles, (barrier), initialise `d`, wgmma, (commit), wait, copy `d` out.
 fn body(o: Opt) -> Vec<Stmt> {
     let n = o.n as i64;
-    let copy = |src, dst, per| copy_tile(src, dst, per, o.fence);
-    let mut body = vec![copy(0, 0, 8)];
+    let copy = |src, dst, per, layout| copy_tile(src, dst, per, o.fence, layout);
+    let mut body = vec![copy(0, 0, 8, o.a_layout)];
     // `b` has n * 16 elements: n / 8 per thread
     if n >= 8 {
-        body.push(copy(1, 1, n / 8));
+        body.push(copy(1, 1, n / 8, o.b_layout));
     }
     if o.barrier {
         body.push(Stmt::barrier(Scope::Block));
@@ -136,6 +217,8 @@ fn body(o: Opt) -> Vec<Stmt> {
         b: alloc(1, u(0)),
         d: 2,
         scale_d: u(o.scale_d),
+        a_layout: o.a_layout,
+        b_layout: o.b_layout,
     });
     if o.commit {
         body.push(Stmt::WgmmaCommit);
@@ -180,12 +263,17 @@ fn kernel(o: Opt) -> KernelFn {
     )
     .with_launch(LaunchShape::new([128, 1, 1], [1, 1, 1]).with_subgroup(32, 32));
     k.allocs = vec![
-        AllocDecl::new("a", MemorySpace::Shared, BF16, Extent::Static(64 * 16)),
+        AllocDecl::new(
+            "a",
+            MemorySpace::Shared,
+            BF16,
+            Extent::Static(span(o.a_layout, 64)),
+        ),
         AllocDecl::new(
             "b",
             MemorySpace::Shared,
             BF16,
-            Extent::Static((n * 16) as u32),
+            Extent::Static(span(o.b_layout, o.n as usize)),
         ),
         AllocDecl::new(
             "d",
@@ -473,4 +561,173 @@ fn a_proxy_fence_survives_the_text_round_trip() {
     assert!(json.contains("ProxyFence"), "{json}");
     let back: Stmt = serde_json::from_str(&json).expect("parses");
     assert_eq!(back, proxy_fence());
+}
+
+// ---- operand layouts, end to end -------------------------------------------------------------------------------------
+
+/// Dense canonical layouts for `rows` rows: K-major packs the two 8-element K halves of a core matrix `LBO` apart and
+/// 8-row groups `SBO` apart; MN-major packs the 8-row groups `SBO` apart and the K halves `LBO` apart.
+fn dense_k(rows: usize) -> OperandLayout {
+    let _ = rows;
+    k_major(128, 256) // core matrix 64 elements (128 B); the two K halves 64 elements apart, row groups 128 apart
+}
+fn dense_mn(rows: usize) -> OperandLayout {
+    mn_major(2 * 64 * (rows as u32 / 8), 128) // row groups 64 elements (128 B) apart; the K halves a whole column of groups
+}
+
+#[test]
+fn every_fragment_value_is_the_reference_product_under_each_canonical_layout() {
+    for n in [8u32, 16, 64] {
+        for (a, b) in [
+            (dense_k(64), dense_k(n as usize)),
+            (dense_mn(64), dense_mn(n as usize)),
+            (dense_k(64), dense_mn(n as usize)),
+            (dense_mn(64), dense_k(n as usize)),
+            // padded: row groups a core matrix apart with a gap, the K halves beyond them
+            (k_major(128, 512), k_major(256, 384)),
+        ] {
+            let mut o = Opt::plain(n);
+            (o.a_layout, o.b_layout) = (a, b);
+            let got = run(&kernel(o), n).expect("the oracle runs it");
+            assert_eq!(got, expected(n, false), "n = {n}, a = {a:?}, b = {b:?}");
+        }
+    }
+}
+
+#[test]
+fn declaring_a_different_layout_than_the_one_stored_gives_a_different_product() {
+    // the tiles are stored K-major; the statement is told MN-major (valid, but another arrangement): the result moves
+    let mut o = Opt::plain(16);
+    o.a_layout = dense_k(64);
+    o.b_layout = dense_k(16);
+    let mut k = kernel(o);
+    if let Some(Stmt::Wgmma {
+        a_layout, b_layout, ..
+    }) = k
+        .body
+        .0
+        .iter_mut()
+        .find(|s| matches!(s, Stmt::Wgmma { .. }))
+    {
+        *a_layout = dense_mn(64);
+        *b_layout = dense_mn(16);
+    }
+    assert_ne!(
+        run(&k, 16).expect("it still runs"),
+        expected(16, false),
+        "the oracle read through the declared layout"
+    );
+}
+
+#[test]
+fn the_checker_refuses_layouts_a_descriptor_cannot_carry() {
+    let refused = |a: OperandLayout, mutate: &dyn Fn(&mut KernelFn)| {
+        let mut o = Opt::plain(8);
+        o.a_layout = dense_k(64);
+        let mut k = kernel(o);
+        if let Some(Stmt::Wgmma { a_layout, .. }) = k
+            .body
+            .0
+            .iter_mut()
+            .find(|s| matches!(s, Stmt::Wgmma { .. }))
+        {
+            *a_layout = a;
+        }
+        mutate(&mut k);
+        matches!(check_kernel(&k), Err(KernelError::WgmmaUnsupported { .. }))
+    };
+    let keep: &dyn Fn(&mut KernelFn) = &|_| {};
+    assert!(!refused(dense_k(64), keep), "the control is admitted");
+    let swz = |sw| OperandLayout::Canonical {
+        major: Major::K,
+        swizzle: sw,
+        lbo: Some(128),
+        sbo: 256,
+    };
+    assert!(refused(swz(Swizzle::B128), keep), "swizzle not built");
+    assert!(
+        refused(
+            OperandLayout::Canonical {
+                major: Major::K,
+                swizzle: Swizzle::None,
+                lbo: None,
+                sbo: 256
+            },
+            keep
+        ),
+        "no leading offset"
+    );
+    assert!(refused(k_major(0, 256), keep), "a zero offset");
+    assert!(refused(k_major(136, 256), keep), "not a multiple of 16");
+    assert!(
+        refused(k_major(128, 1 << 18), keep),
+        "beyond 14 bits of offset >> 4"
+    );
+    assert!(
+        refused(k_major(128, 128), keep),
+        "two core matrices at one place"
+    );
+    assert!(
+        refused(k_major(128, 128 * 1024), keep),
+        "leaves the allocation"
+    );
+    // a tile start that is not a constant, or not 16-byte aligned
+    let start = |e: ScalarExpr| {
+        move |k: &mut KernelFn| {
+            if let Some(Stmt::Wgmma {
+                a: Place::Alloc { index, .. },
+                ..
+            }) = k
+                .body
+                .0
+                .iter_mut()
+                .find(|s| matches!(s, Stmt::Wgmma { .. }))
+            {
+                *index = e.clone();
+            }
+        }
+    };
+    assert!(
+        refused(dense_k(64), &start(u(4))),
+        "start not 16-byte aligned"
+    );
+    assert!(refused(dense_k(64), &start(tid())), "start not a constant");
+}
+
+#[test]
+fn an_operand_layout_survives_the_text_round_trip_and_defaults_when_absent() {
+    let layout = dense_mn(64);
+    let json = serde_json::to_string(&layout).expect("serializes");
+    assert_eq!(
+        serde_json::from_str::<OperandLayout>(&json).unwrap(),
+        layout
+    );
+    // a Wgmma written before the fields existed parses with RowMajor
+    let mut o = Opt::plain(8);
+    o.a_layout = layout;
+    let k = kernel(o);
+    let mut v = serde_json::to_value(&k).expect("a value");
+    fn strip(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(m) => {
+                m.remove("a_layout");
+                m.remove("b_layout");
+                m.values_mut().for_each(strip);
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    strip(&mut v);
+    let old: KernelFn = serde_json::from_value(v).expect("an old kernel parses");
+    let Some(Stmt::Wgmma {
+        a_layout, b_layout, ..
+    }) = old.body.0.iter().find(|s| matches!(s, Stmt::Wgmma { .. }))
+    else {
+        panic!("a wgmma");
+    };
+    assert_eq!(
+        (*a_layout, *b_layout),
+        (OperandLayout::RowMajor, OperandLayout::RowMajor)
+    );
 }

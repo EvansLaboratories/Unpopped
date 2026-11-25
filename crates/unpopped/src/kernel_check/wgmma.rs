@@ -6,7 +6,8 @@
 
 use super::{Scope, check_expr, check_place};
 use crate::exec::{Extent, MemorySpace};
-use crate::kernel::{KernelError, KernelFn, Place, Stmt};
+use crate::ir::ScalarExpr;
+use crate::kernel::{KernelError, KernelFn, OperandLayout, Place, Stmt, Swizzle};
 use crate::types::{self, Ty};
 use unpopped_vocab::ElementKind;
 
@@ -52,6 +53,82 @@ pub(super) fn check_tile(
     Ok(())
 }
 
+/// The largest byte offset a matrix descriptor's leading or stride field can carry: 14 bits of `offset >> 4` (PTX ISA 9.5
+/// 9.7.17.5.1.2.2, `matrix-descriptor-encode(x) = (x & 0x3FFFF) >> 4`).
+const MAX_DESCRIPTOR_OFFSET: u32 = (1 << 18) - 16;
+
+/// Check how a `Wgmma` tile of `rows` rows is laid out. A `Canonical` layout is what an emitter lowers to a descriptor,
+/// so it must be one: no swizzle (the others are not built), byte offsets the descriptor can carry (multiples of 16,
+/// at most `MAX_DESCRIPTOR_OFFSET`), a start the descriptor can name (a constant, 16-byte aligned, so the descriptor's
+/// base offset is 0) and offsets that put every element of the tile at its own place inside the allocation.
+fn check_layout(
+    k: &KernelFn,
+    place: &Place,
+    layout: &OperandLayout,
+    rows: usize,
+) -> Result<(), KernelError> {
+    let OperandLayout::Canonical {
+        swizzle, lbo, sbo, ..
+    } = *layout
+    else {
+        return Ok(());
+    };
+    if swizzle != Swizzle::None {
+        return Err(refuse(
+            "a swizzled operand layout (only the no-swizzle layouts are built)",
+        ));
+    }
+    let Some(lbo) = lbo else {
+        return Err(refuse(
+            "a no-swizzle operand layout without a leading dimension byte offset",
+        ));
+    };
+    for off in [lbo, sbo] {
+        if off == 0 || off % 16 != 0 || off > MAX_DESCRIPTOR_OFFSET {
+            return Err(refuse(
+                "a leading or stride byte offset that is zero, not a multiple of 16, or beyond the descriptor's 14-bit field",
+            ));
+        }
+    }
+    let Place::Alloc { alloc, index } = place else {
+        return Err(refuse("a tile that is not a Shared allocation place"));
+    };
+    let ScalarExpr::ConstInt(start, _) = index else {
+        return Err(refuse(
+            "a Canonical operand layout on a tile whose start is not a constant (the descriptor needs a known, aligned address)",
+        ));
+    };
+    // 16-bit elements: 8 per 16 bytes
+    let Ok(start) = usize::try_from(*start) else {
+        return Err(refuse("a negative tile start"));
+    };
+    if start % 8 != 0 {
+        return Err(refuse("a tile start that is not 16-byte aligned"));
+    }
+    let Some(Extent::Static(len)) = k.allocs.get(*alloc as usize).map(|a| a.extent) else {
+        return Err(refuse(
+            "a Canonical operand layout on an allocation without a static extent",
+        ));
+    };
+    let mut seen = std::collections::HashSet::new();
+    for mn in 0..rows {
+        for kk in 0..16 {
+            let Some(off) = layout.element_offset(mn, kk) else {
+                return Err(refuse("an operand layout with no element offset"));
+            };
+            if start + off >= len as usize {
+                return Err(refuse("an operand layout that leaves the allocation"));
+            }
+            if !seen.insert(off) {
+                return Err(refuse(
+                    "an operand layout that puts two elements of the tile at one place",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Check a `Stmt::Wgmma`.
 pub(super) fn check_wgmma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
     let Stmt::Wgmma {
@@ -62,6 +139,8 @@ pub(super) fn check_wgmma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), Ker
         b,
         d,
         scale_d,
+        a_layout,
+        b_layout,
     } = st
     else {
         unreachable!("check_wgmma is called for a Wgmma");
@@ -78,6 +157,8 @@ pub(super) fn check_wgmma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), Ker
     }
     check_tile(k, a, *ab, sc)?;
     check_tile(k, b, *ab, sc)?;
+    check_layout(k, a, a_layout, 64)?;
+    check_layout(k, b, b_layout, *n as usize)?;
     let Some(frag) = k.allocs.get(*d as usize) else {
         return Err(refuse("a fragment that is not a declared allocation"));
     };

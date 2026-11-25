@@ -318,6 +318,86 @@ pub enum CacheHint {
     Global,
 }
 
+/// Which dimension of a `Wgmma` operand tile is contiguous (`wgmma`'s `imm-trans-a` / `imm-trans-b`; PTX ISA 9.5
+/// 9.7.17.5.1.2: "If the argument imm-trans-a / imm-trans-b ... is 0, then K-major is used ... If the value of
+/// argument imm-trans-a is 1 then M-major is used for matrix A. If the value of the argument imm-trans-b is 1, then
+/// N-major is used for matrix B"). Transposed operands exist for 16-bit element types only.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Major {
+    /// `K` is the contiguous dimension (`imm-trans` 0).
+    #[default]
+    K,
+    /// `M` (for `A`) or `N` (for `B`) is the contiguous dimension (`imm-trans` 1).
+    MN,
+}
+
+/// The swizzle mode of a shared-memory matrix (the PTX matrix-descriptor swizzle field; the descriptor's own wire codes
+/// are the emitter's). **Only `None` is built**: the XOR the others apply is not yet confirmed against the ISA figures
+/// (`docs/design-wgmma-descriptors.md`, slice 2), and the checker refuses the rest.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Swizzle {
+    /// No swizzle (the "interleave" layouts).
+    #[default]
+    None,
+    /// 32-byte swizzle.
+    B32,
+    /// 64-byte swizzle.
+    B64,
+    /// 128-byte swizzle.
+    B128,
+}
+
+/// How the elements of one `Wgmma` operand tile (`MN` rows of 16 `K` values) sit in its `Shared` allocation.
+///
+/// `RowMajor` is what the statement meant before this field: row `mn` is 16 contiguous elements. It is **not a layout the
+/// PTX matrix descriptor can read** (a core matrix is 8 rows x 16 bytes packed), so it is for the oracle only and an
+/// emitter for hardware refuses it. `Canonical` is the PTX canonical layout (PTX ISA 9.5 9.7.17.5.1.2.1.3, CuTe notation,
+/// `T = 8` for a 16-bit element): K-major `((8,m),(T,2)):((1T,SBO),(1,LBO))`, MN-major
+/// `((T,1,m),(8,k)):((1,T,SBO),(1T,LBO))`, with `LBO` and `SBO` in **bytes**, as the descriptor carries them.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum OperandLayout {
+    /// Row `mn` is 16 contiguous elements (oracle only).
+    #[default]
+    RowMajor,
+    /// The PTX canonical layout.
+    Canonical {
+        /// The contiguous dimension.
+        major: Major,
+        /// The swizzle mode (only `None` is built).
+        swizzle: Swizzle,
+        /// The leading dimension byte offset. `None` where the ISA says it is not used (a swizzled K-major operand).
+        lbo: Option<u32>,
+        /// The stride dimension byte offset.
+        sbo: u32,
+    },
+}
+
+impl OperandLayout {
+    /// The element offset of `(mn, k)` from the tile's first element, for a 16-bit element, or `None` for a swizzled
+    /// layout (not built) or a `Canonical` one without the offset it needs. `mn` is the row of `A` / `B`, `k < 16`.
+    #[must_use]
+    pub fn element_offset(&self, mn: usize, k: usize) -> Option<usize> {
+        match *self {
+            Self::RowMajor => Some(mn * 16 + k),
+            Self::Canonical {
+                major,
+                swizzle: Swizzle::None,
+                lbo: Some(lbo),
+                sbo,
+            } => {
+                let (lbo, sbo) = (lbo as usize / 2, sbo as usize / 2);
+                Some(match major {
+                    // ((8,m),(T,2)):((1T,SBO),(1,LBO)), T = 8
+                    Major::K => (mn % 8) * 8 + (mn / 8) * sbo + k % 8 + (k / 8) * lbo,
+                    // ((T,1,m),(8,k)):((1,T,SBO),(1T,LBO)), T = 8
+                    Major::MN => mn % 8 + (mn / 8) * sbo + (k % 8) * 8 + (k / 8) * lbo,
+                })
+            }
+            Self::Canonical { .. } => None,
+        }
+    }
+}
+
 /// A sequence of statements; a block opens a scope.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct Block(pub Vec<Stmt>);
@@ -731,6 +811,12 @@ pub enum Stmt {
         d: u32,
         /// Zero: `D = A.B`; nonzero: `D = A.B + D`. An integer expression.
         scale_d: ScalarExpr,
+        /// How the `A` tile sits in its allocation (default `RowMajor`, the meaning before this field).
+        #[serde(default)]
+        a_layout: OperandLayout,
+        /// How the `B` tile sits in its allocation (default `RowMajor`).
+        #[serde(default)]
+        b_layout: OperandLayout,
     },
     /// Close this thread's open [`Stmt::Wgmma`] operations into one group (`wgmma.commit_group`). A commit with no
     /// open operation still makes a group, so that wait counts line up.
