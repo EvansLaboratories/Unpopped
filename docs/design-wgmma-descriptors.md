@@ -51,15 +51,26 @@ Swizzle = None | B32 | B64 | B128             // the PTX layout family; tcgen05'
 
 Unchanged and stated here: the descriptor, swizzle, TMEM and CTA-pair limbs were read by `unpopped-patents-2`, claims only, as **outside as read**: US12204897B2 and US12710961B2 (the claims recite a wait-on-MMA limb; `WgmmaWait` stays under the board-453 ruling and the existing patent note, untouched), US20230289398A1 (descriptor appears only in dependent claim 16, claim 1 needs a work-distributor circuit distributing warps; **re-read at grant**), US12645455B2, and US12669996B2 as `CopyBulk` is shipped. Never "clear". These fields describe the published PTX instruction operands; they add no new asynchronous-completion statement and no new warp-role statement, so the standing holds (HOLD 2 to 4 and the warp-role hold) are not touched. If a read later covers a field named here, that is a hold on the field, not a decision.
 
+## 5b. The two fences (Baracuda's review, 2026-11-25; text checked in PTX 9.5)
+
+PTX 9.7.17.7.1: "wgmma.fence instruction establishes an ordering between prior accesses to any warpgroup registers and subsequent accesses to the same registers by a wgmma.mma_async instruction. Only the accumulator register and the input registers containing the fragments of matrix A require this ordering." It "must be issued by all warps of the warpgroup ... Before the first wgmma.mma_async operation in a warpgroup" and "Between a register access by a thread in the warpgroup and any wgmma.mma_async instruction that accesses the same registers ... Otherwise, the behavior is undefined." And: "An async proxy fence must be used to establish an ordering between prior writes to shared memory matrices and subsequent reads of the same matrices in a wgmma.mma_async instruction." (9.7.10.28.2: "Accessing the same memory location across multiple proxies needs a cross-proxy fence. For the async proxy, fence.proxy.async should be used".)
+
+**Decision.** (1) **`wgmma.fence` is not an IR statement**: it orders register accesses only, the oracle lands `D` at the wait and has no register hazard to observe, so it is a hardware synchronisation the emitter derives (before every `Wgmma`, as Baracuda does). (2) **`fence.proxy.async` is an IR statement, `Stmt::ProxyFence { space: Shared }`** (the `.shared::cta` form; `.global` and `.shared::cluster` only when a statement needs them): it is a fact of the source (CUTLASS and CuTe kernels write it), it has oracle-visible meaning because the oracle models shared bytes, and a derived-after-every-store rule costs fences the author did not need. (3) **A missing proxy fence is an oracle trap, `MissingProxyFence`**: the oracle keeps, per `Shared` byte, whether the last write was by a generic-proxy store not yet followed by the writing thread's `ProxyFence`; a `Wgmma`, `Tcgen05Mma` or `CopyBulk` whose source reads such a byte traps. `CopyBulk` completion already carries the ISA's implicit generic-async fence ("The completion of a cp{.reduce}.async.bulk operation is followed by an implicit generic-async proxy fence"), so bytes it wrote are fenced. Cross-thread ordering is still the existing barrier and race rules; the proxy fence adds only the proxy dimension.
+
 ## 6. Slices (each red-first, gate alone, U38d absent)
 
+0. **`Stmt::ProxyFence` and the `MissingProxyFence` trap** (small, BREAKING: a new `Stmt`). Tests: a generic `Shared` store then `Wgmma` (or `CopyBulk` source) without the fence traps; with the fence it runs; a store by another thread is not fenced by this thread's fence; bytes written by a completed `CopyBulk` need none.
 1. **`OperandLayout`, `Wgmma`, K-major and MN-major, no swizzle.** Tests: the same logical `A`/`B` placed under `RowMajor` and under `Canonical` give byte-identical `D` (a differential, written by laying the tile out by hand); swapping `lbo` and `sbo`, or flipping `Major`, turns it red; checker declines (zero-sized offsets, misaligned offsets, `lbo: Some` where unused, an out-of-allocation extent).
 2. **Swizzle 32/64/128B**, K- and MN-major, the XOR confirmed against the figures first (a person or a figure read; this is the one open reading).
 3. **`Tcgen05Mma`** takes the same fields, plus `m`.
 4. **`Tcgen05Alloc`/`Dealloc`/`RelinquishPermit`** and their oracle traps.
 5. **`cta_group::2`**: only on request, with the pair rules (issue from one thread of the pair, the peer must be active).
 
-## 7. Questions for Baracuda (answer in the review)
+## 7. Baracuda's answers (2026-11-25, `approved-with-answers`)
+
+Q1 no, base offset stays 0. Q2 fields, not descriptor words (the descriptor words stay the emitter's). Q3 `A` from registers: later, soon after slice 1 (attention P.V needs it). Q4 `m = 64` yes later; `cta_group::2` only on request; both need sm_100. Q5 f16/bf16 first, then `f8f6f4`, `tf32`/`i8` on demand. Swizzled layouts are not lowered until the swizzle unit is confirmed.
+
+## 7a. The questions as asked
 
 1. Non-zero base offset needed (section 4)?
 2. Is `Canonical { major, swizzle, lbo, sbo }` the right grain, or do you want the descriptor words (start, lbo, sbo, base offset, swizzle) built by Unpopped and handed over?
