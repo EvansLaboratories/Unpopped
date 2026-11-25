@@ -93,6 +93,19 @@ No disagreement found. No device is available here (sm_90 needed) to falsify any
 
 **Not built. Named blockers:** (1) second method: CUTLASS `tmem_frg_2sm` not yet read; (2) the pair-address reading above (A and C) needs that or a third source; (3) the IR needs a CTA-pair rule: issue from one thread of the pair, peer CTA active, D split over two blocks' `Tmem`. The cluster model exists (`SharedPeer`, `%cluster_ctarank`) but `BlockMem.tmem` is per block, so a pair-wide D needs a cluster-level TMEM state. (4) Baracuda: "`cta_group::2` only on request" (section 7, Q4): none yet. `f8f6f4` is independent of all of this.
 
+## 5g. `.kind::f8f6f4` (2026-11-25; two methods for the type codes, one for everything else; not built)
+
+**PTX ISA 9.5 Table 53 (page 728) and Table 50 (page 705), read as text; Table 54 (mxf8f6f4) and sections 9.7.18.10.4.2-4 (pages 764-768) read as text, Figures 202-209 (the 4- and 6-bit packings) NOT read.** `.kind::f8f6f4`: `atype`/`btype` are **separate 3-bit fields** (bits 7-9 and 10-12): E4M3 = 0, E5M2 = 1, E2M3 = 3, E3M2 = 4, E2M1 = 5, so A and B may differ (the table says "all input combinations of f8, f6 and f4"); D is F16 (0) or F32 (1); dense `K` = 32 per instruction (`K1` = 64 appears for `M` = 128/256 and a bit-29 `K` flag that is `sm_107f` and later, so not for sm_100), sparse `K` = 64/128; `M` 64/128 (`::1`), 128/256 (`::2`), `N` 8..256 step 8 (`::1`). **CUTLASS** `mma_sm100_desc.hpp` (BSD-3-Clause, facts only; the `MXF8F6F4Format` enum and the `a_format_`/`b_format_` comments at lines 179-207, 435-436) **gives the same codes: the two agree**. Both also say negate (bits 13-14) is valid here.
+
+**What the IR has and lacks.** `ElementKind::Fp8E4M3FN` and `Fp8E5M2` exist (decode through `Val::Float`); **no FP6 or FP4 kind exists** (U47, not started). `Tcgen05Mma` and `Wgmma` take one `ab` for both operands and the checker admits only f16/bf16; the oracle's `K` is the constant 16 (`kernel_wgmma.rs:28`).
+
+**Independent of board 501 (buildable now, each its own slice):**
+1. `ab` split into `a_ty`/`b_ty` on `Tcgen05Mma` (BREAKING, rides the stack); admit `Fp8E4M3FN`/`Fp8E5M2` for dense, `acc` F32, `D` F32 (F16 D is a further slice, tensor-memory 16-bit words are unpacked per PTX 9.7.18.10.4.1).
+2. `K` per input width (32 for 8-bit): the oracle's tile read, the `OperandLayout` check (`check_layout` rows are 16 B units, so one swizzle atom row holds 16 FP8 elements, not 8 halves) and the shared test reference offsets all change; this is the larger half.
+3. Negate A / negate B as flags (valid for f16 as well; a small separate row).
+
+**Blocked, per item:** FP6/FP4 operands (no `ElementKind`; U47, and the container/padding rules need Figures 202-209, unread); `.kind::mxf8f6f4` scale operands (board 501 scale tokens `ue8m0`/`ue4m3`); sparse (metadata layouts, Figures 284-292, unread; and PTX 9.5 gives sparse `K` per kind with a `v0`/`v1` version split). **Baracuda's order (section 7, Q5) puts `f8f6f4` after f16; slice 1 + 2 are the first FP8 step and need a BREAKING note in the changelog fragment.**
+
 ## 6. Slices (each red-first, gate alone, U38d absent)
 
 0. **`Stmt::ProxyFence` and the `MissingProxyFence` trap** (small, BREAKING: a new `Stmt`). Tests: a generic `Shared` store then `Wgmma` (or `CopyBulk` source) without the fence traps; with the fence it runs; a store by another thread is not fenced by this thread's fence; bytes written by a completed `CopyBulk` need none.
