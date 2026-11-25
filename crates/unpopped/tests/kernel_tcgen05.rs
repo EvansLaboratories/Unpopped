@@ -348,16 +348,13 @@ fn a_layout_other_than_the_one_stored_gives_another_product() {
     o.b_layout = dense_k();
     let mut k = kernel(o);
     fn find(k: &mut KernelFn) -> Option<&mut Stmt> {
-        match k.body.0.iter_mut().find_map(|s| match s {
+        k.body.0.iter_mut().find_map(|s| match s {
             Stmt::If { then, .. } => then
                 .0
                 .iter_mut()
                 .find(|t| matches!(t, Stmt::Tcgen05Mma { .. })),
             _ => None,
-        }) {
-            Some(s) => Some(s),
-            None => None,
-        }
+        })
     }
     if let Some(Stmt::Tcgen05Mma { a_layout, .. }) = find(&mut k) {
         *a_layout = dense_mn(128);
