@@ -79,9 +79,6 @@ fn check_mma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
             "input types other than f16, bf16 (A and B alike) or two 8-bit floats (e4m3, e5m2)",
         ));
     }
-    if fp8(*ab) && (*a_layout != OperandLayout::RowMajor || *b_layout != OperandLayout::RowMajor) {
-        return Err(refuse("a canonical layout for 8-bit inputs (not built)"));
-    }
     if *acc != ElementKind::F32 || check_tmem(k, *d)? != ElementKind::F32 {
         return Err(refuse("an accumulator that is not f32 in tensor memory"));
     }
@@ -97,8 +94,24 @@ fn check_mma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
             "an m other than 128 (d_lane 0) or 64 (d_lane 0 or 16)",
         ));
     }
-    check_layout(k, a, a_layout, *m as usize, max_lbo).map_err(refuse)?;
-    check_layout(k, b, b_layout, *n as usize, max_lbo).map_err(refuse)?;
+    check_layout(
+        k,
+        a,
+        a_layout,
+        *m as usize,
+        max_lbo,
+        if fp8(*ab) { 1 } else { 2 },
+    )
+    .map_err(refuse)?;
+    check_layout(
+        k,
+        b,
+        b_layout,
+        *n as usize,
+        max_lbo,
+        if fp8(bt) { 1 } else { 2 },
+    )
+    .map_err(refuse)?;
     check_int(k, d_col, sc)?;
     check_int(k, scale_d, sc)
 }

@@ -406,38 +406,48 @@ impl OperandLayout {
     /// is the XOR on the address.
     #[must_use]
     pub fn element_offset(&self, mn: usize, k: usize) -> Option<usize> {
+        self.element_offset_sized(mn, k, 2)
+    }
+
+    /// [`Self::element_offset`] for an element of `elem_bytes` bytes (1 for the 8-bit floats, 2 for the 16-bit kinds): the
+    /// 16-byte core-matrix row holds `T = 16 / elem_bytes` elements (PTX ISA 9.5: `T = 128 / sizeof_bits`, so 16 for 8-bit),
+    /// and `k` runs to `2T` (32 for 8-bit). `RowMajor` is `mn * 2T + k`. The XOR works on the byte address, so a swizzled
+    /// 8-bit offset is XORed in bytes (an element is a byte).
+    #[must_use]
+    pub fn element_offset_sized(&self, mn: usize, k: usize, elem_bytes: usize) -> Option<usize> {
+        let t = 16 / elem_bytes;
         match *self {
-            Self::RowMajor => Some(mn * 16 + k),
+            Self::RowMajor => Some(mn * 2 * t + k),
             Self::Canonical {
                 major,
                 swizzle,
                 lbo,
                 sbo,
             } => {
-                let sbo = sbo as usize / 2;
+                let sbo = sbo as usize / elem_bytes;
                 let s = 1usize << swizzle.bits();
                 let pre = match (major, swizzle) {
                     (Major::K, Swizzle::None) => {
-                        let lbo = lbo? as usize / 2;
-                        (mn % 8) * 8 + (mn / 8) * sbo + k % 8 + (k / 8) * lbo
+                        let lbo = lbo? as usize / elem_bytes;
+                        (mn % 8) * t + (mn / 8) * sbo + k % t + (k / t) * lbo
                     }
                     (Major::MN, Swizzle::None) => {
-                        let lbo = lbo? as usize / 2;
-                        mn % 8 + (mn / 8) * sbo + (k % 8) * 8 + (k / 8) * lbo
+                        let lbo = lbo? as usize / elem_bytes;
+                        mn % t + (mn / t) * sbo + (k % 8) * t + (k / 8) * lbo
                     }
-                    (Major::K, _) => (mn % 8) * (s * 8) + (mn / 8) * sbo + k,
+                    (Major::K, _) => (mn % 8) * (s * t) + (mn / 8) * sbo + k,
                     (Major::MN, _) => {
-                        let lbo = lbo? as usize / 2;
-                        mn % 8
-                            + ((mn / 8) % s) * 8
-                            + (mn / (8 * s)) * lbo
-                            + (k % 8) * (s * 8)
+                        let lbo = lbo? as usize / elem_bytes;
+                        mn % t
+                            + ((mn / t) % s) * t
+                            + (mn / (t * s)) * lbo
+                            + (k % 8) * (s * t)
                             + (k / 8) * sbo
                     }
                 };
-                let byte = pre * 2;
+                let byte = pre * elem_bytes;
                 let swizzled = byte ^ (((byte >> 7) & (s - 1)) << 4);
-                Some(swizzled / 2)
+                Some(swizzled / elem_bytes)
             }
         }
     }

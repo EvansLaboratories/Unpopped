@@ -247,7 +247,7 @@ impl Machine<'_> {
                 let off = (if *layout == OperandLayout::RowMajor {
                     Some(row * k + j)
                 } else {
-                    layout.element_offset(row, j)
+                    layout.element_offset_sized(row, j, 32 / k)
                 })
                 .ok_or(KernelTrap::Unsupported(
                     "a wgmma operand layout the oracle does not read (a swizzle, or no leading offset)",

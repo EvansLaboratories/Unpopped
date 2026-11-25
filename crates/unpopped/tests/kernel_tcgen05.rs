@@ -19,7 +19,7 @@ use unpopped_vocab::{ElementKind, Fp8E4M3FN, Fp8E5M2};
 
 #[path = "support/operand_layout.rs"]
 mod operand_layout;
-use operand_layout::{k_major, k_major_sw, mn_major, mn_major_sw, span, store_index};
+use operand_layout::{k_major, k_major_sw, mn_major, mn_major_sw, span_eb, store_index_eb};
 
 const U32: ElementKind = ElementKind::U32;
 const BF16: ElementKind = ElementKind::Bf16;
@@ -94,6 +94,13 @@ impl Opt {
     fn k(self) -> usize {
         if self.a_ty == BF16 { 16 } else { 32 }
     }
+    /// Bytes per element of A and of B.
+    fn a_eb(self) -> usize {
+        if self.a_ty == BF16 { 2 } else { 1 }
+    }
+    fn b_eb(self) -> usize {
+        if self.b_ty == BF16 { 2 } else { 1 }
+    }
     fn plain(n: u32) -> Self {
         Opt {
             n,
@@ -128,6 +135,7 @@ fn copy_tile(
     fence: bool,
     layout: OperandLayout,
     tmp: u32,
+    eb: usize,
 ) -> Stmt {
     let per = total / threads;
     counted(
@@ -143,7 +151,7 @@ fn copy_tile(
                 place: buf(src, local(1)),
             },
             Stmt::Store {
-                place: alloc(dst, store_index(layout, local(1))),
+                place: alloc(dst, store_index_eb(layout, local(1), eb)),
                 value: local(tmp),
             },
         ]
@@ -206,8 +214,9 @@ fn body(o: Opt) -> Vec<Stmt> {
             o.fence,
             o.a_layout,
             2,
+            o.a_eb(),
         ),
-        copy_tile(1, 1, n * o.k() as i64, t, o.fence, o.b_layout, 4),
+        copy_tile(1, 1, n * o.k() as i64, t, o.fence, o.b_layout, 4, o.b_eb()),
         Stmt::barrier(Scope::Block),
         on_thread0(issue),
     ];
@@ -290,13 +299,13 @@ fn kernel(o: Opt) -> KernelFn {
             "a",
             MemorySpace::Shared,
             o.a_ty,
-            Extent::Static(span(o.a_layout, o.m as usize) * o.k() as u32 / 16),
+            Extent::Static(span_eb(o.a_layout, o.m as usize, o.a_eb())),
         ),
         AllocDecl::new(
             "b",
             MemorySpace::Shared,
             o.b_ty,
-            Extent::Static(span(o.b_layout, n as usize) * o.k() as u32 / 16),
+            Extent::Static(span_eb(o.b_layout, n as usize, o.b_eb())),
         ),
         AllocDecl::new(
             "tmem",
@@ -442,11 +451,6 @@ fn the_checker_applies_the_fp8_rules() {
         b_ty: BF16,
         ..Opt::plain(8)
     }));
-    // a canonical layout on an 8-bit tile is not built
-    assert!(refuses(Opt {
-        a_layout: dense_k(),
-        ..Opt::f8(8, E4, E4)
-    }));
     // the accepted shape passes
     assert_eq!(check_kernel(&kernel(Opt::f8(8, E4, E4))), Ok(()));
 }
@@ -551,6 +555,62 @@ fn the_reference_product_holds_under_swizzled_layouts() {
             assert_eq!(run(&kernel(o), o), Ok(expected(o)), "{sw:?} n = {n}");
         }
     }
+}
+
+/// Dense canonical layouts for an 8-bit tile: `T = 16`, so a core matrix is 8 rows x 16 B = 128 B, the two K halves
+/// (k 0..16, 16..32) 128 B apart and 8-row groups 256 B apart (K-major); MN-major: 8-row groups of 16 `mn` are `T` wide.
+fn dense8_k() -> OperandLayout {
+    k_major(128, 256)
+}
+fn dense8_mn(rows: u32) -> OperandLayout {
+    // each 16-element MN group of an 8-deep k slab is 128 B; the 4 k slabs (32 k) sit one column of groups apart
+    mn_major(128 * (rows / 16), 128)
+}
+
+#[test]
+fn the_fp8_reference_product_holds_under_canonical_layouts() {
+    const E4: ElementKind = ElementKind::Fp8E4M3FN;
+    const E5: ElementKind = ElementKind::Fp8E5M2;
+    for (a, b) in [(E4, E4), (E5, E4)] {
+        for n in [16u32, 64] {
+            for (la, lb) in [
+                (dense8_k(), dense8_k()),
+                (dense8_mn(128), dense8_mn(n)),
+                (dense8_k(), dense8_mn(n)),
+            ] {
+                let mut o = Opt::f8(n, a, b);
+                (o.a_layout, o.b_layout) = (la, lb);
+                assert_eq!(
+                    run(&kernel(o), o),
+                    Ok(expected(o)),
+                    "{a:?} x {b:?} n = {n}, a = {la:?}, b = {lb:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_fp8_reference_product_holds_under_swizzled_layouts() {
+    // the swizzle atom is 16-byte chunks whatever the element: a chunk is 16 FP8 elements, not 8 halves
+    for (sw, s) in [(Swizzle::B32, 2u32), (Swizzle::B64, 4), (Swizzle::B128, 8)] {
+        for n in [16u32, 64] {
+            let mut o = Opt::f8(n, ElementKind::Fp8E4M3FN, ElementKind::Fp8E5M2);
+            o.a_layout = k_major_sw(sw, 128 * s);
+            o.b_layout = mn_major_sw(sw, 512 * s, 128 * s);
+            assert_eq!(run(&kernel(o), o), Ok(expected(o)), "{sw:?} n = {n}");
+        }
+    }
+}
+
+#[test]
+fn an_fp8_layout_read_as_16_bit_gives_another_product() {
+    // the same offsets, read with the 16-bit chunk, would land elsewhere: the element size is not ignored
+    let l = dense8_k();
+    assert_ne!(
+        l.element_offset_sized(1, 17, 1),
+        l.element_offset_sized(1, 17, 2)
+    );
 }
 
 // ---- tensor-memory allocation (U8c slice 4), PTX ISA 9.5 9.7.18.1.2 and 9.7.18.7.1 ------------------------------------
