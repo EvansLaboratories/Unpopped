@@ -7,7 +7,7 @@
 use super::{Scope, check_expr, check_place};
 use crate::exec::{Extent, MemorySpace};
 use crate::ir::ScalarExpr;
-use crate::kernel::{KernelError, KernelFn, OperandLayout, Place, Stmt, Swizzle};
+use crate::kernel::{KernelError, KernelFn, Major, OperandLayout, Place, Stmt, Swizzle};
 use crate::types::{self, Ty};
 use unpopped_vocab::ElementKind;
 
@@ -69,18 +69,30 @@ pub(super) fn check_layout(
     max_lbo: u32,
 ) -> Result<(), &'static str> {
     let OperandLayout::Canonical {
-        swizzle, lbo, sbo, ..
+        major,
+        swizzle,
+        lbo,
+        sbo,
     } = *layout
     else {
         return Ok(());
     };
-    if swizzle != Swizzle::None {
-        return Err("a swizzled operand layout (only the no-swizzle layouts are built)");
-    }
-    let Some(lbo) = lbo else {
-        return Err("a no-swizzle operand layout without a leading dimension byte offset");
+    // the leading offset is "not used, assumed to be 1" for a swizzled K-major operand (so it must be absent); every
+    // other layout needs it
+    let swizzled = swizzle != Swizzle::None;
+    let offsets_to_check: Vec<(u32, u32)> = match (major == Major::K && swizzled, lbo) {
+        (true, None) => vec![(sbo, MAX_DESCRIPTOR_OFFSET)],
+        (true, Some(_)) => {
+            return Err(
+                "a swizzled K-major operand layout with a leading offset (the ISA does not use it)",
+            );
+        }
+        (false, Some(l)) => vec![(l, max_lbo), (sbo, MAX_DESCRIPTOR_OFFSET)],
+        (false, None) => {
+            return Err("an operand layout without the leading dimension byte offset it needs");
+        }
     };
-    for (off, max) in [(lbo, max_lbo), (sbo, MAX_DESCRIPTOR_OFFSET)] {
+    for (off, max) in offsets_to_check {
         if off == 0 || off % 16 != 0 || off > max {
             return Err(
                 "a leading or stride byte offset that is zero, not a multiple of 16, or beyond the descriptor's 14-bit field",
@@ -95,12 +107,14 @@ pub(super) fn check_layout(
             "a Canonical operand layout on a tile whose start is not a constant (the descriptor needs a known, aligned address)",
         );
     };
-    // 16-bit elements: 8 per 16 bytes
+    // 16-bit elements: 2 bytes each; the start is a multiple of the swizzle pattern (16 bytes with none)
     let Ok(start) = usize::try_from(*start) else {
         return Err("a negative tile start");
     };
-    if start % 8 != 0 {
-        return Err("a tile start that is not 16-byte aligned");
+    if start % (swizzle.pattern_bytes() as usize / 2) != 0 {
+        return Err(
+            "a tile start that is not a multiple of the swizzle pattern (1024 / 512 / 256 bytes; 16 with none)",
+        );
     }
     let Some(Extent::Static(len)) = k.allocs.get(*alloc as usize).map(|a| a.extent) else {
         return Err("a Canonical operand layout on an allocation without a static extent");

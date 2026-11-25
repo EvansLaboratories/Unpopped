@@ -372,28 +372,73 @@ pub enum OperandLayout {
     },
 }
 
+impl Swizzle {
+    /// `B` of the PTX `Swizzle<B,4,3>` (0 none, 1 for 32B, 2 for 64B, 3 for 128B): the number of address bits XORed.
+    const fn bits(self) -> u32 {
+        match self {
+            Self::None => 0,
+            Self::B32 => 1,
+            Self::B64 => 2,
+            Self::B128 => 3,
+        }
+    }
+
+    /// The bytes after which the swizzle pattern repeats (1024 / 512 / 256 for 128B / 64B / 32B; 16 for none): a tile
+    /// start must be a multiple of this for the descriptor's base offset to be 0 (PTX ISA 9.5 9.7.17.5.1.2.2).
+    #[must_use]
+    pub const fn pattern_bytes(self) -> u32 {
+        match self {
+            Self::None => 16,
+            other => 128 << other.bits(),
+        }
+    }
+}
+
 impl OperandLayout {
-    /// The element offset of `(mn, k)` from the tile's first element, for a 16-bit element, or `None` for a swizzled
-    /// layout (not built) or a `Canonical` one without the offset it needs. `mn` is the row of `A` / `B`, `k < 16`.
+    /// The element offset of `(mn, k)` from the tile's first element, for a 16-bit element, or `None` when a `Canonical`
+    /// layout lacks the offset it needs (`lbo` for no swizzle or MN-major). `mn` is the row of `A` / `B`, `k < 16`.
+    ///
+    /// The canonical layout (PTX ISA 9.5 9.7.17.5.1.2.1.3, `T = 8`, `s = 2^B`): K-major `((8,m),(T,2)):((sT,SBO),(1,T))`
+    /// swizzled (`(1T,SBO),(1,LBO)` with no swizzle), MN-major `((T,s,m),(8,k)):((1,T,LBO),(sT,SBO))` swizzled
+    /// (`((T,1,m),(8,k)):((1,T,SBO),(1T,LBO))` with no swizzle); then `Swizzle<B,4,3>` on the **byte** address, which XORs
+    /// address bits `[4, 4+B)` with bits `[7, 7+B)` (read from PTX Figures 159-168, `docs/design-wgmma-descriptors.md`
+    /// section 5c). The tile start is taken to be pattern-aligned (the checker requires it), so the XOR on the offset
+    /// is the XOR on the address.
     #[must_use]
     pub fn element_offset(&self, mn: usize, k: usize) -> Option<usize> {
         match *self {
             Self::RowMajor => Some(mn * 16 + k),
             Self::Canonical {
                 major,
-                swizzle: Swizzle::None,
-                lbo: Some(lbo),
+                swizzle,
+                lbo,
                 sbo,
             } => {
-                let (lbo, sbo) = (lbo as usize / 2, sbo as usize / 2);
-                Some(match major {
-                    // ((8,m),(T,2)):((1T,SBO),(1,LBO)), T = 8
-                    Major::K => (mn % 8) * 8 + (mn / 8) * sbo + k % 8 + (k / 8) * lbo,
-                    // ((T,1,m),(8,k)):((1,T,SBO),(1T,LBO)), T = 8
-                    Major::MN => mn % 8 + (mn / 8) * sbo + (k % 8) * 8 + (k / 8) * lbo,
-                })
+                let sbo = sbo as usize / 2;
+                let s = 1usize << swizzle.bits();
+                let pre = match (major, swizzle) {
+                    (Major::K, Swizzle::None) => {
+                        let lbo = lbo? as usize / 2;
+                        (mn % 8) * 8 + (mn / 8) * sbo + k % 8 + (k / 8) * lbo
+                    }
+                    (Major::MN, Swizzle::None) => {
+                        let lbo = lbo? as usize / 2;
+                        mn % 8 + (mn / 8) * sbo + (k % 8) * 8 + (k / 8) * lbo
+                    }
+                    (Major::K, _) => (mn % 8) * (s * 8) + (mn / 8) * sbo + k,
+                    (Major::MN, _) => {
+                        let lbo = lbo? as usize / 2;
+                        mn % 8
+                            + ((mn / 8) % s) * 8
+                            + (mn / (8 * s)) * lbo
+                            + (k % 8) * (s * 8)
+                            + (k / 8) * sbo
+                    }
+                };
+                let byte = pre * 2;
+                let swizzled = byte ^ (((byte >> 7) & (s - 1)) << 4);
+                Some(swizzled / 2)
             }
-            Self::Canonical { .. } => None,
         }
     }
 }

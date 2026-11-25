@@ -19,7 +19,7 @@ use unpopped_vocab::ElementKind;
 
 #[path = "support/operand_layout.rs"]
 mod operand_layout;
-use operand_layout::{k_major, mn_major, span, store_index};
+use operand_layout::{k_major, k_major_sw, mn_major, mn_major_sw, span, store_index};
 
 const U32: ElementKind = ElementKind::U32;
 const BF16: ElementKind = ElementKind::Bf16;
@@ -659,4 +659,122 @@ fn an_operand_layout_survives_the_text_round_trip_and_defaults_when_absent() {
         (*a_layout, *b_layout),
         (OperandLayout::RowMajor, OperandLayout::RowMajor)
     );
+}
+
+/// Dense swizzled layouts: an atom is 8 rows of `s` 16-byte chunks (`128 s` bytes). K-major packs the 8-row groups one
+/// atom apart; MN-major packs the two 8-row K groups one atom apart (`SBO`) and the MN atoms after both (`LBO`).
+fn dense_sw_k(sw: Swizzle) -> OperandLayout {
+    k_major_sw(sw, 128 * swizzle_chunks(sw))
+}
+fn dense_sw_mn(sw: Swizzle) -> OperandLayout {
+    let s = swizzle_chunks(sw);
+    mn_major_sw(sw, 256 * s, 128 * s)
+}
+fn swizzle_chunks(sw: Swizzle) -> u32 {
+    match sw {
+        Swizzle::None => 1,
+        Swizzle::B32 => 2,
+        Swizzle::B64 => 4,
+        Swizzle::B128 => 8,
+    }
+}
+
+#[test]
+fn every_fragment_value_is_the_reference_product_under_each_swizzled_layout() {
+    for sw in [Swizzle::B32, Swizzle::B64, Swizzle::B128] {
+        for n in [8u32, 16, 64] {
+            for (a, b) in [
+                (dense_sw_k(sw), dense_sw_k(sw)),
+                (dense_sw_mn(sw), dense_sw_mn(sw)),
+                (dense_sw_k(sw), dense_sw_mn(sw)),
+                (dense_sw_mn(sw), dense_sw_k(sw)),
+            ] {
+                let mut o = Opt::plain(n);
+                (o.a_layout, o.b_layout) = (a, b);
+                let got = run(&kernel(o), n).expect("the oracle runs it");
+                assert_eq!(
+                    got,
+                    expected(n, false),
+                    "{sw:?} n = {n}, a = {a:?}, b = {b:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_swizzled_layout_stored_unswizzled_gives_another_product() {
+    // the tiles are stored in the 128B-swizzled arrangement; the statement is told the unswizzled K-major layout of the
+    // same size (a valid arrangement, with the chunks in their un-XORed places): the product moves
+    let mut o = Opt::plain(16);
+    o.a_layout = dense_sw_k(Swizzle::B128);
+    o.b_layout = dense_sw_k(Swizzle::B128);
+    let mut k = kernel(o);
+    if let Some(Stmt::Wgmma {
+        a_layout, b_layout, ..
+    }) = k
+        .body
+        .0
+        .iter_mut()
+        .find(|s| matches!(s, Stmt::Wgmma { .. }))
+    {
+        *a_layout = k_major(128, 1024);
+        *b_layout = k_major(128, 1024);
+    }
+    // either the oracle reads a cell the swizzled stores never wrote (the rows use 2 of the 8 chunks, and the XOR moves
+    // them), or it reads other values: it is never the reference product
+    match run(&k, 16) {
+        Err(KernelTrap::UninitializedShared { .. }) => {}
+        other => assert_ne!(other.expect("it runs or traps"), expected(16, false)),
+    }
+}
+
+#[test]
+fn the_checker_applies_the_swizzle_rules() {
+    let set = |a: OperandLayout, start: Option<i64>| {
+        let mut o = Opt::plain(8);
+        o.a_layout = dense_sw_k(Swizzle::B128);
+        let mut k = kernel(o);
+        if let Some(Stmt::Wgmma {
+            a_layout,
+            a: Place::Alloc { index, .. },
+            ..
+        }) = k
+            .body
+            .0
+            .iter_mut()
+            .find(|s| matches!(s, Stmt::Wgmma { .. }))
+        {
+            *a_layout = a;
+            if let Some(st) = start {
+                *index = u(st);
+            }
+        }
+        check_kernel(&k)
+    };
+    let refused =
+        |r: Result<(), KernelError>| matches!(r, Err(KernelError::WgmmaUnsupported { .. }));
+    assert_eq!(set(dense_sw_k(Swizzle::B128), None), Ok(()), "the control");
+    // a swizzled K-major operand does not use the leading offset
+    assert!(refused(set(
+        OperandLayout::Canonical {
+            major: Major::K,
+            swizzle: Swizzle::B128,
+            lbo: Some(128),
+            sbo: 1024
+        },
+        None
+    )));
+    // an MN-major one needs it
+    assert!(refused(set(
+        OperandLayout::Canonical {
+            major: Major::MN,
+            swizzle: Swizzle::B64,
+            lbo: None,
+            sbo: 512
+        },
+        None
+    )));
+    // a start that is a multiple of 16 bytes but not of the 1024-byte pattern (512 elements)
+    assert!(refused(set(dense_sw_k(Swizzle::B128), Some(64))));
 }

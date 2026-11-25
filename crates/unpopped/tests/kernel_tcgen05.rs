@@ -10,7 +10,7 @@ use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope}
 use unpopped::ir::{BinaryOp, ScalarExpr};
 use unpopped::kernel::{
     Block, BufferRole, KernelError, KernelFn, LocalDecl, OperandLayout, Param, Place, Stmt,
-    check_kernel,
+    Swizzle, check_kernel,
 };
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
@@ -19,7 +19,7 @@ use unpopped_vocab::ElementKind;
 
 #[path = "support/operand_layout.rs"]
 mod operand_layout;
-use operand_layout::{k_major, mn_major, span, store_index};
+use operand_layout::{k_major, k_major_sw, mn_major, mn_major_sw, span, store_index};
 
 const U32: ElementKind = ElementKind::U32;
 const BF16: ElementKind = ElementKind::Bf16;
@@ -395,6 +395,18 @@ fn the_checker_refuses_layouts_a_descriptor_cannot_carry() {
     };
     refused(k_major(128, 128), "two core matrices at one place");
     refused(k_major(0, 256), "a zero offset");
+}
+
+#[test]
+fn the_reference_product_holds_under_swizzled_layouts() {
+    for (sw, s) in [(Swizzle::B32, 2u32), (Swizzle::B64, 4), (Swizzle::B128, 8)] {
+        for n in [8u32, 16, 64] {
+            let mut o = Opt::plain(n);
+            o.a_layout = k_major_sw(sw, 128 * s);
+            o.b_layout = mn_major_sw(sw, 256 * s, 128 * s);
+            assert_eq!(run(&kernel(o), o), Ok(expected(o)), "{sw:?} n = {n}");
+        }
+    }
 }
 
 #[test]
