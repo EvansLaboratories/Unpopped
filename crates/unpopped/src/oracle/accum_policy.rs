@@ -264,9 +264,20 @@ mod tests {
     #[test]
     fn fp8_fast_accum_matches_an_integer_reference() {
         let (a, b) = fast_corpus();
-        for (k_step, every, bits) in [(4u32, 2u32, 3u8), (2, 3, 2), (8, 1, 4), (3, 4, 5), (24, 1, 3), (1, 24, 1)] {
+        for (k_step, every, bits) in [
+            (4u32, 2u32, 3u8),
+            (2, 3, 2),
+            (8, 1, 4),
+            (3, 4, 5),
+            (24, 1, 3),
+            (1, 24, 1),
+        ] {
             let want = fast_reference(k_step as usize, every as usize, u32::from(bits), &a, &b);
-            assert_eq!(fast(k_step, every, bits, &a, &b), want, "k_step {k_step} every {every} bits {bits}");
+            assert_eq!(
+                fast(k_step, every, bits, &a, &b),
+                want,
+                "k_step {k_step} every {every} bits {bits}"
+            );
         }
     }
 
@@ -274,11 +285,27 @@ mod tests {
     fn fp8_fast_accum_corpus_separates_every_parameter_from_an_exact_sum() {
         let (a, b) = fast_corpus();
         let exact: f64 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
-        assert_ne!(fast(4, 8, 3, &a, &b), exact, "the imprecise accumulator must lose something");
+        assert_ne!(
+            fast(4, 8, 3, &a, &b),
+            exact,
+            "the imprecise accumulator must lose something"
+        );
         assert_ne!(fast(4, 8, 3, &a, &b), fast(4, 8, 10, &a, &b), "bits matter");
-        assert_ne!(fast(4, 1, 3, &a, &b), fast(4, 6, 3, &a, &b), "promote_every matters");
-        assert_ne!(fast(1, 24, 3, &a, &b), fast(24, 1, 3, &a, &b), "k_step matters");
-        assert_eq!(fast(1, 1, 23, &a, &b), exact, "23 bits, promoted every step: the exact f32 sum");
+        assert_ne!(
+            fast(4, 1, 3, &a, &b),
+            fast(4, 6, 3, &a, &b),
+            "promote_every matters"
+        );
+        assert_ne!(
+            fast(1, 24, 3, &a, &b),
+            fast(24, 1, 3, &a, &b),
+            "k_step matters"
+        );
+        assert_eq!(
+            fast(1, 1, 23, &a, &b),
+            exact,
+            "23 bits, promoted every step: the exact f32 sum"
+        );
     }
 
     /// A tiny deterministic generator (no `rand` dependency): xorshift64.

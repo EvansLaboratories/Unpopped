@@ -55,7 +55,8 @@ fn run(dtype: ElementKind, accum: AccumSpec, a: &[f64], b: &[f64]) -> Result<f64
     facts.weight_operand = Some(1);
     facts.contraction_roles = Some(ContractionRoles::gemm(2, 0));
     let key = derive_structure_key(&ops, &facts, ArchSku::Sm89).expect("a key");
-    let o = OpDef::contraction("mm", &[dtype], ContractionAxes::matmul(), reduced(0)).with_accum(accum);
+    let o =
+        OpDef::contraction("mm", &[dtype], ContractionAxes::matmul(), reduced(0)).with_accum(accum);
     let plan = try_build_plan(&o, &key)?;
     let out = evaluate(&plan, &ops, &[lhs, rhs], &[]).remove(0);
     // the output is stored in the operand dtype (a wider FP8 GEMM output is U46's `D` distinct from the operands)
@@ -79,26 +80,40 @@ fn policy(k_step: u32, promote_every: u32, bits: u8) -> AccumSpec {
 fn the_policy_is_planned_and_evaluated_for_both_fp8_types() {
     let (a, b) = ([2.0, 1.0, 1.0], [2.0, 1.0, 1.0]);
     for dtype in [E4M3, E5M2] {
-        assert_eq!(run(dtype, policy(1, 3, 1), &a, &b).unwrap(), 4.0, "{dtype:?} absorbed");
-        assert_eq!(run(dtype, policy(1, 1, 1), &a, &b).unwrap(), 6.0, "{dtype:?} promoted every step");
+        assert_eq!(
+            run(dtype, policy(1, 3, 1), &a, &b).unwrap(),
+            4.0,
+            "{dtype:?} absorbed"
+        );
+        assert_eq!(
+            run(dtype, policy(1, 1, 1), &a, &b).unwrap(),
+            6.0,
+            "{dtype:?} promoted every step"
+        );
         // a 23-bit imprecise accumulator is an f32 sum here
-        assert_eq!(run(dtype, policy(1, 3, 23), &a, &b).unwrap(), 6.0, "{dtype:?} wide");
+        assert_eq!(
+            run(dtype, policy(1, 3, 23), &a, &b).unwrap(),
+            6.0,
+            "{dtype:?} wide"
+        );
         // k_step 3 sums the three products exactly inside the step: 6, which 1 bit also holds
-        assert_eq!(run(dtype, policy(3, 1, 1), &a, &b).unwrap(), 6.0, "{dtype:?} one step");
+        assert_eq!(
+            run(dtype, policy(3, 1, 1), &a, &b).unwrap(),
+            6.0,
+            "{dtype:?} one step"
+        );
     }
 }
 
 #[test]
 fn a_policy_its_dtype_or_its_parameters_cannot_serve_declines_with_a_reason() {
     let (a, b) = ([0.5f64; 8], [0.5f64; 8]);
-    let declined = |dtype: ElementKind, p: AccumSpec| {
-        match run(dtype, p, &a, &b) {
-            Err(PlanError::UnservableContraction(ContractionDecline::AccumPolicyMismatch {
-                dtype: d,
-                k_step,
-            })) => (d, k_step),
-            other => panic!("expected AccumPolicyMismatch, got {other:?}"),
-        }
+    let declined = |dtype: ElementKind, p: AccumSpec| match run(dtype, p, &a, &b) {
+        Err(PlanError::UnservableContraction(ContractionDecline::AccumPolicyMismatch {
+            dtype: d,
+            k_step,
+        })) => (d, k_step),
+        other => panic!("expected AccumPolicyMismatch, got {other:?}"),
     };
     assert_eq!(declined(E4M3, policy(0, 1, 3)).1, 0, "k_step 0");
     assert_eq!(declined(E4M3, policy(4, 0, 3)).1, 0, "promote_every 0");
