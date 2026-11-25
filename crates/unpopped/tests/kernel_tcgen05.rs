@@ -374,34 +374,27 @@ fn the_checker_refuses_layouts_a_descriptor_cannot_carry() {
         let mut o = Opt::plain(8);
         o.a_layout = dense_k();
         let mut k = kernel(o);
-        if let Some(Stmt::If { then, .. }) =
-            k.body.0.iter_mut().find(|s| matches!(s, Stmt::If { .. }))
-        {
-            if let Some(Stmt::Tcgen05Mma { a_layout, .. }) = then
-                .0
-                .iter_mut()
-                .find(|t| matches!(t, Stmt::Tcgen05Mma { .. }))
-            {
-                *a_layout = a;
+        for st in &mut k.body.0 {
+            if let Stmt::If { then, .. } = st {
+                for t in &mut then.0 {
+                    if let Stmt::Tcgen05Mma { a_layout, .. } = t {
+                        *a_layout = a;
+                    }
+                }
             }
         }
         check_kernel(&k)
     };
     assert_eq!(with(dense_k()), Ok(()), "the control is admitted");
-    assert!(
-        matches!(
-            with(k_major(128, 128)),
-            Err(KernelError::Tcgen05Unsupported { .. })
-        ),
-        "two core matrices at one place"
-    );
-    assert!(
-        matches!(
-            with(k_major(0, 256)),
-            Err(KernelError::Tcgen05Unsupported { .. })
-        ),
-        "a zero offset"
-    );
+    let refused = |a: OperandLayout, why: &str| {
+        let r = with(a);
+        assert!(
+            matches!(r, Err(KernelError::Tcgen05Unsupported { .. })),
+            "{why}: {r:?}"
+        );
+    };
+    refused(k_major(128, 128), "two core matrices at one place");
+    refused(k_major(0, 256), "a zero offset");
 }
 
 #[test]
