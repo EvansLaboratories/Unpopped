@@ -75,6 +75,20 @@ pub(super) fn contract(
     k: i64,
     pair: impl Fn(i64) -> (f64, f64),
 ) -> Option<f64> {
+    if let AccumSpec::Fp8FastAccum {
+        k_step,
+        promote_every,
+        mantissa_bits,
+    } = *policy
+    {
+        return Some(contract_fast(
+            k,
+            k_step,
+            promote_every,
+            mantissa_bits,
+            &pair,
+        ));
+    }
     let (step, round): (u32, fn(f64) -> f64) = match *policy {
         AccumSpec::Tf32 { k_step }
         | AccumSpec::Tf32x3 { k_step }
@@ -96,6 +110,55 @@ pub(super) fn contract(
         at = end;
     }
     Some(acc)
+}
+
+/// Round an `f64` to `bits` explicit mantissa bits, nearest even, exponent range of `f32` (overflow is infinite).
+fn to_mantissa(x: f64, bits: u8) -> f64 {
+    if !x.is_finite() || x == 0.0 {
+        return x;
+    }
+    let e = ((x.abs().to_bits() >> 52) & 0x7ff) as i32 - 1023;
+    let quantum = f64::powi(2.0, e.max(-126) - i32::from(bits));
+    let r = (x.abs() / quantum).round_ties_even() * quantum * x.signum();
+    if r.abs() > f64::from(f32::MAX) {
+        f64::INFINITY.copysign(x)
+    } else {
+        r
+    }
+}
+
+/// [`AccumSpec::Fp8FastAccum`]: an imprecise accumulator of `bits` mantissa bits rounded after every `k_step` elements,
+/// added into an `f32` accumulator every `promote_every` steps and at the end.
+fn contract_fast(
+    k: i64,
+    k_step: u32,
+    promote_every: u32,
+    bits: u8,
+    pair: &impl Fn(i64) -> (f64, f64),
+) -> f64 {
+    let step = i64::from(k_step.max(1));
+    let every = i64::from(promote_every.max(1));
+    let mut main = 0.0f64;
+    let mut fast = 0.0f64;
+    let (mut at, mut steps) = (0, 0);
+    while at < k {
+        let end = (at + step).min(k);
+        let sum: f64 = (at..end)
+            .map(|i| {
+                let (a, b) = pair(i);
+                a * b
+            })
+            .sum();
+        fast = to_mantissa(fast + sum, bits);
+        steps += 1;
+        at = end;
+        if steps == every || at >= k {
+            main = to_f32(main + fast);
+            fast = 0.0;
+            steps = 0;
+        }
+    }
+    main
 }
 
 /// The K-sum of `k` integer pairs under an integer policy ([`AccumSpec::Int32`]: the exact sum wrapped to `i32`;
@@ -134,7 +197,89 @@ pub(super) fn contract_int(
 
 #[cfg(test)]
 mod tests {
-    use super::{tf32, to_f16};
+    use super::{AccumSpec, contract, tf32, to_f16};
+
+    /// Round an integer to `bits` explicit mantissa bits (`bits + 1` significant bits), nearest even, by its bit
+    /// length: a different mechanism from `to_mantissa`'s scaling of an `f64`.
+    fn round_bits(x: i64, bits: u32) -> i64 {
+        let n = x.unsigned_abs();
+        let len = 64 - n.leading_zeros();
+        if len <= bits + 1 {
+            return x;
+        }
+        let shift = len - (bits + 1);
+        let (q, rem, half) = (n >> shift, n & ((1 << shift) - 1), 1u64 << (shift - 1));
+        let q = if rem > half || (rem == half && q & 1 == 1) {
+            q + 1
+        } else {
+            q
+        };
+        ((q << shift) as i64) * x.signum()
+    }
+
+    /// The `Fp8FastAccum` model in quarters (every product here is a multiple of 1/4), written from the policy text.
+    fn fast_reference(k_step: usize, every: usize, bits: u32, a: &[f64], b: &[f64]) -> f64 {
+        let quarters = |x: f64| (x * 4.0) as i64;
+        let (mut main, mut fast, mut steps) = (0i64, 0i64, 0usize);
+        let n_steps = a.len().div_ceil(k_step);
+        for (s, (ca, cb)) in a.chunks(k_step).zip(b.chunks(k_step)).enumerate() {
+            let sum: i64 = ca.iter().zip(cb).map(|(&x, &y)| quarters(x * y)).sum();
+            fast = round_bits(fast + sum, bits);
+            steps += 1;
+            if steps == every || s + 1 == n_steps {
+                main += fast;
+                fast = 0;
+                steps = 0;
+            }
+        }
+        main as f64 / 4.0
+    }
+
+    /// 24 pairs: a product of 256 absorbs the 0.25 products behind it in a narrow accumulator; a negative 256 follows.
+    fn fast_corpus() -> (Vec<f64>, Vec<f64>) {
+        let a: Vec<f64> = (0..24)
+            .map(|i| match i {
+                0 => 16.0,
+                1..=3 | 8..=10 => 0.0, // the first step holds the 256 alone, the third the -256
+                11 => -16.0,
+                20..=23 => 1.5,
+                _ => 0.5,
+            })
+            .collect();
+        let b: Vec<f64> = (0..24)
+            .map(|i| if i == 0 || i == 11 { 16.0 } else { 0.5 })
+            .collect();
+        (a, b)
+    }
+
+    fn fast(k_step: u32, every: u32, bits: u8, a: &[f64], b: &[f64]) -> f64 {
+        let p = AccumSpec::Fp8FastAccum {
+            k_step,
+            promote_every: every,
+            mantissa_bits: bits,
+        };
+        contract(&p, a.len() as i64, |i| (a[i as usize], b[i as usize])).expect("a policy")
+    }
+
+    #[test]
+    fn fp8_fast_accum_matches_an_integer_reference() {
+        let (a, b) = fast_corpus();
+        for (k_step, every, bits) in [(4u32, 2u32, 3u8), (2, 3, 2), (8, 1, 4), (3, 4, 5), (24, 1, 3), (1, 24, 1)] {
+            let want = fast_reference(k_step as usize, every as usize, u32::from(bits), &a, &b);
+            assert_eq!(fast(k_step, every, bits, &a, &b), want, "k_step {k_step} every {every} bits {bits}");
+        }
+    }
+
+    #[test]
+    fn fp8_fast_accum_corpus_separates_every_parameter_from_an_exact_sum() {
+        let (a, b) = fast_corpus();
+        let exact: f64 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
+        assert_ne!(fast(4, 8, 3, &a, &b), exact, "the imprecise accumulator must lose something");
+        assert_ne!(fast(4, 8, 3, &a, &b), fast(4, 8, 10, &a, &b), "bits matter");
+        assert_ne!(fast(4, 1, 3, &a, &b), fast(4, 6, 3, &a, &b), "promote_every matters");
+        assert_ne!(fast(1, 24, 3, &a, &b), fast(24, 1, 3, &a, &b), "k_step matters");
+        assert_eq!(fast(1, 1, 23, &a, &b), exact, "23 bits, promoted every step: the exact f32 sum");
+    }
 
     /// A tiny deterministic generator (no `rand` dependency): xorshift64.
     fn next(state: &mut u64) -> u64 {

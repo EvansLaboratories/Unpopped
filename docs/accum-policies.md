@@ -22,6 +22,7 @@ in `ir.rs` pins that). A policy states how a tensor core differs from an `f64` s
 | `Tf32x3 { k_step }` | `F32` | head `h = tf32(x)`, remainder `l = tf32(x - h)` | `ah*bh + ah*bl + al*bh` (the `al*bl` term is dropped) | `f32` |
 | `Bf16x3 { k_step }` | `F32` | as `Tf32x3` with `bf16` (nearest even) for head and remainder | same | `f32` |
 | `F16Accum { k_step }` | `F16` | none (the operands are `f16`) | `a * b` | `f16` (`2^-11`), nearest even, overflow beyond 65520 is infinite |
+| `Fp8FastAccum { k_step, promote_every, mantissa_bits }` | `Fp8E4M3FN` or `Fp8E5M2` | none | `a * b`, exact | an imprecise accumulator of `mantissa_bits` explicit mantissa bits (1 to 23, nearest even), rounded after every `k_step` elements; every `promote_every` steps and at the end it is added into an `f32` accumulator (rounded to `f32`) and cleared |
 | `Int32` | `I8` or `U8` (each operand its own signedness) | none | `a * b`, exact | `i32`, wrapping: the exact sum modulo `2^32`, in any order |
 | `Int32Sat { k_step }` | `I8` or `U8` | none | `a * b`, exact | `i32`, clamped into `[-2^31, 2^31-1]` after every `k_step` elements (PTX `.satfinite` per `mma`), so a later negative product lowers a saturated value |
 
@@ -36,7 +37,9 @@ accumulator that overflows its type is infinite; a value that rounds up past the
 
 **Accumulate-into-C (S1a-2, 0.42.24):** a contraction's extra input may be a full `[M,N]` C, read at `[m,n]` in the epilogue, after the K-sum, in the wide type; under a policy that is *not* the hardware's `D = A.B + C` with C as the initial accumulator (that form, with its `u*|C|` bound, is `Stmt::Mma`'s, S2).
 
-**Not here yet:** `Fp8FastAccum` (PM 2026-11-09: no hardware model is documented, so none is built). **Not modelled by the kernel lift**: `lift_contraction_opdef` declines every policy but `WideFloat`
+**`Fp8FastAccum` (U56, PM 2026-11-25):** the earlier hold ("no hardware model is documented, so none is built", PM 2026-11-09) was lifted: a gap is a row. It is stated as a **policy by the parameters fast-accumulate FP8 kernels document in software, never as a claim about a chip**: CUTLASS's `mma_promotion_interval` is `promote_every` (in `k_step`s) and Triton's `max_num_imprecise_acc` is `promote_every * k_step` elements; `mantissa_bits` is the declared width of the imprecise accumulator, chosen by the caller. A zero `k_step` or `promote_every`, or `mantissa_bits` outside 1..=23, or a non-FP8 operand is `ContractionDecline::AccumPolicyMismatch`. The result is stored in the operand dtype today (a wider `D` is U46); `tests/contraction_fp8_fast_accum.rs` checks planning, the declines and results an FP8 output holds exactly, and the number model is checked over a broad corpus by `oracle/accum_policy.rs`'s unit tests against a reference that rounds integers by bit length.
+
+**Not modelled by the kernel lift**: `lift_contraction_opdef` declines every policy but `WideFloat`
 (typed), so `unpopped-cpu-c` has no policy reference yet.
 
 ## The declared bound, per emitter (PM, 2026-11-03: stated before any emitter claims conformance)
@@ -48,10 +51,10 @@ An emitter's result `r_E` is compared with the oracle's model result `r_O` under
 ```
 
 where `K` is the contracted length, `s = ceil(K / k_step)` the number of steps, `u` the accumulator's unit roundoff (table above),
-`S = sum |ã_i b̃_i|` over the *converted* inputs, and `d(P)` the term the model drops: `0` for `Tf32` and `F16Accum`, `2^-22` for `Tf32x3`
+`S = sum |ã_i b̃_i|` over the *converted* inputs, and `d(P)` the term the model drops: `0` for `Tf32`, `F16Accum` and `Fp8FastAccum`, `2^-22` for `Tf32x3`
 (`al*bl <= (2^-11)^2 |a||b|`), `2^-18` for `Bf16x3`. The reasoning: the oracle rounds `s` times, so it is within `gamma_s S` of the exact
 sum of converted products; an emitter may associate inside a step in any order and in the accumulator type, so up to `K` roundings,
-`gamma_K S`; the two bounds add; the `x3` forms add what the model drops. The bound is a **ceiling**, not a promise that any chip is that
+`gamma_K S`; the two bounds add; the `x3` forms add what the model drops. For `Fp8FastAccum` the bound is `B = 2 ( gamma_n(u_m) + gamma_P(2^-24) ) * S` with `n = promote_every * k_step` elements per promotion, `u_m = 2^-(mantissa_bits+1)` and `P = ceil(K / n)` promotions: each of the emitter and the oracle is within `gamma_n(u_m) S` of the exact sum inside the promoted segments (the segments partition `S`) plus `gamma_P(2^-24) S` across promotions, so the two differ by at most twice that (the triangle inequality). The bound is a **ceiling**, not a promise that any chip is that
 bad. Non-finite results must agree in kind: a NaN where the oracle has NaN, the same infinity where it has an infinity.
 
 | Emitter | Policies it may claim | Bound it states today | Evidence required to claim |

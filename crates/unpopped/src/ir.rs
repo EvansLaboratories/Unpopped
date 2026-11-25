@@ -2419,6 +2419,20 @@ pub enum AccumSpec {
         /// Contracted elements per accumulator rounding (at least 1).
         k_step: u32,
     },
+    /// An FP8 fast-accumulate model (U56; `docs/accum-policies.md`), stated as a **policy by its software-documented
+    /// parameters, not as a claim about any chip**: CUTLASS's `mma_promotion_interval` and Triton's
+    /// `max_num_imprecise_acc` are the two knobs its fast-accumulate kernels expose. `Fp8E4M3FN` or `Fp8E5M2` operands,
+    /// exact products; an imprecise accumulator keeps `mantissa_bits` explicit mantissa bits (round to nearest even) and is
+    /// rounded after every `k_step` contracted elements; every `promote_every` such steps (and at the end) it is added into
+    /// an `f32` accumulator and cleared.
+    Fp8FastAccum {
+        /// Contracted elements per imprecise-accumulator rounding (the atom's K; at least 1).
+        k_step: u32,
+        /// Steps between promotions into the `f32` accumulator (CUTLASS's promotion interval; at least 1).
+        promote_every: u32,
+        /// Explicit mantissa bits the imprecise accumulator keeps (1 to 23; `f32` has 23).
+        mantissa_bits: u8,
+    },
     /// An integer tensor-core model (`mma ... s8/u8 ... s32`): `I8` or `U8` operands, exact products, an `i32`
     /// accumulator that wraps (two's complement). The result is the exact sum modulo 2^32, whatever the order. The op's
     /// `out_dtype` is `I32` and its epilogue is the identity (`Reduced(0)`).
@@ -4543,6 +4557,7 @@ mod reduction_axes_tests {
                 | AccumSpec::Tf32x3 { .. }
                 | AccumSpec::Bf16x3 { .. }
                 | AccumSpec::F16Accum { .. }
+                | AccumSpec::Fp8FastAccum { .. }
                 | AccumSpec::Int32
                 | AccumSpec::Int32Sat { .. } => true,
             }
