@@ -157,3 +157,21 @@ fn what_cannot_be_scalarized_declines_by_name() {
         .is_ok()
     );
 }
+
+#[test]
+fn an_empty_brace_list_value_initialises_every_field_to_zero() {
+    // `S x{};` and `S x = {};` are value-initialisation (a functor `F op{};` is the real-world spelling), also with an array field
+    // and a nested struct; a short non-empty list still declines
+    let k = lift(
+        "struct In { int a; float b; }; struct S { float x; int n; In in; float v[2]; \
+           float get() const { return x + (float)n + in.b + v[1]; } };\n\
+         void k(float* out) { S s{}; S t = {}; out[0] = s.get() + 1.0f; t.x = 4.0f; t.v[1] = 2.0f; out[1] = t.get(); out[2] = s.get(); }",
+    )
+    .expect("lifts (was a decline: every field must be given)");
+    assert_eq!(run(&k, 3, vec![]), vec![1.0, 6.0, 0.0]);
+    assert!(
+        lift("struct S { float x; int n; }; void k(float* out) { S s{1.0f}; out[0] = s.x; }")
+            .is_err(),
+        "a list shorter than the fields still declines"
+    );
+}

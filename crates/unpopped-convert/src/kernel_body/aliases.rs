@@ -278,6 +278,14 @@ impl<'s, 't> Walker<'s, 't> {
             "INFINITY" if matches!(self.compute, E::F32 | E::F64) => {
                 Some((ScalarExpr::Const(f64::INFINITY), self.compute))
             }
+            // the double limits exist only where a double is the compute type (a double constant in a float kernel declines)
+            "DBL_MAX" if self.compute == E::F64 => Some((ScalarExpr::Const(f64::MAX), E::F64)),
+            "DBL_MIN" if self.compute == E::F64 => {
+                Some((ScalarExpr::Const(f64::MIN_POSITIVE), E::F64))
+            }
+            "DBL_EPSILON" if self.compute == E::F64 => {
+                Some((ScalarExpr::Const(f64::EPSILON), E::F64))
+            }
             "FLT_MAX" => float(f32::MAX),
             "FLT_MIN" => float(f32::MIN_POSITIVE),
             "FLT_EPSILON" => float(f32::EPSILON),
@@ -285,8 +293,30 @@ impl<'s, 't> Walker<'s, 't> {
             "CUDART_INF_F" => float(f32::INFINITY),
             "CUDART_NAN_F" => float(f32::NAN),
             "CUDART_PI_F" => float(std::f32::consts::PI),
+            // the double-precision names: infinity and NaN are exact at either compute type, pi only at F64
+            "CUDART_INF" if matches!(self.compute, E::F32 | E::F64) => {
+                Some((ScalarExpr::Const(f64::INFINITY), self.compute))
+            }
+            "CUDART_NAN" if matches!(self.compute, E::F32 | E::F64) => {
+                Some((ScalarExpr::Const(f64::NAN), self.compute))
+            }
+            "CUDART_PI" if self.compute == E::F64 => {
+                Some((ScalarExpr::Const(std::f64::consts::PI), E::F64))
+            }
             "CUDART_ZERO_F" => float(0.0),
             "CUDART_ONE_F" => float(1.0),
+            // `<stdint.h>`: each is an `int` (or `unsigned int`, `long long`) constant, as the C macros expand
+            "INT8_MAX" => int(i64::from(i8::MAX), E::I32),
+            "INT8_MIN" => int(i64::from(i8::MIN), E::I32),
+            "UINT8_MAX" => int(i64::from(u8::MAX), E::I32),
+            "INT16_MAX" => int(i64::from(i16::MAX), E::I32),
+            "INT16_MIN" => int(i64::from(i16::MIN), E::I32),
+            "UINT16_MAX" => int(i64::from(u16::MAX), E::I32),
+            "INT32_MAX" => int(i64::from(i32::MAX), E::I32),
+            "INT32_MIN" => int(i64::from(i32::MIN), E::I32),
+            "UINT32_MAX" => int(i64::from(u32::MAX), E::U32),
+            "INT64_MAX" => int(i64::MAX, E::I64),
+            "INT64_MIN" => int(i64::MIN, E::I64),
             "INT_MAX" => int(i64::from(i32::MAX), E::I32),
             "INT_MIN" => int(i64::from(i32::MIN), E::I32),
             "UINT_MAX" => int(i64::from(u32::MAX), E::U32),

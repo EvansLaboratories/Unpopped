@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.13` — U19 walker D1: named lambdas, half and bfloat16 shuffles, switch, x++ as a value, do-while, the optional-pointer idiom, scalar half intrinsics, double constants
+
+Added (`unpopped-convert`, source-to-source in the walker, no IR change): named lambdas (`auto f = [&](..) -> T {..}`) inline as functions that see the caller's locals; half and bfloat16 values through warp shuffles and `cg::reduce` max/min (as F32, exact); `S x{};` value-initialises a struct; `fmod`/`atan2`/`copysign`/`nextafter` and the `__float_as_int` bit-cast family; `switch` with `break`/`return`/`continue` cases becomes an if chain before the walk; `x++` / `++x` / `x--` / `--x` as a value; `do { } while (c)`; the optional-pointer idiom `(da != nullptr) ? da + off : nullptr`; `CUDART_INF` / `CUDART_NAN` / `CUDART_PI` double constants; the scalar half intrinsics (`__habs`, `__hisnan`, `__hadd`/`__hsub`/`__hmul` and the comparisons, via f32); the `<stdint.h>` limit names; `DBL_MAX` / `DBL_MIN` / `DBL_EPSILON` at double compute.
+
+Not here: the caller-stated struct layouts (U38d, `docs/PATENT-SWEEP.md`: "outside as read", NOT CLEARED) and what imports them, and the D2 cut (cuComplex, vector parameters, macro comments, address-taken scalars, member specialisations, alias arguments). The U43 ROADMAP row and the CUDART single-precision commit were already on main or in the PR before this one, so those cherry-picks were empty.
+
+---
+
 ## `0.56.12` — U19 walker C: C library math names, auto, general for, functors, trait aliases, return inside a loop, F64 literals
 
 Added (`unpopped-convert`, source-to-source in the walker, no IR change): C library math names beyond the frontend table (double `exp`/`log`/`sqrt`, `log1p`, `expm1`, `log2`, `log10`, inverse and hyperbolic trig, `cbrt`, `erf`, `lgamma`, `rint`); `(void)x;` as a statement; `auto x = e;` takes the type of its initialiser; a `for` loop that is not counted lowers to a `while` (`k <<= 1`, `j >>= 1`); a float literal in a double kernel is an f32 value; a trait reached through a local alias (`using DT = Lse<T>; typename DT::Compute`); a functor instance called like a function inlines its `operator()`; namespace-qualified static members and trait types of class instances; a comment among the parameters is not one; the zero of a narrow integer is an I32 zero converted, and walker-made constants are I32 under a narrow integer compute type; `return` inside a loop (or followed by statements) of an inlined function lowers with a result local and a done flag. Each has a test with oracle runs and the mutants that closed their survivors.

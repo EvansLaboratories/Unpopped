@@ -190,6 +190,71 @@ impl<'s, 't> Walker<'s, 't> {
         })())
     }
 
+    /// The scalar half intrinsics `__habs`, `__hisnan`, `__hadd`, `__hsub`, `__hmul` and the comparisons `__heq`/`__hne`/`__hlt`/`__hle`/
+    /// `__hgt`/`__hge`, on `half` or `__nv_bfloat16` values. Each works at f32 (widening a half is exact) and narrows the result back:
+    /// for `+`, `-`, `*` the f32 result rounded to half equals the half operation's (a 24-bit significand is at least 2 * 11 + 2, so
+    /// double rounding cannot differ); `__hfma` is not here, since an f32 fma then a narrowing is not that. `None` when `name` is not one.
+    fn half_intrinsic(&mut self, call: Node<'_>, name: &str) -> Option<R<(ScalarExpr, E)>> {
+        let arity = match name {
+            "__habs" | "__hisnan" => 1,
+            "__hadd" | "__hsub" | "__hmul" | "__heq" | "__hne" | "__hlt" | "__hle" | "__hgt"
+            | "__hge" => 2,
+            _ => return None,
+        };
+        let args = self.call_args(call);
+        if args.len() != arity {
+            return Some(self.not_yet(call, format!("`{name}` with {} argument(s)", args.len())));
+        }
+        Some((|| {
+            let mut vals = Vec::new();
+            let mut half = None;
+            for a in &args {
+                let (e, t) = self.expr(*a)?;
+                if !matches!(t, E::F16 | E::Bf16) {
+                    return self.not_yet(
+                        *a,
+                        format!("`{name}` of a {t:?} value (it takes a half or bfloat16)"),
+                    );
+                }
+                if half.is_some_and(|h| h != t) {
+                    return self.not_yet(call, format!("`{name}` of two different half types"));
+                }
+                half = Some(t);
+                vals.push((self.convert(e, t, E::F32, *a)?, E::F32));
+            }
+            let half = half.expect("an intrinsic with an argument");
+            let mut it = vals.into_iter();
+            let (x, y) = (it.next().expect("one argument"), it.next());
+            match (name, y) {
+                ("__habs", None) => {
+                    let abs = ScalarExpr::Unary(UnaryOp::Abs, Box::new(x.0));
+                    Ok((self.convert(abs, E::F32, half, call)?, half))
+                }
+                ("__hisnan", None) => self.binary("!=", x.clone(), x, call),
+                (op, Some(y)) => {
+                    let sym = match op {
+                        "__hadd" => "+",
+                        "__hsub" => "-",
+                        "__hmul" => "*",
+                        "__heq" => "==",
+                        "__hne" => "!=",
+                        "__hlt" => "<",
+                        "__hle" => "<=",
+                        "__hgt" => ">",
+                        _ => ">=",
+                    };
+                    let r = self.binary(sym, x, y, call)?;
+                    if matches!(op, "__hadd" | "__hsub" | "__hmul") {
+                        Ok((self.convert(r.0, E::F32, half, call)?, half))
+                    } else {
+                        Ok(r)
+                    }
+                }
+                _ => self.not_yet(call, format!("`{name}`")),
+            }
+        })())
+    }
+
     /// `__half2float(h)`, `__bfloat162float(b)` (exact widening) and `__float2half[_rn](f)`, `__float2bfloat16[_rn](f)` (round to
     /// nearest even): one `Cast`. The widening takes only an argument of the 16-bit type it names (C would not compile any
     /// other); a narrowing overflows to infinity, as the intrinsic does. `None` when `name` is not one.
@@ -402,7 +467,13 @@ impl<'s, 't> Walker<'s, 't> {
         if let Some(r) = self.fast_math(n, name) {
             return r;
         }
+        if let Some(r) = self.bitcast_intrinsic(n, name) {
+            return r;
+        }
         if let Some(r) = self.half_conversion(n, name) {
+            return r;
+        }
+        if let Some(r) = self.half_intrinsic(n, name) {
             return r;
         }
         if let Some(r) = self.half2_lane(n, name) {
@@ -448,7 +519,7 @@ impl<'s, 't> Walker<'s, 't> {
         }
         match args.len() {
             1 if self.unary_op(name).is_some() => self.math_unary(n, name, args[0]),
-            2 if (self.binary_fn)(name).is_some() => self.math_binary(n, name, args[0], args[1]),
+            2 if self.binary_op(name).is_some() => self.math_binary(n, name, args[0], args[1]),
             _ => self.not_yet(
                 n,
                 self.unexpanded_or(
@@ -535,6 +606,44 @@ impl<'s, 't> Walker<'s, 't> {
         Ok((e, ty))
     }
 
+    /// A two-argument math function: the frontend's table, then the C library's exact `fmod` (`RemTrunc`, sign of the dividend),
+    /// `atan2`, `copysign` and `nextafter`, each in its `f` and plain spelling.
+    pub(super) fn binary_op(&self, name: &str) -> Option<BinaryOp> {
+        if let Some(op) = (self.binary_fn)(name) {
+            return Some(op);
+        }
+        let base = name.strip_suffix('f').unwrap_or(name);
+        Some(match base {
+            "fmod" => BinaryOp::RemTrunc,
+            "atan2" => BinaryOp::Atan2,
+            "copysign" => BinaryOp::Copysign,
+            "nextafter" => BinaryOp::Nextafter,
+            _ => return None,
+        })
+    }
+
+    /// `__float_as_int(x)`, `__int_as_float(i)` and the `uint`, `double`/`longlong` forms: the same bits at the other type.
+    fn bitcast_intrinsic(&mut self, n: Node<'_>, name: &str) -> Option<R<(ScalarExpr, E)>> {
+        let (from, to) = match name {
+            "__float_as_int" => (E::F32, E::I32),
+            "__float_as_uint" => (E::F32, E::U32),
+            "__int_as_float" => (E::I32, E::F32),
+            "__uint_as_float" => (E::U32, E::F32),
+            "__double_as_longlong" => (E::F64, E::I64),
+            "__longlong_as_double" => (E::I64, E::F64),
+            _ => return None,
+        };
+        let args = self.call_args(n);
+        let [a] = args.as_slice() else {
+            return Some(self.not_yet(n, format!("`{name}` with {} argument(s)", args.len())));
+        };
+        Some((|| {
+            let (v, t) = self.expr(*a)?;
+            let v = self.convert(v, t, from, *a)?;
+            Ok((ScalarExpr::Bitcast(Box::new(v), to), to))
+        })())
+    }
+
     pub(super) fn math_binary(
         &mut self,
         n: Node<'_>,
@@ -542,7 +651,7 @@ impl<'s, 't> Walker<'s, 't> {
         a: Node<'_>,
         b: Node<'_>,
     ) -> R<(ScalarExpr, E)> {
-        let Some(op) = (self.binary_fn)(name) else {
+        let Some(op) = self.binary_op(name) else {
             return self.not_yet(n, self.unexpanded_or(name, format!("a call to `{name}`")));
         };
         let (x, xt) = self.expr(a)?;
