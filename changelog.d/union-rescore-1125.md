@@ -1,0 +1,3 @@
+kind: Docs: the third union re-score at b21af35c (coverage 50% to 57%), seven evidence files, ROADMAP 6.7
+---
+Docs only. `docs/ir-union-rescore.md` gains the third measurement section (the index (Yes + half Partial) over the 507 of 519 applicable rows, re-scored at b21af35c by seven read-only agents and normalised to the 519 base), and `docs/ir-union-evidence/rescore-2026-11-25/` holds the per-survey evidence (one file each for CUDA, CUTLASS, CuTe, Mojo, Slang, ThunderKittens and Triton) with every not-yet-Yes row, its blocker code (READY, DECISION, TRIGGER, PATENT, LANE, OUTSCOPE) and its PR estimate. ROADMAP 6.7 points at them. No code changes.
