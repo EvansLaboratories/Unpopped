@@ -862,6 +862,16 @@ pub enum Stmt {
         /// How the `B` tile sits in its allocation (default `RowMajor`).
         #[serde(default)]
         b_layout: OperandLayout,
+        /// `A` from **registers** (`wgmma.mma_async` with `A` in registers; PTX ISA 9.5 9.7.17.5.1.2, Figure 151): the
+        /// `Private` allocation (index into [`KernelFn::allocs`]) holding this thread's fragment of `A`, 8 elements of
+        /// `ab` `a0 .. a7` ("four .f16x2 registers"). Element `i` of the thread `l` of warp `w` is row
+        /// `16 w + l / 4 + 8 * ((i / 2) % 2)`, column `2 * (l % 4) + i % 2 + 8 * (i / 4)` of the 64 x 16 `A`. When
+        /// `Some`, `a` and `a_layout` are not read (give `a` as the fragment's own `Place::Alloc`, index 0) and a layout
+        /// on `A` is refused by the checker. The fragment is read when the statement executes. Register-`A` has no
+        /// transposed form (the ISA's register-`A` syntax has only `imm-trans-b`), and `wgmma.fence` before it is the
+        /// emitter's, as for the accumulator.
+        #[serde(default)]
+        a_regs: Option<u32>,
     },
     /// Close this thread's open [`Stmt::Wgmma`] operations into one group (`wgmma.commit_group`). A commit with no
     /// open operation still makes a group, so that wait counts line up.

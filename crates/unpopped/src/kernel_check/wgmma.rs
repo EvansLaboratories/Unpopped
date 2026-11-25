@@ -148,6 +148,7 @@ pub(super) fn check_wgmma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), Ker
         scale_d,
         a_layout,
         b_layout,
+        a_regs,
     } = st
     else {
         unreachable!("check_wgmma is called for a Wgmma");
@@ -162,9 +163,27 @@ pub(super) fn check_wgmma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), Ker
     if *acc != ElementKind::F32 {
         return Err(refuse("an accumulator type other than f32"));
     }
-    check_tile(k, a, *ab, sc)?;
+    match a_regs {
+        Some(f) => {
+            // A in registers: a Private fragment of 8 input elements, no layout (it is not in memory)
+            let ok = k.allocs.get(*f as usize).is_some_and(|x| {
+                x.space == MemorySpace::Private && x.elem == *ab && x.extent == Extent::Static(8)
+            });
+            if !ok {
+                return Err(refuse(
+                    "an A fragment that is not a Private allocation of exactly 8 input elements",
+                ));
+            }
+            if *a_layout != OperandLayout::RowMajor {
+                return Err(refuse("a layout on an A operand that is in registers"));
+            }
+        }
+        None => {
+            check_tile(k, a, *ab, sc)?;
+            check_layout(k, a, a_layout, 64, MAX_DESCRIPTOR_OFFSET).map_err(refuse)?;
+        }
+    }
     check_tile(k, b, *ab, sc)?;
-    check_layout(k, a, a_layout, 64, MAX_DESCRIPTOR_OFFSET).map_err(refuse)?;
     check_layout(k, b, b_layout, *n as usize, MAX_DESCRIPTOR_OFFSET).map_err(refuse)?;
     let Some(frag) = k.allocs.get(*d as usize) else {
         return Err(refuse("a fragment that is not a declared allocation"));

@@ -75,6 +75,8 @@ struct Opt {
     /// How the tiles sit in their allocations (the stores below use the layout formulas written in this file).
     a_layout: OperandLayout,
     b_layout: OperandLayout,
+    /// `A` comes from each thread's register fragment (alloc 3), filled by the formulas of PTX Figure 151.
+    a_regs: bool,
 }
 impl Opt {
     fn plain(n: u32) -> Self {
@@ -87,6 +89,7 @@ impl Opt {
             fence: true,
             a_layout: OperandLayout::RowMajor,
             b_layout: OperandLayout::RowMajor,
+            a_regs: false,
         }
     }
 }
@@ -118,11 +121,51 @@ fn copy_tile(src: u32, dst: u32, per: i64, fence: bool, layout: OperandLayout) -
     )
 }
 
+/// Each thread loads its 8 elements of `A` into the register fragment (alloc 3), at the (row, column) PTX ISA 9.5
+/// Figure 151 gives them: warp `w` holds rows `16 w ..`; lane `l` holds rows `l / 4` and `l / 4 + 8`, columns
+/// `2 (l % 4)`, `+ 1`, and the same 8 columns on (`a0 a1`, `a2 a3`, `a4 a5`, `a6 a7`). One statement (a one-trip loop), so
+/// the statement positions the other tests rely on do not move.
+fn fill_a_fragment() -> Stmt {
+    let shr =
+        |a: ScalarExpr, n: i64| ScalarExpr::Binary(BinaryOp::Shr, Box::new(a), Box::new(u(n)));
+    let and =
+        |a: ScalarExpr, m: i64| ScalarExpr::Binary(BinaryOp::BitAnd, Box::new(a), Box::new(u(m)));
+    let mut body = Vec::new();
+    for i in 0..8i64 {
+        let row = add(
+            add(mul(shr(tid(), 5), u(16)), shr(and(tid(), 31), 2)),
+            u(8 * ((i / 2) % 2)),
+        );
+        let col = add(mul(and(tid(), 3), u(2)), u(i % 2 + 8 * (i / 4)));
+        // each load in its own scope: a `Load` declares its local
+        body.push(counted(
+            1,
+            1,
+            vec![
+                Stmt::Load {
+                    local: 2,
+                    place: buf(0, add(mul(row, u(16)), col)),
+                },
+                Stmt::Store {
+                    place: alloc(3, u(i)),
+                    value: local(2),
+                },
+            ],
+        ));
+    }
+    counted(0, 1, body)
+}
+
 /// The statements of a scenario: fill the tiles, (barrier), initialise `d`, wgmma, (commit), wait, copy `d` out.
 fn body(o: Opt) -> Vec<Stmt> {
     let n = o.n as i64;
     let copy = |src, dst, per, layout| copy_tile(src, dst, per, o.fence, layout);
-    let mut body = vec![copy(0, 0, 8, o.a_layout)];
+    let first = if o.a_regs {
+        fill_a_fragment()
+    } else {
+        copy(0, 0, 8, o.a_layout)
+    };
+    let mut body = vec![first];
     // `b` has n * 16 elements: n / 8 per thread
     if n >= 8 {
         body.push(copy(1, 1, n / 8, o.b_layout));
@@ -148,6 +191,7 @@ fn body(o: Opt) -> Vec<Stmt> {
         scale_d: u(o.scale_d),
         a_layout: o.a_layout,
         b_layout: o.b_layout,
+        a_regs: o.a_regs.then_some(3),
     });
     if o.commit {
         body.push(Stmt::WgmmaCommit);
@@ -211,6 +255,15 @@ fn kernel(o: Opt) -> KernelFn {
             Extent::Static((n / 2) as u32),
         ),
     ];
+    if o.a_regs {
+        // alloc 3: this thread's register fragment of A (8 bf16 elements)
+        k.allocs.push(AllocDecl::new(
+            "a_frag",
+            MemorySpace::Private,
+            BF16,
+            Extent::Static(8),
+        ));
+    }
     k
 }
 
@@ -777,4 +830,93 @@ fn the_checker_applies_the_swizzle_rules() {
     )));
     // a start that is a multiple of 16 bytes but not of the 1024-byte pattern (512 elements)
     assert!(refused(set(dense_sw_k(Swizzle::B128), Some(64))));
+}
+
+// ---- `A` in registers (U8c): PTX ISA 9.5 9.7.17.5.1.2, Figure 151 ---------------------------------------------------------
+
+#[test]
+fn every_fragment_value_is_the_reference_product_with_a_in_registers() {
+    for n in [8u32, 16, 64] {
+        let mut o = Opt::plain(n);
+        o.a_regs = true;
+        let got = run(&kernel(o), n).expect("the oracle runs it");
+        assert_eq!(got, expected(n, false), "n = {n}");
+    }
+}
+
+#[test]
+fn a_in_registers_agrees_with_a_in_shared_memory() {
+    let mut regs = Opt::plain(16);
+    regs.a_regs = true;
+    assert_eq!(
+        run(&kernel(regs), 16).expect("registers"),
+        run(&kernel(Opt::plain(16)), 16).expect("shared"),
+    );
+}
+
+#[test]
+fn a_fragment_filled_by_the_wrong_formula_gives_another_product() {
+    // swap the two row halves of the fragment fill (a2 a3 and a0 a1 trade rows): the Figure 151 layout is what the
+    // oracle reads, so the product must move
+    let mut o = Opt::plain(16);
+    o.a_regs = true;
+    let mut k = kernel(o);
+    if let Some(Stmt::For { body, .. }) = k.body.0.first_mut() {
+        for st in &mut body.0 {
+            let Stmt::For { body: inner, .. } = st else {
+                continue;
+            };
+            for st in &mut inner.0 {
+                if let Stmt::Store {
+                    place: Place::Alloc { index, .. },
+                    ..
+                } = st
+                {
+                    if let ScalarExpr::ConstInt(i, t) = index.clone() {
+                        *index = ScalarExpr::ConstInt(i ^ 2, t); // a_i stored in a_{i ^ 2}
+                    }
+                }
+            }
+        }
+    }
+    assert_ne!(run(&k, 16).expect("it still runs"), expected(16, false));
+}
+
+#[test]
+fn the_checker_applies_the_register_a_rules() {
+    let with = |f: &dyn Fn(&mut KernelFn)| {
+        let mut o = Opt::plain(8);
+        o.a_regs = true;
+        let mut k = kernel(o);
+        f(&mut k);
+        check_kernel(&k)
+    };
+    assert_eq!(with(&|_| {}), Ok(()), "the control is admitted");
+    let refused =
+        |r: Result<(), KernelError>| matches!(r, Err(KernelError::WgmmaUnsupported { .. }));
+    // a fragment of the wrong length
+    assert!(refused(with(&|k| k.allocs[3] = AllocDecl::new(
+        "a_frag",
+        MemorySpace::Private,
+        BF16,
+        Extent::Static(4)
+    ))));
+    // a fragment in Shared memory
+    assert!(refused(with(&|k| k.allocs[3] = AllocDecl::new(
+        "a_frag",
+        MemorySpace::Shared,
+        BF16,
+        Extent::Static(8)
+    ))));
+    // a layout on an operand that is in registers
+    assert!(refused(with(&|k| {
+        if let Some(Stmt::Wgmma { a_layout, .. }) = k
+            .body
+            .0
+            .iter_mut()
+            .find(|s| matches!(s, Stmt::Wgmma { .. }))
+        {
+            *a_layout = dense_k(64);
+        }
+    })));
 }
