@@ -864,6 +864,12 @@ pub enum Stmt {
         d_col: ScalarExpr,
         /// Zero: `D = A.B`; nonzero: `D = A.B + D`. An integer expression.
         scale_d: ScalarExpr,
+        /// How the 128-row `A` tile sits in its allocation (default `RowMajor`; see [`OperandLayout`]).
+        #[serde(default)]
+        a_layout: OperandLayout,
+        /// How the `B` tile sits in its allocation (default `RowMajor`).
+        #[serde(default)]
+        b_layout: OperandLayout,
     },
     /// `tcgen05.commit`: arrive (a release-class arrival, like [`Stmt::MbarArrive`] without a transaction count) on the
     /// `mbarrier` at `bar` once the thread's earlier [`Stmt::Tcgen05Mma`] have completed. In the oracle they completed at

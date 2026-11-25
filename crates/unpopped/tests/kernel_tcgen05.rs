@@ -9,12 +9,17 @@
 use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
 use unpopped::ir::{BinaryOp, ScalarExpr};
 use unpopped::kernel::{
-    Block, BufferRole, KernelError, KernelFn, LocalDecl, Param, Place, Stmt, check_kernel,
+    Block, BufferRole, KernelError, KernelFn, LocalDecl, OperandLayout, Param, Place, Stmt,
+    check_kernel,
 };
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
 use unpopped::oracle::kernel_launch::run_launch;
 use unpopped_vocab::ElementKind;
+
+#[path = "support/operand_layout.rs"]
+mod operand_layout;
+use operand_layout::{k_major, mn_major, span, store_index};
 
 const U32: ElementKind = ElementKind::U32;
 const BF16: ElementKind = ElementKind::Bf16;
@@ -76,6 +81,9 @@ struct Opt {
     wait: bool,
     /// Each thread issues `fence.proxy.async` after storing its share of a tile.
     fence: bool,
+    /// How the tiles sit in their allocations.
+    a_layout: OperandLayout,
+    b_layout: OperandLayout,
 }
 impl Opt {
     fn plain(n: u32) -> Self {
@@ -86,12 +94,21 @@ impl Opt {
             commit: true,
             wait: true,
             fence: true,
+            a_layout: OperandLayout::RowMajor,
+            b_layout: OperandLayout::RowMajor,
         }
     }
 }
 
 /// Each thread copies `total / threads` elements of input buffer `src` into `Shared` allocation `dst`.
-fn copy_tile(src: u32, dst: u32, total: i64, threads: i64, fence: bool) -> Stmt {
+fn copy_tile(
+    src: u32,
+    dst: u32,
+    total: i64,
+    threads: i64,
+    fence: bool,
+    layout: OperandLayout,
+) -> Stmt {
     let per = total / threads;
     counted(
         0,
@@ -106,7 +123,7 @@ fn copy_tile(src: u32, dst: u32, total: i64, threads: i64, fence: bool) -> Stmt 
                 place: buf(src, local(1)),
             },
             Stmt::Store {
-                place: alloc(dst, local(1)),
+                place: alloc(dst, store_index(layout, local(1))),
                 value: local(2),
             },
         ]
@@ -128,6 +145,8 @@ fn mma(o: Opt, scale_d: i64) -> Stmt {
         d: 2,
         d_col: u(D_COL),
         scale_d: u(scale_d),
+        a_layout: o.a_layout,
+        b_layout: o.b_layout,
     }
 }
 
@@ -145,8 +164,8 @@ fn body(o: Opt) -> Vec<Stmt> {
             bar: alloc(3, u(0)),
             count: u(1),
         }]),
-        copy_tile(0, 0, 128 * K as i64, t, o.fence),
-        copy_tile(1, 1, n * K as i64, t, o.fence),
+        copy_tile(0, 0, 128 * K as i64, t, o.fence, o.a_layout),
+        copy_tile(1, 1, n * K as i64, t, o.fence, o.b_layout),
         Stmt::barrier(Scope::Block),
         on_thread0(issue),
     ];
@@ -201,12 +220,17 @@ fn kernel(o: Opt) -> KernelFn {
     )
     .with_launch(LaunchShape::new([o.threads, 1, 1], [1, 1, 1]).with_subgroup(32, 32));
     k.allocs = vec![
-        AllocDecl::new("a", MemorySpace::Shared, BF16, Extent::Static(128 * 16)),
+        AllocDecl::new(
+            "a",
+            MemorySpace::Shared,
+            BF16,
+            Extent::Static(span(o.a_layout, 128)),
+        ),
         AllocDecl::new(
             "b",
             MemorySpace::Shared,
             BF16,
-            Extent::Static((n * 16) as u32),
+            Extent::Static(span(o.b_layout, n as usize)),
         ),
         AllocDecl::new(
             "tmem",
@@ -286,6 +310,98 @@ fn every_lane_reads_its_row_of_the_reference_product() {
         let o = Opt::plain(n);
         assert_eq!(run(&kernel(o), o), Ok(expected(o)), "n = {n}");
     }
+}
+
+/// Dense canonical layouts for a 16-bit tile: core matrix 64 elements (128 B), K halves 128 B apart and 8-row groups
+/// 256 B apart (K-major); or 8-row groups 128 B apart and the K halves a column of groups apart (MN-major).
+fn dense_k() -> OperandLayout {
+    k_major(128, 256)
+}
+fn dense_mn(rows: u32) -> OperandLayout {
+    mn_major(2 * 64 * (rows / 8), 128)
+}
+
+#[test]
+fn the_reference_product_holds_under_each_canonical_layout() {
+    for n in [8u32, 16, 64] {
+        for (a, b) in [
+            (dense_k(), dense_k()),
+            (dense_mn(128), dense_mn(n)),
+            (dense_k(), dense_mn(n)),
+            (dense_mn(128), dense_k()),
+        ] {
+            let mut o = Opt::plain(n);
+            (o.a_layout, o.b_layout) = (a, b);
+            assert_eq!(
+                run(&kernel(o), o),
+                Ok(expected(o)),
+                "n = {n}, a = {a:?}, b = {b:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_layout_other_than_the_one_stored_gives_another_product() {
+    let mut o = Opt::plain(16);
+    o.a_layout = dense_k();
+    o.b_layout = dense_k();
+    let mut k = kernel(o);
+    fn find(k: &mut KernelFn) -> Option<&mut Stmt> {
+        match k.body.0.iter_mut().find_map(|s| match s {
+            Stmt::If { then, .. } => then
+                .0
+                .iter_mut()
+                .find(|t| matches!(t, Stmt::Tcgen05Mma { .. })),
+            _ => None,
+        }) {
+            Some(s) => Some(s),
+            None => None,
+        }
+    }
+    if let Some(Stmt::Tcgen05Mma { a_layout, .. }) = find(&mut k) {
+        *a_layout = dense_mn(128);
+    } else {
+        panic!("the Tcgen05Mma is inside thread 0's `if`");
+    }
+    let got = run(&k, o).expect("it still runs");
+    assert_ne!(got, expected(o));
+}
+
+#[test]
+fn the_checker_refuses_layouts_a_descriptor_cannot_carry() {
+    let with = |a: OperandLayout| {
+        let mut o = Opt::plain(8);
+        o.a_layout = dense_k();
+        let mut k = kernel(o);
+        if let Some(Stmt::If { then, .. }) =
+            k.body.0.iter_mut().find(|s| matches!(s, Stmt::If { .. }))
+        {
+            if let Some(Stmt::Tcgen05Mma { a_layout, .. }) = then
+                .0
+                .iter_mut()
+                .find(|t| matches!(t, Stmt::Tcgen05Mma { .. }))
+            {
+                *a_layout = a;
+            }
+        }
+        check_kernel(&k)
+    };
+    assert_eq!(with(dense_k()), Ok(()), "the control is admitted");
+    assert!(
+        matches!(
+            with(k_major(128, 128)),
+            Err(KernelError::Tcgen05Unsupported { .. })
+        ),
+        "two core matrices at one place"
+    );
+    assert!(
+        matches!(
+            with(k_major(0, 256)),
+            Err(KernelError::Tcgen05Unsupported { .. })
+        ),
+        "a zero offset"
+    );
 }
 
 #[test]
