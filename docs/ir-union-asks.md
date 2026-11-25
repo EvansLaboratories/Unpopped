@@ -75,7 +75,7 @@ Format: rows | the trigger | does the consumer exist today (yes/no, where) | wha
 - Slang 5; Triton 2, 13 | U3 remainder: `ProgramModel`/`BlockSpmd` lowering, append/consume buffers, block tensors and `tl.gather`, "each when a consumer needs it" | no: no Triton front end exists in the portfolio | a Triton-source frontend lane (not started) or fishstringer asks.
 - CUDA 4 | U40 constant tables: "a lifted kernel or a lane needs a table" | possibly: the U19 census is measurable | the lane measures how many census kernels carry a `__constant__` table; the lane can fire this itself.
 - CUDA 15, 79 | `setmaxnreg` and warp-specialization launch attributes, "ride on `LaunchShape` fields when a backend needs them" | no: the Baracuda emitter does not spell them | Baracuda records `setmaxnreg` among its requirements (2b line 1).
-- Mojo 49 | Unpopped ROADMAP U1 (index dtype of gather and scatter "waits for after the seam hold"; small-int leaves "wait for a consumer"); the hold is the 2026-10-28 seam hold named at ROADMAP line 234 (under it Baracuda does not rank U2-U12; its owner is not confirmed by this lane), **not a KISS hold, and KISS has no sk4 hold (its schema is sk8)** | not a consumer: a hold | the PM says whether the 2026-10-28 seam hold still stands; if it does not, the row is READY.
+- Mojo 49 | **superseded, now READY (PM 2026-11-25, ROADMAP U58):** the 2026-10-28 seam hold on the index-operand dtype of gather and scatter is lifted; CireSnave's 2026-10-28 sentence is an ordering, never an exclusion | none: Unpopped builds it | nothing to fire.
 - Slang 30 | U38a-2 float atomics (CAS loops), parked 2026-11-22: "revisit when the census shows CAS as the largest remaining wall" | measurable | the lane re-runs the census; it can fire this itself.
 
-Row count: 16 + 7 + 8 + 3 + 2 + 3 + 1 + 2 + 1 + 1 = 44.
+Row count: 16 + 7 + 8 + 3 + 2 + 3 + 1 + 2 + 1 + 1 = 44 as first counted; Mojo 49 has since become READY, so 43 rows still wait on a trigger.
