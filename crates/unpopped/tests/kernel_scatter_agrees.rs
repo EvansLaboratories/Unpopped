@@ -18,11 +18,22 @@ use unpopped::oracle::{TypedBuffer, evaluate};
 use unpopped::plan::try_build_plan;
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, try_structure_key};
 
-const INDEX_TYPES: [ElementKind; 3] = [ElementKind::I32, ElementKind::I64, ElementKind::U32];
+const INDEX_TYPES: [ElementKind; 8] = [
+    ElementKind::I32,
+    ElementKind::I64,
+    ElementKind::U32,
+    ElementKind::I8,
+    ElementKind::U8,
+    ElementKind::I16,
+    ElementKind::U16,
+    ElementKind::U64,
+];
 
 fn width(dtype: ElementKind) -> usize {
     match dtype {
-        ElementKind::F64 | ElementKind::I64 => 8,
+        ElementKind::F64 | ElementKind::I64 | ElementKind::U64 => 8,
+        ElementKind::I8 | ElementKind::U8 => 1,
+        ElementKind::I16 | ElementKind::U16 => 2,
         _ => 4,
     }
 }
@@ -82,10 +93,18 @@ fn data_bytes(dtype: ElementKind, n: usize) -> Vec<u8> {
 fn indices(index_dtype: ElementKind, extent: i64) -> Vec<i128> {
     let e = i128::from(extent);
     let mut v: Vec<i128> = vec![0, e - 1, 1, e, e + 9, 0, 2, e - 1, 1];
-    if index_dtype != ElementKind::U32 {
+    if matches!(
+        index_dtype,
+        ElementKind::I8 | ElementKind::I16 | ElementKind::I32 | ElementKind::I64
+    ) {
         v.extend([-1, -7]);
     }
     v.push(match index_dtype {
+        ElementKind::I8 => i128::from(i8::MAX),
+        ElementKind::U8 => i128::from(u8::MAX),
+        ElementKind::I16 => i128::from(i16::MAX),
+        ElementKind::U16 => i128::from(u16::MAX),
+        ElementKind::U64 => i128::from(u64::MAX),
         ElementKind::I64 => i128::from(i64::MAX),
         ElementKind::I32 => i128::from(i32::MAX),
         _ => i128::from(u32::MAX),

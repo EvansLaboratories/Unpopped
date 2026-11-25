@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.56.22` — Added: gather and scatter index dtypes I8, U8, I16, U16 and U64 (U58, union row Mojo 49)
+
+A gather or scatter `index_dtype` may now be any integer type: `I8`, `U8`, `I16`, `U16`, `I32`, `U32`, `I64` or `U64` (the plan check was `I32`/`I64`/`U32`; `plan::is_index_dtype` is the one test, used by the plan check and both lifts). The lifted kernels load the narrow index from its own buffer and compare and clamp in `I64` through a widening cast, so no narrow integer leaf is needed. Tests: the gather and scatter agreement tests (oracle vs kernel interpreter) and the cpu-c emit test (oracle vs compiled C) now run all eight index dtypes with each type's extremes, negatives for signed types, one-past and far-out values. A mutation that stops the widening turns the gather test red (`IllegalIntLeaf { ty: I8 }`). Not breaking: nothing that built before changes.
+
+---
+
 ## `0.56.21` — Docs: the opaque-tile MMA design note (MSL simdgroup_matrix and CUDA WMMA are one class)
 
 Docs only. `docs/design-opaque-tile-mma.md`: the element-to-thread mapping is unspecified in both Apple `simdgroup_matrix` and CUDA `nvcuda::wmma`, so one statement family serves both; written from primary sources. Nothing is built; Q1 (tensor/tile) is not ruled. No code changes.

@@ -14,7 +14,10 @@
 use unpopped_vocab::ElementKind;
 
 use super::im2col::{int, local};
-use super::{Indexing, LiftDecline, check_plain_with, leaves_ok, substitute_inputs};
+use super::{
+    Indexing, LiftDecline, check_plain_with, index_value, index_work_dtype, leaves_ok,
+    substitute_inputs,
+};
 use crate::ir::{Access, BinaryOp, OobPolicy, OpDef, ReadIndex, ScalarExpr, WriteIndex};
 use crate::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stmt};
 
@@ -73,10 +76,7 @@ fn check_gather(op: &OpDef, dtype: ElementKind, rank: u8) -> Result<Gather, Lift
     if op.read_index.iter().filter(|r| !r.is_direct()).count() != 1 {
         return Err(LiftDecline::UnsupportedForm("more than one gathered input"));
     }
-    if !matches!(
-        index_dtype,
-        ElementKind::I32 | ElementKind::I64 | ElementKind::U32
-    ) {
+    if !crate::plan::is_index_dtype(index_dtype) {
         return Err(LiftDecline::UnsupportedForm("a non-integer gather index"));
     }
     check_plain_with(op, dtype, rank, Indexing::Gather, false)?;
@@ -151,7 +151,7 @@ impl Shape {
     }
 
     fn idx_const(&self, v: i64) -> ScalarExpr {
-        ScalarExpr::ConstInt(v, self.index_dtype)
+        ScalarExpr::ConstInt(v, index_work_dtype(self.index_dtype))
     }
 
     fn at_counters(&self, buffer: u32, axis: Option<(u32, u32)>) -> Place {
@@ -182,7 +182,7 @@ impl Shape {
 
     /// One output cell: the index, its clamp, the policy-guarded loads and store.
     fn cell(&self, op: &OpDef, g: &Gather) -> Block {
-        let raw = local(self.loaded(self.index));
+        let raw = index_value(self.loaded(self.index), self.index_dtype);
         let last = ScalarExpr::Sub(Box::new(local(self.extent())), Box::new(self.idx_const(1)));
         let clamp = ScalarExpr::Binary(
             BinaryOp::Min,
@@ -249,11 +249,15 @@ impl Shape {
             Some(rank),
         ));
         params.extend((0..self.r).map(|d| Param::scalar(format!("n{d}"), ElementKind::I32, d)));
-        params.push(Param::scalar("src_extent", self.index_dtype, self.extent()));
+        params.push(Param::scalar(
+            "src_extent",
+            index_work_dtype(self.index_dtype),
+            self.extent(),
+        ));
         let mut locals = vec![LocalDecl::scalar(ElementKind::I32); 2 * self.r as usize];
         locals.extend((0..self.n).map(|k| LocalDecl::scalar(elem(k))));
-        locals.push(LocalDecl::scalar(self.index_dtype)); // src_extent
-        locals.push(LocalDecl::scalar(self.index_dtype)); // clamped index
+        locals.push(LocalDecl::scalar(index_work_dtype(self.index_dtype))); // src_extent
+        locals.push(LocalDecl::scalar(index_work_dtype(self.index_dtype))); // clamped index
         (params, locals)
     }
 }
