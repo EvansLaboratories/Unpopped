@@ -69,6 +69,7 @@ pub(crate) fn check_kernel_with(
     entry: bool,
 ) -> Result<(), KernelError> {
     check_launch(k)?;
+    check_declared_dtypes(k)?;
     let n = k.locals.len();
     let mut sc = Scope {
         in_scope: vec![false; n],
@@ -95,6 +96,33 @@ pub(crate) fn check_kernel_with(
     check_block(k, &k.body, &mut sc)?;
     let barrier_callees: Vec<bool> = sc.callees.iter().map(|c| c.barrier).collect();
     crate::kernel_uniform::check_barriers(k, &barrier_callees, &sc.externs, entry)
+}
+
+/// A kernel declares no dtype of union batch 1 (`types::is_union_batch1`): they are storage and key identity only until the casts,
+/// the wide integer and the software binary128 land, so one is declined by name here and the oracle never meets a value it cannot
+/// hold. Covers the compute type, every parameter (buffer element, scalar, struct field), every local and every allocation.
+fn check_declared_dtypes(k: &KernelFn) -> Result<(), KernelError> {
+    let refuse = |dtype| Err(KernelError::DtypeNotComputed { dtype });
+    if types::is_union_batch1(k.compute) {
+        return refuse(k.compute);
+    }
+    for p in &k.params {
+        let tys: Vec<ElementKind> = match &p.kind {
+            ParamKind::Buffer { elem, .. } => vec![*elem],
+            ParamKind::Scalar { ty, .. } => vec![*ty],
+            ParamKind::Struct { fields } => fields.iter().map(|f| f.ty).collect(),
+        };
+        if let Some(t) = tys.into_iter().find(|t| types::is_union_batch1(*t)) {
+            return refuse(t);
+        }
+    }
+    if let Some(l) = k.locals.iter().find(|l| types::is_union_batch1(l.elem)) {
+        return refuse(l.elem);
+    }
+    if let Some(a) = k.allocs.iter().find(|a| types::is_union_batch1(a.elem)) {
+        return refuse(a.elem);
+    }
+    Ok(())
 }
 
 /// A launch has no zero extent, a subgroup range is non-empty and starts at 1 or more, and clusters (if any) tile the grid.

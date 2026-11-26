@@ -212,3 +212,15 @@ vendored file is a snapshot by definition. Staleness is caught by re-copying at
 each schema event — the manifest carries `structure_key_schema_version`, so a
 copy taken from a newer schema fails the version assertion immediately rather
 than quietly widening the set.
+
+### Re-vendored 2026-11-26 from KISS `a9ad8cf` (0.24.0, `sk8`, union batch 1; board 501 "A" and board 515)
+
+One re-vendor across KISS 0.19.0 to 0.24.0 (this crate was last vendored at `11407f7`, 0.18.0): the three files are copied verbatim from `a9ad8cf` (KISS#848), `git show a9ad8cf:conformance/corpus/<file>`.
+
+| File | KISS blob | sha256 | bytes |
+|---|---|---|---|
+| `dtype_manifest.json` | `44731168f683df273e7cf16c91096d75fc994a67` | `9602ab304ff5c61db8dfc5af439cedbefaeef8433fe068d51c9935024c2fe022` | 4504 |
+| `structure_key_vectors.json` | `74f327af4ca29bbc3397d41a42855b97b98032de` | `1e10c2e6d00de88b0d189d68c3d0da8e6b5d1072ae810c7d79cf972d4e2f73fd` | 43155 |
+| `structure_key_derivation_vectors.json` | `c11f2bbbabd3f5928460b8bcec7a6be371d1a4ab` | `e8d5065dd35f3ac0da413fe7cb40e61b0ec0100bb600ecce86b9830b466118f4` | 79694 |
+
+What it required here (plan E1a, `docs/design-union-batch1-consumer.md`): seven `ElementKind` rows appended after `F6E3M2` (`F128`, `I128`, `U128`, `I256`, `U256`, `F8E3M4`, `F8UE4M3`; tokens `f128`, `i128`, `u128`, `i256`, `u256`, `f8e3m4`, `f8ue4m3`, §6.1-0017 to -0020); the recognition set 27 to 34 and usable 24 to 31; `f8ue4m3` joins the scale types that decline at operand 0 (`ScaleDtypeAtOperand0`, vector `union_ue4m3_at_operand0_declines`); the `vulkan` vocabulary version pin 6 to 8 (KISS 0.19.0 and 0.21.0; this crate's byte-match leg runs `cuda` and the one `vulkan` vector, both still match). **Not built here, named:** four derivation vectors (`ctr_two_k_axes_product_8x16`, `ctr_three_k_axes_product_large`, `ctr_extra_k_axis_repeats_k_declines`, `ctr_extra_k_axis_is_m_declines`, §6.6-0023a, the K role set `ContractionRoles::k_more`) are listed in `KNOWN_GAP` of `tests/kiss_derivation_vectors.rs` and are plan phase E4.

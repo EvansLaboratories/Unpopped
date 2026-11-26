@@ -15,6 +15,8 @@ use super::*;
 /// - **`F8E8M0` / `F8E6M2`** — MX shared block **scales** (KISS-CLASSIFY
 ///   §6.1-0013): a sibling operand that scales a block, **never an element value
 ///   dtype a kernel computes in**. A kernel does not compute *in* a scale.
+/// - **`F128` / `I128` / `U128` / `I256` / `U256` / `F8E3M4` / `F8UE4M3`** — union batch 1 (KISS 0.24.0, §6.1-0017 to
+///   -0020): storage and key identity only until the casts, the wide oracle integer and the software binary128 land.
 /// - **`F4E2M1` / `F6E2M3` / `F6E3M2`** — OCP MX **element** formats
 ///   (§6.1-0014): storage and key identity only until a codec lands (no
 ///   `oracle::elem_size`, no emitter carrier). Added with the rows themselves, so
@@ -44,6 +46,15 @@ pub(super) fn check_dtype_is_a_compute_dtype(dtype: ElementKind) -> Result<(), P
         }
         ElementKind::F4E2M1 | ElementKind::F6E2M3 | ElementKind::F6E3M2 => {
             "an OCP MX ELEMENT format (KISS-CLASSIFY 6.1-0014) — sub-byte storage              and key identity only; no oracle sizing or emitter codec exists yet"
+        }
+        ElementKind::F128
+        | ElementKind::I128
+        | ElementKind::U128
+        | ElementKind::I256
+        | ElementKind::U256
+        | ElementKind::F8E3M4
+        | ElementKind::F8UE4M3 => {
+            "a union batch 1 dtype (KISS 0.24.0, 6.1-0017 to 6.1-0020) - storage and key identity only until the casts, the wide oracle integer and the software binary128 land; the oracle cannot size or hold it"
         }
         _ => return Ok(()),
     };

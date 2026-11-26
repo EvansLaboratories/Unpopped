@@ -106,9 +106,11 @@ fn expected(dt: ElementKind) -> Spelling {
         //     dtypes at sk4, but never an element compute dtype.
         //   * `F4E2M1`/`F6E2M3`/`F6E3M2` are the OCP MX ELEMENT formats (§6.1-0014):
         //     sub-byte storage and key identity only until a codec lands.
-        Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 | F4E2M1 | F6E2M3 | F6E3M2 => {
-            Spelling::Declined
-        }
+        //   * `F128`/`I128`/`U128`/`I256`/`U256`/`F8E3M4`/`F8UE4M3` are union batch 1 (KISS 0.24.0, §6.1-0017 to -0020):
+        //     storage and key identity only; C99 spells none of them, so they are declined by name until a codec or a wide
+        //     integer lands (plan E1b, E2, E3).
+        Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 | F4E2M1 | F6E2M3 | F6E3M2 | F128 | I128
+        | U128 | I256 | U256 | F8E3M4 | F8UE4M3 => Spelling::Declined,
     }
 }
 

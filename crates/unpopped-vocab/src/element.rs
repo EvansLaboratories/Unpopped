@@ -1233,6 +1233,27 @@ pub enum ElementKind {
     /// OCP MX v1.0 FP6 element, E3M2 (1 + 3 + 2, bias 3, no inf/NaN), token
     /// `f6e3m2`. 6-bit storage, sub-byte. Same terms as [`F4E2M1`](Self::F4E2M1).
     F6E3M2,
+    /// IEEE-754 binary128 (1 + 15 + 112), token `f128` (KISS-CLASSIFY §6.1-0018, KISS 0.24.0, board 501 and 515). 128-bit
+    /// storage. **Storage and key identity only here** (union batch 1, plan E1): the oracle and every emitter decline an
+    /// operation on it by name until a software binary128 lands (plan E3).
+    F128,
+    /// Signed 128-bit two's-complement integer, token `i128` (§6.1-0017). Storage and key identity only until the wide
+    /// oracle integer lands (plan E2); operations decline by name.
+    I128,
+    /// Unsigned 128-bit integer, token `u128` (§6.1-0017). Same terms as [`I128`](Self::I128).
+    U128,
+    /// Signed 256-bit two's-complement integer, token `i256` (§6.1-0017). Same terms as [`I128`](Self::I128).
+    I256,
+    /// Unsigned 256-bit integer, token `u256` (§6.1-0017). Same terms as [`I128`](Self::I128).
+    U256,
+    /// IEEE-style FP8 E3M4 (1 + 3 + 4, bias 3, with infinity and NaN), token `f8e3m4` (§6.1-0019; taken from LLVM
+    /// `APFloat` `semFloat8E3M4` and `ml_dtypes`, which agree; Mojo's docstring reads it finite-only and KISS did not adopt
+    /// that). Storage and key identity until the casts land (plan E1b).
+    F8E3M4,
+    /// Unsigned FP8 E4M3 **scale** (no sign bit, 4 + 3, bias 7, no infinity, NaN `0x7F`, range `[0, 448]`), token `f8ue4m3`
+    /// (§6.1-0020; the NVFP4 block scale, sourced to NVIDIA/cutlass `5c179ede` `float8.h` and `exmy_base.h`). A scale type
+    /// like [`F8E8M0`](Self::F8E8M0). Storage and key identity until the casts land (plan E1b).
+    F8UE4M3,
 }
 
 impl ElementKind {
@@ -1246,13 +1267,13 @@ impl ElementKind {
     /// checks half the property (a *missing* token and an *extra* one are
     /// different bugs).
     ///
-    /// # This is 28 entries against a 27-token vocabulary
+    /// # This is 35 entries against a 34-token vocabulary
     ///
     /// Not a discrepancy. [`F32Strict`](Self::F32Strict) is a derivation input
     /// on the operand channel, not a key dtype: it folds to
     /// [`F32`](Self::F32) and spells the same `f32` token (sk3 D4 retired
-    /// `f32s`; §6.1-0005 forbids a strict-precision dtype token). So 28 variants
-    /// produce 27 distinct tokens, and **the token image is the thing to compare
+    /// `f32s`; §6.1-0005 forbids a strict-precision dtype token). So 35 variants
+    /// produce 34 distinct tokens, and **the token image is the thing to compare
     /// across implementations** — comparing variant counts manufactures
     /// divergence that isn't on the wire.
     ///
@@ -1263,7 +1284,7 @@ impl ElementKind {
     /// every match site including the token codec. If a new variant carries a
     /// §6.1 token but is missed here, `tests/kiss_dtype_manifest.rs` fails — the
     /// vendored manifest would list a token this list cannot produce.
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 35] = [
         Self::F16,
         Self::Bf16,
         Self::F32,
@@ -1292,6 +1313,13 @@ impl ElementKind {
         Self::F4E2M1,
         Self::F6E2M3,
         Self::F6E3M2,
+        Self::F128,
+        Self::I128,
+        Self::U128,
+        Self::I256,
+        Self::U256,
+        Self::F8E3M4,
+        Self::F8UE4M3,
     ];
 
     /// Whether this dtype is **reserved** by KISS-Classify §6.1-0001: part of

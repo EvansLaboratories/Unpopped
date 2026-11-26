@@ -1826,6 +1826,14 @@ pub enum KernelError {
     },
     /// A launch with a zero extent, or a subgroup range that is empty or starts at 0.
     BadLaunch,
+    /// A kernel declares (as its compute type, a parameter, a local or an allocation) a dtype that is recognised but not
+    /// computed yet: `F128`, `I128`, `U128`, `I256`, `U256`, `F8E3M4`, `F8UE4M3` (union batch 1, KISS 0.24.0; plan E1a). It is
+    /// declined by name, never run: the oracle holds no value of these types until the casts, the wide integer and the software
+    /// binary128 land (plan E1b, E2, E3).
+    DtypeNotComputed {
+        /// The dtype.
+        dtype: ElementKind,
+    },
     /// `LaneId`, `SubgroupId` or `SubgroupSize` in a launch that names no subgroup size.
     SubgroupIdWithoutSubgroup,
     /// An allocation declared in `MemorySpace::Global` (a global buffer is a buffer parameter).

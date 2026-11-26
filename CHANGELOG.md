@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.0` — **BREAKING**: seven new `ElementKind` rows from KISS 0.24.0 union batch 1 (`F128` `I128` `U128` `I256` `U256` `F8E3M4` `F8UE4M3`)
+
+`ElementKind` is not `non_exhaustive`, so every external exhaustive match breaks (baracuda emit and parse, vulkane, bonefish, fishstringer, rockfish, fuel `element_kind_to_dtype`); each must decline the seven by name until it lowers them. The rows are storage and key identity only (KISS 6.1-0017 to -0020: `f128`, `i128`, `u128`, `i256`, `u256`, `f8e3m4`, `f8ue4m3`, appended after `f6e3m2`; `ElementKind::ALL` is 35 for 34 tokens): the key codec, `dtype_storage_bits` and `dtype_numeric_kind` carry them; `F8UE4M3` is a scale type that declines at operand 0; `check_kernel` refuses a kernel that declares one with the new `KernelError::DtypeNotComputed` (a `non_exhaustive` enum: no compile break) and a `Cast` into one stays `IllegalCast`; `unpopped-cpu-c` declines them. The KISS corpus is re-vendored at `a9ad8cf` (0.24.0); four K-role-set derivation vectors (6.6-0023a) are the named gap for a later phase. Plan: `docs/design-union-batch1-consumer.md`. Verified: the manifest, derivation (88 vectors) and byte-match tests pass; a mutant with the declaration guard off fails the refusal test.
+
+---
+
 ## `0.59.3` — Docs: one batch of design notes and patent-hold rewrites (board 500 plan, 502 holds, Q1 table, tcgen05.cp note, Slang by-design rows)
 
 Six docs branches in one: (1) the combined board-500 plan `docs/design-tile-and-schedule-plan.md` (Q1 A tile value, Q2 A Schedule vocabulary; phases, one breaking release B1, migration sheet, patent gates, the cluster ruling that Stmt, MemorySpace and ElementKind stay exhaustive) with dated SUPERSEDED notes at ROADMAP P9 and U8, `options-u8-copy-atoms.md`, `ir-union-rulings.md` and `design-opaque-tile-mma.md`; (2) the cluster-flag patent hold replaced by the narrow no-fusing hold (US20230315655A1) and (3) the warp-role hold narrowed (US12699602B1), each with its date, basis and conditions; (4) section 7 of `ir-union-rulings.md`, the Q1 table of multi-result tile ops from the union rows; (5) note 5l of `design-wgmma-descriptors.md` on `tcgen05.cp` placement (two sources; multicast UNSPECIFIED-pending) and ROADMAP rows U61 (Tcgen05Cp), U62 (a simplest-launch second fixture form, with the answers so far) and U64 (wide integers); (6) Slang union rows 50 and 52 scored Partial / No by design (KISS#849). Docs only, no gate.
