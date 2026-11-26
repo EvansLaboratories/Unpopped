@@ -130,10 +130,11 @@ fn a_return_on_threadidx_y_is_a_whole_subgroup_exit_when_the_subgroup_size_is_st
 
 #[test]
 fn the_mmvq_guard_shape_stays_admitted() {
-    // The census wall (`unpopped-convert/tests/kernel_body_early_exit_callee.rs`, 57 gguf mmvq kernels): `if (row >= nrows) return;`
+    // The census wall (`unpopped-convert/tests/kernel_body_early_exit_callee.rs`, the gguf mmvq kernels (19 early-return-then-collective kernels in baracuda source at eae3a6dcf, none deriving the guard from `threadIdx.x`; a census figure of 57 is not reproduced by source text and may count instantiations)): `if (row >= nrows) return;`
     // then a warp reduction, with `row` from the block index or a scalar parameter. Both are uniform across a subgroup's lanes, so
-    // the `Return` is a whole-subgroup exit. (The 57 kernels themselves are the census corpus, not in this repository: the lifted
-    // shape is what is pinned here, and it also runs in the `unpopped-convert` test above.)
+    // the `Return` is a whole-subgroup exit. (The kernels are baracuda's, `crates/baracuda-kernels-sys/kernels/gguf/mmvq.cu`, `include/baracuda_gguf.cuh` and
+    // `include/baracuda_mmvq_batched.cuh` at eae3a6dcf, not in this repository; the guard forms are pinned below and the lifted
+    // shape also runs in the `unpopped-convert` test above.)
     let guard = |cond: ScalarExpr| vec![if_(cond, vec![Stmt::Return]), sum(Scope::Subgroup)];
     let block_row = ScalarExpr::Exec(ExecId::BlockIdx(0));
     assert_eq!(check_kernel(&standard(guard(block_row))), Ok(()));
@@ -143,6 +144,56 @@ fn the_mmvq_guard_shape_stays_admitted() {
     assert_eq!(check_kernel(&with_param), Ok(()));
     // the control: the same guard on a lane-dependent value is the refused shape
     after_return(&standard(guard(thread(0))));
+}
+
+#[test]
+fn the_exact_baracuda_guard_forms_are_admitted_and_the_threadidx_x_variant_is_refused() {
+    // `mmvq.cu`: `row = blockIdx.x * blockDim.y + threadIdx.y; if (row >= nrows) return;` then a `__shfl_xor_sync` butterfly, in a
+    // launch of block (WARP_SIZE = 32, 1 or GGML_CUDA_MMV_Y, 1): the launch states the subgroup size (32) and block.x = 32.
+    // `baracuda_mmvq_batched.cuh`: `row = blockIdx.x; if (row >= n_rows_per_expert) return;`.
+    // Locals: 0 result, 1 `nrows`, 2 `row`.
+    let kernel_with = |block: [u32; 3], row: ScalarExpr| {
+        let mut k = kernel(
+            block,
+            (32, 32),
+            vec![
+                Stmt::Let {
+                    local: 2,
+                    init: row,
+                },
+                if_(
+                    ScalarExpr::Binary(
+                        BinaryOp::CmpGe,
+                        Box::new(ScalarExpr::Local(2)),
+                        Box::new(ScalarExpr::Local(1)),
+                    ),
+                    vec![Stmt::Return],
+                ),
+                sum(Scope::Subgroup),
+            ],
+        );
+        k.params = vec![Param::scalar("nrows", U32, 1)];
+        k.locals.push(LocalDecl::scalar(U32));
+        k.locals.push(LocalDecl::scalar(U32));
+        k
+    };
+    let blockdim_y = ScalarExpr::Exec(ExecId::BlockDim(1));
+    let mmvq_row = ScalarExpr::Add(
+        Box::new(ScalarExpr::Mul(
+            Box::new(ScalarExpr::Exec(ExecId::BlockIdx(0))),
+            Box::new(blockdim_y),
+        )),
+        Box::new(thread(1)),
+    );
+    for block in [[32, 1, 1], [32, 4, 1]] {
+        assert_eq!(check_kernel(&kernel_with(block, mmvq_row.clone())), Ok(()), "{block:?}");
+    }
+    assert_eq!(
+        check_kernel(&kernel_with([32, 1, 1], ScalarExpr::Exec(ExecId::BlockIdx(0)))),
+        Ok(())
+    );
+    // the refused variant: the row from `threadIdx.x`
+    after_return(&kernel_with([32, 1, 1], thread(0)));
 }
 
 #[test]

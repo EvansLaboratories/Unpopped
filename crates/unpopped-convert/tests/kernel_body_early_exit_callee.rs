@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! **Census wall (found by the census as `Invalid: BarrierDivergent`, 57 gguf mmvq kernels): a guard `return` in a `void` function
+//! **Census wall (found by the census as `Invalid: BarrierDivergent`, the gguf mmvq kernels (19 early-return-then-collective kernels in baracuda source at eae3a6dcf, none deriving the guard from `threadIdx.x`; a census figure of 57 is not reproduced by source text and may count instantiations)): a guard `return` in a `void` function
 //! the kernel calls last, followed by a warp shuffle.** `if (row >= nrows) return; ...; __shfl_xor_sync(..)` inlined as
 //! `if (c) {} else { rest }` put the shuffle under a branch, which the checker rightly refuses. When the call is the last
 //! statement of the kernel's own body the callee's `return` leaves the kernel, so it lowers as `Stmt::Return` and the rest stays in
