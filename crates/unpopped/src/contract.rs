@@ -1982,9 +1982,9 @@ fn blurb(op: &OpDef, key: &StructureKey, dtype: &str, is_fusion: bool) -> String
 /// token here; `Fp8E5M2` and complex have no §5 slot yet — all return `None`.
 fn fkc_dtype(dt: ElementKind) -> Option<&'static str> {
     use ElementKind::{
-        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E6M2, F8E8M0, F16, F32,
-        F32Strict, F64, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4,
-        U8, U16, U32, U64, F128, F8E3M4, F8UE4M3, I128, I256, U128, U256,
+        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E3M4, F8E6M2, F8E8M0,
+        F8UE4M3, F16, F32, F32Strict, F64, F128, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4,
+        I8, I16, I32, I64, I128, I256, U4, U8, U16, U32, U64, U128, U256,
     };
     Some(match dt {
         F32 | F32Strict => "F32",
@@ -2021,9 +2021,9 @@ fn fkc_dtype(dt: ElementKind) -> Option<&'static str> {
 
 fn dtype_short(dt: ElementKind) -> &'static str {
     use ElementKind::{
-        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E6M2, F8E8M0, F16, F32,
-        F32Strict, F64, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4,
-        U8, U16, U32, U64, F128, F8E3M4, F8UE4M3, I128, I256, U128, U256,
+        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E3M4, F8E6M2, F8E8M0,
+        F8UE4M3, F16, F32, F32Strict, F64, F128, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4,
+        I8, I16, I32, I64, I128, I256, U4, U8, U16, U32, U64, U128, U256,
     };
     match dt {
         F32 | F32Strict => "f32",
@@ -2085,13 +2085,14 @@ fn vec_short(v: VecWidth) -> &'static str {
 
 fn dtype_size(dt: ElementKind) -> u32 {
     use ElementKind::{
-        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E6M2, F8E8M0, F16, F32,
-        F32Strict, F64, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4,
-        U8, U16, U32, U64, F128, F8E3M4, F8UE4M3, I128, I256, U128, U256,
+        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E3M4, F8E6M2, F8E8M0,
+        F8UE4M3, F16, F32, F32Strict, F64, F128, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4,
+        I8, I16, I32, I64, I128, I256, U4, U8, U16, U32, U64, U128, U256,
     };
     match dt {
         I4 | U4 | B1 | F4E2M1 | F6E2M3 | F6E3M2 => 1, // sub-byte: round up to a byte for the declared estimate
-        I8 | U8 | Bool | Fp8E4M3FN | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 | F8E3M4 | F8UE4M3 => 1,
+        I8 | U8 | Bool | Fp8E4M3FN | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2
+        | F8E3M4 | F8UE4M3 => 1,
         F16 | Bf16 | I16 | U16 => 2,
         F32 | F32Strict | I32 | U32 => 4, // U32: 4-byte index dtype
         F64 | I64 | U64 | Complex64 => 8,
