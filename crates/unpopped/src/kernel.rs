@@ -406,41 +406,56 @@ impl OperandLayout {
     /// is the XOR on the address.
     #[must_use]
     pub fn element_offset(&self, mn: usize, k: usize) -> Option<usize> {
+        self.element_offset_sized(mn, k, 2)
+    }
+
+    /// [`Self::element_offset`] for an element of `elem_bytes` bytes (1 for the 8-bit floats, 2 for the 16-bit kinds): the
+    /// 16-byte core-matrix row holds `T = 16 / elem_bytes` elements (PTX ISA 9.5: `T = 128 / sizeof_bits`, so 16 for 8-bit),
+    /// and `k` runs to `2T` (32 for 8-bit). `RowMajor` is `mn * 2T + k`. The XOR works on the byte address, so a swizzled
+    /// 8-bit offset is XORed in bytes (an element is a byte).
+    #[must_use]
+    pub fn element_offset_sized(&self, mn: usize, k: usize, elem_bytes: usize) -> Option<usize> {
+        let t = 16 / elem_bytes;
         match *self {
-            Self::RowMajor => Some(mn * 16 + k),
+            Self::RowMajor => Some(mn * 2 * t + k),
             Self::Canonical {
                 major,
                 swizzle,
                 lbo,
                 sbo,
             } => {
-                let sbo = sbo as usize / 2;
+                let sbo = sbo as usize / elem_bytes;
                 let s = 1usize << swizzle.bits();
                 let pre = match (major, swizzle) {
                     (Major::K, Swizzle::None) => {
-                        let lbo = lbo? as usize / 2;
-                        (mn % 8) * 8 + (mn / 8) * sbo + k % 8 + (k / 8) * lbo
+                        let lbo = lbo? as usize / elem_bytes;
+                        (mn % 8) * t + (mn / 8) * sbo + k % t + (k / t) * lbo
                     }
                     (Major::MN, Swizzle::None) => {
-                        let lbo = lbo? as usize / 2;
-                        mn % 8 + (mn / 8) * sbo + (k % 8) * 8 + (k / 8) * lbo
+                        let lbo = lbo? as usize / elem_bytes;
+                        mn % t + (mn / t) * sbo + (k % 8) * t + (k / 8) * lbo
                     }
-                    (Major::K, _) => (mn % 8) * (s * 8) + (mn / 8) * sbo + k,
+                    (Major::K, _) => (mn % 8) * (s * t) + (mn / 8) * sbo + k,
                     (Major::MN, _) => {
-                        let lbo = lbo? as usize / 2;
-                        mn % 8
-                            + ((mn / 8) % s) * 8
-                            + (mn / (8 * s)) * lbo
-                            + (k % 8) * (s * 8)
+                        let lbo = lbo? as usize / elem_bytes;
+                        mn % t
+                            + ((mn / t) % s) * t
+                            + (mn / (t * s)) * lbo
+                            + (k % 8) * (s * t)
                             + (k / 8) * sbo
                     }
                 };
-                let byte = pre * 2;
+                let byte = pre * elem_bytes;
                 let swizzled = byte ^ (((byte >> 7) & (s - 1)) << 4);
-                Some(swizzled / 2)
+                Some(swizzled / elem_bytes)
             }
         }
     }
+}
+
+/// The default `m` of a [`Stmt::Tcgen05Mma`]: 128.
+const fn default_tcgen05_m() -> u32 {
+    128
 }
 
 /// A sequence of statements; a block opens a scope.
@@ -862,6 +877,16 @@ pub enum Stmt {
         /// How the `B` tile sits in its allocation (default `RowMajor`).
         #[serde(default)]
         b_layout: OperandLayout,
+        /// `A` from **registers** (`wgmma.mma_async` with `A` in registers; PTX ISA 9.5 9.7.17.5.1.2, Figure 151): the
+        /// `Private` allocation (index into [`KernelFn::allocs`]) holding this thread's fragment of `A`, 8 elements of
+        /// `ab` `a0 .. a7` ("four .f16x2 registers"). Element `i` of the thread `l` of warp `w` is row
+        /// `16 w + l / 4 + 8 * ((i / 2) % 2)`, column `2 * (l % 4) + i % 2 + 8 * (i / 4)` of the 64 x 16 `A`. When
+        /// `Some`, `a` and `a_layout` are not read (give `a` as the fragment's own `Place::Alloc`, index 0) and a layout
+        /// on `A` is refused by the checker. The fragment is read when the statement executes. Register-`A` has no
+        /// transposed form (the ISA's register-`A` syntax has only `imm-trans-b`), and `wgmma.fence` before it is the
+        /// emitter's, as for the accumulator.
+        #[serde(default)]
+        a_regs: Option<u32>,
     },
     /// Close this thread's open [`Stmt::Wgmma`] operations into one group (`wgmma.commit_group`). A commit with no
     /// open operation still makes a group, so that wait counts line up.
@@ -896,7 +921,14 @@ pub enum Stmt {
         /// The input element type: `F16` or `Bf16`.
         #[serde(with = "crate::text::ek")]
         ab: ElementKind,
-        /// The accumulator element type: `F32`.
+        /// The accumulator element type (`dtype`, instruction-descriptor bits 4-5; `F16 = 0` and `F32 = 1` for `.kind::f16` and
+        /// `.kind::f8f6f4`, PTX ISA 9.5 Tables 52-53; CUTLASS `CFormat` agrees): `F32`, or `F16`. With `F16`, "the
+        /// sub-word elements of matrix D are expected not to be packed within a 32-bit Tensor Memory word ... a Tensor
+        /// Memory word would contain a single 16-bit element in its lower 16 bits" (PTX 9.7.18.10.5): the `Tensor`
+        /// allocation is `U32` (words), the oracle writes the binary16 bits into the low 16 bits and **zero** into the upper
+        /// 16 (PTX does not say what they hold: a kernel must not read them). The sum is rounded to binary16 once, from the
+        /// exact `f64` sum plus the old `D` (PTX does not say how an `F16` accumulator rounds inside the instruction: this is
+        /// the oracle's contract, not a measurement of hardware).
         #[serde(with = "crate::text::ek")]
         acc: ElementKind,
         /// The first element of the `A` tile: a `Place::Alloc` of a `Shared` allocation.
@@ -909,13 +941,66 @@ pub enum Stmt {
         d_col: ScalarExpr,
         /// Zero: `D = A.B`; nonzero: `D = A.B + D`. An integer expression.
         scale_d: ScalarExpr,
-        /// How the 128-row `A` tile sits in its allocation (default `RowMajor`; see [`OperandLayout`]).
+        /// How the `m`-row `A` tile sits in its allocation (default `RowMajor`; see [`OperandLayout`]).
         #[serde(default)]
         a_layout: OperandLayout,
         /// How the `B` tile sits in its allocation (default `RowMajor`).
         #[serde(default)]
         b_layout: OperandLayout,
+        /// Rows of `A` and `D`: 128 (the default) or 64 (`tcgen05.mma.cta_group::1` with `M = 64`, non-`.ws`, **Layout F**,
+        /// PTX ISA 9.5 9.7.18.10.5.6, Figures 221 and 222: "4x1 (1/2 datapath utilized)"). With `m = 128` row `r` of `D` is
+        /// tensor-memory lane `r`. With `m = 64` row `r` is lane `32 * (r / 16) + d_lane + r % 16`: rows `16 w .. 16 w + 15`
+        /// fill 16 of the 32 lanes of warp `w`'s quadrant, the lower half (`d_lane` 0) or the upper half (`d_lane` 16).
+        #[serde(default = "default_tcgen05_m")]
+        m: u32,
+        /// The tensor-memory lane alignment of `D` for `m = 64`: 0 or 16 (the table's "Layout 0 or 16"; Figure 222's
+        /// addresses `0x0000.0XXX | 0x0010.0XXX`, ...). Must be 0 for `m = 128`.
+        #[serde(default)]
+        d_lane: u32,
+        /// The element type of `B` when it differs from `A`'s (`ab`): `None` (the default) means `ab`. PTX ISA 9.5 Table 53
+        /// gives `.kind::f8f6f4` separate `atype` and `btype` fields (bits 7-9 and 10-12), so `A` and `B` may be different
+        /// 8-bit float types (`Fp8E4M3FN`, `Fp8E5M2`); CUTLASS `mma_sm100_desc.hpp` agrees. For `F16`/`Bf16` the two must
+        /// be the same type (`.kind::f16` has one `atype`/`btype` pair and PTX names no mixed form here). With 8-bit
+        /// inputs `K` is 32 per instruction (`.kind::f8f6f4` dense) and a `Canonical` layout's core-matrix row is 16
+        /// elements. `acc` is `F32` (a `Tensor` allocation of `F32`, `I32` or `U32`) or `F16` (see `acc`).
+        #[serde(default, with = "crate::text::ek_opt")]
+        b_ty: Option<ElementKind>,
+        /// Negate every element of `A` (instruction-descriptor bit 13, PTX ISA 9.5 Tables 52-54 and 9.7.18.10.1 Table 64:
+        /// supported for `.kind::f16`, `.kind::tf32` and `.kind::f8f6f4`; CUTLASS `mma_sm100_desc.hpp` `a_negate_` agrees,
+        /// "valid only for F32F16Format and MXF8F6F4Format"). The product's sign flips; both negated cancel.
+        #[serde(default)]
+        negate_a: bool,
+        /// Negate every element of `B` (bit 14); see `negate_a`.
+        #[serde(default)]
+        negate_b: bool,
     },
+    /// `tcgen05.alloc.cta_group::1` (ROADMAP U8c slice 4): allocate `ncols` columns of tensor memory, the whole of the
+    /// declared `Tensor` allocation `d` (`128 * ncols` elements). PTX ISA 9.5 9.7.18.1.2 and 9.7.18.7.1: "The unit of
+    /// allocation is 32 columns and the number of columns being allocated must be a power of 2", `nCols` "in the range
+    /// [32, 512]", "All of the Tensor Memory that was allocated in a kernel, must be explicitly deallocated before the
+    /// kernel exits", "it is illegal for a CTA to perform tcgen05.alloc after any of its constituent threads execute
+    /// tcgen05.relinquish_alloc_permit", "The number of columns allocated must not increase between any two allocations
+    /// in the execution order within the CTA". `.sync.aligned` means a whole warp issues it: the oracle acts on the
+    /// warp's first lane and ignores the other lanes. A `Tcgen05Mma` or `Tcgen05Ld` on a `Tensor` allocation that is not
+    /// allocated traps (`KernelTrap::TmemMisuse`). The address `tcgen05.alloc` writes to `[dst]` is not modelled: the
+    /// allocation is named by its index and addressed by column. `.exclusive` and `cta_group::2` are not modelled.
+    Tcgen05Alloc {
+        /// The `Tensor` allocation (index into [`KernelFn::allocs`]).
+        d: u32,
+        /// Columns: a power of two from 32 to 512, equal to the allocation's declared columns.
+        ncols: u32,
+    },
+    /// `tcgen05.dealloc.cta_group::1`: release the `ncols` columns of the allocated `Tensor` allocation `d` (the same
+    /// count it was allocated with). Issued by one warp, as [`Stmt::Tcgen05Alloc`].
+    Tcgen05Dealloc {
+        /// The `Tensor` allocation.
+        d: u32,
+        /// Columns, as allocated.
+        ncols: u32,
+    },
+    /// `tcgen05.relinquish_alloc_permit.cta_group::1`: this CTA will allocate no more tensor memory. A later
+    /// [`Stmt::Tcgen05Alloc`] in the block traps.
+    Tcgen05RelinquishPermit,
     /// `tcgen05.commit`: arrive (a release-class arrival, like [`Stmt::MbarArrive`] without a transaction count) on the
     /// `mbarrier` at `bar` once the thread's earlier [`Stmt::Tcgen05Mma`] have completed. In the oracle they completed at
     /// issue.
@@ -994,6 +1079,27 @@ pub enum Stmt {
         src: Place,
         /// How many consecutive elements; `elems` times the element size is a multiple of 16 bytes.
         elems: u32,
+        /// The `mbarrier` (a `Shared` 64-bit element) the copy completes on.
+        bar: Place,
+    },
+    /// Fill a bit-addressed FP4 tile: copy `groups` groups of 16 `F4E2M1` elements from the packed global buffer place `src`
+    /// into the **byte** (`U8`) `Shared` allocation place `dst`, one 16-byte slot per group: the 8 data bytes (KISS packing,
+    /// two per byte, low nibble = even index) then 8 bytes of padding (PTX ISA 9.5 Figure 207, "16 elements of 4-bit
+    /// floating point type, with 64-bit padding at the end"), issued by one thread and completing on an `mbarrier` like
+    /// [`Stmt::CopyBulk`] (`groups * 16` bytes). It moves whole bytes, so it is not a sub-byte `Store` (U8c design note
+    /// 5j; U9b's read-only sub-byte buffers are unchanged). The pad bytes are written zero by the oracle and are
+    /// unspecified by PTX. FP6 sources wait on a KISS pin for their buffer packing. **Tags:** the padding rule is PTX's for
+    /// `.kind::mxf8f6f4`; for the unscaled `.kind::f8f6f4` it is "inferred, CUTLASS-shared tags, PTX silent" (PM ruling
+    /// 2026-11-26), and the nibble order inside the slot is assumed to carry over from the buffer packing.
+    ///
+    /// **Patent note:** the patent note on [`Stmt::CopyBulk`] applies; emitters for other manufacturers decline it.
+    CopyUnpack {
+        /// The first destination byte: a `Shared` `U8` allocation place.
+        dst: Place,
+        /// The first source element: a place of a readable global `F4E2M1` buffer.
+        src: Place,
+        /// How many groups of 16 elements (each becoming one 16-byte slot).
+        groups: u32,
         /// The `mbarrier` (a `Shared` 64-bit element) the copy completes on.
         bar: Place,
     },

@@ -67,6 +67,7 @@ pub(super) fn check_layout(
     layout: &OperandLayout,
     rows: usize,
     max_lbo: u32,
+    elem_bytes: usize,
 ) -> Result<(), &'static str> {
     let OperandLayout::Canonical {
         major,
@@ -107,11 +108,11 @@ pub(super) fn check_layout(
             "a Canonical operand layout on a tile whose start is not a constant (the descriptor needs a known, aligned address)",
         );
     };
-    // 16-bit elements: 2 bytes each; the start is a multiple of the swizzle pattern (16 bytes with none)
+    // the start is a multiple of the swizzle pattern (16 bytes with none), in elements of `elem_bytes`
     let Ok(start) = usize::try_from(*start) else {
         return Err("a negative tile start");
     };
-    if start % (swizzle.pattern_bytes() as usize / 2) != 0 {
+    if start % (swizzle.pattern_bytes() as usize / elem_bytes) != 0 {
         return Err(
             "a tile start that is not a multiple of the swizzle pattern (1024 / 512 / 256 bytes; 16 with none)",
         );
@@ -121,8 +122,8 @@ pub(super) fn check_layout(
     };
     let mut seen = std::collections::HashSet::new();
     for mn in 0..rows {
-        for kk in 0..16 {
-            let Some(off) = layout.element_offset(mn, kk) else {
+        for kk in 0..(32 / elem_bytes) {
+            let Some(off) = layout.element_offset_sized(mn, kk, elem_bytes) else {
                 return Err("an operand layout with no element offset");
             };
             if start + off >= len as usize {
@@ -148,6 +149,7 @@ pub(super) fn check_wgmma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), Ker
         scale_d,
         a_layout,
         b_layout,
+        a_regs,
     } = st
     else {
         unreachable!("check_wgmma is called for a Wgmma");
@@ -162,10 +164,28 @@ pub(super) fn check_wgmma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), Ker
     if *acc != ElementKind::F32 {
         return Err(refuse("an accumulator type other than f32"));
     }
-    check_tile(k, a, *ab, sc)?;
+    match a_regs {
+        Some(f) => {
+            // A in registers: a Private fragment of 8 input elements, no layout (it is not in memory)
+            let ok = k.allocs.get(*f as usize).is_some_and(|x| {
+                x.space == MemorySpace::Private && x.elem == *ab && x.extent == Extent::Static(8)
+            });
+            if !ok {
+                return Err(refuse(
+                    "an A fragment that is not a Private allocation of exactly 8 input elements",
+                ));
+            }
+            if *a_layout != OperandLayout::RowMajor {
+                return Err(refuse("a layout on an A operand that is in registers"));
+            }
+        }
+        None => {
+            check_tile(k, a, *ab, sc)?;
+            check_layout(k, a, a_layout, 64, MAX_DESCRIPTOR_OFFSET, 2).map_err(refuse)?;
+        }
+    }
     check_tile(k, b, *ab, sc)?;
-    check_layout(k, a, a_layout, 64, MAX_DESCRIPTOR_OFFSET).map_err(refuse)?;
-    check_layout(k, b, b_layout, *n as usize, MAX_DESCRIPTOR_OFFSET).map_err(refuse)?;
+    check_layout(k, b, b_layout, *n as usize, MAX_DESCRIPTOR_OFFSET, 2).map_err(refuse)?;
     let Some(frag) = k.allocs.get(*d as usize) else {
         return Err(refuse("a fragment that is not a declared allocation"));
     };

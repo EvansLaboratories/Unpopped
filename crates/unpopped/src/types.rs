@@ -1067,7 +1067,7 @@ pub(crate) fn map_children<E>(
 /// the packing convention normative alongside the token and the width).
 pub(crate) fn elem_bits(dt: ElementKind) -> usize {
     match dt {
-        ElementKind::I4 | ElementKind::U4 => 4,
+        ElementKind::I4 | ElementKind::U4 | ElementKind::F4E2M1 => 4,
         ElementKind::B1 => 1,
         other => elem_size(other) * 8,
     }
@@ -1091,7 +1091,7 @@ pub(crate) fn elem_size(dt: ElementKind) -> usize {
         // Sub-byte dtypes share a byte. `elem_size` is the CONTAINER width here,
         // not the element width — use `elem_bits` for the latter and
         // `packed_bytes` for allocation.
-        ElementKind::I4 | ElementKind::U4 | ElementKind::B1 => 1,
+        ElementKind::I4 | ElementKind::U4 | ElementKind::F4E2M1 | ElementKind::B1 => 1,
         other => panic!("oracle: unsupported dtype {other:?} (v1)"),
     }
 }

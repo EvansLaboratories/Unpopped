@@ -62,6 +62,7 @@ fn a_wgmma_is_refused_with_its_reason_and_the_control_lowers() {
         scale_d: ScalarExpr::ConstInt(0, ElementKind::U32),
         a_layout: OperandLayout::RowMajor,
         b_layout: OperandLayout::RowMajor,
+        a_regs: None,
     }]);
     let err = CpuC.lower_kernel(&with).expect_err("a wgmma is refused");
     assert!(

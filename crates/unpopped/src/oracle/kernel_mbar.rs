@@ -158,6 +158,66 @@ impl Machine<'_> {
         self.complete_tx(bar, (bits * n / 8) as i128)
     }
 
+    /// Run a `CopyUnpack`: land `groups` 16-byte slots at once (a logged write per byte by this thread: the 8 packed
+    /// data bytes of 16 elements, low nibble = even index, then 8 zero pad bytes), then complete `groups * 16` bytes on
+    /// the barrier, so a reader needs an acquire on the barrier to be ordered after the data.
+    pub(super) fn copy_unpack(
+        &mut self,
+        dst: &Place,
+        src: &Place,
+        groups: u32,
+        bar: &Place,
+    ) -> Result<(), KernelTrap> {
+        let Place::Alloc { alloc, index } = dst else {
+            return Err(KernelTrap::Unsupported(
+                "a tile fill into something other than an allocation",
+            ));
+        };
+        let Place::Alloc {
+            alloc: ba,
+            index: bi,
+        } = bar
+        else {
+            return Err(KernelTrap::Unsupported(
+                "an mbarrier that is not an allocation place",
+            ));
+        };
+        let bi = self.alloc_index(*ba, bi)?;
+        if !self.mbar_table().contains_key(&(*ba, bi)) {
+            return Err(misuse("a tile fill on an mbarrier never initialised"));
+        }
+        let at = self.alloc_index(*alloc, index)?;
+        let bytes = groups as usize * 16;
+        let len = self
+            .ctx
+            .as_ref()
+            .and_then(|c| c.mem(*alloc, MemorySpace::Shared))
+            .map_or(0, |m| m.init.len());
+        if at + bytes > len {
+            return Err(KernelTrap::AllocOutOfBounds { alloc: *alloc });
+        }
+        let vals = self.read_source(src, groups as usize * 16)?;
+        let nib = |v: &Val| match v {
+            Val::Raw(b, _) => (*b & 0xf) as i128,
+            _ => 0,
+        };
+        for g in 0..groups as usize {
+            for j in 0..16 {
+                // 8 data bytes: element 2j in the low nibble, 2j + 1 in the high one; then 8 bytes of zero padding
+                let byte = if j < 8 {
+                    nib(&vals[g * 16 + 2 * j]) | (nib(&vals[g * 16 + 2 * j + 1]) << 4)
+                } else {
+                    0
+                };
+                let at_j = at + g * 16 + j;
+                let index = ScalarExpr::ConstInt(at_j as i64, ElementKind::I64);
+                self.alloc_store(*alloc, &index, Val::Int(byte))?;
+                self.mark_async_written(*alloc, at_j);
+            }
+        }
+        self.complete_tx(bar, bytes as i128)
+    }
+
     fn mbar_wait<'k>(
         &mut self,
         bar: &Place,

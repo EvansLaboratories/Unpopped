@@ -9,6 +9,8 @@
 //! `32x32b` shape: thread `l` of warp `w` reads lane `32 (w % 4) + l`.
 
 use super::Val;
+use super::accum_policy::to_f16;
+use super::float_codec::{f16_to_f64, f32_to_f16_bits};
 use super::kernel_eval::{KernelTrap, Machine};
 use crate::exec::{ExecId, MemorySpace};
 use crate::ir::ScalarExpr;
@@ -31,16 +33,120 @@ impl Machine<'_> {
             .map_or(0, |m| m.init.len() / M)
     }
 
+    /// `tcgen05.alloc` (`alloc = true`) or `tcgen05.dealloc` for the `Tensor` allocation `d` with `ncols` columns. The
+    /// instruction is issued by a whole warp (`.sync.aligned`): the warp's first lane acts, the others do nothing.
+    pub(super) fn tcgen05_alloc(
+        &mut self,
+        d: u32,
+        ncols: u32,
+        alloc: bool,
+    ) -> Result<(), KernelTrap> {
+        let t = self.exec_val(ExecId::ThreadIdx(0))? as usize;
+        if t % 32 != 0 {
+            return Ok(());
+        }
+        let declared = self.tmem_columns(d) as u32;
+        let Some(c) = self.ctx.as_mut() else {
+            return Err(KernelTrap::Unsupported("tensor memory outside run_launch"));
+        };
+        let misuse = |what| Err(KernelTrap::TmemMisuse { what });
+        let tmem = &mut c.block.tmem;
+        if alloc {
+            if tmem.relinquished {
+                return misuse("a tcgen05.alloc after tcgen05.relinquish_alloc_permit");
+            }
+            if tmem.live.contains_key(&d) {
+                return misuse("a tcgen05.alloc of tensor memory that is already allocated");
+            }
+            if ncols != declared {
+                return misuse("a tcgen05.alloc whose nCols is not the declared column count");
+            }
+            if tmem.last_cols.is_some_and(|last| ncols > last) {
+                return misuse("the number of columns allocated increased between two allocations");
+            }
+            tmem.live.insert(d, ncols);
+            tmem.last_cols = Some(ncols);
+        } else {
+            match tmem.live.get(&d) {
+                None => return misuse("a tcgen05.dealloc of tensor memory that is not allocated"),
+                Some(&n) if n != ncols => {
+                    return misuse("a tcgen05.dealloc whose nCols is not the allocated count");
+                }
+                Some(_) => {
+                    tmem.live.remove(&d);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `tcgen05.relinquish_alloc_permit` (the warp's first lane acts).
+    pub(super) fn tcgen05_relinquish(&mut self) -> Result<(), KernelTrap> {
+        let t = self.exec_val(ExecId::ThreadIdx(0))? as usize;
+        if t % 32 == 0 {
+            if let Some(c) = self.ctx.as_mut() {
+                c.block.tmem.relinquished = true;
+            }
+        }
+        Ok(())
+    }
+
+    /// The `Tensor` allocation `d` must be allocated (PTX ISA 9.5 9.7.18.1.2).
+    fn require_tmem(&self, d: u32) -> Result<(), KernelTrap> {
+        match &self.ctx {
+            Some(c) if !c.block.tmem.live.contains_key(&d) => Err(KernelTrap::TmemMisuse {
+                what: "tensor memory used before tcgen05.alloc or after tcgen05.dealloc",
+            }),
+            _ => Ok(()),
+        }
+    }
+
     /// The `rows` rows of `K` elements of the tile at `place`.
     fn tcgen05_tile(
         &mut self,
         place: &Place,
         rows: usize,
         layout: &crate::kernel::OperandLayout,
+        k: usize,
     ) -> Result<Vec<Vec<Val>>, KernelTrap> {
         (0..rows)
-            .map(|r| self.wgmma_row(place, r, layout))
+            .map(|r| self.wgmma_row(place, r, layout, k))
             .collect()
+    }
+
+    /// The `rows` rows of 32 `F4E2M1` elements of the tile at `place`, a `U8` `Shared` allocation holding two 16-byte slots
+    /// per row (what a `CopyUnpack` writes): element `k` of a row is nibble `(k % 16) % 2` (0 = low) of byte
+    /// `(k % 16) / 2` of slot `k / 16`. The padding bytes of a slot are never read.
+    fn tcgen05_tile_f4(&mut self, place: &Place, rows: usize) -> Result<Vec<Vec<Val>>, KernelTrap> {
+        let Place::Alloc { alloc, index } = place else {
+            return Err(KernelTrap::Unsupported(
+                "a tcgen05 tile that is not an allocation place",
+            ));
+        };
+        let first = self.wgmma_int(index)?;
+        let mut out = Vec::with_capacity(rows);
+        for r in 0..rows {
+            let mut row = Vec::with_capacity(32);
+            for k in 0..32usize {
+                let off = r * 32 + (k / 16) * 16 + (k % 16) / 2;
+                let at_i = first + off as i128;
+                let at = ScalarExpr::ConstInt(at_i as i64, ElementKind::I64);
+                let byte = self.alloc_load(*alloc, &at)?.f64() as u64;
+                self.require_proxy_fenced(*alloc, at_i as usize)?;
+                let bits = if k % 2 == 0 {
+                    byte & 0xf
+                } else {
+                    (byte >> 4) & 0xf
+                };
+                row.push(Val::Float(crate::cast_ref::decode_mx(
+                    u128::from(bits),
+                    2,
+                    1,
+                )));
+            }
+            out.push(row);
+        }
+        Ok(out)
     }
 
     /// Run a `Tcgen05Mma`: `D` of `n` columns from `d_col` of the tensor allocation `d`.
@@ -54,35 +160,80 @@ impl Machine<'_> {
             scale_d,
             a_layout,
             b_layout,
+            m: rows,
+            d_lane,
+            ab,
+            acc,
+            negate_a,
+            negate_b,
+            b_ty,
             ..
         } = st
         else {
             unreachable!("tcgen05_mma is called for a Tcgen05Mma");
         };
         let (n, d) = (*n as usize, *d);
+        self.require_tmem(d)?;
         let cols = self.tmem_columns(d);
         let col0 = usize::try_from(self.wgmma_int(d_col)?)
             .ok()
             .filter(|c| c + n <= cols)
             .ok_or(KernelTrap::AllocOutOfBounds { alloc: d })?;
         let accumulate = self.wgmma_int(scale_d)? != 0;
-        let (a, b) = (
-            self.tcgen05_tile(a, M, a_layout)?,
-            self.tcgen05_tile(b, n, b_layout)?,
-        );
+        let half_acc = *acc == unpopped_vocab::ElementKind::F16;
+        // negating A's or B's elements flips every product's sign; both cancel
+        let sign = if negate_a ^ negate_b { -1.0 } else { 1.0 };
+        // `.kind::f8f6f4` takes K = 32 per instruction, the 16-bit kinds 16 (PTX ISA 9.5 Table 50)
+        let bt = b_ty.unwrap_or(*ab);
+        let k = if matches!(
+            ab,
+            unpopped_vocab::ElementKind::F16 | unpopped_vocab::ElementKind::Bf16
+        ) {
+            16
+        } else {
+            32
+        };
+        let fp4 = |t: &unpopped_vocab::ElementKind| *t == unpopped_vocab::ElementKind::F4E2M1;
+        let a = if fp4(ab) {
+            self.tcgen05_tile_f4(a, *rows as usize)?
+        } else {
+            self.tcgen05_tile(a, *rows as usize, a_layout, k)?
+        };
+        let b = if fp4(&bt) {
+            self.tcgen05_tile_f4(b, n)?
+        } else {
+            self.tcgen05_tile(b, n, b_layout, k)?
+        };
         for (m, arow) in a.iter().enumerate() {
             for (j, brow) in b.iter().enumerate() {
-                let at = cell(m * cols + col0 + j);
-                let c = if accumulate {
-                    self.alloc_load(d, &at)?.f64()
+                // PTX ISA 9.5 Layout D (m = 128): row r is lane r. Layout F (m = 64): rows 16w..16w+15 are in warp w's
+                // quadrant, in the half `d_lane` picks (Figures 221, 222)
+                let lane = if *rows == 64 {
+                    32 * (m / 16) + *d_lane as usize + m % 16
                 } else {
+                    m
+                };
+                let at = cell(lane * cols + col0 + j);
+                let c = if !accumulate {
                     0.0
+                } else if half_acc {
+                    // the old D is a word whose low 16 bits are a binary16
+                    let w = self.alloc_load(d, &at)?.f64() as u64;
+                    f16_to_f64((w & 0xFFFF) as u16)
+                } else {
+                    self.alloc_load(d, &at)?.f64()
                 };
                 let sum = arow
                     .iter()
                     .zip(brow)
-                    .fold(c, |s, (x, y)| s + x.f64() * y.f64());
-                self.alloc_store(d, &at, Val::Float(f64::from(sum as f32)))?;
+                    .fold(c, |s, (x, y)| s + sign * (x.f64() * y.f64()));
+                let out = if half_acc {
+                    let h = to_f16(sum) as f32;
+                    Val::Int(i128::from(f32_to_f16_bits(h)))
+                } else {
+                    Val::Float(f64::from(sum as f32))
+                };
+                self.alloc_store(d, &at, out)?;
             }
         }
         Ok(())
@@ -97,6 +248,7 @@ impl Machine<'_> {
         dst: u32,
     ) -> Result<(), KernelTrap> {
         let t = self.exec_val(ExecId::ThreadIdx(0))? as usize;
+        self.require_tmem(src)?;
         let lane = 32 * ((t / 32) % 4) + t % 32;
         let cols = self.tmem_columns(src);
         let col0 = usize::try_from(self.wgmma_int(col)?)

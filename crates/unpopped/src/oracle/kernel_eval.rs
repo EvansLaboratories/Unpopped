@@ -332,7 +332,12 @@ impl<'a> Machine<'a> {
                 return Err(KernelTrap::Unsupported("Collective"));
             }
             Stmt::Mma { .. } => return Err(KernelTrap::Unsupported("Mma")),
-            Stmt::Tcgen05Mma { .. } | Stmt::Tcgen05Commit { .. } | Stmt::Tcgen05Ld { .. } => {
+            Stmt::Tcgen05Mma { .. }
+            | Stmt::Tcgen05Commit { .. }
+            | Stmt::Tcgen05Ld { .. }
+            | Stmt::Tcgen05Alloc { .. }
+            | Stmt::Tcgen05Dealloc { .. }
+            | Stmt::Tcgen05RelinquishPermit => {
                 return Err(KernelTrap::Unsupported("a tcgen05 statement"));
             }
             Stmt::Wgmma { .. } | Stmt::WgmmaCommit | Stmt::WgmmaWait { .. } => {
@@ -347,6 +352,7 @@ impl<'a> Machine<'a> {
             }
             Stmt::MatrixStore { .. } => return Err(KernelTrap::Unsupported("MatrixStore")),
             Stmt::CopyBulk { .. } => return Err(KernelTrap::Unsupported("CopyBulk")),
+            Stmt::CopyUnpack { .. } => return Err(KernelTrap::Unsupported("CopyUnpack")),
             Stmt::ExternCall {
                 decl,
                 args,
@@ -466,7 +472,16 @@ impl<'a> Machine<'a> {
                 elems,
                 bar,
             } => self.copy_bulk(dst, src, *elems, bar)?,
+            Stmt::CopyUnpack {
+                dst,
+                src,
+                groups,
+                bar,
+            } => self.copy_unpack(dst, src, *groups, bar)?,
             Stmt::Tcgen05Mma { .. } => self.tcgen05_mma(st)?,
+            Stmt::Tcgen05Alloc { d, ncols } => self.tcgen05_alloc(*d, *ncols, true)?,
+            Stmt::Tcgen05Dealloc { d, ncols } => self.tcgen05_alloc(*d, *ncols, false)?,
+            Stmt::Tcgen05RelinquishPermit => self.tcgen05_relinquish()?,
             Stmt::Tcgen05Ld {
                 src,
                 col,

@@ -631,6 +631,7 @@ fn start_mem(b: &BlockRun<'_>) -> BlockMem {
         mbar: Default::default(),
         named: Default::default(),
         same_value_writes: b.lenient.same_value_writes,
+        tmem: Default::default(),
     }
 }
 
@@ -686,6 +687,7 @@ fn advance<'a>(
             run_phase(b, t, ((&mut *own, peers), global, &mut *edges), args)?;
         }
         if st.threads.iter().all(|t| t.status == Status::Done) {
+            own.tmem.check_released()?;
             return Ok(BlockStop::Done);
         }
         if wake_mbar_waiters(&mut st.threads, own) | wake_named_waiters(&mut st.threads, own) {
@@ -1184,6 +1186,7 @@ mod tests {
             mbar: Default::default(),
             named: Default::default(),
             same_value_writes: false,
+            tmem: Default::default(),
         };
         let r = release(&b, &mut threads, &mut mem);
         let now = threads.iter().map(|t| t.status).collect();

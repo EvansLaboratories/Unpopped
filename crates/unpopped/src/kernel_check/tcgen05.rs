@@ -7,7 +7,7 @@
 use super::wgmma::{MAX_DESCRIPTOR_OFFSET, check_layout, check_tile};
 use super::{Scope, check_expr};
 use crate::exec::{Extent, MemorySpace};
-use crate::kernel::{KernelError, KernelFn, Stmt};
+use crate::kernel::{KernelError, KernelFn, OperandLayout, Stmt};
 use crate::types::{self, Ty};
 use unpopped_vocab::ElementKind;
 
@@ -58,6 +58,10 @@ fn check_mma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
         scale_d,
         a_layout,
         b_layout,
+        m,
+        d_lane,
+        b_ty,
+        ..
     } = st
     else {
         unreachable!("check_mma is called for a Tcgen05Mma");
@@ -68,20 +72,68 @@ fn check_mma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
     if *n == 0 || *n > 256 || *n % 8 != 0 {
         return Err(refuse("an n that is not a multiple of 8 from 8 to 256"));
     }
-    if !matches!(ab, ElementKind::F16 | ElementKind::Bf16) {
-        return Err(refuse("an input type other than f16 or bf16"));
+    let bt = b_ty.unwrap_or(*ab);
+    let fp8 = |t: ElementKind| matches!(t, ElementKind::Fp8E4M3FN | ElementKind::Fp8E5M2);
+    let half = |t: ElementKind| matches!(t, ElementKind::F16 | ElementKind::Bf16);
+    // `.kind::f8f6f4` atype and btype are independent fields; of its types only the 8-bit floats and FP4 are built
+    let fp4 = |t: ElementKind| t == ElementKind::F4E2M1;
+    let f8f6f4 = |t: ElementKind| fp8(t) || fp4(t);
+    if !((half(*ab) && bt == *ab) || (f8f6f4(*ab) && f8f6f4(bt))) {
+        return Err(refuse(
+            "input types other than f16, bf16 (A and B alike) or 8-bit floats (e4m3, e5m2) and FP4 (e2m1)",
+        ));
     }
-    if *acc != ElementKind::F32 || check_tmem(k, *d)? != ElementKind::F32 {
-        return Err(refuse("an accumulator that is not f32 in tensor memory"));
+    // an FP4 tile is bytes: 16-byte slots of 16 elements (U8 Shared, filled by `CopyUnpack`), row-major, oracle only
+    if (fp4(*ab) && *a_layout != OperandLayout::RowMajor)
+        || (fp4(bt) && *b_layout != OperandLayout::RowMajor)
+    {
+        return Err(refuse(
+            "a canonical layout for a 4-bit tile (no second source for a 16-byte slot inside a core matrix)",
+        ));
     }
-    check_tile(k, a, *ab, sc)
+    let tile_ty = |t: ElementKind| if fp4(t) { ElementKind::U8 } else { t };
+    // dtype F32 (a 32-bit float cell) or F16 (a 32-bit word whose low 16 bits are the element: PTX 9.7.18.10.5)
+    let cell = check_tmem(k, *d)?;
+    let acc_ok = match *acc {
+        ElementKind::F32 => cell == ElementKind::F32,
+        ElementKind::F16 => cell == ElementKind::U32,
+        _ => false,
+    };
+    if !acc_ok {
+        return Err(refuse(
+            "an accumulator that is not f32 (F32 tensor memory) or f16 (U32 tensor memory words)",
+        ));
+    }
+    check_tile(k, a, tile_ty(*ab), sc)
         .map_err(|_| refuse("an A tile that is not a Shared place of the input type"))?;
-    check_tile(k, b, *ab, sc)
+    check_tile(k, b, tile_ty(bt), sc)
         .map_err(|_| refuse("a B tile that is not a Shared place of the input type"))?;
     // the tcgen05 descriptor's leading field is 15 bits (PTX ISA 9.5 9.7.18.4.1): twice the wgmma range
     let max_lbo = 2 * MAX_DESCRIPTOR_OFFSET + 16;
-    check_layout(k, a, a_layout, 128, max_lbo).map_err(refuse)?;
-    check_layout(k, b, b_layout, *n as usize, max_lbo).map_err(refuse)?;
+    // PTX ISA 9.5 9.7.18.10.5: M = 64 (non-.ws, cta_group::1: Layout F, lane alignment 0 or 16) or M = 128 (Layout D)
+    if !matches!((*m, *d_lane), (128, 0) | (64, 0 | 16)) {
+        return Err(refuse(
+            "an m other than 128 (d_lane 0) or 64 (d_lane 0 or 16)",
+        ));
+    }
+    check_layout(
+        k,
+        a,
+        a_layout,
+        *m as usize,
+        max_lbo,
+        if half(*ab) { 2 } else { 1 },
+    )
+    .map_err(refuse)?;
+    check_layout(
+        k,
+        b,
+        b_layout,
+        *n as usize,
+        max_lbo,
+        if half(bt) { 2 } else { 1 },
+    )
+    .map_err(refuse)?;
     check_int(k, d_col, sc)?;
     check_int(k, scale_d, sc)
 }
@@ -130,6 +182,28 @@ fn check_ld(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
 pub(super) fn check_tcgen05(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
     match st {
         Stmt::Tcgen05Mma { .. } => check_mma(k, st, sc),
+        Stmt::Tcgen05Alloc { d, ncols } | Stmt::Tcgen05Dealloc { d, ncols } => {
+            if k.launch.is_none() {
+                return Err(KernelError::ExecWithoutLaunch);
+            }
+            check_tmem(k, *d)?;
+            // PTX ISA 9.5 9.7.18.7.1: "the operand nCols must be a power of 2, in the range [32, 512]"
+            if !ncols.is_power_of_two() || !(32..=512).contains(ncols) {
+                return Err(refuse("an nCols that is not a power of two from 32 to 512"));
+            }
+            match k.allocs[*d as usize].extent {
+                Extent::Static(n) if n == 128 * ncols => Ok(()),
+                _ => Err(refuse(
+                    "an nCols that is not the declared column count of the tensor allocation",
+                )),
+            }
+        }
+        Stmt::Tcgen05RelinquishPermit => {
+            if k.launch.is_none() {
+                return Err(KernelError::ExecWithoutLaunch);
+            }
+            Ok(())
+        }
         _ => check_ld(k, st, sc),
     }
 }

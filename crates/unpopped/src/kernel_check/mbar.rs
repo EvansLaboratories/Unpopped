@@ -9,6 +9,7 @@ use crate::exec::MemorySpace;
 use crate::ir::ScalarExpr;
 use crate::kernel::{KernelError, KernelFn, Place, Stmt};
 use crate::types::{self, Ty, elem_bits};
+use unpopped_vocab::ElementKind;
 
 fn refuse(what: &'static str) -> KernelError {
     KernelError::MbarrierUnsupported { what }
@@ -59,6 +60,55 @@ pub(super) fn check_copy_bulk(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(),
     }
     if (elem_bits(de) * *elems as usize) % 128 != 0 || *elems == 0 {
         return Err(refuse_bulk("a size that is not a multiple of 16 bytes"));
+    }
+    let (be, _) = check_place(k, bar, sc)?;
+    if elem_bits(be) != 64 {
+        return Err(refuse_bulk("a barrier whose elements are not 64 bits"));
+    }
+    Ok(())
+}
+
+/// Check a `Stmt::CopyUnpack`: a `Shared` `U8` destination, a readable global `F4E2M1` source, at least one group, and a
+/// `Shared` 64-bit barrier.
+pub(super) fn check_copy_unpack(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
+    let Stmt::CopyUnpack {
+        dst,
+        src,
+        groups,
+        bar,
+    } = st
+    else {
+        unreachable!("check_copy_unpack is called for a CopyUnpack");
+    };
+    let shared = |p: &Place| {
+        matches!(p, Place::Alloc { alloc, .. }
+            if k.allocs.get(*alloc as usize).is_some_and(|a| a.space == MemorySpace::Shared))
+    };
+    if !shared(dst) || !shared(bar) {
+        return Err(refuse_bulk(
+            "a destination or barrier that is not a Shared allocation place",
+        ));
+    }
+    let Place::Logical { buffer, .. } = src else {
+        return Err(refuse_bulk("a source that is not a global buffer place"));
+    };
+    let (de, _) = check_place(k, dst, sc)?;
+    let (se, role) = check_place(k, src, sc)?;
+    if !role.reads() {
+        return Err(KernelError::ReadFromWriteOnly { buffer: *buffer });
+    }
+    if de != ElementKind::U8 {
+        return Err(refuse_bulk(
+            "a destination that is not a byte (U8) allocation",
+        ));
+    }
+    if se != ElementKind::F4E2M1 {
+        return Err(refuse_bulk(
+            "a source that is not F4E2M1 (FP6 buffers have no KISS packing pin yet)",
+        ));
+    }
+    if *groups == 0 {
+        return Err(refuse_bulk("a copy of no groups"));
     }
     let (be, _) = check_place(k, bar, sc)?;
     if elem_bits(be) != 64 {
