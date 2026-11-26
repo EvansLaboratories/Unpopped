@@ -874,3 +874,19 @@ Task: `gates-s`, gate G-S3. Unpopped side: `EpilogueSchedule { tile: Option<[u32
 **Next read (named):** Intel US11086623B2 / US11288069 claims (a tile store instruction: a different construct from a schedule field, so expected outside, not read); queries on "epilogue visitor" and "output tile" with Nvidia as assignee.
 
 — lane: unpopped-patents-2
+
+## G-S4: wave scheduling and register pinning (2026-11-26, unpopped-patents-2, AI-assisted, NOT legal advice; verdict words only: outside as read / needs more / NOT CLEARED, unread)
+
+Task: `gates-s`, gate G-S4 (ThunderKittens 59). Unpopped side: no field. `ScheduleSpec` on `origin/lane/s1-schedule-spec@7268a6c5` has `tile, stages, smem_carveout_bytes, work, epilogue, cluster` and no register or wave field (`RegPin`/`WaveSchedule` are named in the plan, section 3, and not built). So there is nothing to chart today; this section charts what the field would be.
+
+**Queries (WebSearch):** (1) extended, patents sites only: `wave scheduling instruction interleaving ping-pong warpgroups register allocation setmaxnreg warp specialization claims` -> toy-ping-pong patents, US20110072244A1 (credit-based warp scheduling, 2011, not read). (2) standard: `patent warp specialization producer warps consumer warps register reallocation dynamic register file GPU kernel claims` -> arXiv papers, US20230144553A1.
+
+**Read:** US20230144553A1 (Nvidia Corp [Google], priority 2021-10-08, Pending [Google]); independent claims 1, 10, 12. Claim 1: "logic to generate register acquire instructions and register release instructions in the application code, such that ... the application code borrows and returns registers to an inter-block register pool when execution enters a particular section of the application code". Claim 10: "a slow execution path that employs register spill and refill instructions and is only executed on condition that the register acquire instructions fail". Claim 12: "inserting register acquire instructions and register release instructions for an inter-block register pool".
+
+| Unpopped construct | Verdict | The limb that decides it |
+|---|---|---|
+| A static register pin (a count of registers per thread or per warpgroup stated by the user) | **outside as read** | "register acquire instructions and register release instructions" and "inter-block register pool": a pin has neither instruction and no pool. |
+| A runtime register-reallocation statement (the `setmaxnreg` shape: a block raises or lowers its own count mid-kernel) | **needs more** | The claims say "inter-block register pool"; `setmaxnreg` is described elsewhere as a per-CTA pool between warpgroups, which is not the claim's word. Read next: the description of US20230144553A1 for whether "inter-block" reaches warpgroups of one CTA. A hold on adding such a statement. |
+| Wave scheduling (instruction interleaving between warpgroups) | **NOT CLEARED, unread** | No patent found; the one hit (US20110072244A1, 2011) is credit-based warp-scheduler weighting in hardware, not read. |
+
+— lane: unpopped-patents-2
