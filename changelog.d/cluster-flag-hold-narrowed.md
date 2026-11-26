@@ -1,0 +1,3 @@
+kind: Docs: the cluster-flag patent hold is lifted and replaced by a narrow no-fusing hold (US20230315655A1)
+---
+The 2026-11-25 hold on a combined data write plus a flag or barrier update (ROADMAP U8c and U12, `docs/ir-union-asks.md`) is replaced, on the PM ruling of 2026-11-26 after the file-wrapper chart, by a narrow hold: nothing may fuse a `Place::ClusterPeer` data store with a barrier or flag update into one hardware operation (`st.async` with `mbarrier::complete_tx`, `red.async`, a remote arrive). The cluster flag pattern (data store, then a separate flag write or arrive) is lifted. The other 2026-11-25 holds (US11080051B2/US11604649B2 on U13, US9952843B2 on U19) are unchanged. Docs only, no gate.
