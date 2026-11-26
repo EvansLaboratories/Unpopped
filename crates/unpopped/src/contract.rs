@@ -1984,7 +1984,7 @@ fn fkc_dtype(dt: ElementKind) -> Option<&'static str> {
     use ElementKind::{
         B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E6M2, F8E8M0, F16, F32,
         F32Strict, F64, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4,
-        U8, U16, U32, U64,
+        U8, U16, U32, U64, F128, F8E3M4, F8UE4M3, I128, I256, U128, U256,
     };
     Some(match dt {
         F32 | F32Strict => "F32",
@@ -1999,6 +1999,8 @@ fn fkc_dtype(dt: ElementKind) -> Option<&'static str> {
         F8E8M0 | F8E6M2 => return None,
         // MX elements (§6.1-0014): sub-byte, no FKC spelling.
         F4E2M1 | F6E2M3 | F6E3M2 => return None,
+        // Union batch 1 (KISS 0.24.0, §6.1-0017 to -0020): no FKC §5 spelling yet; recognised, declined.
+        F128 | I128 | U128 | I256 | U256 | F8E3M4 | F8UE4M3 => return None,
         F16 => "F16",
         Bf16 => "BF16",
         F64 => "F64",
@@ -2021,7 +2023,7 @@ fn dtype_short(dt: ElementKind) -> &'static str {
     use ElementKind::{
         B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E6M2, F8E8M0, F16, F32,
         F32Strict, F64, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4,
-        U8, U16, U32, U64,
+        U8, U16, U32, U64, F128, F8E3M4, F8UE4M3, I128, I256, U128, U256,
     };
     match dt {
         F32 | F32Strict => "f32",
@@ -2037,6 +2039,13 @@ fn dtype_short(dt: ElementKind) -> &'static str {
         F4E2M1 => "f4e2m1",
         F6E2M3 => "f6e2m3",
         F6E3M2 => "f6e3m2",
+        F128 => "f128",
+        I128 => "i128",
+        U128 => "u128",
+        I256 => "i256",
+        U256 => "u256",
+        F8E3M4 => "f8e3m4",
+        F8UE4M3 => "f8ue4m3",
         F16 => "f16",
         Bf16 => "bf16",
         F64 => "f64",
@@ -2078,15 +2087,16 @@ fn dtype_size(dt: ElementKind) -> u32 {
     use ElementKind::{
         B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E6M2, F8E8M0, F16, F32,
         F32Strict, F64, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4,
-        U8, U16, U32, U64,
+        U8, U16, U32, U64, F128, F8E3M4, F8UE4M3, I128, I256, U128, U256,
     };
     match dt {
         I4 | U4 | B1 | F4E2M1 | F6E2M3 | F6E3M2 => 1, // sub-byte: round up to a byte for the declared estimate
-        I8 | U8 | Bool | Fp8E4M3FN | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 => 1,
+        I8 | U8 | Bool | Fp8E4M3FN | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 | F8E3M4 | F8UE4M3 => 1,
         F16 | Bf16 | I16 | U16 => 2,
         F32 | F32Strict | I32 | U32 => 4, // U32: 4-byte index dtype
         F64 | I64 | U64 | Complex64 => 8,
-        Complex128 => 16,
+        Complex128 | F128 | I128 | U128 => 16,
+        I256 | U256 => 32,
     }
 }
 
