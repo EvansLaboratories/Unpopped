@@ -203,7 +203,7 @@ overflow or a NaN has nowhere to go, and the IR defines where, exactly as it doe
 | `Bitcast` of an MX element | No row: the typed bit widths are byte-multiples only. |
 
 **NaN to `+0` is the IR's rule, not a hardware fact.** What the vendors' conversion instructions do with a
-NaN here is UNVERIFIED (no PTX or Vulkan check has been made; that waits for a consumer). An emitter that
+NaN here is UNVERIFIED (no PTX or Vulkan check has been made; that waits for a consumer). An emitter that **RE-DISPOSITIONED 2026-11-26 (PM via pm-kernels; CireSnave 2026-10-24, 2026-11-11, 2026-11-19): not a wait; unblocked work, ranked lower.**
 cannot reproduce the rule exactly MUST DECLINE, never approximate. No emitter spells these casts today (CpuC has no
 C type for them and declines; Slang is unchanged).
 
