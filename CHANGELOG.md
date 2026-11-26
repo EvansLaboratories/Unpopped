@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.58.9` — Docs: PATENT-SWEEP file-wrapper chart of US12699602B1
+
+Docs only. One dated subsection in `docs/PATENT-SWEEP.md` charting the warp-role statements against the US12699602B1 prosecution record (verdict words only). No code changes.
+
+---
+
 ## `0.58.8` — Docs: PATENT-SWEEP, US20230315655A1 file-wrapper chart (patents-2)
 
 Docs only. `docs/PATENT-SWEEP.md` gains the file-wrapper chart of application 17/691,303 (allowed 2026-11-18) against the remote store-and-arrive limb, per Unpopped statement, verdict words only. No code changes.
