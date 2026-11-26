@@ -57,6 +57,7 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value, json};
 
 use crate::ir::ScalarExpr;
+use crate::kernel::KernelFn;
 use unpopped_vocab::{ElementKind, HwStamp, TargetId};
 
 /// What a measurement of one body on one device concluded.
@@ -138,6 +139,21 @@ pub fn body_key(body: &ScalarExpr, dtype: ElementKind) -> String {
     format!("{}:{json}", unpopped_vocab::dtype_token(dtype))
 }
 
+/// The canonical key of a kernel-layer kernel at a dtype: `"kernel:{dtype}:{serde-JSON of the KernelFn}"` (U59).
+///
+/// The `kernel:` prefix keeps it apart from a [`body_key`], which starts with a dtype token, so a record of one layer
+/// can never answer a question of the other. Like `body_key`, this text is pinned by a test: a key that changes
+/// silently drops every record and nothing would say so. `dtype` is the element type the measurement was about (a
+/// kernel that computes in several is measured, and recorded, once per dtype).
+///
+/// # Panics
+/// Never for a kernel the IR can build: a `KernelFn` round-trips through serde.
+#[must_use]
+pub fn kernel_key(kernel: &KernelFn, dtype: ElementKind) -> String {
+    let json = serde_json::to_string(kernel).expect("a KernelFn always serialises");
+    format!("kernel:{}:{json}", unpopped_vocab::dtype_token(dtype))
+}
+
 /// How much of the input space a run covered.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -210,6 +226,29 @@ pub struct ExactnessRecord {
 }
 
 impl ExactnessRecord {
+    /// Record that the kernel-layer `kernel` at `dtype` on `stamp` concluded `verdict` (U59), for the kernel hashed
+    /// `kernel_hash` that `emitter_version` produced, over `coverage`. See [`kernel_key`].
+    #[must_use]
+    pub fn for_kernel(
+        stamp: DeviceStamp,
+        kernel: &KernelFn,
+        dtype: ElementKind,
+        verdict: ExactnessVerdict,
+        kernel_hash: impl Into<String>,
+        emitter_version: impl Into<String>,
+        coverage: Coverage,
+    ) -> Self {
+        Self {
+            stamp,
+            key: kernel_key(kernel, dtype),
+            verdict,
+            kernel_hash: kernel_hash.into(),
+            emitter_version: emitter_version.into(),
+            coverage,
+            extra: BTreeMap::new(),
+        }
+    }
+
     /// Record that `body` at `dtype` on `stamp` concluded `verdict`, for the kernel hashed
     /// `kernel_hash` that `emitter_version` produced, over `coverage`.
     #[must_use]
@@ -395,7 +434,23 @@ impl ExactnessLedger {
         body: &ScalarExpr,
         dtype: ElementKind,
     ) -> Finding {
-        let key = body_key(body, dtype);
+        self.find_key(stamp, kernel_hash, &body_key(body, dtype))
+    }
+
+    /// [`Self::find`] for a kernel-layer kernel (U59): the same rules over [`kernel_key`]. A record made for an op body
+    /// is never consulted, and a kernel record never answers an op body.
+    #[must_use]
+    pub fn find_kernel(
+        &self,
+        stamp: &DeviceStamp,
+        kernel_hash: &str,
+        kernel: &KernelFn,
+        dtype: ElementKind,
+    ) -> Finding {
+        self.find_key(stamp, kernel_hash, &kernel_key(kernel, dtype))
+    }
+
+    fn find_key(&self, stamp: &DeviceStamp, kernel_hash: &str, key: &str) -> Finding {
         let (mut exact, mut sampled, mut stale) = (false, false, false);
         for r in self
             .records
@@ -441,6 +496,37 @@ impl ExactnessLedger {
         }
     }
 
+    /// [`Self::lookup`] for a kernel-layer kernel (U59).
+    #[must_use]
+    pub fn lookup_kernel(
+        &self,
+        stamp: &DeviceStamp,
+        kernel_hash: &str,
+        kernel: &KernelFn,
+        dtype: ElementKind,
+    ) -> Option<ExactnessVerdict> {
+        match self.find_kernel(stamp, kernel_hash, kernel, dtype) {
+            Finding::Exact => Some(ExactnessVerdict::Exact),
+            Finding::Withheld(Withheld::Flushes) => Some(ExactnessVerdict::Flushes),
+            Finding::Withheld(_) => None,
+        }
+    }
+
+    /// [`Self::admit`] for a kernel-layer kernel (U59): the same decision over [`kernel_key`]. A kernel-layer `Exact`
+    /// is usually a sampled run and so admits nothing; the verdict that matters here is a measured `Flushes`, which
+    /// declines `Exact` on one mismatch.
+    #[must_use]
+    pub fn admit_kernel(
+        &self,
+        stamp: &DeviceStamp,
+        kernel_hash: &str,
+        kernel: &KernelFn,
+        dtype: ElementKind,
+        requirement: Requirement,
+    ) -> Admission {
+        self.admit_key(stamp, kernel_hash, &kernel_key(kernel, dtype), requirement)
+    }
+
     /// Decide what to do with this kernel on this stamp. See [`Admission`] and [`Requirement`].
     ///
     /// A variant is offered only under [`Requirement::Exact`], only from a record on the same
@@ -456,20 +542,29 @@ impl ExactnessLedger {
         dtype: ElementKind,
         requirement: Requirement,
     ) -> Admission {
-        let why = match self.find(stamp, kernel_hash, body, dtype) {
+        self.admit_key(stamp, kernel_hash, &body_key(body, dtype), requirement)
+    }
+
+    fn admit_key(
+        &self,
+        stamp: &DeviceStamp,
+        kernel_hash: &str,
+        key: &str,
+        requirement: Requirement,
+    ) -> Admission {
+        let why = match self.find_key(stamp, kernel_hash, key) {
             Finding::Exact => return Admission::Admitted,
             Finding::Withheld(w) => w,
         };
         if requirement != Requirement::Exact {
             return Admission::ClaimWithheld(why);
         }
-        let key = body_key(body, dtype);
         let offer = self.records.iter().find(|r| {
             r.key == key
                 && r.verdict == ExactnessVerdict::Exact
                 && r.stamp.same_device_and_compiler(stamp)
                 && r.stamp.compiler_args != stamp.compiler_args
-                && self.find(&r.stamp, &r.kernel_hash, body, dtype) == Finding::Exact
+                && self.find_key(&r.stamp, &r.kernel_hash, key) == Finding::Exact
         });
         match offer {
             Some(r) => Admission::UseArgs(ArgsOffer {
