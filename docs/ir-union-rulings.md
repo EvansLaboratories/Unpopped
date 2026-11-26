@@ -4,7 +4,7 @@ Written 2026-11-25 against `origin/main` b21af35c, from the third re-score (`doc
 
 ## 1. The 59 DECISION rows, grouped by the question they wait on
 
-Fourteen questions. Who may decide follows the record: D5 is CireSnave's (board 290), the schedule language P9 was "parked by the PM 2026-10-24" as CireSnave's spend, Fp8FastAccum was held by one sentence of the PM's own (2026-11-09, `docs/accum-policies.md` line 39; the first draft of this note wrongly cited CireSnave's boards 443 and 444), and the tile-value question is architectural enough that the PM asked for a brief for CireSnave. Everything else has a precedent the PM can apply.
+Fourteen questions. Who may decide follows the record: D5 is CireSnave's (board 290), the schedule language P9 was "parked by the PM 2026-10-24" as CireSnave's spend, (RULED 2026-11-26, board 500 Q2 A), Fp8FastAccum was held by one sentence of the PM's own (2026-11-09, `docs/accum-policies.md` line 39; the first draft of this note wrongly cited CireSnave's boards 443 and 444), and the tile-value question is architectural enough that the PM asked for a brief for CireSnave. Everything else has a precedent the PM can apply.
 
 | # | Question | Options | Lane recommendation | Unblocks (rows) | Who decides |
 |---|---|---|---|---|---|
