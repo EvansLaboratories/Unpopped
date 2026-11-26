@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.8` — Added: `Cast` between `F32` (and the integers) and `F8E3M4` / `F8UE4M3` on the oracle (KISS 0.24.0 union batch 1, plan E1b)
+
+`Cast(Cast(x, f8e3m4), f32)` and the same through `f8ue4m3` run on the oracle as intermediate values. `F8E3M4` (IEEE-style, bias 3) rounds to nearest even and overflows like IEEE (infinity under `Wrap`, the largest finite value 15.5 under `ClampFinite`); `F8UE4M3` (the unsigned NVFP4 scale) takes only `Saturation::ClampFinite`, saturates at 448, sends NaN to its one NaN code `0x7F` and a value at or below zero to 0 (the IR's rule, UNVERIFIED against a vendor conversion). Checked against KISS's decode vectors for both formats and an exhaustive round trip of every `F8E3M4` code and every finite `F8UE4M3` code. A kernel still cannot declare a local, parameter or allocation of either dtype (`KernelError::DtypeNotComputed`): load, store and arithmetic wait. `unpopped-cpu-c` declines the casts by name. Additive: no enum variant added. Plan: `docs/design-union-batch1-consumer.md`.
+
+---
+
 ## `0.60.7` — Added: `Layout::{make_ordered_layout, recast_layout, max_common_vector, max_common_layout}`
 
 Pure vocabulary in `unpopped-vocab::layout_algebra` (`ordered.rs`; ROADMAP IR-union rows 12 and 13, `cute.md`). `make_ordered_layout` builds the compact layout whose strides follow an order; `recast_layout` re-reads a stride-1 layout at another element width (restricted form: declines by name what CuTe's general rule might accept, and a widening that leaves the stride-1 extent at 1 cannot be narrowed back); `max_common_vector`/`max_common_layout` are the contiguous run two layouts agree on, through `right_inverse` and `composition`. **All four are UNVERIFIED against `cute/layout.hpp`** (names and intent only). `make_identity_layout` is not added: CuTe's takes basis strides, which integer strides cannot hold (the TMA basis-stride gap). Verified by `tests/layout_algebra_ordered.rs`: hand examples with refusal controls, a brute-force reading of the common vector and layout over 11 pairs, a round trip, and a broken variant per checker. Additive; no kernel or IR change.
