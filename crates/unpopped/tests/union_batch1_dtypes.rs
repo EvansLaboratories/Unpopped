@@ -7,11 +7,11 @@
 //! Each refusal sits beside its accepted control.
 
 use unpopped::exec::{AllocDecl, Extent, LaunchShape, MemorySpace};
-use unpopped::types::TypeError;
 use unpopped::ir::{CastSpec, RoundMode, Saturation, ScalarExpr};
 use unpopped::kernel::{
     Block, BufferRole, KernelError, KernelFn, LocalDecl, Param, Place, Stmt, check_kernel,
 };
+use unpopped::types::TypeError;
 use unpopped_vocab::ElementKind;
 
 const ROWS: [(ElementKind, &str, u32); 7] = [
@@ -28,7 +28,12 @@ fn launch() -> LaunchShape {
     LaunchShape::new([1, 1, 1], [1, 1, 1])
 }
 
-fn kernel(compute: ElementKind, params: Vec<Param>, locals: Vec<LocalDecl>, body: Vec<Stmt>) -> KernelFn {
+fn kernel(
+    compute: ElementKind,
+    params: Vec<Param>,
+    locals: Vec<LocalDecl>,
+    body: Vec<Stmt>,
+) -> KernelFn {
     KernelFn::new("k", compute, params, locals, Block(body)).with_launch(launch())
 }
 
@@ -61,17 +66,32 @@ fn a_kernel_that_declares_a_batch_1_dtype_is_refused_by_name_and_the_control_pas
             "{name} buffer parameter"
         );
         assert_eq!(
-            check_kernel(&kernel(ElementKind::F32, vec![], vec![LocalDecl::scalar(dt)], vec![])),
+            check_kernel(&kernel(
+                ElementKind::F32,
+                vec![],
+                vec![LocalDecl::scalar(dt)],
+                vec![]
+            )),
             refused(dt),
             "{name} local"
         );
         assert_eq!(
-            check_kernel(&kernel(ElementKind::F32, vec![Param::scalar("s", dt, 0)], vec![LocalDecl::scalar(dt)], vec![])),
+            check_kernel(&kernel(
+                ElementKind::F32,
+                vec![Param::scalar("s", dt, 0)],
+                vec![LocalDecl::scalar(dt)],
+                vec![]
+            )),
             refused(dt),
             "{name} scalar parameter"
         );
-        let with_alloc = kernel(ElementKind::F32, vec![], vec![], vec![])
-            .with_allocs(vec![AllocDecl::new("a", MemorySpace::Shared, dt, Extent::Static(4))]);
+        let with_alloc =
+            kernel(ElementKind::F32, vec![], vec![], vec![]).with_allocs(vec![AllocDecl::new(
+                "a",
+                MemorySpace::Shared,
+                dt,
+                Extent::Static(4),
+            )]);
         assert_eq!(check_kernel(&with_alloc), refused(dt), "{name} allocation");
         assert_eq!(
             check_kernel(&kernel(dt, vec![], vec![], vec![])),
@@ -80,15 +100,28 @@ fn a_kernel_that_declares_a_batch_1_dtype_is_refused_by_name_and_the_control_pas
         );
     }
     // the controls: the same shapes over an ordinary dtype pass
-    assert_eq!(check_kernel(&load_from(ElementKind::F32, ElementKind::F32)), Ok(()));
-    assert_eq!(check_kernel(&kernel(ElementKind::F32, vec![], vec![LocalDecl::scalar(ElementKind::U32)], vec![])), Ok(()));
     assert_eq!(
-        check_kernel(&kernel(ElementKind::F32, vec![], vec![], vec![]).with_allocs(vec![AllocDecl::new(
-            "a",
-            MemorySpace::Shared,
+        check_kernel(&load_from(ElementKind::F32, ElementKind::F32)),
+        Ok(())
+    );
+    assert_eq!(
+        check_kernel(&kernel(
             ElementKind::F32,
-            Extent::Static(4)
-        )])),
+            vec![],
+            vec![LocalDecl::scalar(ElementKind::U32)],
+            vec![]
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        check_kernel(
+            &kernel(ElementKind::F32, vec![], vec![], vec![]).with_allocs(vec![AllocDecl::new(
+                "a",
+                MemorySpace::Shared,
+                ElementKind::F32,
+                Extent::Static(4)
+            )])
+        ),
         Ok(())
     );
 }
@@ -113,7 +146,10 @@ fn a_cast_into_a_batch_1_dtype_is_still_the_typed_illegal_cast() {
             }],
         );
         assert!(
-            matches!(check_kernel(&k), Err(KernelError::Type(TypeError::IllegalCast { .. }))),
+            matches!(
+                check_kernel(&k),
+                Err(KernelError::Type(TypeError::IllegalCast { .. }))
+            ),
             "{name}: {:?}",
             check_kernel(&k)
         );
@@ -131,6 +167,9 @@ fn each_row_survives_the_text_codec() {
 
 #[test]
 fn the_helper_names_exactly_the_seven_rows() {
-    let named: Vec<ElementKind> = ElementKind::ALL.into_iter().filter(|t| unpopped::types::is_union_batch1(*t)).collect();
+    let named: Vec<ElementKind> = ElementKind::ALL
+        .into_iter()
+        .filter(|t| unpopped::types::is_union_batch1(*t))
+        .collect();
     assert_eq!(named, ROWS.iter().map(|r| r.0).collect::<Vec<_>>());
 }

@@ -2661,10 +2661,9 @@ impl Frame {
 #[must_use]
 pub const fn dtype_storage_bits(dt: ElementKind) -> u32 {
     use ElementKind::{
-        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E6M2, F8E8M0, F16, F32,
-        F128, F8E3M4, F8UE4M3, I128, I256, U128, U256,
-        F32Strict, F64, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4,
-        U8, U16, U32, U64,
+        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E3M4, F8E6M2, F8E8M0,
+        F8UE4M3, F16, F32, F32Strict, F64, F128, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4,
+        I8, I16, I32, I64, I128, I256, U4, U8, U16, U32, U64, U128, U256,
     };
     match dt {
         B1 => 1,
@@ -2675,7 +2674,8 @@ pub const fn dtype_storage_bits(dt: ElementKind) -> u32 {
         // schema version) but their *storage* width is pinned by §6.1 all the
         // same — a reserved dtype is still a known dtype, and answering "how wide
         // is it" is not the same as agreeing to compute with it.
-        I8 | U8 | Bool | Fp8E4M3FN | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2 | F8E3M4 | F8UE4M3 => 8,
+        I8 | U8 | Bool | Fp8E4M3FN | Fp8E5M2 | Fp8E4M3FNUZ | Fp8E5M2FNUZ | F8E8M0 | F8E6M2
+        | F8E3M4 | F8UE4M3 => 8,
         F16 | Bf16 | I16 | U16 => 16,
         // U32: 4-byte index dtype (the `indices` operand's vec-width side-channel;
         // never a compute operand). Same width class as I32.
@@ -2702,10 +2702,9 @@ fn dtype_size_bytes(dt: ElementKind) -> Option<u32> {
 #[must_use]
 pub const fn dtype_numeric_kind(dt: ElementKind) -> &'static str {
     use ElementKind::{
-        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E6M2, F8E8M0, F16, F32,
-        F128, F8E3M4, F8UE4M3, I128, I256, U128, U256,
-        F32Strict, F64, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4,
-        U8, U16, U32, U64,
+        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E3M4, F8E6M2, F8E8M0,
+        F8UE4M3, F16, F32, F32Strict, F64, F128, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4,
+        I8, I16, I32, I64, I128, I256, U4, U8, U16, U32, U64, U128, U256,
     };
     match dt {
         F16 | Bf16 | F32 | F32Strict | F64 | Fp8E4M3FN | Fp8E4M3FNUZ | Fp8E5M2 | Fp8E5M2FNUZ
@@ -4396,10 +4395,9 @@ pub const fn dtype_token(v: ElementKind) -> &'static str {
 
 const fn dtype_code(v: ElementKind) -> &'static str {
     use ElementKind::{
-        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E6M2, F8E8M0, F16, F32,
-        F128, F8E3M4, F8UE4M3, I128, I256, U128, U256,
-        F32Strict, F64, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4,
-        U8, U16, U32, U64,
+        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E3M4, F8E6M2, F8E8M0,
+        F8UE4M3, F16, F32, F32Strict, F64, F128, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4,
+        I8, I16, I32, I64, I128, I256, U4, U8, U16, U32, U64, U128, U256,
     };
     match v {
         F16 => "f16",
@@ -4771,10 +4769,9 @@ fn parse_acc_mp(field: &str, compute: ElementKind) -> Result<AccMp, TokenDecline
 
 fn dtype_from_code(s: &str) -> Option<ElementKind> {
     use ElementKind::{
-        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E6M2, F8E8M0, F16, F32,
-        F128, F8E3M4, F8UE4M3, I128, I256, U128, U256,
-        F64, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16, I32, I64, U4, U8, U16, U32,
-        U64,
+        B1, Bf16, Bool, Complex64, Complex128, F4E2M1, F6E2M3, F6E3M2, F8E3M4, F8E6M2, F8E8M0,
+        F8UE4M3, F16, F32, F64, F128, Fp8E4M3FN, Fp8E4M3FNUZ, Fp8E5M2, Fp8E5M2FNUZ, I4, I8, I16,
+        I32, I64, I128, I256, U4, U8, U16, U32, U64, U128, U256,
     };
     Some(match s {
         "f16" => F16,
