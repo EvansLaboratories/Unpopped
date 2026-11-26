@@ -1,0 +1,3 @@
+kind: Docs: measured exactness for kernel-layer kernels (design) and ROADMAP rows U59, U60
+---
+`docs/design-kernel-fidelity.md`: the measured-exactness ledger (`unpopped::exactness`) already exists and is keyed only by a plan-layer body, so a kernel-layer kernel's measurement (for example a device that flushes subnormals) has nowhere to be recorded. The note proposes an additive kernel key and entry points over the same ledger, plus shared probe recipes, and withdraws the first draft's new `KernelFidelity` type. ROADMAP gains rows U59 (kernel-layer exactness) and U60 (a fixtures module, one valid kernel per `Stmt` variant). Design only, nothing built; docs-only, no gate.
