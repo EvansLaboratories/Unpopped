@@ -16,7 +16,7 @@ use super::Val;
 use super::kernel_eval::{KernelTrap, Machine};
 use crate::exec::ExecId;
 use crate::ir::ScalarExpr;
-use crate::kernel::{Place, Stmt};
+use crate::kernel::{OperandLayout, Place, Stmt};
 use crate::types::{self, Ty};
 use unpopped_vocab::ElementKind;
 
@@ -139,6 +139,8 @@ impl Machine<'_> {
             b,
             d,
             scale_d,
+            a_layout,
+            b_layout,
             ..
         } = st
         else {
@@ -147,14 +149,14 @@ impl Machine<'_> {
         let t = self.exec_val(ExecId::ThreadIdx(0))? as usize % WARPGROUP;
         let n = *n as usize;
         let a_row = if t < M {
-            Some(self.wgmma_row(a, t)?)
+            Some(self.wgmma_row(a, t, a_layout)?)
         } else {
             None
         };
         let mut b_rows = Vec::new();
         for row in [t, t + WARPGROUP] {
             if row < n {
-                b_rows.push((row, self.wgmma_row(b, row)?));
+                b_rows.push((row, self.wgmma_row(b, row, b_layout)?));
             }
         }
         let scale_d = self.wgmma_int(scale_d)? != 0;
@@ -183,18 +185,31 @@ impl Machine<'_> {
         self.eval_int(e, t)
     }
 
-    /// Row `row` (16 elements) of the tile whose first element is `place`, as logged `Shared` loads.
-    pub(super) fn wgmma_row(&mut self, place: &Place, row: usize) -> Result<Vec<Val>, KernelTrap> {
+    /// Row `row` (16 elements) of the tile whose first element is `place`, as logged `Shared` loads, read through
+    /// `layout` (element `k` of the row is at `layout.element_offset(row, k)` from the tile's first element).
+    pub(super) fn wgmma_row(
+        &mut self,
+        place: &Place,
+        row: usize,
+        layout: &OperandLayout,
+    ) -> Result<Vec<Val>, KernelTrap> {
         let Place::Alloc { alloc, index } = place else {
             return Err(KernelTrap::Unsupported(
                 "a wgmma tile that is not an allocation place",
             ));
         };
-        let first = self.wgmma_int(index)? + (row * K) as i128;
-        (0..K as i128)
+        let first = self.wgmma_int(index)?;
+        (0..K)
             .map(|j| {
-                let at = ScalarExpr::ConstInt((first + j) as i64, ElementKind::I64);
-                self.alloc_load(*alloc, &at)
+                let off = layout.element_offset(row, j).ok_or(KernelTrap::Unsupported(
+                    "a wgmma operand layout the oracle does not read (a swizzle, or no leading offset)",
+                ))?;
+                let at_i = first + off as i128;
+                let at = ScalarExpr::ConstInt(at_i as i64, ElementKind::I64);
+                let v = self.alloc_load(*alloc, &at)?;
+                // the async proxy reads this tile: a generic write to it needs this writer's `ProxyFence` first
+                self.require_proxy_fenced(*alloc, at_i as usize)?;
+                Ok(v)
             })
             .collect()
     }

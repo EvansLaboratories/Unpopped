@@ -47,6 +47,28 @@ impl Machine<'_> {
         }
     }
 
+    /// `fence.proxy.async` by this thread (a no-op outside `run_launch`): its earlier generic writes are fenced.
+    pub(super) fn proxy_fence(&mut self) {
+        if let Some(c) = &mut self.ctx {
+            c.proxy_fence_here();
+        }
+    }
+
+    /// An async-proxy read of element `i` of `alloc` (a no-op outside `run_launch`).
+    pub(super) fn require_proxy_fenced(&self, alloc: u32, i: usize) -> Result<(), KernelTrap> {
+        match &self.ctx {
+            Some(c) => c.require_proxy_fenced(alloc, i),
+            None => Ok(()),
+        }
+    }
+
+    /// An async-proxy write landed on element `i` of `alloc` (a no-op outside `run_launch`).
+    pub(super) fn mark_async_written(&mut self, alloc: u32, i: usize) {
+        if let Some(c) = &mut self.ctx {
+            c.mark_async_written(alloc, i);
+        }
+    }
+
     /// Log a global access by this thread (a no-op outside `run_launch`).
     pub(super) fn note_global(
         &mut self,

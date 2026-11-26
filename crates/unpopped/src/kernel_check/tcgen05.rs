@@ -4,7 +4,7 @@
 //! float type, `n` is a multiple of 8 up to 256, the accumulator is `F32`; a load needs 32-lane subgroups in a
 //! one-dimensional block and a `Private` destination of the tensor element type.
 
-use super::wgmma::check_tile;
+use super::wgmma::{MAX_DESCRIPTOR_OFFSET, check_layout, check_tile};
 use super::{Scope, check_expr};
 use crate::exec::{Extent, MemorySpace};
 use crate::kernel::{KernelError, KernelFn, Stmt};
@@ -56,6 +56,8 @@ fn check_mma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
         d,
         d_col,
         scale_d,
+        a_layout,
+        b_layout,
     } = st
     else {
         unreachable!("check_mma is called for a Tcgen05Mma");
@@ -76,6 +78,10 @@ fn check_mma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
         .map_err(|_| refuse("an A tile that is not a Shared place of the input type"))?;
     check_tile(k, b, *ab, sc)
         .map_err(|_| refuse("a B tile that is not a Shared place of the input type"))?;
+    // the tcgen05 descriptor's leading field is 15 bits (PTX ISA 9.5 9.7.18.4.1): twice the wgmma range
+    let max_lbo = 2 * MAX_DESCRIPTOR_OFFSET + 16;
+    check_layout(k, a, a_layout, 128, max_lbo).map_err(refuse)?;
+    check_layout(k, b, b_layout, *n as usize, max_lbo).map_err(refuse)?;
     check_int(k, d_col, sc)?;
     check_int(k, scale_d, sc)
 }

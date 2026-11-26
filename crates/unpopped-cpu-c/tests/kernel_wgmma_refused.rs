@@ -5,7 +5,7 @@
 use unpopped::backend::Backend;
 use unpopped::exec::{AllocDecl, Extent, LaunchShape, MemorySpace};
 use unpopped::ir::ScalarExpr;
-use unpopped::kernel::{Block, BufferRole, KernelFn, Param, Place, Stmt};
+use unpopped::kernel::{Block, BufferRole, KernelFn, OperandLayout, Param, Place, Stmt};
 use unpopped_cpu_c::CpuC;
 use unpopped_vocab::ElementKind;
 
@@ -60,6 +60,8 @@ fn a_wgmma_is_refused_with_its_reason_and_the_control_lowers() {
         b: tile(1),
         d: 2,
         scale_d: ScalarExpr::ConstInt(0, ElementKind::U32),
+        a_layout: OperandLayout::RowMajor,
+        b_layout: OperandLayout::RowMajor,
     }]);
     let err = CpuC.lower_kernel(&with).expect_err("a wgmma is refused");
     assert!(
@@ -69,5 +71,18 @@ fn a_wgmma_is_refused_with_its_reason_and_the_control_lowers() {
     assert!(
         CpuC.lower_kernel(&kernel(vec![])).is_ok(),
         "the control lowers"
+    );
+}
+
+#[test]
+fn a_proxy_fence_lowers_as_nothing_because_serial_c_has_one_proxy() {
+    // the serial C has no async proxy to order against, so `fence.proxy.async` has nothing to do (the sibling test shows
+    // a Wgmma is still refused, so a lowerable kernel is not a symptom of the fence)
+    let fenced = kernel(vec![Stmt::ProxyFence {
+        space: MemorySpace::Shared,
+    }]);
+    assert!(
+        CpuC.lower_kernel(&fenced).is_ok(),
+        "a lone ProxyFence lowers"
     );
 }

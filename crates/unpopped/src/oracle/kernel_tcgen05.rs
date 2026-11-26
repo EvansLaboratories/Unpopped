@@ -32,8 +32,15 @@ impl Machine<'_> {
     }
 
     /// The `rows` rows of `K` elements of the tile at `place`.
-    fn tcgen05_tile(&mut self, place: &Place, rows: usize) -> Result<Vec<Vec<Val>>, KernelTrap> {
-        (0..rows).map(|r| self.wgmma_row(place, r)).collect()
+    fn tcgen05_tile(
+        &mut self,
+        place: &Place,
+        rows: usize,
+        layout: &crate::kernel::OperandLayout,
+    ) -> Result<Vec<Vec<Val>>, KernelTrap> {
+        (0..rows)
+            .map(|r| self.wgmma_row(place, r, layout))
+            .collect()
     }
 
     /// Run a `Tcgen05Mma`: `D` of `n` columns from `d_col` of the tensor allocation `d`.
@@ -45,6 +52,8 @@ impl Machine<'_> {
             d,
             d_col,
             scale_d,
+            a_layout,
+            b_layout,
             ..
         } = st
         else {
@@ -57,7 +66,10 @@ impl Machine<'_> {
             .filter(|c| c + n <= cols)
             .ok_or(KernelTrap::AllocOutOfBounds { alloc: d })?;
         let accumulate = self.wgmma_int(scale_d)? != 0;
-        let (a, b) = (self.tcgen05_tile(a, M)?, self.tcgen05_tile(b, n)?);
+        let (a, b) = (
+            self.tcgen05_tile(a, M, a_layout)?,
+            self.tcgen05_tile(b, n, b_layout)?,
+        );
         for (m, arow) in a.iter().enumerate() {
             for (j, brow) in b.iter().enumerate() {
                 let at = cell(m * cols + col0 + j);

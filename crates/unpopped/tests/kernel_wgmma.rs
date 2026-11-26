@@ -7,14 +7,19 @@
 //! `WgmmaWait` that covers its committed group. Each behaviour has a program that shows it and a control that does not.
 
 use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
-use unpopped::ir::ScalarExpr;
+use unpopped::ir::{BinaryOp, ScalarExpr};
 use unpopped::kernel::{
-    Block, BufferRole, KernelError, KernelFn, LocalDecl, Param, Place, Stmt, check_kernel,
+    Block, BufferRole, KernelError, KernelFn, LocalDecl, Major, OperandLayout, Param, Place, Stmt,
+    Swizzle, check_kernel,
 };
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
 use unpopped::oracle::kernel_launch::run_launch;
 use unpopped_vocab::ElementKind;
+
+#[path = "support/operand_layout.rs"]
+mod operand_layout;
+use operand_layout::{k_major, k_major_sw, mn_major, mn_major_sw, span, store_index};
 
 const U32: ElementKind = ElementKind::U32;
 const BF16: ElementKind = ElementKind::Bf16;
@@ -65,6 +70,11 @@ struct Opt {
     commit: bool,
     wait: u32,
     barrier: bool,
+    /// Each thread issues `fence.proxy.async` after storing its share of a tile.
+    fence: bool,
+    /// How the tiles sit in their allocations (the stores below use the layout formulas written in this file).
+    a_layout: OperandLayout,
+    b_layout: OperandLayout,
 }
 impl Opt {
     fn plain(n: u32) -> Self {
@@ -74,12 +84,15 @@ impl Opt {
             commit: true,
             wait: 0,
             barrier: true,
+            fence: true,
+            a_layout: OperandLayout::RowMajor,
+            b_layout: OperandLayout::RowMajor,
         }
     }
 }
 
 /// Each thread copies `per` elements of input buffer `src` into `Shared` allocation `dst`.
-fn copy_tile(src: u32, dst: u32, per: i64) -> Stmt {
+fn copy_tile(src: u32, dst: u32, per: i64, fence: bool, layout: OperandLayout) -> Stmt {
     counted(
         0,
         per,
@@ -93,21 +106,26 @@ fn copy_tile(src: u32, dst: u32, per: i64) -> Stmt {
                 place: buf(src, local(1)),
             },
             Stmt::Store {
-                place: alloc(dst, local(1)),
+                place: alloc(dst, store_index(layout, local(1))),
                 value: local(2),
             },
-        ],
+        ]
+        .into_iter()
+        .chain(fence.then_some(Stmt::ProxyFence {
+            space: MemorySpace::Shared,
+        }))
+        .collect(),
     )
 }
 
 /// The statements of a scenario: fill the tiles, (barrier), initialise `d`, wgmma, (commit), wait, copy `d` out.
 fn body(o: Opt) -> Vec<Stmt> {
     let n = o.n as i64;
-    let copy = copy_tile;
-    let mut body = vec![copy(0, 0, 8)];
+    let copy = |src, dst, per, layout| copy_tile(src, dst, per, o.fence, layout);
+    let mut body = vec![copy(0, 0, 8, o.a_layout)];
     // `b` has n * 16 elements: n / 8 per thread
     if n >= 8 {
-        body.push(copy(1, 1, n / 8));
+        body.push(copy(1, 1, n / 8, o.b_layout));
     }
     if o.barrier {
         body.push(Stmt::barrier(Scope::Block));
@@ -128,6 +146,8 @@ fn body(o: Opt) -> Vec<Stmt> {
         b: alloc(1, u(0)),
         d: 2,
         scale_d: u(o.scale_d),
+        a_layout: o.a_layout,
+        b_layout: o.b_layout,
     });
     if o.commit {
         body.push(Stmt::WgmmaCommit);
@@ -172,12 +192,17 @@ fn kernel(o: Opt) -> KernelFn {
     )
     .with_launch(LaunchShape::new([128, 1, 1], [1, 1, 1]).with_subgroup(32, 32));
     k.allocs = vec![
-        AllocDecl::new("a", MemorySpace::Shared, BF16, Extent::Static(64 * 16)),
+        AllocDecl::new(
+            "a",
+            MemorySpace::Shared,
+            BF16,
+            Extent::Static(span(o.a_layout, 64)),
+        ),
         AllocDecl::new(
             "b",
             MemorySpace::Shared,
             BF16,
-            Extent::Static((n * 16) as u32),
+            Extent::Static(span(o.b_layout, o.n as usize)),
         ),
         AllocDecl::new(
             "d",
@@ -327,4 +352,429 @@ fn the_checker_refuses_what_a_warpgroup_mma_cannot_be() {
     }
     // the control
     assert_eq!(check_kernel(&kernel(Opt::plain(8))), Ok(()));
+}
+
+// ---- `ProxyFence` (U8c slice 0): PTX ISA 9.5 9.7.17.7.1 "An async proxy fence must be used to establish an ordering
+// between prior writes to shared memory matrices and subsequent reads of the same matrices in a wgmma.mma_async".
+
+fn on(t: i64, body: Vec<Stmt>) -> Stmt {
+    Stmt::If {
+        cond: ScalarExpr::Binary(BinaryOp::CmpEq, Box::new(tid()), Box::new(u(t))),
+        then: Block(body),
+        els: Block(vec![]),
+    }
+}
+
+fn proxy_fence() -> Stmt {
+    Stmt::ProxyFence {
+        space: MemorySpace::Shared,
+    }
+}
+
+#[test]
+fn a_tile_written_without_the_proxy_fence_traps_when_the_wgmma_reads_it() {
+    let mut o = Opt::plain(8);
+    o.fence = false;
+    assert!(matches!(
+        run_unchecked(&kernel(o)),
+        Err(KernelTrap::MissingProxyFence { .. })
+    ));
+}
+
+#[test]
+fn another_threads_fence_does_not_cover_a_write() {
+    // thread 0 fences after the barrier, but threads 1..127 wrote their share of the tiles
+    let mut o = Opt::plain(8);
+    o.fence = false;
+    let mut k = kernel(o);
+    k.body.0.insert(3, on(0, vec![proxy_fence()]));
+    assert!(matches!(
+        run_unchecked(&k),
+        Err(KernelTrap::MissingProxyFence { .. })
+    ));
+}
+
+#[test]
+fn a_fence_by_every_writer_before_the_barrier_is_enough() {
+    let mut o = Opt::plain(8);
+    o.fence = false;
+    let mut k = kernel(o);
+    // the fence goes before the barrier that publishes the tile (CUTLASS's `fence_view_async_shared()` then a sync)
+    k.body.0.insert(2, proxy_fence());
+    let got = run_unchecked(&k).expect("fenced by each writer, then ordered by the barrier");
+    assert_eq!(got, expected(8, false));
+}
+
+#[test]
+fn bytes_a_bulk_copy_wrote_need_no_fence_but_a_generic_store_does() {
+    // A arrives by `CopyBulk` (the async proxy: completion carries the implicit fence); B is stored by threads
+    let bulk = |fence_b: bool| {
+        let mut o = Opt::plain(8);
+        o.fence = fence_b;
+        let mut k = kernel(o);
+        let mut body = k.body.0.clone();
+        let copy_b = body.remove(1);
+        body.remove(0); // the generic copy of A
+        let bar = Place::Alloc {
+            alloc: 3,
+            index: u(0),
+        };
+        let mut new = vec![
+            on(
+                0,
+                vec![Stmt::MbarInit {
+                    bar: bar.clone(),
+                    count: u(1),
+                }],
+            ),
+            Stmt::barrier(Scope::Block),
+            on(
+                0,
+                vec![
+                    Stmt::MbarArrive {
+                        bar: bar.clone(),
+                        tx: Some(u(64 * 16 * 2)),
+                    },
+                    Stmt::CopyBulk {
+                        dst: alloc(0, u(0)),
+                        src: Place::Logical {
+                            buffer: 0,
+                            coords: vec![u(0)],
+                        },
+                        elems: 64 * 16,
+                        bar: bar.clone(),
+                    },
+                ],
+            ),
+            copy_b,
+            Stmt::MbarWait { bar, parity: u(0) },
+        ];
+        new.extend(body);
+        k.body = Block(new);
+        k.allocs.push(AllocDecl::new(
+            "bar",
+            MemorySpace::Shared,
+            ElementKind::U64,
+            Extent::Static(1),
+        ));
+        k
+    };
+    let got = run_unchecked(&bulk(true)).expect("A by CopyBulk, B fenced");
+    assert_eq!(got, expected(8, false));
+    assert!(
+        matches!(
+            run_unchecked(&bulk(false)),
+            Err(KernelTrap::MissingProxyFence { alloc: 1 })
+        ),
+        "B was stored by threads, so its read needs their fences (A, from the bulk copy, does not)"
+    );
+}
+
+#[test]
+fn the_checker_admits_a_shared_proxy_fence_and_refuses_other_spaces() {
+    let with = |space| {
+        let mut k = kernel(Opt::plain(8));
+        k.body.0.insert(0, Stmt::ProxyFence { space });
+        check_kernel(&k)
+    };
+    assert_eq!(with(MemorySpace::Shared), Ok(()));
+    assert!(matches!(
+        with(MemorySpace::Global),
+        Err(KernelError::SyncUnsupported { .. })
+    ));
+}
+
+#[test]
+fn a_proxy_fence_survives_the_text_round_trip() {
+    let json = serde_json::to_string(&proxy_fence()).expect("serializes");
+    assert!(json.contains("ProxyFence"), "{json}");
+    let back: Stmt = serde_json::from_str(&json).expect("parses");
+    assert_eq!(back, proxy_fence());
+}
+
+// ---- operand layouts, end to end -------------------------------------------------------------------------------------
+
+/// Dense canonical layouts for `rows` rows: K-major packs the two 8-element K halves of a core matrix `LBO` apart and
+/// 8-row groups `SBO` apart; MN-major packs the 8-row groups `SBO` apart and the K halves `LBO` apart.
+fn dense_k(rows: usize) -> OperandLayout {
+    let _ = rows;
+    k_major(128, 256) // core matrix 64 elements (128 B); the two K halves 64 elements apart, row groups 128 apart
+}
+fn dense_mn(rows: usize) -> OperandLayout {
+    mn_major(2 * 64 * (rows as u32 / 8), 128) // row groups 64 elements (128 B) apart; the K halves a whole column of groups
+}
+
+#[test]
+fn every_fragment_value_is_the_reference_product_under_each_canonical_layout() {
+    for n in [8u32, 16, 64] {
+        for (a, b) in [
+            (dense_k(64), dense_k(n as usize)),
+            (dense_mn(64), dense_mn(n as usize)),
+            (dense_k(64), dense_mn(n as usize)),
+            (dense_mn(64), dense_k(n as usize)),
+            // padded: row groups a core matrix apart with a gap, the K halves beyond them
+            (k_major(128, 512), k_major(256, 384)),
+        ] {
+            let mut o = Opt::plain(n);
+            (o.a_layout, o.b_layout) = (a, b);
+            let got = run(&kernel(o), n).expect("the oracle runs it");
+            assert_eq!(got, expected(n, false), "n = {n}, a = {a:?}, b = {b:?}");
+        }
+    }
+}
+
+#[test]
+fn declaring_a_different_layout_than_the_one_stored_gives_a_different_product() {
+    // the tiles are stored K-major; the statement is told MN-major (valid, but another arrangement): the result moves
+    let mut o = Opt::plain(16);
+    o.a_layout = dense_k(64);
+    o.b_layout = dense_k(16);
+    let mut k = kernel(o);
+    if let Some(Stmt::Wgmma {
+        a_layout, b_layout, ..
+    }) = k
+        .body
+        .0
+        .iter_mut()
+        .find(|s| matches!(s, Stmt::Wgmma { .. }))
+    {
+        *a_layout = dense_mn(64);
+        *b_layout = dense_mn(16);
+    }
+    assert_ne!(
+        run(&k, 16).expect("it still runs"),
+        expected(16, false),
+        "the oracle read through the declared layout"
+    );
+}
+
+#[test]
+fn the_checker_refuses_layouts_a_descriptor_cannot_carry() {
+    let refused = |a: OperandLayout, mutate: &dyn Fn(&mut KernelFn)| {
+        let mut o = Opt::plain(8);
+        o.a_layout = dense_k(64);
+        let mut k = kernel(o);
+        if let Some(Stmt::Wgmma { a_layout, .. }) = k
+            .body
+            .0
+            .iter_mut()
+            .find(|s| matches!(s, Stmt::Wgmma { .. }))
+        {
+            *a_layout = a;
+        }
+        mutate(&mut k);
+        matches!(check_kernel(&k), Err(KernelError::WgmmaUnsupported { .. }))
+    };
+    let keep: &dyn Fn(&mut KernelFn) = &|_| {};
+    assert!(!refused(dense_k(64), keep), "the control is admitted");
+    let swz = |sw| OperandLayout::Canonical {
+        major: Major::K,
+        swizzle: sw,
+        lbo: Some(128),
+        sbo: 256,
+    };
+    assert!(refused(swz(Swizzle::B128), keep), "swizzle not built");
+    assert!(
+        refused(
+            OperandLayout::Canonical {
+                major: Major::K,
+                swizzle: Swizzle::None,
+                lbo: None,
+                sbo: 256
+            },
+            keep
+        ),
+        "no leading offset"
+    );
+    assert!(refused(k_major(0, 256), keep), "a zero offset");
+    assert!(refused(k_major(136, 256), keep), "not a multiple of 16");
+    assert!(
+        refused(k_major(128, 1 << 18), keep),
+        "beyond 14 bits of offset >> 4"
+    );
+    assert!(
+        refused(k_major(128, 128), keep),
+        "two core matrices at one place"
+    );
+    assert!(
+        refused(k_major(128, 128 * 1024), keep),
+        "leaves the allocation"
+    );
+    // a tile start that is not a constant, or not 16-byte aligned
+    let start = |e: ScalarExpr| {
+        move |k: &mut KernelFn| {
+            if let Some(Stmt::Wgmma {
+                a: Place::Alloc { index, .. },
+                ..
+            }) = k
+                .body
+                .0
+                .iter_mut()
+                .find(|s| matches!(s, Stmt::Wgmma { .. }))
+            {
+                *index = e.clone();
+            }
+        }
+    };
+    assert!(
+        refused(dense_k(64), &start(u(4))),
+        "start not 16-byte aligned"
+    );
+    assert!(refused(dense_k(64), &start(tid())), "start not a constant");
+}
+
+#[test]
+fn an_operand_layout_survives_the_text_round_trip_and_defaults_when_absent() {
+    let layout = dense_mn(64);
+    let json = serde_json::to_string(&layout).expect("serializes");
+    assert_eq!(
+        serde_json::from_str::<OperandLayout>(&json).unwrap(),
+        layout
+    );
+    // a Wgmma written before the fields existed parses with RowMajor
+    let mut o = Opt::plain(8);
+    o.a_layout = layout;
+    let k = kernel(o);
+    let mut v = serde_json::to_value(&k).expect("a value");
+    fn strip(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(m) => {
+                m.remove("a_layout");
+                m.remove("b_layout");
+                m.values_mut().for_each(strip);
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    strip(&mut v);
+    let old: KernelFn = serde_json::from_value(v).expect("an old kernel parses");
+    let Some(Stmt::Wgmma {
+        a_layout, b_layout, ..
+    }) = old.body.0.iter().find(|s| matches!(s, Stmt::Wgmma { .. }))
+    else {
+        panic!("a wgmma");
+    };
+    assert_eq!(
+        (*a_layout, *b_layout),
+        (OperandLayout::RowMajor, OperandLayout::RowMajor)
+    );
+}
+
+/// Dense swizzled layouts: an atom is 8 rows of `s` 16-byte chunks (`128 s` bytes). K-major packs the 8-row groups one
+/// atom apart; MN-major packs the two 8-row K groups one atom apart (`SBO`) and the MN atoms after both (`LBO`).
+fn dense_sw_k(sw: Swizzle) -> OperandLayout {
+    k_major_sw(sw, 128 * swizzle_chunks(sw))
+}
+fn dense_sw_mn(sw: Swizzle) -> OperandLayout {
+    let s = swizzle_chunks(sw);
+    mn_major_sw(sw, 256 * s, 128 * s)
+}
+fn swizzle_chunks(sw: Swizzle) -> u32 {
+    match sw {
+        Swizzle::None => 1,
+        Swizzle::B32 => 2,
+        Swizzle::B64 => 4,
+        Swizzle::B128 => 8,
+    }
+}
+
+#[test]
+fn every_fragment_value_is_the_reference_product_under_each_swizzled_layout() {
+    for sw in [Swizzle::B32, Swizzle::B64, Swizzle::B128] {
+        for n in [8u32, 16, 64] {
+            for (a, b) in [
+                (dense_sw_k(sw), dense_sw_k(sw)),
+                (dense_sw_mn(sw), dense_sw_mn(sw)),
+                (dense_sw_k(sw), dense_sw_mn(sw)),
+                (dense_sw_mn(sw), dense_sw_k(sw)),
+            ] {
+                let mut o = Opt::plain(n);
+                (o.a_layout, o.b_layout) = (a, b);
+                let got = run(&kernel(o), n).expect("the oracle runs it");
+                assert_eq!(
+                    got,
+                    expected(n, false),
+                    "{sw:?} n = {n}, a = {a:?}, b = {b:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_swizzled_layout_stored_unswizzled_gives_another_product() {
+    // the tiles are stored in the 128B-swizzled arrangement; the statement is told the unswizzled K-major layout of the
+    // same size (a valid arrangement, with the chunks in their un-XORed places): the product moves
+    let mut o = Opt::plain(16);
+    o.a_layout = dense_sw_k(Swizzle::B128);
+    o.b_layout = dense_sw_k(Swizzle::B128);
+    let mut k = kernel(o);
+    if let Some(Stmt::Wgmma {
+        a_layout, b_layout, ..
+    }) = k
+        .body
+        .0
+        .iter_mut()
+        .find(|s| matches!(s, Stmt::Wgmma { .. }))
+    {
+        *a_layout = k_major(128, 1024);
+        *b_layout = k_major(128, 1024);
+    }
+    // either the oracle reads a cell the swizzled stores never wrote (the rows use 2 of the 8 chunks, and the XOR moves
+    // them), or it reads other values: it is never the reference product
+    match run(&k, 16) {
+        Err(KernelTrap::UninitializedShared { .. }) => {}
+        other => assert_ne!(other.expect("it runs or traps"), expected(16, false)),
+    }
+}
+
+#[test]
+fn the_checker_applies_the_swizzle_rules() {
+    let set = |a: OperandLayout, start: Option<i64>| {
+        let mut o = Opt::plain(8);
+        o.a_layout = dense_sw_k(Swizzle::B128);
+        let mut k = kernel(o);
+        if let Some(Stmt::Wgmma {
+            a_layout,
+            a: Place::Alloc { index, .. },
+            ..
+        }) = k
+            .body
+            .0
+            .iter_mut()
+            .find(|s| matches!(s, Stmt::Wgmma { .. }))
+        {
+            *a_layout = a;
+            if let Some(st) = start {
+                *index = u(st);
+            }
+        }
+        check_kernel(&k)
+    };
+    let refused =
+        |r: Result<(), KernelError>| matches!(r, Err(KernelError::WgmmaUnsupported { .. }));
+    assert_eq!(set(dense_sw_k(Swizzle::B128), None), Ok(()), "the control");
+    // a swizzled K-major operand does not use the leading offset
+    assert!(refused(set(
+        OperandLayout::Canonical {
+            major: Major::K,
+            swizzle: Swizzle::B128,
+            lbo: Some(128),
+            sbo: 1024
+        },
+        None
+    )));
+    // an MN-major one needs it
+    assert!(refused(set(
+        OperandLayout::Canonical {
+            major: Major::MN,
+            swizzle: Swizzle::B64,
+            lbo: None,
+            sbo: 512
+        },
+        None
+    )));
+    // a start that is a multiple of 16 bytes but not of the 1024-byte pattern (512 elements)
+    assert!(refused(set(dense_sw_k(Swizzle::B128), Some(64))));
 }

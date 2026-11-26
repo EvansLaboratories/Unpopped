@@ -219,6 +219,7 @@ impl Emitter<'_> {
             Stmt::AtomicRmw { .. } => self.atomic_rmw(s)?,
             Stmt::AtomicCas { .. } => self.atomic_cas(s)?,
             Stmt::Fence { .. }
+            | Stmt::ProxyFence { .. }
             | Stmt::AsyncCommit
             | Stmt::AsyncWait { .. }
             | Stmt::GridDepWait

@@ -152,6 +152,8 @@ impl Machine<'_> {
         for (j, v) in vals.into_iter().enumerate() {
             let index = ScalarExpr::ConstInt((at + j) as i64, ElementKind::I64);
             self.alloc_store(*alloc, &index, v)?;
+            // a bulk copy is an async-proxy write; its completion carries the implicit generic-async fence
+            self.mark_async_written(*alloc, at + j);
         }
         self.complete_tx(bar, (bits * n / 8) as i128)
     }
