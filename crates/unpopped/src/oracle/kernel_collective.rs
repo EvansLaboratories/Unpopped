@@ -11,7 +11,7 @@
 //! - **Vote** `All`/`Any`: `1` or `0` (a `U32`) for "every / some lane's value is non-zero" (a NaN is non-zero).
 //!   `Ballot`: a `U32` whose bit `i` is lane `i`'s predicate; more than 32 lanes is a typed trap.
 //! - **Reduce** `op`: every lane gets the left fold of the values in lane order. **Scan**: lane `i` gets the fold of
-//!   lanes `0..=i` (`0..i` when exclusive; lane 0 then gets the identity of `Sum`/`And`/`Or`/`Xor`, and for `Max`/`Min`/`Prod` NaN on a float or the combine's identity on an integer: U53). Float `Sum` is
+//!   lanes `0..=i` (`0..i` when exclusive; lane 0 then gets the identity of `Sum`/`And`/`Or`/`Xor`, and for `Max`/`Min`/`Prod` the fold's identity: `-inf`/`+inf`/1 on a float, the type's minimum/maximum/1 on an integer: U53). Float `Sum` is
 //!   the left fold in lane order, which a device may reassociate (compare within a tolerance, not bytes).
 //!
 //! A collective does **not** order memory: it is a rendezvous that exchanges registers, not a fence, so accesses on
@@ -163,15 +163,20 @@ fn fold(op: ReduceOp, ty: ElementKind, vals: impl Iterator<Item = Val>) -> Resul
     vals.try_fold(first, |a, b| combine(op, ty, a, b))
 }
 
-/// What an exclusive scan hands lane 0. `Sum`, `And`, `Or` and `Xor` have an identity. `Max`, `Min` and `Prod` follow the
-/// exclusive `Mean` precedent (U53, PM ruling Q12): a **float** lane 0 is NaN (the fold of no values is not a number, as
-/// the running mean's `0 / 0`), an **integer** lane 0 is the combine's identity: the type's least value for `Max`, its
-/// greatest for `Min`, and 1 for `Prod`.
+/// What an exclusive scan hands lane 0: the identity of the fold. `Sum`, `Or` and `Xor` 0, `And` all ones, and (U53) `Max`
+/// the least value (`-inf` on a float, the type's minimum on an integer), `Min` the greatest (`+inf`, the type's maximum)
+/// and `Prod` 1. Reading of the PM ruling Q12 "follow the exclusive `Mean` precedent": follow its *shape* (an exclusive
+/// scan of these folds is admitted, lane 0 is a stated value), not its NaN, which is `Mean`'s `0 / 0` and has no
+/// counterpart for these monoids.
 fn identity(op: ReduceOp, ty: ElementKind) -> Result<Val, KernelTrap> {
     let int = types::int_range(ty);
     if let ReduceOp::Max | ReduceOp::Min | ReduceOp::Prod = op {
         return Ok(match int {
-            None => Val::Float(f64::NAN),
+            None => Val::Float(match op {
+                ReduceOp::Max => f64::NEG_INFINITY,
+                ReduceOp::Min => f64::INFINITY,
+                _ => 1.0,
+            }),
             Some((lo, hi)) => int_val(
                 match op {
                     ReduceOp::Max => lo,

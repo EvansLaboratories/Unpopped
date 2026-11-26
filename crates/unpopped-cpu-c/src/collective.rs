@@ -335,11 +335,12 @@ fn identity(s: &Spec, op: ReduceOp) -> Result<String, LowerError> {
     match op {
         ReduceOp::Sum | ReduceOp::Or | ReduceOp::Xor => Ok(format!("({t})0")),
         ReduceOp::And => Ok(format!("({t})(~({})0)", unsigned_of(s.ty)?)),
-        // U53: a float lane 0 is NaN; an integer lane 0 is the combine's identity (least for Max, greatest for Min, 1)
-        ReduceOp::Max | ReduceOp::Min | ReduceOp::Prod
-            if matches!(s.ty, ElementKind::F32 | ElementKind::F64) =>
-        {
-            Ok(format!("({t})NAN"))
+        // U53: the fold's identity: -inf / +inf / 1 on a float, the type's least / greatest / 1 on an integer
+        ReduceOp::Max if matches!(s.ty, ElementKind::F32 | ElementKind::F64) => {
+            Ok(format!("({t})(-INFINITY)"))
+        }
+        ReduceOp::Min if matches!(s.ty, ElementKind::F32 | ElementKind::F64) => {
+            Ok(format!("({t})INFINITY"))
         }
         ReduceOp::Prod => Ok(format!("({t})1")),
         ReduceOp::Max | ReduceOp::Min => {

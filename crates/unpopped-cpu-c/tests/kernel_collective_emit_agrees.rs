@@ -186,7 +186,7 @@ fn float_reductions_and_scans_agree_with_a_nan_in_one_subgroup() {
             let k = kernel(kind, scope, F32, F32);
             check(&format!("fscan_{op:?}_{scope:?}"), &k, float_args());
         }
-        // an exclusive float scan: lane 0 is 0 for Sum and NaN for Max/Min/Prod (U53)
+        // an exclusive float scan: lane 0 is the fold's identity: 0, -inf, +inf, 1 (U53)
         for op in [ReduceOp::Sum, ReduceOp::Max, ReduceOp::Min, ReduceOp::Prod] {
             let kind = CollectiveKind::Scan {
                 op,

@@ -164,7 +164,7 @@ fn a_scan_is_the_prefix_fold_inclusive_or_exclusive() {
 }
 
 #[test]
-fn an_exclusive_max_min_or_prod_scan_hands_lane_0_nan_or_the_identity() {
+fn an_exclusive_max_min_or_prod_scan_hands_lane_0_the_identity() {
     let int = |op, exclusive, scope| ints(&on(CollectiveKind::Scan { op, exclusive }, scope));
     let (lo, hi) = (i64::from(i32::MIN), i64::from(i32::MAX));
     // integer lane 0: the least value for Max, the greatest for Min, 1 for Prod (U53, PM Q12)
@@ -199,7 +199,7 @@ fn an_exclusive_max_min_or_prod_scan_hands_lane_0_nan_or_the_identity() {
         ints(&on(CollectiveKind::Reduce(ReduceOp::Prod), Scope::Block)),
         vec![40320; 8]
     );
-    // a float lane 0 is NaN, the running values follow
+    // a float lane 0 is the fold's identity (-inf, +inf, 1), the running values follow
     let float = |op, exclusive| {
         let k = kernel(
             CollectiveKind::Scan { op, exclusive },
@@ -211,9 +211,13 @@ fn an_exclusive_max_min_or_prod_scan_hands_lane_0_nan_or_the_identity() {
         assert_eq!(check_kernel(&k), Ok(()), "well formed");
         run(&k, F32).expect("runs")
     };
-    for op in [ReduceOp::Max, ReduceOp::Min, ReduceOp::Prod] {
+    for (op, ident) in [
+        (ReduceOp::Max, f64::NEG_INFINITY),
+        (ReduceOp::Min, f64::INFINITY),
+        (ReduceOp::Prod, 1.0),
+    ] {
         let got = float(op, true);
-        assert!(got[0].is_nan(), "{op:?}: lane 0 is {}", got[0]);
+        assert_eq!(got[0], ident, "{op:?}: lane 0");
         let want: Vec<f64> = match op {
             ReduceOp::Max => vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
             ReduceOp::Min => vec![1.0; 7],
@@ -225,6 +229,44 @@ fn an_exclusive_max_min_or_prod_scan_hands_lane_0_nan_or_the_identity() {
         float(ReduceOp::Prod, false),
         vec![1.0, 2.0, 6.0, 24.0, 120.0, 720.0, 5040.0, 40320.0]
     );
+}
+
+#[test]
+fn an_exclusive_max_after_a_nan_lane_gives_the_identity_then_nan_not_nan_from_lane_0() {
+    // PM Q12 (2026-11-26): out[i] = op(out[i-1], x[i-1]) with NaN-propagating Max/Min would poison every later lane if lane 0
+    // were NaN, and lane 0 would hide that lane 0's own value is NaN: over [NaN, 2, 3, ..] an exclusive Max is
+    // [-inf, NaN, NaN, ..] (and Min [+inf, NaN, ..])
+    let nan_first = ScalarExpr::Select(
+        Box::new(ScalarExpr::Binary(
+            BinaryOp::CmpEq,
+            Box::new(cast(tid(), I32)),
+            Box::new(c(0)),
+        )),
+        Box::new(ScalarExpr::Const(f64::NAN)),
+        Box::new(cast(lane_value(), F32)),
+    );
+    for (op, ident) in [
+        (ReduceOp::Max, f64::NEG_INFINITY),
+        (ReduceOp::Min, f64::INFINITY),
+    ] {
+        let k = kernel(
+            CollectiveKind::Scan {
+                op,
+                exclusive: true,
+            },
+            Scope::Block,
+            nan_first.clone(),
+            F32,
+            F32,
+        );
+        assert_eq!(check_kernel(&k), Ok(()), "well formed");
+        let got = run(&k, F32).expect("runs");
+        assert_eq!(got[0], ident, "{op:?}: lane 0 is the identity, not NaN");
+        assert!(
+            got[1..].iter().all(|v| v.is_nan()),
+            "{op:?}: every later lane has seen the NaN: {got:?}"
+        );
+    }
 }
 
 #[test]
