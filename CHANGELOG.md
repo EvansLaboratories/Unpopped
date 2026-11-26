@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.1` — Docs: the oracle edge rules of subgroup collectives are stated and pinned (shuffle up/down/xor, idx, ballot)
+
+`CollectiveKind::Shuffle` and `Vote` now state the edge rules the oracle always applied: `Idx` reads lane `operand mod n` (Euclidean; design), `Up`/`Down`/`Xor` give a lane with no source its own value (inherited from PTX ISA 9.5 section 9.7.10.6 `shfl.sync`, cited), a ballot is defined for 32 lanes and a typed trap beyond (design). `docs/design-kernel-collectives-edges.md` says the IR defines the edge and an emitter must spell it or decline by name; `tests/kernel_collective_edges.rs` pins delta and mask 0, 1, n - 1, n, n + 1, `Idx` operands n, n + 1 and -1, and a ballot at 32 and 33 lanes. No behaviour change.
+
+---
+
 ## `0.60.0` — **BREAKING**: seven new `ElementKind` rows from KISS 0.24.0 union batch 1 (`F128` `I128` `U128` `I256` `U256` `F8E3M4` `F8UE4M3`)
 
 `ElementKind` is not `non_exhaustive`, so every external exhaustive match breaks (baracuda emit and parse, vulkane, bonefish, fishstringer, rockfish, fuel `element_kind_to_dtype`); each must decline the seven by name until it lowers them. The rows are storage and key identity only (KISS 6.1-0017 to -0020: `f128`, `i128`, `u128`, `i256`, `u256`, `f8e3m4`, `f8ue4m3`, appended after `f6e3m2`; `ElementKind::ALL` is 35 for 34 tokens): the key codec, `dtype_storage_bits` and `dtype_numeric_kind` carry them; `F8UE4M3` is a scale type that declines at operand 0; `check_kernel` refuses a kernel that declares one with the new `KernelError::DtypeNotComputed` (a `non_exhaustive` enum: no compile break) and a `Cast` into one stays `IllegalCast`; `unpopped-cpu-c` declines them. The KISS corpus is re-vendored at `a9ad8cf` (0.24.0); four K-role-set derivation vectors (6.6-0023a) are the named gap for a later phase. Plan: `docs/design-union-batch1-consumer.md`. Verified: the manifest, derivation (88 vectors) and byte-match tests pass; a mutant with the declaration guard off fails the refusal test.
