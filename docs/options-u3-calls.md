@@ -73,7 +73,7 @@ which the acyclic graph permits). A `Call` to such a function is a barrier site:
 callee is proven uniform; **recommend always divergent** in v1 (conservative: it can refuse a program, never admit a
 bad one). Atomics and accesses in a callee are logged with the calling thread, so the race detector needs no change.
 
-**Q7. Effects.** The effect set (ROADMAP U3) is "computed when a consumer asks". A call's effect is the union of its
+**Q7. Effects.** The effect set (ROADMAP U3) is "computed when a consumer asks". A call's effect is the union of its **RE-DISPOSITIONED 2026-11-26 (PM via pm-kernels; CireSnave 2026-10-24, 2026-11-11, 2026-11-19): not a wait; unblocked work, ranked lower.**
 callee's; stating that now costs nothing and nothing computes it yet.
 
 ## Slices (each additive after the Q2 reshape, each red-first with seeded mutants)
