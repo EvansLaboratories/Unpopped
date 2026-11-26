@@ -127,8 +127,12 @@ fn a_kernel_that_declares_a_batch_1_dtype_is_refused_by_name_and_the_control_pas
 }
 
 #[test]
-fn a_cast_into_a_batch_1_dtype_is_still_the_typed_illegal_cast() {
-    for (dt, name, _) in ROWS {
+fn a_cast_into_a_wide_or_binary128_row_is_still_the_typed_illegal_cast() {
+    // `F8E3M4` and `F8UE4M3` became Cast endpoints in plan E1b (`tests/cast_fp8_union.rs`); the five wide rows stay refused
+    for (dt, name, _) in ROWS
+        .into_iter()
+        .filter(|(dt, _, _)| !matches!(dt, ElementKind::F8E3M4 | ElementKind::F8UE4M3))
+    {
         let k = kernel(
             ElementKind::F32,
             vec![],
