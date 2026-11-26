@@ -8,7 +8,7 @@
 use unpopped::exec::{ExecId, LaunchShape, Scope};
 use unpopped::ir::{BinaryOp, ReduceOp, ScalarExpr};
 use unpopped::kernel::{
-    Block, CollectiveKind, KernelError, KernelFn, LocalDecl, Stmt, check_kernel,
+    Block, CollectiveKind, KernelError, KernelFn, LocalDecl, Param, Stmt, check_kernel,
 };
 use unpopped_vocab::ElementKind;
 
@@ -126,6 +126,23 @@ fn a_return_on_threadidx_y_is_a_whole_subgroup_exit_when_the_subgroup_size_is_st
         check_kernel(&kernel([32, 4, 1], (16, 32), under)),
         Err(KernelError::BarrierDivergent)
     );
+}
+
+#[test]
+fn the_mmvq_guard_shape_stays_admitted() {
+    // The census wall (`unpopped-convert/tests/kernel_body_early_exit_callee.rs`, 57 gguf mmvq kernels): `if (row >= nrows) return;`
+    // then a warp reduction, with `row` from the block index or a scalar parameter. Both are uniform across a subgroup's lanes, so
+    // the `Return` is a whole-subgroup exit. (The 57 kernels themselves are the census corpus, not in this repository: the lifted
+    // shape is what is pinned here, and it also runs in the `unpopped-convert` test above.)
+    let guard = |cond: ScalarExpr| vec![if_(cond, vec![Stmt::Return]), sum(Scope::Subgroup)];
+    let block_row = ScalarExpr::Exec(ExecId::BlockIdx(0));
+    assert_eq!(check_kernel(&standard(guard(block_row))), Ok(()));
+    let mut with_param = standard(guard(ScalarExpr::Local(1)));
+    with_param.params = vec![Param::scalar("nrows", I32, 1)];
+    with_param.locals.push(LocalDecl::scalar(I32));
+    assert_eq!(check_kernel(&with_param), Ok(()));
+    // the control: the same guard on a lane-dependent value is the refused shape
+    after_return(&standard(guard(thread(0))));
 }
 
 #[test]
