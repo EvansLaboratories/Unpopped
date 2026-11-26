@@ -812,7 +812,7 @@ pub enum Stmt {
     /// fence. For the async proxy, fence.proxy.async should be used to synchronize memory between generic proxy and the
     /// async proxy" (9.7.17.4, 9.7.10.28.2), and for `wgmma` "An async proxy fence must be used to establish an
     /// ordering between prior writes to shared memory matrices and subsequent reads of the same matrices in a
-    /// wgmma.mma_async instruction" (9.7.17.7.1). The fence "take[s] effect within a single thread and therefore do[es]
+    /// wgmma.mma_async instruction" (9.7.17.7.1). The fence "take\[s\] effect within a single thread and therefore do\[es\]
     /// not have a .scope qualifier": it covers the writes **this thread** made, and its effect composes with a barrier
     /// as the memory model says (so a thread that reads another thread's stores still needs the barrier, and that
     /// writer needs its own `ProxyFence`). The completion of an asynchronous-proxy operation (`CopyBulk`, a `wgmma`)
