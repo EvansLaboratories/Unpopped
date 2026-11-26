@@ -32,6 +32,7 @@
 use std::fmt;
 
 mod slice;
+mod structural;
 mod swizzle;
 mod text;
 
