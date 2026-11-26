@@ -15,6 +15,18 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.4` — Added: `Layout::{group, append, prepend, replace, dice, filter_zeros, filter}`, the structural layout operations
+
+Pure vocabulary in `unpopped-vocab::layout_algebra` (CuTe `01_layout.md` names and meaning; ROADMAP IR-union row 6, `cute.md`). `group` nests a range of top-level modes without changing the index-to-offset map; `append`/`prepend` add a mode at either end; `replace` swaps one; `dice` is the complement of `slice`; `filter_zeros` sets stride-0 extents to 1 and `filter` also coalesces. `filter_zeros`/`filter` semantics are UNVERIFIED against `cute/layout.hpp` (taken from the documentation's description). Verified by `tests/layout_algebra_structural.rs`: hand examples, brute-force properties over eight layouts, and a broken variant per checker that must fail. Additive; no kernel or IR change.
+
+---
+
+## `0.60.3` — docs: PATENT-SWEEP wrapper reads (16/559,544 allowed claims, SRNT) and the G-T2 ruling with what B1 loses
+
+`docs/PATENT-SWEEP.md` only, no code. The allowed claims of US20210064987A1 (application 16/559,544) are read from the file wrapper: the rank-change wording the G-T3 section flagged was deleted, so `retile` moves to outside as read. The 17/367,053 search notes are OCR-read and move no verdict. The G-T2 section gains the PM's hold, the application numbers for the wrapper fetch, and a paragraph on what B1 loses while `TileMma`, `TileLoad` and `TileStore` wait. Also reads US11714648B2 and US10866786B2 (outside as read).
+
+---
+
 ## `0.60.2` — docs: PATENT-SWEEP EXIN reading and gates G-T2, G-T3, G-T4
 
 `docs/PATENT-SWEEP.md` only, no code. Adds an `EXIN` 2025-12-05 addendum for US12699602B1 (OCR-read, errors possible; the interview summary names no reference and moves no verdict) and the patent gates G-T2 (opaque tile MMA, load, store), G-T3 (slice, partition, retile, layout conversion) and G-T4 (`TiledMma`, `TiledCopy`) of `docs/design-tile-and-schedule-plan.md` section 9. Independent claims were read from Google Patents text, each limb quoted, each absence with a positive control. G-T2 and G-T3 each end with a `needs more` for a person (the Intel tile-instruction method claims against an IR statement; US20210064987A1's rank-changing claims against `retile`).
