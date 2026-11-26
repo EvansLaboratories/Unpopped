@@ -125,7 +125,7 @@ pub(super) fn check_contraction(op: &OpDef, key: &StructureKey) -> Result<(), Pl
     };
     let decline = |d| Err(PlanError::UnservableContraction(d));
     if let Some((want, k_step)) = accum_policy_fit(accum) {
-        if key.dtype != want || k_step == 0 {
+        if !want.contains(&key.dtype) || k_step == 0 {
             return decline(ContractionDecline::AccumPolicyMismatch {
                 dtype: key.dtype,
                 k_step,
@@ -199,13 +199,25 @@ pub(crate) fn accum_integer_step(accum: &AccumSpec) -> Option<Option<u32>> {
     }
 }
 
-/// The operand dtype a reduced-precision accumulation policy needs and its `k_step`; `None` for [`AccumSpec::WideFloat`].
-pub(super) fn accum_policy_fit(accum: &AccumSpec) -> Option<(ElementKind, u32)> {
+/// The operand dtypes a reduced-precision accumulation policy admits and its `k_step`; `None` for [`AccumSpec::WideFloat`].
+pub(super) fn accum_policy_fit(accum: &AccumSpec) -> Option<(&'static [ElementKind], u32)> {
     match *accum {
         AccumSpec::Tf32 { k_step }
         | AccumSpec::Tf32x3 { k_step }
-        | AccumSpec::Bf16x3 { k_step } => Some((ElementKind::F32, k_step)),
-        AccumSpec::F16Accum { k_step } => Some((ElementKind::F16, k_step)),
+        | AccumSpec::Bf16x3 { k_step } => Some((&[ElementKind::F32], k_step)),
+        AccumSpec::F16Accum { k_step } => Some((&[ElementKind::F16], k_step)),
+        AccumSpec::Fp8FastAccum {
+            k_step,
+            promote_every,
+            mantissa_bits,
+        } => {
+            // a zero promotion interval or a mantissa width outside 1..=23 is reported as `k_step` 0, the decline's one number
+            let valid = promote_every >= 1 && (1..=23).contains(&mantissa_bits);
+            Some((
+                &[ElementKind::Fp8E4M3FN, ElementKind::Fp8E5M2],
+                if valid { k_step } else { 0 },
+            ))
+        }
         _ => None,
     }
 }
