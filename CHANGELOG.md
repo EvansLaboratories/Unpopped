@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.2` — docs: PATENT-SWEEP EXIN reading and gates G-T2, G-T3, G-T4
+
+`docs/PATENT-SWEEP.md` only, no code. Adds an `EXIN` 2025-12-05 addendum for US12699602B1 (OCR-read, errors possible; the interview summary names no reference and moves no verdict) and the patent gates G-T2 (opaque tile MMA, load, store), G-T3 (slice, partition, retile, layout conversion) and G-T4 (`TiledMma`, `TiledCopy`) of `docs/design-tile-and-schedule-plan.md` section 9. Independent claims were read from Google Patents text, each limb quoted, each absence with a positive control. G-T2 and G-T3 each end with a `needs more` for a person (the Intel tile-instruction method claims against an IR statement; US20210064987A1's rank-changing claims against `retile`).
+
+---
+
 ## `0.60.1` — Docs: the oracle edge rules of subgroup collectives are stated and pinned (shuffle up/down/xor, idx, ballot)
 
 `CollectiveKind::Shuffle` and `Vote` now state the edge rules the oracle always applied: `Idx` reads lane `operand mod n` (Euclidean; design), `Up`/`Down`/`Xor` give a lane with no source its own value (inherited from PTX ISA 9.5 section 9.7.10.6 `shfl.sync`, cited), a ballot is defined for 32 lanes and a typed trap beyond (design). `docs/design-kernel-collectives-edges.md` says the IR defines the edge and an emitter must spell it or decline by name; `tests/kernel_collective_edges.rs` pins delta and mask 0, 1, n - 1, n, n + 1, `Idx` operands n, n + 1 and -1, and a ballot at 32 and 33 lanes. No behaviour change.
