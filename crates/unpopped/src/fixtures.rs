@@ -30,6 +30,7 @@ const BF16: ElementKind = ElementKind::Bf16;
 const I32: ElementKind = ElementKind::I32;
 const U32: ElementKind = ElementKind::U32;
 const U64: ElementKind = ElementKind::U64;
+const U8: ElementKind = ElementKind::U8;
 
 /// A fixture: a kernel `check_kernel` accepts, or a module `check_module` accepts at `entry`.
 #[derive(Clone, Debug, PartialEq)]
@@ -121,9 +122,13 @@ variants! {
     WgmmaWait { .. },
     Tcgen05Mma { .. },
     Tcgen05Commit { .. },
+    Tcgen05Alloc { .. },
+    Tcgen05Dealloc { .. },
+    Tcgen05RelinquishPermit,
     Tcgen05Ld { .. },
     CopyAsync { .. },
     CopyBulk { .. },
+    CopyUnpack { .. },
     AsyncCommit,
     AsyncWait { .. },
     Call { .. },
@@ -712,6 +717,7 @@ fn wgmma() -> KernelFn {
             scale_d: u(0),
             a_layout: OperandLayout::RowMajor,
             b_layout: OperandLayout::RowMajor,
+            a_regs: None,
         }],
     )
     .with_launch(warpgroup())
@@ -749,6 +755,11 @@ fn tcgen05_mma() -> KernelFn {
             scale_d: u(0),
             a_layout: OperandLayout::RowMajor,
             b_layout: OperandLayout::RowMajor,
+            m: 128,
+            d_lane: 0,
+            b_ty: None,
+            negate_a: false,
+            negate_b: false,
         }])],
     )
     .with_launch(warpgroup())
@@ -826,6 +837,60 @@ fn copy_bulk() -> KernelFn {
     .with_launch(block32())
     .with_allocs(vec![
         alloc("dst", MemorySpace::Shared, F32, 4),
+        alloc("bar", MemorySpace::Shared, U64, 1),
+    ])
+}
+
+/// `Tcgen05Alloc`: `tcgen05.alloc.cta_group::1` of 32 columns. Needs a `Tensor` allocation of 128 lanes x 32 columns.
+fn tcgen05_alloc() -> KernelFn {
+    f32_kernel(
+        "tcgen05_alloc",
+        &[],
+        vec![on_thread0(vec![Stmt::Tcgen05Alloc { d: 0, ncols: 32 }])],
+    )
+    .with_launch(warpgroup())
+    .with_allocs(vec![alloc("tmem", MemorySpace::Tensor, F32, 128 * 32)])
+}
+
+/// `Tcgen05Dealloc`: `tcgen05.dealloc.cta_group::1` of 32 columns. Needs a `Tensor` allocation.
+fn tcgen05_dealloc() -> KernelFn {
+    f32_kernel(
+        "tcgen05_dealloc",
+        &[],
+        vec![on_thread0(vec![Stmt::Tcgen05Dealloc { d: 0, ncols: 32 }])],
+    )
+    .with_launch(warpgroup())
+    .with_allocs(vec![alloc("tmem", MemorySpace::Tensor, F32, 128 * 32)])
+}
+
+/// `Tcgen05RelinquishPermit`: `tcgen05.relinquish_alloc_permit.cta_group::1`.
+fn tcgen05_relinquish_permit() -> KernelFn {
+    f32_kernel(
+        "tcgen05_relinquish_permit",
+        &[],
+        vec![on_thread0(vec![Stmt::Tcgen05RelinquishPermit])],
+    )
+    .with_launch(warpgroup())
+}
+
+/// `CopyUnpack`: one group of 16 `F4E2M1` elements from a global buffer into a 16-byte `U8` `Shared` slot, completing on
+/// an `mbarrier`. Needs a `Shared` byte tile and a `Shared` 64-bit element.
+fn copy_unpack() -> KernelFn {
+    kernel(
+        "copy_unpack",
+        F32,
+        Some((ElementKind::F4E2M1, BufferRole::Read)),
+        &[],
+        vec![Stmt::CopyUnpack {
+            dst: alloc_at(0, u(0)),
+            src: buf0(),
+            groups: 1,
+            bar: alloc_at(1, u(0)),
+        }],
+    )
+    .with_launch(block32())
+    .with_allocs(vec![
+        alloc("dst", MemorySpace::Shared, U8, 16),
         alloc("bar", MemorySpace::Shared, U64, 1),
     ])
 }
@@ -976,9 +1041,13 @@ pub fn fixtures() -> Vec<(&'static str, Fixture)> {
         ("WgmmaWait", k(wgmma_wait())),
         ("Tcgen05Mma", k(tcgen05_mma())),
         ("Tcgen05Commit", k(tcgen05_commit())),
+        ("Tcgen05Alloc", k(tcgen05_alloc())),
+        ("Tcgen05Dealloc", k(tcgen05_dealloc())),
+        ("Tcgen05RelinquishPermit", k(tcgen05_relinquish_permit())),
         ("Tcgen05Ld", k(tcgen05_ld())),
         ("CopyAsync", k(copy_async())),
         ("CopyBulk", k(copy_bulk())),
+        ("CopyUnpack", k(copy_unpack())),
         ("AsyncCommit", k(async_commit())),
         ("AsyncWait", k(async_wait())),
         ("Call", call()),
@@ -1018,12 +1087,14 @@ pub fn needs(name: &str) -> &'static str {
         "MatrixLoad" | "MatrixStore" => "warp launch, shared tile",
         "MbarInit" | "MbarArrive" | "MbarCompleteTx" | "MbarWait" => "launch, mbarrier",
         "CopyAsync" => "launch, shared tile",
-        "CopyBulk" => "launch, shared tile, mbarrier",
+        "CopyBulk" | "CopyUnpack" => "launch, shared tile, mbarrier",
         "Wgmma" => "warpgroup launch, shared tiles, operand layouts",
         "WgmmaCommit" | "WgmmaWait" => "warpgroup launch",
         "Tcgen05Mma" => "warpgroup launch, shared tiles, tensor memory, operand layouts",
         "Tcgen05Commit" => "warpgroup launch, mbarrier",
         "Tcgen05Ld" => "warpgroup launch, tensor memory",
+        "Tcgen05Alloc" | "Tcgen05Dealloc" => "warpgroup launch, tensor memory",
+        "Tcgen05RelinquishPermit" => "warpgroup launch",
         "CollectiveTuple" | "Call" | "CallTuple" | "ExternCall" => "module",
         _ => "",
     }
@@ -1063,8 +1134,8 @@ mod tests {
         // the order is the enum's
         let names: Vec<&str> = all.iter().map(|(n, _)| *n).collect();
         assert_eq!(names, ALL);
-        // the positive control: the enum has 42 variants on this base
-        assert_eq!(ALL.len(), 42, "the Stmt variants this list was written for");
+        // the positive control: the enum has 46 variants on this base
+        assert_eq!(ALL.len(), 46, "the Stmt variants this list was written for");
     }
 
     #[test]
