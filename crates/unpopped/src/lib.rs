@@ -74,6 +74,8 @@ pub mod contract;
 pub mod dispatch_artifact;
 pub mod exactness;
 pub mod exec;
+#[cfg(any(test, feature = "fixtures"))]
+pub mod fixtures;
 pub mod ir;
 pub mod jit;
 pub mod kernel;

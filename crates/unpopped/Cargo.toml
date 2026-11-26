@@ -1,6 +1,6 @@
 [package]
 name = "unpopped"
-version = "0.58.4"
+version = "0.58.5"
 description = "A vendor-neutral kernel generator: the backend-agnostic IR, plan, transform pipeline, contracts and dispatch artifacts, plus the `Backend` and `Compiler` traits a target implements. Ships a portable-C99 reference backend and a CPU oracle, so it builds and self-tests with no device, no driver, and no vendor dependency. Device backends live under their own vendor identity and depend on this crate — the CUDA emitter, its NVRTC compiler and the Fuel synthesizer live in `baracuda-cuda-emit`. Pre-1.0 and moving; pin exact versions."
 edition.workspace = true
 rust-version.workspace = true
@@ -32,6 +32,12 @@ libm = "0.2"
 # `--lib` tests exercise it under the default feature set.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[features]
+# `fixtures`: the `unpopped::fixtures` module, one checker-valid kernel or module per `Stmt` variant, for an
+# emitter's decline test (ROADMAP U60). Off by default: a normal build does not carry it. Its own unit tests run in
+# this crate under `cfg(test)` whatever the feature.
+fixtures = []
 
 [dev-dependencies]
 # kiss-ref: the spec-exact KISS reference impl — the single source of truth this
