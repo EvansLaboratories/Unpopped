@@ -53,18 +53,21 @@ pub(crate) fn check_barriers(
         tid_like: vec![false; k.locals.len()],
         warp: stated_warp(k),
         lane_ctx: false,
+        returned: false,
         changed: false,
         check: false,
     };
     w.find_tid_like();
     loop {
         w.changed = false;
+        w.returned = false;
         w.block(&k.body, false, &mut false)?;
         if !w.changed {
             break;
         }
     }
     w.check = true;
+    w.returned = false;
     w.block(&k.body, false, &mut false)
 }
 
@@ -106,6 +109,9 @@ struct Walk<'a> {
     warp: Option<u32>,
     /// Control reaching the statements being walked may differ between the lanes of one subgroup.
     lane_ctx: bool,
+    /// A `Return` under lane-divergent control has been walked (in program order, so far): some lanes of a subgroup may have
+    /// left, and a `Subgroup` collective after it would see fewer lanes than the oracle runs it over (`CollectiveAfterReturn`).
+    returned: bool,
     changed: bool,
     check: bool,
 }
@@ -154,6 +160,9 @@ impl Walk<'_> {
             ScalarExpr::Exec(ExecId::BlockIdx(_)) => self.device,
             // every lane of a subgroup is in the same subgroup
             ScalarExpr::Exec(ExecId::SubgroupId) if lane => false,
+            // When the launch states one subgroup size and the block's x extent is a multiple of it, a subgroup lies in one
+            // (y, z) row of the block, so `threadIdx.y` and `.z` are the same for every lane of a subgroup.
+            ScalarExpr::Exec(ExecId::ThreadIdx(1 | 2)) if lane && self.warp.is_some() => false,
             ScalarExpr::Exec(id) => !matches!(
                 id,
                 ExecId::BlockDim(_) | ExecId::GridDim(_) | ExecId::DeviceCount
@@ -286,8 +295,10 @@ impl Walk<'_> {
     /// is not poison here (the checker has always accepted one before a barrier and the oracle traps a stranded peer).
     fn loop_body(&mut self, b: &Block, div: bool, poisoned: &mut bool) -> Result<(), KernelError> {
         let before = *poisoned;
+        let returned_before = self.returned;
         self.block(b, div, poisoned)?;
-        if !before && *poisoned {
+        // a lane that left (`Break`, `Continue`) or returned late in one pass is also gone at the start of the next
+        if (!before && *poisoned) || (!returned_before && self.returned) {
             self.block(b, div, poisoned)?;
         }
         *poisoned = before;
@@ -384,8 +395,11 @@ impl Walk<'_> {
             | Stmt::MbarInit { .. }
             | Stmt::MbarArrive { .. }
             | Stmt::MbarCompleteTx { .. }
-            | Stmt::MbarWait { .. }
-            | Stmt::Return => {}
+            | Stmt::MbarWait { .. } => {}
+            // A `Return` under control that may differ between the lanes of a subgroup takes some lanes out. It is no poison
+            // for a barrier (the checker has always accepted one before a `Barrier`; the oracle traps a stranded peer), but
+            // a `Subgroup` collective after it is refused (`CollectiveAfterReturn`).
+            Stmt::Return => self.returned |= self.lane_ctx,
             // an MMA is a rendezvous of its subgroup, like a barrier; it defines no local
             Stmt::Mma { .. }
             | Stmt::Wgmma { .. }
@@ -469,27 +483,13 @@ impl Walk<'_> {
             // skip any of them; every other scope needs block-uniform control.
             Stmt::Collective { result, scope, .. } => {
                 self.mark(*result);
-                let skips = if *scope == Scope::Subgroup {
-                    skipped_lane
-                } else {
-                    skipped
-                };
-                if self.check && skips {
-                    return Err(KernelError::BarrierDivergent);
-                }
+                self.collective_site(*scope, skipped, skipped_lane)?;
             }
             Stmt::CollectiveTuple { results, scope, .. } => {
                 for r in results {
                     self.mark(*r);
                 }
-                let skips = if *scope == Scope::Subgroup {
-                    skipped_lane
-                } else {
-                    skipped
-                };
-                if self.check && skips {
-                    return Err(KernelError::BarrierDivergent);
-                }
+                self.collective_site(*scope, skipped, skipped_lane)?;
             }
             // The old value depends on the order the threads reach the element, so it differs
             // between threads whatever the operands are: a barrier under `if old == 0` is divergent.
@@ -499,6 +499,30 @@ impl Walk<'_> {
                 }
             }
             _ => unreachable!("defines is called for local-defining statements only"),
+        }
+        Ok(())
+    }
+
+    /// The rendezvous rule of a `Collective` or `CollectiveTuple` of `scope`: a `Subgroup` one is refused under lane-divergent
+    /// control (`skipped_lane`) and after a lane-divergent `Return`; any other scope needs block-uniform control (`skipped`).
+    fn collective_site(
+        &self,
+        scope: Scope,
+        skipped: bool,
+        skipped_lane: bool,
+    ) -> Result<(), KernelError> {
+        if !self.check {
+            return Ok(());
+        }
+        if scope == Scope::Subgroup {
+            if skipped_lane {
+                return Err(KernelError::BarrierDivergent);
+            }
+            if self.returned {
+                return Err(KernelError::CollectiveAfterReturn);
+            }
+        } else if skipped {
+            return Err(KernelError::BarrierDivergent);
         }
         Ok(())
     }

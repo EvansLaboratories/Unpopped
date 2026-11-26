@@ -633,18 +633,45 @@ fn a_collective_after_an_inner_divergent_loop_inside_a_divergent_region_is_refus
     refused(&with(vec![if_(lane_is_zero(), region)]));
 }
 
+fn refused_after_return(k: &KernelFn) {
+    assert_eq!(check_kernel(k), Err(KernelError::CollectiveAfterReturn));
+}
+
 #[test]
-fn a_return_is_not_poison_and_a_loop_exit_changes_nothing_about_it() {
-    // The checker has always accepted a `Return` under divergent control before a barrier (the oracle traps a stranded peer at
-    // run time: `kernel_barriers_run.rs`), and the 57 gguf mmvq kernels (`if (row >= nrows) return;` then a warp shuffle) rely on
-    // it. Pinned unchanged, outside and inside a loop.
+fn a_lane_divergent_return_before_a_subgroup_collective_is_refused() {
+    // Changed by ROADMAP U63 (board 506): this used to be accepted ("a `Return` is not poison"). The oracle runs a collective
+    // over every lane of its subgroup and a device over the lanes still active, so a subset that left first has no single
+    // meaning at the collective. A `Return` before a `Barrier` is unchanged (`kernel_barrier.rs`).
     let ret = || if_(lane_is_zero(), vec![Stmt::Return]);
     let mut plain = vec![ret()];
     plain.extend(guarded());
-    accepted(&with(plain));
+    refused_after_return(&with(plain));
+    // inside a loop: refused after the return in the same pass, and at the top of the next pass
     let mut looped = vec![counted(ci(4), vec![ret()])];
     looped.extend(guarded());
-    accepted(&with(looped));
+    refused_after_return(&with(looped));
+    let mut top = counted(ci(4), guarded());
+    if let Stmt::For { body, .. } = &mut top {
+        body.0.push(ret());
+    }
+    refused_after_return(&with(vec![top]));
+    // the controls: the same collective with no `Return`, and with the `Return` AFTER it, is accepted
+    accepted(&with(guarded()));
+    let mut after = guarded();
+    after.push(ret());
+    accepted(&with(after));
+}
+
+#[test]
+fn a_return_under_warp_uniform_control_before_a_subgroup_collective_is_accepted() {
+    // `if (warp != 0) return;`: whole subgroups leave, every lane of the one that stays reaches the collective
+    let mut body = vec![if_(warp(), vec![Stmt::Return])];
+    body.extend(guarded());
+    accepted(&with(body));
+    // and under a condition no thread-dependent value reaches (a uniform scalar parameter is none here: `x` is a constant)
+    let mut body = vec![if_(ci(1), vec![Stmt::Return])];
+    body.extend(guarded());
+    accepted(&with(body));
 }
 
 #[test]
