@@ -27,12 +27,29 @@ verdict() { # script file mode
   echo "$out"; echo "rc=$rc"
 }
 
+verdict_add() { # script newfile mode: ADD a new file (status A)
+  cd "$T/r" || exit 2; git checkout -q -- . ; git reset -q --hard origin/main
+  mkdir -p "$(dirname "$2")"; echo new > "$2"; git add -A 2>/dev/null; git commit -qm c 2>/dev/null
+  out=$(bash "$1" --worktree "$T/r" --mode "$3" --verdict-only 2>&1); rc=$?
+  echo "$out"; echo "rc=$rc"
+}
+verdict_del() { # script file mode: DELETE an existing file (status D)
+  cd "$T/r" || exit 2; git checkout -q -- . ; git reset -q --hard origin/main
+  git rm -q "$2" 2>/dev/null; git commit -qm c 2>/dev/null
+  out=$(bash "$1" --worktree "$T/r" --mode "$3" --verdict-only 2>&1); rc=$?
+  echo "$out"; echo "rc=$rc"
+}
+
 run_rule_tests() { # script ; echoes number of failures
   local s="$1" before=$FAILS
   mkrepo
   v=$(verdict "$s" docs/a.md auto);                       check "docs only is a fast gate"        "[[ \"$v\" == *'VERDICT: fast gate'* && \"$v\" == *rc=0* ]]"
   v=$(verdict "$s" crates/unpopped/tests/a.rs auto);      check "a new unpopped test file is fast" "[[ \"$v\" == *'VERDICT: fast gate'* ]]"
-  v=$(verdict "$s" crates/unpopped-cpu-c/tests/t.rs auto); check "a cpu-c TEST file is fast (and is RUN)" "[[ \"$v\" == *'VERDICT: fast gate'* ]]"
+  v=$(verdict_add "$s" crates/unpopped-cpu-c/tests/new_agrees.rs auto); check "ADDING a cpu-c test file is fast and the file is printed to be RUN" "[[ \"$v\" == *'VERDICT: fast gate'* && \"$v\" == *new_agrees.rs* ]]"
+  v=$(verdict_add "$s" crates/unpopped-cpu-c/tests/new_agrees.rs fast); check "--mode fast on an ADDED cpu-c test file is allowed" "[[ \"$v\" == *'VERDICT: fast gate'* && \"$v\" == *rc=0* ]]"
+  v=$(verdict "$s" crates/unpopped-cpu-c/tests/t.rs auto); check "MODIFYING an existing cpu-c test file forces FULL" "[[ \"$v\" == *'VERDICT: full gate'* && \"$v\" == *'existing cpu-c test file, status M'* ]]"
+  v=$(verdict "$s" crates/unpopped-cpu-c/tests/t.rs fast); check "--mode fast on a MODIFIED existing cpu-c test file is REFUSED (exit 3)" "[[ \"$v\" == *REFUSED* && \"$v\" == *rc=3* ]]"
+  v=$(verdict_del "$s" crates/unpopped-cpu-c/tests/t.rs fast); check "DELETING an existing cpu-c test file is REFUSED for fast (exit 3)" "[[ \"$v\" == *REFUSED* && \"$v\" == *rc=3* ]]"
   for f in crates/unpopped/src/oracle/x.rs crates/unpopped/src/kernel.rs crates/unpopped/src/kernel_check.rs crates/unpopped/src/ir.rs crates/unpopped/src/types.rs \
            crates/unpopped/src/cast_ref.rs crates/unpopped/src/cfamily/c.rs crates/unpopped/src/contract.rs crates/unpopped-vocab/src/element.rs \
            crates/unpopped-vocab/src/structure_key.rs crates/unpopped-cpu-c/src/lib.rs; do
@@ -52,6 +69,12 @@ FAILS_BEFORE=$FAILS; run_rule_tests "$T/gate-mut.sh" | grep -c "^FAIL" > "$T/mut
 MUT=$(cat "$T/mutfails"); FAILS=$FAILS_BEFORE   # the mutant's failures are the point, not ours
 check "the mutated rule is CAUGHT (at least one assertion failed)" "[ $MUT -ge 1 ]"
 
+echo "== MUTATION 2: the status rule off (an existing cpu-c test treated like an added one); the same assertions must fail"
+cp "$HERE/gate.sh" "$T/gate-mut2.sh"; sed -i 's/if \[ "\$st" = "A" \]; then ADDED_CPUC_TESTS/if true; then ADDED_CPUC_TESTS/' "$T/gate-mut2.sh"
+cmp -s "$HERE/gate.sh" "$T/gate-mut2.sh" && { bad "mutation 2 applied"; } || ok "mutation 2 applied"
+FAILS_BEFORE=$FAILS; run_rule_tests "$T/gate-mut2.sh" | grep -c "^FAIL" > "$T/mutfails2"
+MUT2=$(cat "$T/mutfails2"); FAILS=$FAILS_BEFORE
+check "the status-rule mutant is CAUGHT (at least one assertion failed)" "[ $MUT2 -ge 1 ]"
 echo "== the lock"
 L="$T/lock"; export GATE_LOCK_DIR="$L" GATE_WAIT_SECS=1
 export GATE_CMD="bash -c 'echo \"[\$(date +%s)] start \$\$\"; sleep 4; echo \"[\$(date +%s)] end \$\$\"'"
