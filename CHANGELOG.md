@@ -15,6 +15,36 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.8` — Added: `Cast` between `F32` (and the integers) and `F8E3M4` / `F8UE4M3` on the oracle (KISS 0.24.0 union batch 1, plan E1b)
+
+`Cast(Cast(x, f8e3m4), f32)` and the same through `f8ue4m3` run on the oracle as intermediate values. `F8E3M4` (IEEE-style, bias 3) rounds to nearest even and overflows like IEEE (infinity under `Wrap`, the largest finite value 15.5 under `ClampFinite`); `F8UE4M3` (the unsigned NVFP4 scale) takes only `Saturation::ClampFinite`, saturates at 448, sends NaN to its one NaN code `0x7F` and a value at or below zero to 0 (the IR's rule, UNVERIFIED against a vendor conversion). Checked against KISS's decode vectors for both formats and an exhaustive round trip of every `F8E3M4` code and every finite `F8UE4M3` code. A kernel still cannot declare a local, parameter or allocation of either dtype (`KernelError::DtypeNotComputed`): load, store and arithmetic wait. `unpopped-cpu-c` declines the casts by name. Additive: no enum variant added. Plan: `docs/design-union-batch1-consumer.md`.
+
+---
+
+## `0.60.7` — Added: `Layout::{make_ordered_layout, recast_layout, max_common_vector, max_common_layout}`
+
+Pure vocabulary in `unpopped-vocab::layout_algebra` (`ordered.rs`; ROADMAP IR-union rows 12 and 13, `cute.md`). `make_ordered_layout` builds the compact layout whose strides follow an order; `recast_layout` re-reads a stride-1 layout at another element width (restricted form: declines by name what CuTe's general rule might accept, and a widening that leaves the stride-1 extent at 1 cannot be narrowed back); `max_common_vector`/`max_common_layout` are the contiguous run two layouts agree on, through `right_inverse` and `composition`. **All four are UNVERIFIED against `cute/layout.hpp`** (names and intent only). `make_identity_layout` is not added: CuTe's takes basis strides, which integer strides cannot hold (the TMA basis-stride gap). Verified by `tests/layout_algebra_ordered.rs`: hand examples with refusal controls, a brute-force reading of the common vector and layout over 11 pairs, a round trip, and a broken variant per checker. Additive; no kernel or IR change.
+
+---
+
+## `0.60.6` — docs: PATENT-SWEEP records CireSnave's board 519 ruling on the G-T2 hold
+
+`docs/PATENT-SWEEP.md` only, no code. A dated G-T2 addendum records "519: B" (the G-T2 hold lifted as CireSnave's risk call, not a clearance), the condition exactly as relayed, the PM's wrapper findings as facts, the re-read triggers and the five holds that stand. No earlier verdict is edited.
+
+---
+
+## `0.60.5` — Added: a matrix-state scan conformance kernel (CUTLASS survey row 93)
+
+`crates/unpopped/tests/kernel_ssd_scan.rs` and `tests/support/ssd_scan.rs`: the scan inside a Mamba2 SSD block (a 2 x 2 state, `H_t = a_t H_{t-1} + B_t (outer) x_t`, readout `y_t = C_t^T H_t`) as one `Stmt::CollectiveTuple { ScanWith }` over a five-component state with a module combine. Asserted: `check_module` is `Ok` at block and subgroup scope; the oracle run equals an independently written sequential recurrence bit for bit over three corpora (a negative decay, a zero decay, an all-negative last row, a NaN input); three mutants (wrong decay scale, dropped decay product, reduce for scan) fail the comparison. Not covered: scopes above subgroup and block, a chunked multi-block SSD, and the real Mamba2 kernels (UNVERIFIED against them).
+
+---
+
+## `0.60.4` — Added: `Layout::{group, append, prepend, replace, dice, filter_zeros, filter}`, the structural layout operations
+
+Pure vocabulary in `unpopped-vocab::layout_algebra` (CuTe `01_layout.md` names and meaning; ROADMAP IR-union row 6, `cute.md`). `group` nests a range of top-level modes without changing the index-to-offset map; `append`/`prepend` add a mode at either end; `replace` swaps one; `dice` is the complement of `slice`; `filter_zeros` sets stride-0 extents to 1 and `filter` also coalesces. `filter_zeros`/`filter` semantics are UNVERIFIED against `cute/layout.hpp` (taken from the documentation's description). Verified by `tests/layout_algebra_structural.rs`: hand examples, brute-force properties over eight layouts, and a broken variant per checker that must fail. Additive; no kernel or IR change.
+
+---
+
 ## `0.60.3` — docs: PATENT-SWEEP wrapper reads (16/559,544 allowed claims, SRNT) and the G-T2 ruling with what B1 loses
 
 `docs/PATENT-SWEEP.md` only, no code. The allowed claims of US20210064987A1 (application 16/559,544) are read from the file wrapper: the rank-change wording the G-T3 section flagged was deleted, so `retile` moves to outside as read. The 17/367,053 search notes are OCR-read and move no verdict. The G-T2 section gains the PM's hold, the application numbers for the wrapper fetch, and a paragraph on what B1 loses while `TileMma`, `TileLoad` and `TileStore` wait. Also reads US11714648B2 and US10866786B2 (outside as read).
