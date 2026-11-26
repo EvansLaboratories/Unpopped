@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.7` — Added: `Layout::{make_ordered_layout, recast_layout, max_common_vector, max_common_layout}`
+
+Pure vocabulary in `unpopped-vocab::layout_algebra` (`ordered.rs`; ROADMAP IR-union rows 12 and 13, `cute.md`). `make_ordered_layout` builds the compact layout whose strides follow an order; `recast_layout` re-reads a stride-1 layout at another element width (restricted form: declines by name what CuTe's general rule might accept, and a widening that leaves the stride-1 extent at 1 cannot be narrowed back); `max_common_vector`/`max_common_layout` are the contiguous run two layouts agree on, through `right_inverse` and `composition`. **All four are UNVERIFIED against `cute/layout.hpp`** (names and intent only). `make_identity_layout` is not added: CuTe's takes basis strides, which integer strides cannot hold (the TMA basis-stride gap). Verified by `tests/layout_algebra_ordered.rs`: hand examples with refusal controls, a brute-force reading of the common vector and layout over 11 pairs, a round trip, and a broken variant per checker. Additive; no kernel or IR change.
+
+---
+
 ## `0.60.6` — docs: PATENT-SWEEP records CireSnave's board 519 ruling on the G-T2 hold
 
 `docs/PATENT-SWEEP.md` only, no code. A dated G-T2 addendum records "519: B" (the G-T2 hold lifted as CireSnave's risk call, not a clearance), the condition exactly as relayed, the PM's wrapper findings as facts, the re-read triggers and the five holds that stand. No earlier verdict is edited.
