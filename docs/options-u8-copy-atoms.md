@@ -21,7 +21,7 @@ count) need new statements, because no composition of existing statements has th
 producer and consumer warps, a persistent tile loop, rasterization order) are ordinary control flow over those operations plus
 `BlockIdx` arithmetic, and a front end recovers them as idioms (`docs/idiom-lifting.md`); an IR node per pattern would freeze one
 library's choices (CUTLASS's `PipelineTmaAsync` is not Mojo's). **Recommendation: statements for the first group only; the
-second is a documented recipe plus a conformance kernel, not an IR type.**
+second is a documented recipe plus a conformance kernel, not an IR type.** **SUPERSEDED 2026-11-26 by board 500 (Q1 A, Q2 A)**, plan `docs/design-tile-and-schedule-plan.md`, for a schedule's declared parameters; the split for a pattern's control flow stands.
 
 ## Slices
 
@@ -103,7 +103,7 @@ backend needs them.
 | Q2 | Is the oracle's "read before wait is a typed trap" the right strictness | Yes (hardware returns either value; a reference should not) |
 | Q3 | S2 (`MatrixLoad`/`MatrixStore`) | Hold until a second lane-table source is found; clear with U7's `mma.sp` hold |
 | Q4 | S3 (`mbarrier`, TMA, descriptors) | Design shape recorded above; build when Baracuda's sm_90 emitter asks |
-| Q5 | S4 as recipes and conformance kernels, no IR node | Yes |
+| Q5 | S4 as recipes and conformance kernels, no IR node | Yes (**SUPERSEDED 2026-11-26 by board 500 (Q1 A, Q2 A)**, plan `docs/design-tile-and-schedule-plan.md` for schedule parameters) |
 | Q6 | Version | PM allocates at the gate (S1 is a new exhaustive `Stmt` variant set, a breaking minor) |
 
 ## Build order, once approved
