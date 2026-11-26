@@ -22,16 +22,19 @@ use crate::ir::{CastSpec, RoundMode, Saturation};
 use crate::types::{float_format, int_range, is_cast_float_endpoint, is_mx_element, typed_bits};
 use unpopped_vocab::ElementKind;
 
-/// Whether `t` is one of the 16-bit floats, which the generic IEEE helpers below encode.
+/// Whether `t` is one of the IEEE-shaped narrow floats (the 16-bit floats and `F8E3M4`), which the generic IEEE helpers below
+/// encode.
 fn is_half(t: ElementKind) -> bool {
-    matches!(t, ElementKind::F16 | ElementKind::Bf16)
+    matches!(
+        t,
+        ElementKind::F16 | ElementKind::Bf16 | ElementKind::F8E3M4
+    )
 }
 
 /// Decode the IEEE-shaped bit pattern `bits` of a `(ebits, mbits)` float to its exact `f64`.
 ///
 /// Exact for every format up to binary32 (and binary64 itself): it computes
 /// `significand * 2^exponent` with a power-of-two scale, never a rounding step.
-#[cfg(test)]
 pub(crate) fn decode_ieee(bits: u128, ebits: u32, mbits: u32) -> f64 {
     let sign = if (bits >> (ebits + mbits)) & 1 == 1 {
         -1.0
@@ -125,6 +128,33 @@ pub(crate) fn encode_mx(x: f64, ebits: u32, mbits: u32, mode: RoundMode) -> u128
         (((e + bias) as u128) << mbits) + (n - (1u128 << mbits))
     };
     sign_bit | bits.min(max_code)
+}
+
+/// The `F8UE4M3` code of `x` (KISS 0.24.0 §6.1-0020: no sign bit, exponent 4, mantissa 3, bias 7, no infinity, the single NaN code
+/// `0x7F`, largest finite `0x7E` = 448). **The IR's rule, not a vendor fact:** NaN is `0x7F`; a value at or below zero (and `-0`)
+/// is `0x00`; an infinity or anything that rounds above 448 saturates at `0x7E`; every other finite value rounds under `mode`.
+pub(crate) fn encode_ue4m3(x: f64, mode: RoundMode) -> u128 {
+    if x.is_nan() {
+        return 0x7F;
+    }
+    if x <= 0.0 {
+        return 0;
+    }
+    if x.is_infinite() {
+        return 0x7E;
+    }
+    // positive: the sign bit of the (4, 3) layout is the exponent's top bit here, so encode with the MX helper at (4, 3) and
+    // clamp to the largest finite code, which is one below the NaN code
+    encode_mx(x, 4, 3, mode).min(0x7E)
+}
+
+/// The value of the `F8UE4M3` code `bits` (`0x7F` is NaN; a code with bit 7 set is outside the format and decodes as NaN here).
+pub(crate) fn decode_ue4m3(bits: u128) -> f64 {
+    let b = bits & 0xFF;
+    if b >= 0x7F {
+        return f64::NAN;
+    }
+    decode_mx(b, 4, 3)
 }
 
 /// Whether a FINITE value too large for the format rounds to infinity (rather than stopping at
@@ -239,6 +269,7 @@ pub(crate) fn bits_of(x: Num, t: ElementKind) -> u128 {
             let (e, m) = float_format(t).expect("an MX element has a format");
             encode_mx(f, e, m, RoundMode::NearestEven)
         }
+        (Num::F(f), ElementKind::F8UE4M3) => encode_ue4m3(f, RoundMode::NearestEven),
         // A value HELD as a 16-bit float is already on its grid, so any mode agrees.
         (Num::F(f), t) if is_half(t) => {
             let (e, m) = float_format(t).expect("a half has a format");
@@ -266,6 +297,7 @@ pub(crate) fn num_of(bits: u128, t: ElementKind) -> Num {
             let (e, m) = float_format(t).expect("an MX element has a format");
             Num::F(decode_mx(bits, e, m))
         }
+        ElementKind::F8UE4M3 => Num::F(decode_ue4m3(bits)),
         ElementKind::I8 => Num::I(i128::from(bits as u8 as i8)),
         ElementKind::I16 => Num::I(i128::from(bits as u16 as i16)),
         ElementKind::I32 => Num::I(i128::from(bits as u32 as i32)),
@@ -482,6 +514,7 @@ pub(crate) fn cast_bits(x: Num, from: ElementKind, spec: CastSpec) -> u128 {
                     let (e, m) = float_format(t).expect("an MX element has a format");
                     encode_mx(f, e, m, spec.round)
                 }
+                ElementKind::F8UE4M3 => encode_ue4m3(f, spec.round),
                 _ => {
                     let max = f64::from(f32::MAX);
                     let r = if spec.sat == Saturation::ClampFinite && !f.is_nan() {
@@ -524,6 +557,7 @@ pub(crate) fn cast_bits(x: Num, from: ElementKind, spec: CastSpec) -> u128 {
                     let (e, m) = float_format(t).expect("an MX element has a format");
                     encode_mx(int_to_f64_sticky(i), e, m, spec.round)
                 }
+                ElementKind::F8UE4M3 => encode_ue4m3(int_to_f64_sticky(i), spec.round),
                 _ => u128::from(int_to_f32(i, spec.round).to_bits()),
             }
         }
