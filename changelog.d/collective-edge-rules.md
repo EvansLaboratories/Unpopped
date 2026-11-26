@@ -1,3 +1,0 @@
-kind: Docs: the oracle edge rules of subgroup collectives are stated and pinned (shuffle up/down/xor, idx, ballot)
----
-`CollectiveKind::Shuffle` and `Vote` now state the edge rules the oracle always applied: `Idx` reads lane `operand mod n` (Euclidean; design), `Up`/`Down`/`Xor` give a lane with no source its own value (inherited from PTX ISA 9.5 section 9.7.10.6 `shfl.sync`, cited), a ballot is defined for 32 lanes and a typed trap beyond (design). `docs/design-kernel-collectives-edges.md` says the IR defines the edge and an emitter must spell it or decline by name; `tests/kernel_collective_edges.rs` pins delta and mask 0, 1, n - 1, n, n + 1, `Idx` operands n, n + 1 and -1, and a ballot at 32 and 33 lanes. No behaviour change.
