@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.58.2` — Docs: measured exactness for kernel-layer kernels (design) and ROADMAP rows U59, U60
+
+`docs/design-kernel-fidelity.md`: the measured-exactness ledger (`unpopped::exactness`) already exists and is keyed only by a plan-layer body, so a kernel-layer kernel's measurement (for example a device that flushes subnormals) has nowhere to be recorded. The note proposes an additive kernel key and entry points over the same ledger, plus shared probe recipes, and withdraws the first draft's new `KernelFidelity` type. ROADMAP gains rows U59 (kernel-layer exactness) and U60 (a fixtures module, one valid kernel per `Stmt` variant). Design only, nothing built; docs-only, no gate.
+
+---
+
 ## `0.58.1` — Docs: the descriptor design note and the U8c emitter migration note
 
 Docs only (`docs/design-wgmma-descriptors.md`, `docs/emitter-migration-u8c.md`): the WGMMA descriptor design and the migration note for emitters, which now names 0.58.0 for the U8c batch. No code change; not breaking. Fragment added by pm-assist so the docs-only PR carries a patch version.
