@@ -54,6 +54,9 @@ pub enum ExecId {
     DeviceRank,
     /// Devices of the launch (`LaunchShape::devices`; `1` for a launch of one device).
     DeviceCount,
+    /// Index of the block in its cluster, `x` fastest (PTX `%cluster_ctarank`); `0` in a launch without clusters,
+    /// where every block is a cluster of one.
+    ClusterCtaRank,
 }
 
 impl ExecId {
@@ -68,7 +71,8 @@ impl ExecId {
             | Self::SubgroupId
             | Self::SubgroupSize
             | Self::DeviceRank
-            | Self::DeviceCount => None,
+            | Self::DeviceCount
+            | Self::ClusterCtaRank => None,
         }
     }
 
@@ -91,6 +95,7 @@ impl ExecId {
             Self::SubgroupSize => "SubgroupSize",
             Self::DeviceRank => "DeviceRank",
             Self::DeviceCount => "DeviceCount",
+            Self::ClusterCtaRank => "ClusterCtaRank",
         }
     }
 }
