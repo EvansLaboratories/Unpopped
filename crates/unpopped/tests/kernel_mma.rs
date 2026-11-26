@@ -408,3 +408,120 @@ fn an_mma_under_divergent_control_is_refused() {
         Err(KernelTrap::Malformed(KernelError::BarrierDivergent))
     );
 }
+
+// ---- the tf32 atom (U57) -----------------------------------------------------------------------------------------
+
+/// PTX ISA 9.5 9.7.16.5.7 Figures 75, 78, 80 (`.m16n8k8` with `.tf32`) as `(row, col)` formulas: A value `i` is row
+/// `gid + 8 * (i % 2)`, column `tig + 4 * (i / 2)`; B value `i` is row `tig + 4 * i`, column `gid`; C/D as `m16n8`.
+fn ptx_tf32(which: usize, lane: u32, i: u32) -> (u32, u32) {
+    let (gid, tig) = (lane >> 2, lane % 4);
+    match which {
+        0 => (gid + 8 * (i % 2), tig + 4 * (i / 2)),
+        1 => (tig + 4 * i, gid),
+        _ => (gid + 8 * (i / 2), tig * 2 + (i % 2)),
+    }
+}
+
+/// Round to tf32 (10 explicit mantissa bits, ties away from zero) by exact scaling in `f64`, independently of the
+/// oracle's bit trick.
+fn rna_tf32(x: f64) -> f64 {
+    if x == 0.0 {
+        return 0.0;
+    }
+    let quantum = f64::powi(2.0, x.abs().log2().floor() as i32 - 10);
+    (x / quantum).round() * quantum
+}
+
+/// Values whose low mantissa bits matter to tf32: `1 + j * 2^-13` for `j` in 0..16 (ties and non-ties), some negated.
+fn tf32_val(seed: u32, i: u32) -> f32 {
+    let j = (seed * 7 + i * 5 + 3) % 16;
+    let v = 1.0 + j as f32 * f32::powi(2.0, -13);
+    if (seed + i) % 3 == 0 { -v } else { v }
+}
+
+fn f32_buffer(vals: &[f32]) -> TypedBuffer {
+    let bytes: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
+    TypedBuffer::new(ElementKind::F32, vec![vals.len() as i64], vec![1], bytes)
+}
+
+#[test]
+fn the_tf32_atom_rounds_its_operands_and_places_fragments_by_the_ptx_tables() {
+    let atom = MmaAtom::nvidia_m16n8k8_tf32_f32();
+    assert!(atom.tf32_inputs());
+    assert_eq!(atom.mnk(), (16, 8, 8));
+    let (a_log, b_log): (Vec<f32>, Vec<f32>) = (
+        (0..16 * 8).map(|i| tf32_val(1, i)).collect(),
+        (0..8 * 8).map(|i| tf32_val(2, i)).collect(),
+    );
+    // logical A is 16 x 8 and B is 8 x 8, indexed [row][col]
+    let a_at = |r: u32, c: u32| a_log[(r * 8 + c) as usize];
+    let b_at = |r: u32, c: u32| b_log[(r * 8 + c) as usize];
+    let frag = |which: usize, vals: u32, at: &dyn Fn(u32, u32) -> f32| -> Vec<f32> {
+        (0..32)
+            .flat_map(|lane| {
+                (0..vals)
+                    .map(move |i| ptx_tf32(which, lane, i))
+                    .map(|(r, c)| at(r, c))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    let c_at = |r: u32, c: u32| (r + c) as f32 * 0.5;
+    let mut args = vec![
+        KernelArg::Buffer(f32_buffer(&frag(0, atom.values(0), &a_at))),
+        KernelArg::Buffer(f32_buffer(&frag(1, atom.values(1), &b_at))),
+        KernelArg::Buffer(f32_buffer(&frag(2, atom.values(2), &c_at))),
+        KernelArg::Buffer(f32_buffer(&vec![0.0; (32 * atom.values(2)) as usize])),
+    ];
+    run_launch(&mma_kernel(&atom, None), &mut args).expect("the atom runs");
+    let KernelArg::Buffer(out) = &args[3] else {
+        unreachable!("a buffer")
+    };
+    let got: Vec<f32> = out
+        .bytes
+        .chunks(4)
+        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .collect();
+    // D[r][c] = f32( C + sum_k rna(A[r][k]) * rna(B[k][c]) ), ascending k, in f64 (the oracle's contract)
+    let want = |r: u32, c: u32, round: bool| -> f32 {
+        let q = |x: f32| {
+            if round {
+                rna_tf32(f64::from(x))
+            } else {
+                f64::from(x)
+            }
+        };
+        let s = (0..8).fold(f64::from(c_at(r, c)), |s, k| {
+            s + q(a_at(r, k)) * q(b_at(k, c))
+        });
+        s as f32
+    };
+    let mut differs_unrounded = false;
+    for lane in 0..32u32 {
+        for i in 0..atom.values(2) {
+            let (r, c) = ptx_tf32(2, lane, i);
+            let g = got[(lane * atom.values(2) + i) as usize];
+            assert_eq!(g, want(r, c, true), "lane {lane} value {i}: D[{r}][{c}]");
+            differs_unrounded |= g != want(r, c, false);
+        }
+    }
+    assert!(
+        differs_unrounded,
+        "the control: without the tf32 rounding some element differs, so the test can see it"
+    );
+}
+
+#[test]
+fn the_tf32_flag_needs_f32_operands_and_only_once() {
+    use unpopped::mma::MmaAtomError;
+    assert_eq!(
+        MmaAtom::nvidia_m16n8k8_tf32_f32()
+            .with_tf32_inputs()
+            .map(|_| ()),
+        Err(MmaAtomError::FlagTwice)
+    );
+    assert!(matches!(
+        MmaAtom::nvidia_m16n8k16_f16_f32().with_tf32_inputs(),
+        Err(MmaAtomError::BadFlag(_))
+    ));
+}

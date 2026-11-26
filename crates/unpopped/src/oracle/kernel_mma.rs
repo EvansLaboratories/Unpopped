@@ -8,6 +8,7 @@
 //! rounded **once** to the accumulator type, so a device that sums in another order or at another width is compared
 //! within a tolerance, never by bytes. Integers: exact, wrapping at the accumulator type.
 
+use super::accum_policy::tf32;
 use super::kernel_eval::{KernelTrap, Machine, wrap};
 use super::{Val, int_val};
 use crate::kernel::Stmt;
@@ -73,6 +74,8 @@ struct Matrices<'a> {
     b: &'a [Val],
     c: &'a [Val],
     scales: Option<Scales<'a>>,
+    /// Round `A` and `B` to tf32 before the products (the tf32 atoms).
+    tf32: bool,
     m: usize,
     k: usize,
 }
@@ -118,6 +121,11 @@ impl Matrices<'_> {
         }
         let product = |i: usize| {
             let (x, y) = (a[row + m * i].f64(), b[i + k * col].f64());
+            let (x, y) = if self.tf32 {
+                (tf32(x), tf32(y))
+            } else {
+                (x, y)
+            };
             match &self.scales {
                 Some(s) => {
                     let (sa, sb) = (
@@ -178,6 +186,7 @@ pub(super) fn compute(lanes: &[MmaContribution]) -> Result<Vec<Vec<Val>>, Kernel
             sfb,
             block: *block,
         }),
+        tf32: atom.tf32_inputs(),
         m,
         k,
     };
