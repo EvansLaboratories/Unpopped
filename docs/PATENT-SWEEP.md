@@ -829,7 +829,7 @@ Task: pm-kernels `gates-s`, gate G-S2 of `docs/design-tile-and-schedule-plan.md`
 | `WorkDivision::StreamK` as a type, and `check_schedule` (S1) | **outside as read** | Limbs (b), (c), (d): the variant is a unit (`StreamK`, no fields); nothing counts tiles or iterations, determines a concurrency maximum, or divides anything. Control: `check_schedule` is the only function that reads `work`, and it compares two integers. |
 | An emitter or statement that honours `StreamK` by splitting the contracted axis across blocks | **needs more** | This is the plan's own gloss ("the contracted axis is split across blocks so every block gets an equal share"), which reads close to "distributed as closely as evenly possible" / "substantially similar number of ... iterations". Whether a particular emitter computes the division itself (a limb of every claim above) or the consumer supplies it is not decided by the type. Read next: the description of US12579003B2, and whose code does the dividing. |
 | `WorkDivision::Persistent{blocks: Some(n)}` | **needs more** (as to `None`) | Limb (c): with `blocks: None` "the emitter's choice" is a number the emitter determines; with `Some(n)` the user states it. Same read-next as above. |
-| `WorkDivision::SplitK{slices}` | **outside as read** | Limb (c) and "as closely as evenly possible": slices are user-stated and not claimed to be balanced; but claim 10 and 19 of US12579003B2 (a proper subset of a tile, "carry-out operations to store one or more partial sums") describe split work with partial sums; those are dependent claims, not read as limits of claim 1. |
+| `WorkDivision::SplitK{slices}` | **outside as read** | Limb (c) and "as closely as evenly possible": slices are user-stated and not claimed to be balanced; but claims 10, 19 and 20 of US12579003B2 ("a non-initial proper subset of at most one output tile"; "carry-out operations to store one or more partial sums") describe split work with partial sums; those are dependent claims, not read as limits of claim 1. |
 
 **US20250272157A1 (persistent kernels with dynamic work requests).** Claim 1: "launching at least one kernel on a processing core, receiving a work assignment request from the at least one kernel, and in response to the work assignment request, dynamically assigning a work item for the at least one kernel to perform without requiring relaunching of the at least one kernel." Claim 24: "an opcode indicating a work item request generation, a first field indicating whether a work item response should be broadcast or not, a second field indicating a shared memory address where work item response data should be written, and a barrier address". Claim 25: "a selector that selects a variable number of workers based on available processing resources; and a scheduler that handshakes with the executing workers".
 
@@ -841,5 +841,19 @@ Task: pm-kernels `gates-s`, gate G-S2 of `docs/design-tile-and-schedule-plan.md`
 **Not read:** the Triton 51 row (no patent found: no query aimed at Triton/OpenAI/Google); AMD and Google scheduler families; the description of US12579003B2. NOT CLEARED, unread.
 
 **File wrapper (goes through the PM):** US20250272157A1 (pending, the claims that matter are 24 and 25) and US12579003B2 (the 2024 continuation). Needs a person or the PM refetch.
+
+— lane: unpopped-patents-2
+
+## G-S1: stages and software pipelining (2026-11-26, unpopped-patents-2, AI-assisted, NOT legal advice; verdict words only: outside as read / needs more / NOT CLEARED, unread)
+
+Task: `gates-s`, gate G-S1. Unpopped side: `StageCount::{Auto, Fixed(u32)}` and `smem_carveout_bytes: Option<u32>` in `schedule.rs` (S1, `origin/lane/s1-schedule-spec@7268a6c5`): two numbers, checked for being at least one. The mbarrier statements are charted already (U8c section, US11803380B2 and others) and are not re-read.
+
+**Query (WebSearch, standard):** `patent software pipelining producer consumer warp specialization asynchronous copy pipeline stages shared memory GPU` -> arXiv papers (Tawa), NVIDIA CUDA programming guide "Pipelines", slides; no patent. One long null. Documents surfaced by other queries and read for this gate: US12524212B2 (Nvidia, priority 2022-04-15, Active; claim 1 "determine ... a storage aliasing preference for a compiler"; compiler register aliasing, claim 13 mentions a matrix-multiply load/multiply schedule only in a dependent claim).
+
+| Unpopped construct | Verdict | Basis |
+|---|---|---|
+| `StageCount`, `smem_carveout_bytes` (numbers only) | **NOT CLEARED, unread** for the field | No async-pipeline patent was found, which is a statement about one query. The only document read, US12524212B2, **outside as read**: its claim 1 recites "a structure of data flow of the plurality of operations" and a compiler allocation of "program variables" to "processor storage locations"; the type has no compiler allocation. |
+
+**Next read (named):** query by CPC G06F 9/38 and G06F 8/41 with "multi-stage pipeline" "asynchronous copy"; the mbarrier-parity "pipeline" API; NVIDIA CUTLASS `PipelineTmaAsync` family. Until a second, differently worded query is made, the gate does not open on a null.
 
 — lane: unpopped-patents-2
