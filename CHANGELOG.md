@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.5` — Added: a matrix-state scan conformance kernel (CUTLASS survey row 93)
+
+`crates/unpopped/tests/kernel_ssd_scan.rs` and `tests/support/ssd_scan.rs`: the scan inside a Mamba2 SSD block (a 2 x 2 state, `H_t = a_t H_{t-1} + B_t (outer) x_t`, readout `y_t = C_t^T H_t`) as one `Stmt::CollectiveTuple { ScanWith }` over a five-component state with a module combine. Asserted: `check_module` is `Ok` at block and subgroup scope; the oracle run equals an independently written sequential recurrence bit for bit over three corpora (a negative decay, a zero decay, an all-negative last row, a NaN input); three mutants (wrong decay scale, dropped decay product, reduce for scan) fail the comparison. Not covered: scopes above subgroup and block, a chunked multi-block SSD, and the real Mamba2 kernels (UNVERIFIED against them).
+
+---
+
 ## `0.60.4` — Added: `Layout::{group, append, prepend, replace, dice, filter_zeros, filter}`, the structural layout operations
 
 Pure vocabulary in `unpopped-vocab::layout_algebra` (CuTe `01_layout.md` names and meaning; ROADMAP IR-union row 6, `cute.md`). `group` nests a range of top-level modes without changing the index-to-offset map; `append`/`prepend` add a mode at either end; `replace` swaps one; `dice` is the complement of `slice`; `filter_zeros` sets stride-0 extents to 1 and `filter` also coalesces. `filter_zeros`/`filter` semantics are UNVERIFIED against `cute/layout.hpp` (taken from the documentation's description). Verified by `tests/layout_algebra_structural.rs`: hand examples, brute-force properties over eight layouts, and a broken variant per checker that must fail. Additive; no kernel or IR change.
