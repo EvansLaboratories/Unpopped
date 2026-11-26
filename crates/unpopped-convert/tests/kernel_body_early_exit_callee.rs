@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! **Census wall (found by the census as `Invalid: BarrierDivergent`, 57 gguf mmvq kernels): a guard `return` in a `void` function
+//! **Census wall (found by the census as `Invalid: BarrierDivergent`, the gguf mmvq kernels (19 early-return-then-collective kernels in baracuda source at eae3a6dcf, none deriving the guard from `threadIdx.x`; a census figure of 57 is not reproduced by source text and may count instantiations)): a guard `return` in a `void` function
 //! the kernel calls last, followed by a warp shuffle.** `if (row >= nrows) return; ...; __shfl_xor_sync(..)` inlined as
 //! `if (c) {} else { rest }` put the shuffle under a branch, which the checker rightly refuses. When the call is the last
 //! statement of the kernel's own body the callee's `return` leaves the kernel, so it lowers as `Stmt::Return` and the rest stays in
@@ -61,12 +61,26 @@ fn a_guard_return_before_a_warp_shuffle_in_the_last_called_function_lifts_and_ru
 
 #[test]
 fn a_call_that_is_not_last_does_not_end_the_kernel_with_its_return() {
-    // the guard `return` leaves only `inner`: the kernel's own `out[1] = 5` still runs when the guard stops the callee. With a
-    // shuffle in the callee the else form is divergent, so the checker refuses it: still a decline, never a wrong kernel
+    // the guard `return` leaves only `inner`: the kernel's own `out[1] = 5` still runs when the guard stops the callee. The
+    // inlined form is `if (row >= nrows) {} else { rest }` with a shuffle in the else arm. `row` is built from `blockIdx.x` and
+    // `threadIdx.y`, which are the same for every lane of a subgroup when the launch states the subgroup size (ROADMAP U63), so
+    // that arm is warp-uniform and the kernel lifts, and it must lift AS the else form (the guard stops only the callee), never
+    // as an early kernel exit: the trailing `out[1] = 5` runs on both paths. (Before U63 the checker read `threadIdx.y` as
+    // lane-divergent and refused this lift.)
     let src = format!(
-        "{INNER}extern \"C\" void k(float* out, const float* in, int nrows) {{ inner(out, in, nrows); out[1] = 5.0f; }}"
+        "{INNER}extern \"C\" void k(float* out, const float* in, int nrows) {{ inner(out, in, nrows); if (threadIdx.x == 0) out[1] = 5.0f; }}"
     );
-    assert!(lift(&src).is_err(), "must not lift as an early kernel exit");
+    let k = lift(&src).expect("lifts as the else form since the guard is warp-uniform");
+    assert_eq!(
+        run(&k, 1),
+        vec![528.0, 5.0],
+        "the guard passes: the sum, then the kernel's own statement"
+    );
+    assert_eq!(
+        run(&k, 0),
+        vec![0.0, 5.0],
+        "the guard stops only the callee: the kernel's own statement still runs"
+    );
     // without a barrier in the callee the else form is fine and the trailing statement runs either way
     let k = lift(
         "static void inner(float* out, const float* in, int nrows) { if (nrows <= 0) return; if (threadIdx.x == 0) out[0] = in[0]; }\n\

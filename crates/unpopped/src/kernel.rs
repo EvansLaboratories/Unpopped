@@ -1870,4 +1870,10 @@ pub enum KernelError {
     /// A `Barrier` under control that may differ between the threads of its scope. The rule is
     /// conservative (decision D-R4-5): it rejects some uniform programs.
     BarrierDivergent,
+    /// A `Subgroup`-scope [`Stmt::Collective`] or [`Stmt::CollectiveTuple`] reached after a `Return` that some lanes of
+    /// its subgroup may have taken (the `Return` sat under control that may differ between the lanes of one subgroup).
+    /// The oracle runs a collective over every lane of the subgroup, while a device operates on the lanes still active,
+    /// so a kernel that exits a subset of the lanes first has no single meaning at the collective (ROADMAP U63; board 506).
+    /// A `Return` under warp-uniform control, which removes whole subgroups, is not refused.
+    CollectiveAfterReturn,
 }

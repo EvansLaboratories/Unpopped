@@ -18,8 +18,8 @@ use crate::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
 use crate::ir::{BinaryOp, ReduceOp, ScalarExpr};
 use crate::kernel::{
     AtomicOp, Block, BodyText, BufferRole, CacheHint, CallArg, CollectiveKind, Effects, ExternDecl,
-    KernelFn, LocalDecl, MemoryOrder, Module, OperandLayout, Param, Place, Stmt, TargetBody,
-    Unroll,
+    KernelError, KernelFn, LocalDecl, MemoryOrder, Module, OperandLayout, Param, Place, Stmt,
+    TargetBody, Unroll,
 };
 use crate::mma::MmaAtom;
 use unpopped_vocab::ElementKind;
@@ -1065,6 +1065,52 @@ pub fn fixture(name: &str) -> Option<Fixture> {
         .map(|(_, f)| f)
 }
 
+/// Kernels `check_kernel` **refuses**, each with the error it gives: a `Subgroup`-scope collective in control that may differ
+/// between the lanes of one subgroup (a decline test for a *checker* rule, not an emitter's; ROADMAP U63, board 506). The oracle
+/// runs a collective over every lane of its subgroup, a device over the lanes still active, so a kernel whose lanes may not all
+/// arrive has no single meaning. `"CollectiveUnderDivergentIf"` puts it under `if (threadIdx.x & 1)` (`BarrierDivergent`);
+/// `"CollectiveAfterDivergentReturn"` puts a `Return` under that condition before it (`CollectiveAfterReturn`). The uniform
+/// control of both is the `Collective` fixture of [`fixtures`].
+#[must_use]
+pub fn divergent_fixtures() -> Vec<(&'static str, KernelFn, KernelError)> {
+    let odd = || ScalarExpr::Binary(BinaryOp::BitAnd, Box::new(tid()), Box::new(u(1)));
+    let sum = || Stmt::Collective {
+        kind: CollectiveKind::Reduce(ReduceOp::Sum),
+        value: l(0),
+        result: 1,
+        scope: Scope::Subgroup,
+    };
+    let set = || Stmt::Let {
+        local: 0,
+        init: c(1.0),
+    };
+    let when_odd = |then: Vec<Stmt>| Stmt::If {
+        cond: odd(),
+        then: Block(then),
+        els: Block(vec![]),
+    };
+    let build =
+        |name: &str, body: Vec<Stmt>| f32_kernel(name, &[F32, F32], body).with_launch(warp());
+    vec![
+        (
+            "CollectiveUnderDivergentIf",
+            build(
+                "collective_under_divergent_if",
+                vec![set(), when_odd(vec![sum()])],
+            ),
+            KernelError::BarrierDivergent,
+        ),
+        (
+            "CollectiveAfterDivergentReturn",
+            build(
+                "collective_after_divergent_return",
+                vec![set(), when_odd(vec![Stmt::Return]), sum()],
+            ),
+            KernelError::CollectiveAfterReturn,
+        ),
+    ]
+}
+
 /// What the fixture for `name` needs that is unusual, in a few words, or `""` for a plain single-thread kernel:
 /// `"module"` (a `check_module` fixture), `"launch"`, `"warp launch"`, `"warpgroup launch"`, `"multi-device launch"`,
 /// `"tensor memory"`, `"operand layouts"` (a tile layout, here the oracle-only row-major one), `"mbarrier"`
@@ -1136,6 +1182,20 @@ mod tests {
         assert_eq!(names, ALL);
         // the positive control: the enum has 46 variants on this base
         assert_eq!(ALL.len(), 46, "the Stmt variants this list was written for");
+    }
+
+    #[test]
+    fn every_divergent_fixture_is_refused_with_its_error_and_its_uniform_control_is_admitted() {
+        let divergent = divergent_fixtures();
+        assert_eq!(divergent.len(), 2);
+        for (name, k, err) in divergent {
+            assert_eq!(crate::kernel::check_kernel(&k), Err(err), "{name}");
+        }
+        // the control: the uniform form of the same collective passes
+        let Some(Fixture::Kernel(k)) = fixture("Collective") else {
+            panic!("the Collective fixture is a kernel");
+        };
+        assert_eq!(crate::kernel::check_kernel(&k), Ok(()));
     }
 
     #[test]
