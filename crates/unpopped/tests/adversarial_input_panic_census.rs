@@ -99,7 +99,10 @@ const KNOWN_PANICKING: usize = 0;
 /// PANICKED (operand count, axis outside the rank, Mean at a non-float dtype: key-reachable `assert!`s in `validate_scan`);
 /// they are `require!` now. The cell here has three operands, so a one-input Scan declines at the operand count and
 /// never reaches the layout checks; those are pinned in `plan_gate_strided_scan.rs`.
-const KNOWN_DECLINED: usize = 2164;
+/// 2164 -> 2948 on 2026-11-26 (+784, all declined, 0 panicked, lowered stayed 972): the seven union batch 1 dtypes (KISS 0.24.0,
+/// `F128`/`I128`/`U128`/`I256`/`U256`/`F8E3M4`/`F8UE4M3`) reach the plan gate and are refused by `check_dtype_is_a_compute_dtype`. Measured
+/// first: before that arm the gate ADMITTED them (1308 lowered) and `oracle::evaluate` would have met a dtype it cannot hold.
+const KNOWN_DECLINED: usize = 2948;
 
 /// Spells every dtype and every plan, so a panic is never a backend decline in
 /// disguise. A backend that declined would mask the very thing being counted.

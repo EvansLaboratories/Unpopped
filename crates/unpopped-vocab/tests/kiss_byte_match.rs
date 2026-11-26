@@ -119,14 +119,14 @@ fn the_vendored_artifacts_are_the_revisions_this_leg_was_written_against() {
         (
             "structure_key_vectors.json",
             VECTORS,
-            42_772_usize,
-            0x0517_fe9e_9a02_757a_u64,
+            43_155_usize,
+            0x0c99_d42c_1c04_b3a0_u64,
         ),
         (
             "dtype_manifest.json",
             MANIFEST,
-            3_650_usize,
-            0x8a87_bddb_bc4f_c100_u64,
+            4_504_usize,
+            0x6bdb_c13f_bc6f_273d_u64,
         ),
     ] {
         assert_eq!(
@@ -179,7 +179,7 @@ fn the_vendored_artifacts_are_the_revisions_this_leg_was_written_against() {
 fn the_namespace_vocabulary_versions_are_asserted() {
     // Object-valued, so the scalar reader does not apply — match the whole
     // block byte-exactly, which is also the strictest thing available.
-    for (ns, ver) in [("cuda", 1), ("vulkan", 6)] {
+    for (ns, ver) in [("cuda", 1), ("vulkan", 8)] {
         let needle = format!("\"{ns}\": {ver}");
         assert!(
             VECTORS.contains(&needle),

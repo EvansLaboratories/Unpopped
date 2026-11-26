@@ -201,6 +201,24 @@ pub const fn is_cast_float_endpoint(t: ElementKind) -> bool {
     is_cast_float(t) || matches!(t, ElementKind::F16 | ElementKind::Bf16) || is_mx_element(t)
 }
 
+/// A dtype of union batch 1 (KISS 0.24.0, §6.1-0017 to -0020; board 501 and 515): `F128`, `I128`, `U128`, `I256`, `U256`,
+/// `F8E3M4`, `F8UE4M3`. **Storage and key identity only** until the casts (plan E1b), the wide oracle integer (E2) and a
+/// software binary128 (E3) land: `check_kernel` refuses a kernel that declares one (`KernelError::DtypeNotComputed`), so the
+/// oracle never meets a value it cannot hold.
+#[must_use]
+pub const fn is_union_batch1(t: ElementKind) -> bool {
+    matches!(
+        t,
+        ElementKind::F128
+            | ElementKind::I128
+            | ElementKind::U128
+            | ElementKind::I256
+            | ElementKind::U256
+            | ElementKind::F8E3M4
+            | ElementKind::F8UE4M3
+    )
+}
+
 /// An OCP MX element format (`F4E2M1`, `F6E2M3`, `F6E3M2`): IEEE-shaped fields with NO
 /// infinity and NO NaN, so the all-ones exponent is an ordinary exponent and the largest
 /// code is the largest finite value. A `Cast` into one saturates (`docs/ir-typed-expressions.md`
@@ -1088,6 +1106,10 @@ pub(crate) fn elem_size(dt: ElementKind) -> usize {
         // §6.1 token names the total width, so the name already says this.
         ElementKind::Complex64 => 8,
         ElementKind::Complex128 => 16,
+        // Union batch 1 (KISS 0.24.0): storage widths only (§6.1-0017 to -0020); no operation computes them yet.
+        ElementKind::F128 | ElementKind::I128 | ElementKind::U128 => 16,
+        ElementKind::I256 | ElementKind::U256 => 32,
+        ElementKind::F8E3M4 | ElementKind::F8UE4M3 => 1,
         // Sub-byte dtypes share a byte. `elem_size` is the CONTAINER width here,
         // not the element width — use `elem_bits` for the latter and
         // `packed_bytes` for allocation.
