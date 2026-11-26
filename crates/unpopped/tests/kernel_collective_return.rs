@@ -114,14 +114,20 @@ fn a_return_on_threadidx_y_is_a_whole_subgroup_exit_when_the_subgroup_size_is_st
     // `if (threadIdx.y != 0) return;` then a subgroup reduction, in a 32 x 4 block with the stated subgroup size 32: the shape of
     // the mmvq kernels' `if (row >= nrows) return;` with `row` built from `threadIdx.y`
     let body = vec![if_(thread(1), vec![Stmt::Return]), sum(Scope::Subgroup)];
-    assert_eq!(check_kernel(&kernel([32, 4, 1], (32, 32), body.clone())), Ok(()));
+    assert_eq!(
+        check_kernel(&kernel([32, 4, 1], (32, 32), body.clone())),
+        Ok(())
+    );
     // the controls: a launch that states a RANGE of subgroup sizes, and a block whose x extent is not a multiple of the size
     // (a subgroup may then straddle rows), do not prove it
     after_return(&kernel([32, 4, 1], (16, 32), body.clone()));
     after_return(&kernel([48, 4, 1], (32, 32), body));
     // the same refinement for a collective under `if (threadIdx.y == 0)`
     let under = vec![if_(thread(1), vec![sum(Scope::Subgroup)])];
-    assert_eq!(check_kernel(&kernel([32, 4, 1], (32, 32), under.clone())), Ok(()));
+    assert_eq!(
+        check_kernel(&kernel([32, 4, 1], (32, 32), under.clone())),
+        Ok(())
+    );
     assert_eq!(
         check_kernel(&kernel([32, 4, 1], (16, 32), under)),
         Err(KernelError::BarrierDivergent)
@@ -186,10 +192,17 @@ fn the_exact_baracuda_guard_forms_are_admitted_and_the_threadidx_x_variant_is_re
         Box::new(thread(1)),
     );
     for block in [[32, 1, 1], [32, 4, 1]] {
-        assert_eq!(check_kernel(&kernel_with(block, mmvq_row.clone())), Ok(()), "{block:?}");
+        assert_eq!(
+            check_kernel(&kernel_with(block, mmvq_row.clone())),
+            Ok(()),
+            "{block:?}"
+        );
     }
     assert_eq!(
-        check_kernel(&kernel_with([32, 1, 1], ScalarExpr::Exec(ExecId::BlockIdx(0)))),
+        check_kernel(&kernel_with(
+            [32, 1, 1],
+            ScalarExpr::Exec(ExecId::BlockIdx(0))
+        )),
         Ok(())
     );
     // the refused variant: the row from `threadIdx.x`

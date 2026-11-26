@@ -71,8 +71,16 @@ fn a_call_that_is_not_last_does_not_end_the_kernel_with_its_return() {
         "{INNER}extern \"C\" void k(float* out, const float* in, int nrows) {{ inner(out, in, nrows); if (threadIdx.x == 0) out[1] = 5.0f; }}"
     );
     let k = lift(&src).expect("lifts as the else form since the guard is warp-uniform");
-    assert_eq!(run(&k, 1), vec![528.0, 5.0], "the guard passes: the sum, then the kernel's own statement");
-    assert_eq!(run(&k, 0), vec![0.0, 5.0], "the guard stops only the callee: the kernel's own statement still runs");
+    assert_eq!(
+        run(&k, 1),
+        vec![528.0, 5.0],
+        "the guard passes: the sum, then the kernel's own statement"
+    );
+    assert_eq!(
+        run(&k, 0),
+        vec![0.0, 5.0],
+        "the guard stops only the callee: the kernel's own statement still runs"
+    );
     // without a barrier in the callee the else form is fine and the trailing statement runs either way
     let k = lift(
         "static void inner(float* out, const float* in, int nrows) { if (nrows <= 0) return; if (threadIdx.x == 0) out[0] = in[0]; }\n\

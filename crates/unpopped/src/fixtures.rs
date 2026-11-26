@@ -18,8 +18,8 @@ use crate::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
 use crate::ir::{BinaryOp, ReduceOp, ScalarExpr};
 use crate::kernel::{
     AtomicOp, Block, BodyText, BufferRole, CacheHint, CallArg, CollectiveKind, Effects, ExternDecl,
-    KernelError, KernelFn, LocalDecl, MemoryOrder, Module, OperandLayout, Param, Place, Stmt, TargetBody,
-    Unroll,
+    KernelError, KernelFn, LocalDecl, MemoryOrder, Module, OperandLayout, Param, Place, Stmt,
+    TargetBody, Unroll,
 };
 use crate::mma::MmaAtom;
 use unpopped_vocab::ElementKind;
@@ -1089,9 +1089,8 @@ pub fn divergent_fixtures() -> Vec<(&'static str, KernelFn, KernelError)> {
         then: Block(then),
         els: Block(vec![]),
     };
-    let build = |name: &str, body: Vec<Stmt>| {
-        f32_kernel(name, &[F32, F32], body).with_launch(warp())
-    };
+    let build =
+        |name: &str, body: Vec<Stmt>| f32_kernel(name, &[F32, F32], body).with_launch(warp());
     vec![
         (
             "CollectiveUnderDivergentIf",
