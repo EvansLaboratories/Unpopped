@@ -75,4 +75,10 @@ Who: the **emitter lane** owns its table and probe (vulkane for Metal/Vulkan/GLS
 3. **Where the probe recipes live**: a `unpopped::conformance` module (shared by the emitter lanes) or each lane's tests. Recommended: shared, because the oracle is the reference and the probes are IR.
 4. **Breaking?** Additive (`#[non_exhaustive]` struct, new accessor); an emitter that does not stamp yields `None`. Not breaking.
 
+## 6. Ruling (pm-kernels, 2026-11-26): A now
+
+Option A is ruled: the local `KernelFidelity` extension now, additive. No request for B: **KISS has no value admitting flush (6.17-0002); if CireSnave later wants one, it is a wire change, filed then.** Nothing is blocked without it. The local type is shaped so that a KISS value maps 1:1: `Exact` <-> `math_fidelity = bit-stable`; `Declined(ReducedMantissa { bits })` <-> `reduced-mantissa-permitted:<bits>`; `Declined(FlushesSubnormals)` has no KISS counterpart today and would be the value a future clause adds; the other reasons (`ContractsFma`, `ApproximateIntrinsic`, `Reassociates`, `NotMeasured`) are Unpopped-local and carry no `bit-stable`. The mapping is a function from the local type to the wire value (or "none"), so a later KISS clause changes that function, not the type.
+
+**Slice 1 (the next code, after the U57 gate):** the type and `GeneratedKernel::with_fidelity` / `fidelity()` in `unpopped` (additive); the shared probe recipe (IR kernels with subnormal, infinity and NaN operands, the oracle as the expectation); and the stamping of what Unpopped itself can measure (`unpopped-cpu-c`, from its own probe run). **The MSL `f32`/`bf16` `Declined(FlushesSubnormals)` rows live in vulkane's emitter table** (vulkane's measurement, on its device, with its provenance); Unpopped supplies the type, the probe recipe and the consumer rule, and vulkane stamps its own rows. Slice 1 therefore ends where a vulkane-side change begins, and is reported as such.
+
 — lane: unpopped
