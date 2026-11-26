@@ -7,7 +7,7 @@
 use super::wgmma::{MAX_DESCRIPTOR_OFFSET, check_layout, check_tile};
 use super::{Scope, check_expr};
 use crate::exec::{Extent, MemorySpace};
-use crate::kernel::{KernelError, KernelFn, Stmt};
+use crate::kernel::{KernelError, KernelFn, OperandLayout, Stmt};
 use crate::types::{self, Ty};
 use unpopped_vocab::ElementKind;
 
@@ -75,11 +75,23 @@ fn check_mma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
     let bt = b_ty.unwrap_or(*ab);
     let fp8 = |t: ElementKind| matches!(t, ElementKind::Fp8E4M3FN | ElementKind::Fp8E5M2);
     let half = |t: ElementKind| matches!(t, ElementKind::F16 | ElementKind::Bf16);
-    if !((half(*ab) && bt == *ab) || (fp8(*ab) && fp8(bt))) {
+    // `.kind::f8f6f4` atype and btype are independent fields; of its types only the 8-bit floats and FP4 are built
+    let fp4 = |t: ElementKind| t == ElementKind::F4E2M1;
+    let f8f6f4 = |t: ElementKind| fp8(t) || fp4(t);
+    if !((half(*ab) && bt == *ab) || (f8f6f4(*ab) && f8f6f4(bt))) {
         return Err(refuse(
-            "input types other than f16, bf16 (A and B alike) or two 8-bit floats (e4m3, e5m2)",
+            "input types other than f16, bf16 (A and B alike) or 8-bit floats (e4m3, e5m2) and FP4 (e2m1)",
         ));
     }
+    // an FP4 tile is bytes: 16-byte slots of 16 elements (U8 Shared, filled by `CopyUnpack`), row-major, oracle only
+    if (fp4(*ab) && *a_layout != OperandLayout::RowMajor)
+        || (fp4(bt) && *b_layout != OperandLayout::RowMajor)
+    {
+        return Err(refuse(
+            "a canonical layout for a 4-bit tile (no second source for a 16-byte slot inside a core matrix)",
+        ));
+    }
+    let tile_ty = |t: ElementKind| if fp4(t) { ElementKind::U8 } else { t };
     // dtype F32 (a 32-bit float cell) or F16 (a 32-bit word whose low 16 bits are the element: PTX 9.7.18.10.5)
     let cell = check_tmem(k, *d)?;
     let acc_ok = match *acc {
@@ -92,9 +104,9 @@ fn check_mma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
             "an accumulator that is not f32 (F32 tensor memory) or f16 (U32 tensor memory words)",
         ));
     }
-    check_tile(k, a, *ab, sc)
+    check_tile(k, a, tile_ty(*ab), sc)
         .map_err(|_| refuse("an A tile that is not a Shared place of the input type"))?;
-    check_tile(k, b, bt, sc)
+    check_tile(k, b, tile_ty(bt), sc)
         .map_err(|_| refuse("a B tile that is not a Shared place of the input type"))?;
     // the tcgen05 descriptor's leading field is 15 bits (PTX ISA 9.5 9.7.18.4.1): twice the wgmma range
     let max_lbo = 2 * MAX_DESCRIPTOR_OFFSET + 16;
@@ -110,7 +122,7 @@ fn check_mma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
         a_layout,
         *m as usize,
         max_lbo,
-        if fp8(*ab) { 1 } else { 2 },
+        if half(*ab) { 2 } else { 1 },
     )
     .map_err(refuse)?;
     check_layout(
@@ -119,7 +131,7 @@ fn check_mma(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), KernelError> {
         b_layout,
         *n as usize,
         max_lbo,
-        if fp8(bt) { 1 } else { 2 },
+        if half(bt) { 2 } else { 1 },
     )
     .map_err(refuse)?;
     check_int(k, d_col, sc)?;

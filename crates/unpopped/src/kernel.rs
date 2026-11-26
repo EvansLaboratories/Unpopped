@@ -1082,6 +1082,27 @@ pub enum Stmt {
         /// The `mbarrier` (a `Shared` 64-bit element) the copy completes on.
         bar: Place,
     },
+    /// Fill a bit-addressed FP4 tile: copy `groups` groups of 16 `F4E2M1` elements from the packed global buffer place `src`
+    /// into the **byte** (`U8`) `Shared` allocation place `dst`, one 16-byte slot per group: the 8 data bytes (KISS packing,
+    /// two per byte, low nibble = even index) then 8 bytes of padding (PTX ISA 9.5 Figure 207, "16 elements of 4-bit
+    /// floating point type, with 64-bit padding at the end"), issued by one thread and completing on an `mbarrier` like
+    /// [`Stmt::CopyBulk`] (`groups * 16` bytes). It moves whole bytes, so it is not a sub-byte `Store` (U8c design note
+    /// 5j; U9b's read-only sub-byte buffers are unchanged). The pad bytes are written zero by the oracle and are
+    /// unspecified by PTX. FP6 sources wait on a KISS pin for their buffer packing. **Tags:** the padding rule is PTX's for
+    /// `.kind::mxf8f6f4`; for the unscaled `.kind::f8f6f4` it is "inferred, CUTLASS-shared tags, PTX silent" (PM ruling
+    /// 2026-11-26), and the nibble order inside the slot is assumed to carry over from the buffer packing.
+    ///
+    /// **Patent note:** the patent note on [`Stmt::CopyBulk`] applies; emitters for other manufacturers decline it.
+    CopyUnpack {
+        /// The first destination byte: a `Shared` `U8` allocation place.
+        dst: Place,
+        /// The first source element: a place of a readable global `F4E2M1` buffer.
+        src: Place,
+        /// How many groups of 16 elements (each becoming one 16-byte slot).
+        groups: u32,
+        /// The `mbarrier` (a `Shared` 64-bit element) the copy completes on.
+        bar: Place,
+    },
     /// Close this thread's open [`Stmt::CopyAsync`] copies into one group (`cp.async.commit_group`). A commit with
     /// no open copy still makes a group, as on hardware, so that wait counts line up.
     ///

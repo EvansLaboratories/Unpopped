@@ -114,6 +114,41 @@ impl Machine<'_> {
             .collect()
     }
 
+    /// The `rows` rows of 32 `F4E2M1` elements of the tile at `place`, a `U8` `Shared` allocation holding two 16-byte slots
+    /// per row (what a `CopyUnpack` writes): element `k` of a row is nibble `(k % 16) % 2` (0 = low) of byte
+    /// `(k % 16) / 2` of slot `k / 16`. The padding bytes of a slot are never read.
+    fn tcgen05_tile_f4(&mut self, place: &Place, rows: usize) -> Result<Vec<Vec<Val>>, KernelTrap> {
+        let Place::Alloc { alloc, index } = place else {
+            return Err(KernelTrap::Unsupported(
+                "a tcgen05 tile that is not an allocation place",
+            ));
+        };
+        let first = self.wgmma_int(index)?;
+        let mut out = Vec::with_capacity(rows);
+        for r in 0..rows {
+            let mut row = Vec::with_capacity(32);
+            for k in 0..32usize {
+                let off = r * 32 + (k / 16) * 16 + (k % 16) / 2;
+                let at_i = first + off as i128;
+                let at = ScalarExpr::ConstInt(at_i as i64, ElementKind::I64);
+                let byte = self.alloc_load(*alloc, &at)?.f64() as u64;
+                self.require_proxy_fenced(*alloc, at_i as usize)?;
+                let bits = if k % 2 == 0 {
+                    byte & 0xf
+                } else {
+                    (byte >> 4) & 0xf
+                };
+                row.push(Val::Float(crate::cast_ref::decode_mx(
+                    u128::from(bits),
+                    2,
+                    1,
+                )));
+            }
+            out.push(row);
+        }
+        Ok(out)
+    }
+
     /// Run a `Tcgen05Mma`: `D` of `n` columns from `d_col` of the tensor allocation `d`.
     pub(super) fn tcgen05_mma(&mut self, st: &Stmt) -> Result<(), KernelTrap> {
         let Stmt::Tcgen05Mma {
@@ -131,6 +166,7 @@ impl Machine<'_> {
             acc,
             negate_a,
             negate_b,
+            b_ty,
             ..
         } = st
         else {
@@ -148,18 +184,26 @@ impl Machine<'_> {
         // negating A's or B's elements flips every product's sign; both cancel
         let sign = if negate_a ^ negate_b { -1.0 } else { 1.0 };
         // `.kind::f8f6f4` takes K = 32 per instruction, the 16-bit kinds 16 (PTX ISA 9.5 Table 50)
+        let bt = b_ty.unwrap_or(*ab);
         let k = if matches!(
             ab,
-            unpopped_vocab::ElementKind::Fp8E4M3FN | unpopped_vocab::ElementKind::Fp8E5M2
+            unpopped_vocab::ElementKind::F16 | unpopped_vocab::ElementKind::Bf16
         ) {
-            32
-        } else {
             16
+        } else {
+            32
         };
-        let (a, b) = (
-            self.tcgen05_tile(a, *rows as usize, a_layout, k)?,
-            self.tcgen05_tile(b, n, b_layout, k)?,
-        );
+        let fp4 = |t: &unpopped_vocab::ElementKind| *t == unpopped_vocab::ElementKind::F4E2M1;
+        let a = if fp4(ab) {
+            self.tcgen05_tile_f4(a, *rows as usize)?
+        } else {
+            self.tcgen05_tile(a, *rows as usize, a_layout, k)?
+        };
+        let b = if fp4(&bt) {
+            self.tcgen05_tile_f4(b, n)?
+        } else {
+            self.tcgen05_tile(b, n, b_layout, k)?
+        };
         for (m, arow) in a.iter().enumerate() {
             for (j, brow) in b.iter().enumerate() {
                 // PTX ISA 9.5 Layout D (m = 128): row r is lane r. Layout F (m = 64): rows 16w..16w+15 are in warp w's

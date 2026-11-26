@@ -368,6 +368,7 @@ impl Walk<'_> {
             | Stmt::ProxyFence { .. }
             | Stmt::CopyAsync { .. }
             | Stmt::CopyBulk { .. }
+            | Stmt::CopyUnpack { .. }
             | Stmt::WgmmaCommit
             | Stmt::WgmmaWait { .. }
             | Stmt::GridDepWait

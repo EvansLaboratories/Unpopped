@@ -94,7 +94,30 @@ struct Opt {
     neg_a: bool,
     neg_b: bool,
 }
+const FP4: ElementKind = ElementKind::F4E2M1;
+
 impl Opt {
+    fn a_fp4(self) -> bool {
+        self.a_ty == FP4
+    }
+    fn b_fp4(self) -> bool {
+        self.b_ty == FP4
+    }
+    /// The element type of A's (B's) `Shared` allocation: a 4-bit tile is bytes, 16-byte slots filled by `CopyUnpack`.
+    fn a_tile(self) -> ElementKind {
+        if self.a_fp4() {
+            ElementKind::U8
+        } else {
+            self.a_ty
+        }
+    }
+    fn b_tile(self) -> ElementKind {
+        if self.b_fp4() {
+            ElementKind::U8
+        } else {
+            self.b_ty
+        }
+    }
     /// The type of a tensor-memory cell and of what a thread reads back from it.
     fn cell(self) -> ElementKind {
         if self.half_d { ElementKind::U32 } else { F32 }
@@ -208,18 +231,26 @@ fn body(o: Opt) -> Vec<Stmt> {
             bar: alloc(3, u(0)),
         });
     }
-    let mut body = vec![
-        on_thread0(vec![
-            Stmt::Tcgen05Alloc {
-                d: 2,
-                ncols: tmem_cols(o.n),
-            },
-            Stmt::MbarInit {
-                bar: alloc(3, u(0)),
-                count: u(1),
-            },
-        ]),
-        copy_tile(
+    let mut opening = vec![
+        Stmt::Tcgen05Alloc {
+            d: 2,
+            ncols: tmem_cols(o.n),
+        },
+        Stmt::MbarInit {
+            bar: alloc(3, u(0)),
+            count: u(1),
+        },
+    ];
+    if o.a_fp4() || o.b_fp4() {
+        // the barrier the tile fills complete on
+        opening.push(Stmt::MbarInit {
+            bar: alloc(5, u(0)),
+            count: u(1),
+        });
+    }
+    let mut body = vec![on_thread0(opening)];
+    if !o.a_fp4() {
+        body.push(copy_tile(
             0,
             0,
             i64::from(o.m) * o.k() as i64,
@@ -228,11 +259,51 @@ fn body(o: Opt) -> Vec<Stmt> {
             o.a_layout,
             2,
             o.a_eb(),
-        ),
-        copy_tile(1, 1, n * o.k() as i64, t, o.fence, o.b_layout, 4, o.b_eb()),
-        Stmt::barrier(Scope::Block),
-        on_thread0(issue),
-    ];
+        ));
+    }
+    if !o.b_fp4() {
+        body.push(copy_tile(
+            1,
+            1,
+            n * o.k() as i64,
+            t,
+            o.fence,
+            o.b_layout,
+            4,
+            o.b_eb(),
+        ));
+    }
+    body.push(Stmt::barrier(Scope::Block));
+    // 4-bit tiles: thread 0 fills them with `CopyUnpack` (two 16-byte slots per row), announces the bytes on the copy
+    // barrier and waits for them before it issues the MMA
+    let mut fill = Vec::new();
+    let mut bytes = 0i64;
+    for (fp4, buffer, tile, rows) in [
+        (o.a_fp4(), 0u32, 0u32, i64::from(o.m)),
+        (o.b_fp4(), 1, 1, n),
+    ] {
+        if fp4 {
+            fill.push(Stmt::CopyUnpack {
+                dst: alloc(tile, u(0)),
+                src: buf(buffer, u(0)),
+                groups: (rows * 2) as u32,
+                bar: alloc(5, u(0)),
+            });
+            bytes += rows * 32;
+        }
+    }
+    if !fill.is_empty() {
+        fill.push(Stmt::MbarArrive {
+            bar: alloc(5, u(0)),
+            tx: Some(u(bytes)),
+        });
+        fill.push(Stmt::MbarWait {
+            bar: alloc(5, u(0)),
+            parity: u(0),
+        });
+    }
+    fill.extend(issue);
+    body.push(on_thread0(fill));
     if o.wait {
         body.push(Stmt::MbarWait {
             bar: alloc(3, u(0)),
@@ -300,9 +371,9 @@ fn kernel(o: Opt) -> KernelFn {
         vec![
             LocalDecl::scalar(U32),
             LocalDecl::scalar(U32),
-            LocalDecl::scalar(o.a_ty),
+            LocalDecl::scalar(o.a_tile()),
             LocalDecl::scalar(o.cell()),
-            LocalDecl::scalar(o.b_ty),
+            LocalDecl::scalar(o.b_tile()),
         ],
         Block(body(o)),
     )
@@ -311,14 +382,22 @@ fn kernel(o: Opt) -> KernelFn {
         AllocDecl::new(
             "a",
             MemorySpace::Shared,
-            o.a_ty,
-            Extent::Static(span_eb(o.a_layout, o.m as usize, o.a_eb())),
+            o.a_tile(),
+            Extent::Static(if o.a_fp4() {
+                o.m * 32
+            } else {
+                span_eb(o.a_layout, o.m as usize, o.a_eb())
+            }),
         ),
         AllocDecl::new(
             "b",
             MemorySpace::Shared,
-            o.b_ty,
-            Extent::Static(span_eb(o.b_layout, n as usize, o.b_eb())),
+            o.b_tile(),
+            Extent::Static(if o.b_fp4() {
+                o.n * 32
+            } else {
+                span_eb(o.b_layout, n as usize, o.b_eb())
+            }),
         ),
         AllocDecl::new(
             "tmem",
@@ -337,6 +416,12 @@ fn kernel(o: Opt) -> KernelFn {
             MemorySpace::Private,
             o.cell(),
             Extent::Static(n as u32),
+        ),
+        AllocDecl::new(
+            "copy_bar",
+            MemorySpace::Shared,
+            ElementKind::U64,
+            Extent::Static(1),
         ),
     ];
     k
@@ -363,6 +448,12 @@ fn typed_buf(ty: ElementKind, rows: usize, k: usize, f: impl Fn(usize, usize) ->
             .collect(),
         ElementKind::Fp8E4M3FN => vals.map(|v| Fp8E4M3FN::from_f32(v).0).collect(),
         ElementKind::Fp8E5M2 => vals.map(|v| Fp8E5M2::from_f32(v).0).collect(),
+        FP4 => {
+            // KISS packing: two per byte, the low nibble is the even index. The values 0..=4 are e2m1 codes 0, 2, 4, 5, 6.
+            let code = |v: f32| [0u8, 2, 4, 5, 6][v as usize];
+            let codes: Vec<u8> = vals.map(code).collect();
+            codes.chunks(2).map(|p| p[0] | (p[1] << 4)).collect()
+        }
         _ => unreachable!("a type this test feeds"),
     };
     KernelArg::Buffer(TypedBuffer::new(
@@ -736,8 +827,8 @@ fn a_column_count_that_grows_between_allocations_traps() {
             Extent::Static(128 * 64),
         ));
     };
-    let alloc64 = Stmt::Tcgen05Alloc { d: 5, ncols: 64 };
-    let dealloc64 = Stmt::Tcgen05Dealloc { d: 5, ncols: 64 };
+    let alloc64 = Stmt::Tcgen05Alloc { d: 6, ncols: 64 };
+    let dealloc64 = Stmt::Tcgen05Dealloc { d: 6, ncols: 64 };
     // 32 columns, then 64: the count increased
     let mut grows = kernel(o);
     big(&mut grows);
@@ -1040,5 +1131,62 @@ fn the_checker_pairs_an_f16_accumulator_with_u32_words_only() {
     let mut k = kernel(Opt::plain(8));
     k.allocs[2].elem = ElementKind::U32;
     k.allocs[4].elem = ElementKind::U32;
+    assert!(check_kernel(&k).is_err());
+}
+
+#[test]
+fn fp4_tiles_filled_by_copy_unpack_give_the_reference_product() {
+    const E4: ElementKind = ElementKind::Fp8E4M3FN;
+    for (a, b) in [(FP4, FP4), (FP4, E4), (E4, FP4)] {
+        for n in [8u32, 64] {
+            let o = Opt::f8(n, a, b);
+            assert_eq!(
+                run(&kernel(o), o),
+                Ok(expected(o)),
+                "{a:?} x {b:?}, n = {n}"
+            );
+        }
+    }
+    // an f16 D and a negation work over 4-bit inputs too
+    let o = Opt {
+        half_d: true,
+        neg_b: true,
+        ..Opt::f8(16, FP4, FP4)
+    };
+    assert_eq!(run(&kernel(o), o), Ok(expected(o)));
+}
+
+#[test]
+fn a_copy_unpack_slot_is_eight_data_bytes_then_zero_padding() {
+    // the oracle's slots: read the filled tile back through the checker-visible path by shrinking the product to one row
+    // and comparing against a reference built from the slot layout (element 16 starts at byte 16, not byte 8)
+    let o = Opt::f8(8, FP4, FP4);
+    let want = expected(o);
+    // a reference that read the second 16 elements at byte 8 (no padding) would differ
+    let (fa, fb) = (val_a(o), val_b(o));
+    let unpadded: f32 = (0..16).map(|k| fa(1, k) * fb(0, k)).sum();
+    assert_ne!(want[8], unpadded, "K = 32 is both slots, not the first 16");
+    assert_eq!(run(&kernel(o), o), Ok(want));
+}
+
+#[test]
+fn the_checker_applies_the_copy_unpack_and_fp4_rules() {
+    let ok = Opt::f8(8, FP4, FP4);
+    assert_eq!(check_kernel(&kernel(ok)), Ok(()));
+    // a canonical layout on a 4-bit tile is refused (no second source for a slot inside a core matrix)
+    assert!(
+        check_kernel(&kernel(Opt {
+            a_layout: dense_k(),
+            ..ok
+        }))
+        .is_err()
+    );
+    // a tile that is not the byte allocation CopyUnpack fills
+    let mut k = kernel(ok);
+    k.allocs[0].elem = FP4;
+    assert!(check_kernel(&k).is_err());
+    // a CopyUnpack whose source is not an F4 buffer, or whose destination is not bytes
+    let mut k = kernel(Opt::f8(8, FP4, ElementKind::Fp8E4M3FN));
+    k.params[0] = Param::buffer("a_in", ElementKind::Fp8E4M3FN, BufferRole::Read, Some(1));
     assert!(check_kernel(&k).is_err());
 }

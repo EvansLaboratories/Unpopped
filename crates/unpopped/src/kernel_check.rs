@@ -307,6 +307,7 @@ fn check_sync_stmt(
             async_copy::check_async(k, st, sc)?;
         }
         Stmt::CopyBulk { .. } => mbar::check_copy_bulk(k, st, sc)?,
+        Stmt::CopyUnpack { .. } => mbar::check_copy_unpack(k, st, sc)?,
         Stmt::ExternCall {
             decl,
             args,
@@ -567,6 +568,7 @@ fn check_stmt(
         | Stmt::MbarWait { .. }
         | Stmt::MatrixStore { .. }
         | Stmt::CopyBulk { .. }
+        | Stmt::CopyUnpack { .. }
         | Stmt::CopyAsync { .. }
         | Stmt::AsyncCommit
         | Stmt::AsyncWait { .. }

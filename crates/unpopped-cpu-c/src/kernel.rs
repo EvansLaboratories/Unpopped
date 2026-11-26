@@ -285,6 +285,11 @@ impl Emitter<'_> {
                     "tcgen05 works on tensor memory, which the serial C does not spell",
                 ));
             }
+            Stmt::CopyUnpack { .. } => {
+                return Err(refuse(
+                    "a tile-fill copy completes on an mbarrier, which the serial C cannot block a thread on",
+                ));
+            }
             Stmt::CopyBulk { .. } => {
                 return Err(refuse(
                     "a bulk copy completes on an mbarrier, which the serial C cannot block a thread on",
