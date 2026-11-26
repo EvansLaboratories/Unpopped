@@ -857,3 +857,20 @@ Task: `gates-s`, gate G-S1. Unpopped side: `StageCount::{Auto, Fixed(u32)}` and 
 **Next read (named):** query by CPC G06F 9/38 and G06F 8/41 with "multi-stage pipeline" "asynchronous copy"; the mbarrier-parity "pipeline" API; NVIDIA CUTLASS `PipelineTmaAsync` family. Until a second, differently worded query is made, the gate does not open on a null.
 
 — lane: unpopped-patents-2
+
+## G-S3: epilogue tile and fusion (2026-11-26, unpopped-patents-2, AI-assisted, NOT legal advice; verdict words only: outside as read / needs more / NOT CLEARED, unread)
+
+Task: `gates-s`, gate G-S3. Unpopped side: `EpilogueSchedule { tile: Option<[u32;2]>, subtile: Option<[u32;2]> }` (S1, `schedule.rs`): two shape fields, the subtile dividing the tile. The IR's `EpilogueKind` (`ir.rs`, a reduction epilogue) is a different construct and is not charted here.
+
+**Queries (WebSearch):** (1) standard: `patent GEMM epilogue fusion matrix multiply output tile elementwise operation fused kernel GPU claims` -> CUTLASS, cuDNN, AMD TLX blog, arXiv CODA; no patent. (2) extended, patents sites only: `matrix multiply epilogue operation fused after accumulate tile output elementwise epilogue tensor core claims` -> Intel tile-instruction family (US11086623B2, US11288069, US11416260: not read), US20230359697A1. (3) standard: `NVIDIA patent "epilogue" general matrix multiplication ...` -> CUTLASS docs only.
+
+**Read:** US20230359697A1 (Douyin Vision Co Ltd [Google], priority 2023-07-18, Pending [Google]), claim 1 only independent: "obtaining a first tensor to be applied attention ... dividing the first tensor into a plurality of matrices based on the number of inputs of the batch and the number of heads of the attention ... generating a second tensor by applying the attention ... based on a grouped matrix multiplication, wherein a resulting matrix ... comprises a plurality of tiles each of which is computed by a set of threads with a shared memory".
+
+| Unpopped construct | Verdict | The limb that decides it |
+|---|---|---|
+| `EpilogueSchedule` (tile, subtile shape numbers) vs US20230359697A1 | **outside as read** | "a first tensor to be applied attention ... a batch of inputs with variable sequence lengths ... grouped matrix multiplication": no attention, no batch, no grouped GEMM in the type. (Its description of a fused bias-and-activation epilogue is description, not a claim.) |
+| The field as a whole: NVIDIA/AMD/Google epilogue-fusion claims | **NOT CLEARED, unread** | Three queries found no epilogue-fusion patent; the Intel tile family (US11086623B2 and others) surfaced and was not read. Not "none". |
+
+**Next read (named):** Intel US11086623B2 / US11288069 claims (a tile store instruction: a different construct from a schedule field, so expected outside, not read); queries on "epilogue visitor" and "output tile" with Nvidia as assignee.
+
+— lane: unpopped-patents-2
