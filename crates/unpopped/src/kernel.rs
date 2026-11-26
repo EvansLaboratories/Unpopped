@@ -1389,13 +1389,27 @@ pub enum BarrierKind {
 pub enum CollectiveKind {
     /// Each lane receives the value of another lane of the scope, named by `operand` under `mode`
     /// (`Idx`: the lane index, `Up`/`Down`: the distance, `Xor`: the lane mask).
+    ///
+    /// **Edge rules (the IR defines them; an emitter must SPELL them, never inherit a device's, and is device-tested at the edge
+    /// lanes or declines by name; `docs/design-kernel-collectives-edges.md`).** For `n` lanes numbered `0..n`: `Idx` reads lane
+    /// `operand mod n` (a Euclidean remainder, so an `operand` of `n` reads lane 0 and `-1` reads lane `n - 1`; **design**, the
+    /// portable defined rule: PTX `shfl.sync.idx` takes `b[4:0]`, which is the same only when `n` is 32). `Up` reads lane
+    /// `i - operand`, `Down` lane `i + operand` and `Xor` lane `i ^ operand`; **when that lane is outside `0..n` the lane reads its
+    /// OWN value**, including `operand == 0` (every lane reads itself) and `operand >= n` for `Up`/`Down` (every lane reads
+    /// itself). This is **inherited from CUDA, with its source**: PTX ISA 9.5, section 9.7.10.6 `shfl.sync` ("If the computed
+    /// source lane index j is in range, the thread will copy the input operand a from lane j into its own destination register d;
+    /// otherwise, the thread will simply copy its own input a to destination d", and `if (!pval) j = lane`), taken for a clamp
+    /// that equals the scope's size. The targets leave these cases undefined or indeterminate (WGSL out-of-range sources
+    /// indeterminate, HLSL has no up/down/xor intrinsic: vulkane's `docs/design/506-subgroup-collectives.md`).
     Shuffle {
         /// How `operand` names the source lane.
         mode: ShuffleMode,
         /// The lane index, distance or mask.
         operand: ScalarExpr,
     },
-    /// A predicate over the scope's contributed values.
+    /// A predicate over the scope's contributed values. `Ballot` is a `U32` whose bit `i` is lane `i`'s predicate, so it is defined for
+    /// up to **32 lanes** and a scope of more is a typed oracle trap (**design**: the result is a `U32`; PTX ISA 9.5
+    /// `vote.sync.ballot.b32` is also a `.b32` mask of the warp's 32 lanes).
     Vote(VoteKind),
     /// Every lane receives the fold of the scope's values under `op`.
     Reduce(ReduceOp),
