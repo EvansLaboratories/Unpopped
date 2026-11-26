@@ -287,8 +287,7 @@ pub fn check_schedule(s: &ScheduleSpec) -> Result<(), ScheduleError> {
 
 /// Specs for an emitter's decline test: each with the result [`check_schedule`] gives. The first is a spec that sets every field
 /// and passes, so a decline test can name each field of [`ScheduleSpec::set_fields`]; the rest are refused, one error each.
-/// Present with the `fixtures` feature, like `unpopped::fixtures`.
-#[cfg(any(test, feature = "fixtures"))]
+/// Always present (a few specs, no feature needed), unlike `unpopped::fixtures`, so an integration test can use it.
 #[must_use]
 pub fn schedule_fixtures() -> Vec<(&'static str, ScheduleSpec, Result<(), ScheduleError>)> {
     let full = ScheduleSpec {
