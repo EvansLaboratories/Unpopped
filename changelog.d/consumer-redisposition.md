@@ -1,0 +1,3 @@
+kind: Docs: ROADMAP rows that waited for a consumer are re-dispositioned as unblocked and ranked lower (PM, 2026-11-26); U3 R2 to R4 get rows
+---
+Issue #114 (IR union I3) was the only issue labelled blocked-on:consumer; it and the ROADMAP rows U2b, U15, U21, U24, U36, E3 and I7 that said "waits for a consumer", "parked: no consumer" or "when a consumer asks" now carry a dated re-disposition: unblocked work, ranked lower, never a reason to idle (CireSnave 2026-10-24, 2026-11-11, 2026-11-19). New rows U65 (ProgramModel / BlockSpmd lowering) and U66 (Constant allocation initializers); U21 records the patent-read gate (no chart exists) and how a Texture space and the plan's Tile space merge. Docs only, no gate.
