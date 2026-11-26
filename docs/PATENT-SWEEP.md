@@ -761,3 +761,20 @@ Task: pm-kernels `wrapper-chart-2` (CireSnave board 502, "502: A"). **Adds to** 
 **Re-read triggers:** the grant (compare the granted claims with CLM 2026-05-26); any `Place::ClusterPeer` accepted as `bar`, `dst` or `src` of `CopyBulk`/`CopyUnpack`/`Mbar*`; any statement carrying both a data place and a barrier place for a peer block; an NVIDIA emitter lowering a `ClusterPeer` `Store` plus an arrive to `st.async`.
 
 — lane: unpopped-patents-2
+
+### US20230315655A1 wrapper addendum: the four rejections, and the grant re-read trigger (2026-11-26, unpopped-patents-2, AI-assisted, NOT legal advice)
+
+Task: pm-kernels `reject-concessions`. Adds to the section above; no verdict in it is edited. Source: the four examiner actions in `C:\Projects\.lane-state\patent-wrapper\` (CTNF 2024-04-22, CTFR 2024-12-04, CTNF 2025-07-16, CTFR 2026-02-25), read in full for the independent claims' mapping and "Response to Arguments".
+
+**What the record shows (examiner's text only; the applicant's own remarks of 2024-08-22, 2025-05-05 and 2025-11-17 are in the document list but were not fetched: NOT CLEARED, unread, so any concession the applicant made in them is not charted).**
+- 2024-04-22 (CTNF): claims 1-27 rejected under 102(a)(1) over FAHS'724 (US2014/0019724A1) and under 112(b). Of claim 27 the examiner wrote "it is not clear what precautions are being referred to" and "what is meant by 'defeating' the conditioned access"; the allowed claim 27 no longer recites "precautions" (CLM 2026-05-26), so the published claim 27 text the 2026-11-25 section charted is superseded.
+- 2024-12-04 and 2025-07-16: the examiner records the applicant arguing "FAHS'724 does not teach ... in response to the first data message, storing the data in a memory buffer ... updating a barrier memory structure ... to indicate the storing" and then maps FAHS'724 onto it ("barrier arrival instruction to write data that is consumed by other threads"). Not a concession; the dispute is the single-message tie of the store to the barrier update.
+- **2026-02-25 (CTFR), the one concession: the examiner states "FAHS'724 does not appear to teach the message structure comprising the first address and second address"** and relies on JIA'196 (US2009/0100196A1) for it, which the applicant then rebutted (REM 2026-05-26, charted above). The examiner's last recorded reason for rejection was an obviousness combination, and the notice of allowance followed an appeal-route sequence in the document list (notice of appeal and pre-appeal request 2026-07-24, pre-appeal decision 2026-09-17, advisory action 2026-06-17; the content of those documents was not read).
+- Effect on the charts above: nothing widens. The one-message, two-address limb is the limb both sides treated as the point of novelty; **verdicts stand** (CopyBulk, CopyUnpack, MbarArrive/MbarCompleteTx, ClusterPeer store plus separate flag: outside as read; a fused ClusterPeer store-and-arrive: needs more, not in the IR).
+
+| Re-read trigger | When | Action |
+|---|---|---|
+| **The grant** of US20230315655A1 (issue fee paid, patent number assigned) | when the patent issues; the PM watches the wrapper status | compare the granted claims with CLM 2026-05-26 (limb: "a first data message identifying the data and comprising a first address and a second address"); send `[FINDING]` to pm-kernels cc pm |
+| the three applicant remarks and the 2026-06/09 appeal-stage documents | any time a person fetches them | read for narrowing statements |
+
+— lane: unpopped-patents-2
