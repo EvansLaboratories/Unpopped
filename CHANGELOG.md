@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.59.2` — Added: `unpopped::schedule`, a `ScheduleSpec` vocabulary and `check_schedule` (board 500 Q2, plan phase S1)
+
+A schedule states how a kernel is run, never what it computes: the tile shape hierarchy (block, warp, instruction), the stage count, the work division (data-parallel, persistent, stream-K, split-K), the shared-memory carveout, the epilogue tile and the cluster shape. `check_schedule` refuses a spec that is not self-consistent (zero extents, tile levels that do not nest, a zero stage count, split-K of fewer than two slices, an epilogue sub-tile that does not divide its tile); `ScheduleSpec::set_fields` lists what a spec sets so an emitter honours each field or declines it by name. Additive: no field of `KernelFn` carries a spec yet (the carrier rides the plan breaking release B1) and the oracle ignores a schedule. `schedule_fixtures()` gives specs for a decline test. Plan: `docs/design-tile-and-schedule-plan.md`.
+
+---
+
 ## `0.59.1` — Docs: PATENT-SWEEP, schedule gates G-S1 to G-S4 and the stream-K and work-request wrappers charted (patents-2)
 
 Docs only. `docs/PATENT-SWEEP.md` gains the G-S1..G-S4 charts (stream-K family, US20250272157A1, US20230144553A1) and a wrapper addendum for US12579003B2, US20250272157A1 and the 17/691,303 appeal papers (verdict words only; OCR-read items marked). No code changes.
