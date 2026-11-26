@@ -33,6 +33,12 @@ libm = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+[features]
+# `fixtures`: the `unpopped::fixtures` module, one checker-valid kernel or module per `Stmt` variant, for an
+# emitter's decline test (ROADMAP U60). Off by default: a normal build does not carry it. Its own unit tests run in
+# this crate under `cfg(test)` whatever the feature.
+fixtures = []
+
 [dev-dependencies]
 # kiss-ref: the spec-exact KISS reference impl — the single source of truth this
 # crate's numerical tests assert against (the oracle.rs consolidation). DEV-only,
