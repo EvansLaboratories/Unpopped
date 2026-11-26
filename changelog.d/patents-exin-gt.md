@@ -1,3 +1,0 @@
-kind: docs: PATENT-SWEEP EXIN reading and gates G-T2, G-T3, G-T4
----
-`docs/PATENT-SWEEP.md` only, no code. Adds an `EXIN` 2025-12-05 addendum for US12699602B1 (OCR-read, errors possible; the interview summary names no reference and moves no verdict) and the patent gates G-T2 (opaque tile MMA, load, store), G-T3 (slice, partition, retile, layout conversion) and G-T4 (`TiledMma`, `TiledCopy`) of `docs/design-tile-and-schedule-plan.md` section 9. Independent claims were read from Google Patents text, each limb quoted, each absence with a positive control. G-T2 and G-T3 each end with a `needs more` for a person (the Intel tile-instruction method claims against an IR statement; US20210064987A1's rank-changing claims against `retile`).
