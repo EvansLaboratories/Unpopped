@@ -133,6 +133,7 @@ fn integer_reductions_and_scans_agree() {
             ReduceOp::Sum,
             ReduceOp::Max,
             ReduceOp::Min,
+            ReduceOp::Prod,
             ReduceOp::And,
             ReduceOp::Or,
             ReduceOp::Xor,
@@ -150,7 +151,15 @@ fn integer_reductions_and_scans_agree() {
             );
             check(&format!("scan_{op:?}_{scope:?}"), &k, int_args(I32));
         }
-        for op in [ReduceOp::Sum, ReduceOp::And, ReduceOp::Or, ReduceOp::Xor] {
+        for op in [
+            ReduceOp::Sum,
+            ReduceOp::Max,
+            ReduceOp::Min,
+            ReduceOp::Prod,
+            ReduceOp::And,
+            ReduceOp::Or,
+            ReduceOp::Xor,
+        ] {
             let kind = CollectiveKind::Scan {
                 op,
                 exclusive: true,
@@ -167,7 +176,7 @@ fn integer_reductions_and_scans_agree() {
 #[test]
 fn float_reductions_and_scans_agree_with_a_nan_in_one_subgroup() {
     for scope in [Scope::Block, Scope::Subgroup] {
-        for op in [ReduceOp::Sum, ReduceOp::Max, ReduceOp::Min] {
+        for op in [ReduceOp::Sum, ReduceOp::Max, ReduceOp::Min, ReduceOp::Prod] {
             let k = kernel(CollectiveKind::Reduce(op), scope, F32, F32);
             check(&format!("fred_{op:?}_{scope:?}"), &k, float_args());
             let kind = CollectiveKind::Scan {
@@ -177,15 +186,18 @@ fn float_reductions_and_scans_agree_with_a_nan_in_one_subgroup() {
             let k = kernel(kind, scope, F32, F32);
             check(&format!("fscan_{op:?}_{scope:?}"), &k, float_args());
         }
-        let kind = CollectiveKind::Scan {
-            op: ReduceOp::Sum,
-            exclusive: true,
-        };
-        check(
-            &format!("fxscan_{scope:?}"),
-            &kernel(kind, scope, F32, F32),
-            float_args(),
-        );
+        // an exclusive float scan: lane 0 is 0 for Sum and NaN for Max/Min/Prod (U53)
+        for op in [ReduceOp::Sum, ReduceOp::Max, ReduceOp::Min, ReduceOp::Prod] {
+            let kind = CollectiveKind::Scan {
+                op,
+                exclusive: true,
+            };
+            check(
+                &format!("fxscan_{op:?}_{scope:?}"),
+                &kernel(kind, scope, F32, F32),
+                float_args(),
+            );
+        }
     }
 }
 

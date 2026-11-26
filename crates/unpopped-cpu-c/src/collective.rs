@@ -304,18 +304,22 @@ fn combine(s: &Spec, op: ReduceOp, a: &str, b: &str) -> Result<String, LowerErro
     if float {
         return match op {
             ReduceOp::Sum => Ok(format!("({t})({a} + {b})")),
+            ReduceOp::Prod => Ok(format!("({t})({a} * {b})")),
             ReduceOp::Max => Ok(format!(
                 "({a} != {a} ? {a} : ({b} != {b} || {b} > {a} ? {b} : {a}))"
             )),
             ReduceOp::Min => Ok(format!(
                 "({a} != {a} ? {a} : ({b} != {b} || {b} < {a} ? {b} : {a}))"
             )),
-            _ => Err(refuse("a collective float fold outside Sum, Max, Min")),
+            _ => Err(refuse(
+                "a collective float fold outside Sum, Prod, Max, Min",
+            )),
         };
     }
     let u = unsigned_of(s.ty)?;
     match op {
         ReduceOp::Sum => Ok(format!("({t})(({u}){a} + ({u}){b})")),
+        ReduceOp::Prod => Ok(format!("({t})(({u}){a} * ({u}){b})")),
         ReduceOp::Max => Ok(format!("({a} > {b} ? {a} : {b})")),
         ReduceOp::Min => Ok(format!("({a} < {b} ? {a} : {b})")),
         ReduceOp::And => Ok(format!("({t})({a} & {b})")),
@@ -331,6 +335,25 @@ fn identity(s: &Spec, op: ReduceOp) -> Result<String, LowerError> {
     match op {
         ReduceOp::Sum | ReduceOp::Or | ReduceOp::Xor => Ok(format!("({t})0")),
         ReduceOp::And => Ok(format!("({t})(~({})0)", unsigned_of(s.ty)?)),
+        // U53: a float lane 0 is NaN; an integer lane 0 is the combine's identity (least for Max, greatest for Min, 1)
+        ReduceOp::Max | ReduceOp::Min | ReduceOp::Prod
+            if matches!(s.ty, ElementKind::F32 | ElementKind::F64) =>
+        {
+            Ok(format!("({t})NAN"))
+        }
+        ReduceOp::Prod => Ok(format!("({t})1")),
+        ReduceOp::Max | ReduceOp::Min => {
+            let (lo, hi) = unpopped::types::int_range(s.ty)
+                .ok_or_else(|| refuse("an exclusive scan of a type with no integer range"))?;
+            let v = if op == ReduceOp::Max { lo } else { hi };
+            // a decimal literal C accepts: the minimum of a signed type cannot be spelled as one literal
+            let lit = if v < 0 {
+                format!("(-{}LL - 1)", -(v + 1))
+            } else {
+                format!("{v}ULL")
+            };
+            Ok(format!("({t}){lit}"))
+        }
         _ => Err(refuse("an exclusive scan with no identity")),
     }
 }
