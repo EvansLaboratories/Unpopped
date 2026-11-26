@@ -34,9 +34,11 @@
 //! shipped: their metadata and scale-factor lane tables have not been checked against a source other than the atom's
 //! own author, so the flags are exercised by atoms built in the tests.
 //!
-//! Shipped: the PTX `mma.sync.aligned` atoms `m16n8k16` (f16 and bf16 into f32) and `m16n8k32` (s8 into s32). The
-//! `m16n8k8` tf32 atom waits for a tf32 operand notion: there is no tf32 `ElementKind`, and "the operands are
-//! rounded to tf32 first" belongs to the compute rule, not to the layout.
+//! - [`MmaAtom::with_tf32_inputs`]: the `F32` operands are rounded to tf32 before the products (the compute rule of the
+//!   tf32 atoms; there is no tf32 `ElementKind`, PM ruling Q5).
+//!
+//! Shipped: the PTX `mma.sync.aligned` atoms `m16n8k16` (f16 and bf16 into f32), `m16n8k32` (s8 into s32) and `m16n8k8`
+//! (tf32 into f32, [`MmaAtom::nvidia_m16n8k8_tf32_f32`]).
 
 use serde::{Deserialize, Serialize};
 use unpopped_vocab::ElementKind;
@@ -128,6 +130,10 @@ pub struct MmaAtom {
     /// The `k` block of the scale operands (0 when the atom is not block-scaled).
     #[serde(default)]
     block: u32,
+    /// `A` and `B` are rounded to tf32 (10 explicit mantissa bits, ties away from zero, as `cvt.rna.tf32.f32`) before
+    /// the products: the `m16n8k8` tf32 atom's compute rule (U57; PM ruling Q5, no `ElementKind`).
+    #[serde(default)]
+    tf32_inputs: bool,
 }
 
 impl MmaAtom {
@@ -164,6 +170,7 @@ impl MmaAtom {
             layouts: layouts.map(Layout::flat_modes).to_vec(),
             extras: Vec::new(),
             block: 0,
+            tf32_inputs: false,
         };
         for (i, what) in ["A", "B", "C"].into_iter().enumerate() {
             atom.check_bijection(i, what)?;
@@ -311,6 +318,30 @@ impl MmaAtom {
         Ok(self)
     }
 
+    /// Round `A` and `B` to tf32 before the products (the tf32 atoms: the operands are `F32` registers whose low 13
+    /// mantissa bits the hardware ignores, so the compute rule rounds them with `cvt.rna.tf32.f32` semantics).
+    ///
+    /// # Errors
+    /// [`MmaAtomError`] if the atom already has the flag or its operands are not `F32`.
+    pub fn with_tf32_inputs(mut self) -> Result<Self, MmaAtomError> {
+        if self.tf32_inputs {
+            return Err(MmaAtomError::FlagTwice);
+        }
+        if self.a != ElementKind::F32 || self.b != ElementKind::F32 {
+            return Err(MmaAtomError::BadFlag(
+                "tf32 input rounding needs F32 operand fragments",
+            ));
+        }
+        self.tf32_inputs = true;
+        Ok(self)
+    }
+
+    /// Whether `A` and `B` are rounded to tf32 before the products.
+    #[must_use]
+    pub const fn tf32_inputs(&self) -> bool {
+        self.tf32_inputs
+    }
+
     fn push_extra(
         &mut self,
         role: ExtraRole,
@@ -456,6 +487,30 @@ impl MmaAtom {
             [&a, &b, &c_m16n8()],
         )
         .expect("the PTX m16n8k16 fragment layouts are bijections")
+    }
+
+    /// PTX `mma.sync.aligned.m16n8k8` with tf32 inputs and an f32 accumulator (U57). The operands are `F32` fragments
+    /// (`.b32` registers holding tf32 values) and the atom carries the tf32 rounding flag. Fragments (PTX ISA 9.5
+    /// 9.7.16.5.7, Figures 75, 78, 80, with `gid = lane / 4`, `tig = lane % 4`): `A` value `i` is row `gid + 8 * (i % 2)`,
+    /// column `tig + 4 * (i / 2)`; `B` value `i` is row `tig + 4 * i`, column `gid`; `C`/`D` as every `m16n8` atom. CUTLASS
+    /// `SM80_16x8x8_F32TF32TF32F32_TN` (`mma_traits_sm80.hpp`) gives the same maps (a different source and method).
+    #[must_use]
+    pub fn nvidia_m16n8k8_tf32_f32() -> Self {
+        let a = flat(&[(4, 16), (8, 1), (2, 8), (2, 64)]);
+        let b = flat(&[(4, 1), (8, 8), (2, 4)]);
+        Self::new(
+            AtomSpec {
+                name: "nvidia.mma.sync.m16n8k8.tf32.f32",
+                mnk: (16, 8, 8),
+                dtypes: (ElementKind::F32, ElementKind::F32, ElementKind::F32),
+                scope: Scope::Subgroup,
+                lanes: 32,
+            },
+            [&a, &b, &c_m16n8()],
+        )
+        .expect("the PTX m16n8k8 tf32 fragment layouts are bijections")
+        .with_tf32_inputs()
+        .expect("an F32 atom takes the tf32 flag")
     }
 
     /// PTX `mma.sync.aligned.m16n8k32` with s8 inputs and an s32 accumulator.

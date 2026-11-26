@@ -289,3 +289,33 @@ fn the_narrow_float_atoms_agree_with_the_oracle() {
         agree_launch(tag, &k, args(&atom));
     }
 }
+
+/// The tf32 atom: A and B are rounded to tf32 (ties away) before the products, in the oracle and in the generated C.
+/// Inputs are `1 + j * 2^-13`, so the dropped mantissa bits change the answer (a plain `0.125` multiple would not).
+#[test]
+fn the_tf32_atom_agrees_with_the_oracle() {
+    let atom = MmaAtom::nvidia_m16n8k8_tf32_f32();
+    let tf = |seed: u32, len: u32| {
+        let bytes: Vec<u8> = (0..len)
+            .flat_map(|i| {
+                let j = (seed * 7 + i * 5 + 3) % 16;
+                let v = 1.0 + j as f32 * f32::powi(2.0, -13);
+                (if (seed + i) % 3 == 0 { -v } else { v }).to_le_bytes()
+            })
+            .collect();
+        KernelArg::Buffer(TypedBuffer::new(
+            ElementKind::F32,
+            vec![i64::from(len)],
+            vec![1],
+            bytes,
+        ))
+    };
+    let n = |w| 32 * atom.values(w);
+    let args = vec![
+        tf(1, n(0)),
+        tf(2, n(1)),
+        KernelArg::Buffer(buffer(ElementKind::F32, 3, n(2))),
+        KernelArg::Buffer(buffer(ElementKind::F32, 0, n(2))),
+    ];
+    agree_launch("mma_tf32", &kernel(&atom), args);
+}

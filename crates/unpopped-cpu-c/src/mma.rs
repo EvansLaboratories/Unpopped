@@ -135,6 +135,12 @@ impl Emitter<'_> {
             (Some(bk), Some(wa), Some(wb)) => Some((bk as usize, wa, wb)),
             _ => None,
         };
+        if atom.tf32_inputs() {
+            // the tf32 atoms round A and B to tf32 (ties away from zero, `cvt.rna.tf32.f32`) before the products
+            let (m, n, k) = atom.mnk();
+            self.mma_round_tf32(a_name, (m * k) as usize);
+            self.mma_round_tf32("mb", (k * n) as usize);
+        }
         self.mma_product(atom, wide, a_name, block);
         let vd = atom.values(2);
         let stored = format!("({td})md[mi{id}o2[l * {vd} + v]]");
@@ -203,6 +209,14 @@ impl Emitter<'_> {
         ));
         self.depth -= 1;
         self.line("}");
+    }
+
+    /// Round the `count` logical values of `name` to tf32: the `f32` bits plus `0x1000`, the low 13 mantissa bits cleared
+    /// (a carry into the exponent is the overflow to infinity; a non-finite value is left as it is).
+    fn mma_round_tf32(&mut self, name: &str, count: usize) {
+        self.line(&format!(
+            "for (int i = 0; i < {count}; ++i) {{ union {{ float f; unsigned int u; }} t; t.f = (float){name}[i];              if ((t.u & 0x7f800000u) != 0x7f800000u) t.u = (t.u + 0x1000u) & 0xFFFFE000u; {name}[i] = t.f; }}"
+        ));
     }
 
     /// `D = A.B + C` over the logical matrices: from `C`, ascending `k`; `(block, sfa, sfb)` scales each factor.
