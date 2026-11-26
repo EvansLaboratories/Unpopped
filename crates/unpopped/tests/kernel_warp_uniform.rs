@@ -348,12 +348,16 @@ fn a_thread_index_copy_that_is_reassigned_or_comes_from_another_axis_is_not_the_
         },
     );
     refused(&k);
-    // axis y
+    // axis y: changed by ROADMAP U63. A thread index along y is the same for every lane of a subgroup when the launch states one
+    // subgroup size dividing the block's x extent (a subgroup then lies in one x-row), so a collective under a condition on it is
+    // admitted. It is still not `tid >> k` of the x axis; the control: a launch that states only a RANGE of sizes proves nothing.
     let mut k = standard();
     k.body.0[0] = Stmt::Let {
         local: TID,
         init: cast(ScalarExpr::Exec(ExecId::ThreadIdx(1)), I32),
     };
+    accepted(&k);
+    k.launch = k.launch.map(|l| l.with_subgroup(2, N));
     refused(&k);
 }
 
