@@ -9,7 +9,7 @@
 //! * [`variant_name`] is an **exhaustive `match` with no wildcard arm**: a new `Stmt` variant is a compile error
 //!   under the feature until it is listed in the `variants!` call below, and [`ALL`] is generated from that same list.
 //!   The unit tests then assert that every name in [`ALL`] has exactly one fixture, that every fixture passes
-//!   [`check_kernel`] / [`check_module`], and that each fixture really contains a statement of its own variant.
+//!   [`crate::kernel::check_kernel`] / [`crate::kernel::check_module`], and that each fixture really contains a statement of its own variant.
 //!
 //! The fixtures are small and are not meant to compute anything useful (the oracle may trap on some, for example a
 //! fragment read before it is written): they are meant to be *valid* and to contain the one statement.
