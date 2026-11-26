@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.58.3` — Added: `AccumSpec::Fp8FastAccum { k_step, promote_every, mantissa_bits }` (U56, union row CUTLASS 72)
+
+A fast-accumulate FP8 contraction policy, stated by the software-documented parameters of such kernels (CUTLASS's promotion interval, Triton's imprecise-accumulation count) and not as a claim about a chip. `Fp8E4M3FN` or `Fp8E5M2` operands, exact products, an imprecise accumulator of `mantissa_bits` mantissa bits rounded every `k_step` elements and promoted into an `f32` accumulator every `promote_every` steps. The oracle models it (`oracle/accum_policy.rs`); the plan gate declines a zero parameter, a mantissa width outside 1..=23 or a non-FP8 operand (`AccumPolicyMismatch`); the declared bound is in `docs/accum-policies.md`. Verified by unit tests against an integer reference over a corpus that separates every parameter from an exact sum, and by `tests/contraction_fp8_fast_accum.rs`. The kernel lift still declines every policy but `WideFloat`, so `unpopped-cpu-c` has no reference yet (as for the other policies). `AccumSpec` is `#[non_exhaustive]`: not breaking.
+
+---
+
 ## `0.58.2` — Docs: measured exactness for kernel-layer kernels (design) and ROADMAP rows U59, U60
 
 `docs/design-kernel-fidelity.md`: the measured-exactness ledger (`unpopped::exactness`) already exists and is keyed only by a plan-layer body, so a kernel-layer kernel's measurement (for example a device that flushes subnormals) has nowhere to be recorded. The note proposes an additive kernel key and entry points over the same ledger, plus shared probe recipes, and withdraws the first draft's new `KernelFidelity` type. ROADMAP gains rows U59 (kernel-layer exactness) and U60 (a fixtures module, one valid kernel per `Stmt` variant). Design only, nothing built; docs-only, no gate.
