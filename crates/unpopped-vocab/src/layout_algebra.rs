@@ -31,6 +31,7 @@
 
 use std::fmt;
 
+mod ordered;
 mod slice;
 mod swizzle;
 mod text;
