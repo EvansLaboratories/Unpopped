@@ -198,7 +198,12 @@ pub const fn is_cast_float(t: ElementKind) -> bool {
 /// ENDPOINT only: it is never a compute dtype (the plan gate keys on [`is_cast_float`]).
 #[must_use]
 pub const fn is_cast_float_endpoint(t: ElementKind) -> bool {
-    is_cast_float(t) || matches!(t, ElementKind::F16 | ElementKind::Bf16) || is_mx_element(t)
+    is_cast_float(t)
+        || matches!(
+            t,
+            ElementKind::F16 | ElementKind::Bf16 | ElementKind::F8E3M4 | ElementKind::F8UE4M3
+        )
+        || is_mx_element(t)
 }
 
 /// A dtype of union batch 1 (KISS 0.24.0, §6.1-0017 to -0020; board 501 and 515): `F128`, `I128`, `U128`, `I256`, `U256`,
@@ -237,6 +242,8 @@ pub const fn float_format(t: ElementKind) -> Option<(u32, u32)> {
     match t {
         ElementKind::F16 => Some((5, 10)),
         ElementKind::Bf16 => Some((8, 7)),
+        // KISS 0.24.0 §6.1-0019: IEEE-style FP8 E3M4 (sign 1, exponent 3, mantissa 4, bias 3, infinity and NaN).
+        ElementKind::F8E3M4 => Some((3, 4)),
         ElementKind::F4E2M1 => Some((2, 1)),
         ElementKind::F6E2M3 => Some((2, 3)),
         ElementKind::F6E3M2 => Some((3, 2)),
@@ -348,7 +355,7 @@ pub fn check_cast(from: ElementKind, spec: CastSpec) -> Result<(), TypeError> {
     }
     if !known(from) || !known(to) {
         return bad(
-            "a Cast endpoint outside {f4e2m1, f6e2m3, f6e3m2, f16, bf16, f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32, u64} is not defined yet",
+            "a Cast endpoint outside {f4e2m1, f6e2m3, f6e3m2, f8e3m4, f8ue4m3, f16, bf16, f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32, u64} is not defined yet",
         );
     }
     // An MX element has no infinity or NaN to overflow into: a conversion into one
@@ -358,6 +365,15 @@ pub fn check_cast(from: ElementKind, spec: CastSpec) -> Result<(), TypeError> {
         return match spec.sat {
             Saturation::ClampFinite => Ok(()),
             _ => bad("a Cast into an MX element type saturates: use Saturation::ClampFinite"),
+        };
+    }
+    // `F8UE4M3` (KISS 0.24.0 §6.1-0020, the unsigned NVFP4 scale) has no infinity either: it saturates at 448, NaN is its one NaN
+    // code, and a value below zero lands on 0 (the IR's rule, UNVERIFIED against a vendor conversion), so the only legal
+    // saturation is the explicit ClampFinite.
+    if to == ElementKind::F8UE4M3 {
+        return match spec.sat {
+            Saturation::ClampFinite => Ok(()),
+            _ => bad("a Cast into f8ue4m3 saturates: use Saturation::ClampFinite"),
         };
     }
     match (is_cast_float_endpoint(from), is_cast_float_endpoint(to)) {

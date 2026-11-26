@@ -133,6 +133,9 @@ pub(super) fn raw_to_f64(bits: u128, dt: ElementKind) -> f64 {
         ElementKind::F4E2M1 => crate::cast_ref::decode_mx(bits, 2, 1),
         ElementKind::F6E2M3 => crate::cast_ref::decode_mx(bits, 2, 3),
         ElementKind::F6E3M2 => crate::cast_ref::decode_mx(bits, 3, 2),
+        // KISS 0.24.0 union batch 1: an intermediate `Cast` result, carried as its raw code (plan E1b).
+        ElementKind::F8E3M4 => crate::cast_ref::decode_ieee(bits, 3, 4),
+        ElementKind::F8UE4M3 => crate::cast_ref::decode_ue4m3(bits),
         ElementKind::F32 | ElementKind::F32Strict => f64::from(f32::from_bits(bits as u32)),
         ElementKind::F64 => f64::from_bits(bits as u64),
         ElementKind::I32
