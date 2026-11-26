@@ -11,7 +11,7 @@
 //! - **Vote** `All`/`Any`: `1` or `0` (a `U32`) for "every / some lane's value is non-zero" (a NaN is non-zero).
 //!   `Ballot`: a `U32` whose bit `i` is lane `i`'s predicate; more than 32 lanes is a typed trap.
 //! - **Reduce** `op`: every lane gets the left fold of the values in lane order. **Scan**: lane `i` gets the fold of
-//!   lanes `0..=i` (`0..i` when exclusive; lane 0 then gets the identity of `Sum`/`And`/`Or`/`Xor`). Float `Sum` is
+//!   lanes `0..=i` (`0..i` when exclusive; lane 0 then gets the identity of `Sum`/`And`/`Or`/`Xor`, and for `Max`/`Min`/`Prod` the fold's identity: `-inf`/`+inf`/1 on a float, the type's minimum/maximum/1 on an integer: U53). Float `Sum` is
 //!   the left fold in lane order, which a device may reassociate (compare within a tolerance, not bytes).
 //!
 //! A collective does **not** order memory: it is a rendezvous that exchanges registers, not a fence, so accesses on
@@ -163,9 +163,31 @@ fn fold(op: ReduceOp, ty: ElementKind, vals: impl Iterator<Item = Val>) -> Resul
     vals.try_fold(first, |a, b| combine(op, ty, a, b))
 }
 
-/// The identity an exclusive scan hands lane 0: only `Sum`, `And`, `Or` and `Xor` have one.
+/// What an exclusive scan hands lane 0: the identity of the fold. `Sum`, `Or` and `Xor` 0, `And` all ones, and (U53) `Max`
+/// the least value (`-inf` on a float, the type's minimum on an integer), `Min` the greatest (`+inf`, the type's maximum)
+/// and `Prod` 1. Reading of the PM ruling Q12 "follow the exclusive `Mean` precedent": follow its *shape* (an exclusive
+/// scan of these folds is admitted, lane 0 is a stated value), not its NaN, which is `Mean`'s `0 / 0` and has no
+/// counterpart for these monoids.
 fn identity(op: ReduceOp, ty: ElementKind) -> Result<Val, KernelTrap> {
-    let int = types::int_range(ty).is_some();
+    let int = types::int_range(ty);
+    if let ReduceOp::Max | ReduceOp::Min | ReduceOp::Prod = op {
+        return Ok(match int {
+            None => Val::Float(match op {
+                ReduceOp::Max => f64::NEG_INFINITY,
+                ReduceOp::Min => f64::INFINITY,
+                _ => 1.0,
+            }),
+            Some((lo, hi)) => int_val(
+                match op {
+                    ReduceOp::Max => lo,
+                    ReduceOp::Min => hi,
+                    _ => 1,
+                },
+                ty,
+            ),
+        });
+    }
+    let int = int.is_some();
     Ok(match (op, int) {
         (ReduceOp::Sum | ReduceOp::Or | ReduceOp::Xor, true) => int_val(0, ty),
         (ReduceOp::Sum, false) => Val::Float(0.0),
@@ -187,6 +209,7 @@ fn combine(op: ReduceOp, ty: ElementKind, a: Val, b: Val) -> Result<Val, KernelT
             ReduceOp::Sum => wrap(ty, x + y),
             ReduceOp::Max => x.max(y),
             ReduceOp::Min => x.min(y),
+            ReduceOp::Prod => wrap(ty, x * y),
             ReduceOp::And => x & y,
             ReduceOp::Or => x | y,
             ReduceOp::Xor => x ^ y,
@@ -203,6 +226,7 @@ fn combine(op: ReduceOp, ty: ElementKind, a: Val, b: Val) -> Result<Val, KernelT
         ReduceOp::Sum => x + y,
         ReduceOp::Max => nan_first(x, y, y > x),
         ReduceOp::Min => nan_first(x, y, y < x),
+        ReduceOp::Prod => x * y,
         _ => {
             return Err(KernelTrap::Unsupported(
                 "a collective combine outside the v1 set",

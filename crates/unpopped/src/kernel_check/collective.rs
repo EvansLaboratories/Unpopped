@@ -52,8 +52,8 @@ pub(super) fn check_collective(
             }
             ElementKind::U32
         }
-        CollectiveKind::Reduce(op) => fold_op(*op, t, false).map(|()| t)?,
-        CollectiveKind::Scan { op, exclusive } => fold_op(*op, t, *exclusive).map(|()| t)?,
+        CollectiveKind::Reduce(op) => fold_op(*op, t).map(|()| t)?,
+        CollectiveKind::Scan { op, .. } => fold_op(*op, t).map(|()| t)?,
         CollectiveKind::ReduceWith { combine } | CollectiveKind::ScanWith { combine } => {
             check_combine(sc, *combine, t).map(|()| t)?
         }
@@ -183,23 +183,17 @@ fn lane_operand(k: &KernelFn, e: &ScalarExpr, sc: &Scope) -> Result<(), KernelEr
 }
 
 /// The fold of a reduction or scan over values of type `t`.
-fn fold_op(op: ReduceOp, t: ElementKind, exclusive: bool) -> Result<(), KernelError> {
+fn fold_op(op: ReduceOp, t: ElementKind) -> Result<(), KernelError> {
     let int = types::int_range(t).is_some();
     let ok = match op {
-        ReduceOp::Sum | ReduceOp::Max | ReduceOp::Min => true,
+        ReduceOp::Sum | ReduceOp::Max | ReduceOp::Min | ReduceOp::Prod => true,
         ReduceOp::And | ReduceOp::Or | ReduceOp::Xor => int,
         _ => false,
     };
     if !ok {
         return Err(refuse(
-            "a collective fold outside Sum, Max, Min and the integer bit ops",
+            "a collective fold outside Sum, Max, Min, Prod and the integer bit ops",
         ));
-    }
-    if exclusive && matches!(op, ReduceOp::Max | ReduceOp::Min) {
-        return Err(refuse("an exclusive Max/Min scan (no identity for lane 0)"));
-    }
-    if exclusive && !int && !matches!(op, ReduceOp::Sum) {
-        return Err(refuse("an exclusive scan of floats other than Sum"));
     }
     Ok(())
 }

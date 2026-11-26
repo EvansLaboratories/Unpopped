@@ -164,6 +164,112 @@ fn a_scan_is_the_prefix_fold_inclusive_or_exclusive() {
 }
 
 #[test]
+fn an_exclusive_max_min_or_prod_scan_hands_lane_0_the_identity() {
+    let int = |op, exclusive, scope| ints(&on(CollectiveKind::Scan { op, exclusive }, scope));
+    let (lo, hi) = (i64::from(i32::MIN), i64::from(i32::MAX));
+    // integer lane 0: the least value for Max, the greatest for Min, 1 for Prod (U53, PM Q12)
+    assert_eq!(
+        int(ReduceOp::Max, true, Scope::Block),
+        vec![lo, 1, 2, 3, 4, 5, 6, 7]
+    );
+    assert_eq!(
+        int(ReduceOp::Min, true, Scope::Block),
+        vec![hi, 1, 1, 1, 1, 1, 1, 1]
+    );
+    assert_eq!(
+        int(ReduceOp::Prod, true, Scope::Block),
+        vec![1, 1, 2, 6, 24, 120, 720, 5040]
+    );
+    // each subgroup of 4 restarts: lane 0 of the second is the identity again
+    assert_eq!(
+        int(ReduceOp::Max, true, Scope::Subgroup),
+        vec![lo, 1, 2, 3, lo, 5, 6, 7]
+    );
+    // inclusive Prod, which no collective had
+    assert_eq!(
+        int(ReduceOp::Prod, false, Scope::Block),
+        vec![1, 2, 6, 24, 120, 720, 5040, 40320]
+    );
+    assert_eq!(
+        int(ReduceOp::Prod, false, Scope::Subgroup),
+        vec![1, 2, 6, 24, 5, 30, 210, 1680]
+    );
+    // a reduction of Prod: every lane gets 8!
+    assert_eq!(
+        ints(&on(CollectiveKind::Reduce(ReduceOp::Prod), Scope::Block)),
+        vec![40320; 8]
+    );
+    // a float lane 0 is the fold's identity (-inf, +inf, 1), the running values follow
+    let float = |op, exclusive| {
+        let k = kernel(
+            CollectiveKind::Scan { op, exclusive },
+            Scope::Block,
+            cast(lane_value(), F32),
+            F32,
+            F32,
+        );
+        assert_eq!(check_kernel(&k), Ok(()), "well formed");
+        run(&k, F32).expect("runs")
+    };
+    for (op, ident) in [
+        (ReduceOp::Max, f64::NEG_INFINITY),
+        (ReduceOp::Min, f64::INFINITY),
+        (ReduceOp::Prod, 1.0),
+    ] {
+        let got = float(op, true);
+        assert_eq!(got[0], ident, "{op:?}: lane 0");
+        let want: Vec<f64> = match op {
+            ReduceOp::Max => vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            ReduceOp::Min => vec![1.0; 7],
+            _ => vec![1.0, 2.0, 6.0, 24.0, 120.0, 720.0, 5040.0],
+        };
+        assert_eq!(&got[1..], &want[..], "{op:?}");
+    }
+    assert_eq!(
+        float(ReduceOp::Prod, false),
+        vec![1.0, 2.0, 6.0, 24.0, 120.0, 720.0, 5040.0, 40320.0]
+    );
+}
+
+#[test]
+fn an_exclusive_max_after_a_nan_lane_gives_the_identity_then_nan_not_nan_from_lane_0() {
+    // PM Q12 (2026-11-26): out[i] = op(out[i-1], x[i-1]) with NaN-propagating Max/Min would poison every later lane if lane 0
+    // were NaN, and lane 0 would hide that lane 0's own value is NaN: over [NaN, 2, 3, ..] an exclusive Max is
+    // [-inf, NaN, NaN, ..] (and Min [+inf, NaN, ..])
+    let nan_first = ScalarExpr::Select(
+        Box::new(ScalarExpr::Binary(
+            BinaryOp::CmpEq,
+            Box::new(cast(tid(), I32)),
+            Box::new(c(0)),
+        )),
+        Box::new(ScalarExpr::Const(f64::NAN)),
+        Box::new(cast(lane_value(), F32)),
+    );
+    for (op, ident) in [
+        (ReduceOp::Max, f64::NEG_INFINITY),
+        (ReduceOp::Min, f64::INFINITY),
+    ] {
+        let k = kernel(
+            CollectiveKind::Scan {
+                op,
+                exclusive: true,
+            },
+            Scope::Block,
+            nan_first.clone(),
+            F32,
+            F32,
+        );
+        assert_eq!(check_kernel(&k), Ok(()), "well formed");
+        let got = run(&k, F32).expect("runs");
+        assert_eq!(got[0], ident, "{op:?}: lane 0 is the identity, not NaN");
+        assert!(
+            got[1..].iter().all(|v| v.is_nan()),
+            "{op:?}: every later lane has seen the NaN: {got:?}"
+        );
+    }
+}
+
+#[test]
 fn a_shuffle_reads_another_lane_or_keeps_its_own() {
     let shuffle = |mode, operand: i64| {
         ints(&on(
@@ -327,7 +433,7 @@ fn the_checker_admits_only_the_v1_forms() {
             Err(KernelError::CollectiveUnsupported { .. })
         )
     };
-    // a ballot over a block, an exclusive Max, a bit fold of floats, a Mean
+    // a ballot over a block, a bit fold of floats, a Mean
     let ballot = kernel(
         CollectiveKind::Vote(VoteKind::Ballot),
         Scope::Block,
@@ -336,14 +442,6 @@ fn the_checker_admits_only_the_v1_forms() {
         U32,
     );
     assert!(refused(&ballot));
-    let ex_max = on(
-        CollectiveKind::Scan {
-            op: ReduceOp::Max,
-            exclusive: true,
-        },
-        Scope::Block,
-    );
-    assert!(refused(&ex_max));
     let half = ScalarExpr::Const(0.5);
     let float_and = kernel(
         CollectiveKind::Reduce(ReduceOp::And),
