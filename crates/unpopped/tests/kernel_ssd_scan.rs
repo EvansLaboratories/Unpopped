@@ -93,28 +93,20 @@ fn reference(c: &Corpus, group: usize) -> Out {
         h: vec![],
         y: vec![],
     };
-    let (mut acc, mut h) = (1.0f32, [[0.0f32; 2]; 2]);
+    let (mut acc, mut h) = (1.0f32, [0.0f32; 4]);
     for t in 0..N {
-        if t % group == 0 {
-            // the first lane of a group is its own element, not folded into a unit
-            acc = c.a[t];
-            for i in 0..2 {
-                for j in 0..2 {
-                    h[i][j] = c.b[t][i] * c.x[t][j];
-                }
-            }
-        } else {
-            acc *= c.a[t];
-            for i in 0..2 {
-                for j in 0..2 {
-                    h[i][j] = c.a[t] * h[i][j] + c.b[t][i] * c.x[t][j];
-                }
-            }
+        let first = t % group == 0;
+        // the first lane of a group is its own element, not folded into a unit
+        acc = if first { c.a[t] } else { acc * c.a[t] };
+        // h is row-major: h[2 i + j] holds B[i] x[j]
+        for (k, cell) in h.iter_mut().enumerate() {
+            let own = c.b[t][k / 2] * c.x[t][k % 2];
+            *cell = if first { own } else { c.a[t] * *cell + own };
         }
         out.a.push(acc);
-        out.h.extend([h[0][0], h[0][1], h[1][0], h[1][1]]);
+        out.h.extend(h);
         for j in 0..2 {
-            out.y.push(c.c[t][0] * h[0][j] + c.c[t][1] * h[1][j]);
+            out.y.push(c.c[t][0] * h[j] + c.c[t][1] * h[2 + j]);
         }
     }
     out
