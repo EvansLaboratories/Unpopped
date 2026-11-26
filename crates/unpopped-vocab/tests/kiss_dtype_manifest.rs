@@ -36,7 +36,7 @@ fn kiss_all_dtypes() -> Vec<String> {
 }
 
 /// The set this crate actually implements, taken from the **codec** rather than
-/// from the enum: `ElementKind` has 28 variants but only 27 distinct tokens,
+/// from the enum: `ElementKind` has 35 variants but only 34 distinct tokens,
 /// because `F32Strict` folds to the canonical `f32` (sk3 D4 retired `f32s`; the
 /// strict axis rides the `<mp>` coordinate). Comparing variant counts across
 /// implementations manufactures phantom divergence — the token image is the only
@@ -149,8 +149,8 @@ fn the_manifest_storage_bits_and_kind_match_our_real_types() {
     let rows = manifest_dtype_rows(MANIFEST);
     assert_eq!(
         rows.len(),
-        27,
-        "expected all 27 §6.1 dtype rows from the manifest; got {}",
+        34,
+        "expected all 34 §6.1 dtype rows from the manifest; got {}",
         rows.len()
     );
 
@@ -188,7 +188,7 @@ fn the_manifest_storage_bits_and_kind_match_our_real_types() {
 #[test]
 fn the_json_scanner_actually_reads_the_manifest() {
     let all = kiss_all_dtypes();
-    assert_eq!(all.len(), 27, "KISS's closed §6.1 set is 27 members");
+    assert_eq!(all.len(), 34, "KISS's closed §6.1 set is 34 members");
     assert!(all.contains(&"f8e4m3fn".to_string()), "a known member");
     assert!(
         all.contains(&"c128".to_string()),
@@ -265,7 +265,7 @@ fn reserved_tokens(src: &str) -> Vec<String> {
 /// row emitted per `storage_bits` field seen — which is also the positive
 /// control: if the manifest's shape ever changed and this scanner silently
 /// returned nothing, `the_manifest_storage_bits_and_kind_match_our_real_types`
-/// would fail its `rows.len() == 27` assertion loudly rather than passing
+/// would fail its `rows.len() == 34` assertion loudly rather than passing
 /// vacuously against an empty comparison.
 fn manifest_dtype_rows(src: &str) -> Vec<(String, String, u64)> {
     let mut out = Vec::new();
@@ -390,6 +390,13 @@ fn every_dtype_arm_is_pinned_by_identity_not_by_set_membership() {
         (F4E2M1, "f4e2m1"),
         (F6E2M3, "f6e2m3"),
         (F6E3M2, "f6e3m2"),
+        (F128, "f128"),
+        (I128, "i128"),
+        (U128, "u128"),
+        (I256, "i256"),
+        (U256, "u256"),
+        (F8E3M4, "f8e3m4"),
+        (F8UE4M3, "f8ue4m3"),
     ];
 
     for (kind, token) in pinned {

@@ -32,7 +32,7 @@ const VECTORS: &str = include_str!("../kiss/structure_key_derivation_vectors.jso
 
 /// Every §6.1 dtype, so a vector's spelling resolves through `dtype_token`
 /// rather than through a second hand-written table that could drift from it.
-const ALL_DTYPES: [ElementKind; 27] = [
+const ALL_DTYPES: [ElementKind; 34] = [
     ElementKind::F16,
     ElementKind::Bf16,
     ElementKind::F32,
@@ -60,6 +60,13 @@ const ALL_DTYPES: [ElementKind; 27] = [
     ElementKind::F4E2M1,
     ElementKind::F6E2M3,
     ElementKind::F6E3M2,
+    ElementKind::F128,
+    ElementKind::I128,
+    ElementKind::U128,
+    ElementKind::I256,
+    ElementKind::U256,
+    ElementKind::F8E3M4,
+    ElementKind::F8UE4M3,
 ];
 
 fn dtype(name: &str) -> ElementKind {
@@ -72,7 +79,15 @@ fn dtype(name: &str) -> ElementKind {
 /// The ctr/role vectors KISS 0.4.3 added that this keyer does not yet match
 /// (KISS `f88d389`, the ctr derivation stage and the batch role, §6.6-0023).
 /// **This list is the work, not an allowance**: the follow-up PR empties it.
-const KNOWN_GAP: [&str; 0] = [];
+const KNOWN_GAP: [&str; 4] = [
+    // KISS 0.24.0, §6.6-0023a: K is a role set (`ContractionRoles::k_more`, K class and divisibility from the product of every
+    // declared K extent). This is plan phase E4 (`docs/design-union-batch1-consumer.md`, board 515), NOT built in E1a; E4
+    // empties these four.
+    "ctr_two_k_axes_product_8x16",
+    "ctr_three_k_axes_product_large",
+    "ctr_extra_k_axis_repeats_k_declines",
+    "ctr_extra_k_axis_is_m_declines",
+];
 
 /// One vector's verdict, in the PM's three-way vocabulary.
 #[derive(Debug, PartialEq, Eq)]
@@ -225,7 +240,7 @@ fn the_artifact_is_the_one_this_leg_claims() {
     );
     assert_eq!(
         v["vectors"].as_array().unwrap().len(),
-        75,
+        88,
         "vector count changed"
     );
 }

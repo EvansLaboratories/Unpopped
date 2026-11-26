@@ -157,6 +157,16 @@ impl Backend for CpuC {
             ElementKind::F4E2M1 | ElementKind::F6E2M3 | ElementKind::F6E3M2 => {
                 DtypeSupport::Unsupported
             }
+            // Declined by name (union batch 1, KISS 0.24.0, §6.1-0017 to -0020): storage and key identity only. The 128 and
+            // 256-bit integers need a wide oracle integer (plan E2), `F128` a software binary128 (plan E3), and the two
+            // 8-bit formats a codec (plan E1b); C99 spells none of them.
+            ElementKind::F128
+            | ElementKind::I128
+            | ElementKind::U128
+            | ElementKind::I256
+            | ElementKind::U256
+            | ElementKind::F8E3M4
+            | ElementKind::F8UE4M3 => DtypeSupport::Unsupported,
         }
     }
 
