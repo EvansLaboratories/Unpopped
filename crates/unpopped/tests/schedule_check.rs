@@ -24,7 +24,11 @@ fn the_default_schedule_states_nothing_and_passes() {
 #[test]
 fn a_tile_level_must_divide_the_one_above_and_the_control_passes() {
     let cta = TileDims::new(128, 128, 64);
-    let ok = hierarchy(cta, Some(TileDims::new(64, 64, 64)), Some(TileDims::new(16, 8, 16)));
+    let ok = hierarchy(
+        cta,
+        Some(TileDims::new(64, 64, 64)),
+        Some(TileDims::new(16, 8, 16)),
+    );
     assert_eq!(check_schedule(&ok), Ok(()));
     // a warp tile that does not divide the block tile
     let bad = hierarchy(cta, Some(TileDims::new(96, 64, 64)), None);
@@ -33,7 +37,11 @@ fn a_tile_level_must_divide_the_one_above_and_the_control_passes() {
         Err(ScheduleError::TileDoesNotNest(ScheduleField::WarpTile))
     );
     // an instruction tile that does not divide the warp tile (and with no warp tile, the block tile)
-    let bad = hierarchy(cta, Some(TileDims::new(64, 64, 64)), Some(TileDims::new(48, 8, 16)));
+    let bad = hierarchy(
+        cta,
+        Some(TileDims::new(64, 64, 64)),
+        Some(TileDims::new(48, 8, 16)),
+    );
     assert_eq!(
         check_schedule(&bad),
         Err(ScheduleError::TileDoesNotNest(ScheduleField::InstrTile))
@@ -77,14 +85,22 @@ fn counts_that_mean_nothing_are_refused_and_the_neighbouring_values_pass() {
         check_schedule(&with(|s| s.stages = StageCount::Fixed(0))),
         Err(ScheduleError::NoStages)
     );
-    assert_eq!(check_schedule(&with(|s| s.stages = StageCount::Fixed(1))), Ok(()));
+    assert_eq!(
+        check_schedule(&with(|s| s.stages = StageCount::Fixed(1))),
+        Ok(())
+    );
     assert_eq!(
         check_schedule(&with(|s| s.smem_carveout_bytes = Some(0))),
         Err(ScheduleError::ZeroCarveout)
     );
-    assert_eq!(check_schedule(&with(|s| s.smem_carveout_bytes = Some(1))), Ok(()));
     assert_eq!(
-        check_schedule(&with(|s| s.work = WorkDivision::Persistent { blocks: Some(0) })),
+        check_schedule(&with(|s| s.smem_carveout_bytes = Some(1))),
+        Ok(())
+    );
+    assert_eq!(
+        check_schedule(&with(
+            |s| s.work = WorkDivision::Persistent { blocks: Some(0) }
+        )),
         Err(ScheduleError::NoPersistentBlocks)
     );
     assert_eq!(
@@ -103,7 +119,10 @@ fn counts_that_mean_nothing_are_refused_and_the_neighbouring_values_pass() {
         check_schedule(&with(|s| s.cluster = Some([2, 0, 1]))),
         Err(ScheduleError::ZeroCluster)
     );
-    assert_eq!(check_schedule(&with(|s| s.cluster = Some([2, 1, 1]))), Ok(()));
+    assert_eq!(
+        check_schedule(&with(|s| s.cluster = Some([2, 1, 1]))),
+        Ok(())
+    );
 }
 
 #[test]
@@ -112,7 +131,10 @@ fn the_epilogue_subtile_must_divide_the_tile() {
         epilogue: Some(EpilogueSchedule { tile, subtile }),
         ..ScheduleSpec::default()
     };
-    assert_eq!(check_schedule(&with(Some([64, 64]), Some([64, 16]))), Ok(()));
+    assert_eq!(
+        check_schedule(&with(Some([64, 64]), Some([64, 16]))),
+        Ok(())
+    );
     assert_eq!(
         check_schedule(&with(Some([64, 64]), Some([48, 16]))),
         Err(ScheduleError::BadEpilogue)

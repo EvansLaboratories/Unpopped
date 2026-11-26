@@ -42,10 +42,7 @@ impl TileDims {
 
     /// Every extent of `self` divides the matching extent of `outer`.
     fn divides(self, outer: Self) -> bool {
-        self.positive()
-            && outer.m % self.m == 0
-            && outer.n % self.n == 0
-            && outer.k % self.k == 0
+        self.positive() && outer.m % self.m == 0 && outer.n % self.n == 0 && outer.k % self.k == 0
     }
 }
 
