@@ -1,0 +1,3 @@
+kind: docs: PATENT-SWEEP wrapper reads (16/559,544 allowed claims, SRNT) and the G-T2 ruling with what B1 loses
+---
+`docs/PATENT-SWEEP.md` only, no code. The allowed claims of US20210064987A1 (application 16/559,544) are read from the file wrapper: the rank-change wording the G-T3 section flagged was deleted, so `retile` moves to outside as read. The 17/367,053 search notes are OCR-read and move no verdict. The G-T2 section gains the PM's hold, the application numbers for the wrapper fetch, and a paragraph on what B1 loses while `TileMma`, `TileLoad` and `TileStore` wait. Also reads US11714648B2 and US10866786B2 (outside as read).
