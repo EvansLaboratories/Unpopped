@@ -76,6 +76,8 @@ No tile, partition, schedule or epilogue construct has been charted: `docs/PATEN
 | G-S3 | epilogue tile and fusion | CUTLASS 41 | none | epilogue-fusion claims |
 | G-S4 | wave scheduling, register pinning | TK 59 | none | wave-scheduling claims |
 
+**Status of G-S1..G-S4 (patents-2, `lane/patents-2-gs@6267ff3a`, sent to the PM for rulings; relayed by pm-kernels 2026-11-26):** the `ScheduleSpec` TYPES and `check_schedule` and the fixtures are outside as read, so **S1 may open now**. **Proposed holds, a working hold until the PM rules:** no emitter may *honour* `StreamK` or `Persistent { blocks: None }` by dividing the work (the stream-K division); no work-request or cluster-launch-control-shaped statement (opcode, broadcast, shared-memory address and barrier address); no runtime `setmaxnreg`-shape register-pool statement. Epilogue fields and wave scheduling are **NOT CLEARED, unread**: types only, no semantics. Every S2-and-later row that would give one of these fields meaning is marked **"patent gate: holds pending PM"** and is not built; the limb is in the sub-lane's chart.
+
 Until a gate opens, the matching phase builds only what is vocabulary with no hardware-mechanism claim (S1's types, T1's types); the statements wait. pm-kernels routes the reads.
 
 ## 10. The first PR
