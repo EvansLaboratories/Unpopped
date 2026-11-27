@@ -29,6 +29,10 @@ impl Machine<'_> {
             ExecId::SubgroupSize => c.subgroup,
             ExecId::DeviceRank => c.device,
             ExecId::DeviceCount => c.launch.devices,
+            ExecId::ClusterCtaRank => c.launch.cluster.map_or(0, |cl| {
+                let b = c.block_idx;
+                (b[0] % cl[0]) + cl[0] * ((b[1] % cl[1]) + cl[1] * (b[2] % cl[2]))
+            }),
         }))
     }
 
