@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.61.2` — documented panics of the c-family unary spellers on integer bit operations
+
+`cfamily::unary_f32` and `unary_f64` now document, under `# Panics`, that `UnaryOp::Popc`, `Clz` and `Brev` panic (message "c-family lowering: {op:?} is an integer bit operation, refused by the typing gate"), and that type checking refuses them first (`TypeError::IntegerOnlyOperand`). Tests pin the message. No signature or behaviour change.
+
+---
+
 ## `0.61.1` — F64 unary ULP tier (`ulp_bound_measured_for`, ROADMAP U42)
 
 Added `contract::ulp_bound_measured_for(e, key, measured, dtype)`; `ulp_bound` and `ulp_bound_measured` keep their signatures and the `f32` table. At `F64` each unary op is rated `max(CUDA f32 count, the vendor double-precision bound)`, and `oracle::required_fidelity` now passes the plan dtype, so the one op whose double bound is larger than its `f32` count, `erfc` (4 to 5), is no longer under-stated in an F64 band (`rel = (steps + 2*5) * 2^-53`). Every other op is unchanged at `F32` and `F64`: no tightening, because the vendor says its bounds are "not guaranteed"; `lgamma` keeps 6.
