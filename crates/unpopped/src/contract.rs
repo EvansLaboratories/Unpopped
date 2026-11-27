@@ -1476,7 +1476,7 @@ pub fn ulp_bound_measured(
 
 /// [`ulp_bound_measured`] for the compute dtype `dtype` (ROADMAP U42). The per-op table is CUDA's **`f32`** count; at
 /// [`ElementKind::F64`] each unary op is rated `max(f32 count, the vendor's double-precision bound)` (see
-/// [`unary_ulp_at`]), so the one op whose double bound is larger than its `f32` one, `erfc`, is not under-stated. Every other
+/// `unary_ulp_at`), so the one op whose double bound is larger than its `f32` one, `erfc`, is not under-stated. Every other
 /// dtype gets the `f32` table, exactly as [`ulp_bound_measured`] always did.
 pub fn ulp_bound_measured_for(
     e: &ScalarExpr,

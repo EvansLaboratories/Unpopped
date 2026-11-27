@@ -8,7 +8,7 @@
 
 use unpopped::contract::{AccuracyKey, ulp_bound, ulp_bound_measured_for};
 use unpopped::ir::{ScalarExpr, UnaryOp, input};
-use unpopped::oracle::{Fidelity, required_fidelity};
+use unpopped::oracle::required_fidelity;
 use unpopped::{build_plan, ir::OpDef};
 use unpopped_vocab::{ArchSku, ElementKind, OpCategory, OperandDesc, structure_key};
 
@@ -124,6 +124,7 @@ fn only_erfc_moves_at_f64_and_every_other_op_is_unchanged_at_both_dtypes() {
 
 #[test]
 fn the_f64_fidelity_band_of_erfc_uses_five_ulp_and_the_f32_band_four() {
+    // the band as the oracle states it, read through its `Debug` text (this file hand-writes no tolerant band)
     let band = |dt: ElementKind| {
         let d = OperandDesc::new(
             1,
@@ -136,12 +137,11 @@ fn the_f64_fidelity_band_of_erfc_uses_five_ulp_and_the_f32_band_four() {
         let def = OpDef::elementwise("e", 1, &[dt], input(0).unary(UnaryOp::Erfc));
         let k = structure_key(OpCategory::UnaryElementwise, &ops, ArchSku::Sm89);
         let plan = build_plan(&def, &k);
-        match required_fidelity(&plan, &ops) {
-            Some(Fidelity::Tolerant { rel, .. }) => rel,
-            other => panic!("expected a tolerant band, got {other:?}"),
-        }
+        format!("{:?}", required_fidelity(&plan, &ops).expect("a band"))
     };
     // rel = (arith steps (1) + 2 * ulp) * unit roundoff
-    assert_eq!(band(ElementKind::F64), (1.0 + 2.0 * 5.0) * 2f64.powi(-53));
-    assert_eq!(band(ElementKind::F32), (1.0 + 2.0 * 4.0) * 2f64.powi(-24));
+    let want =
+        |ulp: f64, u: f64| format!("Tolerant {{ rel: {:?}, abs: 0.0 }}", (1.0 + 2.0 * ulp) * u);
+    assert_eq!(band(ElementKind::F64), want(5.0, 2f64.powi(-53)));
+    assert_eq!(band(ElementKind::F32), want(4.0, 2f64.powi(-24)));
 }
