@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.20` — feat: Layout by-mode coalesce, and the zipped/tiled/flat divide and blocked/raked/zipped/tiled/flat product variants (IR-union cute.md rows 7, 10, 11)
+
+`unpopped-vocab`: `Layout::coalesce_profile`, `logical_divide_by_mode`, `zipped_divide`, `tiled_divide`, `flat_divide`, `blocked_product`, `raked_product`, `zipped_product`, `tiled_product` and `flat_product`. Each applies the existing single-mode `logical_divide` / `logical_product` to every top-level mode and regroups the pairs, so none can disagree with those on a mode; a mode that does not divide is declined (`NotDivisible`), never guessed. Additive; pure vocabulary. Pinned by `tests/layout_algebra_variants.rs` (hand-computed examples plus a brute-force reading of every coordinate, each checker run against a broken grouping). The groupings are UNVERIFIED against CUTLASS `cute/layout.hpp` (not re-read).
+
+---
+
 ## `0.60.19` — Added: tools/gate.sh (full and fast local gate with the path rule), tools/gate-locked.sh (one gate at a time), tools/gate-daily.sh, tools/test-gate.sh, docs/gate.md
 
 The local pre-PR gate is now in the repository: a fast gate (the cpu-c leg is a compile check plus a run of the cpu-c test files the diff touches) allowed only when the diff touches none of the listed paths, with the rule printed and enforced in the script (exit 3 on a forbidden path); a lock so two gates never run at once (stale after 3 h or a dead pid); a daily full gate on origin/main. Measured 43 minutes full, 34 of them the cpu-c runtime leg. The forge's required checks are unchanged. Tests include a mutant of the rule. Tools and docs only.
