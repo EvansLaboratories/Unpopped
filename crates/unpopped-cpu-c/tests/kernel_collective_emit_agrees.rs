@@ -254,6 +254,17 @@ fn votes_and_the_ballot_mask_agree() {
 }
 
 #[test]
+fn match_any_agrees_on_integers_and_on_float_bit_patterns() {
+    let k = kernel(CollectiveKind::MatchAny, Scope::Subgroup, I32, U32);
+    check("match_int", &k, vote_args());
+    // a float compares by bits: the NaN lane matches itself, so its mask is never empty
+    let k = kernel(CollectiveKind::MatchAny, Scope::Subgroup, F32, U32);
+    let mut args = float_args();
+    args[1] = KernelArg::Buffer(zeroed(U32, &[N]));
+    check("match_float", &k, args);
+}
+
+#[test]
 fn the_c_combine_is_what_the_differential_is_sensitive_to() {
     // a seeded mutant of the generated C: the Sum's `+` turned into `-` must change an answer
     let k = kernel(
