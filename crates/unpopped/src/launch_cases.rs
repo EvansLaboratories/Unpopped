@@ -311,35 +311,34 @@ mod tests {
     }
 
     #[test]
-    fn a_view_case_reads_through_its_view_not_the_dense_storage() {
-        // The value mutant of the view cases: ignore the strides and base offset (read the storage densely) and the output must
-        // change, so an emitter that does that is caught. Without this a view case could pass a dense-reading emitter.
+    fn every_viewed_input_is_read_through_its_view_not_the_dense_storage() {
+        // The value mutant of the view cases, one input at a time: read that input's storage densely (strides and base offset
+        // ignored) and the output must change, so an emitter that ignores any one view is caught, and a case whose view is
+        // really dense (or only one of whose inputs is a view) cannot pass for more than it is.
         let mut viewed = 0;
         for c in launch_cases() {
-            let mut args = c.args.clone();
-            let mut any = false;
-            for a in args.iter_mut().take(2) {
-                let KernelArg::Buffer(b) = a else { continue };
+            for input in 0..2 {
+                let mut args = c.args.clone();
+                let KernelArg::Buffer(b) = &mut args[input] else {
+                    unreachable!()
+                };
                 let dense_strides = dense(b.dtype, &b.shape, 0, true).strides;
-                if b.strides != dense_strides || b.base_offset != 0 {
-                    any = true;
-                    b.strides = dense_strides;
-                    b.base_offset = 0;
-                    let need = b.shape.iter().product::<i64>() as usize * 4;
-                    b.bytes.resize(need.max(b.bytes.len()), 0);
+                if b.strides == dense_strides && b.base_offset == 0 {
+                    continue;
                 }
+                viewed += 1;
+                b.strides = dense_strides;
+                b.base_offset = 0;
+                let need = b.shape.iter().product::<i64>() as usize * 4;
+                b.bytes.resize(need.max(b.bytes.len()), 0);
+                run_launch(&c.kernel, &mut args).expect("the dense reading runs");
+                let KernelArg::Buffer(got) = &args[2] else {
+                    unreachable!()
+                };
+                assert_ne!(got.bytes, c.expected[0].1.bytes, "{} input {input}", c.name);
             }
-            if !any {
-                continue;
-            }
-            viewed += 1;
-            run_launch(&c.kernel, &mut args).expect("the dense reading runs");
-            let KernelArg::Buffer(got) = &args[2] else {
-                unreachable!()
-            };
-            assert_ne!(got.bytes, c.expected[0].1.bytes, "{}", c.name);
         }
-        assert_eq!(viewed, 3, "the three view cases");
+        assert_eq!(viewed, 5, "transposed 1, pitched 2, flipped/broadcast 2");
     }
 
     #[test]
