@@ -51,3 +51,6 @@ crates/unpopped-vocab/kiss/** text eol=lf
 # a rule naming one location stops protecting anything the moment a file moves,
 # and does so silently.
 LICENSE-* text eol=lf
+
+# the gate scripts are run by bash: a CRLF checkout on Windows breaks them (tools/gate*.sh, tools/test-gate.sh)
+tools/*.sh text eol=lf
