@@ -2,9 +2,8 @@
 //! **Hillis-Steele prefix sum with per-group named barriers** (survey row 34). A block of 64 threads is two 32-lane groups, each
 //! scanned in shared memory with its own named barrier (`bar.sync id, 32`). The result is compared with a serial inclusive prefix
 //! sum per group over small integers (exact in `f32`, so the different association does not show), a NaN corpus (the NaN
-//! reaches exactly the lanes at and after it, inside its own group) and an all-negative corpus. Dropping the last step, an
-//! off-by-one guard and the sync between a step's read and its write each fail by value (the oracle runs the threads of a block
-//! in a fixed order and did not report the missing sync as a `DataRace`: a finding, not pinned).
+//! reaches exactly the lanes at and after it, inside its own group) and an all-negative corpus. Dropping the last step and an
+//! off-by-one guard fail by value; dropping the sync between a step's read and its write is a `DataRace` trap (last test).
 
 use unpopped::kernel::{KernelFn, check_kernel};
 use unpopped::oracle::TypedBuffer;
@@ -102,13 +101,19 @@ fn the_corpus_is_not_blind() {
 #[test]
 fn the_value_mutants_fail_by_value() {
     let x = corpus();
-    for mutant in [
-        Mutant::DropLastStep,
-        Mutant::OffByOneGuard,
-        Mutant::NoSecondSync,
-    ] {
+    for mutant in [Mutant::DropLastStep, Mutant::OffByOneGuard] {
         let got = run(mutant, &x).expect("race-free, so it runs");
         assert!(got.iter().all(|v| v.is_finite()), "{mutant:?}");
         assert!(!same(&got, &reference(&x)), "{mutant:?} must differ");
     }
+}
+
+#[test]
+fn the_missing_sync_between_a_steps_read_and_write_is_a_data_race() {
+    // the neighbour's write and this lane's read are unordered, so the oracle traps instead of running on with wrong values
+    // (it used to run to completion: a named-barrier waiter acquired a later phase's release; fixed in 0.60.31)
+    assert_eq!(
+        run(Mutant::NoSecondSync, &corpus()),
+        Err(KernelTrap::DataRace)
+    );
 }
