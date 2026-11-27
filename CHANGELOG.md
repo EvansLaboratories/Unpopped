@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.61.1` — F64 unary ULP tier (`ulp_bound_measured_for`, ROADMAP U42)
+
+Added `contract::ulp_bound_measured_for(e, key, measured, dtype)`; `ulp_bound` and `ulp_bound_measured` keep their signatures and the `f32` table. At `F64` each unary op is rated `max(CUDA f32 count, the vendor double-precision bound)`, and `oracle::required_fidelity` now passes the plan dtype, so the one op whose double bound is larger than its `f32` count, `erfc` (4 to 5), is no longer under-stated in an F64 band (`rel = (steps + 2*5) * 2^-53`). Every other op is unchanged at `F32` and `F64`: no tightening, because the vendor says its bounds are "not guaranteed"; `lgamma` keeps 6.
+
+Source: NVIDIA CUDA Programming Guide v13.5, "Mathematical Functions" appendix, tables 54-58 and 62, page dated 2026-10-31. **Provenance:** the 20 rows other than erf, erfc, lgamma and rsqrt were relayed by a fetch subagent from the page's raw text, not read first-hand; `erf`, `erfc`, `lgamma` and `rsqrt` were re-read verbatim, and the one value that changes, `erfc` (5 ULP), is among those first-hand rows. Pinned by `ulp_f64_tier.rs` (every op at both dtypes; the F64 and F32 fidelity band of `erfc`).
+
+---
+
 ## `0.61.0` — **BREAKING**: `UnaryOp::Popc`, `Clz`, `Brev` (integer bit operations)
 
 Added three variants to the exhaustive public enum `UnaryOp`: `Popc` (population count), `Clz` (leading zeros, `w` for zero) and `Brev` (bit reversal), integer-only, defined at the operand's own width (its `w`-bit two's-complement pattern) with the operand's type as the result (PTX ISA `popc`/`clz`/`brev`, CUDA `__popc`/`__clz`/`__brev`). **Breaking** for any downstream exhaustive `match` on `UnaryOp`; `UnaryOp::is_bit_op` names the three, and `TypeError::IntegerOnlyOperand` refuses one on a float or in a plan body. The kernel oracle evaluates them at every integer width (I8..U64); the plan gate admits no `UnaryOp` at an integer dtype and cpu_c declines them by name. In-repo exhaustive sites (cfamily, contract, optimize, pattern, recipe, scalar_ops) rate them exact, never fold them, and map no KISS-Ops token. Pinned by `kernel_bit_ops.rs` (per-bit reference at every width, 0 and all-ones) and `kernel_bit_op_declines.rs`.
