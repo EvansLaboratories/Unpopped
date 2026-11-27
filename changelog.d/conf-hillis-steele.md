@@ -1,0 +1,5 @@
+kind: Added
+---
+Kernel-layer conformance kernel for a Hillis-Steele inclusive prefix sum in shared memory with one named barrier per 32-lane group (row 34 of `docs/ir-union-evidence/conformance-idiom-gaps-2026-11-27.md`, the ThunderKittens mamba2 gate-cumsum pattern): a block of 64 threads, group 0 on `bar.sync 1, 32` and group 1 on `bar.sync 2, 32`, five steps, two syncs per step. Compared on the oracle with a serial per-group prefix sum over small integers, a NaN corpus (the NaN reaches exactly the later lanes of its own group) and an all-negative corpus. Three mutants (the last step dropped, an off-by-one guard, the sync between a step's read and write dropped) fail by value. Finding, recorded not pinned: the missing-sync mutant ran to completion with wrong values rather than a `DataRace` trap. Block-scope named barriers only (arrive and wait together); the PATENT-SWEEP barrier chart (Unpopped#442) lists block-scope barriers as outside as read, not a clearance, and none of its re-read triggers is exercised.
+
+— lane: unpopped-conformance
