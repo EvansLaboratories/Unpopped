@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.16` — Added: gather/scatter GEMM conformance kernel (CUTLASS survey row 13)
+
+`crates/unpopped/tests/kernel_gather_gemm.rs` and `tests/support/gather_gemm.rs`: `D[idx_d[m]][n] = sum_k A[idx_a[m]][k] B[k][n]` with `I32` index buffers read in the kernel, a repeated gather row, a negative (skipped) scatter index and rows of `D` no problem row reaches (poisoned, so a stray write shows). Checker-valid and run on the oracle against a host scatter reference over three corpora (ordinary, all-negative, a NaN in the doubly gathered row that must reach exactly the scattered D row). Mutants fail by value (mirrored scatter, scatter ignored, negative index clamped); applying the gather index to the scatter is recorded as an oracle `DataRace` trap, not a wrong number. Not covered: pointer-array batched GEMM (row 12), float atomics for colliding scatter indices, and the plan-level `Indexed` contraction.
+
+`crates/unpopped/tests/kernel_mixed_input.rs` and `tests/support/mixed_input.rs`: integer weights (`I8`, packed `I4`) widened to `F32` and scaled per group (group 4) by `F16`, `Bf16` or `F32` scales, with and without a zero point, against `F16`, `Bf16` or `F32` activations, `F32` accumulation. Five weight/scale/activation combinations in both modes are checker-valid and run on the oracle against a dequantize-the-whole-matrix-first reference using the `half` crate; corpora include the `I8` extremes, a NaN activation (reaching exactly one output column) and an all-negative weight block. Mutants (scale per row, zero after the scale, zero sign) fail by value. Not covered: `I2`, fp8 activations, the LUT int4-to-fp8 re-encoding (row 18), register-shuffle layouts (row 19), group sizes other than 4, and the CUTLASS collective itself (UNVERIFIED against a checkout).
+
+---
+
 ## `0.60.15` — docs: PATENT-SWEEP barrier and shared-memory lowering chart (seven barrier patents outside as read, allocation null)
 
 Adds the 2026-11-26 dated subsection for pm-kernels task barrier-shared-lowering-line. Docs only; no verdict above is edited.
