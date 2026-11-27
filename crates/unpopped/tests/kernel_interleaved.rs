@@ -222,7 +222,7 @@ fn conv_run(mutant: Mutant, x: &dyn Fn(usize, usize, usize, usize) -> f32) -> Ve
             buf(&[O as i64, C as i64], &wgt),
             buf(
                 &[NB as i64, O as i64, HH as i64, WW as i64],
-                &vec![0.0; NB * O * HH * WW],
+                &[0.0; NB * O * HH * WW],
             ),
         ],
         2,
