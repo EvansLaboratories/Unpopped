@@ -157,7 +157,8 @@ impl Walk<'_> {
 
     fn expr_at(&self, e: &ScalarExpr, lane: bool) -> bool {
         match e {
-            ScalarExpr::Exec(ExecId::BlockIdx(_)) => self.device,
+            // the block's index in its cluster is, like `BlockIdx`, the same for every thread of a block (so of a subgroup)
+            ScalarExpr::Exec(ExecId::BlockIdx(_) | ExecId::ClusterCtaRank) => self.device,
             // every lane of a subgroup is in the same subgroup
             ScalarExpr::Exec(ExecId::SubgroupId) if lane => false,
             // When the launch states one subgroup size and the block's x extent is a multiple of it, a subgroup lies in one
