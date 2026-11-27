@@ -47,10 +47,10 @@ use unpopped::backend::{
     const_lit, lower_dag, lower_dag_all,
 };
 use unpopped::cfamily::{
-    assert_no_int_div_or_const, binary_f32, binary_f64, binary_int, complex_arith, complex_helpers,
-    dtype_tag, fp8_helpers, half_helpers, narrow_load_fn, out_ctype_of, param_args, param_ctype,
-    promote_load_f32, scalar_ctype, select_f32, select_f64, store_expr_of, sub_byte_helpers,
-    sub_byte_load_fn, sub_byte_store_fn, unary_f32, unary_f64,
+    SpellError, assert_no_int_div_or_const, binary_f32, binary_f64, binary_int, complex_arith,
+    complex_helpers, dtype_tag, fp8_helpers, half_helpers, narrow_load_fn, out_ctype_of,
+    param_args, param_ctype, promote_load_f32, scalar_ctype, select_f32, select_f64, store_expr_of,
+    sub_byte_helpers, sub_byte_load_fn, sub_byte_store_fn, unary_f32, unary_f64,
 };
 use unpopped::ir::{BinaryOp, ExprDag, UnaryOp, is_bit_or_sign_move};
 use unpopped::plan::{KernelPlan, Schedule};
@@ -484,7 +484,15 @@ fn cpu_unary(op: UnaryOp, x: String, dtype: ElementKind) -> Result<Spelling, Low
             }));
         }
     };
-    Ok(Spelling::Spelled(spelled))
+    match spelled {
+        Ok(text) => Ok(Spelling::Spelled(text)),
+        // the speller's typed refusal (B1) becomes a named decline, never a panic
+        Err(e) => Ok(Spelling::Declined(Decline::UnsupportedDtypeForOp {
+            op: DeclinedOp::Unary(op),
+            dtype,
+            why: e.to_string(),
+        })),
+    }
 }
 
 /// The f32 unary twin: now a straight delegation to
@@ -497,13 +505,13 @@ fn cpu_unary(op: UnaryOp, x: String, dtype: ElementKind) -> Result<Spelling, Low
 /// point**: while it stood, CpuC never exercised the neutral default, so the
 /// only in-tree backend that could have caught a non-portable default was the
 /// one opted out of it. A duplicate is not a guard.
-fn unary_f32_cpu(op: UnaryOp, x: String) -> String {
+fn unary_f32_cpu(op: UnaryOp, x: String) -> Result<String, SpellError> {
     unary_f32(op, x)
 }
 
 /// The f64 unary twin — a straight delegation, for the reason given on
 /// [`unary_f32_cpu`].
-fn unary_f64_cpu(op: UnaryOp, x: String) -> String {
+fn unary_f64_cpu(op: UnaryOp, x: String) -> Result<String, SpellError> {
     unary_f64(op, x)
 }
 
