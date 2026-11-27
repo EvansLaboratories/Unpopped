@@ -1,0 +1,3 @@
+kind: docs, the 0.63.0 migration text: wide integers accepted since 0.61.3, the Numerics literal (U37), the union-batch-1 note reconciled
+---
+`docs/emitter-migration-b1.md` gains a 0.62 note (`check_kernel` accepts `I128`, `U128`, `I256`, `U256` since 0.61.3, so an emitter that does not lower them must refuse by name before emitting, and the carry-flag emit hold stands) and a U37 section (how a `Numerics` struct literal moves: end it with `..Numerics::default()`; find them with `git grep -n 'Numerics {'`; what `ApproxSpelling` means for a CUDA emitter). `docs/design-union-batch1-consumer.md` states the real set `check_kernel` declines (`F128`, `F8E3M4`, `F8UE4M3`). No code change.
