@@ -144,23 +144,25 @@ fn group_body(id: u32, mutant: Mutant) -> Vec<Stmt> {
     body
 }
 
+/// The statements of group `g` (lanes `g * GROUP ..`), guarded by the thread index, on named barrier `g + 1`.
+fn in_group(g: usize, mutant: Mutant) -> Stmt {
+    let (lo, hi) = (g * GROUP, (g + 1) * GROUP);
+    let cond = if g == 0 {
+        cmp(BinaryOp::CmpLt, tid(), u(hi))
+    } else {
+        cmp(BinaryOp::CmpGe, tid(), u(lo))
+    };
+    Stmt::If {
+        cond,
+        then: Block(group_body(g as u32 + 1, mutant)),
+        els: Block(vec![]),
+    }
+}
+
 /// Buffers: 0 `input` `[THREADS]` (read), 1 `out` `[THREADS]` (write), both `F32`; allocation 0 the shared tile `[THREADS]`.
 /// Locals: 0 the input, 1 the lane within the group (`U32`), 2 the neighbour term, 3 the loaded neighbour, 4 unused, 5 the result,
 /// 6 onward each step's `s[i]`.
 pub(crate) fn hillis_steele(mutant: Mutant) -> KernelFn {
-    let in_group = |g: usize| {
-        let (lo, hi) = (g * GROUP, (g + 1) * GROUP);
-        let cond = if g == 0 {
-            cmp(BinaryOp::CmpLt, tid(), u(hi))
-        } else {
-            cmp(BinaryOp::CmpGe, tid(), u(lo))
-        };
-        Stmt::If {
-            cond,
-            then: Block(group_body(g as u32 + 1, mutant)),
-            els: Block(vec![]),
-        }
-    };
     let body = vec![
         Stmt::Let {
             local: 1,
@@ -176,8 +178,8 @@ pub(crate) fn hillis_steele(mutant: Mutant) -> KernelFn {
             local: 2,
             init: ScalarExpr::Const(0.0),
         },
-        in_group(0),
-        in_group(1),
+        in_group(0, mutant),
+        in_group(1, mutant),
     ];
     let params = vec![
         Param::buffer("input", F32, BufferRole::Read, Some(1)),
