@@ -312,6 +312,36 @@ fn a_broadcast_gives_every_lane_one_lanes_value() {
 }
 
 #[test]
+fn match_any_gives_each_lane_the_mask_of_lanes_with_the_same_bits() {
+    // value = ThreadIdx.x / 3: subgroup 0 (tid 0..4) holds 0 0 0 1, subgroup 1 (tid 4..8) holds 1 1 2 2
+    let value = ScalarExpr::Div(Box::new(cast(tid(), I32)), Box::new(c(3)));
+    let k = kernel(
+        CollectiveKind::MatchAny,
+        Scope::Subgroup,
+        value.clone(),
+        I32,
+        U32,
+    );
+    assert_eq!(check_kernel(&k), Ok(()));
+    assert_eq!(
+        run(&k, U32)
+            .expect("runs")
+            .into_iter()
+            .map(|x| x as i64)
+            .collect::<Vec<_>>(),
+        vec![
+            0b0111, 0b0111, 0b0111, 0b1000, 0b0011, 0b0011, 0b1100, 0b1100
+        ]
+    );
+    // a Block is refused by name; the Subgroup form above is the accepted control
+    let block = kernel(CollectiveKind::MatchAny, Scope::Block, value, I32, U32);
+    assert!(matches!(
+        check_kernel(&block),
+        Err(KernelError::CollectiveUnsupported { .. })
+    ));
+}
+
+#[test]
 fn votes_are_predicates_over_the_scope() {
     // each lane contributes ThreadIdx.x: lane 0 of subgroup 0 contributes zero
     let vote = |v| {

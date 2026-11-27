@@ -165,6 +165,7 @@ fn group_body(
         CollectiveKind::Shuffle { mode, .. } => Ok(shuffle(s, Some(*mode))),
         CollectiveKind::Broadcast { .. } => Ok(shuffle(s, None)),
         CollectiveKind::Vote(v) => Ok(vote(s, *v)),
+        CollectiveKind::MatchAny => Ok(match_any(s)),
         _ => Err(refuse("a collective kind this emitter has not been taught")),
     }
 }
@@ -263,6 +264,21 @@ fn shuffle(s: &Spec, mode: Option<ShuffleMode>) -> Vec<String> {
         format!("for (int i = g{n}; i < ge{n}; ++i) {{"),
         format!("    const long long lane = i - g{n};"),
         format!("    l{local}[i] = ({})cv{n}[g{n} + {src}];", s.res),
+        "}".to_string(),
+    ]
+}
+
+/// Lane `i` gets the mask of the group's lanes whose value has the same bits as lane `i`'s (`memcmp`, as the oracle compares
+/// bit patterns: a float `NaN` matches an identical `NaN`, `0.0` does not match `-0.0`).
+fn match_any(s: &Spec) -> Vec<String> {
+    let (n, local) = (s.n, s.local);
+    vec![
+        format!("for (int i = g{n}; i < ge{n}; ++i) {{"),
+        "    unsigned int mask = 0;".to_string(),
+        format!(
+            "    for (int j = g{n}; j < ge{n}; ++j) if (memcmp(&cv{n}[i], &cv{n}[j], sizeof(cv{n}[i])) == 0) mask |= 1u << (j - g{n});"
+        ),
+        format!("    l{local}[i] = ({})mask;", s.res),
         "}".to_string(),
     ]
 }

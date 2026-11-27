@@ -1411,6 +1411,12 @@ pub enum CollectiveKind {
     /// up to **32 lanes** and a scope of more is a typed oracle trap (**design**: the result is a `U32`; PTX ISA 9.5
     /// `vote.sync.ballot.b32` is also a `.b32` mask of the warp's 32 lanes).
     Vote(VoteKind),
+    /// Each lane receives a `U32` mask whose bit `i` is set when lane `i`'s value is **bit-for-bit equal** to this lane's (a
+    /// float compares by its bit pattern, so `NaN` matches an identical `NaN` and `0.0` does not match `-0.0`). A
+    /// **Subgroup** operation of up to 32 lanes, as `Ballot` (a Block is refused, a larger scope is a typed oracle trap).
+    /// Source: PTX ISA, `match.any.sync.type` ("the mask of threads whose operand `a` equals this thread's"); CUDA
+    /// `__match_any_sync`.
+    MatchAny,
     /// Every lane receives the fold of the scope's values under `op`.
     Reduce(ReduceOp),
     /// Every lane receives the prefix fold up to itself (before itself when `exclusive`).
