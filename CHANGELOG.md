@@ -15,6 +15,24 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.61.10` — tests: device-scope semaphore probe (survey row 9)
+
+Pins what the oracle does with an `AtomicCas(Acquire, Device)` spin across blocks: a producer in the earlier block completes (`out[0]=42`); a consumer in the earlier block is `CrossBlockWait`; an unreleased spin is `CrossBlockWait` while a block remains and `StepLimit` when the spinner is the last block. Weakening Acquire to Relaxed turns the completing case into `DataRace` and the waiting case into `StepLimit`. Tests only, no source change; verified by `cargo test -p unpopped --test kernel_device_semaphore`.
+
+`kernel_gemm_mixed_dtype`: `D(I32) = acc + Cast(C(I16))`, operands `I8` widened to `I16` for the product and to `I32` for the sum, built from ordinary ops only (KISS 771 Q3: no `c` role hint). Oracle-compared against a host loop; three type mutants (product narrowed to `I8`, sum kept in `I16`, addend dropped) each change the value on `-128 * -128` data.
+
+— lane: unpopped-conformance
+
+`kernel_int_where`: the index-masking idiom as an integer `Select` in the oracle, the condition a loaded `U8` mask tested `!= 0` (values 1, 2, 255) or a comparison; host-loop reference; swapped arms change the value at every width. Tests only.
+
+— lane: unpopped-conformance
+
+`kernel_wide_int_idioms`: the widening multiply, an `I128` accumulator over `I64` products, and the `U128` x `U128` -> `U256` product, each a kernel of ordinary ops compared with Rust's `u128`/`i128` or an independent 32-bit-limb schoolbook; each has a one-width-too-small mutant that changes the value. Oracle only; no carry-chain lowering. Stacked on `lane/e2-wide-int-r3`.
+
+— lane: unpopped-conformance
+
+---
+
 ## `0.61.9` — the oracle decodes an `F8E8M0` MX block scale (CUDA audit row 60)
 
 The oracle reads an `F8E8M0` buffer as the scale `2^(code - 127)` with `0xFF` as NaN (no zero, no infinity), through `cast_ref::decode_e8m0` and an arm in `raw_to_f64`; `types::elem_size` gives it its storage width, one byte. It is still a scale type, never a compute dtype: the plan gate refuses it as one. Sources: OCP Microscaling Formats (MX) Specification v1.0 (section number not re-read) and the ONNX float8 note's E8M0 table. Additive: no signature or IR change.
