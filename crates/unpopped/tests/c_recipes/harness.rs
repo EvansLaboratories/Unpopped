@@ -208,3 +208,31 @@ pub(crate) fn recipe(
 pub(crate) fn run64(k: &KernelFn, out_len: usize) -> Vec<u32> {
     run(k, 64, out_len, vec![])
 }
+
+pub(crate) fn binop(op: unpopped::ir::BinaryOp, a: ScalarExpr, b: ScalarExpr) -> ScalarExpr {
+    ScalarExpr::Binary(op, Box::new(a), Box::new(b))
+}
+
+pub(crate) fn sub(a: ScalarExpr, b: ScalarExpr) -> ScalarExpr {
+    ScalarExpr::Sub(Box::new(a), Box::new(b))
+}
+
+/// `n` consecutive locals starting at `first`, each declared by a `Load` of `place(i)` (a register fragment of `n` values).
+pub(crate) fn load_all(first: u32, n: u32, place: &dyn Fn(u32) -> Place) -> Vec<Stmt> {
+    (0..n)
+        .map(|i| Stmt::Load {
+            local: first + i,
+            place: place(i),
+        })
+        .collect()
+}
+
+/// `out[base + i] = value(i)` for `i in 0..n`.
+pub(crate) fn store_all(base: ScalarExpr, n: u32, value: &dyn Fn(u32) -> ScalarExpr) -> Vec<Stmt> {
+    (0..n)
+        .map(|i| Stmt::Store {
+            place: at(1, add(base.clone(), u(i64::from(i)))),
+            value: value(i),
+        })
+        .collect()
+}
