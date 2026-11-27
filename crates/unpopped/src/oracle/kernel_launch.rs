@@ -590,7 +590,7 @@ struct ThreadRun<'a> {
     /// What the thread contributed to the tuple collective it waits at.
     tuple: Option<Box<TupleContribution>>,
     /// The named barrier that opened while the thread waited at it: the acquire it owes before it runs on.
-    named_acq: Option<u32>,
+    named_acq: Option<(u32, u32)>,
 }
 
 /// One block between `Device` barriers: its threads and its memory.
@@ -746,7 +746,7 @@ fn wake_named_waiters(threads: &mut [ThreadRun<'_>], mem: &BlockMem) -> bool {
         };
         if mem.named.get(&id).is_some_and(|s| s.opened_after(phase)) {
             t.status = Status::Runnable;
-            t.named_acq = Some(id);
+            t.named_acq = Some((id, phase));
             woke = true;
         }
     }
@@ -807,8 +807,8 @@ fn run_phase<'a>(
     m.steps = t.steps;
     m.limit = b.limit;
     let pending = std::mem::take(&mut t.pending);
-    if let Some(id) = t.named_acq.take() {
-        m.named_acquire(id);
+    if let Some((id, phase)) = t.named_acq.take() {
+        m.named_acquire(id, phase);
     }
     let stop = if t.started {
         m.perform_pending(pending)
