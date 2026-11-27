@@ -1,0 +1,3 @@
+kind: additive: NVIDIA mma.sync 4-bit integer atoms m8n8k32, m16n8k32, m16n8k64 (s4, u4, mixed) (U7 theme 3)
+
+Three `MmaAtom` constructors as data (`mma_int4.rs`): `nvidia_m8n8k32_int4_s32`, `nvidia_m16n8k32_int4_s32`, `nvidia_m16n8k64_int4_s32`, each taking the A and B element (`I4` or `U4`). Layouts from the public PTX ISA 9.5 sections 9.7.16.5.4 (pp. 543-545), 9.7.16.5.10 (pp. 571-575) and 9.7.16.5.11 (pp. 578-582); single source (CUTLASS not read). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. Tested by placement against the PTX `(row, col)` formulas only: the oracle cannot run a 4-bit fragment (a kernel may not Store a sub-byte element). No `Stmt`, `ScalarExpr` or `ElementKind` change.
