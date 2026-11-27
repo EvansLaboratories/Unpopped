@@ -86,9 +86,9 @@ fn launch(k: KernelFn) -> KernelFn {
     k.with_launch(LaunchShape::new([N as u32, 1, 1], [1, 1, 1]))
 }
 
-/// The 64-bit carry-less product of two `u32`s, as two `u32` halves. Buffers: 0 `a`, 1 `b`, 2 `lo`, 3 `hi`. Locals: 0 `a`,
-/// 1 `b`, 2 `a` widened (`U64`), 3 the accumulator (`U64`), 4 the bit index `i`.
-pub(crate) fn clmul(mutant: Mutant) -> KernelFn {
+/// One bit step of the carry-less multiply: when bit `i` (local 4) of `b` (local 1) is set, fold `a << i` (local 2) into the
+/// accumulator (local 3) by XOR, or by addition for the `Carries` mutant.
+fn clmul_step(mutant: Mutant) -> Stmt {
     let amount = if mutant == Mutant::ShiftedByOne {
         add(l(4), ci(1, U32))
     } else {
@@ -101,14 +101,19 @@ pub(crate) fn clmul(mutant: Mutant) -> KernelFn {
         bin(BinaryOp::BitXor, l(3), part)
     };
     let bit = bin(BinaryOp::BitAnd, bin(BinaryOp::Shr, l(1), l(4)), ci(1, U32));
-    let step = Stmt::If {
+    Stmt::If {
         cond: bit,
         then: Block(vec![Stmt::Assign {
             local: 3,
             value: folded,
         }]),
         els: Block(vec![]),
-    };
+    }
+}
+
+/// The 64-bit carry-less product of two `u32`s, as two `u32` halves. Buffers: 0 `a`, 1 `b`, 2 `lo`, 3 `hi`. Locals: 0 `a`,
+/// 1 `b`, 2 `a` widened (`U64`), 3 the accumulator (`U64`), 4 the bit index `i`.
+pub(crate) fn clmul(mutant: Mutant) -> KernelFn {
     let load = |local, buffer| Stmt::Load {
         local,
         place: at(buffer),
@@ -124,7 +129,7 @@ pub(crate) fn clmul(mutant: Mutant) -> KernelFn {
             local: 3,
             init: ci(0, U64),
         },
-        counted(4, 32, vec![step]),
+        counted(4, 32, vec![clmul_step(mutant)]),
         Stmt::Store {
             place: at(2),
             value: cast(l(3), U32),
