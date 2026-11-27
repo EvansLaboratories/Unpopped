@@ -14,7 +14,7 @@ use unpopped_vocab::ElementKind::{self, Bf16, F16, F32, F64, I8, I32, U8, U32};
 use unpopped_vocab::{Fp8E4M3FN, Fp8E5M2};
 
 /// `(row, col)` of value `i` of `lane` for operand 0/1/2 = A/B/C.
-pub type Table = fn(usize, u32, u32) -> (u32, u32);
+pub(crate) type Table = fn(usize, u32, u32) -> (u32, u32);
 
 fn u(v: i64) -> ScalarExpr {
     ScalarExpr::ConstInt(v, U32)
@@ -36,7 +36,7 @@ fn frag(alloc: u32, v: u32) -> Place {
 }
 
 /// Each lane copies its A/B/C slots from buffers 0..3 into `Private` fragments, runs the MMA, writes D to buffer 3.
-pub fn mma_kernel(atom: &MmaAtom) -> KernelFn {
+pub(crate) fn mma_kernel(atom: &MmaAtom) -> KernelFn {
     let (ta, tb, tacc) = atom.dtypes();
     let tys = [ta, tb, tacc, tacc];
     let vals = [
@@ -109,7 +109,7 @@ pub fn mma_kernel(atom: &MmaAtom) -> KernelFn {
 
 /// A deterministic value of element `i` of operand `seed`, exactly representable in `ty`: the full range for the
 /// 8-bit integers (so a signed/unsigned mix-up changes the answer), small integers for the floats, lattice fractions for fp8.
-pub fn value(ty: ElementKind, seed: u32, i: u32) -> f64 {
+pub(crate) fn value(ty: ElementKind, seed: u32, i: u32) -> f64 {
     let h = seed
         .wrapping_mul(2_654_435_761)
         .wrapping_add(i.wrapping_mul(40_503))
@@ -154,13 +154,13 @@ fn buffer(ty: ElementKind, xs: &[f64]) -> TypedBuffer {
 }
 
 /// The logical matrices of `atom` (column-major): A is `m x k`, B `k x n`, C `m x n`.
-pub struct Logical {
-    pub a: Vec<f64>,
-    pub b: Vec<f64>,
-    pub c: Vec<f64>,
+pub(crate) struct Logical {
+    pub(crate) a: Vec<f64>,
+    pub(crate) b: Vec<f64>,
+    pub(crate) c: Vec<f64>,
 }
 
-pub fn logical(atom: &MmaAtom) -> Logical {
+pub(crate) fn logical(atom: &MmaAtom) -> Logical {
     let (m, n, k) = atom.mnk();
     let (ta, tb, tacc) = atom.dtypes();
     let make = |ty, seed, len: u32| (0..len).map(|i| value(ty, seed, i)).collect();
@@ -172,7 +172,7 @@ pub fn logical(atom: &MmaAtom) -> Logical {
 }
 
 /// Lay a logical matrix into per-lane fragments through `table`.
-pub fn fragments(table: Table, which: usize, rows: u32, vals: u32, x: &[f64]) -> Vec<f64> {
+pub(crate) fn fragments(table: Table, which: usize, rows: u32, vals: u32, x: &[f64]) -> Vec<f64> {
     (0..32)
         .flat_map(|lane| (0..vals).map(move |v| (lane, v)))
         .map(|(lane, v)| {
@@ -183,7 +183,7 @@ pub fn fragments(table: Table, which: usize, rows: u32, vals: u32, x: &[f64]) ->
 }
 
 /// `D = f(A).f(B) + C` as a plain triple loop in `f64`, `f` applied to each operand element (identity or tf32).
-pub fn reference(atom: &MmaAtom, l: &Logical, f: fn(f64) -> f64) -> Vec<f64> {
+pub(crate) fn reference(atom: &MmaAtom, l: &Logical, f: fn(f64) -> f64) -> Vec<f64> {
     let (m, n, k) = atom.mnk();
     let (m, n, k) = (m as usize, n as usize, k as usize);
     let mut d = vec![0.0; m * n];
@@ -198,7 +198,7 @@ pub fn reference(atom: &MmaAtom, l: &Logical, f: fn(f64) -> f64) -> Vec<f64> {
 }
 
 /// Run the MMA over `l` through `table`; the D fragments each lane wrote.
-pub fn run(atom: &MmaAtom, table: Table, l: &Logical) -> Result<Vec<f64>, KernelTrap> {
+pub(crate) fn run(atom: &MmaAtom, table: Table, l: &Logical) -> Result<Vec<f64>, KernelTrap> {
     let (m, _, k) = atom.mnk();
     let (ta, tb, tacc) = atom.dtypes();
     let fc = fragments(table, 2, m, atom.values(2), &l.c);
@@ -220,7 +220,7 @@ pub fn run(atom: &MmaAtom, table: Table, l: &Logical) -> Result<Vec<f64>, Kernel
 }
 
 /// Run and compare with the reference D placed through the same table.
-pub fn agrees(atom: &MmaAtom, table: Table) {
+pub(crate) fn agrees(atom: &MmaAtom, table: Table) {
     let l = logical(atom);
     let (m, ..) = atom.mnk();
     let want = fragments(table, 2, m, atom.values(2), &reference(atom, &l, |x| x));
