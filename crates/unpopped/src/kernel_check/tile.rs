@@ -5,6 +5,7 @@
 
 use super::{Scope, check_expr, check_place};
 use crate::exec::{AllocDecl, Extent, MemorySpace};
+use crate::ir::ScalarExpr;
 use crate::kernel::{BufferRole, KernelError, KernelFn, Place, Stmt};
 use crate::types::Ty;
 use unpopped_vocab::ElementKind::{self, Bf16, F16, F32, F64};
@@ -74,13 +75,33 @@ pub(super) fn check_tile(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), Kern
             src,
             elements_per_row,
             origin,
-        } => tile_move(k, sc, (*d, src, elements_per_row, origin), true),
+        } => tile_move(
+            k,
+            sc,
+            &Move {
+                tile: *d,
+                place: src,
+                per_row: elements_per_row,
+                origin,
+            },
+            true,
+        ),
         Stmt::TileStore {
             a,
             dst,
             elements_per_row,
             origin,
-        } => tile_move(k, sc, (*a, dst, elements_per_row, origin), false),
+        } => tile_move(
+            k,
+            sc,
+            &Move {
+                tile: *a,
+                place: dst,
+                per_row: elements_per_row,
+                origin,
+            },
+            false,
+        ),
         Stmt::TileFill { d, value } => {
             let (_, _, elem) = tile_of(k, *d)?;
             if check_expr(k, value, sc)? != Ty::Scalar(elem) {
@@ -116,18 +137,22 @@ fn check_tile_place(k: &KernelFn, tile: u32, place: &Place) -> Result<(), Kernel
     }
 }
 
+/// What a `TileLoad` or a `TileStore` names: the tile, the place, the row stride and the origin.
+struct Move<'a> {
+    tile: u32,
+    place: &'a Place,
+    per_row: &'a ScalarExpr,
+    origin: &'a [ScalarExpr; 2],
+}
+
 /// A `TileLoad` (`load`) or a `TileStore`: the tile, the place, the strides and origins.
-fn tile_move(
-    k: &KernelFn,
-    sc: &Scope,
-    (tile, place, per_row, origin): (
-        u32,
-        &Place,
-        &crate::ir::ScalarExpr,
-        &[crate::ir::ScalarExpr; 2],
-    ),
-    load: bool,
-) -> Result<(), KernelError> {
+fn tile_move(k: &KernelFn, sc: &Scope, mv: &Move<'_>, load: bool) -> Result<(), KernelError> {
+    let Move {
+        tile,
+        place,
+        per_row,
+        origin,
+    } = *mv;
     let (_, _, elem) = tile_of(k, tile)?;
     check_tile_place(k, tile, place)?;
     let (pe, role) = check_place(k, place, sc)?;
