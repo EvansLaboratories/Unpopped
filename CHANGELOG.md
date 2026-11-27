@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.13` — Fixed: ExecId::ClusterCtaRank is block-uniform in the barrier-uniformity rule (divergent only with a Cluster or Device barrier in the kernel)
+
+The block's index in its cluster is the same for every thread of a block, like `BlockIdx`, so a `Block` or `Subgroup` rendezvous under `if (cluster_ctarank == 0)` is no longer refused as divergent; a kernel that also holds a `Cluster` or `Device` barrier still treats it as divergent (its threads span the cluster's blocks). More permissive than 0.60.9, which read the leaf as divergent (the conservative reading the leaves lane noted on #428). Not breaking: it admits kernels that were refused.
+
+---
+
 ## `0.60.12` — Added: grouped, depthwise and transposed convolution conformance kernels (CUTLASS survey rows 46 and 48)
 
 `crates/unpopped/tests/kernel_conv_grouped.rs` and `tests/support/conv_grouped.rs`: a grouped forward convolution (G = 2, filter `[K, R, S, C/G]`), a depthwise one (G = C = K), both with stride (2, 1), dilation (1, 2) and asymmetric padding (top 1, bottom 0, left 2, right 1), and a transposed convolution (gather form) whose output padding enlarges the output. Each is checker-valid and runs on the oracle against a host scatter reference over integer data. Mutants (interleaved groups, first group only, a wrong padding sign) fail by value. Recorded: the interleaved-groups mutant is equivalent at G = K (depthwise), so it is asserted on the grouped geometry only. Not covered: 1D and 3D, split-K convolution, `NHWC` plan-layer Im2Col, and the data and filter gradients of the grouped case.
