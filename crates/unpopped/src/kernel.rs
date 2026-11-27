@@ -1467,6 +1467,9 @@ pub enum VoteKind {
     Any,
     /// A mask with bit `i` set when lane `i`'s value is non-zero.
     Ballot,
+    /// Every lane's predicate (is the value non-zero) is the same: all true or all false. Source: PTX ISA, `vote.sync.uni.pred`
+    /// ("true if source predicate has the same value in all active threads"); the result is `1` or `0` (a `U32`) like `All`/`Any`.
+    Uniform,
 }
 
 /// The memory order of an atomic or a fence.

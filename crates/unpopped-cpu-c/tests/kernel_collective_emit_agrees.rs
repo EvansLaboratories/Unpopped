@@ -234,6 +234,8 @@ fn votes_and_the_ballot_mask_agree() {
         (VoteKind::Any, Scope::Block),
         (VoteKind::All, Scope::Subgroup),
         (VoteKind::Any, Scope::Subgroup),
+        (VoteKind::Uniform, Scope::Block),
+        (VoteKind::Uniform, Scope::Subgroup),
         (VoteKind::Ballot, Scope::Subgroup),
     ] {
         let k = kernel(CollectiveKind::Vote(v), scope, I32, U32);

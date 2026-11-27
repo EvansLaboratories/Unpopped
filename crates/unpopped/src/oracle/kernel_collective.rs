@@ -8,7 +8,8 @@
 //! - **Shuffle** `Idx`/`Broadcast`: lane `i` gets the value of lane `operand mod n`. `Up`: lane `i - operand` if it
 //!   exists, else its own value. `Down`: lane `i + operand` if it exists, else its own. `Xor`: lane `i ^ operand` if
 //!   it exists, else its own. (CUDA's out-of-range rule: a lane with no source keeps its value.)
-//! - **Vote** `All`/`Any`: `1` or `0` (a `U32`) for "every / some lane's value is non-zero" (a NaN is non-zero).
+//! - **Vote** `All`/`Any`/`Uniform`: `1` or `0` (a `U32`) for "every / some lane's value is non-zero" / "all lanes agree on
+//!   whether it is" (a NaN is non-zero).
 //!   `Ballot`: a `U32` whose bit `i` is lane `i`'s predicate; more than 32 lanes is a typed trap.
 //! - **Reduce** `op`: every lane gets the left fold of the values in lane order. **Scan**: lane `i` gets the fold of
 //!   lanes `0..=i` (`0..i` when exclusive; lane 0 then gets the identity of `Sum`/`And`/`Or`/`Xor`, and for `Max`/`Min`/`Prod` the fold's identity: `-inf`/`+inf`/1 on a float, the type's minimum/maximum/1 on an integer: U53). Float `Sum` is
@@ -119,6 +120,7 @@ fn vote(kind: VoteKind, lanes: &[Contribution]) -> Result<Vec<Val>, KernelTrap> 
     let one = match kind {
         VoteKind::All => u32v(i128::from(flags.iter().all(|f| *f))),
         VoteKind::Any => u32v(i128::from(flags.iter().any(|f| *f))),
+        VoteKind::Uniform => u32v(i128::from(flags.iter().all(|f| *f == flags[0]))),
         _ => {
             if flags.len() > 32 {
                 return Err(KernelTrap::Unsupported("a ballot over more than 32 lanes"));

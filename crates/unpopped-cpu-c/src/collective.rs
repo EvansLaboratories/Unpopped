@@ -272,13 +272,16 @@ fn vote(s: &Spec, kind: VoteKind) -> Vec<String> {
     let result = match kind {
         VoteKind::All => "all",
         VoteKind::Any => "any",
+        VoteKind::Uniform => "uni",
         _ => "mask",
     };
     vec![
-        "int all = 1, any = 0; unsigned int mask = 0;".to_string(),
+        "int all = 1, any = 0, uni = 1; unsigned int mask = 0;".to_string(),
         format!("for (int i = g{n}; i < ge{n}; ++i) {{"),
         format!("    const int f = cv{n}[i] != 0;"),
-        format!("    all &= f; any |= f; mask |= (unsigned int)f << (i - g{n});"),
+        format!(
+            "    all &= f; any |= f; uni &= (f == (cv{n}[g{n}] != 0)); mask |= (unsigned int)f << (i - g{n});"
+        ),
         "}".to_string(),
         format!(
             "for (int i = g{n}; i < ge{n}; ++i) l{local}[i] = ({})({result});",
