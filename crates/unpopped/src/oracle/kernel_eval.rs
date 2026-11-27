@@ -910,7 +910,8 @@ impl<'a> Machine<'a> {
             }
             ScalarExpr::Mul(a, b) => {
                 let (x, y) = two(a, b)?;
-                wrap(t, x * y)
+                // the product of two 64-bit values can exceed i128; the low bits are all `wrap` keeps
+                wrap(t, x.wrapping_mul(y))
             }
             ScalarExpr::Div(a, b) => {
                 let (x, y) = two(a, b)?;
