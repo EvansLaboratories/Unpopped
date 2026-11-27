@@ -31,8 +31,8 @@ fn pow2(e: i32) -> f64 {
 fn every_code_decodes_to_two_to_the_code_minus_127_and_ff_is_nan() {
     let all: Vec<u8> = (0..=255u8).collect();
     let got = decode(&all);
-    for c in 0..=254usize {
-        assert_eq!(got[c], pow2(c as i32 - 127), "code {c}");
+    for (c, g) in got.iter().enumerate().take(255) {
+        assert_eq!(*g, pow2(c as i32 - 127), "code {c}");
     }
     assert!(got[255].is_nan(), "0xFF is NaN");
     // the corners by hand: 127 -> 1, 128 -> 2, 126 -> 0.5; code 0 is the smallest scale, not zero
