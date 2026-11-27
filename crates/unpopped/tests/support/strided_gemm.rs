@@ -43,16 +43,26 @@ fn at2(buffer: u32, i: ScalarExpr, j: ScalarExpr) -> Place {
     }
 }
 
-/// Buffers: 0 `a` `[M, K]`, 1 `b` `[K, N]` (read), 2 `c` `[M, N]` (write). Locals: 0 `acc`, 1 `kk`, 2 `a`, 3 `b`.
-pub(crate) fn strided_gemm(mutant: Mutant) -> KernelFn {
-    let r = ScalarExpr::Exec(ExecId::ThreadIdx(1));
-    let c = ScalarExpr::Exec(ExecId::ThreadIdx(0));
+/// The output row of thread row `r`: `r`, or for the `ShiftedRow` mutant `(r + 1) % M` written as `r + 1 - M * (r / (M - 1))`.
+fn out_row(r: ScalarExpr, mutant: Mutant) -> ScalarExpr {
+    if mutant != Mutant::ShiftedRow {
+        return r;
+    }
+    let wrap = mul(
+        cu(M),
+        ScalarExpr::Div(Box::new(r.clone()), Box::new(cu(M - 1))),
+    );
+    ScalarExpr::Sub(Box::new(add(r, cu(1))), Box::new(wrap))
+}
+
+/// The body of one `kk` step: the two loads and the accumulation.
+fn k_step(mutant: Mutant, r: &ScalarExpr, c: &ScalarExpr) -> Vec<Stmt> {
     let b_place = if mutant == Mutant::SwappedB {
         at2(1, c.clone(), l(1))
     } else {
         at2(1, l(1), c.clone())
     };
-    let step = vec![
+    vec![
         Stmt::Load {
             local: 2,
             place: at2(0, r.clone(), l(1)),
@@ -65,19 +75,13 @@ pub(crate) fn strided_gemm(mutant: Mutant) -> KernelFn {
             local: 0,
             value: add(l(0), mul(l(2), l(3))),
         },
-    ];
-    let row = if mutant == Mutant::ShiftedRow {
-        // `(m + 1) % M` written without a remainder: `m + 1 - M * (m / (M - 1))`, which is `m + 1` for `m < M - 1` and `0` after
-        ScalarExpr::Sub(
-            Box::new(add(r.clone(), cu(1))),
-            Box::new(mul(
-                cu(M),
-                ScalarExpr::Div(Box::new(r.clone()), Box::new(cu(M - 1))),
-            )),
-        )
-    } else {
-        r
-    };
+    ]
+}
+
+/// Buffers: 0 `a` `[M, K]`, 1 `b` `[K, N]` (read), 2 `c` `[M, N]` (write). Locals: 0 `acc`, 1 `kk`, 2 `a`, 3 `b`.
+pub(crate) fn strided_gemm(mutant: Mutant) -> KernelFn {
+    let r = ScalarExpr::Exec(ExecId::ThreadIdx(1));
+    let c = ScalarExpr::Exec(ExecId::ThreadIdx(0));
     let body = vec![
         Stmt::Let {
             local: 0,
@@ -89,10 +93,10 @@ pub(crate) fn strided_gemm(mutant: Mutant) -> KernelFn {
             start: cu(0),
             end: cu(K),
             step: cu(1),
-            body: Block(step),
+            body: Block(k_step(mutant, &r, &c)),
         },
         Stmt::Store {
-            place: at2(2, row, c),
+            place: at2(2, out_row(r, mutant), c),
             value: l(0),
         },
     ];
