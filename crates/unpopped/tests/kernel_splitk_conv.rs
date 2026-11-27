@@ -5,7 +5,7 @@
 //! all-negative corpus. A slice that reads the wrong channels and a reduction that drops a slice are mutants that stay in range,
 //! so they fail by value. The stream-K division of one tile between blocks is held and not modelled.
 
-use unpopped::kernel::{KernelFn, check_kernel};
+use unpopped::kernel::check_kernel;
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
 use unpopped::oracle::kernel_launch::run_launch;
