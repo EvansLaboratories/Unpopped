@@ -154,18 +154,14 @@ impl Machine<'_> {
             self.private_all(b)?,
             self.private_all(c)?,
         );
-        let acc = self.alloc_k.allocs[c as usize].elem;
         let mut out = Vec::with_capacity((m * n) as usize);
         for i in 0..m as usize {
             for j in 0..n as usize {
                 let sum = (0..k as usize).fold(cv[i * n as usize + j].f64(), |s, l| {
                     s + av[i * k as usize + l].f64() * bv[l * n as usize + j].f64()
                 });
-                out.push(Val::Float(if acc == ElementKind::F32 {
-                    f64::from(sum as f32)
-                } else {
-                    sum
-                }));
+                // the one rounding to the accumulator type is the store's (`F32`) or none (`F64`)
+                out.push(Val::Float(sum));
             }
         }
         for (i, v) in out.into_iter().enumerate() {
