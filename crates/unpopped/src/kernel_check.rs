@@ -235,11 +235,8 @@ fn check_alloc_layout(a: &crate::exec::AllocDecl, alloc: u32) -> Result<(), Kern
     if i64::from(n) != l.layout.size() {
         return bad("the layout's size must equal the allocation's extent");
     }
-    // 3. range: every offset lies below the extent
-    if l.layout.cosize() > i64::from(n) {
-        return bad("the layout's cosize exceeds the allocation's extent");
-    }
-    // 4. injective: no two logical indices share an offset (the swizzle is a bijection, so this is the layout's alone)
+    // 3 and 4. range and injective, by one enumeration: every offset lies below the extent and no two logical indices share an
+    // offset (the swizzle is a bijection, so injectivity is the layout's alone)
     if l.layout.size() > LAYOUT_ENUMERATION_CAP {
         return bad("the layout is too large to prove injective");
     }
