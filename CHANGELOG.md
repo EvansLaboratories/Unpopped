@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.61.0` — **BREAKING**: `UnaryOp::Popc`, `Clz`, `Brev` (integer bit operations)
+
+Added three variants to the exhaustive public enum `UnaryOp`: `Popc` (population count), `Clz` (leading zeros, `w` for zero) and `Brev` (bit reversal), integer-only, defined at the operand's own width (its `w`-bit two's-complement pattern) with the operand's type as the result (PTX ISA `popc`/`clz`/`brev`, CUDA `__popc`/`__clz`/`__brev`). **Breaking** for any downstream exhaustive `match` on `UnaryOp`; `UnaryOp::is_bit_op` names the three, and `TypeError::IntegerOnlyOperand` refuses one on a float or in a plan body. The kernel oracle evaluates them at every integer width (I8..U64); the plan gate admits no `UnaryOp` at an integer dtype and cpu_c declines them by name. In-repo exhaustive sites (cfamily, contract, optimize, pattern, recipe, scalar_ops) rate them exact, never fold them, and map no KISS-Ops token. Pinned by `kernel_bit_ops.rs` (per-bit reference at every width, 0 and all-ones) and `kernel_bit_op_declines.rs`.
+
+---
+
 ## `0.60.35` — test, float Max/Min/Sum collectives over 32 lanes with NaN, signed zero and infinities
 
 `kernel_collective_float_nan.rs`: F32 `Reduce` Max, Min and Sum over a 32-lane subgroup against hand-written vectors (NaN propagates, a zero tie keeps the first lane's sign, +inf plus -inf is NaN, Sum is the lane-order left fold); a NaN-ignoring Max/Min, a tie to the last lane and a reversed or pairwise Sum fail the vectors by value. Rule read from the oracle code; the design note matches it. Tests only.
