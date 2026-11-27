@@ -10,9 +10,11 @@
 //! The cells are `f16 [64, 8, 512] . f16 [64, 512, 4096] -> f16 [64, 8, 4096]` on `cuda:sm89`, roles M = (operand 0, axis 1),
 //! N = (operand 1, axis 2), K = (operand 0, axis 2), weight slot 1.
 
+use unpopped::ir::{ContractionAxes, OpDef, reduced};
+use unpopped::plan::try_build_plan;
 use unpopped_vocab::{
     ArchSku, AxisRef, BatchRoleDecline, CellFacts, ContractionRoles, DeriveDecline, ElementKind,
-    OperandDesc, derive_structure_key_token,
+    OperandDesc, derive_structure_key, derive_structure_key_token,
 };
 
 const F16: ElementKind = ElementKind::F16;
@@ -30,19 +32,29 @@ fn desc(shape: &[i64]) -> OperandDesc {
     OperandDesc::new(shape.len(), shape, &strides(shape), F16, 256)
 }
 
-/// The three operands of `lhs . rhs -> out` and the cell facts with `batch` as the declared batch axes (`None`: no roles
-/// beyond M, N, K).
+/// The three operands of `lhs . rhs -> out` and the cell facts with the given roles (a declared batch axis, or none).
+fn facts_and_operands(
+    lhs: &[i64],
+    rhs: &[i64],
+    out: &[i64],
+    roles: ContractionRoles,
+) -> ([OperandDesc; 3], CellFacts) {
+    let mut facts = CellFacts::new();
+    facts.contraction_declared = true;
+    facts.weight_operand = Some(1);
+    facts.contraction_roles = Some(roles);
+    ([desc(lhs), desc(rhs), desc(out)], facts)
+}
+
+/// The token of `lhs . rhs -> out` under `roles`.
 fn token(
     lhs: &[i64],
     rhs: &[i64],
     out: &[i64],
     roles: ContractionRoles,
 ) -> Result<String, DeriveDecline> {
-    let mut facts = CellFacts::new();
-    facts.contraction_declared = true;
-    facts.weight_operand = Some(1);
-    facts.contraction_roles = Some(roles);
-    derive_structure_key_token(&[desc(lhs), desc(rhs), desc(out)], &facts, ArchSku::Sm89)
+    let (ops, facts) = facts_and_operands(lhs, rhs, out, roles);
+    derive_structure_key_token(&ops, &facts, ArchSku::Sm89)
 }
 
 fn rank3_roles(batch: &[usize]) -> ContractionRoles {
@@ -122,4 +134,19 @@ fn an_unusable_batch_declaration_is_declined_by_name_not_keyed() {
             "batch axis {axis}"
         );
     }
+}
+
+#[test]
+fn the_kiss_batched_key_plans_a_batched_matmul_at_the_plan_layer() {
+    // the key whose token is asserted above is the one the plan layer consumes: a batched matmul op plans against it
+    let (ops, facts) = facts_and_operands(
+        &[64, 8, 512],
+        &[64, 512, 4096],
+        &[64, 8, 4096],
+        rank3_roles(&[0]),
+    );
+    let key = derive_structure_key(&ops, &facts, ArchSku::Sm89).expect("the key derives");
+    let op = OpDef::contraction("bmm", &[F16], ContractionAxes::batched_matmul(), reduced(0));
+    let planned = try_build_plan(&op, &key);
+    assert!(planned.is_ok(), "{:?}", planned.err());
 }
