@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.30` — `AtomicOp::Inc`/`Dec` (CUDA `atomicInc`/`atomicDec`)
+
+Added `AtomicOp::Inc` (`old >= v ? 0 : old + 1`) and `Dec` (`(old == 0 || old > v) ? v : old - 1`), `U32` only (the checker refuses other elements by name): CUDA C++ Programming Guide `atomicInc`/`atomicDec`, PTX ISA `atom.inc.u32`/`atom.dec.u32`. Oracle, cpu-c and the CUDA walker (`atomicInc`/`atomicDec`) spell them. Pinned by `kernel_atomic_incdec.rs` (an independent loop from the CUDA definition) and the cpu-c differential `the_wrapping_inc_and_dec_agree`.
+
+---
+
 ## `0.60.29` — Added
 
 Kernel-layer conformance kernels for two integer idioms from other kernel languages' public docs, built from leaves already on main (rows 20 and 28 of `docs/ir-union-evidence/conformance-idiom-gaps-2026-11-27.md`): a 32 x 32 to 64-bit carry-less (GF(2)) multiply (Triton `tl.clmul`) and a four-lane signed byte dot product with accumulate (CUDA `__dp4a`, TileLang `T.dp4a`). Each is compared on the oracle with a reference written independently (the carry-less product by coefficient parity rather than the kernel's shift-and-XOR loop; the dot product with Rust's `as i8` casts) over boundary corpora, with mutants (carries instead of XOR, an off-by-one shift, unsigned bytes, a dropped accumulator) that fail by value. Arithmetic semantics only: whether a target has one instruction for either is not modelled, and no new statement or operator was needed.
