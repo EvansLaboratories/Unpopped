@@ -218,7 +218,7 @@ fn a_tile_allocation_states_its_shape_and_no_ordinary_access_reaches_it() {
 }
 
 #[test]
-fn each_tile_statement_rule_refuses_and_its_control_passes() {
+fn each_tile_mma_rule_refuses_and_its_control_passes() {
     let mma = |d, a, b, c| Stmt::TileMma { d, a, b, c };
     let ok = kernel(
         vec![tile("a", 2, 3), tile("b", 3, 2), tile("c", 2, 2)],
@@ -236,6 +236,10 @@ fn each_tile_statement_rule_refuses_and_its_control_passes() {
         vec![mma(3, 1, 2, 3)],
     );
     assert!(refused(&wrong_c).contains("shapes"));
+}
+
+#[test]
+fn each_tile_move_and_fill_rule_refuses_and_its_control_passes() {
     // a statement over an allocation that is not a tile
     let not_tile = kernel(vec![tile("a", 2, 2)], vec![load(0, [0, 0])]);
     assert!(refused(&not_tile).contains("not a Tile"));

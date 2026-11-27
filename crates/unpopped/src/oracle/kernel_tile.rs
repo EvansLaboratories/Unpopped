@@ -23,36 +23,13 @@ impl Machine<'_> {
                 src,
                 elements_per_row,
                 origin,
-            } => {
-                let (rows, cols) = self.tile_shape(*d)?;
-                let at = self.tile_origin(elements_per_row, origin)?;
-                for r in 0..rows {
-                    for c in 0..cols {
-                        let p = self.tile_place(src, at.element(r, c))?;
-                        let v = self.load(&p)?;
-                        self.tile_write(*d, (r * cols + c) as usize, v)?;
-                    }
-                }
-            }
+            } => self.tile_load(*d, src, (elements_per_row, origin))?,
             Stmt::TileStore {
                 a,
                 dst,
                 elements_per_row,
                 origin,
-            } => {
-                let (rows, cols) = self.tile_shape(*a)?;
-                let at = self.tile_origin(elements_per_row, origin)?;
-                let vals = self.private_all(*a)?;
-                // one writer for the whole subgroup: its first lane
-                if self.exec_val(ExecId::LaneId)? == 0 {
-                    for r in 0..rows {
-                        for c in 0..cols {
-                            let p = self.tile_place(dst, at.element(r, c))?;
-                            self.store(&p, vals[(r * cols + c) as usize])?;
-                        }
-                    }
-                }
-            }
+            } => self.tile_store(*a, dst, (elements_per_row, origin))?,
             Stmt::TileFill { d, value } => {
                 let v = self.eval_expr(value)?;
                 let (rows, cols) = self.tile_shape(*d)?;
@@ -62,6 +39,46 @@ impl Machine<'_> {
             }
             Stmt::TileMma { d, a, b, c } => self.tile_mma([*d, *a, *b, *c])?,
             _ => unreachable!("exec_tile is called for a tile statement"),
+        }
+        Ok(())
+    }
+
+    /// `TileLoad`: every element an ordinary logged load, on every lane.
+    fn tile_load(
+        &mut self,
+        d: u32,
+        src: &Place,
+        (per_row, origin): (&ScalarExpr, &[ScalarExpr; 2]),
+    ) -> Result<(), KernelTrap> {
+        let (rows, cols) = self.tile_shape(d)?;
+        let at = self.tile_origin(per_row, origin)?;
+        for r in 0..rows {
+            for c in 0..cols {
+                let p = self.tile_place(src, at.element(r, c))?;
+                let v = self.load(&p)?;
+                self.tile_write(d, (r * cols + c) as usize, v)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `TileStore`: the tile must be fully written; one writer for the whole subgroup, its first lane.
+    fn tile_store(
+        &mut self,
+        a: u32,
+        dst: &Place,
+        (per_row, origin): (&ScalarExpr, &[ScalarExpr; 2]),
+    ) -> Result<(), KernelTrap> {
+        let (rows, cols) = self.tile_shape(a)?;
+        let at = self.tile_origin(per_row, origin)?;
+        let vals = self.private_all(a)?;
+        if self.exec_val(ExecId::LaneId)? == 0 {
+            for r in 0..rows {
+                for c in 0..cols {
+                    let p = self.tile_place(dst, at.element(r, c))?;
+                    self.store(&p, vals[(r * cols + c) as usize])?;
+                }
+            }
         }
         Ok(())
     }

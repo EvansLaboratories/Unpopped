@@ -96,6 +96,26 @@ pub(super) fn check_tile(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), Kern
     }
 }
 
+/// A tile's place: a `Shared` allocation place or a one-index buffer place.
+fn check_tile_place(k: &KernelFn, tile: u32, place: &Place) -> Result<(), KernelError> {
+    let ok = match place {
+        Place::Alloc { alloc, .. } => k
+            .allocs
+            .get(*alloc as usize)
+            .is_some_and(|a| a.space == MemorySpace::Shared),
+        Place::Logical { coords, .. } => coords.len() == 1,
+        _ => false,
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(refuse(
+            tile,
+            "a tile place that is not a Shared allocation place or a one-index buffer place",
+        ))
+    }
+}
+
 /// A `TileLoad` (`load`) or a `TileStore`: the tile, the place, the strides and origins.
 fn tile_move(
     k: &KernelFn,
@@ -109,20 +129,7 @@ fn tile_move(
     load: bool,
 ) -> Result<(), KernelError> {
     let (_, _, elem) = tile_of(k, tile)?;
-    let ok_place = match place {
-        Place::Alloc { alloc, .. } => k
-            .allocs
-            .get(*alloc as usize)
-            .is_some_and(|a| a.space == MemorySpace::Shared),
-        Place::Logical { coords, .. } => coords.len() == 1,
-        _ => false,
-    };
-    if !ok_place {
-        return Err(refuse(
-            tile,
-            "a tile place that is not a Shared allocation place or a one-index buffer place",
-        ));
-    }
+    check_tile_place(k, tile, place)?;
     let (pe, role) = check_place(k, place, sc)?;
     if pe != elem {
         return Err(refuse(

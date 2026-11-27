@@ -22,14 +22,10 @@ fn kernel(allocs: Vec<AllocDecl>, body: Vec<Stmt>) -> KernelFn {
     .with_allocs(allocs)
 }
 
-#[test]
-fn a_tile_allocation_and_each_tile_statement_decline_by_name() {
+/// One of each tile statement over the tile `1` and the `Shared` allocation `0`.
+fn statements() -> [(&'static str, Stmt); 4] {
     let u = |v| ScalarExpr::ConstInt(v, U32);
-    let shared = AllocDecl::new("s", MemorySpace::Shared, F32, Extent::Static(4));
-    let plain = kernel(vec![shared.clone()], vec![]);
-    assert!(CpuC.lower_kernel(&plain).is_ok(), "the control lowers");
-    let allocs = vec![shared, AllocDecl::tile("t", F32, 2, 2)];
-    let bodies = [
+    [
         (
             "TileLoad",
             Stmt::TileLoad {
@@ -70,8 +66,16 @@ fn a_tile_allocation_and_each_tile_statement_decline_by_name() {
                 origin: [u(0), u(0)],
             },
         ),
-    ];
-    for (name, st) in bodies {
+    ]
+}
+
+#[test]
+fn a_tile_allocation_and_each_tile_statement_decline_by_name() {
+    let shared = AllocDecl::new("s", MemorySpace::Shared, F32, Extent::Static(4));
+    let plain = kernel(vec![shared.clone()], vec![]);
+    assert!(CpuC.lower_kernel(&plain).is_ok(), "the control lowers");
+    let allocs = vec![shared, AllocDecl::tile("t", F32, 2, 2)];
+    for (name, st) in statements() {
         let k = kernel(allocs.clone(), vec![st]);
         assert_eq!(check_kernel(&k), Ok(()), "{name} is well formed");
         let err = CpuC.lower_kernel(&k).expect_err(name);
