@@ -260,6 +260,9 @@ fn the_128_bit_types_match_rusts_own_integers() {
             ),
             (BinaryOp::CmpEq, |o| o == std::cmp::Ordering::Equal),
             (BinaryOp::CmpGe, |o| o != std::cmp::Ordering::Less),
+            (BinaryOp::CmpLe, |o| o != std::cmp::Ordering::Greater),
+            (BinaryOp::CmpGt, |o| o == std::cmp::Ordering::Greater),
+            (BinaryOp::CmpNe, |o| o != std::cmp::Ordering::Equal),
         ] {
             let got = run(&binary_kernel(op, t, I32, a.len() as u32), t, I32, &a, &b);
             for (i, (x, y)) in a.iter().zip(&b).enumerate() {
@@ -272,6 +275,58 @@ fn the_128_bit_types_match_rusts_own_integers() {
                     got[i].1,
                     u128::from(f(o)),
                     "{op:?} {:#x} {:#x} at {t:?}",
+                    x.1,
+                    y.1
+                );
+            }
+        }
+    }
+}
+
+/// A wrapped result is a CANONICAL pattern of its type (sign-extended for the signed type, zero-extended for the unsigned): the
+/// store keeps only the low bytes, so this is seen by comparing the unstored value, here against zero.
+#[test]
+fn a_wrapped_result_compares_as_its_own_type() {
+    for (t, signed) in [(I128, true), (U128, false)] {
+        let (a, b) = grid(t);
+        let n = a.len() as u32;
+        for (name, make) in [
+            (
+                "add",
+                (|x, y| ScalarExpr::Add(x, y))
+                    as fn(Box<ScalarExpr>, Box<ScalarExpr>) -> ScalarExpr,
+            ),
+            ("sub", |x, y| ScalarExpr::Sub(x, y)),
+            ("mul", |x, y| ScalarExpr::Mul(x, y)),
+        ] {
+            let mut k = binary_kernel(BinaryOp::CmpLt, t, I32, n);
+            let Stmt::Store { value, .. } = &mut k.body.0[2] else {
+                unreachable!()
+            };
+            let zero = ScalarExpr::Sub(
+                Box::new(ScalarExpr::Local(0)),
+                Box::new(ScalarExpr::Local(0)),
+            );
+            *value = ScalarExpr::Binary(
+                BinaryOp::CmpLt,
+                Box::new(make(
+                    Box::new(ScalarExpr::Local(0)),
+                    Box::new(ScalarExpr::Local(1)),
+                )),
+                Box::new(zero),
+            );
+            let got = run(&k, t, I32, &a, &b);
+            for (i, (x, y)) in a.iter().zip(&b).enumerate() {
+                let r = match name {
+                    "add" => x.1.wrapping_add(y.1),
+                    "sub" => x.1.wrapping_sub(y.1),
+                    _ => x.1.wrapping_mul(y.1),
+                };
+                let want = signed && (r as i128) < 0;
+                assert_eq!(
+                    got[i].1,
+                    u128::from(want),
+                    "{name} {:#x} {:#x} < 0 at {t:?}",
                     x.1,
                     y.1
                 );
@@ -399,6 +454,19 @@ fn the_256_bit_types_match_the_limb_pair_model() {
                 }
             },
         );
+        for (op, f) in [
+            (
+                BinaryOp::CmpLe,
+                (|o| o != std::cmp::Ordering::Greater) as fn(std::cmp::Ordering) -> bool,
+            ),
+            (BinaryOp::CmpNe, |o| o != std::cmp::Ordering::Equal),
+        ] {
+            let got = run(&binary_kernel(op, t, I32, n), t, I32, &a, &b);
+            for (i, (x, y)) in a.iter().zip(&b).enumerate() {
+                let want = u128::from(f(cmp256(*x, *y, signed)));
+                assert_eq!(got[i].1, want, "{op:?} {x:x?} {y:x?} at {t:?}");
+            }
+        }
         let lt = run(&binary_kernel(BinaryOp::CmpLt, t, I32, n), t, I32, &a, &b);
         for (i, (x, y)) in a.iter().zip(&b).enumerate() {
             let want = u128::from(cmp256(*x, *y, signed) == std::cmp::Ordering::Less);
