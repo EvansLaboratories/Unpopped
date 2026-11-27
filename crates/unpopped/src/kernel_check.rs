@@ -870,6 +870,11 @@ fn check_atomic(
             what: "an atomic on a non-integer element (only an F16/Bf16/F32/F64 Add or Exchange is admitted)",
         });
     }
+    if matches!(op, AtomicOp::Inc | AtomicOp::Dec) && elem != ElementKind::U32 {
+        return Err(KernelError::AtomicUnsupported {
+            what: "an Inc or Dec atomic outside a U32 element (CUDA atomicInc/atomicDec, PTX atom.inc.u32/atom.dec.u32)",
+        });
+    }
     if check_expr(k, value, sc)? != Ty::Scalar(elem) {
         return Err(KernelError::TypeMismatch { what: "AtomicRmw" });
     }

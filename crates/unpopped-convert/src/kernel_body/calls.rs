@@ -807,6 +807,8 @@ fn atomic_op(name: &str) -> Option<Option<AtomicOp>> {
         "atomicOr" => Some(AtomicOp::Or),
         "atomicXor" => Some(AtomicOp::Xor),
         "atomicExch" => Some(AtomicOp::Exchange),
+        "atomicInc" => Some(AtomicOp::Inc),
+        "atomicDec" => Some(AtomicOp::Dec),
         "atomicCAS" => None,
         _ => return None,
     })

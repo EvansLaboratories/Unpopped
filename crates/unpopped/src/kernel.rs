@@ -1532,6 +1532,12 @@ pub enum AtomicOp {
     Xor,
     /// Store `value`; the old value is what was there (integers, `F32`, `F64`: the bits move unchanged).
     Exchange,
+    /// Wrapping increment: `old >= value ? 0 : old + 1` (`U32` only). Not commutative, so even the final value depends on the
+    /// order of the threads. Source: CUDA C++ Programming Guide, `atomicInc`; PTX ISA `atom.inc.u32`.
+    Inc,
+    /// Wrapping decrement: `(old == 0 || old > value) ? value : old - 1` (`U32` only). Not commutative. Source: CUDA C++
+    /// Programming Guide, `atomicDec`; PTX ISA `atom.dec.u32`.
+    Dec,
 }
 
 /// A kernel: the program of one logical thread.

@@ -319,6 +319,37 @@ fn the_associative_atomic_combines_agree() {
     }
 }
 
+/// `Inc`/`Dec` apply one function per thread with one operand, so the final cell is the same after 12 applications whatever
+/// the order: the C reference and the interpreter agree byte for byte (the start values cross the wrap on both ops).
+#[test]
+fn the_wrapping_inc_and_dec_agree() {
+    for (op, limit, start) in [
+        (AtomicOp::Inc, 7, 3),
+        (AtomicOp::Inc, 4, 9),
+        (AtomicOp::Dec, 7, 3),
+        (AtomicOp::Dec, 4, 9),
+    ] {
+        let cell = Place::Logical {
+            buffer: 0,
+            coords: vec![u(0)],
+        };
+        let mut k = KernelFn::new(
+            "incdec",
+            U32,
+            vec![Param::buffer("c", U32, BufferRole::ReadWrite, Some(1))],
+            vec![],
+            Block(vec![Stmt::atomic_rmw(op, cell, u(limit))]),
+        );
+        k.launch = Some(LaunchShape::new([6, 1, 1], [2, 1, 1]));
+        let buf = TypedBuffer::new(U32, vec![1], vec![1], (start as u32).to_le_bytes().to_vec());
+        agree_launch(
+            &format!("incdec_{op:?}_{limit}_{start}"),
+            &k,
+            vec![KernelArg::Buffer(buf)],
+        );
+    }
+}
+
 /// `Exchange` is order dependent, so the C reference is held to the property the IR promises: the
 /// values read back plus the final cell are the start value and every value written, once each.
 /// `old = exchange(cell, tid + 1); out[tid] = old` over one block of 12 threads.
