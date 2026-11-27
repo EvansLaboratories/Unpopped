@@ -613,8 +613,24 @@ fn infix(
     Ok(Spelling::Spelled(format!("({a} {} {b})", op.c_operator())))
 }
 
+/// This emitter honours no schedule field (ROADMAP S2): a kernel that sets one is declined by the field's name, never run with
+/// the field silently ignored.
+pub(crate) fn admit_schedule(k: &KernelFn) -> Result<(), LowerError> {
+    let Some(spec) = &k.schedule else {
+        return Ok(());
+    };
+    match spec.set_fields().first() {
+        Some(field) => Err(refuse(format!(
+            "the kernel sets the schedule field `{}`; this emitter honours no schedule field and declines rather than ignore it",
+            field.name()
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// Lower `k` to a C function. See the module docs for the contract.
 pub(crate) fn lower_kernel(k: &KernelFn) -> Result<GeneratedKernel, LowerError> {
+    admit_schedule(k)?;
     let name = format!("unpopped_cpu_kernel_{}", ident(&k.name));
     let text = function_text(k, (None, &name, false))?;
     Ok(GeneratedKernel::new(name, with_prelude(&k.name, &text))

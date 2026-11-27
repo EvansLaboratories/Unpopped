@@ -35,6 +35,10 @@ const U8: ElementKind = ElementKind::U8;
 /// A fixture: a kernel `check_kernel` accepts, or a module `check_module` accepts at `entry`.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a fixture is a test value: boxing `Kernel` would change what a consumer's `Fixture::Kernel(k)` pattern binds"
+)]
 pub enum Fixture {
     /// A single kernel, checked with `check_kernel`.
     Kernel(KernelFn),
