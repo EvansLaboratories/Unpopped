@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.61.12` — additive: NVIDIA mma.sync atoms m16n8k8 f16/bf16, m16n8k4 tf32, m8n8k4 f64 (U7 theme 3)
+
+Four `MmaAtom` constructors as data (`mma_sm80.rs`): `nvidia_m16n8k8_{f16,bf16}_f32`, `nvidia_m16n8k4_tf32_f32` (carries the tf32 flag) and `nvidia_m8n8k4_f64_f64`. Layouts read from the public PTX ISA 9.5 (sections 9.7.16.5.7, 9.7.16.5.6, 9.7.16.5.2; pages in the module doc) and cross-checked against CUTLASS `mma_traits_sm80.hpp` (`main` 5c179ede). `tests/mma_atoms_sm80.rs` checks each against `(row, col)` formulas from the PTX text and runs it in the oracle. `wmma` shapes are not built: PTX 9.7.16.4.1 leaves the wmma fragment layout unspecified. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+---
+
 ## `0.61.11` — T1, a layout and a swizzle on an allocation (`AllocDecl::layout`, `align_bytes`)
 
 `AllocDecl` gains `layout: Option<AllocLayout>` and `align_bytes: Option<u32>` (both `serde(default)`, omitted when `None`; `AllocDecl::new` is unchanged, `with_layout` and `with_align_bytes` set them). An `AllocLayout` is a `unpopped_vocab::layout_algebra::Layout` and an optional byte-address `Swizzle` (the PTX form, `swz(3,4,3)` for the 128-byte mode), written as one canonical string: `(8,8):(1,8)` or `swz(2,2,3)((8,8):(1,8))`.
