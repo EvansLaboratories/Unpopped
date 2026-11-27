@@ -15,6 +15,36 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.61.0` — **BREAKING**: `UnaryOp::Popc`, `Clz`, `Brev` (integer bit operations)
+
+Added three variants to the exhaustive public enum `UnaryOp`: `Popc` (population count), `Clz` (leading zeros, `w` for zero) and `Brev` (bit reversal), integer-only, defined at the operand's own width (its `w`-bit two's-complement pattern) with the operand's type as the result (PTX ISA `popc`/`clz`/`brev`, CUDA `__popc`/`__clz`/`__brev`). **Breaking** for any downstream exhaustive `match` on `UnaryOp`; `UnaryOp::is_bit_op` names the three, and `TypeError::IntegerOnlyOperand` refuses one on a float or in a plan body. The kernel oracle evaluates them at every integer width (I8..U64); the plan gate admits no `UnaryOp` at an integer dtype and cpu_c declines them by name. In-repo exhaustive sites (cfamily, contract, optimize, pattern, recipe, scalar_ops) rate them exact, never fold them, and map no KISS-Ops token. Pinned by `kernel_bit_ops.rs` (per-bit reference at every width, 0 and all-ones) and `kernel_bit_op_declines.rs`.
+
+---
+
+## `0.60.35` — test, float Max/Min/Sum collectives over 32 lanes with NaN, signed zero and infinities
+
+`kernel_collective_float_nan.rs`: F32 `Reduce` Max, Min and Sum over a 32-lane subgroup against hand-written vectors (NaN propagates, a zero tie keeps the first lane's sign, +inf plus -inf is NaN, Sum is the lane-order left fold); a NaN-ignoring Max/Min, a tie to the last lane and a reversed or pairwise Sum fail the vectors by value. Rule read from the oracle code; the design note matches it. Tests only.
+
+`kernel_subtile_causal_mask.rs`: one subgroup zeroes the upper triangle of a 16 x 8 tile held in the m16n8 accumulator fragment layout, checked against Rust's lower triangle; a strict-triangle and a missing-upper-half-offset mutant change values. Tests and docs only.
+
+---
+
+## `0.60.34` — test, wave count-bits idioms (survey row 46) and survey batch 3
+
+`kernel_wave_count_bits.rs`: WaveActiveCountBits as a subgroup Reduce(Sum) and WavePrefixCountBits as an exclusive Scan(Sum) over a predicate, checked by hand-written arrays and against a Ballot mask; an inclusive-scan and a Max mutant change a lane by value. Also survey batch 3 (6 rows) in the verification doc. Tests and docs only.
+
+`kernel_simd_shuffle_fill.rs`: simd_shuffle_and_fill_up/down and simd_shuffle_rotate_up/down built from two Shuffle collectives and a Select, against hand-written arrays from the Metal 4.1 spec example; a fill that ignores its filling fails by value. Survey batch 4 (8 Metal rows) in the verification doc. Tests and docs only.
+
+---
+
+## `0.60.33` — test, 64-bit integer atomics (survey row 50)
+
+`kernel_atomic_wide.rs`: twelve threads apply each integer `AtomicRmw` op with an operand above 2^32 to an `I64` and a `U64` cell; expected cells come from Rust operators, and a narrowed-operand and a wrong-op mutant change the cell by value. Adds the survey batch 1 and 2 verification doc. Tests and docs only.
+
+Read 10 rows of the idiom-gap table from their primary pages (CuTe DSL 4.7.0, TileLang 0.1.16, HLSL SM 6.0/6.5) and triaged them: 4 already covered on main (rows 2-redux, 28, 29, 45), 1 expressible and unbuilt (46 count-bits), 7 leaf candidates, 1 held, 1 stale (row 2 uniform vote, closed by #453). Docs only; no code changed.
+
+---
+
 ## `0.60.32` — Added
 
 Conformance test for the structure key of a rank-3 batched contraction (CuTe survey row 39, key half; the value half is `kiss_ref_diff::batched_matmul_oracle_eq_kiss_ref`): `unpopped-vocab`'s `derive_structure_key_token` is asserted against the tokens KISS's own corpus carries for `f16 [64, 8, 512] . f16 [64, 512, 4096] -> f16 [64, 8, 4096]` on `cuda:sm89` (`sk8|ctr|f16|cuda:sm89|ix32|grid|r3|...|ctlm/d16/bs/f16/f16/f16/st`), with its controls: no declared batch axis gives no batch coordinate, a declared extent-1 batch is `bt`, rank 4 keys the class of the PRODUCT of the batch extents (`bm` for 4 x 64), and an out-of-range, repeated or contraction-overlapping batch axis is declined by name (`BatchAxisOutOfRange`, `BatchAxisDuplicate`, `BatchAxisOverlapsContractionRole`). The expected tokens were reported by the KISS lane (KISS `origin/main` 8828b194, KISS-CLASSIFY-6.6-0023) and are UNVERIFIED by this lane against the JSON corpus or the spec text, which were not read; two of KISS's five declines (`NotInOutput`, `NonPositiveExtent`) are not built. No source mutation was run: the derivation is the primary's `crates/*/src`, which this lane does not edit.

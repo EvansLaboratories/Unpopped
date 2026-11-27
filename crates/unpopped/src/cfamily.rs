@@ -824,6 +824,12 @@ pub fn unary_f32(op: UnaryOp, x: String) -> String {
         UnaryOp::Atanh => format!("atanhf({x})"),
         UnaryOp::Cbrt => format!("cbrtf({x})"),
         UnaryOp::Lgamma => format!("lgammaf({x})"),
+        // an integer bit operation has no float spelling: the typing gate refuses it on a float (`UnaryOp::is_bit_op`)
+        UnaryOp::Popc | UnaryOp::Clz | UnaryOp::Brev => {
+            panic!(
+                "c-family lowering: {op:?} is an integer bit operation, refused by the typing gate"
+            )
+        }
     }
 }
 
@@ -871,6 +877,12 @@ pub fn unary_f64(op: UnaryOp, x: String) -> String {
         UnaryOp::Atanh => format!("atanh({x})"),
         UnaryOp::Cbrt => format!("cbrt({x})"),
         UnaryOp::Lgamma => format!("lgamma({x})"),
+        // an integer bit operation has no float spelling: the typing gate refuses it on a float (`UnaryOp::is_bit_op`)
+        UnaryOp::Popc | UnaryOp::Clz | UnaryOp::Brev => {
+            panic!(
+                "c-family lowering: {op:?} is an integer bit operation, refused by the typing gate"
+            )
+        }
     }
 }
 

@@ -687,7 +687,12 @@ fn weight(n: &ENode) -> u64 {
         // Select is compare-select class (one setp+selp) — the Max/Min/Cmp* tier.
         ENode::Select(..) => 2,
         ENode::Unary(op, _) => match op {
-            UnaryOp::Neg | UnaryOp::Abs | UnaryOp::Relu => 1,
+            UnaryOp::Neg
+            | UnaryOp::Abs
+            | UnaryOp::Relu
+            | UnaryOp::Popc
+            | UnaryOp::Clz
+            | UnaryOp::Brev => 1,
             UnaryOp::Sqr
             | UnaryOp::Floor
             | UnaryOp::Ceil
