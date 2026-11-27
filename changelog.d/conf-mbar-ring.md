@@ -1,0 +1,5 @@
+kind: Added
+---
+Kernel-layer conformance kernel for a two-stage full/empty `mbarrier` ring inside one block (CUTLASS survey row 88, the multi-stage ring the earlier rows lacked): a consumer thread and a producer thread pass six items through two shared slots, with `MbarInit`, `MbarArrive` and `MbarWait` as separate statements, wait parity flipping over three rounds, compared with `2 * x + 1` over ordinary, NaN and all-negative corpora. An off-by-one item counter fails by value; reading the slot being refilled (`DataRace`), a slot never released (`MbarrierDeadlock`) and a refill that skips its wait (`MbarrierDeadlock`) are pinned as typed traps. Scope: one block, no transaction count on any arrival, no cluster or device scope, no store fused with an arrive, no cross-SM roles. PATENT-SWEEP barrier chart (Unpopped#442): block-scope barriers outside as read, not a clearance; re-read triggers (an arrival fused with a transaction count, a barrier with a reduction or scan, divergence compaction) are not exercised. The tensor-map TMA stage of the row is not covered, so the row stays Partial.
+
+— lane: unpopped-conformance
