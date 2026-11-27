@@ -499,7 +499,8 @@ fn instances(k: &KernelFn, lens: &[usize], space: MemorySpace) -> Vec<Option<All
         .map(|(a, &n)| {
             // tensor memory is one instance per block, stored beside `Shared`
             let here = a.space == space
-                || (space == MemorySpace::Shared && a.space == MemorySpace::Tensor);
+                || (space == MemorySpace::Shared && a.space == MemorySpace::Tensor)
+                || (space == MemorySpace::Private && a.space == MemorySpace::Tile);
             here.then(|| AllocMem::new(a.elem, n))
         })
         .collect()

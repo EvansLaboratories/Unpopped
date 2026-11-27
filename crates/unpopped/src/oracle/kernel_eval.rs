@@ -337,6 +337,10 @@ impl<'a> Machine<'a> {
                 return Err(KernelTrap::Unsupported("Collective"));
             }
             Stmt::Mma { .. } => return Err(KernelTrap::Unsupported("Mma")),
+            Stmt::TileLoad { .. }
+            | Stmt::TileMma { .. }
+            | Stmt::TileFill { .. }
+            | Stmt::TileStore { .. } => self.exec_tile(st)?,
             Stmt::Tcgen05Mma { .. }
             | Stmt::Tcgen05Commit { .. }
             | Stmt::Tcgen05Ld { .. }
@@ -620,7 +624,7 @@ impl<'a> Machine<'a> {
         Ok((root, off))
     }
 
-    fn load(&mut self, place: &Place) -> Result<Val, KernelTrap> {
+    pub(super) fn load(&mut self, place: &Place) -> Result<Val, KernelTrap> {
         if matches!(place, Place::Raw { .. }) {
             return self.raw_load(place);
         }
@@ -759,7 +763,7 @@ impl<'a> Machine<'a> {
         reduce_devices(op, tb.dtype, &seen)
     }
 
-    fn store(&mut self, place: &Place, v: Val) -> Result<(), KernelTrap> {
+    pub(super) fn store(&mut self, place: &Place, v: Val) -> Result<(), KernelTrap> {
         if matches!(place, Place::Raw { .. }) {
             return self.raw_store(place, v);
         }
