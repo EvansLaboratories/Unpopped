@@ -211,7 +211,8 @@ fn combine(op: ReduceOp, ty: ElementKind, a: Val, b: Val) -> Result<Val, KernelT
             ReduceOp::Sum => wrap(ty, x + y),
             ReduceOp::Max => x.max(y),
             ReduceOp::Min => x.min(y),
-            ReduceOp::Prod => wrap(ty, x * y),
+            // the product of two 64-bit values can exceed i128; the low bits are all `wrap` keeps
+            ReduceOp::Prod => wrap(ty, x.wrapping_mul(y)),
             ReduceOp::And => x & y,
             ReduceOp::Or => x | y,
             ReduceOp::Xor => x ^ y,
