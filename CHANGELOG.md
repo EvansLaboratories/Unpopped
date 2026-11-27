@@ -15,14 +15,6 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
-## `0.60.13` — feat: lift_elementwise_multi, a multi-output and u8-output lift that reads the real Slang emitter spelling (ROADMAP U67)
-
-`unpopped-convert`: `lift_elementwise_multi` lifts an elementwise kernel that stores several outputs (`output0`, `output1`, ..., one store each at one index) into a multi-output `OpDef`, with a per-output element type (`Some(U8)` for a mask beside a float value). A declared output with no store, a store to an undeclared output and stores at different indices are refused; `lift_elementwise` is unchanged. ROADMAP U67. Tested against the real spelling: the kernels fishstringer-slang-emit (origin/main `46988a72`, fishstringer#58) emits for `sum_and_product` and `dropout_like` are lifted and run on the oracle against Rust references. Reading them needed identity `(float)` casts (only to the compute type; any other cast is refused) and the `(uint8_t)` store-site cast and `(c ? 1.0 : 0.0)` predicate of a mask output, all inside `lift_elementwise_multi`; the single-output lifts are unchanged.
-
-Adds docs/design-swizzled-allocation.md, written by unpopped-leaves at the primary lane's answer (option b): it states what the kernel.rs and kernel_check edit must do for a layout and a swizzle on an allocation. Docs only: no code, no version, no CHANGELOG edit. The edit itself is the primary lane's and rides T1 of docs/design-tile-and-schedule-plan.md.
-
----
-
 ## `0.60.12` — Added: grouped, depthwise and transposed convolution conformance kernels (CUTLASS survey rows 46 and 48)
 
 `crates/unpopped/tests/kernel_conv_grouped.rs` and `tests/support/conv_grouped.rs`: a grouped forward convolution (G = 2, filter `[K, R, S, C/G]`), a depthwise one (G = C = K), both with stride (2, 1), dilation (1, 2) and asymmetric padding (top 1, bottom 0, left 2, right 1), and a transposed convolution (gather form) whose output padding enlarges the output. Each is checker-valid and runs on the oracle against a host scatter reference over integer data. Mutants (interleaved groups, first group only, a wrong padding sign) fail by value. Recorded: the interleaved-groups mutant is equivalent at G = K (depthwise), so it is asserted on the grouped geometry only. Not covered: 1D and 3D, split-K convolution, `NHWC` plan-layer Im2Col, and the data and filter gradients of the grouped case.
