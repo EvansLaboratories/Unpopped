@@ -121,9 +121,9 @@ fn the_asymmetric_padding_is_exercised_at_every_edge() {
     // left and right but never at the bottom, where the padding is 0
     assert_eq!((P, Q), (2, 6));
     assert_eq!((PT, PB, PL, PR), (1, 0, 2, 1));
-    let top = (0..R).any(|r| 0 * SH + r * DH - PT < 0);
+    let top = (0..R).any(|r| r * DH < PT);
     let bottom = (0..R).any(|r| (P - 1) * SH + r * DH - PT >= H);
-    let left = (0..S).any(|s| 0 * SW + s * DW - PL < 0);
+    let left = (0..S).any(|s| s * DW < PL);
     let right = (0..S).any(|s| (Q - 1) * SW + s * DW - PL >= W);
     assert!(top && left && right && !bottom);
 }
