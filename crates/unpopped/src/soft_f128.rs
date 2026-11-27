@@ -2,7 +2,7 @@
 //! `F128`: a software IEEE 754 binary128 for the oracle (ROADMAP E3).
 //!
 //! The design is the **integer-word** one: a value is its 128-bit pattern, and every operation is exact integer arithmetic on a
-//! 256-bit word ([`W256`]) followed by ONE rounding (round to nearest, ties to even) in [`pack`]. There is no double-double
+//! 256-bit word ([`W256`]) followed by ONE rounding (round to nearest, ties to even) in `pack`. There is no double-double
 //! pair and no hardware floating point in the arithmetic, so the result cannot depend on the host.
 //!
 //! Rules (IEEE 754-2019 section 6): `x + (-x)` is `+0`; `inf - inf`, `0 * inf`, `0 / 0` and `inf / inf` are NaN; a finite
