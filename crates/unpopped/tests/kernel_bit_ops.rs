@@ -198,3 +198,41 @@ fn a_bit_op_is_refused_on_a_float_and_in_a_plan_body_with_the_integer_control() 
         Err(TypeError::IntegerOnlyOperand { .. })
     ));
 }
+
+// ---- the c-family spellers refuse a bit op on a float by panic (documented `# Panics`); the typing gate refuses it first ----
+
+#[test]
+#[should_panic(expected = "Popc is an integer bit operation, refused by the typing gate")]
+fn unary_f32_panics_on_popc() {
+    let _ = unpopped::cfamily::unary_f32(UnaryOp::Popc, "x".to_string());
+}
+
+#[test]
+#[should_panic(expected = "Clz is an integer bit operation, refused by the typing gate")]
+fn unary_f32_panics_on_clz() {
+    let _ = unpopped::cfamily::unary_f32(UnaryOp::Clz, "x".to_string());
+}
+
+#[test]
+#[should_panic(expected = "Brev is an integer bit operation, refused by the typing gate")]
+fn unary_f64_panics_on_brev() {
+    let _ = unpopped::cfamily::unary_f64(UnaryOp::Brev, "x".to_string());
+}
+
+#[test]
+#[should_panic(expected = "Popc is an integer bit operation, refused by the typing gate")]
+fn unary_f64_panics_on_popc() {
+    let _ = unpopped::cfamily::unary_f64(UnaryOp::Popc, "x".to_string());
+}
+
+#[test]
+fn the_float_spellers_still_spell_an_ordinary_op_control() {
+    assert_eq!(
+        unpopped::cfamily::unary_f32(UnaryOp::Sqrt, "x".to_string()),
+        "sqrtf(x)"
+    );
+    assert_eq!(
+        unpopped::cfamily::unary_f64(UnaryOp::Sqrt, "x".to_string()),
+        "sqrt(x)"
+    );
+}
