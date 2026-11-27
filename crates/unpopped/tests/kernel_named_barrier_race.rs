@@ -33,10 +33,9 @@ fn sync() -> Stmt {
     }
 }
 
-/// `between`: whether the sync between the neighbour read and the in-place write is present.
-fn kernel(between: bool) -> KernelFn {
-    let u = |v: i64| ScalarExpr::ConstInt(v, ElementKind::U32);
-    let mut body = vec![
+/// Store the input to the tile, then sync.
+fn stage_input() -> Vec<Stmt> {
+    vec![
         Stmt::Load {
             local: 0,
             place: Place::Logical {
@@ -49,16 +48,23 @@ fn kernel(between: bool) -> KernelFn {
             value: ScalarExpr::Local(0),
         },
         sync(),
+    ]
+}
+
+/// Read the left neighbour `s[i - 1]` (zero for lane 0) into local 1.
+fn read_left_neighbour() -> Vec<Stmt> {
+    let one = ScalarExpr::ConstInt(1, ElementKind::U32);
+    vec![
         Stmt::Let {
             local: 1,
             init: ScalarExpr::Const(0.0),
         },
         Stmt::If {
-            cond: ScalarExpr::Binary(BinaryOp::CmpGe, Box::new(tid()), Box::new(u(1))),
+            cond: ScalarExpr::Binary(BinaryOp::CmpGe, Box::new(tid()), Box::new(one.clone())),
             then: Block(vec![
                 Stmt::Load {
                     local: 2,
-                    place: tile(ScalarExpr::Sub(Box::new(tid()), Box::new(u(1)))),
+                    place: tile(ScalarExpr::Sub(Box::new(tid()), Box::new(one))),
                 },
                 Stmt::Assign {
                     local: 1,
@@ -67,33 +73,47 @@ fn kernel(between: bool) -> KernelFn {
             ]),
             els: Block(vec![]),
         },
-    ];
+    ]
+}
+
+/// Add the neighbour into `s[i]` in place, sync, and write the result out.
+fn add_in_place_and_write_out() -> Vec<Stmt> {
+    let sum = ScalarExpr::Add(
+        Box::new(ScalarExpr::Local(3)),
+        Box::new(ScalarExpr::Local(1)),
+    );
+    vec![
+        Stmt::Load {
+            local: 3,
+            place: tile(tid()),
+        },
+        Stmt::Store {
+            place: tile(tid()),
+            value: sum,
+        },
+        sync(),
+        Stmt::Load {
+            local: 4,
+            place: tile(tid()),
+        },
+        Stmt::Store {
+            place: Place::Logical {
+                buffer: 1,
+                coords: vec![tid()],
+            },
+            value: ScalarExpr::Local(4),
+        },
+    ]
+}
+
+/// `between`: whether the sync between the neighbour read and the in-place write is present.
+fn kernel(between: bool) -> KernelFn {
+    let mut body = stage_input();
+    body.extend(read_left_neighbour());
     if between {
         body.push(sync());
     }
-    body.push(Stmt::Load {
-        local: 3,
-        place: tile(tid()),
-    });
-    body.push(Stmt::Store {
-        place: tile(tid()),
-        value: ScalarExpr::Add(
-            Box::new(ScalarExpr::Local(3)),
-            Box::new(ScalarExpr::Local(1)),
-        ),
-    });
-    body.push(sync());
-    body.push(Stmt::Load {
-        local: 4,
-        place: tile(tid()),
-    });
-    body.push(Stmt::Store {
-        place: Place::Logical {
-            buffer: 1,
-            coords: vec![tid()],
-        },
-        value: ScalarExpr::Local(4),
-    });
+    body.extend(add_in_place_and_write_out());
     let params = vec![
         Param::buffer("input", F32, BufferRole::Read, Some(1)),
         Param::buffer("out", F32, BufferRole::Write, Some(1)),
