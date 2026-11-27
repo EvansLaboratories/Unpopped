@@ -1,0 +1,3 @@
+kind: Fixed: the barrier-uniformity rule for ExecId::ClusterCtaId, ClusterDim and WarpgroupId (they were read as divergent)
+---
+`ClusterDim` is a launch constant (uniform, like `GridDim`); `ClusterCtaId` is the block's position in its cluster, uniform within a block like `ClusterCtaRank` (divergent only where the kernel holds a `Cluster` or `Device` barrier); `WarpgroupId` is the subgroup index divided by four, so it stays divergent across the subgroups of a block and is lane-uniform within one subgroup (a `Subgroup` collective under it is accepted). More permissive than 0.60.14, which read all three as divergent; admits kernels that were refused, not breaking.
