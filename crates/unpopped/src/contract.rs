@@ -1604,7 +1604,11 @@ fn unary_ulp(op: UnaryOp) -> f64 {
         | UnaryOp::Round
         | UnaryOp::Sign
         | UnaryOp::Step
-        | UnaryOp::Trunc => 0.0,
+        | UnaryOp::Trunc
+        // integer bit operations are exact
+        | UnaryOp::Popc
+        | UnaryOp::Clz
+        | UnaryOp::Brev => 0.0,
         UnaryOp::Log | UnaryOp::Expm1 | UnaryOp::Log1p | UnaryOp::Cbrt | UnaryOp::Log2 => 1.0,
         UnaryOp::Exp
         | UnaryOp::Tanh

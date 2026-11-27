@@ -458,6 +458,15 @@ fn emit_scalar_cpu(plan: &KernelPlan<'_>, ctype: &str) -> Result<GeneratedKernel
 /// dtype has no unary math (the ir admissibility table rejects it), so the panic
 /// is the emitter backstop.
 fn cpu_unary(op: UnaryOp, x: String, dtype: ElementKind) -> Result<Spelling, LowerError> {
+    // an integer bit operation (Popc, Clz, Brev) is a kernel-layer, integer-only operation the oracle defines; cpu_c does not
+    // spell it yet, so it declines by name rather than reaching a float speller
+    if op.is_bit_op() {
+        return Ok(Spelling::Declined(Decline::UnsupportedDtypeForOp {
+            op: DeclinedOp::Unary(op),
+            dtype,
+            why: "an integer bit operation is not lowered by cpu_c v1".to_string(),
+        }));
+    }
     let spelled = match dtype {
         // Promoted to `float` at the leaf, so unary math is f32 math.
         ElementKind::F32

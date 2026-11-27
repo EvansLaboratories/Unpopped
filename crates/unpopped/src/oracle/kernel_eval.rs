@@ -34,7 +34,7 @@ pub use super::kernel_trap::KernelTrap;
 use super::{
     Eval, TypedBuffer, Val, eval, int_val, panic_reduced, raw_to_i128, read_elem, store_val,
 };
-use crate::ir::{BinaryOp, Saturation, ScalarExpr};
+use crate::ir::{BinaryOp, Saturation, ScalarExpr, UnaryOp};
 use crate::kernel::{AtomicOp, Block, KernelFn, ParamKind, Place, Stmt, check_kernel};
 use crate::types::{self, Ty, map_children};
 use unpopped_vocab::ElementKind;
@@ -906,6 +906,8 @@ impl<'a> Machine<'a> {
             }
             ScalarExpr::Binary(op, a, b) if op.is_cmp() => self.eval_cmp(*op, a, b)?,
             ScalarExpr::Select(c, a, b) => self.eval_int_select(c, a, b, t)?,
+            // an integer bit operation reads its operand at the result's own type (the typing rule: same type)
+            ScalarExpr::Unary(op, x) if op.is_bit_op() => int_bit_op(*op, t, self.eval_int(x, t)?),
             _ => Err(KernelTrap::Unsupported(
                 "integer expression outside the v0 subset",
             ))?,
@@ -1256,4 +1258,25 @@ pub(super) fn wrap(t: ElementKind, v: i128) -> i128 {
     }
     let m = hi - lo + 1;
     (v - lo).rem_euclid(m) + lo
+}
+
+/// `Popc`/`Clz`/`Brev` of `v` at the integer type `t` (`UnaryOp::is_bit_op`): the operand's `w`-bit two's-complement pattern
+/// (`w` is `t`'s width), the result wrapped back into `t`. `Popc` counts set bits, `Clz` counts leading zero bits (`w` for a
+/// zero pattern), `Brev` moves bit `i` to bit `w - 1 - i`.
+pub(super) fn int_bit_op(op: UnaryOp, t: ElementKind, v: i128) -> i128 {
+    let (lo, hi) = types::int_range(t).expect("an integer type");
+    let w = (hi + 1).trailing_zeros() + u32::from(lo < 0);
+    let mask = if w == 128 {
+        u128::MAX
+    } else {
+        (1u128 << w) - 1
+    };
+    let pat = (v as u128) & mask;
+    let out = match op {
+        UnaryOp::Popc => i128::from(pat.count_ones()),
+        UnaryOp::Clz => i128::from(pat.leading_zeros() - (128 - w)),
+        UnaryOp::Brev => (pat.reverse_bits() >> (128 - w)) as i128,
+        other => panic!("oracle: {other:?} is not an integer bit operation"),
+    };
+    wrap(t, out)
 }
