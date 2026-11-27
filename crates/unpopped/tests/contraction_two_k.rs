@@ -32,8 +32,8 @@ fn f32_bytes(v: impl Iterator<Item = f32>) -> Vec<u8> {
     v.flat_map(f32::to_le_bytes).collect()
 }
 
-/// `lhs [M, K1, K2] . rhs [K1, K2, N] -> [M, N]`, dense row-major, K declared as two axes.
-fn run(k_more: &[AxisRef]) -> Result<Vec<f32>, String> {
+/// The two input buffers: `lhs [M, K1, K2]` and `rhs [K1, K2, N]`, dense row-major.
+fn buffers() -> [TypedBuffer; 2] {
     let lhs = TypedBuffer::new(
         F32,
         vec![M as i64, K1 as i64, K2 as i64],
@@ -52,7 +52,12 @@ fn run(k_more: &[AxisRef]) -> Result<Vec<f32>, String> {
                 .flat_map(|a| (0..K2).flat_map(move |b| (0..N).map(move |n| rhs_value(a, b, n)))),
         ),
     );
-    let ops = [
+    [lhs, rhs]
+}
+
+/// The three operand descriptions of the same contraction.
+fn operand_descs() -> [OperandDesc; 3] {
+    [
         OperandDesc::new(
             3,
             &[M as i64, K1 as i64, K2 as i64],
@@ -68,7 +73,11 @@ fn run(k_more: &[AxisRef]) -> Result<Vec<f32>, String> {
             256,
         ),
         OperandDesc::new(2, &[M as i64, N as i64], &[N as i64, 1], F32, 256),
-    ];
+    ]
+}
+
+/// The cell facts declaring the contraction, with `k_more` as the further K axes.
+fn cell_facts(k_more: &[AxisRef]) -> CellFacts {
     let mut facts = CellFacts::new();
     facts.contraction_declared = true;
     facts.weight_operand = Some(1);
@@ -76,8 +85,11 @@ fn run(k_more: &[AxisRef]) -> Result<Vec<f32>, String> {
         ContractionRoles::new(AxisRef::new(0, 0), AxisRef::new(1, 2), AxisRef::new(0, 1))
             .with_k_more_axes(k_more),
     );
-    let key =
-        derive_structure_key(&ops, &facts, ArchSku::Sm89).map_err(|e| format!("key: {e:?}"))?;
+    facts
+}
+
+/// The op-layer declaration: K spelled as two `ContractedK` axes on each operand.
+fn two_k_op() -> OpDef {
     let axes = ContractionAxes {
         lhs: vec![
             AxisRole::FreeM,
@@ -90,9 +102,17 @@ fn run(k_more: &[AxisRef]) -> Result<Vec<f32>, String> {
             AxisRole::FreeN,
         ],
     };
-    let op = OpDef::contraction("mm2k", &[F32], axes, reduced(0));
+    OpDef::contraction("mm2k", &[F32], axes, reduced(0))
+}
+
+/// `lhs [M, K1, K2] . rhs [K1, K2, N] -> [M, N]`, dense row-major, K declared as two axes.
+fn run(k_more: &[AxisRef]) -> Result<Vec<f32>, String> {
+    let ops = operand_descs();
+    let key = derive_structure_key(&ops, &cell_facts(k_more), ArchSku::Sm89)
+        .map_err(|e| format!("key: {e:?}"))?;
+    let op = two_k_op();
     let plan = try_build_plan(&op, &key).map_err(|e| format!("plan: {e:?}"))?;
-    let out = evaluate(&plan, &ops, &[lhs, rhs], &[]).remove(0);
+    let out = evaluate(&plan, &ops, &buffers(), &[]).remove(0);
     Ok(out
         .bytes
         .chunks(4)
