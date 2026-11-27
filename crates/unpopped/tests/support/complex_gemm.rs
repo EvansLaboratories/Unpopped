@@ -93,21 +93,19 @@ fn product(form: Form, mutant: Mutant) -> (ScalarExpr, ScalarExpr) {
     }
 }
 
-/// Buffers: 0 `a` `[M*K*2]`, 1 `b` `[K*N*2]`, 2 `out` `[M*N*2]`. Locals: 0 `re`, 1 `im`, 2 `kk`, 3 `ar`, 4 `ai`, 5 `br`, 6 `bi`.
-pub(crate) fn complex_gemm(form: Form, mutant: Mutant) -> KernelFn {
-    let r = ScalarExpr::Exec(ExecId::ThreadIdx(1));
-    let c = ScalarExpr::Exec(ExecId::ThreadIdx(0));
+/// The body of one `kk` step: the four loads and the two accumulations.
+fn k_step(form: Form, mutant: Mutant, r: &ScalarExpr, c: &ScalarExpr) -> Vec<Stmt> {
     let kk = l(2);
     let load = |local, buffer, i| Stmt::Load {
         local,
         place: at(buffer, i),
     };
     let (dre, dim) = product(form, mutant);
-    let step = vec![
-        load(3, 0, part(&r, &kk, K, 0)),
-        load(4, 0, part(&r, &kk, K, 1)),
-        load(5, 1, part(&kk, &c, N, 0)),
-        load(6, 1, part(&kk, &c, N, 1)),
+    vec![
+        load(3, 0, part(r, &kk, K, 0)),
+        load(4, 0, part(r, &kk, K, 1)),
+        load(5, 1, part(&kk, c, N, 0)),
+        load(6, 1, part(&kk, c, N, 1)),
         Stmt::Assign {
             local: 0,
             value: add(l(0), dre),
@@ -116,7 +114,27 @@ pub(crate) fn complex_gemm(form: Form, mutant: Mutant) -> KernelFn {
             local: 1,
             value: add(l(1), dim),
         },
+    ]
+}
+
+/// The buffer parameters and the locals.
+fn signature() -> (Vec<Param>, Vec<LocalDecl>) {
+    let params = vec![
+        Param::buffer("a", F32, BufferRole::Read, Some(1)),
+        Param::buffer("b", F32, BufferRole::Read, Some(1)),
+        Param::buffer("out", F32, BufferRole::ReadWrite, Some(1)),
     ];
+    let locals = [F32, F32, U32, F32, F32, F32, F32]
+        .map(LocalDecl::scalar)
+        .to_vec();
+    (params, locals)
+}
+
+/// Buffers: 0 `a` `[M*K*2]`, 1 `b` `[K*N*2]`, 2 `out` `[M*N*2]`. Locals: 0 `re`, 1 `im`, 2 `kk`, 3 `ar`, 4 `ai`, 5 `br`, 6 `bi`.
+pub(crate) fn complex_gemm(form: Form, mutant: Mutant) -> KernelFn {
+    let r = ScalarExpr::Exec(ExecId::ThreadIdx(1));
+    let c = ScalarExpr::Exec(ExecId::ThreadIdx(0));
+    let step = k_step(form, mutant, &r, &c);
     let zero = |local| Stmt::Let {
         local,
         init: ScalarExpr::Const(0.0),
@@ -141,14 +159,7 @@ pub(crate) fn complex_gemm(form: Form, mutant: Mutant) -> KernelFn {
             value: l(1),
         },
     ];
-    let params = vec![
-        Param::buffer("a", F32, BufferRole::Read, Some(1)),
-        Param::buffer("b", F32, BufferRole::Read, Some(1)),
-        Param::buffer("out", F32, BufferRole::ReadWrite, Some(1)),
-    ];
-    let locals = [F32, F32, U32, F32, F32, F32, F32]
-        .map(LocalDecl::scalar)
-        .to_vec();
+    let (params, locals) = signature();
     KernelFn::new("complex_gemm", F32, params, locals, Block(body))
         .with_launch(LaunchShape::new([N as u32, M as u32, 1], [1, 1, 1]))
 }
