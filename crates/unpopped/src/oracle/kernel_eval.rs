@@ -797,7 +797,7 @@ impl<'a> Machine<'a> {
         let same = match &self.args[b] {
             KernelArg::Buffer(tb) if types::elem_bits(tb.dtype) % 8 == 0 => {
                 let esz = types::elem_size(tb.dtype);
-                let mut tmp = [0u8; 16];
+                let mut tmp = [0u8; 32];
                 store_val(v, tb.dtype, &mut tmp, 0);
                 tb.bytes.get(off * esz..(off + 1) * esz) == Some(&tmp[..esz])
             }

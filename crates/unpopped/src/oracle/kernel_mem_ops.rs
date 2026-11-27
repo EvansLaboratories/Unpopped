@@ -255,7 +255,7 @@ impl Machine<'_> {
         // whether this store writes the value the element already holds (a benign race when `Leniency` allows it)
         let same = c.mem(alloc, space).is_some_and(|m| {
             let (esz, bits) = (types::elem_size(m.dtype), types::elem_bits(m.dtype));
-            let mut tmp = [0u8; 16];
+            let mut tmp = [0u8; 32];
             store_val(v, m.dtype, &mut tmp, 0);
             bits % 8 == 0 && m.init[i] && m.bytes[i * esz..(i + 1) * esz] == tmp[..esz]
         });
