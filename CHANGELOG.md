@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.10` — docs: PATENT-SWEEP G-T2 addendum 4, four more Intel matrix-instruction patents read
+
+`docs/PATENT-SWEEP.md` only, no code. Reads the independent claims of US10963256B2, US10990397B2, US10942738B2 and US10719323B2 against the opaque-tile statements: outside as read, each by a named limb (row-interleaved store, FMA-grid mode switch, reservation-station circuitry, header-based compress). The Intel tile-zero and tile-dot-product families stay unread. The board 519 `needs more` rows are unchanged.
+
+---
+
 ## `0.60.9` — Added: `ExecId::ClusterCtaRank`, the block's index in its cluster
 
 A new variant of the `non_exhaustive` `ExecId` (ROADMAP IR-union `cute.md` row 28, "cluster rank"; PTX `%cluster_ctarank`, x fastest). The oracle reads it from the launch's cluster dimensions and the block index, `0` in a launch without clusters (every block is a cluster of one). No checker change: the leaf needs a launch like every id. `unpopped-cpu-c` declines it by name through its existing `other => refuse(..)` arm (not pinned by a test here). The uniformity analysis treats it as divergent, the conservative answer; a precise rule (uniform within a block) is a `kernel_uniform.rs` change left to the primary. Verified by `tests/kernel_cluster_rank.rs` (1D and 2D clusters worked by hand, the no-cluster control).
