@@ -1144,7 +1144,7 @@ pub(crate) fn elem_size(dt: ElementKind) -> usize {
         // Union batch 1 (KISS 0.24.0): storage widths only (§6.1-0017 to -0020); no operation computes them yet.
         ElementKind::F128 | ElementKind::I128 | ElementKind::U128 => 16,
         ElementKind::I256 | ElementKind::U256 => 32,
-        ElementKind::F8E3M4 | ElementKind::F8UE4M3 => 1,
+        ElementKind::F8E3M4 | ElementKind::F8UE4M3 | ElementKind::F8E8M0 => 1,
         // Sub-byte dtypes share a byte. `elem_size` is the CONTAINER width here,
         // not the element width — use `elem_bits` for the latter and
         // `packed_bytes` for allocation.

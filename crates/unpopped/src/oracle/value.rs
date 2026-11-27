@@ -136,6 +136,9 @@ pub(super) fn raw_to_f64(bits: u128, dt: ElementKind) -> f64 {
         // KISS 0.24.0 union batch 1: an intermediate `Cast` result, carried as its raw code (plan E1b).
         ElementKind::F8E3M4 => crate::cast_ref::decode_ieee(bits, 3, 4),
         ElementKind::F8UE4M3 => crate::cast_ref::decode_ue4m3(bits),
+        // an MX block scale (KISS-CLASSIFY 6.1-0013): decoded when it is read as a scale operand; the plan gate still refuses
+        // it as a compute dtype
+        ElementKind::F8E8M0 => crate::cast_ref::decode_e8m0(bits),
         ElementKind::F32 | ElementKind::F32Strict => f64::from(f32::from_bits(bits as u32)),
         ElementKind::F64 => f64::from_bits(bits as u64),
         ElementKind::I32
