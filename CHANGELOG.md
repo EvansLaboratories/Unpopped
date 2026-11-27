@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.14` — Added: `ExecId::{ClusterCtaId, ClusterDim, WarpgroupId}`
+
+Three new variants of the `non_exhaustive` `ExecId` (ROADMAP IR-union `cute.md` row 28): `ClusterCtaId(axis)` and `ClusterDim(axis)` are PTX `%cluster_ctaid` and `%cluster_nctaid` (`0` and `1` in a launch without clusters), and `WarpgroupId` is the thread's subgroup index divided by four (a warpgroup is four consecutive subgroups, `Scope::Warpgroup`), so it needs a launch that names a subgroup size like the other subgroup ids. The oracle reads them from the launch and the thread's position; the checker already guards the axis (`0..=2`) and the subgroup size. `unpopped-cpu-c` declines them by name through its existing `other => refuse(..)` arm (not pinned by a test here). The uniformity analysis treats them as divergent, the conservative answer; `unpopped` is making the cluster ids precise in `kernel_uniform.rs`. `smid` and `clock` are not added: their value is a property of the hardware run, with no meaning the oracle could state. Verified by `tests/kernel_cluster_ids.rs`.
+
+---
+
 ## `0.60.13` — Fixed: ExecId::ClusterCtaRank is block-uniform in the barrier-uniformity rule (divergent only with a Cluster or Device barrier in the kernel)
 
 The block's index in its cluster is the same for every thread of a block, like `BlockIdx`, so a `Block` or `Subgroup` rendezvous under `if (cluster_ctarank == 0)` is no longer refused as divergent; a kernel that also holds a `Cluster` or `Device` barrier still treats it as divergent (its threads span the cluster's blocks). More permissive than 0.60.9, which read the leaf as divergent (the conservative reading the leaves lane noted on #428). Not breaking: it admits kernels that were refused.
