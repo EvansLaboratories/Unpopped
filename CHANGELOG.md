@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.34` — test, wave count-bits idioms (survey row 46) and survey batch 3
+
+`kernel_wave_count_bits.rs`: WaveActiveCountBits as a subgroup Reduce(Sum) and WavePrefixCountBits as an exclusive Scan(Sum) over a predicate, checked by hand-written arrays and against a Ballot mask; an inclusive-scan and a Max mutant change a lane by value. Also survey batch 3 (6 rows) in the verification doc. Tests and docs only.
+
+`kernel_simd_shuffle_fill.rs`: simd_shuffle_and_fill_up/down and simd_shuffle_rotate_up/down built from two Shuffle collectives and a Select, against hand-written arrays from the Metal 4.1 spec example; a fill that ignores its filling fails by value. Survey batch 4 (8 Metal rows) in the verification doc. Tests and docs only.
+
+---
+
 ## `0.60.33` — test, 64-bit integer atomics (survey row 50)
 
 `kernel_atomic_wide.rs`: twelve threads apply each integer `AtomicRmw` op with an operand above 2^32 to an `I64` and a `U64` cell; expected cells come from Rust operators, and a narrowed-operand and a wrong-op mutant change the cell by value. Adds the survey batch 1 and 2 verification doc. Tests and docs only.
