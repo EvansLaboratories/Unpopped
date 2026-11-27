@@ -105,7 +105,7 @@ fn ring_protocol_violations_are_typed_traps() {
     let observed = |m| run(m, &x).expect_err("a trap");
     assert!(matches!(
         observed(Mutant::ReadOtherSlot),
-        KernelTrap::DataRace { .. }
+        KernelTrap::DataRace
     ));
     assert!(matches!(
         observed(Mutant::NoEmptyArrive),
