@@ -227,3 +227,36 @@ pub(crate) fn agrees(atom: &MmaAtom, table: Table) {
     let got = run(atom, table, &l).unwrap_or_else(|e| panic!("{}: {e:?}", atom.name()));
     assert_eq!(got, want, "{}", atom.name());
 }
+
+/// Every fragment element of `atom` sits where `table` (the PTX text as `(row, col)` formulas) says, the table covers
+/// each matrix once, and the atom states its shape and types.
+pub(crate) fn places(
+    atom: &MmaAtom,
+    table: Table,
+    mnk: (u32, u32, u32),
+    tys: (ElementKind, ElementKind, ElementKind),
+) {
+    assert_eq!((atom.mnk(), atom.dtypes()), (mnk, tys), "{}", atom.name());
+    let (m, n, k) = mnk;
+    for (which, rows, cols) in [(0, m, k), (1, k, n), (2, m, n)] {
+        let mut seen = vec![0u32; (rows * cols) as usize];
+        for lane in 0..atom.lanes() {
+            for v in 0..atom.values(which) {
+                let (r, c) = table(which, lane, v);
+                let id = r + rows * c;
+                assert_eq!(
+                    atom.id(which, lane, v),
+                    Some(id),
+                    "{} op {which} lane {lane} v {v}",
+                    atom.name()
+                );
+                seen[id as usize] += 1;
+            }
+        }
+        assert!(
+            seen.iter().all(|&c| c == 1),
+            "{} table {which} is not a bijection",
+            atom.name()
+        );
+    }
+}
