@@ -5,7 +5,7 @@
 use super::kernel_eval::Machine;
 use super::kernel_mem::*;
 use super::kernel_trap::KernelTrap;
-use super::{Val, read_elem, store_val};
+use super::{Val, load_val, read_elem, store_val};
 use crate::exec::{ExecId, MemorySpace, Scope};
 use crate::ir::ScalarExpr;
 use crate::kernel::MemoryOrder;
@@ -187,7 +187,7 @@ impl Machine<'_> {
             return Err(KernelTrap::UninitializedPrivate { alloc });
         }
         Ok((0..m.init.len())
-            .map(|i| Val::Raw(read_elem(&m.bytes, i, m.dtype), m.dtype))
+            .map(|i| load_val(&m.bytes, i, m.dtype))
             .collect())
     }
 
@@ -208,7 +208,7 @@ impl Machine<'_> {
         if !m.init[i] {
             return Err(trap);
         }
-        Ok(Val::Raw(read_elem(&m.bytes, i, m.dtype), m.dtype))
+        Ok(load_val(&m.bytes, i, m.dtype))
     }
 
     /// An atomic step on a `Shared` element: logged as an atomic access (it races only with a plain

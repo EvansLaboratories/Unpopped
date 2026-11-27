@@ -32,7 +32,8 @@
 use super::kernel_mem::{AccessKind, ThreadCtx};
 pub use super::kernel_trap::KernelTrap;
 use super::{
-    Eval, TypedBuffer, Val, eval, int_val, panic_reduced, raw_to_i128, read_elem, store_val,
+    Eval, TypedBuffer, Val, eval, int_val, load_val, panic_reduced, raw_to_i128, read_elem,
+    store_val,
 };
 use crate::ir::{BinaryOp, Saturation, ScalarExpr};
 use crate::kernel::{AtomicOp, Block, KernelFn, ParamKind, Place, Stmt, check_kernel};
@@ -641,7 +642,7 @@ impl<'a> Machine<'a> {
         let KernelArg::Buffer(tb) = &self.args[b] else {
             unreachable!("offset() returned a buffer");
         };
-        Ok(Val::Raw(read_elem(&tb.bytes, off, tb.dtype), tb.dtype))
+        Ok(load_val(&tb.bytes, off, tb.dtype))
     }
 
     /// An atomic read-modify-write of a global integer element: logged as an atomic access (it
