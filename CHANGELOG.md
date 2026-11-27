@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.62.3` — C-recipes for CuTe 22-27/31/47 and ThunderKittens 6/38 (tests only)
+
+`tests/kernel_c_recipes.rs`: slice, `local_tile`, `local_partition`, TV-layout composition, `partition_A/B/C`, a layout-driven GEMM, `partition_S/D` with `retile`, identity-tensor predication, subtile views and `swap_layout` run on the oracle as index arithmetic (`unpopped-vocab` layouts evaluated as `/ % * +`) over `Shared` allocations carrying a T1 layout, with no view statement. Each result is compared with a hand-written element formula and has a value-changing mutant. Two findings are recorded by name: `local_tile` does not refuse a non-dividing tile (the last tile leaves the extent), and an opaque `Tile` allocation has no element to index (checker `KernelError::Tile`).
+
+---
+
 ## `0.62.2` — additive: NVIDIA mma.sync f64 atoms m16n8k4, m16n8k8, m16n8k16 (U7 theme 3)
 
 Three `MmaAtom` constructors as data (`mma_f64.rs`): `nvidia_m16n8k4_f64_f64`, `nvidia_m16n8k8_f64_f64`, `nvidia_m16n8k16_f64_f64`. Layouts from the public PTX ISA 9.5 (sections 9.7.16.5.6, .7, .8; pages in the module doc) and CUTLASS `mma_traits_sm90.hpp` (`main` 5c179ede). `m16n8k16` is checked against PTX Figures 83 (A, pp. 564-565), 85 (B, p. 566) and 86 (C, p. 567); the A column formula continues across a page break (col = 2i + tig for even i, 2i - 2 + tig for odd i). `tests/mma_atoms_f64.rs` checks each against `(row, col)` formulas and runs it in the oracle. No `Stmt`, `ScalarExpr` or `ElementKind` change.
