@@ -62,27 +62,43 @@ fn slot(row: ScalarExpr, col: ScalarExpr) -> Place {
     }
 }
 
-/// Buffers: 0 `in` `[64]` (read), 1 `out` `[64]` (write). Locals: 0 `x`, 1 `y`, 2 the loaded element, 3 the tile element.
-/// Tile: allocation 0, 64 `F32` in shared memory.
-pub(crate) fn swizzle_transpose(mutant: Mutant) -> KernelFn {
-    let store_col = if mutant == Mutant::NarrowMask {
+/// The columns of the store and of the load: `x ^ y` and `y ^ x`, or the mutant's.
+fn columns(mutant: Mutant) -> (ScalarExpr, ScalarExpr) {
+    let store = if mutant == Mutant::NarrowMask {
         bin(BinaryOp::BitXor, l(0), bin(BinaryOp::BitAnd, l(1), ci(3)))
     } else {
         bin(BinaryOp::BitXor, l(0), l(1))
     };
-    let load_col = if mutant == Mutant::ReadUnswizzled {
+    let load = if mutant == Mutant::ReadUnswizzled {
         l(1)
     } else {
         bin(BinaryOp::BitXor, l(1), l(0))
     };
+    (store, load)
+}
+
+/// The two buffer parameters and the four locals.
+fn signature() -> (Vec<Param>, Vec<LocalDecl>) {
+    let params = vec![
+        Param::buffer("input", F32, BufferRole::Read, Some(1)),
+        Param::buffer("out", F32, BufferRole::Write, Some(1)),
+    ];
+    (params, [I32, I32, F32, F32].map(LocalDecl::scalar).to_vec())
+}
+
+/// Buffers: 0 `in` `[64]` (read), 1 `out` `[64]` (write). Locals: 0 `x`, 1 `y`, 2 the loaded element, 3 the tile element.
+/// Tile: allocation 0, 64 `F32` in shared memory.
+pub(crate) fn swizzle_transpose(mutant: Mutant) -> KernelFn {
+    let (store_col, load_col) = columns(mutant);
+    let thread = |axis| i32_of(ScalarExpr::Exec(ExecId::ThreadIdx(axis)));
     let body = vec![
         Stmt::Let {
             local: 0,
-            init: i32_of(ScalarExpr::Exec(ExecId::ThreadIdx(0))),
+            init: thread(0),
         },
         Stmt::Let {
             local: 1,
-            init: i32_of(ScalarExpr::Exec(ExecId::ThreadIdx(1))),
+            init: thread(1),
         },
         Stmt::Load {
             local: 2,
@@ -105,11 +121,7 @@ pub(crate) fn swizzle_transpose(mutant: Mutant) -> KernelFn {
             value: l(3),
         },
     ];
-    let params = vec![
-        Param::buffer("input", F32, BufferRole::Read, Some(1)),
-        Param::buffer("out", F32, BufferRole::Write, Some(1)),
-    ];
-    let locals = [I32, I32, F32, F32].map(LocalDecl::scalar).to_vec();
+    let (params, locals) = signature();
     KernelFn::new("swizzle_transpose", F32, params, locals, Block(body))
         .with_launch(LaunchShape::new([T as u32, T as u32, 1], [1, 1, 1]))
         .with_allocs(vec![AllocDecl::new(
