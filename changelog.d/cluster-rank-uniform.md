@@ -1,0 +1,3 @@
+kind: Fixed: ExecId::ClusterCtaRank is block-uniform in the barrier-uniformity rule (divergent only with a Cluster or Device barrier in the kernel)
+---
+The block's index in its cluster is the same for every thread of a block, like `BlockIdx`, so a `Block` or `Subgroup` rendezvous under `if (cluster_ctarank == 0)` is no longer refused as divergent; a kernel that also holds a `Cluster` or `Device` barrier still treats it as divergent (its threads span the cluster's blocks). More permissive than 0.60.9, which read the leaf as divergent (the conservative reading the leaves lane noted on #428). Not breaking: it admits kernels that were refused.
