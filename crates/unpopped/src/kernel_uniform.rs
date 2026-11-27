@@ -157,16 +157,22 @@ impl Walk<'_> {
 
     fn expr_at(&self, e: &ScalarExpr, lane: bool) -> bool {
         match e {
-            // the block's index in its cluster is, like `BlockIdx`, the same for every thread of a block (so of a subgroup)
-            ScalarExpr::Exec(ExecId::BlockIdx(_) | ExecId::ClusterCtaRank) => self.device,
-            // every lane of a subgroup is in the same subgroup
-            ScalarExpr::Exec(ExecId::SubgroupId) if lane => false,
+            // the block's index in its cluster (rank or per-axis id) is, like `BlockIdx`, the same for every thread of a block
+            ScalarExpr::Exec(
+                ExecId::BlockIdx(_) | ExecId::ClusterCtaRank | ExecId::ClusterCtaId(_),
+            ) => self.device,
+            // every lane of a subgroup is in the same subgroup, and the warpgroup is the subgroup index divided by four: a
+            // function of the subgroup, so the same for every lane of one
+            ScalarExpr::Exec(ExecId::SubgroupId | ExecId::WarpgroupId) if lane => false,
             // When the launch states one subgroup size and the block's x extent is a multiple of it, a subgroup lies in one
             // (y, z) row of the block, so `threadIdx.y` and `.z` are the same for every lane of a subgroup.
             ScalarExpr::Exec(ExecId::ThreadIdx(1 | 2)) if lane && self.warp.is_some() => false,
             ScalarExpr::Exec(id) => !matches!(
                 id,
-                ExecId::BlockDim(_) | ExecId::GridDim(_) | ExecId::DeviceCount
+                ExecId::BlockDim(_)
+                    | ExecId::GridDim(_)
+                    | ExecId::DeviceCount
+                    | ExecId::ClusterDim(_)
             ),
             ScalarExpr::Local(i) => {
                 if lane {
