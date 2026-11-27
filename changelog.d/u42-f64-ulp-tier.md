@@ -1,5 +1,0 @@
-kind: F64 unary ULP tier (`ulp_bound_measured_for`, ROADMAP U42)
----
-Added `contract::ulp_bound_measured_for(e, key, measured, dtype)`; `ulp_bound` and `ulp_bound_measured` keep their signatures and the `f32` table. At `F64` each unary op is rated `max(CUDA f32 count, the vendor double-precision bound)`, and `oracle::required_fidelity` now passes the plan dtype, so the one op whose double bound is larger than its `f32` count, `erfc` (4 to 5), is no longer under-stated in an F64 band (`rel = (steps + 2*5) * 2^-53`). Every other op is unchanged at `F32` and `F64`: no tightening, because the vendor says its bounds are "not guaranteed"; `lgamma` keeps 6.
-
-Source: NVIDIA CUDA Programming Guide v13.5, "Mathematical Functions" appendix, tables 54-58 and 62, page dated 2026-10-31. **Provenance:** the 20 rows other than erf, erfc, lgamma and rsqrt were relayed by a fetch subagent from the page's raw text, not read first-hand; `erf`, `erfc`, `lgamma` and `rsqrt` were re-read verbatim, and the one value that changes, `erfc` (5 ULP), is among those first-hand rows. Pinned by `ulp_f64_tier.rs` (every op at both dtypes; the F64 and F32 fidelity band of `erfc`).
