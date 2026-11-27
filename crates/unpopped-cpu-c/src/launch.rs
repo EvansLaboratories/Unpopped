@@ -150,6 +150,13 @@ fn admit_alloc(a: &AllocDecl) -> Result<(), LowerError> {
             a.name, a.space
         )));
     }
+    // a layout or an alignment is declined by name, never silently ignored (`docs/design-swizzled-allocation.md` section 6)
+    if a.layout.is_some() || a.align_bytes.is_some() {
+        return Err(refuse(format!(
+            "allocation `{}` states a layout or an alignment; this emitter spells the identity layout only",
+            a.name
+        )));
+    }
     ctype(a.elem, &format!("allocation `{}`", a.name)).map(|_| ())
 }
 

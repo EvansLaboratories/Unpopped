@@ -204,8 +204,77 @@ fn check_allocs(k: &KernelFn) -> Result<(), KernelError> {
         if !ok {
             return Err(KernelError::AllocExtent { alloc });
         }
+        check_alloc_layout(a, alloc)?;
     }
     Ok(())
+}
+
+/// The largest layout the checker proves injective by enumerating it (4 Mi elements, far above any shared array).
+const LAYOUT_ENUMERATION_CAP: i64 = 1 << 22;
+
+/// The rules of `docs/design-swizzled-allocation.md` section 3 for one allocation's `align_bytes` and `layout`, each with its
+/// accepted control in `tests/kernel_alloc_layout.rs`.
+fn check_alloc_layout(a: &crate::exec::AllocDecl, alloc: u32) -> Result<(), KernelError> {
+    let bad = |why: &'static str| Err(KernelError::AllocLayout { alloc, why });
+    if let Some(al) = a.align_bytes {
+        if al == 0 || !al.is_power_of_two() {
+            return bad("align_bytes is a power of two");
+        }
+    }
+    let Some(l) = &a.layout else { return Ok(()) };
+    // 1. space: a layout (and a swizzle) belongs to a `Shared` array; the other spaces keep the identity until a row asks
+    if a.space != MemorySpace::Shared {
+        return bad("a layout is only on a Shared allocation");
+    }
+    // 2. size: a Static extent equal to the layout's size (a Param extent is not known here)
+    let Extent::Static(n) = a.extent else {
+        return bad("a layout needs a Static extent (a dynamic extent is not known at check time)");
+    };
+    if i64::from(n) != l.layout.size() {
+        return bad("the layout's size must equal the allocation's extent");
+    }
+    // 3. range: every offset lies below the extent
+    if l.layout.cosize() > i64::from(n) {
+        return bad("the layout's cosize exceeds the allocation's extent");
+    }
+    // 4. injective: no two logical indices share an offset (the swizzle is a bijection, so this is the layout's alone)
+    if l.layout.size() > LAYOUT_ENUMERATION_CAP {
+        return bad("the layout is too large to prove injective");
+    }
+    let mut seen = vec![false; n as usize];
+    for i in 0..l.layout.size() {
+        let Ok(o) = l.layout.call(i) else {
+            return bad("the layout is not defined over its own size");
+        };
+        match usize::try_from(o).ok().and_then(|o| seen.get_mut(o)) {
+            Some(slot) if !*slot => *slot = true,
+            Some(_) => return bad("the layout is not injective: two indices share an offset"),
+            None => return bad("the layout's cosize exceeds the allocation's extent"),
+        }
+    }
+    let Some(sw) = l.swizzle else { return Ok(()) };
+    // swizzle rules: the element width must not be above the swizzle base, the period must divide the extent, and the base
+    // address must be a multiple of the period (the pattern is anchored at address zero)
+    let width = u32::try_from(types::elem_size(a.elem)).unwrap_or(0);
+    let Ok(in_elems) = sw.in_elements(width) else {
+        return bad(
+            "the swizzle base is below the element width (or the width is not a power of two)",
+        );
+    };
+    let period_elems =
+        1u64 << (in_elems.base() + in_elems.shift().unsigned_abs() + in_elems.bits());
+    if u64::from(n) % period_elems != 0 {
+        return bad(
+            "the swizzle period does not divide the extent, so a swizzled offset could leave it",
+        );
+    }
+    let period_bytes = 1u64 << (sw.base() + sw.shift().unsigned_abs() + sw.bits());
+    match a.align_bytes {
+        Some(al) if u64::from(al) % period_bytes == 0 => Ok(()),
+        _ => bad(
+            "a swizzled allocation states an align_bytes that is a multiple of the swizzle period",
+        ),
+    }
 }
 
 fn check_block(k: &KernelFn, b: &Block, sc: &mut Scope) -> Result<(), KernelError> {
