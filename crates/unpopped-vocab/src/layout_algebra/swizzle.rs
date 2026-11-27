@@ -42,6 +42,25 @@ impl Swizzle {
         self.shift
     }
 
+    /// The same permutation read over **elements** of `width_bytes` bytes, given that `self` acts on the **byte** address
+    /// (the PTX form, `Swizzle<B,4,3>`): `self.apply(i * w) == w * self.in_elements(w).apply(i)` for every `i >= 0`.
+    /// A byte swizzle with `base = M` leaves the low `M` bits alone, so for `w = 2^k` with `k <= M` the element swizzle is
+    /// the one with `base = M - k` and the same `bits` and `shift`. Declined with [`LayoutError::NotDivisible`] when `w`
+    /// is not a power of two (a byte address is not a whole number of elements' bits), and with
+    /// [`LayoutError::BadSwizzle`] when `k > M` (the swizzle would mix bits inside one element).
+    /// CuTe reaches the same form by upcasting a layout atom; that rule was not read (**UNVERIFIED** against
+    /// `cute/layout.hpp` and `cute/swizzle.hpp`), so this is pinned by the identity above, not by CuTe.
+    pub fn in_elements(&self, width_bytes: u32) -> Result<Swizzle, LayoutError> {
+        if width_bytes == 0 || !width_bytes.is_power_of_two() {
+            return Err(LayoutError::NotDivisible);
+        }
+        let k = width_bytes.trailing_zeros();
+        if k > self.base {
+            return Err(LayoutError::BadSwizzle);
+        }
+        Swizzle::new(self.bits, self.base - k, self.shift)
+    }
+
     /// Apply the swizzle to a non-negative offset.
     pub fn apply(&self, x: i64) -> Result<i64, LayoutError> {
         if x < 0 {

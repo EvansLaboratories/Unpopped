@@ -54,6 +54,16 @@ pub enum ExecId {
     DeviceRank,
     /// Devices of the launch (`LaunchShape::devices`; `1` for a launch of one device).
     DeviceCount,
+    /// Index of the block in its cluster, `x` fastest (PTX `%cluster_ctarank`); `0` in a launch without clusters,
+    /// where every block is a cluster of one.
+    ClusterCtaRank,
+    /// Index of the block in its cluster along axis `0..=2` (PTX `%cluster_ctaid`); `0` in a launch without clusters.
+    ClusterCtaId(u8),
+    /// Extent of the cluster, in blocks, along axis `0..=2` (PTX `%cluster_nctaid`); `1` in a launch without clusters.
+    ClusterDim(u8),
+    /// Index of the warpgroup in its block: the thread's subgroup index divided by four (a warpgroup is four consecutive
+    /// subgroups, [`Scope::Warpgroup`]).
+    WarpgroupId,
 }
 
 impl ExecId {
@@ -61,21 +71,29 @@ impl ExecId {
     #[must_use]
     pub const fn axis(self) -> Option<u8> {
         match self {
-            Self::ThreadIdx(a) | Self::BlockIdx(a) | Self::BlockDim(a) | Self::GridDim(a) => {
-                Some(a)
-            }
+            Self::ThreadIdx(a)
+            | Self::BlockIdx(a)
+            | Self::BlockDim(a)
+            | Self::GridDim(a)
+            | Self::ClusterCtaId(a)
+            | Self::ClusterDim(a) => Some(a),
             Self::LaneId
             | Self::SubgroupId
             | Self::SubgroupSize
             | Self::DeviceRank
-            | Self::DeviceCount => None,
+            | Self::DeviceCount
+            | Self::ClusterCtaRank
+            | Self::WarpgroupId => None,
         }
     }
 
     /// `true` for the ids that need a subgroup size to mean anything.
     #[must_use]
     pub const fn needs_subgroup(self) -> bool {
-        matches!(self, Self::LaneId | Self::SubgroupId | Self::SubgroupSize)
+        matches!(
+            self,
+            Self::LaneId | Self::SubgroupId | Self::SubgroupSize | Self::WarpgroupId
+        )
     }
 
     /// The name used in diagnostics.
@@ -91,6 +109,10 @@ impl ExecId {
             Self::SubgroupSize => "SubgroupSize",
             Self::DeviceRank => "DeviceRank",
             Self::DeviceCount => "DeviceCount",
+            Self::ClusterCtaRank => "ClusterCtaRank",
+            Self::ClusterCtaId(_) => "ClusterCtaId",
+            Self::ClusterDim(_) => "ClusterDim",
+            Self::WarpgroupId => "WarpgroupId",
         }
     }
 }

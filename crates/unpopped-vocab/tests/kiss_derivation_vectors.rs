@@ -79,15 +79,7 @@ fn dtype(name: &str) -> ElementKind {
 /// The ctr/role vectors KISS 0.4.3 added that this keyer does not yet match
 /// (KISS `f88d389`, the ctr derivation stage and the batch role, §6.6-0023).
 /// **This list is the work, not an allowance**: the follow-up PR empties it.
-const KNOWN_GAP: [&str; 4] = [
-    // KISS 0.24.0, §6.6-0023a: K is a role set (`ContractionRoles::k_more`, K class and divisibility from the product of every
-    // declared K extent). This is plan phase E4 (`docs/design-union-batch1-consumer.md`, board 515), NOT built in E1a; E4
-    // empties these four.
-    "ctr_two_k_axes_product_8x16",
-    "ctr_three_k_axes_product_large",
-    "ctr_extra_k_axis_repeats_k_declines",
-    "ctr_extra_k_axis_is_m_declines",
-];
+const KNOWN_GAP: [&str; 0] = [];
 
 /// One vector's verdict, in the PM's three-way vocabulary.
 #[derive(Debug, PartialEq, Eq)]
@@ -183,8 +175,14 @@ fn facts_of(name: &str, v: &Value) -> CellFacts {
         let batch: Vec<usize> = c["batch_axes"].as_array().unwrap().iter().map(us).collect();
         facts.weight_operand = c["weight"].as_u64().map(|x| usize::try_from(x).unwrap());
         facts.scale_operand = c["scale"].as_u64().map(|x| usize::try_from(x).unwrap());
+        let k_more: Vec<AxisRef> = c
+            .get("k_more")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().map(axis).collect())
+            .unwrap_or_default();
         facts.contraction_roles = Some(
             ContractionRoles::new(axis(&c["m"]), axis(&c["n"]), axis(&c["k"]))
+                .with_k_more_axes(&k_more)
                 .with_batch_axes(&batch),
         );
     }

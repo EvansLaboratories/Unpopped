@@ -15,6 +15,94 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.18` — Added: the K role set for contraction keys (KISS 0.24.0 6.6-0023a): `ContractionRoles::with_k_more_axes`, K class and divisibility from the product of every K extent (plan E4)
+
+`unpopped_vocab::ContractionRoles` gains further K axes (`with_k_more_axes`, `k_more_axes`; the struct is `non_exhaustive` with private fields, so the change is additive). The key derivation takes the K size class and divisibility from the product of every declared K extent and declines `ContractionAxisInvalid` for a further K axis that repeats K, another further axis, M or N, or lies outside its operand. The four KISS 0.24.0 vectors that were the E1a `KNOWN_GAP` now pass and the gap list is empty. The op layer is unchanged and pinned: the plan gate still refuses two `ContractedK` axes by name (`RolesInvalid`, plan-layer multi-K is ROADMAP D2), so a two-K cell derives a key but does not plan. Plan: `docs/design-union-batch1-consumer.md` section 6.
+
+---
+
+## `0.60.17` — feat: lift_elementwise_multi, a multi-output and u8-output lift that reads the real Slang emitter spelling (ROADMAP U67)
+
+`unpopped-convert`: `lift_elementwise_multi` lifts an elementwise kernel that stores several outputs (`output0`, `output1`, ..., one store each at one index) into a multi-output `OpDef`, with a per-output element type (`Some(U8)` for a mask beside a float value). A declared output with no store, a store to an undeclared output and stores at different indices are refused; `lift_elementwise` is unchanged. ROADMAP U67. Tested against the real spelling: the kernels fishstringer-slang-emit (origin/main `46988a72`, fishstringer#58) emits for `sum_and_product` and `dropout_like` are lifted and run on the oracle against Rust references. Reading them needed identity `(float)` casts (only to the compute type; any other cast is refused) and the `(uint8_t)` store-site cast and `(c ? 1.0 : 0.0)` predicate of a mask output, all inside `lift_elementwise_multi`; the single-output lifts are unchanged.
+
+Adds docs/design-swizzled-allocation.md, written by unpopped-leaves at the primary lane's answer (option b): it states what the kernel.rs and kernel_check edit must do for a layout and a swizzle on an allocation. Docs only: no code, no version, no CHANGELOG edit. The edit itself is the primary lane's and rides T1 of docs/design-tile-and-schedule-plan.md.
+
+---
+
+## `0.60.16` — Added: gather/scatter GEMM conformance kernel (CUTLASS survey row 13)
+
+`crates/unpopped/tests/kernel_gather_gemm.rs` and `tests/support/gather_gemm.rs`: `D[idx_d[m]][n] = sum_k A[idx_a[m]][k] B[k][n]` with `I32` index buffers read in the kernel, a repeated gather row, a negative (skipped) scatter index and rows of `D` no problem row reaches (poisoned, so a stray write shows). Checker-valid and run on the oracle against a host scatter reference over three corpora (ordinary, all-negative, a NaN in the doubly gathered row that must reach exactly the scattered D row). Mutants fail by value (mirrored scatter, scatter ignored, negative index clamped); applying the gather index to the scatter is recorded as an oracle `DataRace` trap, not a wrong number. Not covered: pointer-array batched GEMM (row 12), float atomics for colliding scatter indices, and the plan-level `Indexed` contraction.
+
+`crates/unpopped/tests/kernel_mixed_input.rs` and `tests/support/mixed_input.rs`: integer weights (`I8`, packed `I4`) widened to `F32` and scaled per group (group 4) by `F16`, `Bf16` or `F32` scales, with and without a zero point, against `F16`, `Bf16` or `F32` activations, `F32` accumulation. Five weight/scale/activation combinations in both modes are checker-valid and run on the oracle against a dequantize-the-whole-matrix-first reference using the `half` crate; corpora include the `I8` extremes, a NaN activation (reaching exactly one output column) and an all-negative weight block. Mutants (scale per row, zero after the scale, zero sign) fail by value. Not covered: `I2`, fp8 activations, the LUT int4-to-fp8 re-encoding (row 18), register-shuffle layouts (row 19), group sizes other than 4, and the CUTLASS collective itself (UNVERIFIED against a checkout).
+
+---
+
+## `0.60.15` — docs: PATENT-SWEEP barrier and shared-memory lowering chart (seven barrier patents outside as read, allocation null)
+
+Adds the 2026-11-26 dated subsection for pm-kernels task barrier-shared-lowering-line. Docs only; no verdict above is edited.
+
+Docs only; no earlier verdict edited. Records that the three-application wrapper fetch had not arrived.
+
+---
+
+## `0.60.14` — Added: `ExecId::{ClusterCtaId, ClusterDim, WarpgroupId}`
+
+Three new variants of the `non_exhaustive` `ExecId` (ROADMAP IR-union `cute.md` row 28): `ClusterCtaId(axis)` and `ClusterDim(axis)` are PTX `%cluster_ctaid` and `%cluster_nctaid` (`0` and `1` in a launch without clusters), and `WarpgroupId` is the thread's subgroup index divided by four (a warpgroup is four consecutive subgroups, `Scope::Warpgroup`), so it needs a launch that names a subgroup size like the other subgroup ids. The oracle reads them from the launch and the thread's position; the checker already guards the axis (`0..=2`) and the subgroup size. `unpopped-cpu-c` declines them by name through its existing `other => refuse(..)` arm (not pinned by a test here). The uniformity analysis treats them as divergent, the conservative answer; `unpopped` is making the cluster ids precise in `kernel_uniform.rs`. `smid` and `clock` are not added: their value is a property of the hardware run, with no meaning the oracle could state. Verified by `tests/kernel_cluster_ids.rs`.
+
+---
+
+## `0.60.13` — Fixed: ExecId::ClusterCtaRank is block-uniform in the barrier-uniformity rule (divergent only with a Cluster or Device barrier in the kernel)
+
+The block's index in its cluster is the same for every thread of a block, like `BlockIdx`, so a `Block` or `Subgroup` rendezvous under `if (cluster_ctarank == 0)` is no longer refused as divergent; a kernel that also holds a `Cluster` or `Device` barrier still treats it as divergent (its threads span the cluster's blocks). More permissive than 0.60.9, which read the leaf as divergent (the conservative reading the leaves lane noted on #428). Not breaking: it admits kernels that were refused.
+
+---
+
+## `0.60.12` — Added: grouped, depthwise and transposed convolution conformance kernels (CUTLASS survey rows 46 and 48)
+
+`crates/unpopped/tests/kernel_conv_grouped.rs` and `tests/support/conv_grouped.rs`: a grouped forward convolution (G = 2, filter `[K, R, S, C/G]`), a depthwise one (G = C = K), both with stride (2, 1), dilation (1, 2) and asymmetric padding (top 1, bottom 0, left 2, right 1), and a transposed convolution (gather form) whose output padding enlarges the output. Each is checker-valid and runs on the oracle against a host scatter reference over integer data. Mutants (interleaved groups, first group only, a wrong padding sign) fail by value. Recorded: the interleaved-groups mutant is equivalent at G = K (depthwise), so it is asserted on the grouped geometry only. Not covered: 1D and 3D, split-K convolution, `NHWC` plan-layer Im2Col, and the data and filter gradients of the grouped case.
+
+`crates/unpopped/tests/kernel_attention_gqa_mla.rs` and `tests/support/attention_gqa_mla.rs`: a grouped-query decode kernel (4 query heads over 2 KV heads, query head `h` reads KV head `h / 2`) and a multi-head latent attention decode kernel in the absorbed form (latent cache plus a shared rope key, up-projection in the kernel). Both are checker-valid and run on the oracle. GQA is compared with a two-pass reference over three corpora (ordinary, all scores negative, a NaN confined to one KV head, which must reach exactly the two query heads that read it). MLA is compared with the expanded reference (`k = W_UK c`, `v = W_UV c`, plain softmax), so the absorption identity is also checked. Four mutants (interleaved KV head, single KV head, dropped rope term, transposed up-projection) fail. Not covered: prefill, paged or causal GQA/MLA, FlashMLA's split-KV, and real DeepSeek weights (UNVERIFIED against their kernels).
+
+`crates/unpopped/tests/kernel_interleaved.rs` and `tests/support/interleaved.rs`: a GEMM with `A` in `ColumnMajorInterleaved<4>` and `B` in `RowMajorInterleaved<4>` (read as extra coordinates of a rank-3 logical buffer) and a 1x1 convolution over an `NC4HW4` input (rank 5). Both are checker-valid and run on the oracle against references computed from the logical matrices, with operands packed by independent flat-offset formulas, over an ordinary, a NaN and an all-negative corpus. Two in-range mutants fail by value (`A` read with major and minor swapped; a wrong conv minor coordinate). Recorded: the same swap on both GEMM operands is a permutation of `k` and an equivalent mutant, so it is not used. Not covered: the plan-layer `View::Layout` path, int8 element types, and other interleave widths (CUTLASS layout formulas recalled, UNVERIFIED against a checkout).
+
+---
+
+## `0.60.11` — Added: `Swizzle::in_elements`, a byte-address swizzle read over elements
+
+`Swizzle::in_elements(width_bytes)` in `unpopped-vocab::layout_algebra` (`docs/design-swizzled-allocation.md` section 2): for a power-of-two element width `w = 2^k` with `k <= base`, the swizzle with `base - k` that satisfies `byte.apply(i*w) == w * elems.apply(i)`. Declines a non-power-of-two width (`NotDivisible`) and a width wider than `2^base` (`BadSwizzle`). CuTe's upcast of a layout atom was not read (**UNVERIFIED** against `cute/layout.hpp`, `cute/swizzle.hpp`; no local facts directory); pinned by the identity, checked over a grid of swizzles and every offset below 4096, with a broken derivation that must fail. Additive; no kernel or IR change.
+
+---
+
+## `0.60.10` — docs: PATENT-SWEEP G-T2 addendum 4, four more Intel matrix-instruction patents read
+
+`docs/PATENT-SWEEP.md` only, no code. Reads the independent claims of US10963256B2, US10990397B2, US10942738B2 and US10719323B2 against the opaque-tile statements: outside as read, each by a named limb (row-interleaved store, FMA-grid mode switch, reservation-station circuitry, header-based compress). The Intel tile-zero and tile-dot-product families stay unread. The board 519 `needs more` rows are unchanged.
+
+---
+
+## `0.60.9` — Added: `ExecId::ClusterCtaRank`, the block's index in its cluster
+
+A new variant of the `non_exhaustive` `ExecId` (ROADMAP IR-union `cute.md` row 28, "cluster rank"; PTX `%cluster_ctarank`, x fastest). The oracle reads it from the launch's cluster dimensions and the block index, `0` in a launch without clusters (every block is a cluster of one). No checker change: the leaf needs a launch like every id. `unpopped-cpu-c` declines it by name through its existing `other => refuse(..)` arm (not pinned by a test here). The uniformity analysis treats it as divergent, the conservative answer; a precise rule (uniform within a block) is a `kernel_uniform.rs` change left to the primary. Verified by `tests/kernel_cluster_rank.rs` (1D and 2D clusters worked by hand, the no-cluster control).
+
+---
+
+## `0.60.8` — Added: `Cast` between `F32` (and the integers) and `F8E3M4` / `F8UE4M3` on the oracle (KISS 0.24.0 union batch 1, plan E1b)
+
+`Cast(Cast(x, f8e3m4), f32)` and the same through `f8ue4m3` run on the oracle as intermediate values. `F8E3M4` (IEEE-style, bias 3) rounds to nearest even and overflows like IEEE (infinity under `Wrap`, the largest finite value 15.5 under `ClampFinite`); `F8UE4M3` (the unsigned NVFP4 scale) takes only `Saturation::ClampFinite`, saturates at 448, sends NaN to its one NaN code `0x7F` and a value at or below zero to 0 (the IR's rule, UNVERIFIED against a vendor conversion). Checked against KISS's decode vectors for both formats and an exhaustive round trip of every `F8E3M4` code and every finite `F8UE4M3` code. A kernel still cannot declare a local, parameter or allocation of either dtype (`KernelError::DtypeNotComputed`): load, store and arithmetic wait. `unpopped-cpu-c` declines the casts by name. Additive: no enum variant added. Plan: `docs/design-union-batch1-consumer.md`.
+
+---
+
+## `0.60.7` — Added: `Layout::{make_ordered_layout, recast_layout, max_common_vector, max_common_layout}`
+
+Pure vocabulary in `unpopped-vocab::layout_algebra` (`ordered.rs`; ROADMAP IR-union rows 12 and 13, `cute.md`). `make_ordered_layout` builds the compact layout whose strides follow an order; `recast_layout` re-reads a stride-1 layout at another element width (restricted form: declines by name what CuTe's general rule might accept, and a widening that leaves the stride-1 extent at 1 cannot be narrowed back); `max_common_vector`/`max_common_layout` are the contiguous run two layouts agree on, through `right_inverse` and `composition`. **All four are UNVERIFIED against `cute/layout.hpp`** (names and intent only). `make_identity_layout` is not added: CuTe's takes basis strides, which integer strides cannot hold (the TMA basis-stride gap). Verified by `tests/layout_algebra_ordered.rs`: hand examples with refusal controls, a brute-force reading of the common vector and layout over 11 pairs, a round trip, and a broken variant per checker. Additive; no kernel or IR change.
+
+---
+
+## `0.60.6` — docs: PATENT-SWEEP records CireSnave's board 519 ruling on the G-T2 hold
+
+`docs/PATENT-SWEEP.md` only, no code. A dated G-T2 addendum records "519: B" (the G-T2 hold lifted as CireSnave's risk call, not a clearance), the condition exactly as relayed, the PM's wrapper findings as facts, the re-read triggers and the five holds that stand. No earlier verdict is edited.
+
+---
+
 ## `0.60.5` — Added: a matrix-state scan conformance kernel (CUTLASS survey row 93)
 
 `crates/unpopped/tests/kernel_ssd_scan.rs` and `tests/support/ssd_scan.rs`: the scan inside a Mamba2 SSD block (a 2 x 2 state, `H_t = a_t H_{t-1} + B_t (outer) x_t`, readout `y_t = C_t^T H_t`) as one `Stmt::CollectiveTuple { ScanWith }` over a five-component state with a module combine. Asserted: `check_module` is `Ok` at block and subgroup scope; the oracle run equals an independently written sequential recurrence bit for bit over three corpora (a negative decay, a zero decay, an all-negative last row, a NaN input); three mutants (wrong decay scale, dropped decay product, reduce for scan) fail the comparison. Not covered: scopes above subgroup and block, a chunked multi-block SSD, and the real Mamba2 kernels (UNVERIFIED against them).
