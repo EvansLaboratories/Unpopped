@@ -256,6 +256,14 @@ impl Emitter<'_> {
                 results,
             } => self.extern_stmt(*decl, args, results)?,
             Stmt::Mma { .. } => return Err(refuse("a Stmt::Mma is block-level only")),
+            Stmt::TileLoad { .. }
+            | Stmt::TileMma { .. }
+            | Stmt::TileFill { .. }
+            | Stmt::TileStore { .. } => {
+                return Err(refuse(
+                    "an opaque-tile statement (TileLoad, TileMma, TileFill, TileStore; ROADMAP T2) is not spelled by this emitter",
+                ));
+            }
             Stmt::MatrixLoad { .. } => {
                 return Err(refuse("a Stmt::MatrixLoad is block-level only"));
             }

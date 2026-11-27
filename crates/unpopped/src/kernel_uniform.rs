@@ -411,7 +411,11 @@ impl Walk<'_> {
             Stmt::Mma { .. }
             | Stmt::Wgmma { .. }
             | Stmt::MatrixLoad { .. }
-            | Stmt::MatrixStore { .. } => {
+            | Stmt::MatrixStore { .. }
+            | Stmt::TileLoad { .. }
+            | Stmt::TileMma { .. }
+            | Stmt::TileFill { .. }
+            | Stmt::TileStore { .. } => {
                 if self.check && (div || *poisoned) {
                     return Err(KernelError::BarrierDivergent);
                 }
