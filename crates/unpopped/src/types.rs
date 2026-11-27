@@ -62,6 +62,14 @@ pub enum TypeError {
         /// The integer type of the operand.
         ty: ElementKind,
     },
+    /// An integer bit operation (`Popc`, `Clz`, `Brev`) applied to a value that is not an integer of a kernel body (a float,
+    /// or any operand in a plan body).
+    IntegerOnlyOperand {
+        /// The node kind, e.g. `"Unary"`.
+        node: &'static str,
+        /// The type of the operand.
+        ty: ElementKind,
+    },
     /// A `Pack` or `BitcastPacked` with a lane count other than 2, 4, 8 or 16, or an 8- or 16-lane one wider than 128 bits.
     BadLanes {
         /// The number of children given (saturated at 255).
@@ -858,6 +866,17 @@ fn node_ty(
                 return Ok(if op.is_cmp() { compute } else { t });
             }
             Ok(t)
+        }
+        ScalarExpr::Unary(op, _) if op.is_bit_op() => {
+            // an integer-only operation: defined at the operand's own width, kernel layer only
+            if mode == TyMode::Kernel && int_range(k[0]).is_some() {
+                Ok(k[0])
+            } else {
+                Err(TypeError::IntegerOnlyOperand {
+                    node: "Unary",
+                    ty: k[0],
+                })
+            }
         }
         ScalarExpr::Unary(..) => no_int("Unary", k[0]),
         ScalarExpr::Fma(..) => {

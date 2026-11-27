@@ -618,7 +618,10 @@ fn unary_name(op: UnaryOp) -> Option<&'static str> {
         | UnaryOp::Acosh
         | UnaryOp::Atanh
         | UnaryOp::Cbrt
-        | UnaryOp::Lgamma => return None,
+        | UnaryOp::Lgamma
+        | UnaryOp::Popc
+        | UnaryOp::Clz
+        | UnaryOp::Brev => return None,
     })
 }
 

@@ -510,6 +510,30 @@ pub enum UnaryOp {
     Cbrt,
     /// Log-gamma `ln|Γ(x)|`.
     Lgamma,
+    // --- integer bit operations (kernel layer only; see [`UnaryOp::is_bit_op`]) ---
+    /// Population count: the number of set bits of the operand's `w`-bit two's-complement pattern (`w` is the operand type's
+    /// width, so `-1` at `I8` is 8, not 64). Integer operands only; the result has the **operand's type** (it always fits:
+    /// at most `w`). Source: PTX ISA `popc.b32`/`popc.b64`; CUDA `__popc`/`__popcll`. At 8 and 16 bits the pattern is the
+    /// type's own width (not the promoted `int`), which is the IR's definition; no source this lane read states it.
+    Popc,
+    /// Count of leading zero bits of the operand's `w`-bit pattern; `0` gives `w`. Integer operands only; the result has the
+    /// operand's type (at `I8` the value is at most 8). Source: PTX ISA `clz.b32`/`clz.b64`; CUDA `__clz`/`__clzll`
+    /// (`__clz(0) == 32`). A signed operand counts its pattern, so a negative value gives 0.
+    Clz,
+    /// Bit reversal of the operand's `w`-bit pattern: bit `i` moves to bit `w - 1 - i`. Integer operands only; the result has
+    /// the operand's type (a signed operand is read and returned as its pattern). Source: PTX ISA `brev.b32`/`brev.b64`; CUDA
+    /// `__brev`/`__brevll`.
+    Brev,
+}
+
+impl UnaryOp {
+    /// `true` for the integer bit operations ([`UnaryOp::Popc`], [`UnaryOp::Clz`], [`UnaryOp::Brev`]): they take an integer
+    /// operand only, are defined at the operand's own width, and exist in the **kernel layer** (the typing of a plan body
+    /// refuses them by name, and the plan gate admits no `UnaryOp` at an integer dtype).
+    #[must_use]
+    pub const fn is_bit_op(self) -> bool {
+        matches!(self, UnaryOp::Popc | UnaryOp::Clz | UnaryOp::Brev)
+    }
 }
 
 /// A non-infix binary op — lowered as a backend **function call** (`fmaxf`,
