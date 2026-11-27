@@ -23,6 +23,16 @@ fn k32(which: usize, lane: u32, i: u32) -> (u32, u32) {
     }
 }
 
+/// m16n8k16 integer (PTX 9.7.16.5.9, Figures 87-89): A `(gid + 8 * (i / 4), tig * 4 + i % 4)`, B `(tig * 4 + i, gid)`.
+fn k16(which: usize, lane: u32, i: u32) -> (u32, u32) {
+    let (gid, tig) = (lane >> 2, lane % 4);
+    match which {
+        0 => (gid + 8 * (i / 4), tig * 4 + (i % 4)),
+        1 => (tig * 4 + i, gid),
+        _ => (gid + 8 * (i / 2), tig * 2 + (i % 2)),
+    }
+}
+
 use ElementKind::{F32, Fp8E4M3FN as E4, Fp8E5M2 as E5, I8, I32, U8};
 
 #[test]
@@ -34,6 +44,19 @@ fn the_unsigned_and_mixed_8_bit_atoms_place_and_run() {
     ] {
         places(&atom, k32, (16, 8, 32), (a, b, I32));
         agrees(&atom, k32);
+    }
+}
+
+#[test]
+fn the_integer_k16_atoms_place_and_run() {
+    for (atom, a, b) in [
+        (MmaAtom::nvidia_m16n8k16_s8_s32(), I8, I8),
+        (MmaAtom::nvidia_m16n8k16_u8_s32(), U8, U8),
+        (MmaAtom::nvidia_m16n8k16_s8_u8_s32(), I8, U8),
+        (MmaAtom::nvidia_m16n8k16_u8_s8_s32(), U8, I8),
+    ] {
+        places(&atom, k16, (16, 8, 16), (a, b, I32));
+        agrees(&atom, k16);
     }
 }
 
