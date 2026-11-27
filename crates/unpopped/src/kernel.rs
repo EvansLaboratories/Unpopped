@@ -821,6 +821,65 @@ pub enum Stmt {
         /// The `Private` allocation (index into [`KernelFn::allocs`]) holding this lane's `2 * count` elements.
         src: u32,
     },
+    /// Load a tile (ROADMAP T2, `docs/design-opaque-tile-mma.md`): the `rows x cols` elements of the [`MemorySpace::Tile`]
+    /// allocation `d` are read from `src`: element `(r, c)` is the element at `src + (origin[0] + r) * elements_per_row +
+    /// origin[1] + c`, in `src`'s allocation or buffer (`src` is a `Place::Alloc` of a `Shared` allocation or a one-index
+    /// `Place::Logical`; its index names the element the offsets count from). Every element is an ordinary logged load. A
+    /// tile is held by the whole subgroup and no element of it is addressable, so the statement is reached in uniform control
+    /// (a divergent one is `BarrierDivergent`) and every lane of the subgroup executes it identically. The element type of
+    /// `src` is the tile's.
+    ///
+    /// **Patent:** lifted by CireSnave 2026-11-26 (board 519 B) as his risk call: the PM did not support it with a reading; not
+    /// a clearance; no attorney; the Intel/NVIDIA tile-instruction method and medium claims (US11086623B2 = app 16/487,787,
+    /// US11288069B2 = 16/487,755, US10884734B2 = 16/459,191) remain NEEDS MORE as read. There is no `transpose` option and no
+    /// transpose statement: US12405770B2 claims 8 and 15 are NEEDS MORE against one (findings, `docs/PATENT-SWEEP.md`).
+    TileLoad {
+        /// The tile (index into [`KernelFn::allocs`], a [`MemorySpace::Tile`] allocation).
+        d: u32,
+        /// The element the offsets count from.
+        src: Place,
+        /// The distance in elements between two rows of the source.
+        elements_per_row: ScalarExpr,
+        /// The row and the column of the source the tile starts at.
+        origin: [ScalarExpr; 2],
+    },
+    /// `d = a * b + c` over tiles: `a` is `m x k`, `b` is `k x n`, `c` and `d` are `m x n` (`d` may be `c`). The element of
+    /// `D` is the sum of `C` and the `k` products, the products exact, summed in ascending `k` and rounded **once** to the
+    /// accumulator type (the contract of [`Stmt::Mma`]), so a device that sums in another order or at another width is compared
+    /// within a tolerance, never by bytes. `a` and `b` have one element type and `c` and `d` another (`F32`, or `F64` over `F64`).
+    /// Uniform control, like [`Stmt::TileLoad`]. The tile patent text on [`Stmt::TileLoad`] applies.
+    TileMma {
+        /// The result tile.
+        d: u32,
+        /// The left operand.
+        a: u32,
+        /// The right operand.
+        b: u32,
+        /// The accumulator.
+        c: u32,
+    },
+    /// Set every element of the tile `d` to `value` (converted to the tile's element type with the rounding of an `Assign`).
+    /// Uniform control. The tile patent text on [`Stmt::TileLoad`] applies.
+    TileFill {
+        /// The tile.
+        d: u32,
+        /// The value.
+        value: ScalarExpr,
+    },
+    /// Store the tile `a` to `dst`, the inverse of [`Stmt::TileLoad`]: element `(r, c)` goes to `dst + (origin[0] + r) *
+    /// elements_per_row + origin[1] + c`. The subgroup's first lane performs the writes (one logged writer, as on hardware
+    /// where one operation stores the tile); uniform control. Every element of the tile must have been written (by a load,
+    /// a fill or an MMA). The tile patent text on [`Stmt::TileLoad`] applies.
+    TileStore {
+        /// The tile.
+        a: u32,
+        /// The element the offsets count from.
+        dst: Place,
+        /// The distance in elements between two rows of the destination.
+        elements_per_row: ScalarExpr,
+        /// The row and the column of the destination the tile starts at.
+        origin: [ScalarExpr; 2],
+    },
     /// `fence.proxy.async.shared::cta` (ROADMAP U8c, slice 0): order this thread's earlier **generic-proxy** writes to
     /// `Shared` memory before later **async-proxy** reads of the same memory by [`Stmt::Wgmma`], [`Stmt::Tcgen05Mma`]
     /// and the like. PTX ISA 9.5: "Accessing the same memory location across multiple proxies needs a cross-proxy
@@ -1881,6 +1940,14 @@ pub enum KernelError {
     /// divides the byte extent and whose base is at least the element width, and a swizzled allocation aligned to the period.
     AllocLayout {
         /// The allocation index.
+        alloc: u32,
+        /// The rule, in words.
+        why: &'static str,
+    },
+    /// A tile allocation or tile statement breaks a rule (the reason is named): a `Tile` space and a tile shape agree, a tile
+    /// statement names a tile of the right shape and element types, and no ordinary access reaches a tile.
+    Tile {
+        /// The allocation index (or the first tile the statement names).
         alloc: u32,
         /// The rule, in words.
         why: &'static str,

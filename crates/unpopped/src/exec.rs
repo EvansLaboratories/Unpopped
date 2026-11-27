@@ -288,6 +288,11 @@ pub enum MemorySpace {
     /// `128 * columns` elements and addressed `lane * columns + column`. Only the `tcgen05` statements reach it: an
     /// ordinary load, store or atomic on it is refused.
     Tensor,
+    /// An opaque matrix tile (ROADMAP T2, `docs/design-opaque-tile-mma.md`): `rows * cols` elements that no ordinary access
+    /// reaches (a load, a store or an atomic on it is refused); only the tile statements ([`crate::kernel::Stmt::TileLoad`],
+    /// `TileMma`, `TileFill`, `TileStore`) read and write it, and the program cannot name an element. The declaration carries
+    /// its shape in [`AllocDecl::tile`].
+    Tile,
 }
 
 /// How many elements an allocation holds.
@@ -321,6 +326,28 @@ pub struct AllocDecl {
     /// a swizzled allocation states an alignment that is a multiple of the swizzle's period.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align_bytes: Option<u32>,
+    /// The shape of a [`MemorySpace::Tile`] allocation (`None` on every other space; `check_kernel` requires the two to agree).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile: Option<TileShape>,
+}
+
+/// The shape of an opaque tile: `rows` by `cols` elements of the allocation's element type (ROADMAP T2). A `TileMma` multiplies
+/// an `m x k` tile by a `k x n` tile into an `m x n` tile, so the shapes are checked against each other, not against a table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct TileShape {
+    /// Rows.
+    pub rows: u32,
+    /// Columns.
+    pub cols: u32,
+}
+
+impl TileShape {
+    /// A tile of `rows` by `cols` elements.
+    #[must_use]
+    pub const fn new(rows: u32, cols: u32) -> Self {
+        Self { rows, cols }
+    }
 }
 
 /// A layout, and optionally a swizzle, on an allocation: `index -> swizzle(layout(index))`, the swizzle in **bytes** (the PTX form
@@ -417,7 +444,21 @@ impl AllocDecl {
             extent,
             layout: None,
             align_bytes: None,
+            tile: None,
         }
+    }
+
+    /// An opaque tile of `rows` by `cols` elements of `elem` ([`MemorySpace::Tile`], extent `rows * cols`).
+    #[must_use]
+    pub fn tile(name: impl Into<String>, elem: ElementKind, rows: u32, cols: u32) -> Self {
+        let mut a = Self::new(
+            name,
+            MemorySpace::Tile,
+            elem,
+            Extent::Static(rows.saturating_mul(cols)),
+        );
+        a.tile = Some(TileShape::new(rows, cols));
+        a
     }
 
     /// The same allocation with `layout` (and its swizzle).

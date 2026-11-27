@@ -15,6 +15,28 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.62.1` — additive: NVIDIA mma.sync m16n8k32 u8, mixed s8/u8 and fp8 atoms (U7 theme 3)
+
+Seven `MmaAtom` constructors as data (`mma_sm80_8bit.rs`): `nvidia_m16n8k32_{u8,s8_u8,u8_s8}_s32` and `nvidia_m16n8k32_{e4m3,e5m2,e4m3_e5m2,e5m2_e4m3}_f32`, four of them with `A != B` in type. Layout read from the public PTX ISA 9.5 section 9.7.16.5.10 (pp. 572-576) and cross-checked against CUTLASS `mma_traits_sm80.hpp` and `mma_traits_sm89.hpp` (`main` 5c179ede). `tests/mma_atoms_8bit.rs` checks each against `(row, col)` formulas and runs it in the oracle; fp8 values are lattice fractions per format. No `Stmt`, `ScalarExpr` or `ElementKind` change. Patent column: US12314717B2, the 4x element-size method claim: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.
+
+---
+
+## `0.62.0` — **BREAKING**: T2, opaque matrix tiles (`MemorySpace::Tile`, `Stmt::TileLoad`/`TileMma`/`TileFill`/`TileStore`)
+
+`Stmt` gains four variants and `MemorySpace` a fifth case, so an exhaustive `match` on `Stmt` stops compiling (`MemorySpace` is `non_exhaustive`: a wildcard arm hides `Tile`, so every emitter states a decline for it; `docs/emitter-migration-b1.md`). `AllocDecl` gains `tile: Option<TileShape>` (serde default, omitted when `None`; `AllocDecl::tile(name, elem, rows, cols)` builds a tile) and `KernelError::Tile { alloc, why }` names each rule.
+
+A tile is `rows x cols` elements (`F16`, `Bf16`, `F32`, `F64`) that no ordinary access reaches; the program cannot name an element. `TileLoad`/`TileStore` move a tile to and from a `Shared` allocation place or a one-index buffer place with a row stride and an origin; `TileFill` sets every element; `TileMma` is `D = A.B + C` with `(m x k)(k x n) + (m x n)`, the products exact, summed in ascending `k` and rounded once to the accumulator (`F32`, or `F64` over `F64`), the contract of `Stmt::Mma`. All four are reached in uniform control (a divergent one is `BarrierDivergent`). The oracle keeps a tile like a `Private` array that every lane fills identically, and the subgroup's first lane performs a `TileStore`, so the race log sees one writer. There is no `transpose` option and no transpose statement (patent hold: US12405770B2 claims 8 and 15 are NEEDS MORE against one), and no `satf` flag. cpu-c declines a `Tile` allocation and each statement by name; the board 519 B text is on the statements' doc comments.
+
+Verified by `tests/kernel_tile.rs` (a rectangular product with an origin and a row stride against a hand-written one, an in-place accumulate, the uninitialised tile, each checker rule with an accepted control, divergent control, serde) and cpu-c's `kernel_tile_declines.rs`; the four fixtures are in `fixtures.rs`; 5 seeded mutants caught.
+
+---
+
+## `0.61.13` — E3, a software IEEE binary128 (`soft_f128::F128`), not yet wired into the oracle
+
+Adds `unpopped::soft_f128::F128` (a `u128` bit pattern): add, sub, mul and div each rounded once to nearest even from the exact result (the division remainder is folded in as a sticky bit), `partial_cmp`, `from_f64`/`to_f64`, `from_w256` (integer conversion with one rounding), NaN/infinity/zero/subnormal handling, and `W256::bit_length`. It uses integer words, not double-double (double-double is NOT CLEARED, HP US5631859A claim 1). Additive: new module, no existing public item changes. The oracle does not use it yet (a later slice wires `F128` kernels); fma and sqrt follow. Verified by 8 tests including a random f64 cross-check of the four operations and a division tie-breaking test, and 7 seeded mutants caught.
+
+---
+
 ## `0.61.12` — additive: NVIDIA mma.sync atoms m16n8k8 f16/bf16, m16n8k4 tf32, m8n8k4 f64 (U7 theme 3)
 
 Four `MmaAtom` constructors as data (`mma_sm80.rs`): `nvidia_m16n8k8_{f16,bf16}_f32`, `nvidia_m16n8k4_tf32_f32` (carries the tf32 flag) and `nvidia_m8n8k4_f64_f64`. Layouts read from the public PTX ISA 9.5 (sections 9.7.16.5.7, 9.7.16.5.6, 9.7.16.5.2; pages in the module doc) and cross-checked against CUTLASS `mma_traits_sm80.hpp` (`main` 5c179ede). `tests/mma_atoms_sm80.rs` checks each against `(row, col)` formulas from the PTX text and runs it in the oracle. `wmma` shapes are not built: PTX 9.7.16.4.1 leaves the wmma fragment layout unspecified. No `Stmt`, `ScalarExpr` or `ElementKind` change.
