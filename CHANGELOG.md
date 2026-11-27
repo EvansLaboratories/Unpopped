@@ -15,6 +15,70 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.27` — Docs
+
+`docs/ir-union-evidence/conformance-idiom-gaps-2026-11-27.md`: a 52-row table of idioms from Triton, TileLang, ThunderKittens, CuTe, Mojo, Slang, Metal and HLSL public docs that the conformance kernels do not yet express, each with its source URL, version or date read, the IR grep and its result, and a READ or UNVERIFIED status (pm-kernels task `more-rows`, the CireSnave 2026-11-11 union standard). Each gap is a candidate row for the primary, not a build; rows touching a standing patent hold (setmaxnreg, persistent scheduling, two-CTA pairing) are marked HELD, and texture rows are facts only. Docs only, no code changed.
+
+— lane: unpopped-conformance
+
+Kernel-layer conformance kernel for a two-stage full/empty `mbarrier` ring inside one block (CUTLASS survey row 88, the multi-stage ring the earlier rows lacked): a consumer thread and a producer thread pass six items through two shared slots, with `MbarInit`, `MbarArrive` and `MbarWait` as separate statements, wait parity flipping over three rounds, compared with `2 * x + 1` over ordinary, NaN and all-negative corpora. An off-by-one item counter fails by value; reading the slot being refilled (`DataRace`), a slot never released (`MbarrierDeadlock`) and a refill that skips its wait (`MbarrierDeadlock`) are pinned as typed traps. Scope: one block, no transaction count on any arrival, no cluster or device scope, no store fused with an arrive, no cross-SM roles. PATENT-SWEEP barrier chart (Unpopped#442): block-scope barriers outside as read, not a clearance; re-read triggers (an arrival fused with a transaction count, a barrier with a reduction or scan, divergence compaction) are not exercised. The tensor-map TMA stage of the row is not covered, so the row stays Partial.
+
+— lane: unpopped-conformance
+
+---
+
+## `0.60.26` — Added
+
+Kernel-layer conformance kernel for split-K convolution in the serial-reduction form (CUTLASS survey row 50): the channel reduction of a 1-D convolution is cut into four fixed slices, launch 1 writes one partial per slice (one block per slice) to a workspace, and launch 2 sums the partials in slice order. Oracle-compared against a plain convolution over ordinary, NaN and all-negative corpora; a slice that reads the wrong channels and a reduction that drops a slice are mutants that fail by value. The stream-K division of one tile between blocks, persistent scheduling and work-stealing are held and not modelled, so the row stays Partial.
+
+— lane: unpopped-conformance
+
+Kernel-layer conformance kernel for a swizzled shared-memory tile (CUTLASS survey row 66): an 8 x 8 transpose through a block-shared tile addressed with an XOR swizzle (`col ^ row`) around one block barrier, oracle-compared against a plain transpose over ordinary, NaN and all-negative corpora. Two mutants (a load that forgets the swizzle, a store with a narrowed mask) stay in range and race-free and fail by value. The swizzle is index arithmetic only; `docs/PATENT-SWEEP.md` idea 15 reads the XOR swizzle as pure data, outside as read, not a clearance. TMA-style hardware swizzle modes and bank-conflict counting are not covered, so the row stays Partial.
+
+— lane: unpopped-conformance
+
+---
+
+## `0.60.25` — Added
+
+Kernel-layer conformance kernel for nine-term `bf16` emulation of an `f32` GEMM (CUTLASS survey row 27): each operand is split into three `bf16` pieces, the nine products are accumulated in `f32`, and the oracle result is compared bit for bit against an independent reference that rounds to `bf16` by bit manipulation, over ordinary, NaN and all-negative corpora. A second test shows the emulation is within 1e-6 of the exact `f64` product where a plain `bf16` product is not. Three mutants (leading piece only, unchained residual, reversed pairing) fail by value. Finding: the oracle rounds a whole expression tree once, at the `Assign`, so the kernel emits one `Assign` per term to keep each add rounded to `f32`. Arithmetic only; no hardware atom, and no PATENT-SWEEP entry names this row.
+
+— lane: unpopped-conformance
+
+Kernel-layer conformance kernel for GEMM over arbitrary strides (CUTLASS survey row 7, the `lda` and non-contiguous part): a row-major `A` padded to `lda = K + 3`, a column-major `B`, and a padded `C`, all addressed by logical coordinates with the strides on the argument views. The oracle result is compared against a reference over the logical matrices (ordinary, NaN, all-negative corpora), the poisoned storage outside the views is never read, and the output padding comes back untouched. Two mutants (swapped `B` index, shifted output row) fail by value. The misaligned-`Raw` trap half of the row is already covered by `kernel_raw_place.rs`; the TMA 16-byte stride rule is not covered here, so the row stays Partial.
+
+— lane: unpopped-conformance
+
+---
+
+## `0.60.24` — Added
+
+Kernel-layer conformance kernel for complex GEMM (CUTLASS survey rows 26 and 82): interleaved `(re, im)` `F32` operands, a four-multiply and a three-multiply (Gaussian) form, oracle-compared against an independent complex reference over ordinary, NaN and all-negative corpora, with a conjugated-operand and an imaginary-sign mutant that fail by value. There is no complex element kind, so the rows stay Partial for the dtype itself; the 3xTF32 emulation is not covered here.
+
+— lane: unpopped-conformance
+
+`crates/unpopped/tests/kernel_fp8_blockwise.rs` and `tests/support/fp8_blockwise.rs`: `out[m][n] = sum_kb sfa[m][kb] * sfb[n / 128][kb] * dot128(a[m], b[n])` with `A` scaled per row and per 128-block of `K` and `B` per 128 rows of `N` and 128-block of `K`, `F32` scales, promotion accumulation. Checker-valid and run on the oracle against a reference that decodes `E3M4` codes with its own formula; corpora ordinary, all-negative and a NaN code reaching exactly one output row; mutants (swapped K-block scales, a parity-chosen B scale block) fail by value. The operands are `F32` buffers holding FP8-representable values because the kernel layer does not compute an FP8 dtype yet (accepted by the primary as ROADMAP U68: `F8E3M4` buffers answer `DtypeNotComputed` by design until the Load/Store rows land, and `Fp8E4M3FN` and `Fp8E5M2` have no kernel `Cast`). Not covered: a real FP8 operand dtype, `E4M3FN`/`E5M2`, groupwise 128x1, the CUTLASS example's source (UNVERIFIED). The 4x-ratio hold does not apply (scalar loops); on US12314717B2 only: outside as read, findings not advice, no clearance.
+
+---
+
+## `0.60.23` — Fixed: the barrier-uniformity rule for ExecId::ClusterCtaId, ClusterDim and WarpgroupId (they were read as divergent)
+
+`ClusterDim` is a launch constant (uniform, like `GridDim`); `ClusterCtaId` is the block's position in its cluster, uniform within a block like `ClusterCtaRank` (divergent only where the kernel holds a `Cluster` or `Device` barrier); `WarpgroupId` is the subgroup index divided by four, so it stays divergent across the subgroups of a block and is lane-uniform within one subgroup (a `Subgroup` collective under it is accepted). More permissive than 0.60.14, which read all three as divergent; admits kernels that were refused, not breaking.
+
+---
+
+## `0.60.22` — Added: block-scaled GEMM conformance kernel over the 512-byte scale-factor atom (CUTLASS survey row 22)
+
+`crates/unpopped/tests/kernel_block_scaled.rs` and `tests/support/block_scaled.rs`: `out[m][n] = sum_kb sfa[m][kb] * sfb[n][kb] * dot(a[m], b[n])` over blocks of 16, with both scale matrices read through the 128-row by 4-column basic-block atom (offset `(r % 32) * 16 + (r / 32) * 4 + c`) by index arithmetic in the kernel. Checker-valid and run on the oracle against a reference from the logical scales, the atom packed by an independent nested loop; corpora ordinary, all-negative and a NaN scale reaching exactly one output row. Two mutants (swapped row factors, a column-major atom) fail by value. Not covered: tiling of several atoms, fp8/fp4 element types, the CUTLASS config templates (atom recalled from `blockscaled_layout.hpp`, UNVERIFIED against a checkout).
+
+---
+
+## `0.60.21` — docs: PATENT-SWEEP G-T2 addendum 6, Intel dot-product family; US12314717B2 claim 25 needs more against the shipped s8 Mma atom
+
+Docs only; no earlier verdict edited.
+
+---
+
 ## `0.60.20` — feat: Layout by-mode coalesce, and the zipped/tiled/flat divide and blocked/raked/zipped/tiled/flat product variants (IR-union cute.md rows 7, 10, 11)
 
 `unpopped-vocab`: `Layout::coalesce_profile`, `logical_divide_by_mode`, `zipped_divide`, `tiled_divide`, `flat_divide`, `blocked_product`, `raked_product`, `zipped_product`, `tiled_product` and `flat_product`. Each applies the existing single-mode `logical_divide` / `logical_product` to every top-level mode and regroups the pairs, so none can disagree with those on a mode; a mode that does not divide is declined (`NotDivisible`), never guessed. Additive; pure vocabulary. Pinned by `tests/layout_algebra_variants.rs` (hand-computed examples plus a brute-force reading of every coordinate, each checker run against a broken grouping). The groupings are UNVERIFIED against CUTLASS `cute/layout.hpp` (not re-read).
