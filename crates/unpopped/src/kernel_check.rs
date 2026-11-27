@@ -9,6 +9,7 @@ mod matrix;
 mod mbar;
 mod mma;
 mod tcgen05;
+mod tile;
 mod wgmma;
 
 use unpopped_vocab::ElementKind;
@@ -207,6 +208,7 @@ fn check_allocs(k: &KernelFn) -> Result<(), KernelError> {
             return Err(KernelError::AllocExtent { alloc });
         }
         check_alloc_layout(a, alloc)?;
+        tile::check_tile_alloc(a, alloc)?;
     }
     Ok(())
 }
@@ -394,6 +396,10 @@ fn check_sync_stmt(
             collective::check_collective_tuple(k, st, sc, declared_here)?;
         }
         Stmt::Mma { .. } => mma::check_mma(k, st)?,
+        Stmt::TileLoad { .. }
+        | Stmt::TileMma { .. }
+        | Stmt::TileFill { .. }
+        | Stmt::TileStore { .. } => tile::check_tile(k, st, sc)?,
         Stmt::Wgmma { .. } => wgmma::check_wgmma(k, st, sc)?,
         Stmt::WgmmaCommit | Stmt::WgmmaWait { .. } => {}
         Stmt::GridDepWait | Stmt::GridDepLaunchDependents => {}
@@ -673,6 +679,10 @@ fn check_stmt(
         | Stmt::MbarCompleteTx { .. }
         | Stmt::MbarWait { .. }
         | Stmt::MatrixStore { .. }
+        | Stmt::TileLoad { .. }
+        | Stmt::TileMma { .. }
+        | Stmt::TileFill { .. }
+        | Stmt::TileStore { .. }
         | Stmt::CopyBulk { .. }
         | Stmt::CopyUnpack { .. }
         | Stmt::CopyAsync { .. }
@@ -1276,6 +1286,12 @@ fn check_alloc_raw_place(
                 what: "an ordinary access to tensor memory",
             });
         }
+        MemorySpace::Tile => {
+            return Err(KernelError::Tile {
+                alloc,
+                why: "an ordinary access to a Tile (only the tile statements reach one)",
+            });
+        }
         MemorySpace::Constant => {
             return Err(KernelError::TypeMismatch {
                 what: "an AllocRaw place on a Constant allocation",
@@ -1343,6 +1359,12 @@ fn check_alloc_place(
     if a.space == MemorySpace::Tensor {
         return Err(KernelError::Tcgen05Unsupported {
             what: "an ordinary access to tensor memory",
+        });
+    }
+    if a.space == MemorySpace::Tile {
+        return Err(KernelError::Tile {
+            alloc,
+            why: "an ordinary access to a Tile (only the tile statements reach one)",
         });
     }
     if a.space == MemorySpace::Shared && k.launch.is_none() {

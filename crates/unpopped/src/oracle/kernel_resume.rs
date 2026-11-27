@@ -216,6 +216,10 @@ impl<'a> Machine<'a> {
             | Stmt::Fence { .. } => {
                 self.exec_simple(st)?;
             }
+            Stmt::TileLoad { .. }
+            | Stmt::TileMma { .. }
+            | Stmt::TileFill { .. }
+            | Stmt::TileStore { .. } => self.exec_tile(st)?,
             Stmt::Collective { .. } => return self.collective_stop(st).map(Some),
             Stmt::CollectiveTuple { scope, .. } => {
                 return Ok(Some(Stop::Tuple {

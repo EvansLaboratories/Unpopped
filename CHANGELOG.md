@@ -15,6 +15,16 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.62.0` — **BREAKING**: T2, opaque matrix tiles (`MemorySpace::Tile`, `Stmt::TileLoad`/`TileMma`/`TileFill`/`TileStore`)
+
+`Stmt` gains four variants and `MemorySpace` a fifth case, so an exhaustive `match` on `Stmt` stops compiling (`MemorySpace` is `non_exhaustive`: a wildcard arm hides `Tile`, so every emitter states a decline for it; `docs/emitter-migration-b1.md`). `AllocDecl` gains `tile: Option<TileShape>` (serde default, omitted when `None`; `AllocDecl::tile(name, elem, rows, cols)` builds a tile) and `KernelError::Tile { alloc, why }` names each rule.
+
+A tile is `rows x cols` elements (`F16`, `Bf16`, `F32`, `F64`) that no ordinary access reaches; the program cannot name an element. `TileLoad`/`TileStore` move a tile to and from a `Shared` allocation place or a one-index buffer place with a row stride and an origin; `TileFill` sets every element; `TileMma` is `D = A.B + C` with `(m x k)(k x n) + (m x n)`, the products exact, summed in ascending `k` and rounded once to the accumulator (`F32`, or `F64` over `F64`), the contract of `Stmt::Mma`. All four are reached in uniform control (a divergent one is `BarrierDivergent`). The oracle keeps a tile like a `Private` array that every lane fills identically, and the subgroup's first lane performs a `TileStore`, so the race log sees one writer. There is no `transpose` option and no transpose statement (patent hold: US12405770B2 claims 8 and 15 are NEEDS MORE against one), and no `satf` flag. cpu-c declines a `Tile` allocation and each statement by name; the board 519 B text is on the statements' doc comments.
+
+Verified by `tests/kernel_tile.rs` (a rectangular product with an origin and a row stride against a hand-written one, an in-place accumulate, the uninitialised tile, each checker rule with an accepted control, divergent control, serde) and cpu-c's `kernel_tile_declines.rs`; the four fixtures are in `fixtures.rs`; 5 seeded mutants caught.
+
+---
+
 ## `0.61.13` — E3, a software IEEE binary128 (`soft_f128::F128`), not yet wired into the oracle
 
 Adds `unpopped::soft_f128::F128` (a `u128` bit pattern): add, sub, mul and div each rounded once to nearest even from the exact result (the division remainder is folded in as a sticky bit), `partial_cmp`, `from_f64`/`to_f64`, `from_w256` (integer conversion with one rounding), NaN/infinity/zero/subnormal handling, and `W256::bit_length`. It uses integer words, not double-double (double-double is NOT CLEARED, HP US5631859A claim 1). Additive: new module, no existing public item changes. The oracle does not use it yet (a later slice wires `F128` kernels); fma and sqrt follow. Verified by 8 tests including a random f64 cross-check of the four operations and a division tie-breaking test, and 7 seeded mutants caught.
