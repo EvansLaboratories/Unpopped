@@ -35,6 +35,25 @@ fn frag(alloc: u32, v: u32) -> Place {
     }
 }
 
+/// The four `Private` fragment allocations (A, B, C, D) for `atom`.
+fn fragment_allocs(tys: [ElementKind; 4], vals: [u32; 4]) -> Vec<AllocDecl> {
+    ["a", "b", "c", "d"]
+        .iter()
+        .enumerate()
+        .map(|(i, n)| AllocDecl::new(*n, MemorySpace::Private, tys[i], Extent::Static(vals[i])))
+        .collect()
+}
+
+/// The four buffer parameters (A, B, C read-only, D written).
+fn buffer_params(tys: [ElementKind; 4]) -> Vec<Param> {
+    vec![
+        Param::buffer("fa", tys[0], BufferRole::Read, Some(1)),
+        Param::buffer("fb", tys[1], BufferRole::Read, Some(1)),
+        Param::buffer("fc", tys[2], BufferRole::Read, Some(1)),
+        Param::buffer("fd", tys[3], BufferRole::ReadWrite, Some(1)),
+    ]
+}
+
 /// Each lane copies its A/B/C slots from buffers 0..3 into `Private` fragments, runs the MMA, writes D to buffer 3.
 pub(crate) fn mma_kernel(atom: &MmaAtom) -> KernelFn {
     let (ta, tb, tacc) = atom.dtypes();
@@ -45,17 +64,6 @@ pub(crate) fn mma_kernel(atom: &MmaAtom) -> KernelFn {
         atom.values(2),
         atom.values(2),
     ];
-    let names = ["a", "b", "c", "d"];
-    let allocs = (0..4)
-        .map(|i| {
-            AllocDecl::new(
-                names[i],
-                MemorySpace::Private,
-                tys[i],
-                Extent::Static(vals[i]),
-            )
-        })
-        .collect();
     let mut locals = vec![LocalDecl::scalar(U32)];
     let mut body = vec![Stmt::Let {
         local: 0,
@@ -91,20 +99,9 @@ pub(crate) fn mma_kernel(atom: &MmaAtom) -> KernelFn {
     for v in 0..vals[3] {
         hop(frag(3, v), slot(3, vals[3], v), tacc, &mut body);
     }
-    KernelFn::new(
-        "mma",
-        tacc,
-        vec![
-            Param::buffer("fa", ta, BufferRole::Read, Some(1)),
-            Param::buffer("fb", tb, BufferRole::Read, Some(1)),
-            Param::buffer("fc", tacc, BufferRole::Read, Some(1)),
-            Param::buffer("fd", tacc, BufferRole::ReadWrite, Some(1)),
-        ],
-        locals,
-        Block(body),
-    )
-    .with_launch(LaunchShape::new([32, 1, 1], [1, 1, 1]).with_subgroup(32, 32))
-    .with_allocs(allocs)
+    KernelFn::new("mma", tacc, buffer_params(tys), locals, Block(body))
+        .with_launch(LaunchShape::new([32, 1, 1], [1, 1, 1]).with_subgroup(32, 32))
+        .with_allocs(fragment_allocs(tys, vals))
 }
 
 /// A deterministic value of element `i` of operand `seed`, exactly representable in `ty`: the full range for the
