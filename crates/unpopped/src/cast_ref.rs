@@ -148,6 +148,19 @@ pub(crate) fn encode_ue4m3(x: f64, mode: RoundMode) -> u128 {
     encode_mx(x, 4, 3, mode).min(0x7E)
 }
 
+/// The value of the `F8E8M0` code `bits`: the MX block scale `2^(code - 127)` (exponent only, bias 127, unsigned), with `0xFF`
+/// as NaN. There is no zero and no infinity: code `0` is `2^-127`, the smallest scale. Sources: OCP Microscaling Formats
+/// (MX) Specification v1.0 (the E8M0 scale; section number not re-read here) and the ONNX `float8` note's E8M0 table
+/// (bias 127, `0xFF` NaN, no infinity, minimum `00000000` = `2^-127`). Only the low 8 bits of `bits` are read.
+pub(crate) fn decode_e8m0(bits: u128) -> f64 {
+    let b = (bits & 0xFF) as u32;
+    if b == 0xFF {
+        return f64::NAN;
+    }
+    // 2^(b - 127) is a normal f64 for every b in 0..=254 (the exponent field is b + 896)
+    f64::from_bits(u64::from(b + 896) << 52)
+}
+
 /// The value of the `F8UE4M3` code `bits` (`0x7F` is NaN; a code with bit 7 set is outside the format and decodes as NaN here).
 pub(crate) fn decode_ue4m3(bits: u128) -> f64 {
     let b = bits & 0xFF;

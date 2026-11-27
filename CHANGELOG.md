@@ -15,6 +15,20 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.61.9` — the oracle decodes an `F8E8M0` MX block scale (CUDA audit row 60)
+
+The oracle reads an `F8E8M0` buffer as the scale `2^(code - 127)` with `0xFF` as NaN (no zero, no infinity), through `cast_ref::decode_e8m0` and an arm in `raw_to_f64`; `types::elem_size` gives it its storage width, one byte. It is still a scale type, never a compute dtype: the plan gate refuses it as one. Sources: OCP Microscaling Formats (MX) Specification v1.0 (section number not re-read) and the ONNX float8 note's E8M0 table. Additive: no signature or IR change.
+
+Added `Layout::{inner_partition, outer_partition, local_tile, local_partition, retile}` in `unpopped-vocab::layout_algebra`: the tile of a `zipped_divide` at a rest coordinate, the strided share at a tile coordinate (a thread), and a rank-changing reshape (`self` composed with the column-major layout of the target; refused when the sizes differ or the modes do not align). Pure functions: no IR, no statement, no view. Groupings worked from the definitions of `zipped_divide` and `slice`, UNVERIFIED against `cute/tensor_impl.hpp`. Patent wording: no patent found on slice/local_tile/partition/layout algebra (a null, not a clearance); the retile needs-more is lifted for US20210064987A1 only (outside as read; findings not advice).
+
+---
+
+## `0.61.8` — `CollectiveKind::MatchAny` (PTX `match.any.sync`)
+
+Added `CollectiveKind::MatchAny`: each lane gets a `U32` mask of the subgroup lanes whose value has the same bits as its own (a float compares by bit pattern). Subgroup only, at most 32 lanes (a Block is refused by name, a larger scope is a typed oracle trap). Source: PTX ISA `match.any.sync`; CUDA `__match_any_sync`. `CollectiveKind` is `#[non_exhaustive]`, so additive. Pinned by `match_any_gives_each_lane_the_mask_of_lanes_with_the_same_bits` and the cpu-c differential `match_any_agrees_on_integers_and_on_float_bit_patterns`.
+
+---
+
 ## `0.61.7` — Docs: PATENT-SWEEP, US20230315655A1 file-wrapper chart (patents-2)
 
 Docs only. `docs/PATENT-SWEEP.md` gains the file-wrapper chart of application 17/691,303 (allowed 2026-11-18) against the remote store-and-arrive limb, per Unpopped statement, verdict words only. No code changes.
