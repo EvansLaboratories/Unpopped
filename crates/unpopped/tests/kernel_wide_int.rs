@@ -212,28 +212,28 @@ fn the_128_bit_types_match_rusts_own_integers() {
             assert_eq!(got, want, "{op:?} at {t:?}");
         }
         let add = run(
-            &arith_kernel(|x, y| ScalarExpr::Add(x, y), t, a.len() as u32),
+            &arith_kernel(ScalarExpr::Add, t, a.len() as u32),
             t,
             t,
             &a,
             &b,
         );
         let sub = run(
-            &arith_kernel(|x, y| ScalarExpr::Sub(x, y), t, a.len() as u32),
+            &arith_kernel(ScalarExpr::Sub, t, a.len() as u32),
             t,
             t,
             &a,
             &b,
         );
         let mul = run(
-            &arith_kernel(|x, y| ScalarExpr::Mul(x, y), t, a.len() as u32),
+            &arith_kernel(ScalarExpr::Mul, t, a.len() as u32),
             t,
             t,
             &a,
             &b,
         );
         let div = run(
-            &arith_kernel(|x, y| ScalarExpr::Div(x, y), t, a.len() as u32),
+            &arith_kernel(ScalarExpr::Div, t, a.len() as u32),
             t,
             t,
             &a,
@@ -293,11 +293,10 @@ fn a_wrapped_result_compares_as_its_own_type() {
         for (name, make) in [
             (
                 "add",
-                (|x, y| ScalarExpr::Add(x, y))
-                    as fn(Box<ScalarExpr>, Box<ScalarExpr>) -> ScalarExpr,
+                (ScalarExpr::Add) as fn(Box<ScalarExpr>, Box<ScalarExpr>) -> ScalarExpr,
             ),
-            ("sub", |x, y| ScalarExpr::Sub(x, y)),
-            ("mul", |x, y| ScalarExpr::Mul(x, y)),
+            ("sub", ScalarExpr::Sub),
+            ("mul", ScalarExpr::Mul),
         ] {
             let mut k = binary_kernel(BinaryOp::CmpLt, t, I32, n);
             let Stmt::Store { value, .. } = &mut k.body.0[2] else {
@@ -403,24 +402,12 @@ fn the_256_bit_types_match_the_limb_pair_model() {
         };
         check(
             "add",
-            run(
-                &arith_kernel(|x, y| ScalarExpr::Add(x, y), t, n),
-                t,
-                t,
-                &a,
-                &b,
-            ),
+            run(&arith_kernel(ScalarExpr::Add, t, n), t, t, &a, &b),
             &add256,
         );
         check(
             "sub",
-            run(
-                &arith_kernel(|x, y| ScalarExpr::Sub(x, y), t, n),
-                t,
-                t,
-                &a,
-                &b,
-            ),
+            run(&arith_kernel(ScalarExpr::Sub, t, n), t, t, &a, &b),
             &|x, y| add256(x, neg256(y)),
         );
         check(
@@ -478,24 +465,8 @@ fn the_256_bit_types_match_the_limb_pair_model() {
 #[test]
 fn the_256_bit_product_and_quotient_are_pinned_by_hand() {
     let (x, one) = ((1u128, 0u128), (0u128, 1u128)); // 2^128 and 1
-    let mul = |t, a: P, b: P| {
-        run(
-            &arith_kernel(|x, y| ScalarExpr::Mul(x, y), t, 1),
-            t,
-            t,
-            &[a],
-            &[b],
-        )[0]
-    };
-    let div = |t, a: P, b: P| {
-        run(
-            &arith_kernel(|x, y| ScalarExpr::Div(x, y), t, 1),
-            t,
-            t,
-            &[a],
-            &[b],
-        )[0]
-    };
+    let mul = |t, a: P, b: P| run(&arith_kernel(ScalarExpr::Mul, t, 1), t, t, &[a], &[b])[0];
+    let div = |t, a: P, b: P| run(&arith_kernel(ScalarExpr::Div, t, 1), t, t, &[a], &[b])[0];
     for t in [I256, U256] {
         assert_eq!(mul(t, x, x), (0, 0), "2^128 * 2^128 wraps to 0 at 256 bits");
         assert_eq!(mul(t, x, one), x);
