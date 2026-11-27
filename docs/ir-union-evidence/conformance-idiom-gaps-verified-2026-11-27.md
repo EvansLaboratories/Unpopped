@@ -57,4 +57,23 @@
 
 **Tally of the original 36 UNVERIFIED rows after batch 3:** batches 1-2 read 11 (see above); batch 3 reads 14, 15, 30, 31, 47, 48 (6), all of which were UNVERIFIED in the table (row 31, 30, 47, 48, 14, 15 are marked UNVERIFIED there). **17 read, 19 remain.**
 
+## Batch 4 (Metal, from the Metal Shading Language Specification)
+
+Source for every row: developer.apple.com/metal/Metal-Shading-Language-Specification.pdf, Version 4.1, page footer 2026-06-04, 383 pages. This lane downloaded the PDF, extracted text with `pdftotext -layout`, and read the sections named. The earlier table's note that Apple's HTML pages returned titles only does not apply: the PDF has the text.
+
+| # | Section READ | Verified fact | Triage |
+|---|---|---|---|
+| 36 | "simdgroup_matrix<T,Cols,Rows>" (p. 38) and the `simdgroup_multiply_accumulate` entry (6.8) | Types `simdgroup_half8x8`, `simdgroup_bfloat8x8` (Metal 3.1+), `simdgroup_float8x8`; "the mapping of matrix elements to threads is unspecified"; `d = a * b + c`; all operations need uniform control flow | LEAF-large: an 8x8 SIMD-group atom whose element-to-thread map is unspecified has no named `MmaAtom` (same family as rows 47 and 48). Candidate for `unpopped` as a design question |
+| 37 | "cooperative_tensor" (about line 5090 of the extract) and the `matmul2d` descriptor | `cooperative_tensor<ElementType, Extents, Layout>` partitions elements across a set of consecutive SIMD-groups; the layout is device-defined and "you don't usually" construct it; element access outside the valid set is undefined | LEAF-large, as row 36 |
+| 38 | Function constants, `[[function_constant(index)]]` (p. 190) | Index 0..65535; control compiled code paths and optional arguments; the value is given at `MTLFunction` creation, never in the source | LEAF candidate, same family as row 15 (a build-time specialization constant) |
+| 39 | Argument buffers, `[[id(n)]]` (about line 2666) | Members of an argument buffer take a generic `[[id(n)]]` index | OUT of the kernel layer (host binding model) |
+| 40 | 6.9.2 SIMD-group functions, pp. 220 and 223-224 | `simd_shuffle_and_fill_up/down(data, filling, delta[, modulo])`, `simd_shuffle_rotate_up/down(data, delta)`; delta uniform across the group; the worked 16-lane example shows the lower lanes taking the filling's upper lanes | **BUILT** from two `Shuffle`s and a `Select`: `kernel_simd_shuffle_fill.rs`. The `modulo` overloads are not built. The IR's one-operand `Shuffle` suffices: no leaf needed |
+| 41 | Address spaces (line 789) and the imageblock text | `threadgroup_imageblock` is an address space for tile-local graphics data | OUT (fragment/tile stage); fact only |
+| 42 | Visible and intersection function tables (about line 2921, `<metal_visible_function_table>`) | Functions called through a table by index; ray-tracing intersection tables | LEAF-large: `Call` is static. Ray tracing: fact only |
+| 43 | `texture2d`, `texture_buffer` sections | Typed texture objects and samplers | OUT, texture-shaped: fact only (no row is built) |
+
+**Counts, batch 4 (8 rows READ):** BUILT 1 (40), LEAF 4 (36, 37, 38, 42), OUT 3 (39, 41, 43).
+
+**Tally of the original 36 UNVERIFIED rows after batch 4:** 17 read before this batch; this batch reads 36, 37, 38, 39, 40, 41, 42, 43 (8), all UNVERIFIED in the table. **25 read.** Counting the table's own UNVERIFIED marks again gives 37 rows, not the 36 first reported (row 39 is marked half-read), so **12 remain by that count: 6, 7, 8, 11, 16, 17, 18, 19, 24, 34, 35, 52** (rows 7 and 34 are marked UNVERIFIED in the table although the 16-row re-run list names 7).
+
 — lane: unpopped-conformance
