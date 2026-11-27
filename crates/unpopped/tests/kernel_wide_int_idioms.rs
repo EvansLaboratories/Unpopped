@@ -115,12 +115,13 @@ fn mul_wide(narrow: bool) -> KernelFn {
 
 const EDGE: [u64; 6] = [0, 1, u64::MAX, 1 << 63, 0xFFFF_FFFF, 0x1234_5678_9ABC_DEF0];
 
-/// No pair is `u64::MAX * u64::MAX`: the oracle's narrow `Mul` forms the product in an `i128`, which that pair overflows
-/// (a debug-build panic, reported to `unpopped`); the wide multiply here is not affected.
+/// Includes `u64::MAX * u64::MAX`: the narrow (mutant) `Mul` forms the product in an `i128`, which that pair overflows.
+/// **Before the oracle hotfix (`wrapping_mul` in `oracle/kernel_eval.rs`) the mutant run panics in a debug build**
+/// ("attempt to multiply with overflow"); after it the run is trap-free. This is the regression vector.
 fn mul_wide_data() -> ([u64; 6], [u64; 6]) {
     (
         [EDGE[2], EDGE[3], EDGE[2], EDGE[4], EDGE[5], EDGE[1]],
-        [1 << 62, EDGE[3], EDGE[0], EDGE[4], EDGE[5], EDGE[2] >> 1],
+        [EDGE[2], EDGE[3], EDGE[0], EDGE[4], EDGE[5], EDGE[2]],
     )
 }
 
