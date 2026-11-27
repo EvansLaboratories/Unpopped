@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.32` — Added
+
+Conformance test for the structure key of a rank-3 batched contraction (CuTe survey row 39, key half; the value half is `kiss_ref_diff::batched_matmul_oracle_eq_kiss_ref`): `unpopped-vocab`'s `derive_structure_key_token` is asserted against the tokens KISS's own corpus carries for `f16 [64, 8, 512] . f16 [64, 512, 4096] -> f16 [64, 8, 4096]` on `cuda:sm89` (`sk8|ctr|f16|cuda:sm89|ix32|grid|r3|...|ctlm/d16/bs/f16/f16/f16/st`), with its controls: no declared batch axis gives no batch coordinate, a declared extent-1 batch is `bt`, rank 4 keys the class of the PRODUCT of the batch extents (`bm` for 4 x 64), and an out-of-range, repeated or contraction-overlapping batch axis is declined by name (`BatchAxisOutOfRange`, `BatchAxisDuplicate`, `BatchAxisOverlapsContractionRole`). The expected tokens were reported by the KISS lane (KISS `origin/main` 8828b194, KISS-CLASSIFY-6.6-0023) and are UNVERIFIED by this lane against the JSON corpus or the spec text, which were not read; two of KISS's five declines (`NotInOutput`, `NonPositiveExtent`) are not built. No source mutation was run: the derivation is the primary's `crates/*/src`, which this lane does not edit.
+
+— lane: unpopped-conformance
+
+---
+
 ## `0.60.31` — Fixed
 
 Oracle: a named barrier (`bar.sync` / `bar.arrive`) no longer orders a waiter after what a thread did in a LATER phase. The oracle runs the threads of a block one after another and a woken waiter took its acquire when it next ran, by which time a thread that had already run on into the next phase had left a release on the same barrier key; the waiter absorbed that release too, so an unordered read and write between two threads (a Hillis-Steele scan with the sync between a step's read and write removed, found by the conformance lane in #457) ran to completion with wrong values and no `DataRace`. Releases are now left on the key of the phase they arrive in and a waiter acquires only the phase it waited in (the records of phase `p - 2` are dropped when phase `p` opens). **Consumer effect, plainly: a kernel whose named-barrier phases raced now traps `KernelTrap::DataRace` from `run_launch` (and every entry that reaches it); previously it ran to completion with wrong values. If a differential test newly traps `DataRace`, the KERNEL was racy: fix the kernel, not the oracle.** Verified: `tests/kernel_named_barrier_race.rs` (a warp-wide neighbour add; the synced kernel runs, the kernel without the mid sync is a `DataRace`; without this change the second one returns `Ok` with wrong values), the #457 Hillis-Steele mutant `NoSecondSync` now traps, its unmutated scan still passes, and the 208 existing test binaries of `cargo test -p unpopped` pass.
