@@ -139,6 +139,20 @@ impl Machine<'_> {
             .ok()
             .filter(|i| *i < len)
             .ok_or(KernelTrap::AllocOutOfBounds { alloc })?;
+        // a layout permutes the storage: the access, the race log, the initialised flags and the async queue all key on the
+        // PHYSICAL element, so two logical elements never alias and a swizzle never hides or creates a race
+        let decl = &self.alloc_k.allocs[alloc as usize];
+        let i = match &decl.layout {
+            Some(l) => {
+                let width = u32::try_from(types::elem_size(decl.elem)).unwrap_or(0);
+                l.physical(i as i64, width)
+                    .ok()
+                    .and_then(|p| usize::try_from(p).ok())
+                    .filter(|p| *p < len)
+                    .ok_or(KernelTrap::AllocOutOfBounds { alloc })?
+            }
+            None => i,
+        };
         if c.peer.is_none() && c.asyncq.covers(alloc, i) {
             return Err(KernelTrap::AsyncRace { alloc });
         }

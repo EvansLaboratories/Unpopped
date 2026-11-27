@@ -1870,6 +1870,15 @@ pub enum KernelError {
         /// The allocation index.
         alloc: u32,
     },
+    /// An allocation's `layout` or `align_bytes` breaks a rule of `docs/design-swizzled-allocation.md` (the reason is named): a layout
+    /// only on `Shared` with a `Static` extent equal to its size, an injective layout inside the extent, a swizzle whose period
+    /// divides the byte extent and whose base is at least the element width, and a swizzled allocation aligned to the period.
+    AllocLayout {
+        /// The allocation index.
+        alloc: u32,
+        /// The rule, in words.
+        why: &'static str,
+    },
     /// A `Store` to a `Constant` allocation.
     WriteToConstant {
         /// The allocation index.
