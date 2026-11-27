@@ -15,6 +15,18 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.26` — Added
+
+Kernel-layer conformance kernel for split-K convolution in the serial-reduction form (CUTLASS survey row 50): the channel reduction of a 1-D convolution is cut into four fixed slices, launch 1 writes one partial per slice (one block per slice) to a workspace, and launch 2 sums the partials in slice order. Oracle-compared against a plain convolution over ordinary, NaN and all-negative corpora; a slice that reads the wrong channels and a reduction that drops a slice are mutants that fail by value. The stream-K division of one tile between blocks, persistent scheduling and work-stealing are held and not modelled, so the row stays Partial.
+
+— lane: unpopped-conformance
+
+Kernel-layer conformance kernel for a swizzled shared-memory tile (CUTLASS survey row 66): an 8 x 8 transpose through a block-shared tile addressed with an XOR swizzle (`col ^ row`) around one block barrier, oracle-compared against a plain transpose over ordinary, NaN and all-negative corpora. Two mutants (a load that forgets the swizzle, a store with a narrowed mask) stay in range and race-free and fail by value. The swizzle is index arithmetic only; `docs/PATENT-SWEEP.md` idea 15 reads the XOR swizzle as pure data, outside as read, not a clearance. TMA-style hardware swizzle modes and bank-conflict counting are not covered, so the row stays Partial.
+
+— lane: unpopped-conformance
+
+---
+
 ## `0.60.25` — Added
 
 Kernel-layer conformance kernel for nine-term `bf16` emulation of an `f32` GEMM (CUTLASS survey row 27): each operand is split into three `bf16` pieces, the nine products are accumulated in `f32`, and the oracle result is compared bit for bit against an independent reference that rounds to `bf16` by bit manipulation, over ordinary, NaN and all-negative corpora. A second test shows the emulation is within 1e-6 of the exact `f64` product where a plain `bf16` product is not. Three mutants (leading piece only, unchained residual, reversed pairing) fail by value. Finding: the oracle rounds a whole expression tree once, at the `Assign`, so the kernel emits one `Assign` per term to keep each add rounded to `f32`. Arithmetic only; no hardware atom, and no PATENT-SWEEP entry names this row.
