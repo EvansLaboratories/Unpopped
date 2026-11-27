@@ -10,7 +10,7 @@
 use super::{R, Sym, Walker, text};
 use tree_sitter::Node;
 use unpopped::exec::Scope;
-use unpopped::ir::{Numerics, RoundMode, ScalarExpr, UnaryOp};
+use unpopped::ir::{Numerics, ScalarExpr, UnaryOp};
 use unpopped::kernel::{CollectiveKind, ShuffleMode, Stmt};
 use unpopped_vocab::ElementKind as E;
 
@@ -138,9 +138,9 @@ impl<'s, 't> Walker<'s, 't> {
         let x = self.convert(x, xt, E::F32, i.value)?;
         out.append(&mut self.hoisted);
         let n = Numerics {
-            round: RoundMode::NearestEven,
             ftz,
             approx: true,
+            ..Numerics::default()
         };
         let value = ScalarExpr::Qualified(Box::new(ScalarExpr::Unary(op, Box::new(x))), n);
         out.push(Stmt::Assign { local, value });

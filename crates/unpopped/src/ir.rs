@@ -114,6 +114,11 @@ pub struct Numerics {
     /// Licence to use an approximate form within the bound of
     /// [`crate::numerics::approx_within`]; a backend may still spell the exact function.
     pub approx: bool,
+    /// The CUDA fast-math intrinsic this approximate node was lifted from (ROADMAP U37), when it was one: a hint, never a
+    /// meaning (the oracle and every checker rule except the one below ignore it, and the node computes the same with or without
+    /// it). Only an `approx` node of the operation the intrinsic lowers to may carry one ([`ApproxSpelling::op`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spelling: Option<ApproxSpelling>,
 }
 
 impl Default for Numerics {
@@ -122,6 +127,56 @@ impl Default for Numerics {
             round: RoundMode::NearestEven,
             ftz: false,
             approx: false,
+            spelling: None,
+        }
+    }
+}
+
+/// The CUDA fast-math intrinsic a lifted approximate node came from (ROADMAP U37, `docs/idiom-lifting-design.md` section 4.3).
+///
+/// The walker lifts `__expf(x)` to `ex2.approx(x * log2 e)` (a `Qualified(Exp2, approx)` over `x * log2 e`), so the token
+/// `__expf` is gone from the IR; this names it. A re-emit for a CUDA target that finds the node's operand and any surrounding scale
+/// exactly as the walker built them may print the token; in every other case (a hand-built node, an edited operand, another
+/// target) it prints the exact function or the `ex2.approx` sequence, never the token. `__sinf`, `__cosf`, `__tanf` and `__powf`
+/// have no approximate form in the IR and are not here.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum ApproxSpelling {
+    /// `__expf`: `Exp2` over `x * log2 e`.
+    Expf,
+    /// `__exp10f`: `Exp2` over `x * log2 10`.
+    Exp10f,
+    /// `__log2f`: `Log2`.
+    Log2f,
+    /// `__logf`: `Log2`, scaled by `ln 2` outside the node.
+    Logf,
+    /// `__log10f`: `Log2`, scaled by `log10 2` outside the node.
+    Log10f,
+    /// `__fdividef`: `Div`.
+    Fdividef,
+}
+
+impl ApproxSpelling {
+    /// The CUDA token.
+    #[must_use]
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Expf => "__expf",
+            Self::Exp10f => "__exp10f",
+            Self::Log2f => "__log2f",
+            Self::Logf => "__logf",
+            Self::Log10f => "__log10f",
+            Self::Fdividef => "__fdividef",
+        }
+    }
+
+    /// The operation the qualified node wraps.
+    #[must_use]
+    pub fn op(self) -> QualOp {
+        match self {
+            Self::Expf | Self::Exp10f => QualOp::Exp2,
+            Self::Log2f | Self::Logf | Self::Log10f => QualOp::Log2,
+            Self::Fdividef => QualOp::Div,
         }
     }
 }
