@@ -42,4 +42,19 @@
 
 **Tally of the original 36 UNVERIFIED rows:** READ in batch 1: 2, 5, 29, 44, 45, 46 (6). READ in batch 2: 10, 12, 49, 50, 51 (5). Rows 1, 9, 20, 21 and 23 were GREP-RERUN, not UNVERIFIED, so they do not reduce the 36. **11 read, 25 remain.** Row 22's `rand` page was fetched but its signature text was not extracted, and its descriptor half and rows 33 and 34 were not fetched, so they stay as the table marks them.
 
+## Batch 3 (language-level features, structured sparsity, wave matrices)
+
+| # | Source READ (page, section, version, date) | Verified fact | Triage |
+|---|---|---|---|
+| 14 | shader-slang.org/slang/user-guide/convenience-features.html, "Optional<T> type" (no date shown) | `Optional<T>` is a value that may be absent; `none` is the empty value; `.value` reads it; `p == none` tests | OUT of the IR: front-end sugar that lowers to a flag plus a value (two locals and an `If`), which the IR already has. Not a leaf |
+| 15 | shader-slang.org/slang/user-guide/link-time-specialization.html, "extern static const" (no date shown) | A constant declared `extern` is given its value by another module that `export`s it at link time, so the shader is specialized without a source change | LEAF candidate only if Unpopped wants a build-time specialization constant (no `SpecConst` in `ir.rs`; `ParamKind::Scalar` is a run-time scalar). Same family as rows 16 and 38 |
+| 30 | tilelang.com/programming_guides/instructions.html, "GEMM and sparse GEMM"; 0.1.16 | The page states only: `T.gemm_sp(...)` is a 2:4 sparse tensor-core GEMM "(see examples and README)"; it gives no operand or metadata layout | **READ, and limited:** the page has no more to read. The metadata-layout semantics are UNVERIFIED (the examples and README were not fetched). The non-tcgen05 sparse `Mma` flag is tested in `kernel_mma_flags.rs`. The same page lists `T.gemm_blockscaled` with scale-factor granularity, which `support/block_scaled.rs` covers |
+| 31 | same page, "Annotation helpers" and "Data Movement"; 0.1.16 | `T.use_swizzle(panel_size, enable)` is a rasterization hint; `T.copy` takes `coalesced_width` and `loop_layout` hints | `use_swizzle`: **COVERED** by `kernel_raster_group.rs` (the id-to-tile mapping). `coalesced_width`/`loop_layout`: HINT, no value semantics |
+| 47 | microsoft.github.io/DirectX-Specs/d3d/HLSL_SM_6_x_WaveMatrix.html, "MultiplyAccumulate", "MatrixDepth" (revised 2022-06-15 per the earlier table, not re-checked) | Wave-scope Left/Right/Accumulator matrices; `MultiplyAccumulate` adds A times B into the accumulator; K comes from `MatrixDepth()` and is an even multiple of 16 | LEAF-large: an opaque, hardware-chosen-K wave matrix has no IR form (`Mma` takes a named `MmaAtom`). Candidate for `unpopped` only as a design question |
+| 48 | microsoft.github.io/hlsl-specs/proposals/0035-linalg-matrix/ (proposal, "Planned Version: SM 6.10", no date); the sections naming OuterProduct and InterlockedAccumulate were located by text search, the whole 361 kB page was NOT read | `dx::linalg::Matrix` with thread, wave and threadgroup scope; has `OuterProduct` and `InterlockedAccumulate` | LEAF-large, as row 47; UNVERIFIED in detail (partial read) |
+
+**Counts, batch 3 (6 rows):** COVERED 1 (31, and its hints), OUT 1 (14), LEAF 3 (15, 47, 48), READ-limited 1 (30). Row 17 (Slang `AppendStructuredBuffer`) stays UNVERIFIED: the stdlib-reference URL returned 404.
+
+**Tally of the original 36 UNVERIFIED rows after batch 3:** batches 1-2 read 11 (see above); batch 3 reads 14, 15, 30, 31, 47, 48 (6), all of which were UNVERIFIED in the table (row 31, 30, 47, 48, 14, 15 are marked UNVERIFIED there). **17 read, 19 remain.**
+
 — lane: unpopped-conformance
