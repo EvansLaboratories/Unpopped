@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.33` — test, 64-bit integer atomics (survey row 50)
+
+`kernel_atomic_wide.rs`: twelve threads apply each integer `AtomicRmw` op with an operand above 2^32 to an `I64` and a `U64` cell; expected cells come from Rust operators, and a narrowed-operand and a wrong-op mutant change the cell by value. Adds the survey batch 1 and 2 verification doc. Tests and docs only.
+
+Read 10 rows of the idiom-gap table from their primary pages (CuTe DSL 4.7.0, TileLang 0.1.16, HLSL SM 6.0/6.5) and triaged them: 4 already covered on main (rows 2-redux, 28, 29, 45), 1 expressible and unbuilt (46 count-bits), 7 leaf candidates, 1 held, 1 stale (row 2 uniform vote, closed by #453). Docs only; no code changed.
+
+---
+
 ## `0.60.32` — Added
 
 Conformance test for the structure key of a rank-3 batched contraction (CuTe survey row 39, key half; the value half is `kiss_ref_diff::batched_matmul_oracle_eq_kiss_ref`): `unpopped-vocab`'s `derive_structure_key_token` is asserted against the tokens KISS's own corpus carries for `f16 [64, 8, 512] . f16 [64, 512, 4096] -> f16 [64, 8, 4096]` on `cuda:sm89` (`sk8|ctr|f16|cuda:sm89|ix32|grid|r3|...|ctlm/d16/bs/f16/f16/f16/st`), with its controls: no declared batch axis gives no batch coordinate, a declared extent-1 batch is `bt`, rank 4 keys the class of the PRODUCT of the batch extents (`bm` for 4 x 64), and an out-of-range, repeated or contraction-overlapping batch axis is declined by name (`BatchAxisOutOfRange`, `BatchAxisDuplicate`, `BatchAxisOverlapsContractionRole`). The expected tokens were reported by the KISS lane (KISS `origin/main` 8828b194, KISS-CLASSIFY-6.6-0023) and are UNVERIFIED by this lane against the JSON corpus or the spec text, which were not read; two of KISS's five declines (`NotInOutput`, `NonPositiveExtent`) are not built. No source mutation was run: the derivation is the primary's `crates/*/src`, which this lane does not edit.
