@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.22` — Added: block-scaled GEMM conformance kernel over the 512-byte scale-factor atom (CUTLASS survey row 22)
+
+`crates/unpopped/tests/kernel_block_scaled.rs` and `tests/support/block_scaled.rs`: `out[m][n] = sum_kb sfa[m][kb] * sfb[n][kb] * dot(a[m], b[n])` over blocks of 16, with both scale matrices read through the 128-row by 4-column basic-block atom (offset `(r % 32) * 16 + (r / 32) * 4 + c`) by index arithmetic in the kernel. Checker-valid and run on the oracle against a reference from the logical scales, the atom packed by an independent nested loop; corpora ordinary, all-negative and a NaN scale reaching exactly one output row. Two mutants (swapped row factors, a column-major atom) fail by value. Not covered: tiling of several atoms, fp8/fp4 element types, the CUTLASS config templates (atom recalled from `blockscaled_layout.hpp`, UNVERIFIED against a checkout).
+
+---
+
 ## `0.60.21` — docs: PATENT-SWEEP G-T2 addendum 6, Intel dot-product family; US12314717B2 claim 25 needs more against the shipped s8 Mma atom
 
 Docs only; no earlier verdict edited.
