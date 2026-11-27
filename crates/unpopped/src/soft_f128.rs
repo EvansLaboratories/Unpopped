@@ -512,6 +512,38 @@ mod tests {
     }
 
     #[test]
+    fn a_nonzero_division_remainder_breaks_a_rounding_tie_upward() {
+        // random significands a < b: find operands whose 115-bit quotient ends in the pair 10 (a tie at
+        // 113 bits) with a nonzero remainder. The true value is above the tie, so it must round UP; dropping the sticky bit
+        // would call it a tie and round to even.
+        let mut rng = Rng(77);
+        let mut found = 0;
+        for _ in 0..4000 {
+            let frac =
+                |r: &mut Rng| (u128::from(r.next()) << 64 | u128::from(r.next())) & (HIDDEN - 1);
+            let (fa, fb) = (frac(&mut rng), frac(&mut rng));
+            if fa >= fb {
+                continue; // keep the quotient below one: 115 bits
+            }
+            let num = W256::from_u128(HIDDEN + fa).shift_left(115);
+            let (q, r) = num.divrem_unsigned(W256::from_u128(HIDDEN + fb)).unwrap();
+            if q.low_u128() & 3 == 2 && !r.is_zero() {
+                let (x, y) = (
+                    F128((0x3fff << FRAC_BITS) | fa),
+                    F128((0x3fff << FRAC_BITS) | fb),
+                );
+                let want = (0x3ffdu128 << FRAC_BITS) + (q.shr_logical(2).low_u128() + 1);
+                assert_eq!(x.div_rne(y).0, want, "{fa:#x} / {fb:#x}");
+                found += 1;
+            }
+        }
+        assert!(
+            found >= 100,
+            "the search must find tie cases, found {found}"
+        );
+    }
+
+    #[test]
     fn specials_and_signed_zero() {
         let inf = F128::INFINITY;
         let one = F128::ONE;
