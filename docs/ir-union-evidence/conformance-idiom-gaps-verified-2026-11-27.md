@@ -88,8 +88,15 @@ Source for every row: developer.apple.com/metal/Metal-Shading-Language-Specifica
 | 35 | same file | `warp::make_causal(subtile, subtile, 0)` zeroes the upper triangle of a diagonal subtile; row index is `warpgroup::warpid()*16 + laneid()/4`, i.e. a per-lane coordinate from the MMA accumulator layout | EXPRESSIBLE: integer index math plus `Select`; the accumulator-fragment layout itself is what `operand_layout.rs`/`attention_mma.rs` already pin. Unbuilt as a subtile-causal mask: candidate row |
 | 52 | microsoft.github.io/DirectX-Specs/d3d/Raytracing.html, the `RayQuery` and `TraceRayInline` sections | `RayQuery` is an object available to any shader stage for inline ray traversal (`Proceed`, `Abort`, committed and candidate status) | OUT, ray tracing: fact only |
 
-**Counts, batch 5 (7 rows):** COVERED 2 (8, 34), LEAF 2 (6 fence, 7), OUT 2 (11, 52), EXPRESSIBLE-unbuilt 1 (35).
+**Counts, batch 5 (9 rows with 16 and 24):** COVERED 2 (8, 34), LEAF 3 (6 fence, 7, 16), OUT 2 (11, 52), HELD 1 (24), EXPRESSIBLE-unbuilt 1 (35).
 
-**Tally:** 25 read before this batch, 7 now (6, 7, 8, 11, 34, 35, 52) = **32 read**. Rows still UNVERIFIED: 16, 17, 18, 19 (Slang pages: the specialization-constant, append-buffer, quad and texture rows, the stdlib-reference URLs 404) and 24 (TileLang `T.Persistent`, held persistent scheduling).
+Two more rows read in this batch:
+
+| # | Source READ | Verified fact | Triage |
+|---|---|---|---|
+| 16 | shader-slang.org/slang/user-guide/spirv-target-specific.html, "Specialization Constants" (no date) | `[SpecializationConstant] const int myConst = 1;` maps to a SPIR-V specialization constant; Slang assigns `constant_id` unless given | LEAF candidate, the build-time constant family of rows 15 and 38 |
+| 24 | tilelang.com/programming_guides/control_flow.html, "Persistent (advanced)"; 0.1.16 | `T.Persistent(domain, wave_size, index, group_size)` exposes persistent thread-block looping; "an advanced construct that TileLang lowers in later passes" | HELD (persistent scheduling, standing hold); fact only |
+
+**Tally:** 25 read before this batch, 9 now (6, 7, 8, 11, 16, 24, 34, 35, 52) = **34 read**. Rows still UNVERIFIED: **17, 18, 19**. Rows 17 (`AppendStructuredBuffer`) and 19 (textures): Slang's stdlib-reference pages are not reachable by a URL I could construct (the guessed path returned 404 and the index page lists no links in its static HTML), so they stay UNVERIFIED for that reason; 19 is texture-shaped, fact only. Row 18 (Slang quad ops) is COVERED regardless: `kernel_quad_wave.rs` names it in its header, built from the HLSL quad rows, but the Slang page itself was not read.
 
 — lane: unpopped-conformance
