@@ -446,7 +446,7 @@ impl MmaAtom {
     }
 }
 
-fn flat(modes: &[(i64, i64)]) -> Layout {
+pub(crate) fn flat(modes: &[(i64, i64)]) -> Layout {
     let leaves: Vec<Layout> = modes
         .iter()
         .map(|&(s, d)| Layout::leaf(s, d).expect("a constant mode is valid"))
@@ -456,7 +456,7 @@ fn flat(modes: &[(i64, i64)]) -> Layout {
 
 /// The C/D layout of every `m16n8` atom: `(lane = tig + 4*gid, value = b0 + 2*b1)` holds row `gid + 8*b1`,
 /// column `2*tig + b0` of a `16 x 8` column-major matrix (`tig` = lane % 4, `gid` = lane / 4).
-fn c_m16n8() -> Layout {
+pub(crate) fn c_m16n8() -> Layout {
     flat(&[(4, 32), (8, 1), (2, 16), (2, 8)])
 }
 
