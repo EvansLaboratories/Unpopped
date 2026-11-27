@@ -331,6 +331,8 @@ fn votes_are_predicates_over_the_scope() {
     };
     assert_eq!(vote(VoteKind::All), vec![0, 0, 0, 0, 1, 1, 1, 1]);
     assert_eq!(vote(VoteKind::Any), vec![1; 8]);
+    // Uniform: subgroup 0 mixes zero and non-zero (not uniform), subgroup 1 is all non-zero (uniform): PTX `vote.sync.uni`
+    assert_eq!(vote(VoteKind::Uniform), vec![0, 0, 0, 0, 1, 1, 1, 1]);
     assert_eq!(
         vote(VoteKind::Ballot),
         vec![
