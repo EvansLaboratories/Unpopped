@@ -62,6 +62,14 @@ pub enum TypeError {
         /// The integer type of the operand.
         ty: ElementKind,
     },
+    /// An integer bit operation (`Popc`, `Clz`, `Brev`) applied to a value that is not an integer of a kernel body (a float,
+    /// or any operand in a plan body).
+    IntegerOnlyOperand {
+        /// The node kind, e.g. `"Unary"`.
+        node: &'static str,
+        /// The type of the operand.
+        ty: ElementKind,
+    },
     /// A `Pack` or `BitcastPacked` with a lane count other than 2, 4, 8 or 16, or an 8- or 16-lane one wider than 128 bits.
     BadLanes {
         /// The number of children given (saturated at 255).
@@ -224,6 +232,19 @@ pub const fn is_union_batch1(t: ElementKind) -> bool {
     )
 }
 
+/// A wide integer dtype (`I128`, `U128`, `I256`, `U256`, ROADMAP E2): a **kernel-layer** integer, computed by the oracle on a 256-bit
+/// pattern (`wide_int::W256`) because [`int_range`] holds `i128` pairs and cannot describe them. A plan never types one.
+#[must_use]
+pub const fn is_wide_int(t: ElementKind) -> bool {
+    crate::wide_int::wide_int_bits(t).is_some()
+}
+
+/// An integer a **kernel** may compute on: [`is_cast_int`] or [`is_wide_int`].
+#[must_use]
+pub const fn is_kernel_int(t: ElementKind) -> bool {
+    is_cast_int(t) || is_wide_int(t)
+}
+
 /// An OCP MX element format (`F4E2M1`, `F6E2M3`, `F6E3M2`): IEEE-shaped fields with NO
 /// infinity and NO NaN, so the all-ones exponent is an ordinary exponent and the largest
 /// code is the largest finite value. A `Cast` into one saturates (`docs/ir-typed-expressions.md`
@@ -340,6 +361,19 @@ pub fn check_cast(from: ElementKind, spec: CastSpec) -> Result<(), TypeError> {
     let bad = |why: &'static str| Err(TypeError::IllegalCast { from, spec, why });
     let to = spec.to;
     let known = |t| is_cast_float_endpoint(t) || is_cast_int(t);
+    // A wide integer converts to and from the integers only, by wrap or clamp: a float or sub-byte endpoint has no
+    // reference conversion yet (E2), so it is refused by name.
+    if is_wide_int(from) || is_wide_int(to) {
+        if !(is_kernel_int(from) && is_kernel_int(to)) {
+            return bad(
+                "a wide integer (i128, u128, i256, u256) casts to and from the integer types only: no float or sub-byte conversion is defined yet",
+            );
+        }
+        return match spec.sat {
+            Saturation::Wrap | Saturation::Clamp => Ok(()),
+            _ => bad("integer to integer takes Wrap or Clamp"),
+        };
+    }
     if is_subbyte_int(from) || is_subbyte_int(to) {
         // the other endpoint must be an integer (widen to i32 before a float), the only conversion is a wrap
         let other = if is_subbyte_int(from) { to } else { from };
@@ -801,7 +835,7 @@ fn node_ty(
     // values can only differ from the compute dtype here (the typed-expression gate
     // admits them under float compute), so an integer COMPUTE dtype is untouched.
     let no_int = |node: &'static str, t: ElementKind| {
-        if t != compute && is_cast_int(t) {
+        if t != compute && is_kernel_int(t) {
             Err(TypeError::IntegerOperand { node, ty: t })
         } else {
             Ok(t)
@@ -830,7 +864,7 @@ fn node_ty(
         ScalarExpr::Div(..) => {
             let t = same("Div", k[0], k[1])?;
             // the kernel layer admits an integer `Div` at any integer type (total, `docs/int-div-shift-semantics.md`)
-            if mode == TyMode::Kernel && is_cast_int(t) {
+            if mode == TyMode::Kernel && is_kernel_int(t) {
                 return Ok(t);
             }
             no_int("Div", t)
@@ -840,13 +874,13 @@ fn node_ty(
             // The float-only operators have no integer meaning anywhere (the oracle defines none, and a C emitter would
             // spell `fmod` and `pow` on integers), whether or not the integer type is the compute type. An integer
             // remainder is `Select(b == 0, 0, a - (a / b) * b)` over the total `Div` (`docs/int-div-shift-semantics.md`).
-            if is_cast_int(t) && float_only_binary(*op) {
+            if is_kernel_int(t) && float_only_binary(*op) {
                 return Err(TypeError::IntegerOperand {
                     node: "Binary",
                     ty: t,
                 });
             }
-            if t != compute && is_cast_int(t) {
+            if t != compute && is_kernel_int(t) {
                 if !(int_binary_ok(*op) || (mode == TyMode::Kernel && kernel_int_op(*op))) {
                     return Err(TypeError::IntegerOperand {
                         node: "Binary",
@@ -859,6 +893,17 @@ fn node_ty(
             }
             Ok(t)
         }
+        ScalarExpr::Unary(op, _) if op.is_bit_op() => {
+            // an integer-only operation: defined at the operand's own width, kernel layer only
+            if mode == TyMode::Kernel && int_range(k[0]).is_some() {
+                Ok(k[0])
+            } else {
+                Err(TypeError::IntegerOnlyOperand {
+                    node: "Unary",
+                    ty: k[0],
+                })
+            }
+        }
         ScalarExpr::Unary(..) => no_int("Unary", k[0]),
         ScalarExpr::Fma(..) => {
             let ab = no_int("Fma", same("Fma", k[0], k[1])?)?;
@@ -868,6 +913,13 @@ fn node_ty(
         ScalarExpr::Select(..) => same("Select", k[1], k[2]),
         ScalarExpr::Cast(_, spec) => {
             check_cast(k[0], *spec)?;
+            if mode == TyMode::Plan && (is_wide_int(k[0]) || is_wide_int(spec.to)) {
+                return Err(TypeError::IllegalCast {
+                    from: k[0],
+                    spec: *spec,
+                    why: "a wide integer (i128, u128, i256, u256) is a kernel-layer type: a plan does not cast to or from one",
+                });
+            }
             Ok(spec.to)
         }
         ScalarExpr::Bitcast(_, to) => {

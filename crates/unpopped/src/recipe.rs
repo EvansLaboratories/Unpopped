@@ -512,6 +512,8 @@ fn unary_kiss_name(op: UnaryOp) -> Option<&'static str> {
         U::Atanh => "atanh",
         U::Cbrt => "cbrt",
         U::Lgamma => "lgamma",
+        // no KISS-Ops token for the integer bit operations is verified (kernel layer only): an honest miss
+        U::Popc | U::Clz | U::Brev => return None,
         // `round` = round-half-to-even (RNE): the emitter is `rintf`/`rint` (Slang
         // `round`), the oracle is `round_ties_even` — an EXACT match for KISS-Ops
         // `round_even` (verified vs the emitter+oracle, not just the IR doc). A

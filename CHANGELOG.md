@@ -15,6 +15,44 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.61.4` — Docs: PATENT-SWEEP, U21 texture/sampler/surface, warp match/vote, bit-ops, SpecConstant, wide-int, binary128 and rounding patent charts (patents-2)
+
+Docs only. `docs/PATENT-SWEEP.md` gains the U21 texture/sampler/surface chart and updates 1-3, the warp match/vote/active-mask chart (sections 1-7a), the bit-op and `SpecConstant` chart, and the E2 wide-integer, E3 binary128 and U42/U43 rounding chart (section 8). Verdicts are only outside as read, needs more (limb quoted) or NOT CLEARED, unread; findings, not advice. No code changes.
+
+---
+
+## `0.61.3` — E2, the wide integers `I128`, `U128`, `I256`, `U256` are computed by the kernel oracle
+
+A kernel may now declare, load, store, compute on and convert the four wide integer dtypes (`check_kernel` no longer refuses them with `DtypeNotComputed`; `F128`, `F8E3M4` and `F8UE4M3` still are). The oracle holds one on a 256-bit two's-complement word (`wide_int::W256`, new, with wrapping add/sub/mul, shifts, compare, clamp, and div/rem) and `Val::Wide`.
+
+Rules are the narrow ones of `docs/int-div-shift-semantics.md` at the wide width: arithmetic wraps at the dtype's width, `Div` is total (a zero divisor gives the dividend, signed `MIN / -1` gives `MIN`), a shift count is read as unsigned bits modulo the width, ordering and the six comparisons read the dtype's signedness, and a `Cast` between a wide and any narrow integer wraps or clamps. A float or sub-byte endpoint of a wide `Cast` is refused by name (`IllegalCast`), and a plan never types a wide value (`types::is_wide_int`, `types::is_kernel_int`).
+
+Additive: no public enum or struct gained a variant or field. cpu-c declines a wide kernel by name (`tests/kernel_wide_int_declines.rs`); no emitter lowers a wide add, and the oracle's 256-bit carry is computed from native `u64` limb sums, not a carry-flag instruction chain.
+
+Verified: `tests/kernel_wide_int.rs` runs the 128-bit types against Rust's own `i128`/`u128` operators and the 256-bit types against an independent `(hi, lo)` model plus hand-pinned products and quotients, over operand sets including 0, 1, all-ones, the sign bit alone and patterns crossing the 128-bit boundary; `W256` and the oracle operations carry their own unit tests and seeded-mutation checks. Found and fixed on the way: a 16-byte scratch buffer in the same-value store test overflowed on a 256-bit element.
+
+---
+
+## `0.61.2` — documented panics of the c-family unary spellers on integer bit operations
+
+`cfamily::unary_f32` and `unary_f64` now document, under `# Panics`, that `UnaryOp::Popc`, `Clz` and `Brev` panic (message "c-family lowering: {op:?} is an integer bit operation, refused by the typing gate"), and that type checking refuses them first (`TypeError::IntegerOnlyOperand`). Tests pin the message. No signature or behaviour change.
+
+---
+
+## `0.61.1` — F64 unary ULP tier (`ulp_bound_measured_for`, ROADMAP U42)
+
+Added `contract::ulp_bound_measured_for(e, key, measured, dtype)`; `ulp_bound` and `ulp_bound_measured` keep their signatures and the `f32` table. At `F64` each unary op is rated `max(CUDA f32 count, the vendor double-precision bound)`, and `oracle::required_fidelity` now passes the plan dtype, so the one op whose double bound is larger than its `f32` count, `erfc` (4 to 5), is no longer under-stated in an F64 band (`rel = (steps + 2*5) * 2^-53`). Every other op is unchanged at `F32` and `F64`: no tightening, because the vendor says its bounds are "not guaranteed"; `lgamma` keeps 6.
+
+Source: NVIDIA CUDA Programming Guide v13.5, "Mathematical Functions" appendix, tables 54-58 and 62, page dated 2026-10-31. **Provenance:** the 20 rows other than erf, erfc, lgamma and rsqrt were relayed by a fetch subagent from the page's raw text, not read first-hand; `erf`, `erfc`, `lgamma` and `rsqrt` were re-read verbatim, and the one value that changes, `erfc` (5 ULP), is among those first-hand rows. Pinned by `ulp_f64_tier.rs` (every op at both dtypes; the F64 and F32 fidelity band of `erfc`).
+
+---
+
+## `0.61.0` — **BREAKING**: `UnaryOp::Popc`, `Clz`, `Brev` (integer bit operations)
+
+Added three variants to the exhaustive public enum `UnaryOp`: `Popc` (population count), `Clz` (leading zeros, `w` for zero) and `Brev` (bit reversal), integer-only, defined at the operand's own width (its `w`-bit two's-complement pattern) with the operand's type as the result (PTX ISA `popc`/`clz`/`brev`, CUDA `__popc`/`__clz`/`__brev`). **Breaking** for any downstream exhaustive `match` on `UnaryOp`; `UnaryOp::is_bit_op` names the three, and `TypeError::IntegerOnlyOperand` refuses one on a float or in a plan body. The kernel oracle evaluates them at every integer width (I8..U64); the plan gate admits no `UnaryOp` at an integer dtype and cpu_c declines them by name. In-repo exhaustive sites (cfamily, contract, optimize, pattern, recipe, scalar_ops) rate them exact, never fold them, and map no KISS-Ops token. Pinned by `kernel_bit_ops.rs` (per-bit reference at every width, 0 and all-ones) and `kernel_bit_op_declines.rs`.
+
+---
+
 ## `0.60.35` — test, float Max/Min/Sum collectives over 32 lanes with NaN, signed zero and infinities
 
 `kernel_collective_float_nan.rs`: F32 `Reduce` Max, Min and Sum over a 32-lane subgroup against hand-written vectors (NaN propagates, a zero tie keeps the first lane's sign, +inf plus -inf is NaN, Sum is the lane-order left fold); a NaN-ignoring Max/Min, a tie to the last lane and a reversed or pairwise Sum fail the vectors by value. Rule read from the oracle code; the design note matches it. Tests only.

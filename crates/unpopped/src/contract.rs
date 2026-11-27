@@ -1471,6 +1471,19 @@ pub fn ulp_bound_measured(
     key: &AccuracyKey,
     measured: Option<&MeasuredOn<'_>>,
 ) -> f64 {
+    ulp_bound_measured_for(e, key, measured, ElementKind::F32)
+}
+
+/// [`ulp_bound_measured`] for the compute dtype `dtype` (ROADMAP U42). The per-op table is CUDA's **`f32`** count; at
+/// [`ElementKind::F64`] each unary op is rated `max(f32 count, the vendor's double-precision bound)` (see
+/// `unary_ulp_at`), so the one op whose double bound is larger than its `f32` one, `erfc`, is not under-stated. Every other
+/// dtype gets the `f32` table, exactly as [`ulp_bound_measured`] always did.
+pub fn ulp_bound_measured_for(
+    e: &ScalarExpr,
+    key: &AccuracyKey,
+    measured: Option<&MeasuredOn<'_>>,
+    dtype: ElementKind,
+) -> f64 {
     // A measurement that saw a mismatch on this device outranks every table: the body is not
     // exact here, whatever the namespace's table says.
     let verdict = measured.and_then(|m| m.verdict_for(e));
@@ -1507,19 +1520,19 @@ pub fn ulp_bound_measured(
         // An Exact run on this device proves the body matches a correctly-rounded reference, so
         // it admits exactly the bodies the table rates 0 and no others (an operator with an
         // error budget is not made correctly rounded by agreeing with a reference that has one).
-        let measured_exact = verdict == Some(ExactnessVerdict::Exact) && ulp_sum(e) == 0.0;
+        let measured_exact = verdict == Some(ExactnessVerdict::Exact) && ulp_sum(e, dtype) == 0.0;
         return if is_exact_on_every_target(e) || measured_exact {
             0.0
         } else {
             f64::INFINITY
         };
     }
-    ulp_sum(e)
+    ulp_sum(e, dtype)
 }
 
 /// The op-keyed walk. Unchanged, and **that is the remaining defect**: see
 /// [`AccuracyKey`] for the axes it still does not have.
-fn ulp_sum(e: &ScalarExpr) -> f64 {
+fn ulp_sum(e: &ScalarExpr, dt: ElementKind) -> f64 {
     match e {
         // Coord rates 0 like the other leaves: the long-long → float/double
         // cast is exact under the documented caller precondition (axis extent
@@ -1537,12 +1550,12 @@ fn ulp_sum(e: &ScalarExpr) -> f64 {
         | ScalarExpr::ConstInt(..)
         | ScalarExpr::Local(_)
         | ScalarExpr::Exec(_) => 0.0,
-        ScalarExpr::Unary(op, x) => ulp_sum(x) + unary_ulp(*op),
-        ScalarExpr::Binary(op, a, b) => ulp_sum(a) + ulp_sum(b) + binary_ulp(*op),
+        ScalarExpr::Unary(op, x) => ulp_sum(x, dt) + unary_ulp_at(*op, dt),
+        ScalarExpr::Binary(op, a, b) => ulp_sum(a, dt) + ulp_sum(b, dt) + binary_ulp(*op),
         ScalarExpr::Add(a, b)
         | ScalarExpr::Sub(a, b)
         | ScalarExpr::Mul(a, b)
-        | ScalarExpr::Div(a, b) => ulp_sum(a) + ulp_sum(b),
+        | ScalarExpr::Div(a, b) => ulp_sum(a, dt) + ulp_sum(b, dt),
         // Select contributes 0 ulp of its OWN: the pick never rounds (the arms'
         // bits move untouched, the cond compare is exact) — the same modeling
         // call as the Cmp* predicates in `binary_ulp`. Subexpression tiers sum
@@ -1550,27 +1563,27 @@ fn ulp_sum(e: &ScalarExpr) -> f64 {
         // any select body contract-less — but the table stays exhaustive on
         // purpose so the rating is decided here, not silently defaulted, when
         // the Where advert lands.)
-        ScalarExpr::Select(c, a, b) => ulp_sum(c) + ulp_sum(a) + ulp_sum(b),
+        ScalarExpr::Select(c, a, b) => ulp_sum(c, dt) + ulp_sum(a, dt) + ulp_sum(b, dt),
         // Fma is correctly rounded (one rounding of the exact a*b+c), so it adds 0
         // ulp of its OWN; sub-expression tiers sum as usual.
-        ScalarExpr::Fma(a, b, c) => ulp_sum(a) + ulp_sum(b) + ulp_sum(c),
+        ScalarExpr::Fma(a, b, c) => ulp_sum(a, dt) + ulp_sum(b, dt) + ulp_sum(c, dt),
         // A conversion rounds once, and not into the compute dtype's ulp. Defensive:
         // `derive_pattern` rejects a typed body (TypedExprUnsupported) before any
         // contract is emitted, so no tolerance is ever advertised for one. One
         // ulp is the conservative rating should that ever change.
-        ScalarExpr::Cast(x, _) => ulp_sum(x) + 1.0,
+        ScalarExpr::Cast(x, _) => ulp_sum(x, dt) + 1.0,
         // A bitcast moves bits exactly.
-        ScalarExpr::Bitcast(x, _) => ulp_sum(x),
+        ScalarExpr::Bitcast(x, _) => ulp_sum(x, dt),
         // Defensive like `Cast`: a packed body is `TypedExprUnsupported`, so no contract is
         // emitted. A lane moves unconverted; a pack's budget is the sum of its lanes'
         // (an upper bound on any one of them).
-        ScalarExpr::Extract(x, _) | ScalarExpr::BitcastPacked(x, ..) => ulp_sum(x),
-        ScalarExpr::Pack(xs) => xs.iter().map(ulp_sum).sum(),
+        ScalarExpr::Extract(x, _) | ScalarExpr::BitcastPacked(x, ..) => ulp_sum(x, dt),
+        ScalarExpr::Pack(xs) => xs.iter().map(|x| ulp_sum(x, dt)).sum(),
         // The wrapped operation's budget, plus one ulp when it rounds in a directed
         // mode (error below one ulp, not half) and `APPROX_ULP` for an approximate
         // form. `ftz` adds nothing: the contract's input domain excludes subnormals.
         ScalarExpr::Qualified(x, n) => {
-            ulp_sum(x)
+            ulp_sum(x, dt)
                 + if n.round == crate::ir::RoundMode::NearestEven {
                     0.0
                 } else {
@@ -1583,6 +1596,56 @@ fn ulp_sum(e: &ScalarExpr) -> f64 {
                 }
         }
     }
+}
+
+/// The unary rating at the compute dtype `dt` (ROADMAP U42): the `f32` count of [`unary_ulp`], and at `F64` the larger of
+/// that and the vendor's double-precision bound [`vendor_f64_ulp`]. Never tighter than the `f32` count: the vendor's bounds
+/// are not guaranteed, so a smaller double bound is not taken as licence to narrow the band.
+fn unary_ulp_at(op: UnaryOp, dt: ElementKind) -> f64 {
+    let f32_count = unary_ulp(op);
+    if dt == ElementKind::F64 {
+        vendor_f64_ulp(op).map_or(f32_count, |v| v.max(f32_count))
+    } else {
+        f32_count
+    }
+}
+
+/// CUDA's maximum ULP error for the **`double`** form of a unary op, where the vendor's table has a row; `None` for an op it
+/// has no row for (`Exp2`, the composites `Sigmoid`/`Silu`/`Gelu`, and the exact ops, which stay at the `f32` count).
+///
+/// Source: NVIDIA CUDA Programming Guide v13.5, "Mathematical Functions" appendix
+/// (`docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/mathematical-functions.html`, page dated 2026-10-31), tables
+/// 54-58 and 62, the `double` column. The page says the bounds are "derived from extensive, though not exhaustive, testing.
+/// Therefore, they are not guaranteed." Provenance: 20 of these rows were relayed by a fetch subagent from the page's raw text;
+/// `Erf`, `Erfc`, `Lgamma` and `Rsqrt` were re-read verbatim (`erfc(x)` 5 ULP; `erf` 2; `lgamma` 4 ULP for
+/// x outside [-23.0001, -2.2637], "larger otherwise"; `rsqrt` 1). `Lgamma` keeps the `f32` count 6 (larger than 4, and the
+/// page gives no bound inside the interval).
+const fn vendor_f64_ulp(op: UnaryOp) -> Option<f64> {
+    Some(match op {
+        UnaryOp::Exp
+        | UnaryOp::Expm1
+        | UnaryOp::Log
+        | UnaryOp::Log10
+        | UnaryOp::Log2
+        | UnaryOp::Log1p
+        | UnaryOp::Cbrt
+        | UnaryOp::Cosh
+        | UnaryOp::Tanh
+        | UnaryOp::Rsqrt => 1.0,
+        UnaryOp::Sin
+        | UnaryOp::Cos
+        | UnaryOp::Tan
+        | UnaryOp::Asin
+        | UnaryOp::Acos
+        | UnaryOp::Atan
+        | UnaryOp::Sinh
+        | UnaryOp::Atanh
+        | UnaryOp::Erf => 2.0,
+        UnaryOp::Asinh | UnaryOp::Acosh => 3.0,
+        UnaryOp::Lgamma => 4.0,
+        UnaryOp::Erfc => 5.0,
+        _ => return None,
+    })
 }
 
 /// Per-op CUDA f32 ULP error. Correctly-rounded / exact ops (`Neg`/`Abs`/`Sqr`/
@@ -1604,7 +1667,11 @@ fn unary_ulp(op: UnaryOp) -> f64 {
         | UnaryOp::Round
         | UnaryOp::Sign
         | UnaryOp::Step
-        | UnaryOp::Trunc => 0.0,
+        | UnaryOp::Trunc
+        // integer bit operations are exact
+        | UnaryOp::Popc
+        | UnaryOp::Clz
+        | UnaryOp::Brev => 0.0,
         UnaryOp::Log | UnaryOp::Expm1 | UnaryOp::Log1p | UnaryOp::Cbrt | UnaryOp::Log2 => 1.0,
         UnaryOp::Exp
         | UnaryOp::Tanh
