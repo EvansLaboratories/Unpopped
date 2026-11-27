@@ -1,3 +1,0 @@
-kind: Added: `Swizzle::in_elements`, a byte-address swizzle read over elements
----
-`Swizzle::in_elements(width_bytes)` in `unpopped-vocab::layout_algebra` (`docs/design-swizzled-allocation.md` section 2): for a power-of-two element width `w = 2^k` with `k <= base`, the swizzle with `base - k` that satisfies `byte.apply(i*w) == w * elems.apply(i)`. Declines a non-power-of-two width (`NotDivisible`) and a width wider than `2^base` (`BadSwizzle`). CuTe's upcast of a layout atom was not read (**UNVERIFIED** against `cute/layout.hpp`, `cute/swizzle.hpp`; no local facts directory); pinned by the identity, checked over a grid of swizzles and every offset below 4096, with a broken derivation that must fail. Additive; no kernel or IR change.
