@@ -112,10 +112,11 @@ fn case_over(
     dtype: ElementKind,
     body: ScalarExpr,
     shape: &[i64],
-    (block, grid): (u32, u32),
+    launch: (u32, u32),
     ulps: u64,
     ins: [TypedBuffer; 2],
 ) -> LaunchCase {
+    let (block, grid) = launch;
     let rank = u8::try_from(shape.len()).expect("rank fits u8");
     let opdef = OpDef::elementwise(op, 2, &[dtype], Expr(body));
     let kernel = lift_elementwise_opdef_launched(&opdef, dtype, rank, block, grid)
