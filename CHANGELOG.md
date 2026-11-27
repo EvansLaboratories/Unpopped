@@ -15,6 +15,18 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.25` — Added
+
+Kernel-layer conformance kernel for nine-term `bf16` emulation of an `f32` GEMM (CUTLASS survey row 27): each operand is split into three `bf16` pieces, the nine products are accumulated in `f32`, and the oracle result is compared bit for bit against an independent reference that rounds to `bf16` by bit manipulation, over ordinary, NaN and all-negative corpora. A second test shows the emulation is within 1e-6 of the exact `f64` product where a plain `bf16` product is not. Three mutants (leading piece only, unchained residual, reversed pairing) fail by value. Finding: the oracle rounds a whole expression tree once, at the `Assign`, so the kernel emits one `Assign` per term to keep each add rounded to `f32`. Arithmetic only; no hardware atom, and no PATENT-SWEEP entry names this row.
+
+— lane: unpopped-conformance
+
+Kernel-layer conformance kernel for GEMM over arbitrary strides (CUTLASS survey row 7, the `lda` and non-contiguous part): a row-major `A` padded to `lda = K + 3`, a column-major `B`, and a padded `C`, all addressed by logical coordinates with the strides on the argument views. The oracle result is compared against a reference over the logical matrices (ordinary, NaN, all-negative corpora), the poisoned storage outside the views is never read, and the output padding comes back untouched. Two mutants (swapped `B` index, shifted output row) fail by value. The misaligned-`Raw` trap half of the row is already covered by `kernel_raw_place.rs`; the TMA 16-byte stride rule is not covered here, so the row stays Partial.
+
+— lane: unpopped-conformance
+
+---
+
 ## `0.60.24` — Added
 
 Kernel-layer conformance kernel for complex GEMM (CUTLASS survey rows 26 and 82): interleaved `(re, im)` `F32` operands, a four-multiply and a three-multiply (Gaussian) form, oracle-compared against an independent complex reference over ordinary, NaN and all-negative corpora, with a conjugated-operand and an imaginary-sign mutant that fail by value. There is no complex element kind, so the rows stay Partial for the dtype itself; the 3xTF32 emulation is not covered here.
