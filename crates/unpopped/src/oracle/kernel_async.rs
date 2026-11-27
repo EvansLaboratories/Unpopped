@@ -8,7 +8,7 @@
 
 use super::kernel_eval::{KernelArg, KernelTrap, Machine};
 use super::kernel_mem::{AccessKind, PendingCopy};
-use super::{Val, elem_bits, read_elem};
+use super::{Val, elem_bits, load_val};
 use crate::exec::MemorySpace;
 use crate::ir::ScalarExpr;
 use crate::kernel::Place;
@@ -131,7 +131,7 @@ impl Machine<'_> {
             let KernelArg::Buffer(tb) = &self.args[b] else {
                 unreachable!("offset() returned a buffer");
             };
-            vals.push(Val::Raw(read_elem(&tb.bytes, off + j, dt), dt));
+            vals.push(load_val(&tb.bytes, off + j, dt));
         }
         Ok(vals)
     }

@@ -29,6 +29,9 @@ pub(super) enum Val {
     /// `f32` (every value of which is an exact `f64`) and `c128` a pair of `f64`.
     Complex(f64, f64),
     Raw(u128, ElementKind),
+    /// A value of a wide integer dtype (`I128`, `U128`, `I256`, `U256`) as its canonical 256-bit pattern (ROADMAP E2): the
+    /// dtype says how to read it. Never produced for a narrower dtype, so every existing path is unchanged.
+    Wide(crate::wide_int::W256, ElementKind),
 }
 
 /// Decode a raw integer storage pattern to a signed wide integer (S8 sign-,
@@ -170,6 +173,9 @@ impl Val {
             Val::Complex(re, im) => {
                 panic!("oracle: complex value ({re}, {im}) projected into the float domain")
             }
+            Val::Wide(_, dt) => {
+                panic!("oracle: wide integer {dt:?} projected into the float domain (E2 slice 2b)")
+            }
         }
     }
 
@@ -186,6 +192,9 @@ impl Val {
             Val::Raw(b, dt) if is_complex(dt) => raw_to_complex(b, dt),
             Val::Raw(b, dt) if is_int(dt) => (raw_to_i128(b, dt) as f64, 0.0),
             Val::Raw(b, dt) => (raw_to_f64(b, dt), 0.0),
+            Val::Wide(_, dt) => panic!(
+                "oracle: wide integer {dt:?} projected into the complex domain (E2 slice 2b)"
+            ),
         }
     }
 
@@ -197,6 +206,9 @@ impl Val {
             Val::Float(f) => f as i128,
             Val::Complex(re, im) => {
                 panic!("oracle: complex value ({re}, {im}) projected into the integer domain")
+            }
+            Val::Wide(_, dt) => {
+                panic!("oracle: wide integer {dt:?} projected into the i128 domain (E2 slice 2b)")
             }
         }
     }

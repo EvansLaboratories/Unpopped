@@ -154,10 +154,10 @@ impl W256 {
     pub fn wrapping_add(self, o: Self) -> Self {
         let mut out = [0u64; 4];
         let mut carry = false;
-        for i in 0..4 {
+        for (i, slot) in out.iter_mut().enumerate() {
             let (s1, c1) = self.0[i].overflowing_add(o.0[i]);
             let (s2, c2) = s1.overflowing_add(u64::from(carry));
-            out[i] = s2;
+            *slot = s2;
             carry = c1 || c2;
         }
         Self(out)
@@ -197,20 +197,20 @@ impl W256 {
     ///
     /// On `n >= 256`, which is a caller error (an unmasked count).
     #[must_use]
-    pub fn shl(self, n: u32) -> Self {
-        assert!(n < 256, "W256::shl count {n} is not below 256");
+    pub fn shift_left(self, n: u32) -> Self {
+        assert!(n < 256, "W256::shift_left count {n} is not below 256");
         let (limbs, bits) = ((n / 64) as usize, n % 64);
         let mut out = [0u64; 4];
-        for i in limbs..4 {
-            out[i] = self.0[i - limbs] << bits;
+        for (i, slot) in out.iter_mut().enumerate().skip(limbs) {
+            *slot = self.0[i - limbs] << bits;
             if bits > 0 && i > limbs {
-                out[i] |= self.0[i - limbs - 1] >> (64 - bits);
+                *slot |= self.0[i - limbs - 1] >> (64 - bits);
             }
         }
         Self(out)
     }
 
-    /// Logical shift right by `n` bits (`n` below 256, as [`Self::shl`]).
+    /// Logical shift right by `n` bits (`n` below 256, as [`Self::shift_left`]).
     ///
     /// # Panics
     ///
@@ -220,10 +220,10 @@ impl W256 {
         assert!(n < 256, "W256::shr_logical count {n} is not below 256");
         let (limbs, bits) = ((n / 64) as usize, n % 64);
         let mut out = [0u64; 4];
-        for i in 0..(4 - limbs) {
-            out[i] = self.0[i + limbs] >> bits;
+        for (i, slot) in out.iter_mut().enumerate().take(4 - limbs) {
+            *slot = self.0[i + limbs] >> bits;
             if bits > 0 && i + limbs + 1 < 4 {
-                out[i] |= self.0[i + limbs + 1] << (64 - bits);
+                *slot |= self.0[i + limbs + 1] << (64 - bits);
             }
         }
         Self(out)
@@ -238,7 +238,7 @@ impl W256 {
     pub fn shr_arith(self, n: u32) -> Self {
         let logical = self.shr_logical(n);
         if self.is_negative() && n > 0 {
-            logical.or(Self::ONES.shl(256 - n))
+            logical.or(Self::ONES.shift_left(256 - n))
         } else {
             logical
         }
@@ -343,13 +343,13 @@ impl W256 {
         let mut q = Self::ZERO;
         let mut r = Self::ZERO;
         for i in (0..256u32).rev() {
-            r = r.shl(1);
+            r = r.shift_left(1);
             if self.shr_logical(i).0[0] & 1 == 1 {
                 r.0[0] |= 1;
             }
             if r.cmp_unsigned(d) != Ordering::Less {
                 r = r.wrapping_sub(d);
-                q = q.or(Self::ONE.shl(i));
+                q = q.or(Self::ONE.shift_left(i));
             }
         }
         Some((q, r))
@@ -401,18 +401,18 @@ mod tests {
             W256([1, 0, u64::MAX - 1, u64::MAX])
         );
         // 2^255 * 2 wraps to zero
-        assert_eq!(W256::ONE.shl(255).wrapping_mul(u(2)), W256::ZERO);
+        assert_eq!(W256::ONE.shift_left(255).wrapping_mul(u(2)), W256::ZERO);
     }
 
     #[test]
     fn shifts_cross_limbs_and_fill_sign() {
-        assert_eq!(W256::ONE.shl(64), W256([0, 1, 0, 0]));
-        assert_eq!(W256::ONE.shl(255).shr_logical(255), W256::ONE);
+        assert_eq!(W256::ONE.shift_left(64), W256([0, 1, 0, 0]));
+        assert_eq!(W256::ONE.shift_left(255).shr_logical(255), W256::ONE);
         assert_eq!(i(-8).shr_arith(1), i(-4));
         assert_eq!(i(-1).shr_arith(255), W256::ONES);
         assert_eq!(u(0xF0).shr_arith(4), u(0xF));
         // 70 = 64 + 6: limb and bit part together
-        assert_eq!(W256::ONE.shl(70).shr_logical(70), W256::ONE);
+        assert_eq!(W256::ONE.shift_left(70).shr_logical(70), W256::ONE);
     }
 
     #[test]
@@ -422,8 +422,8 @@ mod tests {
         let (lo, hi) = wide_int_range(ElementKind::U128).unwrap();
         assert_eq!((lo, hi), (W256::ZERO, u(u128::MAX)));
         let (lo, hi) = wide_int_range(ElementKind::I256).unwrap();
-        assert_eq!(lo, W256::ONE.shl(255));
-        assert_eq!(hi, W256::ONE.shl(255).wrapping_sub(W256::ONE));
+        assert_eq!(lo, W256::ONE.shift_left(255));
+        assert_eq!(hi, W256::ONE.shift_left(255).wrapping_sub(W256::ONE));
         let (lo, hi) = wide_int_range(ElementKind::U256).unwrap();
         assert_eq!((lo, hi), (W256::ZERO, W256::ONES));
         assert!(wide_int_range(ElementKind::I64).is_none());
@@ -459,13 +459,13 @@ mod tests {
         assert_eq!(u(1).divrem_unsigned(W256::ZERO), None);
         assert_eq!(i(1).divrem_signed(W256::ZERO), None);
         // MIN / -1 wraps to MIN, remainder zero
-        let min = W256::ONE.shl(255);
+        let min = W256::ONE.shift_left(255);
         assert_eq!(min.divrem_signed(i(-1)), Some((min, W256::ZERO)));
         // a quotient wider than 128 bits
-        let big = W256::ONE.shl(200);
+        let big = W256::ONE.shift_left(200);
         assert_eq!(
-            big.divrem_unsigned(W256::ONE.shl(100)),
-            Some((W256::ONE.shl(100), W256::ZERO))
+            big.divrem_unsigned(W256::ONE.shift_left(100)),
+            Some((W256::ONE.shift_left(100), W256::ZERO))
         );
     }
 
