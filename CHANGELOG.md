@@ -15,6 +15,38 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.21` — docs: PATENT-SWEEP G-T2 addendum 6, Intel dot-product family; US12314717B2 claim 25 needs more against the shipped s8 Mma atom
+
+Docs only; no earlier verdict edited.
+
+---
+
+## `0.60.20` — feat: Layout by-mode coalesce, and the zipped/tiled/flat divide and blocked/raked/zipped/tiled/flat product variants (IR-union cute.md rows 7, 10, 11)
+
+`unpopped-vocab`: `Layout::coalesce_profile`, `logical_divide_by_mode`, `zipped_divide`, `tiled_divide`, `flat_divide`, `blocked_product`, `raked_product`, `zipped_product`, `tiled_product` and `flat_product`. Each applies the existing single-mode `logical_divide` / `logical_product` to every top-level mode and regroups the pairs, so none can disagree with those on a mode; a mode that does not divide is declined (`NotDivisible`), never guessed. Additive; pure vocabulary. Pinned by `tests/layout_algebra_variants.rs` (hand-computed examples plus a brute-force reading of every coordinate, each checker run against a broken grouping). The groupings are UNVERIFIED against CUTLASS `cute/layout.hpp` (not re-read).
+
+---
+
+## `0.60.19` — Added: tools/gate.sh (full and fast local gate with the path rule), tools/gate-locked.sh (one gate at a time), tools/gate-daily.sh, tools/test-gate.sh, docs/gate.md
+
+The local pre-PR gate is now in the repository: a fast gate (the cpu-c leg is a compile check plus a run of the cpu-c test files the diff touches) allowed only when the diff touches none of the listed paths, with the rule printed and enforced in the script (exit 3 on a forbidden path); a lock so two gates never run at once (stale after 3 h or a dead pid); a daily full gate on origin/main. Measured 43 minutes full, 34 of them the cpu-c runtime leg. The forge's required checks are unchanged. Tests include a mutant of the rule. Tools and docs only.
+
+---
+
+## `0.60.18` — Added: the K role set for contraction keys (KISS 0.24.0 6.6-0023a): `ContractionRoles::with_k_more_axes`, K class and divisibility from the product of every K extent (plan E4)
+
+`unpopped_vocab::ContractionRoles` gains further K axes (`with_k_more_axes`, `k_more_axes`; the struct is `non_exhaustive` with private fields, so the change is additive). The key derivation takes the K size class and divisibility from the product of every declared K extent and declines `ContractionAxisInvalid` for a further K axis that repeats K, another further axis, M or N, or lies outside its operand. The four KISS 0.24.0 vectors that were the E1a `KNOWN_GAP` now pass and the gap list is empty. The op layer is unchanged and pinned: the plan gate still refuses two `ContractedK` axes by name (`RolesInvalid`, plan-layer multi-K is ROADMAP D2), so a two-K cell derives a key but does not plan. Plan: `docs/design-union-batch1-consumer.md` section 6.
+
+---
+
+## `0.60.17` — feat: lift_elementwise_multi, a multi-output and u8-output lift that reads the real Slang emitter spelling (ROADMAP U67)
+
+`unpopped-convert`: `lift_elementwise_multi` lifts an elementwise kernel that stores several outputs (`output0`, `output1`, ..., one store each at one index) into a multi-output `OpDef`, with a per-output element type (`Some(U8)` for a mask beside a float value). A declared output with no store, a store to an undeclared output and stores at different indices are refused; `lift_elementwise` is unchanged. ROADMAP U67. Tested against the real spelling: the kernels fishstringer-slang-emit (origin/main `46988a72`, fishstringer#58) emits for `sum_and_product` and `dropout_like` are lifted and run on the oracle against Rust references. Reading them needed identity `(float)` casts (only to the compute type; any other cast is refused) and the `(uint8_t)` store-site cast and `(c ? 1.0 : 0.0)` predicate of a mask output, all inside `lift_elementwise_multi`; the single-output lifts are unchanged.
+
+Adds docs/design-swizzled-allocation.md, written by unpopped-leaves at the primary lane's answer (option b): it states what the kernel.rs and kernel_check edit must do for a layout and a swizzle on an allocation. Docs only: no code, no version, no CHANGELOG edit. The edit itself is the primary lane's and rides T1 of docs/design-tile-and-schedule-plan.md.
+
+---
+
 ## `0.60.16` — Added: gather/scatter GEMM conformance kernel (CUTLASS survey row 13)
 
 `crates/unpopped/tests/kernel_gather_gemm.rs` and `tests/support/gather_gemm.rs`: `D[idx_d[m]][n] = sum_k A[idx_a[m]][k] B[k][n]` with `I32` index buffers read in the kernel, a repeated gather row, a negative (skipped) scatter index and rows of `D` no problem row reaches (poisoned, so a stray write shows). Checker-valid and run on the oracle against a host scatter reference over three corpora (ordinary, all-negative, a NaN in the doubly gathered row that must reach exactly the scattered D row). Mutants fail by value (mirrored scatter, scatter ignored, negative index clamped); applying the gather index to the scatter is recorded as an oracle `DataRace` trap, not a wrong number. Not covered: pointer-array batched GEMM (row 12), float atomics for colliding scatter indices, and the plan-level `Indexed` contraction.

@@ -750,6 +750,8 @@ impl AxisRef {
 /// `MAX_RANK` at the latest, so truncating at this capacity never changes which decline
 /// [`BatchRoleDecline`] reports.
 const BATCH_CAP: usize = 2 * MAX_RANK;
+/// Capacity of [`ContractionRoles`]'s further-K list (KISS 0.24.0 §6.6-0023a): the frame rank.
+const K_MORE_CAP: usize = MAX_RANK;
 
 /// The caller-declared **M, N, K and batch axis roles** of a dense contraction
 /// (KISS-CLASSIFY-6.6-0016 and -0023). Declared, never inferred from rank, position or
@@ -767,6 +769,9 @@ pub struct ContractionRoles {
     pub n: AxisRef,
     /// The K axis.
     pub k: AxisRef,
+    /// Further K axes (KISS 0.24.0 §6.6-0023a: K is a role set); see [`Self::with_k_more_axes`].
+    k_more: [AxisRef; K_MORE_CAP],
+    k_more_len: u8,
     batch: [u8; BATCH_CAP],
     batch_len: u8,
 }
@@ -779,9 +784,30 @@ impl ContractionRoles {
             m,
             n,
             k,
+            k_more: [AxisRef::new(0, 0); K_MORE_CAP],
+            k_more_len: 0,
             batch: [0; BATCH_CAP],
             batch_len: 0,
         }
+    }
+
+    /// Declare **further K axes** beside [`Self::k`] (KISS-CLASSIFY-6.6-0023a, KISS 0.24.0: K is a role set). The K size class
+    /// and divisibility then come from the **product** of every declared K extent, each read from its own operand. A further
+    /// axis that repeats K, another further axis, M or N, or lies outside its operand, is declined by name
+    /// ([`DeriveDecline::ContractionAxisInvalid`]), never silently dropped, so such an entry is kept as given. A list longer
+    /// than the capacity is truncated at [`MAX_RANK`] entries (a longer list must repeat an axis of an operand of rank at most
+    /// [`MAX_RANK`], which the derivation declines first).
+    #[must_use]
+    pub fn with_k_more_axes(mut self, axes: &[AxisRef]) -> Self {
+        let n = axes.len().min(K_MORE_CAP);
+        self.k_more[..n].copy_from_slice(&axes[..n]);
+        self.k_more_len = n as u8;
+        self
+    }
+
+    /// The declared further K axes, in declaration order.
+    pub fn k_more_axes(&self) -> impl Iterator<Item = AxisRef> + '_ {
+        self.k_more[..usize::from(self.k_more_len)].iter().copied()
     }
 
     /// The roles of the plain GEMM `[B.., M, K] . [B.., K, N] -> [B.., M, N]` of `rank`
@@ -1538,6 +1564,13 @@ fn contraction_from_axes(
     if m == n || m == k || n == k {
         return Err(DeriveDecline::ContractionAxisInvalid);
     }
+    // KISS 0.24.0 §6.6-0023a: K is a role set. A further K axis must be distinct from M, N, K and every other further K axis.
+    let k_more: Vec<AxisRef> = axes.k_more_axes().collect();
+    for (i, x) in k_more.iter().enumerate() {
+        if *x == m || *x == n || *x == k || k_more[..i].contains(x) {
+            return Err(DeriveDecline::ContractionAxisInvalid);
+        }
+    }
     // The extent of a role axis and the frame axis it lands on (right-aligned).
     let role = |r: AxisRef| -> Result<(i64, usize), DeriveDecline> {
         let o = operands
@@ -1549,7 +1582,15 @@ fn contraction_from_axes(
         }
         Ok((o.shape[r.axis], frame.rank - rank + r.axis))
     };
-    let ((m_ext, m_fr), (n_ext, n_fr), (k_ext, k_fr)) = (role(m)?, role(n)?, role(k)?);
+    let ((m_ext, m_fr), (n_ext, n_fr), (k_first, k_fr)) = (role(m)?, role(n)?, role(k)?);
+    // the K extent is the product of every declared K extent (a saturating product: a class of `Large` cannot overflow)
+    let mut k_ext = k_first;
+    let mut k_frames = vec![k_fr];
+    for x in &k_more {
+        let (e, f) = role(*x)?;
+        k_ext = k_ext.saturating_mul(e);
+        k_frames.push(f);
+    }
     let weight_od = operands
         .get(weight)
         .ok_or(DeriveDecline::WeightRoleOutOfRange { index: weight })?;
@@ -1569,7 +1610,7 @@ fn contraction_from_axes(
     let batch = derive_batch_class(
         &frame.extents[..frame.rank],
         &batch_axes,
-        &[m_fr, n_fr, k_fr],
+        &[&[m_fr, n_fr][..], &k_frames].concat(),
         &out_axes,
     )
     .map_err(DeriveDecline::Batch)?;
