@@ -198,6 +198,71 @@ fn the_layout_is_observable_through_alloc_raw_at_the_physical_byte() {
 }
 
 #[test]
+fn the_swizzle_is_read_over_elements_for_a_wide_element() {
+    // byte swz(2,2,3) over 64 U32 (256 bytes) is the element swizzle (2,0,3): bits [3,5) XORed into bits [0,2), so logical index
+    // 8 lands at element 9 (byte 36). Read over bytes without the element conversion it would stay at element 8 (byte 32).
+    let swizzled = shared_u32(64)
+        .with_layout(layout("swz(2,2,3)(64:1)"))
+        .with_align_bytes(128);
+    let probe = |raw_at: i64| {
+        let k = KernelFn::new(
+            "raw",
+            ElementKind::I32,
+            vec![Param::buffer("out", U32, BufferRole::Write, Some(1))],
+            vec![LocalDecl::scalar(U32)],
+            Block(vec![
+                Stmt::Store {
+                    place: Place::Alloc {
+                        alloc: 0,
+                        index: ScalarExpr::ConstInt(8, U32),
+                    },
+                    value: ScalarExpr::Cast(
+                        Box::new(ScalarExpr::ConstInt(77, U32)),
+                        CastSpec {
+                            to: U32,
+                            round: RoundMode::NearestEven,
+                            sat: Saturation::Wrap,
+                        },
+                    ),
+                },
+                Stmt::Load {
+                    local: 0,
+                    place: Place::AllocRaw {
+                        alloc: 0,
+                        byte_offset: ScalarExpr::ConstInt(raw_at, U32),
+                        elem: U32,
+                    },
+                },
+                Stmt::Store {
+                    place: at(0, ScalarExpr::ConstInt(0, U32)),
+                    value: ScalarExpr::Local(0),
+                },
+            ]),
+        )
+        .with_launch(LaunchShape::new([1, 1, 1], [1, 1, 1]))
+        .with_allocs(vec![swizzled.clone()]);
+        assert_eq!(check_kernel(&k), Ok(()));
+        let mut args = vec![KernelArg::Buffer(TypedBuffer::new(
+            U32,
+            vec![1],
+            vec![1],
+            vec![0; 4],
+        ))];
+        (run_launch(&k, &mut args), args)
+    };
+    let (r, args) = probe(36);
+    r.expect("element 9 (byte 36) holds the stored value");
+    let KernelArg::Buffer(out) = &args[0] else {
+        unreachable!()
+    };
+    assert_eq!(out.bytes, 77u32.to_le_bytes());
+    assert!(
+        probe(32).0.is_err(),
+        "element 8 (byte 32) was never written"
+    );
+}
+
+#[test]
 fn each_checker_rule_refuses_and_its_control_passes() {
     let ok = shared_u32(64).with_layout(layout("(8,8):(1,8)"));
     assert_eq!(check_kernel(&kernel(ok.clone())), Ok(()));
