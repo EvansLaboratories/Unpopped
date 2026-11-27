@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.9` — Added: `ExecId::ClusterCtaRank`, the block's index in its cluster
+
+A new variant of the `non_exhaustive` `ExecId` (ROADMAP IR-union `cute.md` row 28, "cluster rank"; PTX `%cluster_ctarank`, x fastest). The oracle reads it from the launch's cluster dimensions and the block index, `0` in a launch without clusters (every block is a cluster of one). No checker change: the leaf needs a launch like every id. `unpopped-cpu-c` declines it by name through its existing `other => refuse(..)` arm (not pinned by a test here). The uniformity analysis treats it as divergent, the conservative answer; a precise rule (uniform within a block) is a `kernel_uniform.rs` change left to the primary. Verified by `tests/kernel_cluster_rank.rs` (1D and 2D clusters worked by hand, the no-cluster control).
+
+---
+
 ## `0.60.8` — Added: `Cast` between `F32` (and the integers) and `F8E3M4` / `F8UE4M3` on the oracle (KISS 0.24.0 union batch 1, plan E1b)
 
 `Cast(Cast(x, f8e3m4), f32)` and the same through `f8ue4m3` run on the oracle as intermediate values. `F8E3M4` (IEEE-style, bias 3) rounds to nearest even and overflows like IEEE (infinity under `Wrap`, the largest finite value 15.5 under `ClampFinite`); `F8UE4M3` (the unsigned NVFP4 scale) takes only `Saturation::ClampFinite`, saturates at 448, sends NaN to its one NaN code `0x7F` and a value at or below zero to 0 (the IR's rule, UNVERIFIED against a vendor conversion). Checked against KISS's decode vectors for both formats and an exhaustive round trip of every `F8E3M4` code and every finite `F8UE4M3` code. A kernel still cannot declare a local, parameter or allocation of either dtype (`KernelError::DtypeNotComputed`): load, store and arithmetic wait. `unpopped-cpu-c` declines the casts by name. Additive: no enum variant added. Plan: `docs/design-union-batch1-consumer.md`.
