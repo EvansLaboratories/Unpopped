@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.11` — Added: GQA and MLA decode attention conformance kernels (CUTLASS survey row 92)
+
+`crates/unpopped/tests/kernel_attention_gqa_mla.rs` and `tests/support/attention_gqa_mla.rs`: a grouped-query decode kernel (4 query heads over 2 KV heads, query head `h` reads KV head `h / 2`) and a multi-head latent attention decode kernel in the absorbed form (latent cache plus a shared rope key, up-projection in the kernel). Both are checker-valid and run on the oracle. GQA is compared with a two-pass reference over three corpora (ordinary, all scores negative, a NaN confined to one KV head, which must reach exactly the two query heads that read it). MLA is compared with the expanded reference (`k = W_UK c`, `v = W_UV c`, plain softmax), so the absorption identity is also checked. Four mutants (interleaved KV head, single KV head, dropped rope term, transposed up-projection) fail. Not covered: prefill, paged or causal GQA/MLA, FlashMLA's split-KV, and real DeepSeek weights (UNVERIFIED against their kernels).
+
+---
+
 ## `0.60.10` — docs: PATENT-SWEEP G-T2 addendum 4, four more Intel matrix-instruction patents read
 
 `docs/PATENT-SWEEP.md` only, no code. Reads the independent claims of US10963256B2, US10990397B2, US10942738B2 and US10719323B2 against the opaque-tile statements: outside as read, each by a named limb (row-interleaved store, FMA-grid mode switch, reservation-station circuitry, header-based compress). The Intel tile-zero and tile-dot-product families stay unread. The board 519 `needs more` rows are unchanged.
