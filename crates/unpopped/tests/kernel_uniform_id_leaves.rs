@@ -6,8 +6,10 @@
 //! refusal beside it, differing in the one id.
 
 use unpopped::exec::{ExecId, LaunchShape, Scope};
-use unpopped::ir::{BinaryOp, ScalarExpr};
-use unpopped::kernel::{BarrierKind, Block, KernelError, KernelFn, Stmt, check_kernel};
+use unpopped::ir::{BinaryOp, ReduceOp, ScalarExpr};
+use unpopped::kernel::{
+    BarrierKind, Block, CollectiveKind, KernelError, KernelFn, LocalDecl, Stmt, check_kernel,
+};
 use unpopped_vocab::ElementKind;
 
 fn under(id: ExecId, inner: Stmt) -> Stmt {
@@ -29,20 +31,38 @@ fn barrier(scope: Scope) -> Stmt {
     }
 }
 
-fn check(id: ExecId, scope: Scope) -> Result<(), KernelError> {
-    let k = KernelFn::new(
+fn sum() -> Stmt {
+    Stmt::Collective {
+        kind: CollectiveKind::Reduce(ReduceOp::Sum),
+        value: ScalarExpr::ConstInt(1, ElementKind::I32),
+        result: 0,
+        scope: Scope::Subgroup,
+    }
+}
+
+fn kernel(body: Stmt) -> KernelFn {
+    KernelFn::new(
         "ids",
         ElementKind::F32,
         vec![],
-        vec![],
-        Block(vec![under(id, barrier(scope))]),
+        vec![LocalDecl::scalar(ElementKind::I32)],
+        Block(vec![body]),
     )
     .with_launch(
         LaunchShape::new([32, 1, 1], [256, 1, 1])
             .with_cluster([2, 1, 1])
             .with_subgroup(32, 32),
-    );
-    check_kernel(&k)
+    )
+}
+
+/// `if (id == 0) { barrier(scope) }`.
+fn check(id: ExecId, scope: Scope) -> Result<(), KernelError> {
+    check_kernel(&kernel(under(id, barrier(scope))))
+}
+
+/// `if (id == 0) { subgroup sum }`: judged by what may differ between the lanes of one subgroup.
+fn check_collective(id: ExecId) -> Result<(), KernelError> {
+    check_kernel(&kernel(under(id, sum())))
 }
 
 #[test]
@@ -68,10 +88,10 @@ fn warpgroup_id_differs_between_subgroups_but_not_between_lanes() {
         check(ExecId::WarpgroupId, Scope::Block),
         Err(KernelError::BarrierDivergent)
     );
-    // a Subgroup barrier under it: every lane of a subgroup has the same warpgroup (control: the thread index is divergent)
-    assert_eq!(check(ExecId::WarpgroupId, Scope::Subgroup), Ok(()));
+    // a Subgroup collective under it: every lane of a subgroup has the same warpgroup (control: the thread index is divergent)
+    assert_eq!(check_collective(ExecId::WarpgroupId), Ok(()));
     assert_eq!(
-        check(ExecId::ThreadIdx(0), Scope::Subgroup),
+        check_collective(ExecId::ThreadIdx(0)),
         Err(KernelError::BarrierDivergent)
     );
 }
