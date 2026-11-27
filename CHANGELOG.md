@@ -15,6 +15,30 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.61.5` — Shared-memory size check (`kernel_interface::{shared_bytes, check_shared_size}`)
+
+Added `shared_bytes(kernel, dynamic_counts)`, the sum of `count * element size` over the kernel's `Shared` allocations (dynamic ones at the launch's counts, in `KernelInterface::dynamic_shared` order), and `check_shared_size(kernel, dynamic_counts, target)`, which compares it with `TargetCapabilities::max_shared_mem_per_block` (the opt-in maximum; the 48 KiB default, the per-SM figure and reserved system shared memory are not modelled). A sub-byte or unsized element, a missing dynamic count and an overflow are errors (`SharedSizeError`), not a zero. Additive: new functions and a `non_exhaustive` error enum. Source of the limit: the existing `cuda_capabilities` table. Union audit CUDA row 95.
+
+---
+
+## `0.61.4` — Docs: PATENT-SWEEP, U21 texture/sampler/surface, warp match/vote, bit-ops, SpecConstant, wide-int, binary128 and rounding patent charts (patents-2)
+
+Docs only. `docs/PATENT-SWEEP.md` gains the U21 texture/sampler/surface chart and updates 1-3, the warp match/vote/active-mask chart (sections 1-7a), the bit-op and `SpecConstant` chart, and the E2 wide-integer, E3 binary128 and U42/U43 rounding chart (section 8). Verdicts are only outside as read, needs more (limb quoted) or NOT CLEARED, unread; findings, not advice. No code changes.
+
+---
+
+## `0.61.3` — E2, the wide integers `I128`, `U128`, `I256`, `U256` are computed by the kernel oracle
+
+A kernel may now declare, load, store, compute on and convert the four wide integer dtypes (`check_kernel` no longer refuses them with `DtypeNotComputed`; `F128`, `F8E3M4` and `F8UE4M3` still are). The oracle holds one on a 256-bit two's-complement word (`wide_int::W256`, new, with wrapping add/sub/mul, shifts, compare, clamp, and div/rem) and `Val::Wide`.
+
+Rules are the narrow ones of `docs/int-div-shift-semantics.md` at the wide width: arithmetic wraps at the dtype's width, `Div` is total (a zero divisor gives the dividend, signed `MIN / -1` gives `MIN`), a shift count is read as unsigned bits modulo the width, ordering and the six comparisons read the dtype's signedness, and a `Cast` between a wide and any narrow integer wraps or clamps. A float or sub-byte endpoint of a wide `Cast` is refused by name (`IllegalCast`), and a plan never types a wide value (`types::is_wide_int`, `types::is_kernel_int`).
+
+Additive: no public enum or struct gained a variant or field. cpu-c declines a wide kernel by name (`tests/kernel_wide_int_declines.rs`); no emitter lowers a wide add, and the oracle's 256-bit carry is computed from native `u64` limb sums, not a carry-flag instruction chain.
+
+Verified: `tests/kernel_wide_int.rs` runs the 128-bit types against Rust's own `i128`/`u128` operators and the 256-bit types against an independent `(hi, lo)` model plus hand-pinned products and quotients, over operand sets including 0, 1, all-ones, the sign bit alone and patterns crossing the 128-bit boundary; `W256` and the oracle operations carry their own unit tests and seeded-mutation checks. Found and fixed on the way: a 16-byte scratch buffer in the same-value store test overflowed on a 256-bit element.
+
+---
+
 ## `0.61.2` — documented panics of the c-family unary spellers on integer bit operations
 
 `cfamily::unary_f32` and `unary_f64` now document, under `# Panics`, that `UnaryOp::Popc`, `Clz` and `Brev` panic (message "c-family lowering: {op:?} is an integer bit operation, refused by the typing gate"), and that type checking refuses them first (`TypeError::IntegerOnlyOperand`). Tests pin the message. No signature or behaviour change.

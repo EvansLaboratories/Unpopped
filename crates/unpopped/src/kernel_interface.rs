@@ -10,6 +10,7 @@
 //! default and set through the `with_*` builders, so a backend that sets nothing is unchanged. Nothing here is part of
 //! the kernel's revision hash: the emitter-set fields follow from the source text the emitter wrote.
 
+use crate::capability::TargetCapabilities;
 use crate::exec::{Extent, LaunchShape, MemorySpace};
 use crate::kernel::{KernelFn, Param, ParamKind};
 use unpopped_vocab::ElementKind;
@@ -418,6 +419,112 @@ impl KernelInterface {
         self.fidelity_notes.push(note.into());
         self
     }
+}
+
+/// Why a kernel's `Shared` memory could not be sized or does not fit ([`check_shared_size`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SharedSizeError {
+    /// An allocation's element has no byte size here: a sub-byte dtype (packed or container width is a layout decision this
+    /// check does not make) or a dtype the vocabulary does not size.
+    UnsizedElement {
+        /// The allocation's name.
+        alloc: String,
+        /// Its element type.
+        elem: ElementKind,
+    },
+    /// `dynamic_counts` has no entry for the dynamic allocation at this index of [`KernelInterface::dynamic_shared`].
+    DynamicCountMissing {
+        /// The allocation's name.
+        alloc: String,
+    },
+    /// The byte total does not fit `u64`.
+    Overflow,
+    /// The total is above the target's per-block limit.
+    OverLimit {
+        /// Static plus dynamic `Shared` bytes.
+        bytes: u64,
+        /// [`TargetCapabilities::max_shared_mem_per_block`].
+        limit: u32,
+    },
+}
+
+/// Byte size of one `Shared` element, for the dtypes whose size is the plain width (`None` otherwise, by name).
+const fn shared_elem_bytes(e: ElementKind) -> Option<u64> {
+    match e {
+        ElementKind::I8
+        | ElementKind::U8
+        | ElementKind::Bool
+        | ElementKind::Fp8E4M3FN
+        | ElementKind::Fp8E5M2 => Some(1),
+        ElementKind::F16 | ElementKind::Bf16 | ElementKind::I16 | ElementKind::U16 => Some(2),
+        ElementKind::F32 | ElementKind::F32Strict | ElementKind::I32 | ElementKind::U32 => Some(4),
+        ElementKind::F64 | ElementKind::I64 | ElementKind::U64 | ElementKind::Complex64 => Some(8),
+        ElementKind::Complex128 => Some(16),
+        _ => None,
+    }
+}
+
+/// The bytes of `Shared` memory `kernel` declares: every static allocation, plus each dynamic one at the element count in
+/// `dynamic_counts` (in the order of [`KernelInterface::dynamic_shared`], the launch's values for the sizing parameters).
+/// No alignment padding is added: the figure is the sum of `count * element size`.
+///
+/// # Errors
+/// [`SharedSizeError::UnsizedElement`], [`SharedSizeError::DynamicCountMissing`] or [`SharedSizeError::Overflow`].
+pub fn shared_bytes(kernel: &KernelFn, dynamic_counts: &[u64]) -> Result<u64, SharedSizeError> {
+    let mut total: u64 = 0;
+    let mut next_dynamic = 0usize;
+    for a in kernel
+        .allocs
+        .iter()
+        .filter(|a| a.space == MemorySpace::Shared)
+    {
+        let width = shared_elem_bytes(a.elem).ok_or_else(|| SharedSizeError::UnsizedElement {
+            alloc: a.name.clone(),
+            elem: a.elem,
+        })?;
+        let count = match a.extent {
+            Extent::Static(n) => u64::from(n),
+            Extent::Param(_) => {
+                let c = dynamic_counts.get(next_dynamic).copied().ok_or_else(|| {
+                    SharedSizeError::DynamicCountMissing {
+                        alloc: a.name.clone(),
+                    }
+                })?;
+                next_dynamic += 1;
+                c
+            }
+        };
+        total = count
+            .checked_mul(width)
+            .and_then(|b| total.checked_add(b))
+            .ok_or(SharedSizeError::Overflow)?;
+    }
+    Ok(total)
+}
+
+/// Does `kernel`'s `Shared` memory ([`shared_bytes`]) fit one block of the target? Returns the byte total.
+///
+/// The limit is [`TargetCapabilities::max_shared_mem_per_block`], the opt-in maximum (on CUDA it needs
+/// `cudaFuncSetAttribute(MaxDynamicSharedMemorySize)`); the smaller default static limit is not modelled, and neither is
+/// the per-SM figure or any reserved system shared memory. Limits are not monotonic in the architecture number
+/// ([`TargetCapabilities`]), so pass the row of the actual target.
+///
+/// # Errors
+/// Those of [`shared_bytes`], and [`SharedSizeError::OverLimit`].
+pub fn check_shared_size(
+    kernel: &KernelFn,
+    dynamic_counts: &[u64],
+    target: &TargetCapabilities,
+) -> Result<u64, SharedSizeError> {
+    let bytes = shared_bytes(kernel, dynamic_counts)?;
+    if bytes > u64::from(target.max_shared_mem_per_block) {
+        return Err(SharedSizeError::OverLimit {
+            bytes,
+            limit: target.max_shared_mem_per_block,
+        });
+    }
+    Ok(bytes)
 }
 
 /// **The U23 patent guard, as a compile-time check** (`docs/PATENT-SWEEP.md`, U23 section; PM 2026-11-17). `Param`,

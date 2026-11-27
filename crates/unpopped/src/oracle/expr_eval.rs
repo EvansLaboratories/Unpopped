@@ -478,6 +478,13 @@ pub(super) fn eval_binary(op: BinaryOp, a: &ScalarExpr, b: &ScalarExpr, ev: &Eva
 /// value whose source dtype equals `out` moves VERBATIM (bit-preserving); a float
 /// rounds to `out` (RNE for the halves), an integer wraps to `out`'s width.
 pub(super) fn store_val(v: Val, out: ElementKind, buf: &mut [u8], off: usize) {
+    if crate::wide_int::wide_int_bits(out).is_some() {
+        match v {
+            Val::Wide(w, dt) if dt == out => write_wide(buf, off, out, w),
+            other => panic!("oracle: store of {other:?} into wide integer {out:?} (E2 slice 2b)"),
+        }
+        return;
+    }
     let bits = match v {
         Val::Raw(b, dt) if dt == out => b,
         Val::Raw(b, dt) => {
@@ -492,6 +499,7 @@ pub(super) fn store_val(v: Val, out: ElementKind, buf: &mut [u8], off: usize) {
         Val::Int(i) if is_complex(out) => encode_int_as_complex(i, out),
         Val::Int(i) => encode_int(i, out),
         Val::Complex(re, im) => encode_complex(re, im, out),
+        Val::Wide(_, dt) => panic!("oracle: wide integer {dt:?} stored into {out:?} (E2 slice 2b)"),
     };
     write_elem(buf, off, out, bits);
 }

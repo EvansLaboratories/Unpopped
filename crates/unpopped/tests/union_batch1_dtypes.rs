@@ -58,7 +58,11 @@ fn refused(dtype: ElementKind) -> Result<(), KernelError> {
 
 #[test]
 fn a_kernel_that_declares_a_batch_1_dtype_is_refused_by_name_and_the_control_passes() {
-    for (dt, name, _) in ROWS {
+    // the four wide integers are computed since E2 (`a_kernel_may_declare_a_wide_integer` below); the rest stay declined
+    for (dt, name, _) in ROWS
+        .into_iter()
+        .filter(|(dt, _, _)| !unpopped::types::is_wide_int(*dt))
+    {
         // a buffer parameter, a local, a scalar parameter, an allocation, the compute type: each refused
         assert_eq!(
             check_kernel(&load_from(dt, ElementKind::F32)),
@@ -124,6 +128,44 @@ fn a_kernel_that_declares_a_batch_1_dtype_is_refused_by_name_and_the_control_pas
         ),
         Ok(())
     );
+}
+
+#[test]
+fn a_kernel_may_declare_a_wide_integer() {
+    // E2: `I128`, `U128`, `I256`, `U256` are computed by the oracle, so every place the guard looked passes
+    for (dt, name, _) in ROWS
+        .into_iter()
+        .filter(|(dt, _, _)| unpopped::types::is_wide_int(*dt))
+    {
+        assert_eq!(
+            check_kernel(&load_from(dt, dt)),
+            Ok(()),
+            "{name} buffer parameter and local"
+        );
+        assert_eq!(
+            check_kernel(&kernel(
+                ElementKind::I32,
+                vec![Param::scalar("s", dt, 0)],
+                vec![LocalDecl::scalar(dt)],
+                vec![]
+            )),
+            Ok(()),
+            "{name} scalar parameter"
+        );
+        let with_alloc =
+            kernel(ElementKind::I32, vec![], vec![], vec![]).with_allocs(vec![AllocDecl::new(
+                "a",
+                MemorySpace::Shared,
+                dt,
+                Extent::Static(4),
+            )]);
+        assert_eq!(check_kernel(&with_alloc), Ok(()), "{name} allocation");
+        assert_eq!(
+            check_kernel(&kernel(dt, vec![], vec![], vec![])),
+            Ok(()),
+            "{name} compute type"
+        );
+    }
 }
 
 #[test]
