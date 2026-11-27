@@ -139,12 +139,12 @@ fn the_blockwise_fp8_gemm_matches_the_decoded_reference_on_every_corpus() {
 fn the_decoder_and_the_corpus_are_not_blind() {
     // the format's own anchors: 1.0 is exponent 3, the largest finite value is exponent 6 mantissa 15, exponent 7 is inf or NaN,
     // and the smallest subnormal is 2^-6
-    assert_eq!(decode(0b0_011_0000), 1.0);
-    assert_eq!(decode(0b0_110_1111), 15.5);
-    assert_eq!(decode(0b0_111_0000), f32::INFINITY);
+    assert_eq!(decode(0x30), 1.0);
+    assert_eq!(decode(0x6f), 15.5);
+    assert_eq!(decode(0x70), f32::INFINITY);
     assert!(decode(0x7f).is_nan());
     assert_eq!(decode(0x01), 2f32.powi(-6));
-    assert_eq!(decode(0x80 | 0b0_011_1000), -1.5);
+    assert_eq!(decode(0x80 | 0x38), -1.5);
     // the NaN reaches exactly output row 1
     let want = reference(&nan());
     let rows: Vec<usize> = (0..M)
