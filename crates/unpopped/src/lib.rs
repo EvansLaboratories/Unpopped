@@ -90,6 +90,7 @@ pub mod launch_cases;
 pub mod lift;
 pub mod link;
 pub mod mma;
+mod mma_sm80;
 pub mod numerics;
 pub mod optimize;
 pub mod oracle;

@@ -15,6 +15,72 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.61.12` — additive: NVIDIA mma.sync atoms m16n8k8 f16/bf16, m16n8k4 tf32, m8n8k4 f64 (U7 theme 3)
+
+Four `MmaAtom` constructors as data (`mma_sm80.rs`): `nvidia_m16n8k8_{f16,bf16}_f32`, `nvidia_m16n8k4_tf32_f32` (carries the tf32 flag) and `nvidia_m8n8k4_f64_f64`. Layouts read from the public PTX ISA 9.5 (sections 9.7.16.5.7, 9.7.16.5.6, 9.7.16.5.2; pages in the module doc) and cross-checked against CUTLASS `mma_traits_sm80.hpp` (`main` 5c179ede). `tests/mma_atoms_sm80.rs` checks each against `(row, col)` formulas from the PTX text and runs it in the oracle. `wmma` shapes are not built: PTX 9.7.16.4.1 leaves the wmma fragment layout unspecified. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+---
+
+## `0.61.11` — T1, a layout and a swizzle on an allocation (`AllocDecl::layout`, `align_bytes`)
+
+`AllocDecl` gains `layout: Option<AllocLayout>` and `align_bytes: Option<u32>` (both `serde(default)`, omitted when `None`; `AllocDecl::new` is unchanged, `with_layout` and `with_align_bytes` set them). An `AllocLayout` is a `unpopped_vocab::layout_algebra::Layout` and an optional byte-address `Swizzle` (the PTX form, `swz(3,4,3)` for the 128-byte mode), written as one canonical string: `(8,8):(1,8)` or `swz(2,2,3)((8,8):(1,8))`.
+
+`check_kernel` gains `KernelError::AllocLayout { alloc, why }` for the rules of `docs/design-swizzled-allocation.md` section 3: a layout only on a `Shared` allocation with a `Static` extent equal to its size; every offset below the extent; no two logical indices sharing an offset (enumerated up to 4 Mi elements); a swizzle whose base is at or above the element width and whose period divides the extent; a swizzled allocation with an `align_bytes` that is a multiple of the period; `align_bytes` a power of two.
+
+The oracle maps a `Place::Alloc` index to the physical element (`layout`, then the swizzle read over elements); the access, the race log, the initialised flags and the async queue all key on the physical element, so a layout permutes storage and changes no result of a kernel that uses `Place::Alloc`. `Place::AllocRaw` names physical bytes, so it sees the permutation (logical index `0x80` of `swz(3,4,3)(1024:1)` over `U8` lands at byte `0x90`). cpu-c declines a layout or an alignment by name.
+
+Additive: `AllocDecl` is `non_exhaustive`, `KernelError` is `non_exhaustive`, a document without the fields loads with `None`. No new statement, so no patent hold is touched (the layout algebra is "outside as read", `docs/PATENT-SWEEP.md`). Verified by `tests/kernel_alloc_layout.rs` (permutation invariance over four layouts with and without a swizzle, the hand-worked `AllocRaw` byte, each rule with its accepted control, the serde round trip and the pre-field document) and cpu-c's `kernel_alloc_layout_declines.rs`.
+
+---
+
+## `0.61.10` — tests: device-scope semaphore probe (survey row 9)
+
+Pins what the oracle does with an `AtomicCas(Acquire, Device)` spin across blocks: a producer in the earlier block completes (`out[0]=42`); a consumer in the earlier block is `CrossBlockWait`; an unreleased spin is `CrossBlockWait` while a block remains and `StepLimit` when the spinner is the last block. Weakening Acquire to Relaxed turns the completing case into `DataRace` and the waiting case into `StepLimit`. Tests only, no source change; verified by `cargo test -p unpopped --test kernel_device_semaphore`.
+
+`kernel_gemm_mixed_dtype`: `D(I32) = acc + Cast(C(I16))`, operands `I8` widened to `I16` for the product and to `I32` for the sum, built from ordinary ops only (KISS 771 Q3: no `c` role hint). Oracle-compared against a host loop; three type mutants (product narrowed to `I8`, sum kept in `I16`, addend dropped) each change the value on `-128 * -128` data.
+
+— lane: unpopped-conformance
+
+`kernel_int_where`: the index-masking idiom as an integer `Select` in the oracle, the condition a loaded `U8` mask tested `!= 0` (values 1, 2, 255) or a comparison; host-loop reference; swapped arms change the value at every width. Tests only.
+
+— lane: unpopped-conformance
+
+`kernel_wide_int_idioms`: the widening multiply, an `I128` accumulator over `I64` products, and the `U128` x `U128` -> `U256` product, each a kernel of ordinary ops compared with Rust's `u128`/`i128` or an independent 32-bit-limb schoolbook; each has a one-width-too-small mutant that changes the value. Oracle only; no carry-chain lowering. Stacked on `lane/e2-wide-int-r3`.
+
+— lane: unpopped-conformance
+
+---
+
+## `0.61.9` — the oracle decodes an `F8E8M0` MX block scale (CUDA audit row 60)
+
+The oracle reads an `F8E8M0` buffer as the scale `2^(code - 127)` with `0xFF` as NaN (no zero, no infinity), through `cast_ref::decode_e8m0` and an arm in `raw_to_f64`; `types::elem_size` gives it its storage width, one byte. It is still a scale type, never a compute dtype: the plan gate refuses it as one. Sources: OCP Microscaling Formats (MX) Specification v1.0 (section number not re-read) and the ONNX float8 note's E8M0 table. Additive: no signature or IR change.
+
+Added `Layout::{inner_partition, outer_partition, local_tile, local_partition, retile}` in `unpopped-vocab::layout_algebra`: the tile of a `zipped_divide` at a rest coordinate, the strided share at a tile coordinate (a thread), and a rank-changing reshape (`self` composed with the column-major layout of the target; refused when the sizes differ or the modes do not align). Pure functions: no IR, no statement, no view. Groupings worked from the definitions of `zipped_divide` and `slice`, UNVERIFIED against `cute/tensor_impl.hpp`. Patent wording: no patent found on slice/local_tile/partition/layout algebra (a null, not a clearance); the retile needs-more is lifted for US20210064987A1 only (outside as read; findings not advice).
+
+---
+
+## `0.61.8` — `CollectiveKind::MatchAny` (PTX `match.any.sync`)
+
+Added `CollectiveKind::MatchAny`: each lane gets a `U32` mask of the subgroup lanes whose value has the same bits as its own (a float compares by bit pattern). Subgroup only, at most 32 lanes (a Block is refused by name, a larger scope is a typed oracle trap). Source: PTX ISA `match.any.sync`; CUDA `__match_any_sync`. `CollectiveKind` is `#[non_exhaustive]`, so additive. Pinned by `match_any_gives_each_lane_the_mask_of_lanes_with_the_same_bits` and the cpu-c differential `match_any_agrees_on_integers_and_on_float_bit_patterns`.
+
+---
+
+## `0.61.7` — Docs: PATENT-SWEEP, US20230315655A1 file-wrapper chart (patents-2)
+
+Docs only. `docs/PATENT-SWEEP.md` gains the file-wrapper chart of application 17/691,303 (allowed 2026-11-18) against the remote store-and-arrive limb, per Unpopped statement, verdict words only. No code changes.
+
+---
+
+## `0.61.6` — fix, the kernel oracle's integer `Mul` and the collective `Prod` wrap at 64 bits instead of overflowing `i128`
+
+The kernel oracle multiplied two integers with a plain `i128` `*` before wrapping to the type: `u64::MAX * u64::MAX` (about 2^128) exceeds `i128::MAX` and panicked with "attempt to multiply with overflow" in a debug build (a release build wrapped to the right value). Two sites, both now `wrapping_mul` before the wrap: `Mul` in `kernel_eval::eval_int` and `ReduceOp::Prod` in `kernel_collective::combine` (a four-lane `u64::MAX` product passes `(2^64 - 1)^2`). Found by unpopped-conformance; the same-shaped sums cannot overflow (two 64-bit values add inside `i128`).
+
+Audit of `oracle/**` for plain `+`, `-`, `*` on `i128` values: the plan paths already use `wrapping_add`/`wrapping_mul` (`plan_window.rs`, `plan_contract.rs`, `expr_eval::arith`, which is the positive control that the search finds the safe form); the MMA and accumulation-policy sums multiply at most 32-bit operands. No other site found.
+
+Verified: `tests/kernel_int_mul_wraps.rs` panicked at both sites before the fix (red first) and passes after; the `Mul` test covers `u64::MAX * u64::MAX` (1 modulo 2^64), `u64::MAX * 2`, `2^63 * 2` and `i64::MIN * i64::MIN`.
+
+---
+
 ## `0.61.5` — Shared-memory size check (`kernel_interface::{shared_bytes, check_shared_size}`)
 
 Added `shared_bytes(kernel, dynamic_counts)`, the sum of `count * element size` over the kernel's `Shared` allocations (dynamic ones at the launch's counts, in `KernelInterface::dynamic_shared` order), and `check_shared_size(kernel, dynamic_counts, target)`, which compares it with `TargetCapabilities::max_shared_mem_per_block` (the opt-in maximum; the 48 KiB default, the per-SM figure and reserved system shared memory are not modelled). A sub-byte or unsized element, a missing dynamic count and an overflow are errors (`SharedSizeError`), not a zero. Additive: new functions and a `non_exhaustive` error enum. Source of the limit: the existing `cuda_capabilities` table. Union audit CUDA row 95.
