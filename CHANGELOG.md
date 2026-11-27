@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.11` — Added: `Swizzle::in_elements`, a byte-address swizzle read over elements
+
+`Swizzle::in_elements(width_bytes)` in `unpopped-vocab::layout_algebra` (`docs/design-swizzled-allocation.md` section 2): for a power-of-two element width `w = 2^k` with `k <= base`, the swizzle with `base - k` that satisfies `byte.apply(i*w) == w * elems.apply(i)`. Declines a non-power-of-two width (`NotDivisible`) and a width wider than `2^base` (`BadSwizzle`). CuTe's upcast of a layout atom was not read (**UNVERIFIED** against `cute/layout.hpp`, `cute/swizzle.hpp`; no local facts directory); pinned by the identity, checked over a grid of swizzles and every offset below 4096, with a broken derivation that must fail. Additive; no kernel or IR change.
+
+---
+
 ## `0.60.10` — docs: PATENT-SWEEP G-T2 addendum 4, four more Intel matrix-instruction patents read
 
 `docs/PATENT-SWEEP.md` only, no code. Reads the independent claims of US10963256B2, US10990397B2, US10942738B2 and US10719323B2 against the opaque-tile statements: outside as read, each by a named limb (row-interleaved store, FMA-grid mode switch, reservation-station circuitry, header-based compress). The Intel tile-zero and tile-dot-product families stay unread. The board 519 `needs more` rows are unchanged.
