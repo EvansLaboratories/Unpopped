@@ -90,6 +90,7 @@ pub mod launch_cases;
 pub mod lift;
 pub mod link;
 pub mod mma;
+mod mma_f64;
 mod mma_sm80;
 mod mma_sm80_8bit;
 pub mod numerics;
