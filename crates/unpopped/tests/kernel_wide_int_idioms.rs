@@ -184,6 +184,23 @@ fn a_product_taken_at_64_bits_loses_the_high_word() {
 const DOT_K: i64 = 4;
 
 /// Buffers 0 `a`, 1 `b` (I64, `DOT_K` per thread), 2 `out` (I128). `narrow`: accumulate at I64 (the mutant).
+fn dot128_body(idx: ScalarExpr, upd: ScalarExpr) -> Block {
+    Block(vec![
+        Stmt::Load {
+            local: 1,
+            place: at(0, idx.clone()),
+        },
+        Stmt::Load {
+            local: 2,
+            place: at(1, idx),
+        },
+        Stmt::Assign {
+            local: 0,
+            value: upd,
+        },
+    ])
+}
+
 fn dot128(narrow: bool) -> KernelFn {
     let idx = add(mul(tid(), ScalarExpr::ConstInt(DOT_K, U32)), l(3));
     let term = mul(cast(l(1), I128), cast(l(2), I128));
@@ -217,20 +234,7 @@ fn dot128(narrow: bool) -> KernelFn {
                 start: ScalarExpr::ConstInt(0, U32),
                 end: ScalarExpr::ConstInt(DOT_K, U32),
                 step: ScalarExpr::ConstInt(1, U32),
-                body: Block(vec![
-                    Stmt::Load {
-                        local: 1,
-                        place: at(0, idx.clone()),
-                    },
-                    Stmt::Load {
-                        local: 2,
-                        place: at(1, idx),
-                    },
-                    Stmt::Assign {
-                        local: 0,
-                        value: upd,
-                    },
-                ]),
+                body: dot128_body(idx, upd),
             },
             Stmt::Store {
                 place: at(2, tid()),
