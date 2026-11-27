@@ -64,14 +64,15 @@ echo "== the path rule (red first: the assertions below fail against a mutated r
 run_rule_tests "$HERE/gate.sh"
 echo "== MUTATION: remove the oracle pattern from a copy of the script; the SAME assertions must now fail"
 cp "$HERE/gate.sh" "$T/gate-mut.sh"; sed -i "/src\/oracle/d" "$T/gate-mut.sh"
-cmp -s "$HERE/gate.sh" "$T/gate-mut.sh" && { bad "the mutation applied"; } || ok "the mutation applied"
+if cmp -s "$HERE/gate.sh" "$T/gate-mut.sh"; then bad "the mutation applied"; else ok "the mutation applied"; fi
 FAILS_BEFORE=$FAILS; run_rule_tests "$T/gate-mut.sh" | grep -c "^FAIL" > "$T/mutfails"
 MUT=$(cat "$T/mutfails"); FAILS=$FAILS_BEFORE   # the mutant's failures are the point, not ours
 check "the mutated rule is CAUGHT (at least one assertion failed)" "[ $MUT -ge 1 ]"
 
 echo "== MUTATION 2: the status rule off (an existing cpu-c test treated like an added one); the same assertions must fail"
+# shellcheck disable=SC2016  # the pattern is a literal sed regex: $st must NOT expand
 cp "$HERE/gate.sh" "$T/gate-mut2.sh"; sed -i 's/if \[ "\$st" = "A" \]; then ADDED_CPUC_TESTS/if true; then ADDED_CPUC_TESTS/' "$T/gate-mut2.sh"
-cmp -s "$HERE/gate.sh" "$T/gate-mut2.sh" && { bad "mutation 2 applied"; } || ok "mutation 2 applied"
+if cmp -s "$HERE/gate.sh" "$T/gate-mut2.sh"; then bad "mutation 2 applied"; else ok "mutation 2 applied"; fi
 FAILS_BEFORE=$FAILS; run_rule_tests "$T/gate-mut2.sh" | grep -c "^FAIL" > "$T/mutfails2"
 MUT2=$(cat "$T/mutfails2"); FAILS=$FAILS_BEFORE
 check "the status-rule mutant is CAUGHT (at least one assertion failed)" "[ $MUT2 -ge 1 ]"
