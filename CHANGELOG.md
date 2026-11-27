@@ -15,6 +15,18 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.62.2` — additive: NVIDIA mma.sync f64 atoms m16n8k4, m16n8k8, m16n8k16 (U7 theme 3)
+
+Three `MmaAtom` constructors as data (`mma_f64.rs`): `nvidia_m16n8k4_f64_f64`, `nvidia_m16n8k8_f64_f64`, `nvidia_m16n8k16_f64_f64`. Layouts from the public PTX ISA 9.5 (sections 9.7.16.5.6, .7, .8; pages in the module doc) and CUTLASS `mma_traits_sm90.hpp` (`main` 5c179ede). `m16n8k16` is checked against PTX Figures 83 (A, pp. 564-565), 85 (B, p. 566) and 86 (C, p. 567); the A column formula continues across a page break (col = 2i + tig for even i, 2i - 2 + tig for odd i). `tests/mma_atoms_f64.rs` checks each against `(row, col)` formulas and runs it in the oracle. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+---
+
+## `0.62.1` — additive: NVIDIA mma.sync m16n8k32 u8, mixed s8/u8 and fp8 atoms (U7 theme 3)
+
+Seven `MmaAtom` constructors as data (`mma_sm80_8bit.rs`): `nvidia_m16n8k32_{u8,s8_u8,u8_s8}_s32` and `nvidia_m16n8k32_{e4m3,e5m2,e4m3_e5m2,e5m2_e4m3}_f32`, four of them with `A != B` in type. Layout read from the public PTX ISA 9.5 section 9.7.16.5.10 (pp. 572-576) and cross-checked against CUTLASS `mma_traits_sm80.hpp` and `mma_traits_sm89.hpp` (`main` 5c179ede). `tests/mma_atoms_8bit.rs` checks each against `(row, col)` formulas and runs it in the oracle; fp8 values are lattice fractions per format. No `Stmt`, `ScalarExpr` or `ElementKind` change. Patent column: US12314717B2, the 4x element-size method claim: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.
+
+---
+
 ## `0.62.0` — **BREAKING**: T2, opaque matrix tiles (`MemorySpace::Tile`, `Stmt::TileLoad`/`TileMma`/`TileFill`/`TileStore`)
 
 `Stmt` gains four variants and `MemorySpace` a fifth case, so an exhaustive `match` on `Stmt` stops compiling (`MemorySpace` is `non_exhaustive`: a wildcard arm hides `Tile`, so every emitter states a decline for it; `docs/emitter-migration-b1.md`). `AllocDecl` gains `tile: Option<TileShape>` (serde default, omitted when `None`; `AllocDecl::tile(name, elem, rows, cols)` builds a tile) and `KernelError::Tile { alloc, why }` names each rule.
