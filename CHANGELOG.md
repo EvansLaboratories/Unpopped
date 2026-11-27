@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.13` — Added: the K role set for contraction keys (KISS 0.24.0 6.6-0023a): `ContractionRoles::with_k_more_axes`, K class and divisibility from the product of every K extent (plan E4)
+
+`unpopped_vocab::ContractionRoles` gains further K axes (`with_k_more_axes`, `k_more_axes`; the struct is `non_exhaustive` with private fields, so the change is additive). The key derivation takes the K size class and divisibility from the product of every declared K extent and declines `ContractionAxisInvalid` for a further K axis that repeats K, another further axis, M or N, or lies outside its operand. The four KISS 0.24.0 vectors that were the E1a `KNOWN_GAP` now pass and the gap list is empty. The op layer is unchanged and pinned: the plan gate still refuses two `ContractedK` axes by name (`RolesInvalid`, plan-layer multi-K is ROADMAP D2), so a two-K cell derives a key but does not plan. Plan: `docs/design-union-batch1-consumer.md` section 6.
+
+---
+
 ## `0.60.12` — Added: grouped, depthwise and transposed convolution conformance kernels (CUTLASS survey rows 46 and 48)
 
 `crates/unpopped/tests/kernel_conv_grouped.rs` and `tests/support/conv_grouped.rs`: a grouped forward convolution (G = 2, filter `[K, R, S, C/G]`), a depthwise one (G = C = K), both with stride (2, 1), dilation (1, 2) and asymmetric padding (top 1, bottom 0, left 2, right 1), and a transposed convolution (gather form) whose output padding enlarges the output. Each is checker-valid and runs on the oracle against a host scatter reference over integer data. Mutants (interleaved groups, first group only, a wrong padding sign) fail by value. Recorded: the interleaved-groups mutant is equivalent at G = K (depthwise), so it is asserted on the grouped geometry only. Not covered: 1D and 3D, split-K convolution, `NHWC` plan-layer Im2Col, and the data and filter gradients of the grouped case.
