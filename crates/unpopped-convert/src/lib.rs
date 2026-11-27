@@ -234,6 +234,152 @@ pub fn lift_elementwise_with(
     lift_store(&tree, src, name, dtypes, &names).map(|l| finished(l, resources))
 }
 
+/// The `(index, rhs)` of each store to `{out}0 .. {out}{n-1}`: refused when one has no store, when `{out}{n}` is stored
+/// (an undeclared output), or when the stores are not all at one index.
+fn multi_stores<'t>(
+    tree: &'t Tree,
+    src: &str,
+    out: &str,
+    n: usize,
+) -> Result<Vec<(String, Node<'t>)>, LiftError> {
+    let out_of = |k: usize| format!("{out}{k}");
+    if find_out_store(tree.root_node(), src, &out_of(n)).is_some() {
+        return Err(LiftError::Unrecognized(format!(
+            "a store to `{}` but only {n} output(s) declared",
+            out_of(n)
+        )));
+    }
+    let mut stores = Vec::with_capacity(n);
+    for k in 0..n {
+        let store = find_out_store(tree.root_node(), src, &out_of(k))
+            .ok_or_else(|| LiftError::Unrecognized(format!("no `{}[i] = ..` store", out_of(k))))?;
+        stores.push(store);
+    }
+    if stores.iter().any(|(i, _)| *i != stores[0].0) {
+        return Err(LiftError::Unrecognized(
+            "the output stores are not all at one index".into(),
+        ));
+    }
+    Ok(stores)
+}
+
+/// Lift a grid-stride / dispatch elementwise kernel that **stores several outputs** (ROADMAP U67).
+///
+/// Output `K` is the buffer named `{out_name}{K}` (`output0`, `output1`, ... for a frontend whose
+/// `out_name` is `output`), one store `{out_name}{K}[i] = <expr>;` each, all at the one index `i`.
+/// `out_dtypes[K]` is output `K`'s own element type: `None` is the key dtype, `Some(U8)` a mask beside
+/// a float value (what [`OpDef::elementwise_multi_hetero`] admits; the plan, not this lift, checks
+/// that the `U8` body is a comparison). The count of outputs is `out_dtypes.len()`.
+///
+/// Refused, never half lifted: a declared output with no store, a store to `{out_name}{N}` with
+/// `N == out_dtypes.len()` (an output the caller did not declare would be dropped silently), and
+/// stores at different indices. Buffers are inferred from names; a [`ResourceMap`] declares one output
+/// and is not read here.
+///
+/// # Errors
+/// [`LiftError::NotAKernel`], [`LiftError::Inexpressible`], [`LiftError::NotElementwise`] and
+/// [`LiftError::Unrecognized`] as for [`lift_elementwise`].
+pub fn lift_elementwise_multi(
+    fe: &Frontend,
+    src: &str,
+    name: &str,
+    dtypes: &[ElementKind],
+    out_dtypes: &[Option<ElementKind>],
+) -> Result<Lifted, LiftError> {
+    if out_dtypes.is_empty() {
+        return Err(LiftError::Unrecognized(
+            "a multi-output lift declares at least one output".into(),
+        ));
+    }
+    let tree = prepared(fe, src)?;
+    let names = Names::resolve(fe, None)?;
+    let stores = multi_stores(&tree, src, fe.out_name, out_dtypes.len())?;
+    let idx_var = stores[0].0.clone();
+    let mut w = Walk {
+        src,
+        idx_var,
+        names: &names,
+        max_input: None,
+        locals: local_bindings(tree.root_node(), src),
+        resolving: Vec::new(),
+        identity_casts: compute_spellings(dtypes),
+    };
+    let mut bodies = Vec::with_capacity(stores.len());
+    for ((_, rhs), dt) in stores.into_iter().zip(out_dtypes) {
+        let (rhs, mask) = match dt {
+            Some(ElementKind::U8) => (strip_store_cast(rhs, w.src, U8_SPELLINGS), true),
+            _ => (rhs, false),
+        };
+        let e = w.expr(rhs)?;
+        bodies.push((Expr(if mask { predicate_of(e) } else { e }), *dt));
+    }
+    let n_inputs = w.max_input.map_or(0, |m| m + 1);
+    Ok(Lifted::inferred(
+        OpDef::elementwise_multi_hetero(name, n_inputs, dtypes, bodies),
+        n_inputs,
+    ))
+}
+
+/// C spellings of a compute dtype, for the casts that are the identity on it (`float` on `F32`).
+fn compute_spellings(dtypes: &[ElementKind]) -> &'static [&'static str] {
+    match dtypes.first() {
+        Some(ElementKind::F32 | ElementKind::F32Strict) => &["float"],
+        Some(ElementKind::F64) => &["double"],
+        _ => &[],
+    }
+}
+
+/// C spellings of `U8`, for the store-site conversion of a mask output (`(uint8_t)tmp0`).
+const U8_SPELLINGS: &[&str] = &["uint8_t", "unsigned char", "uchar"];
+
+/// `rhs` without the conversion to the output's own element type that a store carries (the IR applies it at
+/// the store site, so it is not part of the body): `(uint8_t)v` and `((uint8_t)v)` give `v`.
+fn strip_store_cast<'t>(rhs: Node<'t>, src: &str, spellings: &[&str]) -> Node<'t> {
+    match rhs.kind() {
+        "parenthesized_expression" => rhs
+            .named_child(0)
+            .map_or(rhs, |c| strip_store_cast(c, src, spellings)),
+        "cast_expression" => {
+            let ty = rhs
+                .child_by_field_name("type")
+                .and_then(|t| t.utf8_text(src.as_bytes()).ok())
+                .map(str::trim);
+            match (ty, rhs.child_by_field_name("value")) {
+                (Some(t), Some(v)) if spellings.contains(&t) => v,
+                _ => rhs,
+            }
+        }
+        _ => rhs,
+    }
+}
+
+/// A `U8` mask output's body must be a comparison. The Slang emitter spells a comparison as the 0/1 float
+/// `(c ? 1.0 : 0.0)`; that is exactly `c` as a mask, so `Select(c, 1.0, 0.0)` with `c` a comparison is `c`.
+fn predicate_of(e: ScalarExpr) -> ScalarExpr {
+    match e {
+        ScalarExpr::Select(c, one, zero)
+            if matches!(*c, ScalarExpr::Binary(op, ..) if is_cmp(op))
+                && matches!(*one, ScalarExpr::Const(v) if v == 1.0)
+                && matches!(*zero, ScalarExpr::Const(v) if v == 0.0) =>
+        {
+            *c
+        }
+        other => other,
+    }
+}
+
+fn is_cmp(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::CmpEq
+            | BinaryOp::CmpNe
+            | BinaryOp::CmpLt
+            | BinaryOp::CmpLe
+            | BinaryOp::CmpGt
+            | BinaryOp::CmpGe
+    )
+}
+
 /// The names a lift resolves buffers and `Params` through: the frontend's naming
 /// convention, or a caller's declared [`ResourceMap`].
 struct Names<'a> {
@@ -421,6 +567,7 @@ fn lift_store(
         max_input: None,
         locals: local_bindings(tree.root_node(), src),
         resolving: Vec::new(),
+        identity_casts: &[],
     };
     let body = w.expr(rhs)?;
     let n_inputs = w.max_input.map_or(0, |m| m + 1);
@@ -460,6 +607,7 @@ fn lift_scan_store(
         max_input: None,
         locals: local_bindings(tree.root_node(), src),
         resolving: Vec::new(),
+        identity_casts: &[],
     };
     let pre = w.expr(pre_node)?;
     let n_inputs = w.max_input.map_or(0, |m| m + 1);
@@ -591,6 +739,7 @@ fn lift_reduce_store(
         max_input: None,
         locals: local_bindings(tree.root_node(), src),
         resolving: Vec::new(),
+        identity_casts: &[],
     };
     let body = w.expr(body_node)?;
     let n_inputs = w.max_input.map_or(0, |m| m + 1);
@@ -1022,6 +1171,9 @@ struct Walk<'a> {
     /// or mutually-referential binding declines as a typed miss instead of
     /// recursing forever.
     resolving: Vec<String>,
+    /// C spellings of the compute type: `(float)x` is the identity on a float kernel and lifts as `x`. Empty (every
+    /// cast refused) except in [`lift_elementwise_multi`].
+    identity_casts: &'static [&'static str],
 }
 
 impl<'a> Walk<'a> {
@@ -1169,6 +1321,14 @@ impl<'a> Walk<'a> {
                             Err(LiftError::Unrecognized(format!("identifier '{name}'")))
                         }
                     }
+                }
+            }
+            "cast_expression" => {
+                let ty = self.text(self.field(n, "type")?).trim();
+                if self.identity_casts.contains(&ty) {
+                    self.expr(self.field(n, "value")?)
+                } else {
+                    Err(LiftError::Unrecognized(format!("cast to '{ty}'")))
                 }
             }
             other => Err(LiftError::Unrecognized(format!("node '{other}'"))),
