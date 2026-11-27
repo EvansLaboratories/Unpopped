@@ -15,6 +15,24 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.28` — `VoteKind::Uniform` (PTX `vote.sync.uni`)
+
+Added `VoteKind::Uniform`: `1` when every lane's predicate agrees, else `0` (PTX ISA `vote.sync.uni.pred`). The oracle and the cpu-c emitter spell it explicitly (both had a `_ =>` arm that would have read a new variant as `Ballot`); pinned by `votes_are_predicates_over_the_scope` and the cpu-c differential.
+
+---
+
+## `0.60.27` — Docs
+
+`docs/ir-union-evidence/conformance-idiom-gaps-2026-11-27.md`: a 52-row table of idioms from Triton, TileLang, ThunderKittens, CuTe, Mojo, Slang, Metal and HLSL public docs that the conformance kernels do not yet express, each with its source URL, version or date read, the IR grep and its result, and a READ or UNVERIFIED status (pm-kernels task `more-rows`, the CireSnave 2026-11-11 union standard). Each gap is a candidate row for the primary, not a build; rows touching a standing patent hold (setmaxnreg, persistent scheduling, two-CTA pairing) are marked HELD, and texture rows are facts only. Docs only, no code changed.
+
+— lane: unpopped-conformance
+
+Kernel-layer conformance kernel for a two-stage full/empty `mbarrier` ring inside one block (CUTLASS survey row 88, the multi-stage ring the earlier rows lacked): a consumer thread and a producer thread pass six items through two shared slots, with `MbarInit`, `MbarArrive` and `MbarWait` as separate statements, wait parity flipping over three rounds, compared with `2 * x + 1` over ordinary, NaN and all-negative corpora. An off-by-one item counter fails by value; reading the slot being refilled (`DataRace`), a slot never released (`MbarrierDeadlock`) and a refill that skips its wait (`MbarrierDeadlock`) are pinned as typed traps. Scope: one block, no transaction count on any arrival, no cluster or device scope, no store fused with an arrive, no cross-SM roles. PATENT-SWEEP barrier chart (Unpopped#442): block-scope barriers outside as read, not a clearance; re-read triggers (an arrival fused with a transaction count, a barrier with a reduction or scan, divergence compaction) are not exercised. The tensor-map TMA stage of the row is not covered, so the row stays Partial.
+
+— lane: unpopped-conformance
+
+---
+
 ## `0.60.26` — Added
 
 Kernel-layer conformance kernel for split-K convolution in the serial-reduction form (CUTLASS survey row 50): the channel reduction of a 1-D convolution is cut into four fixed slices, launch 1 writes one partial per slice (one block per slice) to a workspace, and launch 2 sums the partials in slice order. Oracle-compared against a plain convolution over ordinary, NaN and all-negative corpora; a slice that reads the wrong channels and a reduction that drops a slice are mutants that fail by value. The stream-K division of one tile between blocks, persistent scheduling and work-stealing are held and not modelled, so the row stays Partial.
