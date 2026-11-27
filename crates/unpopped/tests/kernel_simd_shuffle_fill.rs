@@ -61,9 +61,38 @@ fn shuffle(mode: ShuffleMode, operand: ScalarExpr, value: u32, result: u32) -> S
     }
 }
 
+fn lane_plus(d: i64) -> ScalarExpr {
+    ScalarExpr::Add(Box::new(lane()), Box::new(ci(d)))
+}
+
+/// The fill ops: the shifted data, the filling read at the wrapped lane, and a `Select` between them.
+fn fill(op: Op, v: &mut Vec<Stmt>) -> ScalarExpr {
+    let up = op != Op::FillDown;
+    let (mode, wrapped, keep) = if up {
+        (
+            ShuffleMode::Up,
+            lane_plus(-DELTA),
+            bin(BinaryOp::CmpGe, lane(), ci(DELTA)),
+        )
+    } else {
+        (
+            ShuffleMode::Down,
+            lane_plus(DELTA),
+            bin(BinaryOp::CmpLt, lane(), ci(N - DELTA)),
+        )
+    };
+    v.push(shuffle(mode, ci(DELTA), 0, 2));
+    v.push(shuffle(ShuffleMode::Idx, wrapped, 1, 3));
+    let from = if op == Op::FillUpIgnoresFilling {
+        l(2)
+    } else {
+        l(3)
+    };
+    ScalarExpr::Select(Box::new(keep), Box::new(l(2)), Box::new(from))
+}
+
 /// Locals: 0 data, 1 filling, 2 shuffled data, 3 shuffled filling, 4 the result.
 fn body(op: Op) -> Vec<Stmt> {
-    let lane_plus = |d: i64| ScalarExpr::Add(Box::new(lane()), Box::new(ci(d)));
     let mut v = vec![
         Stmt::Let {
             local: 0,
@@ -75,33 +104,12 @@ fn body(op: Op) -> Vec<Stmt> {
         },
     ];
     let result = match op {
-        Op::FillUp | Op::FillUpIgnoresFilling => {
-            v.push(shuffle(ShuffleMode::Up, ci(DELTA), 0, 2));
-            v.push(shuffle(ShuffleMode::Idx, lane_plus(-DELTA), 1, 3));
-            let from = if op == Op::FillUp { l(3) } else { l(2) };
-            ScalarExpr::Select(
-                Box::new(bin(BinaryOp::CmpGe, lane(), ci(DELTA))),
-                Box::new(l(2)),
-                Box::new(from),
-            )
-        }
-        Op::FillDown => {
-            v.push(shuffle(ShuffleMode::Down, ci(DELTA), 0, 2));
-            v.push(shuffle(ShuffleMode::Idx, lane_plus(DELTA), 1, 3));
-            ScalarExpr::Select(
-                Box::new(bin(BinaryOp::CmpLt, lane(), ci(N - DELTA))),
-                Box::new(l(2)),
-                Box::new(l(3)),
-            )
-        }
-        Op::RotateUp => {
-            v.push(shuffle(ShuffleMode::Idx, lane_plus(-DELTA), 0, 2));
+        Op::RotateUp | Op::RotateDown => {
+            let d = if op == Op::RotateUp { -DELTA } else { DELTA };
+            v.push(shuffle(ShuffleMode::Idx, lane_plus(d), 0, 2));
             l(2)
         }
-        Op::RotateDown => {
-            v.push(shuffle(ShuffleMode::Idx, lane_plus(DELTA), 0, 2));
-            l(2)
-        }
+        _ => fill(op, &mut v),
     };
     v.push(Stmt::Let {
         local: 4,
