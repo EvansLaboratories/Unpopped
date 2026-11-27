@@ -15,6 +15,34 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.16` — Added: gather/scatter GEMM conformance kernel (CUTLASS survey row 13)
+
+`crates/unpopped/tests/kernel_gather_gemm.rs` and `tests/support/gather_gemm.rs`: `D[idx_d[m]][n] = sum_k A[idx_a[m]][k] B[k][n]` with `I32` index buffers read in the kernel, a repeated gather row, a negative (skipped) scatter index and rows of `D` no problem row reaches (poisoned, so a stray write shows). Checker-valid and run on the oracle against a host scatter reference over three corpora (ordinary, all-negative, a NaN in the doubly gathered row that must reach exactly the scattered D row). Mutants fail by value (mirrored scatter, scatter ignored, negative index clamped); applying the gather index to the scatter is recorded as an oracle `DataRace` trap, not a wrong number. Not covered: pointer-array batched GEMM (row 12), float atomics for colliding scatter indices, and the plan-level `Indexed` contraction.
+
+`crates/unpopped/tests/kernel_mixed_input.rs` and `tests/support/mixed_input.rs`: integer weights (`I8`, packed `I4`) widened to `F32` and scaled per group (group 4) by `F16`, `Bf16` or `F32` scales, with and without a zero point, against `F16`, `Bf16` or `F32` activations, `F32` accumulation. Five weight/scale/activation combinations in both modes are checker-valid and run on the oracle against a dequantize-the-whole-matrix-first reference using the `half` crate; corpora include the `I8` extremes, a NaN activation (reaching exactly one output column) and an all-negative weight block. Mutants (scale per row, zero after the scale, zero sign) fail by value. Not covered: `I2`, fp8 activations, the LUT int4-to-fp8 re-encoding (row 18), register-shuffle layouts (row 19), group sizes other than 4, and the CUTLASS collective itself (UNVERIFIED against a checkout).
+
+---
+
+## `0.60.15` — docs: PATENT-SWEEP barrier and shared-memory lowering chart (seven barrier patents outside as read, allocation null)
+
+Adds the 2026-11-26 dated subsection for pm-kernels task barrier-shared-lowering-line. Docs only; no verdict above is edited.
+
+Docs only; no earlier verdict edited. Records that the three-application wrapper fetch had not arrived.
+
+---
+
+## `0.60.14` — Added: `ExecId::{ClusterCtaId, ClusterDim, WarpgroupId}`
+
+Three new variants of the `non_exhaustive` `ExecId` (ROADMAP IR-union `cute.md` row 28): `ClusterCtaId(axis)` and `ClusterDim(axis)` are PTX `%cluster_ctaid` and `%cluster_nctaid` (`0` and `1` in a launch without clusters), and `WarpgroupId` is the thread's subgroup index divided by four (a warpgroup is four consecutive subgroups, `Scope::Warpgroup`), so it needs a launch that names a subgroup size like the other subgroup ids. The oracle reads them from the launch and the thread's position; the checker already guards the axis (`0..=2`) and the subgroup size. `unpopped-cpu-c` declines them by name through its existing `other => refuse(..)` arm (not pinned by a test here). The uniformity analysis treats them as divergent, the conservative answer; `unpopped` is making the cluster ids precise in `kernel_uniform.rs`. `smid` and `clock` are not added: their value is a property of the hardware run, with no meaning the oracle could state. Verified by `tests/kernel_cluster_ids.rs`.
+
+---
+
+## `0.60.13` — Fixed: ExecId::ClusterCtaRank is block-uniform in the barrier-uniformity rule (divergent only with a Cluster or Device barrier in the kernel)
+
+The block's index in its cluster is the same for every thread of a block, like `BlockIdx`, so a `Block` or `Subgroup` rendezvous under `if (cluster_ctarank == 0)` is no longer refused as divergent; a kernel that also holds a `Cluster` or `Device` barrier still treats it as divergent (its threads span the cluster's blocks). More permissive than 0.60.9, which read the leaf as divergent (the conservative reading the leaves lane noted on #428). Not breaking: it admits kernels that were refused.
+
+---
+
 ## `0.60.12` — Added: grouped, depthwise and transposed convolution conformance kernels (CUTLASS survey rows 46 and 48)
 
 `crates/unpopped/tests/kernel_conv_grouped.rs` and `tests/support/conv_grouped.rs`: a grouped forward convolution (G = 2, filter `[K, R, S, C/G]`), a depthwise one (G = C = K), both with stride (2, 1), dilation (1, 2) and asymmetric padding (top 1, bottom 0, left 2, right 1), and a transposed convolution (gather form) whose output padding enlarges the output. Each is checker-valid and runs on the oracle against a host scatter reference over integer data. Mutants (interleaved groups, first group only, a wrong padding sign) fail by value. Recorded: the interleaved-groups mutant is equivalent at G = K (depthwise), so it is asserted on the grouped geometry only. Not covered: 1D and 3D, split-K convolution, `NHWC` plan-layer Im2Col, and the data and filter gradients of the grouped case.
