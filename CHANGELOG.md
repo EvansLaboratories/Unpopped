@@ -15,6 +15,34 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.13` — Fixed: ExecId::ClusterCtaRank is block-uniform in the barrier-uniformity rule (divergent only with a Cluster or Device barrier in the kernel)
+
+The block's index in its cluster is the same for every thread of a block, like `BlockIdx`, so a `Block` or `Subgroup` rendezvous under `if (cluster_ctarank == 0)` is no longer refused as divergent; a kernel that also holds a `Cluster` or `Device` barrier still treats it as divergent (its threads span the cluster's blocks). More permissive than 0.60.9, which read the leaf as divergent (the conservative reading the leaves lane noted on #428). Not breaking: it admits kernels that were refused.
+
+---
+
+## `0.60.12` — Added: grouped, depthwise and transposed convolution conformance kernels (CUTLASS survey rows 46 and 48)
+
+`crates/unpopped/tests/kernel_conv_grouped.rs` and `tests/support/conv_grouped.rs`: a grouped forward convolution (G = 2, filter `[K, R, S, C/G]`), a depthwise one (G = C = K), both with stride (2, 1), dilation (1, 2) and asymmetric padding (top 1, bottom 0, left 2, right 1), and a transposed convolution (gather form) whose output padding enlarges the output. Each is checker-valid and runs on the oracle against a host scatter reference over integer data. Mutants (interleaved groups, first group only, a wrong padding sign) fail by value. Recorded: the interleaved-groups mutant is equivalent at G = K (depthwise), so it is asserted on the grouped geometry only. Not covered: 1D and 3D, split-K convolution, `NHWC` plan-layer Im2Col, and the data and filter gradients of the grouped case.
+
+`crates/unpopped/tests/kernel_attention_gqa_mla.rs` and `tests/support/attention_gqa_mla.rs`: a grouped-query decode kernel (4 query heads over 2 KV heads, query head `h` reads KV head `h / 2`) and a multi-head latent attention decode kernel in the absorbed form (latent cache plus a shared rope key, up-projection in the kernel). Both are checker-valid and run on the oracle. GQA is compared with a two-pass reference over three corpora (ordinary, all scores negative, a NaN confined to one KV head, which must reach exactly the two query heads that read it). MLA is compared with the expanded reference (`k = W_UK c`, `v = W_UV c`, plain softmax), so the absorption identity is also checked. Four mutants (interleaved KV head, single KV head, dropped rope term, transposed up-projection) fail. Not covered: prefill, paged or causal GQA/MLA, FlashMLA's split-KV, and real DeepSeek weights (UNVERIFIED against their kernels).
+
+`crates/unpopped/tests/kernel_interleaved.rs` and `tests/support/interleaved.rs`: a GEMM with `A` in `ColumnMajorInterleaved<4>` and `B` in `RowMajorInterleaved<4>` (read as extra coordinates of a rank-3 logical buffer) and a 1x1 convolution over an `NC4HW4` input (rank 5). Both are checker-valid and run on the oracle against references computed from the logical matrices, with operands packed by independent flat-offset formulas, over an ordinary, a NaN and an all-negative corpus. Two in-range mutants fail by value (`A` read with major and minor swapped; a wrong conv minor coordinate). Recorded: the same swap on both GEMM operands is a permutation of `k` and an equivalent mutant, so it is not used. Not covered: the plan-layer `View::Layout` path, int8 element types, and other interleave widths (CUTLASS layout formulas recalled, UNVERIFIED against a checkout).
+
+---
+
+## `0.60.11` — Added: `Swizzle::in_elements`, a byte-address swizzle read over elements
+
+`Swizzle::in_elements(width_bytes)` in `unpopped-vocab::layout_algebra` (`docs/design-swizzled-allocation.md` section 2): for a power-of-two element width `w = 2^k` with `k <= base`, the swizzle with `base - k` that satisfies `byte.apply(i*w) == w * elems.apply(i)`. Declines a non-power-of-two width (`NotDivisible`) and a width wider than `2^base` (`BadSwizzle`). CuTe's upcast of a layout atom was not read (**UNVERIFIED** against `cute/layout.hpp`, `cute/swizzle.hpp`; no local facts directory); pinned by the identity, checked over a grid of swizzles and every offset below 4096, with a broken derivation that must fail. Additive; no kernel or IR change.
+
+---
+
+## `0.60.10` — docs: PATENT-SWEEP G-T2 addendum 4, four more Intel matrix-instruction patents read
+
+`docs/PATENT-SWEEP.md` only, no code. Reads the independent claims of US10963256B2, US10990397B2, US10942738B2 and US10719323B2 against the opaque-tile statements: outside as read, each by a named limb (row-interleaved store, FMA-grid mode switch, reservation-station circuitry, header-based compress). The Intel tile-zero and tile-dot-product families stay unread. The board 519 `needs more` rows are unchanged.
+
+---
+
 ## `0.60.9` — Added: `ExecId::ClusterCtaRank`, the block's index in its cluster
 
 A new variant of the `non_exhaustive` `ExecId` (ROADMAP IR-union `cute.md` row 28, "cluster rank"; PTX `%cluster_ctarank`, x fastest). The oracle reads it from the launch's cluster dimensions and the block index, `0` in a launch without clusters (every block is a cluster of one). No checker change: the leaf needs a launch like every id. `unpopped-cpu-c` declines it by name through its existing `other => refuse(..)` arm (not pinned by a test here). The uniformity analysis treats it as divergent, the conservative answer; a precise rule (uniform within a block) is a `kernel_uniform.rs` change left to the primary. Verified by `tests/kernel_cluster_rank.rs` (1D and 2D clusters worked by hand, the no-cluster control).
