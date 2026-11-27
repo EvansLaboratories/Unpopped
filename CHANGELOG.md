@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.61.8` — `CollectiveKind::MatchAny` (PTX `match.any.sync`)
+
+Added `CollectiveKind::MatchAny`: each lane gets a `U32` mask of the subgroup lanes whose value has the same bits as its own (a float compares by bit pattern). Subgroup only, at most 32 lanes (a Block is refused by name, a larger scope is a typed oracle trap). Source: PTX ISA `match.any.sync`; CUDA `__match_any_sync`. `CollectiveKind` is `#[non_exhaustive]`, so additive. Pinned by `match_any_gives_each_lane_the_mask_of_lanes_with_the_same_bits` and the cpu-c differential `match_any_agrees_on_integers_and_on_float_bit_patterns`.
+
+---
+
 ## `0.61.7` — Docs: PATENT-SWEEP, US20230315655A1 file-wrapper chart (patents-2)
 
 Docs only. `docs/PATENT-SWEEP.md` gains the file-wrapper chart of application 17/691,303 (allowed 2026-11-18) against the remote store-and-arrive limb, per Unpopped statement, verdict words only. No code changes.
