@@ -5,7 +5,7 @@
 use super::kernel_eval::Machine;
 use super::kernel_mem::*;
 use super::kernel_trap::KernelTrap;
-use super::{Val, read_elem, store_val};
+use super::{Val, load_val, read_elem, store_val};
 use crate::exec::{ExecId, MemorySpace, Scope};
 use crate::ir::ScalarExpr;
 use crate::kernel::MemoryOrder;
@@ -187,7 +187,7 @@ impl Machine<'_> {
             return Err(KernelTrap::UninitializedPrivate { alloc });
         }
         Ok((0..m.init.len())
-            .map(|i| Val::Raw(read_elem(&m.bytes, i, m.dtype), m.dtype))
+            .map(|i| load_val(&m.bytes, i, m.dtype))
             .collect())
     }
 
@@ -208,7 +208,7 @@ impl Machine<'_> {
         if !m.init[i] {
             return Err(trap);
         }
-        Ok(Val::Raw(read_elem(&m.bytes, i, m.dtype), m.dtype))
+        Ok(load_val(&m.bytes, i, m.dtype))
     }
 
     /// An atomic step on a `Shared` element: logged as an atomic access (it races only with a plain
@@ -255,7 +255,7 @@ impl Machine<'_> {
         // whether this store writes the value the element already holds (a benign race when `Leniency` allows it)
         let same = c.mem(alloc, space).is_some_and(|m| {
             let (esz, bits) = (types::elem_size(m.dtype), types::elem_bits(m.dtype));
-            let mut tmp = [0u8; 16];
+            let mut tmp = [0u8; 32];
             store_val(v, m.dtype, &mut tmp, 0);
             bits % 8 == 0 && m.init[i] && m.bytes[i * esz..(i + 1) * esz] == tmp[..esz]
         });
