@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.35` — test, float Max/Min/Sum collectives over 32 lanes with NaN, signed zero and infinities
+
+`kernel_collective_float_nan.rs`: F32 `Reduce` Max, Min and Sum over a 32-lane subgroup against hand-written vectors (NaN propagates, a zero tie keeps the first lane's sign, +inf plus -inf is NaN, Sum is the lane-order left fold); a NaN-ignoring Max/Min, a tie to the last lane and a reversed or pairwise Sum fail the vectors by value. Rule read from the oracle code; the design note matches it. Tests only.
+
+`kernel_subtile_causal_mask.rs`: one subgroup zeroes the upper triangle of a 16 x 8 tile held in the m16n8 accumulator fragment layout, checked against Rust's lower triangle; a strict-triangle and a missing-upper-half-offset mutant change values. Tests and docs only.
+
+---
+
 ## `0.60.34` — test, wave count-bits idioms (survey row 46) and survey batch 3
 
 `kernel_wave_count_bits.rs`: WaveActiveCountBits as a subgroup Reduce(Sum) and WavePrefixCountBits as an exclusive Scan(Sum) over a predicate, checked by hand-written arrays and against a Ballot mask; an inclusive-scan and a Max mutant change a lane by value. Also survey batch 3 (6 rows) in the verification doc. Tests and docs only.
