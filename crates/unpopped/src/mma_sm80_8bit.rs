@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! The 4x element-size NVIDIA `mma.sync.aligned.m16n8k32` atoms as data (ROADMAP U7 theme 3): u8, mixed s8/u8 and the fp8
-//! atoms, including pairings with `A != B` in type. Additive: constructors only, no new statement, flag or element kind.
+//! atoms, including pairings with `A != B` in type, and the integer `m16n8k16` atoms (s8, u8, mixed; PTX ISA 9.5 section
+//! 9.7.16.5.9, A pp. 568-569 Figure 87, B p. 569 Figure 88, C p. 569 Figure 89; second source CUTLASS `mma_traits_sm80.hpp`
+//! `SM80_16x8x16_S32{S8S8,U8U8,S8U8,U8S8}S32_TN`). Additive: constructors only, no new statement, flag or element kind.
 //!
 //! **Source.** PTX ISA 9.5 section 9.7.16.5.10 (text of the public PDF, outside every repo): A pp. 572-573 (Figure 91), B
 //! pp. 574-576 (Figures 93, 94), C p. 575 (Figure 95); one table serves `.s8`, `.u8`, `.e4m3`, `.e5m2` (the page also
@@ -38,6 +40,42 @@ fn build(
 }
 
 impl MmaAtom {
+    /// `mma.sync.aligned.m16n8k16` with s8 inputs and an s32 accumulator (CuTe `SM80_16x8x16_S32S8S8S32_TN`).
+    #[must_use]
+    pub fn nvidia_m16n8k16_s8_s32() -> Self {
+        Self::m16n8k16_int(ElementKind::I8, ElementKind::I8, "s8")
+    }
+
+    /// `m16n8k16` with u8 inputs (CuTe `SM80_16x8x16_S32U8U8S32_TN`).
+    #[must_use]
+    pub fn nvidia_m16n8k16_u8_s32() -> Self {
+        Self::m16n8k16_int(ElementKind::U8, ElementKind::U8, "u8")
+    }
+
+    /// `m16n8k16` with signed `A` and unsigned `B` (CuTe `SM80_16x8x16_S32S8U8S32_TN`): `A != B` in type.
+    #[must_use]
+    pub fn nvidia_m16n8k16_s8_u8_s32() -> Self {
+        Self::m16n8k16_int(ElementKind::I8, ElementKind::U8, "s8u8")
+    }
+
+    /// `m16n8k16` with unsigned `A` and signed `B` (CuTe `SM80_16x8x16_S32U8S8S32_TN`): `A != B` in type.
+    #[must_use]
+    pub fn nvidia_m16n8k16_u8_s8_s32() -> Self {
+        Self::m16n8k16_int(ElementKind::U8, ElementKind::I8, "u8s8")
+    }
+
+    fn m16n8k16_int(a: ElementKind, b: ElementKind, tag: &str) -> Self {
+        let la = flat(&[(4, 64), (8, 1), (4, 16), (2, 8)]);
+        let lb = flat(&[(4, 4), (8, 16), (4, 1)]);
+        let name = format!("nvidia.mma.sync.m16n8k16.{tag}.s32");
+        build(
+            &name,
+            (16, 8, 16),
+            (a, b, ElementKind::I32),
+            [&la, &lb, &c_m16n8()],
+        )
+    }
+
     /// `mma.sync.aligned.m16n8k32` with u8 inputs and an s32 accumulator (CuTe `SM80_16x8x32_S32U8U8S32_TN`).
     #[must_use]
     pub fn nvidia_m16n8k32_u8_s32() -> Self {
