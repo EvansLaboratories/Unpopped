@@ -1078,6 +1078,10 @@ fn atomic_new(op: AtomicOp, t: ElementKind, old: &str, v: &str) -> Result<String
         (AtomicOp::Or, false) => format!("{old} | {v}"),
         (AtomicOp::Xor, false) => format!("{old} ^ {v}"),
         (AtomicOp::Exchange, _) => v.to_string(),
+        (AtomicOp::Inc, false) => format!("({u}){old} >= ({u}){v} ? 0u : ({u}){old} + 1u"),
+        (AtomicOp::Dec, false) => {
+            format!("({u}){old} == 0u || ({u}){old} > ({u}){v} ? ({u}){v} : ({u}){old} - 1u")
+        }
         (other, _) => return Err(refuse(format!("the atomic combine {other:?} on {t:?}"))),
     })
 }

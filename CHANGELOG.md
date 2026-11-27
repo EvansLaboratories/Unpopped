@@ -15,6 +15,42 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.30` — `AtomicOp::Inc`/`Dec` (CUDA `atomicInc`/`atomicDec`)
+
+Added `AtomicOp::Inc` (`old >= v ? 0 : old + 1`) and `Dec` (`(old == 0 || old > v) ? v : old - 1`), `U32` only (the checker refuses other elements by name): CUDA C++ Programming Guide `atomicInc`/`atomicDec`, PTX ISA `atom.inc.u32`/`atom.dec.u32`. Oracle, cpu-c and the CUDA walker (`atomicInc`/`atomicDec`) spell them. Pinned by `kernel_atomic_incdec.rs` (an independent loop from the CUDA definition) and the cpu-c differential `the_wrapping_inc_and_dec_agree`.
+
+---
+
+## `0.60.29` — Added
+
+Kernel-layer conformance kernels for two integer idioms from other kernel languages' public docs, built from leaves already on main (rows 20 and 28 of `docs/ir-union-evidence/conformance-idiom-gaps-2026-11-27.md`): a 32 x 32 to 64-bit carry-less (GF(2)) multiply (Triton `tl.clmul`) and a four-lane signed byte dot product with accumulate (CUDA `__dp4a`, TileLang `T.dp4a`). Each is compared on the oracle with a reference written independently (the carry-less product by coefficient parity rather than the kernel's shift-and-XOR loop; the dot product with Rust's `as i8` casts) over boundary corpora, with mutants (carries instead of XOR, an off-by-one shift, unsigned bytes, a dropped accumulator) that fail by value. Arithmetic semantics only: whether a target has one instruction for either is not modelled, and no new statement or operator was needed.
+
+— lane: unpopped-conformance
+
+Kernel-layer conformance kernel for a Hillis-Steele inclusive prefix sum in shared memory with one named barrier per 32-lane group (row 34 of `docs/ir-union-evidence/conformance-idiom-gaps-2026-11-27.md`, the ThunderKittens mamba2 gate-cumsum pattern): a block of 64 threads, group 0 on `bar.sync 1, 32` and group 1 on `bar.sync 2, 32`, five steps, two syncs per step. Compared on the oracle with a serial per-group prefix sum over small integers, a NaN corpus (the NaN reaches exactly the later lanes of its own group) and an all-negative corpus. Three mutants (the last step dropped, an off-by-one guard, the sync between a step's read and write dropped) fail by value. Finding, recorded not pinned: the missing-sync mutant ran to completion with wrong values rather than a `DataRace` trap. Block-scope named barriers only (arrive and wait together); the PATENT-SWEEP barrier chart (Unpopped#442) lists block-scope barriers as outside as read, not a clearance, and none of its re-read triggers is exercised.
+
+— lane: unpopped-conformance
+
+Kernel-layer conformance kernel for Philox4x32-10, the counter-based generator behind Triton's `tl.rand` family and ThunderKittens' dropout (rows 22 and 33 of `docs/ir-union-evidence/conformance-idiom-gaps-2026-11-27.md`), built from leaves already on main (`U64` multiply, shifts, XOR). One thread per counter block; ten rounds with the published multipliers and key increments, written from memory of the algorithm. The oracle result is compared with an independently written reference (`u128` multiplies, an array rotated each round) over four counter and key blocks, and the three Random123 known answers recalled from memory (all-zero, all-ones, digits of pi) agree with both the reference and the kernel; that agreement is the only check of the constants, which stay UNVERIFIED against the paper or the library source. Mutants (nine rounds, swapped multipliers, an unbumped key) change every block. Arithmetic only; no statement or operator was added.
+
+— lane: unpopped-conformance
+
+Kernel-layer conformance kernels for HLSL's quad reads and wave queries, built from the shuffles and votes already on main (rows 18, 45 and 46 of `docs/ir-union-evidence/conformance-idiom-gaps-2026-11-27.md`): `QuadReadAcrossX/Y/Diagonal` (XOR masks 1, 2, 3), `QuadReadLaneAt` (an index shuffle to the quad's base plus the requested lane), `WaveReadLaneFirst` and `WaveActiveAllEqual` (an index-0 shuffle and a vote). Eight lanes in one subgroup (two quads) hold distinct boundary integers; each result is compared on the oracle with a reference written from the quad's definition (base and position), not from the masks. Mutants (the wrong X mask, a dropped quad base, `Any` for `All`) fail by value. Not modelled: which lane is first among inactive lanes (the whole subgroup participates), and a float all-equal over NaN.
+
+— lane: unpopped-conformance
+
+Kernel-layer conformance kernel for grouped block rasterization (row 31 of `docs/ir-union-evidence/conformance-idiom-gaps-2026-11-27.md`: the grouped ordering of Triton's public matmul tutorial, TileLang `T.use_swizzle`): a linear tile id is mapped to `(tile_m, tile_n)` over a 5 x 4 grid with groups of two rows, so the last group is clamped to one row. Integer index arithmetic only (divide, modulo as divide-multiply-subtract, `Min`); one thread per tile id. The oracle result is compared with a reference that enumerates the order by nested loops, and the mapping is checked to be a bijection that differs from row-major order. Mutants (no clamp of the last group, a modulo where a divide belongs) fail by value. It models the mapping only: no persistent loop, no scheduling, no work stealing, no division of a tile between blocks.
+
+— lane: unpopped-conformance
+
+---
+
+## `0.60.28` — `VoteKind::Uniform` (PTX `vote.sync.uni`)
+
+Added `VoteKind::Uniform`: `1` when every lane's predicate agrees, else `0` (PTX ISA `vote.sync.uni.pred`). The oracle and the cpu-c emitter spell it explicitly (both had a `_ =>` arm that would have read a new variant as `Ballot`); pinned by `votes_are_predicates_over_the_scope` and the cpu-c differential.
+
+---
+
 ## `0.60.27` — Docs
 
 `docs/ir-union-evidence/conformance-idiom-gaps-2026-11-27.md`: a 52-row table of idioms from Triton, TileLang, ThunderKittens, CuTe, Mojo, Slang, Metal and HLSL public docs that the conformance kernels do not yet express, each with its source URL, version or date read, the IR grep and its result, and a READ or UNVERIFIED status (pm-kernels task `more-rows`, the CireSnave 2026-11-11 union standard). Each gap is a candidate row for the primary, not a build; rows touching a standing patent hold (setmaxnreg, persistent scheduling, two-CTA pairing) are marked HELD, and texture rows are facts only. Docs only, no code changed.

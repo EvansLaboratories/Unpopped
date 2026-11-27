@@ -1140,6 +1140,20 @@ pub(super) fn atomic_apply(
                     AtomicOp::Or => a | b,
                     AtomicOp::Xor => a ^ b,
                     AtomicOp::Exchange => b,
+                    AtomicOp::Inc => {
+                        if a >= b {
+                            0
+                        } else {
+                            a + 1
+                        }
+                    }
+                    AtomicOp::Dec => {
+                        if a == 0 || a > b {
+                            b
+                        } else {
+                            a - 1
+                        }
+                    }
                 },
                 t,
             ))
