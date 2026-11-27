@@ -91,6 +91,7 @@ pub mod lift;
 pub mod link;
 pub mod mma;
 mod mma_f64;
+mod mma_int4;
 mod mma_m8n8;
 mod mma_sm80;
 mod mma_sm80_8bit;
