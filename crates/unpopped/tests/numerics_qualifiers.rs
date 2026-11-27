@@ -433,6 +433,7 @@ fn ftz_flushes_operands_and_results_and_keeps_the_sign() {
         round: RoundMode::TowardPosInf,
         ftz: true,
         approx: false,
+        spelling: None,
     };
     assert_eq!(eval_qualified_f32(QualOp::Add, both, &[sub, sub]), 0.0);
 }
@@ -579,6 +580,7 @@ fn each_illegal_cell_is_a_typed_decline_naming_it() {
         round: RoundMode::TowardZero,
         ftz: false,
         approx: true,
+        spelling: None,
     };
     declines(
         plan(&elementwise((input(0) / input(1)).qualified(both)), F32),

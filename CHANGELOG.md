@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.0` — **BREAKING**: U37, `Numerics::spelling`, the exact-spelling hint on an approximate node
+
+`Numerics` gains `spelling: Option<ApproxSpelling>` (serde default, omitted when `None`), so a struct literal `Numerics { .. }` without `..Numerics::default()` stops compiling (`Numerics` is not `non_exhaustive`; `Numerics::default()` and the `Expr::rounded/ftz/approx` builders are unchanged). `ApproxSpelling` (`non_exhaustive`: `Expf`, `Exp10f`, `Log2f`, `Logf`, `Log10f`, `Fdividef`, each with `token()` and the `op()` it annotates) names the CUDA fast-math intrinsic a lifted node came from: the C-family walker lifts `__expf(x)` to `ex2.approx(x * log2 e)` and so lost the token, which a CUDA re-emit could not reproduce. The walker now sets it; the `asm` lift (`ex2.approx` written out) and every hand-built node carry `None`.
+
+The hint is not a meaning: the oracle, the plan gate and every rule but one ignore it. The one rule: `check_kernel` refuses a spelling on a node that is not `approx` or whose operation is not the intrinsic's (`TypeError::IllegalQualifier`). A re-emit prints the token only for a node whose operand and surrounding scale are exactly the walker's; otherwise it prints the exact function or the sequence. `__sinf`, `__cosf`, `__tanf` and `__powf` still decline (no approximate form in the IR). Verified by `tests/numerics_spelling.rs` (admitted and refused with controls, every spelling's operation takes `approx`, serde and the pre-field document) and the convert test `each_intrinsic_names_itself_on_its_approx_node`.
+
+---
+
 ## `0.62.4` — C-recipes batch 2: CuTe 3/15/17/30/40/66, ThunderKittens 1/2/3/5/39, Slang 25/26 (tests only)
 
 `tests/kernel_c_recipes_tiles.rs` and `tests/kernel_c_recipes_tiled.rs` run register tiles and layout swaps, register and shared vectors, a fragment-layout tile move, a hierarchical-layout tensor, runtime-extent views, a swizzled and a tiled shared atom, a `TiledMma` as thread-value layouts (with a permutation tiler), `autovec_copy`/`fill`/`clear`/`axpby`, cooperative-matrix map/transpose/reduce and the three clamp modes on the oracle as index arithmetic over `Shared` and `Private` allocations, with no view statement. Each has a hand-written reference and a value-changing mutant. One finding is recorded as a test: a dynamic (runtime) mode cannot be stated in the static `Layout` algebra.

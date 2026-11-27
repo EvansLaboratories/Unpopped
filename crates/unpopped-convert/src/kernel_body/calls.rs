@@ -2,7 +2,7 @@
 //! Calls: math functions through the frontend's tables, atomics and call statements (ROADMAP U19).
 
 use super::*;
-use unpopped::ir::QualOp;
+use unpopped::ir::{ApproxSpelling, QualOp};
 
 impl<'s, 't> Walker<'s, 't> {
     /// A call statement: only `__syncthreads()` (a block barrier) in slice 2.
@@ -127,8 +127,7 @@ impl<'s, 't> Walker<'s, 't> {
             };
             let n = unpopped::ir::Numerics {
                 round,
-                ftz: false,
-                approx: false,
+                ..unpopped::ir::Numerics::default()
             };
             Ok((ScalarExpr::Qualified(Box::new(plain), n), ty))
         })())
@@ -155,10 +154,19 @@ impl<'s, 't> Walker<'s, 't> {
                 let (e, t) = self.expr(*a)?;
                 v.push(self.convert(e, t, E::F32, *a)?);
             }
+            // the node names the intrinsic it came from (ROADMAP U37)
+            let spelling = match name {
+                "__expf" => ApproxSpelling::Expf,
+                "__exp10f" => ApproxSpelling::Exp10f,
+                "__log2f" => ApproxSpelling::Log2f,
+                "__logf" => ApproxSpelling::Logf,
+                "__log10f" => ApproxSpelling::Log10f,
+                _ => ApproxSpelling::Fdividef,
+            };
             let approx = || unpopped::ir::Numerics {
-                round: RoundMode::NearestEven,
-                ftz: false,
                 approx: true,
+                spelling: Some(spelling),
+                ..unpopped::ir::Numerics::default()
             };
             let c = |x: f32| Box::new(ScalarExpr::Const(f64::from(x)));
             let un = |op, x: ScalarExpr| {
