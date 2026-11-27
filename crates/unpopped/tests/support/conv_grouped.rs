@@ -222,25 +222,51 @@ pub(crate) fn grouped_fprop(geo: Geo, mutant: Mutant) -> KernelFn {
     ))
 }
 
+/// One axis of the transposed gather: stride, dilation, the locals for the numerator and the input index, and the input extent.
+#[derive(Clone, Copy)]
+struct GatherAxis {
+    stride: i64,
+    dil: i64,
+    num: u32,
+    index: u32,
+    extent: i64,
+}
+
+/// The column axis (tap local 1) and the row axis (tap local 0) of the transposed gather.
+const COL_AXIS: GatherAxis = GatherAxis {
+    stride: SW,
+    dil: DW,
+    num: 4,
+    index: 6,
+    extent: TW,
+};
+const ROW_AXIS: GatherAxis = GatherAxis {
+    stride: SH,
+    dil: DH,
+    num: 3,
+    index: 5,
+    extent: TH,
+};
+
 /// The input index of output position `o` through tap local `t`: `(o + pad - t * dil) / stride`, when the division is exact and
-/// the index is inside the extent. `slots` are the locals for the numerator and the index; `then` runs when it is.
-fn gather_source(
-    o: ScalarExpr,
-    t: u32,
-    pad: i64,
-    (stride, dil): (i64, i64),
-    (num, i): (u32, u32),
-    (extent, then): (i64, Vec<Stmt>),
-) -> Vec<Stmt> {
+/// the index is inside the extent; `then` runs when it is.
+fn gather_source(o: ScalarExpr, t: u32, pad: i64, axis: GatherAxis, then: Vec<Stmt>) -> Vec<Stmt> {
+    let GatherAxis {
+        stride,
+        dil,
+        num,
+        index,
+        extent,
+    } = axis;
     vec![
         let_(num, sub(add(o, ci(pad)), mul(l(t), ci(dil)))),
         when(
             cmp(BinaryOp::CmpLt, ci(-1), l(num)),
             vec![
-                let_(i, div(l(num), ci(stride))),
+                let_(index, div(l(num), ci(stride))),
                 when(
-                    cmp(BinaryOp::CmpEq, mul(l(i), ci(stride)), l(num)),
-                    vec![when(cmp(BinaryOp::CmpLt, l(i), ci(extent)), then)],
+                    cmp(BinaryOp::CmpEq, mul(l(index), ci(stride)), l(num)),
+                    vec![when(cmp(BinaryOp::CmpLt, l(index), ci(extent)), then)],
                 ),
             ],
         ),
@@ -272,15 +298,8 @@ pub(crate) fn transposed_fprop(mutant: Mutant) -> KernelFn {
             mac(9, 7, 8),
         ],
     )];
-    let cols = gather_source(wo.clone(), 1, pad, (SW, DW), (4, 6), (TW, channels));
-    let rows = gather_source(
-        ho.clone(),
-        0,
-        pad,
-        (SH, DH),
-        (3, 5),
-        (TH, vec![counted(1, S, cols)]),
-    );
+    let cols = gather_source(wo.clone(), 1, pad, COL_AXIS, channels);
+    let rows = gather_source(ho.clone(), 0, pad, ROW_AXIS, vec![counted(1, S, cols)]);
     let body = vec![
         let_(9, ci(0)),
         counted(0, R, rows),
