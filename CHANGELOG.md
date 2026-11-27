@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.31` — Fixed
+
+Oracle: a named barrier (`bar.sync` / `bar.arrive`) no longer orders a waiter after what a thread did in a LATER phase. The oracle runs the threads of a block one after another and a woken waiter took its acquire when it next ran, by which time a thread that had already run on into the next phase had left a release on the same barrier key; the waiter absorbed that release too, so an unordered read and write between two threads (a Hillis-Steele scan with the sync between a step's read and write removed, found by the conformance lane in #457) ran to completion with wrong values and no `DataRace`. Releases are now left on the key of the phase they arrive in and a waiter acquires only the phase it waited in (the records of phase `p - 2` are dropped when phase `p` opens). **Consumer effect, plainly: a kernel whose named-barrier phases raced now traps `KernelTrap::DataRace` from `run_launch` (and every entry that reaches it); previously it ran to completion with wrong values. If a differential test newly traps `DataRace`, the KERNEL was racy: fix the kernel, not the oracle.** Verified: `tests/kernel_named_barrier_race.rs` (a warp-wide neighbour add; the synced kernel runs, the kernel without the mid sync is a `DataRace`; without this change the second one returns `Ok` with wrong values), the #457 Hillis-Steele mutant `NoSecondSync` now traps, its unmutated scan still passes, and the 208 existing test binaries of `cargo test -p unpopped` pass.
+
+— lane: unpopped
+
+---
+
 ## `0.60.30` — `AtomicOp::Inc`/`Dec` (CUDA `atomicInc`/`atomicDec`)
 
 Added `AtomicOp::Inc` (`old >= v ? 0 : old + 1`) and `Dec` (`(old == 0 || old > v) ? v : old - 1`), `U32` only (the checker refuses other elements by name): CUDA C++ Programming Guide `atomicInc`/`atomicDec`, PTX ISA `atom.inc.u32`/`atom.dec.u32`. Oracle, cpu-c and the CUDA walker (`atomicInc`/`atomicDec`) spell them. Pinned by `kernel_atomic_incdec.rs` (an independent loop from the CUDA definition) and the cpu-c differential `the_wrapping_inc_and_dec_agree`.
