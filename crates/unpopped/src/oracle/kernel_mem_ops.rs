@@ -33,6 +33,12 @@ impl Machine<'_> {
                 let b = c.block_idx;
                 (b[0] % cl[0]) + cl[0] * ((b[1] % cl[1]) + cl[1] * (b[2] % cl[2]))
             }),
+            ExecId::ClusterCtaId(a) => c
+                .launch
+                .cluster
+                .map_or(0, |cl| c.block_idx[axis(a)] % cl[axis(a)]),
+            ExecId::ClusterDim(a) => c.launch.cluster.map_or(1, |cl| cl[axis(a)]),
+            ExecId::WarpgroupId => c.thread_lin / (4 * c.subgroup),
         }))
     }
 
