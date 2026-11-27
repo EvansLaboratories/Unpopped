@@ -100,6 +100,7 @@ pub mod resource_map;
 mod revision;
 pub mod schedule;
 pub mod shape;
+pub mod soft_f128;
 pub mod telemetry;
 mod text;
 pub mod types;
