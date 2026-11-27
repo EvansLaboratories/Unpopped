@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.31` — Added
+
+Conformance test for the structure key of a rank-3 batched contraction (CuTe survey row 39, key half; the value half is `kiss_ref_diff::batched_matmul_oracle_eq_kiss_ref`): `unpopped-vocab`'s `derive_structure_key_token` is asserted against the tokens KISS's own corpus carries for `f16 [64, 8, 512] . f16 [64, 512, 4096] -> f16 [64, 8, 4096]` on `cuda:sm89` (`sk8|ctr|f16|cuda:sm89|ix32|grid|r3|...|ctlm/d16/bs/f16/f16/f16/st`), with its controls: no declared batch axis gives no batch coordinate, a declared extent-1 batch is `bt`, rank 4 keys the class of the PRODUCT of the batch extents (`bm` for 4 x 64), and an out-of-range, repeated or contraction-overlapping batch axis is declined by name (`BatchAxisOutOfRange`, `BatchAxisDuplicate`, `BatchAxisOverlapsContractionRole`). The expected tokens were reported by the KISS lane (KISS `origin/main` 8828b194, KISS-CLASSIFY-6.6-0023) and are UNVERIFIED by this lane against the JSON corpus or the spec text, which were not read; two of KISS's five declines (`NotInOutput`, `NonPositiveExtent`) are not built. No source mutation was run: the derivation is the primary's `crates/*/src`, which this lane does not edit.
+
+— lane: unpopped-conformance
+
+---
+
 ## `0.60.30` — `AtomicOp::Inc`/`Dec` (CUDA `atomicInc`/`atomicDec`)
 
 Added `AtomicOp::Inc` (`old >= v ? 0 : old + 1`) and `Dec` (`(old == 0 || old > v) ? v : old - 1`), `U32` only (the checker refuses other elements by name): CUDA C++ Programming Guide `atomicInc`/`atomicDec`, PTX ISA `atom.inc.u32`/`atom.dec.u32`. Oracle, cpu-c and the CUDA walker (`atomicInc`/`atomicDec`) spell them. Pinned by `kernel_atomic_incdec.rs` (an independent loop from the CUDA definition) and the cpu-c differential `the_wrapping_inc_and_dec_agree`.
