@@ -15,6 +15,16 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.24` — Added
+
+Kernel-layer conformance kernel for complex GEMM (CUTLASS survey rows 26 and 82): interleaved `(re, im)` `F32` operands, a four-multiply and a three-multiply (Gaussian) form, oracle-compared against an independent complex reference over ordinary, NaN and all-negative corpora, with a conjugated-operand and an imaginary-sign mutant that fail by value. There is no complex element kind, so the rows stay Partial for the dtype itself; the 3xTF32 emulation is not covered here.
+
+— lane: unpopped-conformance
+
+`crates/unpopped/tests/kernel_fp8_blockwise.rs` and `tests/support/fp8_blockwise.rs`: `out[m][n] = sum_kb sfa[m][kb] * sfb[n / 128][kb] * dot128(a[m], b[n])` with `A` scaled per row and per 128-block of `K` and `B` per 128 rows of `N` and 128-block of `K`, `F32` scales, promotion accumulation. Checker-valid and run on the oracle against a reference that decodes `E3M4` codes with its own formula; corpora ordinary, all-negative and a NaN code reaching exactly one output row; mutants (swapped K-block scales, a parity-chosen B scale block) fail by value. The operands are `F32` buffers holding FP8-representable values because the kernel layer does not compute an FP8 dtype yet (accepted by the primary as ROADMAP U68: `F8E3M4` buffers answer `DtypeNotComputed` by design until the Load/Store rows land, and `Fp8E4M3FN` and `Fp8E5M2` have no kernel `Cast`). Not covered: a real FP8 operand dtype, `E4M3FN`/`E5M2`, groupwise 128x1, the CUTLASS example's source (UNVERIFIED). The 4x-ratio hold does not apply (scalar loops); on US12314717B2 only: outside as read, findings not advice, no clearance.
+
+---
+
 ## `0.60.23` — Fixed: the barrier-uniformity rule for ExecId::ClusterCtaId, ClusterDim and WarpgroupId (they were read as divergent)
 
 `ClusterDim` is a launch constant (uniform, like `GridDim`); `ClusterCtaId` is the block's position in its cluster, uniform within a block like `ClusterCtaRank` (divergent only where the kernel holds a `Cluster` or `Device` barrier); `WarpgroupId` is the subgroup index divided by four, so it stays divergent across the subgroups of a block and is lane-uniform within one subgroup (a `Subgroup` collective under it is accepted). More permissive than 0.60.14, which read all three as divergent; admits kernels that were refused, not breaking.
