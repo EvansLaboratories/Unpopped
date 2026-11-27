@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.61.4` — Docs: PATENT-SWEEP, U21 texture/sampler/surface, warp match/vote, bit-ops, SpecConstant, wide-int, binary128 and rounding patent charts (patents-2)
+
+Docs only. `docs/PATENT-SWEEP.md` gains the U21 texture/sampler/surface chart and updates 1-3, the warp match/vote/active-mask chart (sections 1-7a), the bit-op and `SpecConstant` chart, and the E2 wide-integer, E3 binary128 and U42/U43 rounding chart (section 8). Verdicts are only outside as read, needs more (limb quoted) or NOT CLEARED, unread; findings, not advice. No code changes.
+
+---
+
 ## `0.61.3` — E2, the wide integers `I128`, `U128`, `I256`, `U256` are computed by the kernel oracle
 
 A kernel may now declare, load, store, compute on and convert the four wide integer dtypes (`check_kernel` no longer refuses them with `DtypeNotComputed`; `F128`, `F8E3M4` and `F8UE4M3` still are). The oracle holds one on a 256-bit two's-complement word (`wide_int::W256`, new, with wrapping add/sub/mul, shifts, compare, clamp, and div/rem) and `Val::Wide`.
