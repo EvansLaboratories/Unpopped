@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.23` — Fixed: the barrier-uniformity rule for ExecId::ClusterCtaId, ClusterDim and WarpgroupId (they were read as divergent)
+
+`ClusterDim` is a launch constant (uniform, like `GridDim`); `ClusterCtaId` is the block's position in its cluster, uniform within a block like `ClusterCtaRank` (divergent only where the kernel holds a `Cluster` or `Device` barrier); `WarpgroupId` is the subgroup index divided by four, so it stays divergent across the subgroups of a block and is lane-uniform within one subgroup (a `Subgroup` collective under it is accepted). More permissive than 0.60.14, which read all three as divergent; admits kernels that were refused, not breaking.
+
+---
+
 ## `0.60.22` — Added: block-scaled GEMM conformance kernel over the 512-byte scale-factor atom (CUTLASS survey row 22)
 
 `crates/unpopped/tests/kernel_block_scaled.rs` and `tests/support/block_scaled.rs`: `out[m][n] = sum_kb sfa[m][kb] * sfb[n][kb] * dot(a[m], b[n])` over blocks of 16, with both scale matrices read through the 128-row by 4-column basic-block atom (offset `(r % 32) * 16 + (r / 32) * 4 + c`) by index arithmetic in the kernel. Checker-valid and run on the oracle against a reference from the logical scales, the atom packed by an independent nested loop; corpora ordinary, all-negative and a NaN scale reaching exactly one output row. Two mutants (swapped row factors, a column-major atom) fail by value. Not covered: tiling of several atoms, fp8/fp4 element types, the CUTLASS config templates (atom recalled from `blockscaled_layout.hpp`, UNVERIFIED against a checkout).
