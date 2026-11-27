@@ -7,6 +7,7 @@ Source of the oracle rules: `crates/unpopped/src/oracle/kernel_collective.rs` `c
 * **`Max`/`Min` on a float propagate NaN.** Once any lane's value (or the running fold) is NaN, the result is NaN: the first NaN seen is kept. This is the torch convention.
 * **`Max`/`Min` keep the first of equal values** (a strictly better value replaces, a tie does not), so `Max(-0.0, +0.0)` is lane order's first zero, never a normalized one.
 * **`Sum` is the left fold in lane order**, rounded to `F32` at each step when the type is `F32`; `+inf` plus `-inf` is NaN (IEEE). The oracle documents that a device may reassociate, so a `Sum` is compared within a tolerance, not by bytes.
+* `MaxNum`/`MinNum` (NaN-ignoring) are **not admitted** as collective folds (`CollectiveUnsupported`), so the oracle has no NaN-ignoring collective; the vector's NaN-ignoring mutant (Unpopped#464, `kernel_collective_float_nan.rs`) is Rust `f32::max`. The NaN's payload and sign are not checked, only `is_nan`.
 * An exclusive scan hands lane 0 the identity: `-inf`/`+inf` for float `Max`/`Min`.
 
 ## What a target must measure before it lowers a float collective
