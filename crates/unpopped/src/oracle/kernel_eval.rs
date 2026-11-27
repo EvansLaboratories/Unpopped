@@ -39,7 +39,7 @@ use super::{
     store_val,
 };
 use crate::ir::{BinaryOp, CastSpec, Saturation, ScalarExpr, UnaryOp};
-use crate::kernel::{AtomicOp, Block, KernelFn, ParamKind, Place, Stmt, check_kernel};
+use crate::kernel::{AtomicOp, Block, KernelFn, ParamKind, Place, SpecValue, Stmt, check_kernel};
 use crate::types::{self, Ty, map_children};
 use crate::wide_int::W256;
 use unpopped_vocab::ElementKind;
@@ -254,7 +254,24 @@ impl<'a> Machine<'a> {
 
     pub(super) fn bind_args(&mut self) -> Result<(), KernelTrap> {
         let base = self.dev_base();
-        for (p, a) in self.k.params.iter().zip(self.args[base..].iter()) {
+        for (i, (p, a)) in self
+            .k
+            .params
+            .iter()
+            .zip(self.args[base..].iter())
+            .enumerate()
+        {
+            // a specialization constant is built in: the oracle binds its default whatever the launch slot holds
+            if let (Some(sc), ParamKind::Scalar { ty, local }) = (
+                self.k.spec_consts.iter().find(|c| c.param as usize == i),
+                &p.kind,
+            ) {
+                self.locals[*local as usize] = Some(match sc.default {
+                    SpecValue::Int(v) => int_val(v, *ty),
+                    SpecValue::Float(v) => Val::Float(v),
+                });
+                continue;
+            }
             match (&p.kind, a) {
                 (ParamKind::Struct { fields }, KernelArg::Struct(vals))
                     if fields.len() == vals.len() =>
