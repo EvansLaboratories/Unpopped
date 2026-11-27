@@ -225,3 +225,47 @@ fn the_limit_is_the_targets_row_and_sm89_is_below_sm80() {
     let at = (u64::from(t89.max_shared_mem_per_block) - 64) / 4;
     assert_eq!(check_shared_size(&k, &[at, 0], &t89), Ok(at * 4 + 64));
 }
+
+#[test]
+fn a_launch_is_checked_against_the_targets_thread_and_subgroup_limits() {
+    use unpopped::capability::cuda_capabilities;
+    use unpopped::kernel_interface::{LaunchLimitError, check_launch_limits};
+    let t = cuda_capabilities(8, 9).expect("sm89");
+    let with = |block: [u32; 3]| kernel().with_launch(LaunchShape::new(block, [1, 1, 1]));
+    let mut none = kernel();
+    none.launch = None;
+    assert_eq!(
+        check_launch_limits(&none, &t),
+        Err(LaunchLimitError::NoLaunch)
+    );
+    // 32 x 32 = 1024 threads: exactly the limit passes (the control); 1025 does not
+    assert_eq!(check_launch_limits(&with([32, 32, 1]), &t), Ok(1024));
+    assert_eq!(
+        check_launch_limits(&with([1025, 1, 1]), &t),
+        Err(LaunchLimitError::OverThreads {
+            threads: 1025,
+            limit: t.max_threads_per_block
+        })
+    );
+    assert_eq!(
+        check_launch_limits(&with([0, 4, 1]), &t),
+        Err(LaunchLimitError::EmptyBlock)
+    );
+    assert_eq!(
+        check_launch_limits(&with([u32::MAX, u32::MAX, u32::MAX]), &t),
+        Err(LaunchLimitError::Overflow)
+    );
+    // a subgroup range that excludes the target's warp size (32), and one that includes it
+    let mut sg = LaunchShape::new([64, 1, 1], [1, 1, 1]);
+    sg.subgroup = Some(SubgroupSize::new(64, 64));
+    assert_eq!(
+        check_launch_limits(&kernel().with_launch(sg), &t),
+        Err(LaunchLimitError::SubgroupSize {
+            min: 64,
+            max: 64,
+            warp_size: t.warp_size
+        })
+    );
+    sg.subgroup = Some(SubgroupSize::new(16, 64));
+    assert_eq!(check_launch_limits(&kernel().with_launch(sg), &t), Ok(64));
+}
