@@ -234,6 +234,75 @@ pub fn lift_elementwise_with(
     lift_store(&tree, src, name, dtypes, &names).map(|l| finished(l, resources))
 }
 
+/// Lift a grid-stride / dispatch elementwise kernel that **stores several outputs** (ROADMAP U67).
+///
+/// Output `K` is the buffer named `{out_name}{K}` (`output0`, `output1`, ... for a frontend whose
+/// `out_name` is `output`), one store `{out_name}{K}[i] = <expr>;` each, all at the one index `i`.
+/// `out_dtypes[K]` is output `K`'s own element type: `None` is the key dtype, `Some(U8)` a mask beside
+/// a float value (what [`OpDef::elementwise_multi_hetero`] admits; the plan, not this lift, checks
+/// that the `U8` body is a comparison). The count of outputs is `out_dtypes.len()`.
+///
+/// Refused, never half lifted: a declared output with no store, a store to `{out_name}{N}` with
+/// `N == out_dtypes.len()` (an output the caller did not declare would be dropped silently), and
+/// stores at different indices. Buffers are inferred from names; a [`ResourceMap`] declares one output
+/// and is not read here.
+///
+/// # Errors
+/// [`LiftError::NotAKernel`], [`LiftError::Inexpressible`], [`LiftError::NotElementwise`] and
+/// [`LiftError::Unrecognized`] as for [`lift_elementwise`].
+pub fn lift_elementwise_multi(
+    fe: &Frontend,
+    src: &str,
+    name: &str,
+    dtypes: &[ElementKind],
+    out_dtypes: &[Option<ElementKind>],
+) -> Result<Lifted, LiftError> {
+    if out_dtypes.is_empty() {
+        return Err(LiftError::Unrecognized(
+            "a multi-output lift declares at least one output".into(),
+        ));
+    }
+    let tree = prepared(fe, src)?;
+    let names = Names::resolve(fe, None)?;
+    let out_of = |k: usize| format!("{}{k}", fe.out_name);
+    if find_out_store(tree.root_node(), src, &out_of(out_dtypes.len())).is_some() {
+        return Err(LiftError::Unrecognized(format!(
+            "a store to `{}` but only {} output(s) declared",
+            out_of(out_dtypes.len()),
+            out_dtypes.len()
+        )));
+    }
+    let mut stores = Vec::with_capacity(out_dtypes.len());
+    for k in 0..out_dtypes.len() {
+        let store = find_out_store(tree.root_node(), src, &out_of(k))
+            .ok_or_else(|| LiftError::Unrecognized(format!("no `{}[i] = ..` store", out_of(k))))?;
+        stores.push(store);
+    }
+    let idx_var = stores[0].0.clone();
+    if stores.iter().any(|(i, _)| *i != idx_var) {
+        return Err(LiftError::Unrecognized(
+            "the output stores are not all at one index".into(),
+        ));
+    }
+    let mut w = Walk {
+        src,
+        idx_var,
+        names: &names,
+        max_input: None,
+        locals: local_bindings(tree.root_node(), src),
+        resolving: Vec::new(),
+    };
+    let mut bodies = Vec::with_capacity(stores.len());
+    for ((_, rhs), dt) in stores.into_iter().zip(out_dtypes) {
+        bodies.push((Expr(w.expr(rhs)?), *dt));
+    }
+    let n_inputs = w.max_input.map_or(0, |m| m + 1);
+    Ok(Lifted::inferred(
+        OpDef::elementwise_multi_hetero(name, n_inputs, dtypes, bodies),
+        n_inputs,
+    ))
+}
+
 /// The names a lift resolves buffers and `Params` through: the frontend's naming
 /// convention, or a caller's declared [`ResourceMap`].
 struct Names<'a> {
