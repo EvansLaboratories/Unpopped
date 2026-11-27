@@ -102,19 +102,27 @@ pub(super) fn check_tile(k: &KernelFn, st: &Stmt, sc: &Scope) -> Result<(), Kern
             },
             false,
         ),
-        Stmt::TileFill { d, value } => {
-            let (_, _, elem) = tile_of(k, *d)?;
-            if check_expr(k, value, sc)? != Ty::Scalar(elem) {
-                return Err(refuse(
-                    *d,
-                    "a TileFill value whose type is not the tile's element type",
-                ));
-            }
-            Ok(())
-        }
+        Stmt::TileFill { d, value } => check_tile_fill(k, sc, *d, value),
         Stmt::TileMma { d, a, b, c } => check_tile_mma(k, [*d, *a, *b, *c]),
         _ => unreachable!("check_tile is called for a tile statement"),
     }
+}
+
+/// A `TileFill`: the value has the tile's element type.
+fn check_tile_fill(
+    k: &KernelFn,
+    sc: &Scope,
+    d: u32,
+    value: &ScalarExpr,
+) -> Result<(), KernelError> {
+    let (_, _, elem) = tile_of(k, d)?;
+    if check_expr(k, value, sc)? != Ty::Scalar(elem) {
+        return Err(refuse(
+            d,
+            "a TileFill value whose type is not the tile's element type",
+        ));
+    }
+    Ok(())
 }
 
 /// A tile's place: a `Shared` allocation place or a one-index buffer place.
