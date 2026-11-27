@@ -36,6 +36,7 @@ mod slice;
 mod structural;
 mod swizzle;
 mod text;
+mod variants;
 
 pub use slice::SliceCrd;
 pub use swizzle::{ComposedLayout, Swizzle};
