@@ -494,13 +494,6 @@ pub fn shared_bytes(kernel: &KernelFn, dynamic_counts: &[u64]) -> Result<u64, Sh
                 next_dynamic += 1;
                 c
             }
-            // a future extent form has no size here
-            _ => {
-                return Err(SharedSizeError::UnsizedElement {
-                    alloc: a.name.clone(),
-                    elem: a.elem,
-                });
-            }
         };
         total = count
             .checked_mul(width)
