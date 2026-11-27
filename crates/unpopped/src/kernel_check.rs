@@ -18,7 +18,7 @@ use crate::exec::{Extent, GridDim, MemorySpace, Scope as ExecScope};
 use crate::ir::ScalarExpr;
 use crate::kernel::{
     AtomicOp, BarrierKind, Block, BufferRole, CallArg, KernelError, KernelFn, MemoryOrder, Param,
-    ParamKind, Place, Stmt,
+    ParamKind, Place, SpecValue, Stmt,
 };
 use crate::kernel_extern::ExternSig;
 use crate::types::{self, Ty};
@@ -94,6 +94,7 @@ pub(crate) fn check_kernel_with(
         }
     }
     check_allocs(k)?;
+    check_spec_consts(k)?;
     check_block(k, &k.body, &mut sc)?;
     let barrier_callees: Vec<bool> = sc.callees.iter().map(|c| c.barrier).collect();
     crate::kernel_uniform::check_barriers(k, &barrier_callees, &sc.externs, entry)
@@ -286,6 +287,30 @@ fn check_alloc_layout(a: &crate::exec::AllocDecl, alloc: u32) -> Result<(), Kern
             "a swizzled allocation states an align_bytes that is a multiple of the swizzle period",
         ),
     }
+}
+
+/// A specialization constant names a distinct scalar parameter and carries a default of that parameter's kind (an integer in
+/// the type's range for an integer type, a float for a floating one).
+fn check_spec_consts(k: &KernelFn) -> Result<(), KernelError> {
+    for (i, c) in k.spec_consts.iter().enumerate() {
+        let index = i as u32;
+        let ty = match k.params.get(c.param as usize).map(|p| &p.kind) {
+            Some(ParamKind::Scalar { ty, .. }) => *ty,
+            _ => return Err(KernelError::BadSpecConst { index }),
+        };
+        if k.spec_consts[..i].iter().any(|d| d.param == c.param) {
+            return Err(KernelError::BadSpecConst { index });
+        }
+        let ok = match (c.default, types::int_range(ty)) {
+            (SpecValue::Int(v), Some((lo, hi))) => (lo..=hi).contains(&v),
+            (SpecValue::Float(_), None) => true,
+            _ => false,
+        };
+        if !ok {
+            return Err(KernelError::BadSpecConst { index });
+        }
+    }
+    Ok(())
 }
 
 fn check_block(k: &KernelFn, b: &Block, sc: &mut Scope) -> Result<(), KernelError> {

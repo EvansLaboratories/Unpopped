@@ -1429,7 +1429,7 @@ pub enum BarrierKind {
     Named {
         /// Which barrier, 0 to 15.
         id: u32,
-        /// How many threads must arrive before it opens.
+        /// A count of arriving threads; threads that disagree on it trap (`KernelTrap::BarrierMismatch`).
         count: u32,
     },
     /// `bar.arrive id, count`: arrive at the named barrier without waiting (a producer signalling a consumer that waits
@@ -1437,7 +1437,7 @@ pub enum BarrierKind {
     NamedArrive {
         /// Which barrier, 0 to 15.
         id: u32,
-        /// How many threads must arrive before it opens.
+        /// A count of arriving threads; threads that disagree on it trap (`KernelTrap::BarrierMismatch`).
         count: u32,
     },
 }
@@ -1635,6 +1635,41 @@ pub struct KernelFn {
     /// most one value (R5.7 D4b).
     #[serde(default)]
     pub results: Vec<u32>,
+    /// Scalar parameters whose value is fixed when the kernel is built (a specialization constant), not passed at launch.
+    /// Empty for every kernel that has none; an empty list is not serialized, so a kernel without one keeps its text and its
+    /// revision hash.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spec_consts: Vec<SpecConst>,
+}
+
+/// The value a [`SpecConst`] takes when nothing overrides it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum SpecValue {
+    /// For an integer scalar parameter.
+    Int(i128),
+    /// For a floating-point scalar parameter.
+    Float(f64),
+}
+
+/// A scalar parameter that is a specialization constant: the program is built for one value of it, so it is not among the
+/// launch arguments. The oracle binds the default; an emitter either bakes the default into the program or declines by name.
+/// Vocabulary only: this adds no statement and no expression, the parameter is read as its local like any other scalar.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SpecConst {
+    /// Index into [`KernelFn::params`] of a [`ParamKind::Scalar`] parameter.
+    pub param: u32,
+    /// Its value.
+    pub default: SpecValue,
+}
+
+impl SpecConst {
+    /// A specialization constant for the scalar parameter `param`.
+    #[must_use]
+    pub fn new(param: u32, default: SpecValue) -> Self {
+        Self { param, default }
+    }
 }
 
 impl KernelFn {
@@ -1677,7 +1712,15 @@ impl KernelFn {
             allocs: Vec::new(),
             result: None,
             results: Vec::new(),
+            spec_consts: Vec::new(),
         }
+    }
+
+    /// The same kernel with scalar parameter `param` a specialization constant of value `default` (see [`SpecConst`]).
+    #[must_use]
+    pub fn with_spec_const(mut self, param: u32, default: SpecValue) -> Self {
+        self.spec_consts.push(SpecConst::new(param, default));
+        self
     }
 
     /// The same kernel launched with `launch`.
@@ -1951,6 +1994,12 @@ pub enum KernelError {
         alloc: u32,
         /// The rule, in words.
         why: &'static str,
+    },
+    /// A specialization constant that names no scalar parameter, names one twice, or whose default is not of the parameter's
+    /// kind (an integer default for a floating parameter, a float for an integer, or an integer outside the type's range).
+    BadSpecConst {
+        /// The index into [`KernelFn::spec_consts`].
+        index: u32,
     },
     /// A `Store` to a `Constant` allocation.
     WriteToConstant {
