@@ -38,7 +38,7 @@ use super::{
     Eval, TypedBuffer, Val, eval, int_val, load_val, panic_reduced, raw_to_i128, read_elem,
     store_val,
 };
-use crate::ir::{BinaryOp, Saturation, ScalarExpr, UnaryOp};
+use crate::ir::{BinaryOp, CastSpec, Saturation, ScalarExpr, UnaryOp};
 use crate::kernel::{AtomicOp, Block, KernelFn, ParamKind, Place, Stmt, check_kernel};
 use crate::types::{self, Ty, map_children};
 use crate::wide_int::W256;
@@ -999,6 +999,32 @@ impl<'a> Machine<'a> {
         Ok(as_wide(self.eval_expr(e)?, t))
     }
 
+    /// Whether the condition `c` of a `Select` over wide arms is taken (`!= 0`): a comparison by its operands' type, a wide value by
+    /// its pattern, any other integer by value.
+    fn wide_taken(&self, c: &ScalarExpr) -> Result<bool, KernelTrap> {
+        Ok(match c {
+            ScalarExpr::Binary(op, x, y) if op.is_cmp() => self.eval_cmp(*op, x, y)? != 0,
+            _ if self.wide_ty_of(c).is_some() => !self.wide_operand(c)?.0.is_zero(),
+            other => self.eval_operand_int(other)? != 0,
+        })
+    }
+
+    /// A `Cast` whose result is a wide integer: the operand is a wide pattern or a narrow integer extended from `i128`.
+    fn wide_cast_node(&self, x: &ScalarExpr, spec: &CastSpec) -> Result<Val, KernelTrap> {
+        let (src, from) = match self.wide_ty_of(x) {
+            Some(from) => (as_wide(self.eval_expr(x)?, from), from),
+            None => match types::infer_ty_in(x, self.k.compute, &self.local_tys) {
+                Ok(Ty::Scalar(from)) if types::int_range(from).is_some() => {
+                    (W256::from_i128(self.eval_int(x, from)?), from)
+                }
+                _ => Err(KernelTrap::Unsupported(
+                    "a cast into a wide integer from a non-integer",
+                ))?,
+            },
+        };
+        Ok(wide_cast(src, from, spec.to, spec.sat))
+    }
+
     /// A wide integer expression at type `t`: wrapping arithmetic, the total `Div`, shifts modulo the width, ordering and
     /// bitwise operators, `Select`, and a `Cast` into the wide type (`wide_ops`). The value is the canonical pattern of `t`.
     fn eval_wide(&self, e: &ScalarExpr, t: ElementKind) -> Result<Val, KernelTrap> {
@@ -1008,21 +1034,7 @@ impl<'a> Machine<'a> {
         let w = match e {
             ScalarExpr::Local(i) => return Ok(self.local_val(*i)),
             ScalarExpr::ConstInt(v, _) => W256::from_i128(i128::from(*v)).wrap_to(t),
-            ScalarExpr::Cast(x, spec) => {
-                // the operand's type: a wide one is already a pattern, a narrow integer is extended from `i128`
-                let (src, from) = match self.wide_ty_of(x) {
-                    Some(from) => (as_wide(self.eval_expr(x)?, from), from),
-                    None => match types::infer_ty_in(x, self.k.compute, &self.local_tys) {
-                        Ok(Ty::Scalar(from)) if types::int_range(from).is_some() => {
-                            (W256::from_i128(self.eval_int(x, from)?), from)
-                        }
-                        _ => Err(KernelTrap::Unsupported(
-                            "a cast into a wide integer from a non-integer",
-                        ))?,
-                    },
-                };
-                return Ok(wide_cast(src, from, spec.to, spec.sat));
-            }
+            ScalarExpr::Cast(x, spec) => return self.wide_cast_node(x, spec),
             ScalarExpr::Add(a, b) => {
                 let (x, y) = two(a, b)?;
                 wide_add(x, y, t)
@@ -1044,12 +1056,7 @@ impl<'a> Machine<'a> {
                 wide_binary(*op, x, y, t)
             }
             ScalarExpr::Select(c, a, b) => {
-                let taken = match &**c {
-                    ScalarExpr::Binary(op, x, y) if op.is_cmp() => self.eval_cmp(*op, x, y)? != 0,
-                    _ if self.wide_ty_of(c).is_some() => !self.wide_operand(c)?.0.is_zero(),
-                    other => self.eval_operand_int(other)? != 0,
-                };
-                self.wide_at(if taken { a } else { b }, t)?
+                self.wide_at(if self.wide_taken(c)? { a } else { b }, t)?
             }
             _ => Err(KernelTrap::Unsupported(
                 "wide integer expression outside the v0 subset",
