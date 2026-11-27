@@ -1,5 +1,0 @@
-kind: Added
----
-Kernel-layer conformance kernel for Philox4x32-10, the counter-based generator behind Triton's `tl.rand` family and ThunderKittens' dropout (rows 22 and 33 of `docs/ir-union-evidence/conformance-idiom-gaps-2026-11-27.md`), built from leaves already on main (`U64` multiply, shifts, XOR). One thread per counter block; ten rounds with the published multipliers and key increments, written from memory of the algorithm. The oracle result is compared with an independently written reference (`u128` multiplies, an array rotated each round) over four counter and key blocks, and the three Random123 known answers recalled from memory (all-zero, all-ones, digits of pi) agree with both the reference and the kernel; that agreement is the only check of the constants, which stay UNVERIFIED against the paper or the library source. Mutants (nine rounds, swapped multipliers, an unbumped key) change every block. Arithmetic only; no statement or operator was added.
-
-— lane: unpopped-conformance
