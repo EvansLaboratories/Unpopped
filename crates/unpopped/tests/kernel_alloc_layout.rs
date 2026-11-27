@@ -120,14 +120,13 @@ fn a_layout_permutes_storage_and_changes_no_result() {
     }
 }
 
-/// Store `value` at logical `store_at`, then read the PHYSICAL byte `raw_at` of the same allocation through `AllocRaw`:
-/// `Some(bytes)` when the byte holds the stored value, `None` when the read traps (a byte never stored is uninitialised).
-fn raw_probe(
+/// The probe kernel: store `value` at logical `store_at`, then read the PHYSICAL byte `raw_at` through `AllocRaw`.
+fn raw_kernel(
     decl: &AllocDecl,
     elem: ElementKind,
     (store_at, value): (i64, i64),
     raw_at: i64,
-) -> Option<Vec<u8>> {
+) -> KernelFn {
     let stored = ScalarExpr::Cast(
         Box::new(ScalarExpr::ConstInt(value, U32)),
         CastSpec {
@@ -164,9 +163,25 @@ fn raw_probe(
     .with_launch(LaunchShape::new([1, 1, 1], [1, 1, 1]))
     .with_allocs(vec![decl.clone()]);
     assert_eq!(check_kernel(&k), Ok(()));
-    let width = if elem == U8 { 1 } else { 4 };
-    let out = TypedBuffer::new(elem, vec![1], vec![1], vec![0; width]);
-    let mut args = vec![KernelArg::Buffer(out)];
+    k
+}
+
+/// Run `raw_kernel` once:
+/// `Some(bytes)` when the byte holds the stored value, `None` when the read traps (a byte never stored is uninitialised).
+fn raw_probe(
+    decl: &AllocDecl,
+    elem: ElementKind,
+    store: (i64, i64),
+    raw_at: i64,
+) -> Option<Vec<u8>> {
+    let k = raw_kernel(decl, elem, store, raw_at);
+    let zero = vec![0; if elem == U8 { 1 } else { 4 }];
+    let mut args = vec![KernelArg::Buffer(TypedBuffer::new(
+        elem,
+        vec![1],
+        vec![1],
+        zero,
+    ))];
     run_launch(&k, &mut args).ok()?;
     let KernelArg::Buffer(out) = &args[0] else {
         unreachable!()
