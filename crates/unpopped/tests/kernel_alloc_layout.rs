@@ -120,81 +120,77 @@ fn a_layout_permutes_storage_and_changes_no_result() {
     }
 }
 
+/// Store `value` at logical `store_at`, then read the PHYSICAL byte `raw_at` of the same allocation through `AllocRaw`:
+/// `Some(bytes)` when the byte holds the stored value, `None` when the read traps (a byte never stored is uninitialised).
+fn raw_probe(
+    decl: &AllocDecl,
+    elem: ElementKind,
+    (store_at, value): (i64, i64),
+    raw_at: i64,
+) -> Option<Vec<u8>> {
+    let stored = ScalarExpr::Cast(
+        Box::new(ScalarExpr::ConstInt(value, U32)),
+        CastSpec {
+            to: elem,
+            round: RoundMode::NearestEven,
+            sat: Saturation::Wrap,
+        },
+    );
+    let place = |index| Place::Alloc { alloc: 0, index };
+    let k = KernelFn::new(
+        "raw",
+        ElementKind::I32,
+        vec![Param::buffer("out", elem, BufferRole::Write, Some(1))],
+        vec![LocalDecl::scalar(elem)],
+        Block(vec![
+            Stmt::Store {
+                place: place(ScalarExpr::ConstInt(store_at, U32)),
+                value: stored,
+            },
+            Stmt::Load {
+                local: 0,
+                place: Place::AllocRaw {
+                    alloc: 0,
+                    byte_offset: ScalarExpr::ConstInt(raw_at, U32),
+                    elem,
+                },
+            },
+            Stmt::Store {
+                place: at(0, ScalarExpr::ConstInt(0, U32)),
+                value: ScalarExpr::Local(0),
+            },
+        ]),
+    )
+    .with_launch(LaunchShape::new([1, 1, 1], [1, 1, 1]))
+    .with_allocs(vec![decl.clone()]);
+    assert_eq!(check_kernel(&k), Ok(()));
+    let width = if elem == U8 { 1 } else { 4 };
+    let out = TypedBuffer::new(elem, vec![1], vec![1], vec![0; width]);
+    let mut args = vec![KernelArg::Buffer(out)];
+    run_launch(&k, &mut args).ok()?;
+    let KernelArg::Buffer(out) = &args[0] else {
+        unreachable!()
+    };
+    Some(out.bytes.clone())
+}
+
 #[test]
 fn the_layout_is_observable_through_alloc_raw_at_the_physical_byte() {
     // swz(3,4,3) over a 1024-byte U8 array: logical index 0x80 lands at byte 0x90 (bit 7 XORed into bit 4)
-    let u8_of = |v: i64| {
-        ScalarExpr::Cast(
-            Box::new(ScalarExpr::ConstInt(v, U32)),
-            CastSpec {
-                to: U8,
-                round: RoundMode::NearestEven,
-                sat: Saturation::Wrap,
-            },
-        )
-    };
-    let probe = |decl: AllocDecl, raw_at: i64| {
-        let k = KernelFn::new(
-            "raw",
-            ElementKind::I32,
-            vec![Param::buffer("out", U8, BufferRole::Write, Some(1))],
-            vec![LocalDecl::scalar(U8)],
-            Block(vec![
-                Stmt::Store {
-                    place: Place::Alloc {
-                        alloc: 0,
-                        index: ScalarExpr::ConstInt(0x80, U32),
-                    },
-                    value: u8_of(0xab),
-                },
-                Stmt::Load {
-                    local: 0,
-                    place: Place::AllocRaw {
-                        alloc: 0,
-                        byte_offset: ScalarExpr::ConstInt(raw_at, U32),
-                        elem: U8,
-                    },
-                },
-                Stmt::Store {
-                    place: at(0, ScalarExpr::ConstInt(0, U32)),
-                    value: ScalarExpr::Local(0),
-                },
-            ]),
-        )
-        .with_launch(LaunchShape::new([1, 1, 1], [1, 1, 1]))
-        .with_allocs(vec![decl]);
-        assert_eq!(check_kernel(&k), Ok(()));
-        let mut args = vec![KernelArg::Buffer(TypedBuffer::new(
-            U8,
-            vec![1],
-            vec![1],
-            vec![0],
-        ))];
-        // the raw read of a byte never stored traps (uninitialised): the stored one is the only readable byte
-        (run_launch(&k, &mut args), args)
-    };
     let shared = || AllocDecl::new("sh", MemorySpace::Shared, U8, Extent::Static(1024));
     let swizzled = shared()
         .with_layout(layout("swz(3,4,3)(1024:1)"))
         .with_align_bytes(1024);
-    let (r, args) = probe(swizzled.clone(), 0x90);
-    r.expect("byte 0x90 holds the stored value");
-    let KernelArg::Buffer(out) = &args[0] else {
-        unreachable!()
-    };
-    assert_eq!(out.bytes, vec![0xab]);
-    // the control: byte 0x80, where the unswizzled array would hold it, was never written
-    assert!(
-        probe(swizzled, 0x80).0.is_err(),
-        "0x80 is not where it landed"
+    let store = (0x80, 0xab);
+    assert_eq!(
+        raw_probe(&swizzled, U8, store, 0x90),
+        Some(vec![0xab]),
+        "byte 0x90 holds the stored value"
     );
+    // the control: byte 0x80, where the unswizzled array would hold it, was never written
+    assert_eq!(raw_probe(&swizzled, U8, store, 0x80), None);
     // and without the layout the value is at byte 0x80
-    let (r, args) = probe(shared(), 0x80);
-    r.expect("identity layout: byte 0x80");
-    let KernelArg::Buffer(out) = &args[0] else {
-        unreachable!()
-    };
-    assert_eq!(out.bytes, vec![0xab]);
+    assert_eq!(raw_probe(&shared(), U8, store, 0x80), Some(vec![0xab]));
 }
 
 #[test]
@@ -204,68 +200,36 @@ fn the_swizzle_is_read_over_elements_for_a_wide_element() {
     let swizzled = shared_u32(64)
         .with_layout(layout("swz(2,2,3)(64:1)"))
         .with_align_bytes(128);
-    let probe = |raw_at: i64| {
-        let k = KernelFn::new(
-            "raw",
-            ElementKind::I32,
-            vec![Param::buffer("out", U32, BufferRole::Write, Some(1))],
-            vec![LocalDecl::scalar(U32)],
-            Block(vec![
-                Stmt::Store {
-                    place: Place::Alloc {
-                        alloc: 0,
-                        index: ScalarExpr::ConstInt(8, U32),
-                    },
-                    value: ScalarExpr::Cast(
-                        Box::new(ScalarExpr::ConstInt(77, U32)),
-                        CastSpec {
-                            to: U32,
-                            round: RoundMode::NearestEven,
-                            sat: Saturation::Wrap,
-                        },
-                    ),
-                },
-                Stmt::Load {
-                    local: 0,
-                    place: Place::AllocRaw {
-                        alloc: 0,
-                        byte_offset: ScalarExpr::ConstInt(raw_at, U32),
-                        elem: U32,
-                    },
-                },
-                Stmt::Store {
-                    place: at(0, ScalarExpr::ConstInt(0, U32)),
-                    value: ScalarExpr::Local(0),
-                },
-            ]),
-        )
-        .with_launch(LaunchShape::new([1, 1, 1], [1, 1, 1]))
-        .with_allocs(vec![swizzled.clone()]);
-        assert_eq!(check_kernel(&k), Ok(()));
-        let mut args = vec![KernelArg::Buffer(TypedBuffer::new(
-            U32,
-            vec![1],
-            vec![1],
-            vec![0; 4],
-        ))];
-        (run_launch(&k, &mut args), args)
-    };
-    let (r, args) = probe(36);
-    r.expect("element 9 (byte 36) holds the stored value");
-    let KernelArg::Buffer(out) = &args[0] else {
-        unreachable!()
-    };
-    assert_eq!(out.bytes, 77u32.to_le_bytes());
-    assert!(
-        probe(32).0.is_err(),
+    let store = (8, 77);
+    assert_eq!(
+        raw_probe(&swizzled, U32, store, 36),
+        Some(77u32.to_le_bytes().to_vec()),
+        "element 9 (byte 36) holds the stored value"
+    );
+    assert_eq!(
+        raw_probe(&swizzled, U32, store, 32),
+        None,
         "element 8 (byte 32) was never written"
     );
 }
 
+/// A kernel with no body, one parameter and one allocation: the shape the dynamic-extent rule needs.
+fn empty_kernel(alloc: AllocDecl) -> KernelFn {
+    KernelFn::new(
+        "d",
+        ElementKind::I32,
+        vec![Param::scalar("n", ElementKind::I32, 0)],
+        vec![LocalDecl::scalar(ElementKind::I32)],
+        Block(vec![]),
+    )
+    .with_launch(LaunchShape::new([64, 1, 1], [1, 1, 1]))
+    .with_allocs(vec![alloc])
+}
+
 #[test]
-fn each_checker_rule_refuses_and_its_control_passes() {
+fn a_layout_needs_a_shared_static_allocation_of_its_own_size() {
     let ok = shared_u32(64).with_layout(layout("(8,8):(1,8)"));
-    assert_eq!(check_kernel(&kernel(ok.clone())), Ok(()));
+    assert_eq!(check_kernel(&kernel(ok)), Ok(()));
     // 1. space: a layout belongs to a Shared allocation
     let private = AllocDecl::new("p", MemorySpace::Private, U32, Extent::Static(64))
         .with_layout(layout("(8,8):(1,8)"));
@@ -273,66 +237,58 @@ fn each_checker_rule_refuses_and_its_control_passes() {
     // 2. size: the layout's size equals the extent, and a dynamic extent is refused with a layout
     let small = shared_u32(32).with_layout(layout("(8,8):(1,8)"));
     assert!(refused(&kernel(small)).contains("size"));
-    let dynamic = AllocDecl::new("d", MemorySpace::Shared, U32, Extent::Param(0))
-        .with_layout(layout("(8,8):(1,8)"));
-    let k = KernelFn::new(
-        "d",
-        ElementKind::I32,
-        vec![Param::scalar("n", ElementKind::I32, 0)],
-        vec![LocalDecl::scalar(ElementKind::I32)],
-        Block(vec![]),
-    )
-    .with_launch(LaunchShape::new([64, 1, 1], [1, 1, 1]))
-    .with_allocs(vec![dynamic]);
-    assert!(refused(&k).contains("Static"));
+    let dynamic = AllocDecl::new("d", MemorySpace::Shared, U32, Extent::Param(0));
+    assert!(
+        refused(&empty_kernel(
+            dynamic.clone().with_layout(layout("(8,8):(1,8)"))
+        ))
+        .contains("Static")
+    );
     // the control: the same dynamic allocation without a layout is accepted
-    let plain_dynamic = AllocDecl::new("d", MemorySpace::Shared, U32, Extent::Param(0));
-    let k = KernelFn::new(
-        "d",
-        ElementKind::I32,
-        vec![Param::scalar("n", ElementKind::I32, 0)],
-        vec![LocalDecl::scalar(ElementKind::I32)],
-        Block(vec![]),
-    )
-    .with_launch(LaunchShape::new([64, 1, 1], [1, 1, 1]))
-    .with_allocs(vec![plain_dynamic]);
-    assert_eq!(check_kernel(&k), Ok(()));
+    assert_eq!(check_kernel(&empty_kernel(dynamic)), Ok(()));
+}
+
+#[test]
+fn a_layout_must_stay_in_range_and_be_injective() {
     // 3. range: a layout whose cosize exceeds the extent
     let wide = shared_u32(64).with_layout(layout("(8,8):(1,9)"));
     assert!(refused(&kernel(wide)).contains("cosize"));
     // 4. injective: (2,2):(1,0) aliases; the control (2,2):(1,2) does not
-    let alias = AllocDecl::new("a", MemorySpace::Shared, U32, Extent::Static(4))
-        .with_layout(layout("(2,2):(1,0)"));
-    assert!(refused(&kernel(alias)).contains("injective"));
-    let control = AllocDecl::new("a", MemorySpace::Shared, U32, Extent::Static(4))
-        .with_layout(layout("(2,2):(1,2)"));
-    assert_eq!(check_kernel(&kernel(control)), Ok(()));
+    let four = |text| {
+        AllocDecl::new("a", MemorySpace::Shared, U32, Extent::Static(4)).with_layout(layout(text))
+    };
+    assert!(refused(&kernel(four("(2,2):(1,0)"))).contains("injective"));
+    assert_eq!(check_kernel(&kernel(four("(2,2):(1,2)"))), Ok(()));
+}
+
+#[test]
+fn a_swizzle_must_divide_the_extent_clear_the_element_and_be_aligned() {
     // 5. swizzle: the period must divide the byte extent, the base must be at or above the element width, and the allocation
     // must be aligned to the period
     let swz = |bits, base, shift| Swizzle::new(bits, base, shift).unwrap();
+    let swizzled = |text: &str, s: Swizzle| AllocLayout::new(layout(text).layout).with_swizzle(s);
     let aligned = shared_u32(64)
-        .with_layout(AllocLayout::new(layout("(8,8):(1,8)").layout).with_swizzle(swz(2, 2, 3)))
+        .with_layout(swizzled("(8,8):(1,8)", swz(2, 2, 3)))
         .with_align_bytes(128);
     assert_eq!(
         check_kernel(&kernel(aligned)),
         Ok(()),
         "the swizzled control"
     );
-    let unaligned = shared_u32(64)
-        .with_layout(AllocLayout::new(layout("64:1").layout).with_swizzle(swz(2, 2, 3)));
+    let unaligned = shared_u32(64).with_layout(swizzled("64:1", swz(2, 2, 3)));
     assert!(refused(&kernel(unaligned)).contains("align_bytes"));
     let misaligned = shared_u32(64)
-        .with_layout(AllocLayout::new(layout("64:1").layout).with_swizzle(swz(2, 2, 3)))
+        .with_layout(swizzled("64:1", swz(2, 2, 3)))
         .with_align_bytes(64);
     assert!(refused(&kernel(misaligned)).contains("align_bytes"));
     // a base below the element width: a U32 element is 4 bytes, so base 1 would mix bits inside one element
     let low = shared_u32(64)
-        .with_layout(AllocLayout::new(layout("64:1").layout).with_swizzle(swz(2, 1, 3)))
+        .with_layout(swizzled("64:1", swz(2, 1, 3)))
         .with_align_bytes(128);
     assert!(refused(&kernel(low)).contains("below the element width"));
     // an extent the period does not divide (48 elements against a 32-element period)
     let ragged = AllocDecl::new("r", MemorySpace::Shared, U32, Extent::Static(48))
-        .with_layout(AllocLayout::new(layout("48:1").layout).with_swizzle(swz(2, 2, 3)))
+        .with_layout(swizzled("48:1", swz(2, 2, 3)))
         .with_align_bytes(128);
     assert!(refused(&kernel(ragged)).contains("divide"));
     // align_bytes is a power of two on any allocation
