@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.19` — Added: tools/gate.sh (full and fast local gate with the path rule), tools/gate-locked.sh (one gate at a time), tools/gate-daily.sh, tools/test-gate.sh, docs/gate.md
+
+The local pre-PR gate is now in the repository: a fast gate (the cpu-c leg is a compile check plus a run of the cpu-c test files the diff touches) allowed only when the diff touches none of the listed paths, with the rule printed and enforced in the script (exit 3 on a forbidden path); a lock so two gates never run at once (stale after 3 h or a dead pid); a daily full gate on origin/main. Measured 43 minutes full, 34 of them the cpu-c runtime leg. The forge's required checks are unchanged. Tests include a mutant of the rule. Tools and docs only.
+
+---
+
 ## `0.60.18` — Added: the K role set for contraction keys (KISS 0.24.0 6.6-0023a): `ContractionRoles::with_k_more_axes`, K class and divisibility from the product of every K extent (plan E4)
 
 `unpopped_vocab::ContractionRoles` gains further K axes (`with_k_more_axes`, `k_more_axes`; the struct is `non_exhaustive` with private fields, so the change is additive). The key derivation takes the K size class and divisibility from the product of every declared K extent and declines `ContractionAxisInvalid` for a further K axis that repeats K, another further axis, M or N, or lies outside its operand. The four KISS 0.24.0 vectors that were the E1a `KNOWN_GAP` now pass and the gap list is empty. The op layer is unchanged and pinned: the plan gate still refuses two `ContractedK` axes by name (`RolesInvalid`, plan-layer multi-K is ROADMAP D2), so a two-K cell derives a key but does not plan. Plan: `docs/design-union-batch1-consumer.md` section 6.
