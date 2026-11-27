@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.61.4` — Docs: PATENT-SWEEP, U21 texture/sampler/surface, warp match/vote, bit-ops, SpecConstant, wide-int, binary128 and rounding patent charts (patents-2)
+
+Docs only. `docs/PATENT-SWEEP.md` gains the U21 texture/sampler/surface chart and updates 1-3, the warp match/vote/active-mask chart (sections 1-7a), the bit-op and `SpecConstant` chart, and the E2 wide-integer, E3 binary128 and U42/U43 rounding chart (section 8). Verdicts are only outside as read, needs more (limb quoted) or NOT CLEARED, unread; findings, not advice. No code changes.
+
+---
+
 ## `0.61.2` — documented panics of the c-family unary spellers on integer bit operations
 
 `cfamily::unary_f32` and `unary_f64` now document, under `# Panics`, that `UnaryOp::Popc`, `Clz` and `Brev` panic (message "c-family lowering: {op:?} is an integer bit operation, refused by the typing gate"), and that type checking refuses them first (`TypeError::IntegerOnlyOperand`). Tests pin the message. No signature or behaviour change.
