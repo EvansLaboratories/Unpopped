@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.62.4` — C-recipes batch 2: CuTe 3/15/17/30/40/66, ThunderKittens 1/2/3/5/39, Slang 25/26 (tests only)
+
+`tests/kernel_c_recipes_tiles.rs` and `tests/kernel_c_recipes_tiled.rs` run register tiles and layout swaps, register and shared vectors, a fragment-layout tile move, a hierarchical-layout tensor, runtime-extent views, a swizzled and a tiled shared atom, a `TiledMma` as thread-value layouts (with a permutation tiler), `autovec_copy`/`fill`/`clear`/`axpby`, cooperative-matrix map/transpose/reduce and the three clamp modes on the oracle as index arithmetic over `Shared` and `Private` allocations, with no view statement. Each has a hand-written reference and a value-changing mutant. One finding is recorded as a test: a dynamic (runtime) mode cannot be stated in the static `Layout` algebra.
+
+---
+
 ## `0.62.3` — C-recipes for CuTe 22-27/31/47 and ThunderKittens 6/38 (tests only)
 
 `tests/kernel_c_recipes.rs`: slice, `local_tile`, `local_partition`, TV-layout composition, `partition_A/B/C`, a layout-driven GEMM, `partition_S/D` with `retile`, identity-tensor predication, subtile views and `swap_layout` run on the oracle as index arithmetic (`unpopped-vocab` layouts evaluated as `/ % * +`) over `Shared` allocations carrying a T1 layout, with no view statement. Each result is compared with a hand-written element formula and has a value-changing mutant. Two findings are recorded by name: `local_tile` does not refuse a non-dividing tile (the last tile leaves the extent), and an opaque `Tile` allocation has no element to index (checker `KernelError::Tile`).
