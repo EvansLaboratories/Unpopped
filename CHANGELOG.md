@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.18` — Added: the K role set for contraction keys (KISS 0.24.0 6.6-0023a): `ContractionRoles::with_k_more_axes`, K class and divisibility from the product of every K extent (plan E4)
+
+`unpopped_vocab::ContractionRoles` gains further K axes (`with_k_more_axes`, `k_more_axes`; the struct is `non_exhaustive` with private fields, so the change is additive). The key derivation takes the K size class and divisibility from the product of every declared K extent and declines `ContractionAxisInvalid` for a further K axis that repeats K, another further axis, M or N, or lies outside its operand. The four KISS 0.24.0 vectors that were the E1a `KNOWN_GAP` now pass and the gap list is empty. The op layer is unchanged and pinned: the plan gate still refuses two `ContractedK` axes by name (`RolesInvalid`, plan-layer multi-K is ROADMAP D2), so a two-K cell derives a key but does not plan. Plan: `docs/design-union-batch1-consumer.md` section 6.
+
+---
+
 ## `0.60.17` — feat: lift_elementwise_multi, a multi-output and u8-output lift that reads the real Slang emitter spelling (ROADMAP U67)
 
 `unpopped-convert`: `lift_elementwise_multi` lifts an elementwise kernel that stores several outputs (`output0`, `output1`, ..., one store each at one index) into a multi-output `OpDef`, with a per-output element type (`Some(U8)` for a mask beside a float value). A declared output with no store, a store to an undeclared output and stores at different indices are refused; `lift_elementwise` is unchanged. ROADMAP U67. Tested against the real spelling: the kernels fishstringer-slang-emit (origin/main `46988a72`, fishstringer#58) emits for `sum_and_product` and `dropout_like` are lifted and run on the oracle against Rust references. Reading them needed identity `(float)` casts (only to the compute type; any other cast is refused) and the `(uint8_t)` store-site cast and `(c ? 1.0 : 0.0)` predicate of a mask output, all inside `lift_elementwise_multi`; the single-output lifts are unchanged.
