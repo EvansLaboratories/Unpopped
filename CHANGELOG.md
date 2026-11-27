@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.60.21` — docs: PATENT-SWEEP G-T2 addendum 6, Intel dot-product family; US12314717B2 claim 25 needs more against the shipped s8 Mma atom
+
+Docs only; no earlier verdict edited.
+
+---
+
 ## `0.60.20` — feat: Layout by-mode coalesce, and the zipped/tiled/flat divide and blocked/raked/zipped/tiled/flat product variants (IR-union cute.md rows 7, 10, 11)
 
 `unpopped-vocab`: `Layout::coalesce_profile`, `logical_divide_by_mode`, `zipped_divide`, `tiled_divide`, `flat_divide`, `blocked_product`, `raked_product`, `zipped_product`, `tiled_product` and `flat_product`. Each applies the existing single-mode `logical_divide` / `logical_product` to every top-level mode and regroups the pairs, so none can disagree with those on a mode; a mode that does not divide is declined (`NotDivisible`), never guessed. Additive; pure vocabulary. Pinned by `tests/layout_algebra_variants.rs` (hand-computed examples plus a brute-force reading of every coordinate, each checker run against a broken grouping). The groupings are UNVERIFIED against CUTLASS `cute/layout.hpp` (not re-read).
