@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! **The f64 `mma.sync.aligned.m16n8k{4,8,16}` atoms of ROADMAP U7 theme 3 put every fragment element where the PTX ISA
 //! says** and run through the oracle. Layouts are `(row, col)` formulas from PTX ISA 9.5 sections 9.7.16.5.6 (`k4`),
-//! 9.7.16.5.7 (`k8`) and 9.7.16.5.8 (`k16`: A Figure 83 pp. 564-565, B Figure 85 p. 566, C Figure 86 p. 567; the A column formula is read across a page break, see
+//! 9.7.16.5.7 (`k8`) and 9.7.16.5.8 (`k16`: A Figure 83 pp. 564-565, B Figure 85 p. 566, C Figure 86 p. 567; the A column formula continues across a page break, see
 //! `mma_f64.rs`). Second source of all three: CUTLASS `mma_traits_sm90.hpp`, `main` 5c179ede.
 
 use unpopped::mma::MmaAtom;

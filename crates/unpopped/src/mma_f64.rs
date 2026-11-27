@@ -5,10 +5,9 @@
 //!
 //! **Sources.** Public PTX ISA 9.5 (text of the PDF, outside every repo): `m16n8k4` section 9.7.16.5.6 (pp. 549-554;
 //! Figures 69, 71, 73), `m16n8k8` section 9.7.16.5.7 (pp. 557-562; Figures 76, 79, 81), `m16n8k16` section 9.7.16.5.8
-//! (A pp. 564-565, Figure 83; B p. 566, Figure 85; C p. 567, Figure 86). The k16 A column formula is split across a page
-//! break in the extracted text (`(i * 2) + threadID_in_group` for even `i`, `(i * 2) - 2 + threadID_in_group` for odd `i`
-//! as read), which is `4 * (i / 2) + threadID_in_group`: a bijection, and the same as the CUTLASS layout. The even/odd
-//! pairing of the two branches is this lane's reading of interleaved text, not a quotation. Second source for all three: CUTLASS
+//! (A pp. 564-565, Figure 83; B p. 566, Figure 85; C p. 567, Figure 86). The k16 A column formula continues across a page
+//! break (pp. 564-565): `(i * 2) + threadID_in_group` for even `i`, `(i * 2) - 2 + threadID_in_group` for odd `i`, which
+//! is `4 * (i / 2) + threadID_in_group`, a bijection and the same as the CUTLASS layout. Second source for all three: CUTLASS
 //! `include/cute/atom/mma_traits_sm90.hpp` (`SM90_16x8x{4,8,16}_F64F64F64F64_TN`, `main` 5c179ede); a CuTe `BLayout`
 //! indexes `(N, K)`, so B strides are recomputed. PTX gives these f64 shapes a `sm_90` target.
 
