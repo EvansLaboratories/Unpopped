@@ -103,7 +103,9 @@ pub(crate) fn check_kernel_with(
 /// hold. Covers the compute type, every parameter (buffer element, scalar, struct field), every local and every allocation.
 fn check_declared_dtypes(k: &KernelFn) -> Result<(), KernelError> {
     let refuse = |dtype| Err(KernelError::DtypeNotComputed { dtype });
-    if types::is_union_batch1(k.compute) {
+    // the four wide integers are computed (ROADMAP E2); the rest of union batch 1 is declined by name
+    let declined = |t: ElementKind| types::is_union_batch1(t) && !types::is_wide_int(t);
+    if declined(k.compute) {
         return refuse(k.compute);
     }
     for p in &k.params {
@@ -112,14 +114,14 @@ fn check_declared_dtypes(k: &KernelFn) -> Result<(), KernelError> {
             ParamKind::Scalar { ty, .. } => vec![*ty],
             ParamKind::Struct { fields } => fields.iter().map(|f| f.ty).collect(),
         };
-        if let Some(t) = tys.into_iter().find(|t| types::is_union_batch1(*t)) {
+        if let Some(t) = tys.into_iter().find(|t| declined(*t)) {
             return refuse(t);
         }
     }
-    if let Some(l) = k.locals.iter().find(|l| types::is_union_batch1(l.elem)) {
+    if let Some(l) = k.locals.iter().find(|l| declined(l.elem)) {
         return refuse(l.elem);
     }
-    if let Some(a) = k.allocs.iter().find(|a| types::is_union_batch1(a.elem)) {
+    if let Some(a) = k.allocs.iter().find(|a| declined(a.elem)) {
         return refuse(a.elem);
     }
     Ok(())
@@ -868,6 +870,11 @@ fn check_atomic(
     if crate::types::int_range(elem).is_none() && !float_ok {
         return Err(KernelError::AtomicUnsupported {
             what: "an atomic on a non-integer element (only an F16/Bf16/F32/F64 Add or Exchange is admitted)",
+        });
+    }
+    if matches!(op, AtomicOp::Inc | AtomicOp::Dec) && elem != ElementKind::U32 {
+        return Err(KernelError::AtomicUnsupported {
+            what: "an Inc or Dec atomic outside a U32 element (CUDA atomicInc/atomicDec, PTX atom.inc.u32/atom.dec.u32)",
         });
     }
     if check_expr(k, value, sc)? != Ty::Scalar(elem) {

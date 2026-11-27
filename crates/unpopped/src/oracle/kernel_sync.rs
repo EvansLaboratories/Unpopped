@@ -159,6 +159,11 @@ impl Edges {
         }
     }
 
+    /// Drop what releases left on `key` (a barrier phase nobody can still acquire from).
+    pub(super) fn forget(&mut self, key: ElemKey) {
+        self.records.remove(&key);
+    }
+
     /// What `me` has acquired plus its own access `seq`: the clock a release by `me` publishes.
     fn snapshot(&self, me: Tid, seq: u64) -> Clock {
         let mut clock = self.know.get(&me).cloned().unwrap_or_default();

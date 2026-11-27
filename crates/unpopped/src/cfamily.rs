@@ -771,6 +771,12 @@ pub fn cast_scalar(from: ElementKind, to: ElementKind, expr: &str) -> String {
 /// Deferred rather than done because it rewrites emitted text, which moves every
 /// byte-identity golden — including Baracuda's physical CUDA corpus. It belongs
 /// with a coordinated golden regen, not with a quiet cleanup.
+///
+/// # Panics
+/// On `UnaryOp::Popc`, `UnaryOp::Clz` and `UnaryOp::Brev` (integer bit operations, which have no f32 spelling):
+/// the message is "c-family lowering: {op:?} is an integer bit operation, refused by the typing gate".
+/// Type checking refuses these first (`TypeError::IntegerOnlyOperand`, on the kernel path and the plan path), so a
+/// checked kernel or plan never reaches this panic; only a caller that spells an unchecked `UnaryOp` does.
 pub fn unary_f32(op: UnaryOp, x: String) -> String {
     match op {
         UnaryOp::Neg => format!("(-{x})"),
@@ -824,10 +830,22 @@ pub fn unary_f32(op: UnaryOp, x: String) -> String {
         UnaryOp::Atanh => format!("atanhf({x})"),
         UnaryOp::Cbrt => format!("cbrtf({x})"),
         UnaryOp::Lgamma => format!("lgammaf({x})"),
+        // an integer bit operation has no float spelling: the typing gate refuses it on a float (`UnaryOp::is_bit_op`)
+        UnaryOp::Popc | UnaryOp::Clz | UnaryOp::Brev => {
+            panic!(
+                "c-family lowering: {op:?} is an integer bit operation, refused by the typing gate"
+            )
+        }
     }
 }
 
 /// Same as [`unary_f32`] but with f64 math-function names and double literals.
+///
+/// # Panics
+/// On `UnaryOp::Popc`, `UnaryOp::Clz` and `UnaryOp::Brev` (integer bit operations, which have no f64 spelling):
+/// the message is "c-family lowering: {op:?} is an integer bit operation, refused by the typing gate".
+/// Type checking refuses these first (`TypeError::IntegerOnlyOperand`, on the kernel path and the plan path), so a
+/// checked kernel or plan never reaches this panic; only a caller that spells an unchecked `UnaryOp` does.
 pub fn unary_f64(op: UnaryOp, x: String) -> String {
     match op {
         UnaryOp::Neg => format!("(-{x})"),
@@ -871,6 +889,12 @@ pub fn unary_f64(op: UnaryOp, x: String) -> String {
         UnaryOp::Atanh => format!("atanh({x})"),
         UnaryOp::Cbrt => format!("cbrt({x})"),
         UnaryOp::Lgamma => format!("lgamma({x})"),
+        // an integer bit operation has no float spelling: the typing gate refuses it on a float (`UnaryOp::is_bit_op`)
+        UnaryOp::Popc | UnaryOp::Clz | UnaryOp::Brev => {
+            panic!(
+                "c-family lowering: {op:?} is an integer bit operation, refused by the typing gate"
+            )
+        }
     }
 }
 

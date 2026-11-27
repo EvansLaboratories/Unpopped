@@ -78,6 +78,11 @@ pub(super) fn unary_op_f64(op: UnaryOp, x: f64) -> f64 {
         UnaryOp::Atanh => x.abs().atanh().copysign(x),
         UnaryOp::Cbrt => x.cbrt(),
         UnaryOp::Lgamma => lgamma(x),
+        UnaryOp::Popc | UnaryOp::Clz | UnaryOp::Brev => {
+            panic!(
+                "oracle: {op:?} is an integer bit operation, evaluated by the kernel oracle at the operand's width"
+            )
+        }
     }
 }
 

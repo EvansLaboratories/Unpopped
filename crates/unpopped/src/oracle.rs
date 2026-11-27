@@ -132,6 +132,7 @@ mod plan_eval;
 mod plan_window;
 mod scalar_ops;
 mod value;
+mod wide_ops;
 
 use crate::ir::{Access, BinaryOp, ReduceOp, ScalarExpr, SortOrder, SortOut, UnaryOp, View};
 use crate::plan::{KernelPlan, RrRole, Schedule, rr_role};

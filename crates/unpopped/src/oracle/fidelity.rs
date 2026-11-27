@@ -105,10 +105,11 @@ pub fn required_fidelity_with_exactness(
     // is 3 ULP against CUDA `expf`'s 2 — this band is too tight to be met, and a
     // conforming kernel fails a comparison it should pass. See `ulp_bound`'s
     // "KNOWN LIMIT" section; closing it needs a per-target accuracy seam.
-    let ulp = crate::contract::ulp_bound_measured(
+    let ulp = crate::contract::ulp_bound_measured_for(
         plan.body,
         &crate::contract::AccuracyKey::for_target(plan.key.target),
         crate::contract::MeasuredOn::for_target(measured, plan.key.target, plan.dtype).as_ref(),
+        plan.dtype,
     );
     if !ulp.is_finite() {
         return None;

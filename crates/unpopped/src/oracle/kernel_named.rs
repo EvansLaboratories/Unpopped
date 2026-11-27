@@ -37,7 +37,6 @@ impl Machine<'_> {
         count: u32,
         wait: bool,
     ) -> Result<Option<Stop>, KernelTrap> {
-        self.named_edge(id, MemoryOrder::Release);
         let c = self.ctx.as_mut().ok_or(KernelTrap::Unsupported(
             "a named barrier outside run_launch",
         ))?;
@@ -56,26 +55,40 @@ impl Machine<'_> {
             s.arrived = 0;
             s.phase += 1;
         }
+        // the release is left on the key of the phase it arrives in, so a waiter of an earlier phase never acquires what a
+        // thread that already ran on into a later phase released
+        self.named_edge(id, phase, MemoryOrder::Release);
+        if opened {
+            self.named_forget(id, phase);
+        }
         if !wait {
             return Ok(None);
         }
         if opened {
-            self.named_acquire(id);
+            self.named_acquire(id, phase);
             return Ok(None);
         }
         Ok(Some(Stop::NamedWait { id, phase }))
     }
 
     /// Take in what the other participants released on the barrier `id`.
-    pub(super) fn named_acquire(&mut self, id: u32) {
-        self.named_edge(id, MemoryOrder::Acquire);
+    pub(super) fn named_acquire(&mut self, id: u32, phase: u32) {
+        self.named_edge(id, phase, MemoryOrder::Acquire);
     }
 
-    fn named_edge(&mut self, id: u32, order: MemoryOrder) {
+    /// Phase `phase` has opened: drop the records of phase `phase - 2`. Every waiter of that phase is a counted participant, so it
+    /// has already run (and acquired) before phase `phase - 1` could open.
+    fn named_forget(&mut self, id: u32, phase: u32) {
+        if let (Some(old), Some(c)) = (phase.checked_sub(2), self.ctx.as_mut()) {
+            c.sync.forget((2, c.block_lin, id, old as usize));
+        }
+    }
+
+    fn named_edge(&mut self, id: u32, phase: u32, order: MemoryOrder) {
         self.set_site(order, Scope::Block);
         if let Some(c) = self.ctx.as_mut() {
             let now = c.stamp(AccessKind::Atomic);
-            let key = (2, c.block_lin, id, 0);
+            let key = (2, c.block_lin, id, phase as usize);
             c.after(now, AccessKind::Atomic, key);
         }
     }

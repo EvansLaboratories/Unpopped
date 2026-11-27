@@ -71,6 +71,29 @@ pub(super) fn write_elem(bytes: &mut [u8], i: usize, dt: ElementKind, bits: u128
     }
 }
 
+/// Read element `i` of a wide integer dtype (`I128`/`U128`/`I256`/`U256`) as its canonical 256-bit pattern (ROADMAP E2).
+pub(super) fn read_wide(bytes: &[u8], i: usize, dt: ElementKind) -> crate::wide_int::W256 {
+    let sz = elem_size(dt);
+    let mut b = [0u8; 32];
+    b[..sz].copy_from_slice(&bytes[i * sz..i * sz + sz]);
+    crate::wide_int::W256::from_le_bytes(b).wrap_to(dt)
+}
+
+/// Write element `i` of a wide integer dtype: the low `elem_size(dt)` little-endian bytes of `w`.
+pub(super) fn write_wide(bytes: &mut [u8], i: usize, dt: ElementKind, w: crate::wide_int::W256) {
+    let sz = elem_size(dt);
+    bytes[i * sz..i * sz + sz].copy_from_slice(&w.to_le_bytes()[..sz]);
+}
+
+/// Load element `i` as a value: a wide integer dtype gives [`Val::Wide`], every other dtype the raw storage bits it always did.
+pub(super) fn load_val(bytes: &[u8], i: usize, dt: ElementKind) -> Val {
+    if crate::wide_int::wide_int_bits(dt).is_some() {
+        Val::Wide(read_wide(bytes, i, dt), dt)
+    } else {
+        Val::Raw(read_elem(bytes, i, dt), dt)
+    }
+}
+
 /// `true` for the integer compute dtypes (`I32`/`I64`/`S8`/`U8`/`Bool`).
 pub(super) fn is_int(dt: ElementKind) -> bool {
     matches!(
@@ -211,5 +234,63 @@ pub(super) fn int_extreme(dt: ElementKind, most_negative: bool) -> i128 {
             }
         }
         other => panic!("oracle: no integer extreme for {other:?}"),
+    }
+}
+
+#[cfg(test)]
+mod wide_storage_tests {
+    use super::*;
+    use crate::wide_int::W256;
+
+    const WIDE: [ElementKind; 4] = [
+        ElementKind::I128,
+        ElementKind::U128,
+        ElementKind::I256,
+        ElementKind::U256,
+    ];
+
+    #[test]
+    fn a_wide_element_stores_and_loads_back_and_leaves_its_neighbours() {
+        for dt in WIDE {
+            let sz = elem_size(dt);
+            let mut bytes = vec![0xAAu8; sz * 3];
+            let v = W256::from_i128(-0x0123_4567_89ab_cdef_i128).wrap_to(dt);
+            super::super::store_val(Val::Wide(v, dt), dt, &mut bytes, 1);
+            let Val::Wide(back, bdt) = load_val(&bytes, 1, dt) else {
+                panic!("{dt:?}: a wide load is Val::Wide")
+            };
+            assert_eq!((back, bdt), (v, dt), "{dt:?}");
+            assert!(
+                bytes[..sz].iter().all(|b| *b == 0xAA),
+                "{dt:?} lower neighbour"
+            );
+            assert!(
+                bytes[2 * sz..].iter().all(|b| *b == 0xAA),
+                "{dt:?} upper neighbour"
+            );
+        }
+    }
+
+    #[test]
+    fn a_narrow_dtype_still_loads_as_raw_bits() {
+        let bytes = 0x1234_5678u32.to_le_bytes();
+        let Val::Raw(bits, ElementKind::U32) = load_val(&bytes, 0, ElementKind::U32) else {
+            panic!("a narrow load is Val::Raw")
+        };
+        assert_eq!(bits, 0x1234_5678);
+    }
+
+    #[test]
+    fn storage_is_little_endian_and_a_signed_128_reads_sign_extended() {
+        let mut bytes = vec![0u8; 16];
+        write_wide(&mut bytes, 0, ElementKind::I128, W256::from_i128(-2));
+        assert_eq!(bytes[0], 0xFE);
+        assert!(bytes[1..].iter().all(|b| *b == 0xFF));
+        assert_eq!(read_wide(&bytes, 0, ElementKind::I128), W256::from_i128(-2));
+        // the same bytes as U128 are 2^128 - 2, never negative
+        assert_eq!(
+            read_wide(&bytes, 0, ElementKind::U128),
+            W256::from_u128(u128::MAX - 1)
+        );
     }
 }

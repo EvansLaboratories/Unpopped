@@ -15,6 +15,142 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.61.7` — Docs: PATENT-SWEEP, US20230315655A1 file-wrapper chart (patents-2)
+
+Docs only. `docs/PATENT-SWEEP.md` gains the file-wrapper chart of application 17/691,303 (allowed 2026-11-18) against the remote store-and-arrive limb, per Unpopped statement, verdict words only. No code changes.
+
+---
+
+## `0.61.6` — fix, the kernel oracle's integer `Mul` and the collective `Prod` wrap at 64 bits instead of overflowing `i128`
+
+The kernel oracle multiplied two integers with a plain `i128` `*` before wrapping to the type: `u64::MAX * u64::MAX` (about 2^128) exceeds `i128::MAX` and panicked with "attempt to multiply with overflow" in a debug build (a release build wrapped to the right value). Two sites, both now `wrapping_mul` before the wrap: `Mul` in `kernel_eval::eval_int` and `ReduceOp::Prod` in `kernel_collective::combine` (a four-lane `u64::MAX` product passes `(2^64 - 1)^2`). Found by unpopped-conformance; the same-shaped sums cannot overflow (two 64-bit values add inside `i128`).
+
+Audit of `oracle/**` for plain `+`, `-`, `*` on `i128` values: the plan paths already use `wrapping_add`/`wrapping_mul` (`plan_window.rs`, `plan_contract.rs`, `expr_eval::arith`, which is the positive control that the search finds the safe form); the MMA and accumulation-policy sums multiply at most 32-bit operands. No other site found.
+
+Verified: `tests/kernel_int_mul_wraps.rs` panicked at both sites before the fix (red first) and passes after; the `Mul` test covers `u64::MAX * u64::MAX` (1 modulo 2^64), `u64::MAX * 2`, `2^63 * 2` and `i64::MIN * i64::MIN`.
+
+---
+
+## `0.61.5` — Shared-memory size check (`kernel_interface::{shared_bytes, check_shared_size}`)
+
+Added `shared_bytes(kernel, dynamic_counts)`, the sum of `count * element size` over the kernel's `Shared` allocations (dynamic ones at the launch's counts, in `KernelInterface::dynamic_shared` order), and `check_shared_size(kernel, dynamic_counts, target)`, which compares it with `TargetCapabilities::max_shared_mem_per_block` (the opt-in maximum; the 48 KiB default, the per-SM figure and reserved system shared memory are not modelled). A sub-byte or unsized element, a missing dynamic count and an overflow are errors (`SharedSizeError`), not a zero. Additive: new functions and a `non_exhaustive` error enum. Source of the limit: the existing `cuda_capabilities` table. Union audit CUDA row 95.
+
+---
+
+## `0.61.4` — Docs: PATENT-SWEEP, U21 texture/sampler/surface, warp match/vote, bit-ops, SpecConstant, wide-int, binary128 and rounding patent charts (patents-2)
+
+Docs only. `docs/PATENT-SWEEP.md` gains the U21 texture/sampler/surface chart and updates 1-3, the warp match/vote/active-mask chart (sections 1-7a), the bit-op and `SpecConstant` chart, and the E2 wide-integer, E3 binary128 and U42/U43 rounding chart (section 8). Verdicts are only outside as read, needs more (limb quoted) or NOT CLEARED, unread; findings, not advice. No code changes.
+
+---
+
+## `0.61.3` — E2, the wide integers `I128`, `U128`, `I256`, `U256` are computed by the kernel oracle
+
+A kernel may now declare, load, store, compute on and convert the four wide integer dtypes (`check_kernel` no longer refuses them with `DtypeNotComputed`; `F128`, `F8E3M4` and `F8UE4M3` still are). The oracle holds one on a 256-bit two's-complement word (`wide_int::W256`, new, with wrapping add/sub/mul, shifts, compare, clamp, and div/rem) and `Val::Wide`.
+
+Rules are the narrow ones of `docs/int-div-shift-semantics.md` at the wide width: arithmetic wraps at the dtype's width, `Div` is total (a zero divisor gives the dividend, signed `MIN / -1` gives `MIN`), a shift count is read as unsigned bits modulo the width, ordering and the six comparisons read the dtype's signedness, and a `Cast` between a wide and any narrow integer wraps or clamps. A float or sub-byte endpoint of a wide `Cast` is refused by name (`IllegalCast`), and a plan never types a wide value (`types::is_wide_int`, `types::is_kernel_int`).
+
+Additive: no public enum or struct gained a variant or field. cpu-c declines a wide kernel by name (`tests/kernel_wide_int_declines.rs`); no emitter lowers a wide add, and the oracle's 256-bit carry is computed from native `u64` limb sums, not a carry-flag instruction chain.
+
+Verified: `tests/kernel_wide_int.rs` runs the 128-bit types against Rust's own `i128`/`u128` operators and the 256-bit types against an independent `(hi, lo)` model plus hand-pinned products and quotients, over operand sets including 0, 1, all-ones, the sign bit alone and patterns crossing the 128-bit boundary; `W256` and the oracle operations carry their own unit tests and seeded-mutation checks. Found and fixed on the way: a 16-byte scratch buffer in the same-value store test overflowed on a 256-bit element.
+
+---
+
+## `0.61.2` — documented panics of the c-family unary spellers on integer bit operations
+
+`cfamily::unary_f32` and `unary_f64` now document, under `# Panics`, that `UnaryOp::Popc`, `Clz` and `Brev` panic (message "c-family lowering: {op:?} is an integer bit operation, refused by the typing gate"), and that type checking refuses them first (`TypeError::IntegerOnlyOperand`). Tests pin the message. No signature or behaviour change.
+
+---
+
+## `0.61.1` — F64 unary ULP tier (`ulp_bound_measured_for`, ROADMAP U42)
+
+Added `contract::ulp_bound_measured_for(e, key, measured, dtype)`; `ulp_bound` and `ulp_bound_measured` keep their signatures and the `f32` table. At `F64` each unary op is rated `max(CUDA f32 count, the vendor double-precision bound)`, and `oracle::required_fidelity` now passes the plan dtype, so the one op whose double bound is larger than its `f32` count, `erfc` (4 to 5), is no longer under-stated in an F64 band (`rel = (steps + 2*5) * 2^-53`). Every other op is unchanged at `F32` and `F64`: no tightening, because the vendor says its bounds are "not guaranteed"; `lgamma` keeps 6.
+
+Source: NVIDIA CUDA Programming Guide v13.5, "Mathematical Functions" appendix, tables 54-58 and 62, page dated 2026-10-31. **Provenance:** the 20 rows other than erf, erfc, lgamma and rsqrt were relayed by a fetch subagent from the page's raw text, not read first-hand; `erf`, `erfc`, `lgamma` and `rsqrt` were re-read verbatim, and the one value that changes, `erfc` (5 ULP), is among those first-hand rows. Pinned by `ulp_f64_tier.rs` (every op at both dtypes; the F64 and F32 fidelity band of `erfc`).
+
+---
+
+## `0.61.0` — **BREAKING**: `UnaryOp::Popc`, `Clz`, `Brev` (integer bit operations)
+
+Added three variants to the exhaustive public enum `UnaryOp`: `Popc` (population count), `Clz` (leading zeros, `w` for zero) and `Brev` (bit reversal), integer-only, defined at the operand's own width (its `w`-bit two's-complement pattern) with the operand's type as the result (PTX ISA `popc`/`clz`/`brev`, CUDA `__popc`/`__clz`/`__brev`). **Breaking** for any downstream exhaustive `match` on `UnaryOp`; `UnaryOp::is_bit_op` names the three, and `TypeError::IntegerOnlyOperand` refuses one on a float or in a plan body. The kernel oracle evaluates them at every integer width (I8..U64); the plan gate admits no `UnaryOp` at an integer dtype and cpu_c declines them by name. In-repo exhaustive sites (cfamily, contract, optimize, pattern, recipe, scalar_ops) rate them exact, never fold them, and map no KISS-Ops token. Pinned by `kernel_bit_ops.rs` (per-bit reference at every width, 0 and all-ones) and `kernel_bit_op_declines.rs`.
+
+---
+
+## `0.60.35` — test, float Max/Min/Sum collectives over 32 lanes with NaN, signed zero and infinities
+
+`kernel_collective_float_nan.rs`: F32 `Reduce` Max, Min and Sum over a 32-lane subgroup against hand-written vectors (NaN propagates, a zero tie keeps the first lane's sign, +inf plus -inf is NaN, Sum is the lane-order left fold); a NaN-ignoring Max/Min, a tie to the last lane and a reversed or pairwise Sum fail the vectors by value. Rule read from the oracle code; the design note matches it. Tests only.
+
+`kernel_subtile_causal_mask.rs`: one subgroup zeroes the upper triangle of a 16 x 8 tile held in the m16n8 accumulator fragment layout, checked against Rust's lower triangle; a strict-triangle and a missing-upper-half-offset mutant change values. Tests and docs only.
+
+---
+
+## `0.60.34` — test, wave count-bits idioms (survey row 46) and survey batch 3
+
+`kernel_wave_count_bits.rs`: WaveActiveCountBits as a subgroup Reduce(Sum) and WavePrefixCountBits as an exclusive Scan(Sum) over a predicate, checked by hand-written arrays and against a Ballot mask; an inclusive-scan and a Max mutant change a lane by value. Also survey batch 3 (6 rows) in the verification doc. Tests and docs only.
+
+`kernel_simd_shuffle_fill.rs`: simd_shuffle_and_fill_up/down and simd_shuffle_rotate_up/down built from two Shuffle collectives and a Select, against hand-written arrays from the Metal 4.1 spec example; a fill that ignores its filling fails by value. Survey batch 4 (8 Metal rows) in the verification doc. Tests and docs only.
+
+---
+
+## `0.60.33` — test, 64-bit integer atomics (survey row 50)
+
+`kernel_atomic_wide.rs`: twelve threads apply each integer `AtomicRmw` op with an operand above 2^32 to an `I64` and a `U64` cell; expected cells come from Rust operators, and a narrowed-operand and a wrong-op mutant change the cell by value. Adds the survey batch 1 and 2 verification doc. Tests and docs only.
+
+Read 10 rows of the idiom-gap table from their primary pages (CuTe DSL 4.7.0, TileLang 0.1.16, HLSL SM 6.0/6.5) and triaged them: 4 already covered on main (rows 2-redux, 28, 29, 45), 1 expressible and unbuilt (46 count-bits), 7 leaf candidates, 1 held, 1 stale (row 2 uniform vote, closed by #453). Docs only; no code changed.
+
+---
+
+## `0.60.32` — Added
+
+Conformance test for the structure key of a rank-3 batched contraction (CuTe survey row 39, key half; the value half is `kiss_ref_diff::batched_matmul_oracle_eq_kiss_ref`): `unpopped-vocab`'s `derive_structure_key_token` is asserted against the tokens KISS's own corpus carries for `f16 [64, 8, 512] . f16 [64, 512, 4096] -> f16 [64, 8, 4096]` on `cuda:sm89` (`sk8|ctr|f16|cuda:sm89|ix32|grid|r3|...|ctlm/d16/bs/f16/f16/f16/st`), with its controls: no declared batch axis gives no batch coordinate, a declared extent-1 batch is `bt`, rank 4 keys the class of the PRODUCT of the batch extents (`bm` for 4 x 64), and an out-of-range, repeated or contraction-overlapping batch axis is declined by name (`BatchAxisOutOfRange`, `BatchAxisDuplicate`, `BatchAxisOverlapsContractionRole`). The expected tokens were reported by the KISS lane (KISS `origin/main` 8828b194, KISS-CLASSIFY-6.6-0023) and are UNVERIFIED by this lane against the JSON corpus or the spec text, which were not read; two of KISS's five declines (`NotInOutput`, `NonPositiveExtent`) are not built. No source mutation was run: the derivation is the primary's `crates/*/src`, which this lane does not edit.
+
+— lane: unpopped-conformance
+
+---
+
+## `0.60.31` — Fixed
+
+Oracle: a named barrier (`bar.sync` / `bar.arrive`) no longer orders a waiter after what a thread did in a LATER phase. The oracle runs the threads of a block one after another and a woken waiter took its acquire when it next ran, by which time a thread that had already run on into the next phase had left a release on the same barrier key; the waiter absorbed that release too, so an unordered read and write between two threads (a Hillis-Steele scan with the sync between a step's read and write removed, found by the conformance lane in #457) ran to completion with wrong values and no `DataRace`. Releases are now left on the key of the phase they arrive in and a waiter acquires only the phase it waited in (the records of phase `p - 2` are dropped when phase `p` opens). **Consumer effect, plainly: a kernel whose named-barrier phases raced now traps `KernelTrap::DataRace` from `run_launch` (and every entry that reaches it); previously it ran to completion with wrong values. If a differential test newly traps `DataRace`, the KERNEL was racy: fix the kernel, not the oracle.** Verified: `tests/kernel_named_barrier_race.rs` (a warp-wide neighbour add; the synced kernel runs, the kernel without the mid sync is a `DataRace`; without this change the second one returns `Ok` with wrong values), the #457 Hillis-Steele mutant `NoSecondSync` now traps, its unmutated scan still passes, and the 208 existing test binaries of `cargo test -p unpopped` pass.
+
+— lane: unpopped
+
+---
+
+## `0.60.30` — `AtomicOp::Inc`/`Dec` (CUDA `atomicInc`/`atomicDec`)
+
+Added `AtomicOp::Inc` (`old >= v ? 0 : old + 1`) and `Dec` (`(old == 0 || old > v) ? v : old - 1`), `U32` only (the checker refuses other elements by name): CUDA C++ Programming Guide `atomicInc`/`atomicDec`, PTX ISA `atom.inc.u32`/`atom.dec.u32`. Oracle, cpu-c and the CUDA walker (`atomicInc`/`atomicDec`) spell them. Pinned by `kernel_atomic_incdec.rs` (an independent loop from the CUDA definition) and the cpu-c differential `the_wrapping_inc_and_dec_agree`.
+
+---
+
+## `0.60.29` — Added
+
+Kernel-layer conformance kernels for two integer idioms from other kernel languages' public docs, built from leaves already on main (rows 20 and 28 of `docs/ir-union-evidence/conformance-idiom-gaps-2026-11-27.md`): a 32 x 32 to 64-bit carry-less (GF(2)) multiply (Triton `tl.clmul`) and a four-lane signed byte dot product with accumulate (CUDA `__dp4a`, TileLang `T.dp4a`). Each is compared on the oracle with a reference written independently (the carry-less product by coefficient parity rather than the kernel's shift-and-XOR loop; the dot product with Rust's `as i8` casts) over boundary corpora, with mutants (carries instead of XOR, an off-by-one shift, unsigned bytes, a dropped accumulator) that fail by value. Arithmetic semantics only: whether a target has one instruction for either is not modelled, and no new statement or operator was needed.
+
+— lane: unpopped-conformance
+
+Kernel-layer conformance kernel for a Hillis-Steele inclusive prefix sum in shared memory with one named barrier per 32-lane group (row 34 of `docs/ir-union-evidence/conformance-idiom-gaps-2026-11-27.md`, the ThunderKittens mamba2 gate-cumsum pattern): a block of 64 threads, group 0 on `bar.sync 1, 32` and group 1 on `bar.sync 2, 32`, five steps, two syncs per step. Compared on the oracle with a serial per-group prefix sum over small integers, a NaN corpus (the NaN reaches exactly the later lanes of its own group) and an all-negative corpus. Three mutants (the last step dropped, an off-by-one guard, the sync between a step's read and write dropped) fail by value. Finding, recorded not pinned: the missing-sync mutant ran to completion with wrong values rather than a `DataRace` trap. Block-scope named barriers only (arrive and wait together); the PATENT-SWEEP barrier chart (Unpopped#442) lists block-scope barriers as outside as read, not a clearance, and none of its re-read triggers is exercised.
+
+— lane: unpopped-conformance
+
+Kernel-layer conformance kernel for Philox4x32-10, the counter-based generator behind Triton's `tl.rand` family and ThunderKittens' dropout (rows 22 and 33 of `docs/ir-union-evidence/conformance-idiom-gaps-2026-11-27.md`), built from leaves already on main (`U64` multiply, shifts, XOR). One thread per counter block; ten rounds with the published multipliers and key increments, written from memory of the algorithm. The oracle result is compared with an independently written reference (`u128` multiplies, an array rotated each round) over four counter and key blocks, and the three Random123 known answers recalled from memory (all-zero, all-ones, digits of pi) agree with both the reference and the kernel; that agreement is the only check of the constants, which stay UNVERIFIED against the paper or the library source. Mutants (nine rounds, swapped multipliers, an unbumped key) change every block. Arithmetic only; no statement or operator was added.
+
+— lane: unpopped-conformance
+
+Kernel-layer conformance kernels for HLSL's quad reads and wave queries, built from the shuffles and votes already on main (rows 18, 45 and 46 of `docs/ir-union-evidence/conformance-idiom-gaps-2026-11-27.md`): `QuadReadAcrossX/Y/Diagonal` (XOR masks 1, 2, 3), `QuadReadLaneAt` (an index shuffle to the quad's base plus the requested lane), `WaveReadLaneFirst` and `WaveActiveAllEqual` (an index-0 shuffle and a vote). Eight lanes in one subgroup (two quads) hold distinct boundary integers; each result is compared on the oracle with a reference written from the quad's definition (base and position), not from the masks. Mutants (the wrong X mask, a dropped quad base, `Any` for `All`) fail by value. Not modelled: which lane is first among inactive lanes (the whole subgroup participates), and a float all-equal over NaN.
+
+— lane: unpopped-conformance
+
+Kernel-layer conformance kernel for grouped block rasterization (row 31 of `docs/ir-union-evidence/conformance-idiom-gaps-2026-11-27.md`: the grouped ordering of Triton's public matmul tutorial, TileLang `T.use_swizzle`): a linear tile id is mapped to `(tile_m, tile_n)` over a 5 x 4 grid with groups of two rows, so the last group is clamped to one row. Integer index arithmetic only (divide, modulo as divide-multiply-subtract, `Min`); one thread per tile id. The oracle result is compared with a reference that enumerates the order by nested loops, and the mapping is checked to be a bijection that differs from row-major order. Mutants (no clamp of the last group, a modulo where a divide belongs) fail by value. It models the mapping only: no persistent loop, no scheduling, no work stealing, no division of a tile between blocks.
+
+— lane: unpopped-conformance
+
+---
+
+## `0.60.28` — `VoteKind::Uniform` (PTX `vote.sync.uni`)
+
+Added `VoteKind::Uniform`: `1` when every lane's predicate agrees, else `0` (PTX ISA `vote.sync.uni.pred`). The oracle and the cpu-c emitter spell it explicitly (both had a `_ =>` arm that would have read a new variant as `Ballot`); pinned by `votes_are_predicates_over_the_scope` and the cpu-c differential.
+
+---
+
 ## `0.60.27` — Docs
 
 `docs/ir-union-evidence/conformance-idiom-gaps-2026-11-27.md`: a 52-row table of idioms from Triton, TileLang, ThunderKittens, CuTe, Mojo, Slang, Metal and HLSL public docs that the conformance kernels do not yet express, each with its source URL, version or date read, the IR grep and its result, and a READ or UNVERIFIED status (pm-kernels task `more-rows`, the CireSnave 2026-11-11 union standard). Each gap is a candidate row for the primary, not a build; rows touching a standing patent hold (setmaxnreg, persistent scheduling, two-CTA pairing) are marked HELD, and texture rows are facts only. Docs only, no code changed.

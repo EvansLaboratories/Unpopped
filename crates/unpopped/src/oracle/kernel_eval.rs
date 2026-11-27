@@ -31,12 +31,17 @@
 
 use super::kernel_mem::{AccessKind, ThreadCtx};
 pub use super::kernel_trap::KernelTrap;
-use super::{
-    Eval, TypedBuffer, Val, eval, int_val, panic_reduced, raw_to_i128, read_elem, store_val,
+use super::wide_ops::{
+    as_wide, wide_add, wide_binary, wide_cast, wide_compare, wide_div, wide_mul, wide_sub,
 };
-use crate::ir::{BinaryOp, Saturation, ScalarExpr};
+use super::{
+    Eval, TypedBuffer, Val, eval, int_val, load_val, panic_reduced, raw_to_i128, read_elem,
+    store_val,
+};
+use crate::ir::{BinaryOp, CastSpec, Saturation, ScalarExpr, UnaryOp};
 use crate::kernel::{AtomicOp, Block, KernelFn, ParamKind, Place, Stmt, check_kernel};
 use crate::types::{self, Ty, map_children};
+use crate::wide_int::W256;
 use unpopped_vocab::ElementKind;
 
 /// A buffer map entry at or above this is not a root argument but the entry's allocation `entry - ALLOC_BIND`:
@@ -641,7 +646,7 @@ impl<'a> Machine<'a> {
         let KernelArg::Buffer(tb) = &self.args[b] else {
             unreachable!("offset() returned a buffer");
         };
-        Ok(Val::Raw(read_elem(&tb.bytes, off, tb.dtype), tb.dtype))
+        Ok(load_val(&tb.bytes, off, tb.dtype))
     }
 
     /// An atomic read-modify-write of a global integer element: logged as an atomic access (it
@@ -792,7 +797,7 @@ impl<'a> Machine<'a> {
         let same = match &self.args[b] {
             KernelArg::Buffer(tb) if types::elem_bits(tb.dtype) % 8 == 0 => {
                 let esz = types::elem_size(tb.dtype);
-                let mut tmp = [0u8; 16];
+                let mut tmp = [0u8; 32];
                 store_val(v, tb.dtype, &mut tmp, 0);
                 tb.bytes.get(off * esz..(off + 1) * esz) == Some(&tmp[..esz])
             }
@@ -830,6 +835,8 @@ impl<'a> Machine<'a> {
             Ty::Scalar(t) if types::is_subbyte_int(t) => {
                 Ok(Val::Raw((self.eval_subbyte(e, t)? as u128) & 0xf, t))
             }
+            // a wide integer (`I128`, `U128`, `I256`, `U256`, ROADMAP E2) is computed on its 256-bit pattern, never on `i128`
+            Ty::Scalar(t) if crate::wide_int::wide_int_bits(t).is_some() => self.eval_wide(e, t),
             // a float-to-integer `Cast` (round, saturate, NaN to 0) is a float node producing an integer: the node-by-node
             // evaluation reads the operand at its own type and the oracle's cast does the conversion
             Ty::Scalar(t) if types::int_range(t).is_some() && self.is_float_to_int_cast(e) => {
@@ -881,6 +888,15 @@ impl<'a> Machine<'a> {
             ScalarExpr::ConstInt(v, _) => wrap(t, i128::from(*v)),
             ScalarExpr::Local(i) => self.int_local(*i)?,
             ScalarExpr::Exec(id) => wrap(t, self.exec_val(*id)?),
+            // a wide source: the conversion is `wide_ops::wide_cast` (wrap or clamp), the result a narrow integer
+            ScalarExpr::Cast(x, spec) if self.wide_ty_of(x).is_some() => {
+                let from = self.wide_ty_of(x).expect("guarded");
+                let w = as_wide(self.eval_expr(x)?, from);
+                match wide_cast(w, from, spec.to, spec.sat) {
+                    Val::Raw(b, dt) => raw_to_i128(b, dt),
+                    _ => Err(KernelTrap::Unsupported("a wide cast to a non-integer"))?,
+                }
+            }
             ScalarExpr::Cast(x, spec) if spec.to == t && spec.sat == Saturation::Wrap => {
                 wrap(t, self.eval_operand_int(x)?)
             }
@@ -894,7 +910,8 @@ impl<'a> Machine<'a> {
             }
             ScalarExpr::Mul(a, b) => {
                 let (x, y) = two(a, b)?;
-                wrap(t, x * y)
+                // the product of two 64-bit values can exceed i128; the low bits are all `wrap` keeps
+                wrap(t, x.wrapping_mul(y))
             }
             ScalarExpr::Div(a, b) => {
                 let (x, y) = two(a, b)?;
@@ -906,6 +923,8 @@ impl<'a> Machine<'a> {
             }
             ScalarExpr::Binary(op, a, b) if op.is_cmp() => self.eval_cmp(*op, a, b)?,
             ScalarExpr::Select(c, a, b) => self.eval_int_select(c, a, b, t)?,
+            // an integer bit operation reads its operand at the result's own type (the typing rule: same type)
+            ScalarExpr::Unary(op, x) if op.is_bit_op() => int_bit_op(*op, t, self.eval_int(x, t)?),
             _ => Err(KernelTrap::Unsupported(
                 "integer expression outside the v0 subset",
             ))?,
@@ -925,6 +944,7 @@ impl<'a> Machine<'a> {
         // kernel), not an integer: evaluate it as the comparison it is, over its own operands' integer types.
         let taken = match c {
             ScalarExpr::Binary(op, x, y) if op.is_cmp() => self.eval_cmp(*op, x, y)? != 0,
+            _ if self.wide_ty_of(c).is_some() => !self.wide_operand(c)?.0.is_zero(),
             _ => self.eval_operand_int(c)? != 0,
         };
         let arm = if taken { a } else { b };
@@ -943,6 +963,10 @@ impl<'a> Machine<'a> {
 
     /// A comparison of two integer operands: `1` or `0`.
     fn eval_cmp(&self, op: BinaryOp, a: &ScalarExpr, b: &ScalarExpr) -> Result<i128, KernelTrap> {
+        if self.wide_ty_of(a).is_some() {
+            let ((x, t), (y, _)) = (self.wide_operand(a)?, self.wide_operand(b)?);
+            return Ok(i128::from(wide_compare(op, x, y, t).expect("a comparison")));
+        }
         let (x, y) = (self.eval_operand_int(a)?, self.eval_operand_int(b)?);
         Ok(i128::from(match op {
             BinaryOp::CmpEq => x == y,
@@ -952,6 +976,94 @@ impl<'a> Machine<'a> {
             BinaryOp::CmpGt => x > y,
             _ => x >= y,
         }))
+    }
+
+    /// The wide integer dtype of `e`, or `None` when `e` is any other type.
+    fn wide_ty_of(&self, e: &ScalarExpr) -> Option<ElementKind> {
+        match types::infer_ty_in(e, self.k.compute, &self.local_tys) {
+            Ok(Ty::Scalar(t)) if crate::wide_int::wide_int_bits(t).is_some() => Some(t),
+            _ => None,
+        }
+    }
+
+    /// `e`, a wide integer expression, as its 256-bit pattern and dtype.
+    fn wide_operand(&self, e: &ScalarExpr) -> Result<(W256, ElementKind), KernelTrap> {
+        let t = self.wide_ty_of(e).ok_or(KernelTrap::Unsupported(
+            "comparison of mixed wide and other operands",
+        ))?;
+        Ok((as_wide(self.eval_expr(e)?, t), t))
+    }
+
+    /// An operand of a wide operation, brought to the wide type `t` (a narrow integer operand is sign- or zero-extended;
+    /// the type checker admits only operands of one type, so this is the identity for every checked kernel).
+    fn wide_at(&self, e: &ScalarExpr, t: ElementKind) -> Result<W256, KernelTrap> {
+        Ok(as_wide(self.eval_expr(e)?, t))
+    }
+
+    /// Whether the condition `c` of a `Select` over wide arms is taken (`!= 0`): a comparison by its operands' type, a wide value by
+    /// its pattern, any other integer by value.
+    fn wide_taken(&self, c: &ScalarExpr) -> Result<bool, KernelTrap> {
+        Ok(match c {
+            ScalarExpr::Binary(op, x, y) if op.is_cmp() => self.eval_cmp(*op, x, y)? != 0,
+            _ if self.wide_ty_of(c).is_some() => !self.wide_operand(c)?.0.is_zero(),
+            other => self.eval_operand_int(other)? != 0,
+        })
+    }
+
+    /// A `Cast` whose result is a wide integer: the operand is a wide pattern or a narrow integer extended from `i128`.
+    fn wide_cast_node(&self, x: &ScalarExpr, spec: &CastSpec) -> Result<Val, KernelTrap> {
+        let (src, from) = match self.wide_ty_of(x) {
+            Some(from) => (as_wide(self.eval_expr(x)?, from), from),
+            None => match types::infer_ty_in(x, self.k.compute, &self.local_tys) {
+                Ok(Ty::Scalar(from)) if types::int_range(from).is_some() => {
+                    (W256::from_i128(self.eval_int(x, from)?), from)
+                }
+                _ => Err(KernelTrap::Unsupported(
+                    "a cast into a wide integer from a non-integer",
+                ))?,
+            },
+        };
+        Ok(wide_cast(src, from, spec.to, spec.sat))
+    }
+
+    /// A wide integer expression at type `t`: wrapping arithmetic, the total `Div`, shifts modulo the width, ordering and
+    /// bitwise operators, `Select`, and a `Cast` into the wide type (`wide_ops`). The value is the canonical pattern of `t`.
+    fn eval_wide(&self, e: &ScalarExpr, t: ElementKind) -> Result<Val, KernelTrap> {
+        let two = |a: &ScalarExpr, b: &ScalarExpr| -> Result<(W256, W256), KernelTrap> {
+            Ok((self.wide_at(a, t)?, self.wide_at(b, t)?))
+        };
+        let w = match e {
+            ScalarExpr::Local(i) => return Ok(self.local_val(*i)),
+            ScalarExpr::ConstInt(v, _) => W256::from_i128(i128::from(*v)).wrap_to(t),
+            ScalarExpr::Cast(x, spec) => return self.wide_cast_node(x, spec),
+            ScalarExpr::Add(a, b) => {
+                let (x, y) = two(a, b)?;
+                wide_add(x, y, t)
+            }
+            ScalarExpr::Sub(a, b) => {
+                let (x, y) = two(a, b)?;
+                wide_sub(x, y, t)
+            }
+            ScalarExpr::Mul(a, b) => {
+                let (x, y) = two(a, b)?;
+                wide_mul(x, y, t)
+            }
+            ScalarExpr::Div(a, b) => {
+                let (x, y) = two(a, b)?;
+                wide_div(x, y, t)
+            }
+            ScalarExpr::Binary(op, a, b) if is_int_binary(*op) => {
+                let (x, y) = two(a, b)?;
+                wide_binary(*op, x, y, t)
+            }
+            ScalarExpr::Select(c, a, b) => {
+                self.wide_at(if self.wide_taken(c)? { a } else { b }, t)?
+            }
+            _ => Err(KernelTrap::Unsupported(
+                "wide integer expression outside the v0 subset",
+            ))?,
+        };
+        Ok(Val::Wide(w, t))
     }
 
     /// A sub-byte integer expression (`I4`, `U4`): only a local, a constant or a narrowing `Cast` of an integer exists
@@ -1140,6 +1252,20 @@ pub(super) fn atomic_apply(
                     AtomicOp::Or => a | b,
                     AtomicOp::Xor => a ^ b,
                     AtomicOp::Exchange => b,
+                    AtomicOp::Inc => {
+                        if a >= b {
+                            0
+                        } else {
+                            a + 1
+                        }
+                    }
+                    AtomicOp::Dec => {
+                        if a == 0 || a > b {
+                            b
+                        } else {
+                            a - 1
+                        }
+                    }
                 },
                 t,
             ))
@@ -1242,4 +1368,25 @@ pub(super) fn wrap(t: ElementKind, v: i128) -> i128 {
     }
     let m = hi - lo + 1;
     (v - lo).rem_euclid(m) + lo
+}
+
+/// `Popc`/`Clz`/`Brev` of `v` at the integer type `t` (`UnaryOp::is_bit_op`): the operand's `w`-bit two's-complement pattern
+/// (`w` is `t`'s width), the result wrapped back into `t`. `Popc` counts set bits, `Clz` counts leading zero bits (`w` for a
+/// zero pattern), `Brev` moves bit `i` to bit `w - 1 - i`.
+pub(super) fn int_bit_op(op: UnaryOp, t: ElementKind, v: i128) -> i128 {
+    let (lo, hi) = types::int_range(t).expect("an integer type");
+    let w = (hi + 1).trailing_zeros() + u32::from(lo < 0);
+    let mask = if w == 128 {
+        u128::MAX
+    } else {
+        (1u128 << w) - 1
+    };
+    let pat = (v as u128) & mask;
+    let out = match op {
+        UnaryOp::Popc => i128::from(pat.count_ones()),
+        UnaryOp::Clz => i128::from(pat.leading_zeros() - (128 - w)),
+        UnaryOp::Brev => (pat.reverse_bits() >> (128 - w)) as i128,
+        other => panic!("oracle: {other:?} is not an integer bit operation"),
+    };
+    wrap(t, out)
 }

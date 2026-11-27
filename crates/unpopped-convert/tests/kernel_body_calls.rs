@@ -10,6 +10,7 @@ use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, run_kernel};
 use unpopped::oracle::kernel_launch::run_launch;
 use unpopped_convert::{Frontend, KernelLiftError, lift_kernel, lift_kernel_launched};
+use unpopped_vocab::ElementKind;
 
 fn parse(src: &str) -> Option<tree_sitter::Tree> {
     let mut p = tree_sitter::Parser::new();
@@ -107,6 +108,29 @@ fn an_integer_through_a_float_math_function_converts_as_c_does() {
 }
 
 #[test]
+fn atomic_inc_and_dec_wrap_as_cuda_defines() {
+    // CUDA C++ Programming Guide: atomicInc: old >= v ? 0 : old + 1; atomicDec: (old == 0 || old > v) ? v : old - 1
+    let k = one_thread(
+        "void k(unsigned* out, unsigned* c) { unsigned a = atomicInc(&c[0], 7u); unsigned b = atomicInc(&c[1], 7u);          unsigned d = atomicDec(&c[2], 7u); unsigned e = atomicDec(&c[3], 7u); unsigned f = atomicDec(&c[4], 7u);          out[0] = a; out[1] = b; out[2] = d; out[3] = e; out[4] = f; }",
+    )
+    .unwrap();
+    let u32s = |v: &[u32]| {
+        let bytes: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
+        KernelArg::Buffer(TypedBuffer::new(
+            ElementKind::U32,
+            vec![v.len() as i64],
+            vec![1],
+            bytes,
+        ))
+    };
+    let mut args = vec![u32s(&[0; 5]), u32s(&[3, 7, 5, 0, 9])];
+    run_launch(&k, &mut args).expect("runs");
+    assert_eq!(buf(&args[0]), vec![3.0, 7.0, 5.0, 0.0, 9.0]);
+    // inc 3 -> 4; inc 7 (>= 7) -> 0; dec 5 -> 4; dec 0 -> 7; dec 9 (> 7) -> 7
+    assert_eq!(buf(&args[1]), vec![4.0, 0.0, 4.0, 7.0, 7.0]);
+}
+
+#[test]
 fn atomics_return_the_old_value_and_apply_the_op() {
     let k = one_thread(
         "void k(int* out, int* c) { int a = atomicAdd(&c[0], 5); int b = atomicMax(&c[1], 7); int d = atomicExch(&c[2], 9); \
@@ -143,7 +167,7 @@ fn every_thread_of_a_block_adds_into_one_counter() {
 fn atomics_that_are_not_a_plain_address_decline() {
     for (call, needle) in [
         ("atomicAdd((unsigned*)c, 1u)", "through a pointer"),
-        ("atomicInc(&c[0], 3)", "`atomicInc`"),
+        ("atomicSub(&c[0], 3)", "`atomicSub`"),
         ("atomicAdd(&c[0])", "1 argument"),
     ] {
         let src = format!("void k(int* c) {{ {call}; }}");
