@@ -1915,9 +1915,11 @@ pub enum KernelError {
     /// A launch with a zero extent, or a subgroup range that is empty or starts at 0.
     BadLaunch,
     /// A kernel declares (as its compute type, a parameter, a local or an allocation) a dtype that is recognised but not
-    /// computed yet: `F128`, `I128`, `U128`, `I256`, `U256`, `F8E3M4`, `F8UE4M3` (union batch 1, KISS 0.24.0; plan E1a). It is
-    /// declined by name, never run: the oracle holds no value of these types until the casts, the wide integer and the software
-    /// binary128 land (plan E1b, E2, E3).
+    /// computed: exactly `F128`, `F8E3M4` and `F8UE4M3` (union batch 1, KISS 0.24.0; plan E1a). It is declined by name, never run:
+    /// the oracle holds no value of these types (`F128` waits for the software binary128 wired into the oracle, E3 slice 2).
+    /// `I128`, `U128`, `I256` and `U256` are **computed since 0.61.3** (E2) and pass `check_kernel`; whether an emitter lowers
+    /// them is the emitter's to refuse by name (`docs/emitter-migration-b1.md`). The set is pinned by
+    /// `tests/union_batch1_dtypes.rs::the_declined_set_is_exactly_f128_and_the_two_fp8_rows`.
     DtypeNotComputed {
         /// The dtype.
         dtype: ElementKind,
