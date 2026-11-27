@@ -110,6 +110,19 @@ impl W256 {
         self.0[0] | self.0[1] | self.0[2] | self.0[3] == 0
     }
 
+    /// The number of bits needed to write the unsigned value (`0` for zero, `256` when bit 255 is set).
+    #[must_use]
+    pub const fn bit_length(self) -> u32 {
+        let mut i = 4;
+        while i > 0 {
+            i -= 1;
+            if self.0[i] != 0 {
+                return (i as u32) * 64 + (64 - self.0[i].leading_zeros());
+            }
+        }
+        0
+    }
+
     /// Bitwise NOT.
     #[must_use]
     pub const fn not(self) -> Self {
