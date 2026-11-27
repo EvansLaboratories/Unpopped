@@ -234,6 +234,35 @@ pub fn lift_elementwise_with(
     lift_store(&tree, src, name, dtypes, &names).map(|l| finished(l, resources))
 }
 
+/// The `(index, rhs)` of each store to `{out}0 .. {out}{n-1}`: refused when one has no store, when `{out}{n}` is stored
+/// (an undeclared output), or when the stores are not all at one index.
+fn multi_stores<'t>(
+    tree: &'t Tree,
+    src: &str,
+    out: &str,
+    n: usize,
+) -> Result<Vec<(String, Node<'t>)>, LiftError> {
+    let out_of = |k: usize| format!("{out}{k}");
+    if find_out_store(tree.root_node(), src, &out_of(n)).is_some() {
+        return Err(LiftError::Unrecognized(format!(
+            "a store to `{}` but only {n} output(s) declared",
+            out_of(n)
+        )));
+    }
+    let mut stores = Vec::with_capacity(n);
+    for k in 0..n {
+        let store = find_out_store(tree.root_node(), src, &out_of(k))
+            .ok_or_else(|| LiftError::Unrecognized(format!("no `{}[i] = ..` store", out_of(k))))?;
+        stores.push(store);
+    }
+    if stores.iter().any(|(i, _)| *i != stores[0].0) {
+        return Err(LiftError::Unrecognized(
+            "the output stores are not all at one index".into(),
+        ));
+    }
+    Ok(stores)
+}
+
 /// Lift a grid-stride / dispatch elementwise kernel that **stores several outputs** (ROADMAP U67).
 ///
 /// Output `K` is the buffer named `{out_name}{K}` (`output0`, `output1`, ... for a frontend whose
@@ -264,26 +293,8 @@ pub fn lift_elementwise_multi(
     }
     let tree = prepared(fe, src)?;
     let names = Names::resolve(fe, None)?;
-    let out_of = |k: usize| format!("{}{k}", fe.out_name);
-    if find_out_store(tree.root_node(), src, &out_of(out_dtypes.len())).is_some() {
-        return Err(LiftError::Unrecognized(format!(
-            "a store to `{}` but only {} output(s) declared",
-            out_of(out_dtypes.len()),
-            out_dtypes.len()
-        )));
-    }
-    let mut stores = Vec::with_capacity(out_dtypes.len());
-    for k in 0..out_dtypes.len() {
-        let store = find_out_store(tree.root_node(), src, &out_of(k))
-            .ok_or_else(|| LiftError::Unrecognized(format!("no `{}[i] = ..` store", out_of(k))))?;
-        stores.push(store);
-    }
+    let stores = multi_stores(&tree, src, fe.out_name, out_dtypes.len())?;
     let idx_var = stores[0].0.clone();
-    if stores.iter().any(|(i, _)| *i != idx_var) {
-        return Err(LiftError::Unrecognized(
-            "the output stores are not all at one index".into(),
-        ));
-    }
     let mut w = Walk {
         src,
         idx_var,
