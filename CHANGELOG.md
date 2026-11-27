@@ -15,6 +15,40 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.61.8` — `CollectiveKind::MatchAny` (PTX `match.any.sync`)
+
+Added `CollectiveKind::MatchAny`: each lane gets a `U32` mask of the subgroup lanes whose value has the same bits as its own (a float compares by bit pattern). Subgroup only, at most 32 lanes (a Block is refused by name, a larger scope is a typed oracle trap). Source: PTX ISA `match.any.sync`; CUDA `__match_any_sync`. `CollectiveKind` is `#[non_exhaustive]`, so additive. Pinned by `match_any_gives_each_lane_the_mask_of_lanes_with_the_same_bits` and the cpu-c differential `match_any_agrees_on_integers_and_on_float_bit_patterns`.
+
+---
+
+## `0.61.7` — Docs: PATENT-SWEEP, US20230315655A1 file-wrapper chart (patents-2)
+
+Docs only. `docs/PATENT-SWEEP.md` gains the file-wrapper chart of application 17/691,303 (allowed 2026-11-18) against the remote store-and-arrive limb, per Unpopped statement, verdict words only. No code changes.
+
+---
+
+## `0.61.6` — fix, the kernel oracle's integer `Mul` and the collective `Prod` wrap at 64 bits instead of overflowing `i128`
+
+The kernel oracle multiplied two integers with a plain `i128` `*` before wrapping to the type: `u64::MAX * u64::MAX` (about 2^128) exceeds `i128::MAX` and panicked with "attempt to multiply with overflow" in a debug build (a release build wrapped to the right value). Two sites, both now `wrapping_mul` before the wrap: `Mul` in `kernel_eval::eval_int` and `ReduceOp::Prod` in `kernel_collective::combine` (a four-lane `u64::MAX` product passes `(2^64 - 1)^2`). Found by unpopped-conformance; the same-shaped sums cannot overflow (two 64-bit values add inside `i128`).
+
+Audit of `oracle/**` for plain `+`, `-`, `*` on `i128` values: the plan paths already use `wrapping_add`/`wrapping_mul` (`plan_window.rs`, `plan_contract.rs`, `expr_eval::arith`, which is the positive control that the search finds the safe form); the MMA and accumulation-policy sums multiply at most 32-bit operands. No other site found.
+
+Verified: `tests/kernel_int_mul_wraps.rs` panicked at both sites before the fix (red first) and passes after; the `Mul` test covers `u64::MAX * u64::MAX` (1 modulo 2^64), `u64::MAX * 2`, `2^63 * 2` and `i64::MIN * i64::MIN`.
+
+---
+
+## `0.61.5` — Shared-memory size check (`kernel_interface::{shared_bytes, check_shared_size}`)
+
+Added `shared_bytes(kernel, dynamic_counts)`, the sum of `count * element size` over the kernel's `Shared` allocations (dynamic ones at the launch's counts, in `KernelInterface::dynamic_shared` order), and `check_shared_size(kernel, dynamic_counts, target)`, which compares it with `TargetCapabilities::max_shared_mem_per_block` (the opt-in maximum; the 48 KiB default, the per-SM figure and reserved system shared memory are not modelled). A sub-byte or unsized element, a missing dynamic count and an overflow are errors (`SharedSizeError`), not a zero. Additive: new functions and a `non_exhaustive` error enum. Source of the limit: the existing `cuda_capabilities` table. Union audit CUDA row 95.
+
+---
+
+## `0.61.4` — Docs: PATENT-SWEEP, U21 texture/sampler/surface, warp match/vote, bit-ops, SpecConstant, wide-int, binary128 and rounding patent charts (patents-2)
+
+Docs only. `docs/PATENT-SWEEP.md` gains the U21 texture/sampler/surface chart and updates 1-3, the warp match/vote/active-mask chart (sections 1-7a), the bit-op and `SpecConstant` chart, and the E2 wide-integer, E3 binary128 and U42/U43 rounding chart (section 8). Verdicts are only outside as read, needs more (limb quoted) or NOT CLEARED, unread; findings, not advice. No code changes.
+
+---
+
 ## `0.61.3` — E2, the wide integers `I128`, `U128`, `I256`, `U256` are computed by the kernel oracle
 
 A kernel may now declare, load, store, compute on and convert the four wide integer dtypes (`check_kernel` no longer refuses them with `DtypeNotComputed`; `F128`, `F8E3M4` and `F8UE4M3` still are). The oracle holds one on a 256-bit two's-complement word (`wide_int::W256`, new, with wrapping add/sub/mul, shifts, compare, clamp, and div/rem) and `Val::Wide`.
