@@ -15,6 +15,18 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.61.11` — T1, a layout and a swizzle on an allocation (`AllocDecl::layout`, `align_bytes`)
+
+`AllocDecl` gains `layout: Option<AllocLayout>` and `align_bytes: Option<u32>` (both `serde(default)`, omitted when `None`; `AllocDecl::new` is unchanged, `with_layout` and `with_align_bytes` set them). An `AllocLayout` is a `unpopped_vocab::layout_algebra::Layout` and an optional byte-address `Swizzle` (the PTX form, `swz(3,4,3)` for the 128-byte mode), written as one canonical string: `(8,8):(1,8)` or `swz(2,2,3)((8,8):(1,8))`.
+
+`check_kernel` gains `KernelError::AllocLayout { alloc, why }` for the rules of `docs/design-swizzled-allocation.md` section 3: a layout only on a `Shared` allocation with a `Static` extent equal to its size; every offset below the extent; no two logical indices sharing an offset (enumerated up to 4 Mi elements); a swizzle whose base is at or above the element width and whose period divides the extent; a swizzled allocation with an `align_bytes` that is a multiple of the period; `align_bytes` a power of two.
+
+The oracle maps a `Place::Alloc` index to the physical element (`layout`, then the swizzle read over elements); the access, the race log, the initialised flags and the async queue all key on the physical element, so a layout permutes storage and changes no result of a kernel that uses `Place::Alloc`. `Place::AllocRaw` names physical bytes, so it sees the permutation (logical index `0x80` of `swz(3,4,3)(1024:1)` over `U8` lands at byte `0x90`). cpu-c declines a layout or an alignment by name.
+
+Additive: `AllocDecl` is `non_exhaustive`, `KernelError` is `non_exhaustive`, a document without the fields loads with `None`. No new statement, so no patent hold is touched (the layout algebra is "outside as read", `docs/PATENT-SWEEP.md`). Verified by `tests/kernel_alloc_layout.rs` (permutation invariance over four layouts with and without a swizzle, the hand-worked `AllocRaw` byte, each rule with its accepted control, the serde round trip and the pre-field document) and cpu-c's `kernel_alloc_layout_declines.rs`.
+
+---
+
 ## `0.61.10` — tests: device-scope semaphore probe (survey row 9)
 
 Pins what the oracle does with an `AtomicCas(Acquire, Device)` spin across blocks: a producer in the earlier block completes (`out[0]=42`); a consumer in the earlier block is `CrossBlockWait`; an unreleased spin is `CrossBlockWait` while a block remains and `StepLimit` when the spinner is the last block. Weakening Acquire to Relaxed turns the completing case into `DataRace` and the waiting case into `StepLimit`. Tests only, no source change; verified by `cargo test -p unpopped --test kernel_device_semaphore`.
