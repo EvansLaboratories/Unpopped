@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.17` — Pip's review of #498: a scheduled callee is pinned, a partial ScheduleSpec loads, and every changelog fragment is checked
+
+`tests/kernel_schedule_declines.rs` gains a test that a called function (not the entry) that sets a schedule field is declined by name by `lower_module` (the entry-only loop mutant fails it; the three earlier tests passed it). `ScheduleSpec` loads from a document that states only the fields it sets (`#[serde(default)]`, additive: the unstated fields are the defaults), pinned with a wrong-type control. `tests/changelog_fragments.rs` checks every `changelog.d/*.md` against the rule of `tools/stamp-version.py` (a first line `kind: ...`, a `---` line, a non-empty entry), with the broken fixtures and an in-memory scan as controls, so a malformed fragment fails on the PR that adds it, not at the stamp. No behaviour change beyond the loading.
+
+---
+
 ## `0.63.16` — Added: shared subnormal probes for measuring a device's exactness (`unpopped::exactness::probe::subnormal_probes`) (U59 slice 2)
 
 Non-breaking and additive. Unpopped never probes a device; an emitter lane's harness does. `subnormal_probes(dtype)` (`F32`, `F16`, `Bf16`) returns the operand sets such a harness should run, each with the bits a subnormal-preserving device must give: a subnormal **operand** with a subnormal result and with a **normal** result, a subnormal result from normal operands, subnormal add, **two-rounding** `a * b + c` (`ProbeOp::MulAdd`) and **fused** `fma` (`ProbeOp::Fma`) on the same operands (they differ: `s * 0.5 + s` is `s` unfused and `2 s` fused, so a harness must run the one it means), a product that underflows to a subnormal and is added back, and infinity, NaN and plain-normal controls so a mismatch there is told apart from a flush. Wanted by vulkane after its Metal measurement (f32 and bf16 flush subnormals, f16 preserves) found its shared pairs never reached a subnormal. Expectations come from exact `f64` arithmetic and one rounding, and `tests/exactness_probes.rs` checks each against the host's own arithmetic (native `f32`, the `half` crate) and that a simulated flushing device disagrees with every subnormal probe and no control. Rides after U59 slice 1 (`kernel_key`, `for_kernel`, `admit_kernel`).
