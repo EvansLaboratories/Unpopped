@@ -643,6 +643,18 @@ pub enum Stmt {
     /// once every block of this grid has executed it or exited. It is a scheduling hint: it orders nothing, and a
     /// dependent still [`Stmt::GridDepWait`]s before it reads this grid's results. The oracle and the serial C ignore it.
     GridDepLaunchDependents,
+    /// `tl.assume(cond)` (ROADMAP U50, PM ruling Q10 A): a **value fact**. Each thread that reaches it states that `cond` holds (taken as
+    /// an `If` condition is: a nonzero value, a NaN counts as true, `-0.0` as false); a thread for which it does not has undefined
+    /// behaviour on a device. The oracle makes that **testable**: a false `cond` is `KernelTrap::AssumptionViolated`, so a front end that
+    /// lowers `tl.assume`, `multiple_of(x, n)` (`assume x % n == 0`) or a range fact gets a kernel whose facts are checked on every
+    /// oracle run. It reads no memory and writes none, orders nothing and defines no local, so it is uniform-safe at any depth; an
+    /// emitter MAY use it as an optimisation hint (`__builtin_assume`, `llvm.assume`) and MUST NOT rely on it for anything else
+    /// (`unpopped-cpu-c` ignores it). `max_contiguous` / `max_constancy` relate the values of several lanes, which a per-thread
+    /// condition cannot state: ROADMAP U50b.
+    Assume {
+        /// The fact, any scalar expression `check_kernel` accepts as an `If` condition.
+        cond: ScalarExpr,
+    },
     /// A memory fence of `scope` with `order`. Since 0.42.8 the oracle runs it as the C++ fence rules do: a release
     /// fence (`Release`, `AcqRel`, `SeqCst`) before a relaxed atomic publishes what the thread knew; an acquire fence
     /// (`Acquire`, `AcqRel`, `SeqCst`) after a relaxed atomic read takes in what that read saw. `check_kernel` refuses a

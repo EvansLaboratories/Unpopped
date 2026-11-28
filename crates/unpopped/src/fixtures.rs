@@ -110,6 +110,7 @@ variants! {
     MulticastLoadReduce { .. },
     GridDepWait,
     GridDepLaunchDependents,
+    Assume { .. },
     Fence { .. },
     Collective { .. },
     CollectiveTuple { .. },
@@ -487,6 +488,22 @@ fn grid_dep_launch_dependents() -> KernelFn {
         "grid_dep_launch_dependents",
         &[],
         vec![Stmt::GridDepLaunchDependents],
+    )
+    .with_launch(block32())
+}
+
+/// `Assume`: a value fact that holds (a thread index is below 32), so the oracle does not trap.
+fn assume() -> KernelFn {
+    f32_kernel(
+        "assume",
+        &[],
+        vec![Stmt::Assume {
+            cond: ScalarExpr::Binary(
+                BinaryOp::CmpLt,
+                Box::new(ScalarExpr::Exec(ExecId::ThreadIdx(0))),
+                Box::new(ScalarExpr::ConstInt(32, ElementKind::U32)),
+            ),
+        }],
     )
     .with_launch(block32())
 }
@@ -1100,6 +1117,7 @@ pub fn fixtures() -> Vec<(&'static str, Fixture)> {
         ("MulticastLoadReduce", k(multicast_load_reduce())),
         ("GridDepWait", k(grid_dep_wait())),
         ("GridDepLaunchDependents", k(grid_dep_launch_dependents())),
+        ("Assume", k(assume())),
         ("Fence", k(fence())),
         ("Collective", k(collective())),
         ("CollectiveTuple", collective_tuple()),
@@ -1260,8 +1278,8 @@ mod tests {
         // the order is the enum's
         let names: Vec<&str> = all.iter().map(|(n, _)| *n).collect();
         assert_eq!(names, ALL);
-        // the positive control: the enum has 50 variants on this base
-        assert_eq!(ALL.len(), 50, "the Stmt variants this list was written for");
+        // the positive control: the enum has 51 variants on this base
+        assert_eq!(ALL.len(), 51, "the Stmt variants this list was written for");
     }
 
     #[test]

@@ -15,6 +15,30 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.64.0` — feat!, U50 `Stmt::Assume` (BREAKING), a value fact the oracle checks (`KernelTrap::AssumptionViolated`)
+
+`Stmt` gains `Assume { cond }` (`tl.assume`, `multiple_of`): each thread that reaches it states that `cond` holds; undefined behaviour on a device when false, a typed trap in the oracle (`KernelTrap::AssumptionViolated`, `non_exhaustive`), so a front end that lowers a fact gets it checked on every oracle run. It reads and writes nothing, orders nothing and is uniform-safe. **Breaking: `Stmt` is exhaustive, so every exhaustive `match` on it must name the new variant** (docs/emitter-migration-b1.md, U50): an emitter may lower it to an optimiser hint or ignore it (`unpopped-cpu-c` ignores it) and must not rely on it otherwise. `max_contiguous` / `max_constancy` (several lanes) are ROADMAP U50b. Verification: touched tests (kernel_assume 6, cpu-c kernel_assume 1, the fixture guards), clippy and fmt; the full gate was NOT run (oracle/** path).
+
+---
+
+## `0.63.30` — feat, a directed rounding at f64 in a kernel (ROADMAP U43): `numerics_f64` and the oracle
+
+A `Qualified` `Add`, `Sub`, `Mul`, `Div`, `Fma` or `Sqrt` over **f64** under `TowardZero`, `TowardNegInf` or `TowardPosInf` now passes `check_kernel` and runs in the oracle. The reference is the new `unpopped::numerics_f64` (`directed_f64`, `eval_qualified_f64`): exact integer arithmetic in a 256-bit frame and ONE directed rounding, independent of the host rounding mode, checked bit for bit against 734 rows of an independent Python exact-rational generator (`tools/gen_f64_directed_vectors.py`; subnormal results, overflow per IEEE 754 7.4, exact cancellation and signed zero included). `ftz` and `approx` at f64 and the half types stay a named `TypeError::IllegalQualifier`; a plan with an f64 qualifier is still refused at the plan gate; `unpopped-cpu-c` declines it by name. Emitters: an emitter with no f64 directed spelling must decline such a kernel by name (docs/emitter-migration-b1.md, U43). Additive. No operand-sign `RoundMode`. Verification: touched tests only (numerics_f64_directed, kernel_qualified_dtype, numerics_qualifiers, numerics_spelling, changelog_fragments, kernel_f128, union_batch1_dtypes, cpu-c kernel_qualified_f64_declines), clippy and fmt; the full gate was NOT run (oracle/** path).
+
+---
+
+## `0.63.29` — docs, ROADMAP U72 to U75, the tile rules the WMMA and Apple shapes cannot meet yet
+
+ROADMAP gains U72 (an `F16` accumulator for `TileMma`), U73 (TF32 as a tile element), U74 (integer `TileMma`, `s8`/`u8`/`s4`/`u4` into `s32`) and U75 (1-bit tiles and atoms: the atoms are built, the packed/vector popc statement stays held, US10452398B2), from the coverage table of `unpopped-mma`'s #525 (`docs/mma-atom-coverage.md`). Each names its path; none is declined for lack of a consumer. No code change.
+
+---
+
+## `0.63.28` — test: WMMA (f16, bf16, f64) and Apple simdgroup 8x8x8 shapes run as T2 tile conformance kernels (additive)
+
+`tests/kernel_tile_shapes.rs` runs WMMA m16n16k16, m8n32k16, m32n8k16 (f16, bf16 over f32) and m8n8k4 (f64) and Apple 8x8x8 (half, bfloat, float) through `TileLoad`/`TileMma`/`TileStore` on the oracle against a hand-written product, with A, B, C inside padded buffers (stride and origin checked, D's border sentinel must survive) and two value mutants per shape (C dropped; A at the wrong origin) that must disagree. `docs/mma-atom-coverage.md` records what the tile rules do not admit (f16 accumulator, tf32, integer and b1 WMMA) as ROADMAP candidates. `encode_float` into an F6 buffer now panics with a named reason instead of the generic unsupported-dtype text (unreachable today). Verified: `cargo test -p unpopped --test kernel_tile_shapes --test kernel_tile`, clippy clean.
+
+---
+
 ## `0.63.27` — tools, `tools/gate-locked.sh` is first come first served (a ticket queue), with `--status`
 
 The gate lock (`C:/cb/gate.lock`, an atomic `mkdir`) was won by whoever polled first after a release (every 30 s), so a waiter could starve for hours behind lanes that polled better (seven mma gates, leaves and E3 queued behind one lock, 2026-11-28). A caller now takes a ticket (`mkdir C:/cb/gate-queue/<epoch ms>-<pid>-<worktree>`) and only the lowest live ticket may try the lock; a ticket whose pid is dead or whose heartbeat is older than 3 h is removed by the next poller and logged; the ticket is dropped on taking the lock and on exit, interrupt and termination; an unusable queue directory means no queue (never blocked); `tools/gate-locked.sh --status` prints the holder and the numbered queue. The lock itself is unchanged, so a worktree whose copy of the script predates this change still races for the lock and can overtake a ticketed waiter: the fix reaches a lane when it has merged `main`. Verified by `tools/test-gate.sh` (the older of two waiters runs first although the newer polls far more often; three waiters in order; dead and heartbeat-stale tickets; a live older ticket holds the line; a killed waiter leaves no ticket; a dead holder; an unusable queue directory; `--status`), with a take-any-ticket mutant the same assertions catch. Tools and docs only: no code path of the crates.

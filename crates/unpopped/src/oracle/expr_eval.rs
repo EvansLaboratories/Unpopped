@@ -169,13 +169,21 @@ pub(super) fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
         // flush. f32/f32s compute only; the plan gate rejects the rest.
         ScalarExpr::Qualified(x, n) => {
             assert!(
-                matches!(ev.dtype, ElementKind::F32 | ElementKind::F32Strict),
+                matches!(
+                    ev.dtype,
+                    ElementKind::F32 | ElementKind::F32Strict | ElementKind::F64
+                ),
                 "oracle: Qualified at {:?} (the plan gate rejects this)",
                 ev.dtype
             );
             let (op, kids) = crate::ir::QualOp::of(x).expect(
                 "oracle: Qualified over a non-qualifiable node (the plan gate rejects this)",
             );
+            if ev.dtype == ElementKind::F64 {
+                // f64: a rounding mode only, exact integer reference (ROADMAP U43, `numerics_f64`)
+                let args: Vec<f64> = kids.iter().map(|k| eval(k, ev).f64()).collect();
+                return Val::Float(crate::numerics_f64::eval_qualified_f64(op, *n, &args));
+            }
             let args: Vec<f32> = kids
                 .iter()
                 .map(|k| round_to_compute(eval(k, ev).f64(), ev.dtype) as f32)
@@ -543,6 +551,11 @@ pub(super) fn encode_float(f: f64, out: ElementKind) -> u128 {
         ElementKind::U64 => u128::from(f as u64),
         ElementKind::I4 | ElementKind::U4 => u128::from((f as i8 as u8) & 0x0f),
         ElementKind::B1 => u128::from(u8::from(f != 0.0)),
+        // an F6 buffer is written from a canonical 6-bit pattern (`Val::Raw`, `docs/design-f6-storage.md`); a `Val::Float`
+        // has no rounding mode here, so reaching this is a defect in the caller (unreachable today)
+        ElementKind::F6E2M3 | ElementKind::F6E3M2 => panic!(
+            "oracle: encode_float to {out:?}: a Val::Float has no rounding mode for an F6 element; cast it first"
+        ),
         other => panic!("oracle: encode_float to unsupported dtype {other:?}"),
     }
 }

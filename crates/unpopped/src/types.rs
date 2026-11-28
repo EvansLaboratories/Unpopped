@@ -1023,14 +1023,49 @@ fn node_ty(
                     why: "an arithmetic operation takes no ties-away rounding (RoundMode::NearestAway is a Cast's)",
                 });
             }
-            // The plan gate (`plan/admissibility.rs`) and cpu_c already say f32/f32s only; the oracle asserts it
-            // (`oracle/expr_eval.rs`). A kernel never went through the gate, so without this a `KernelFn` with a qualified f64 or
-            // half operation passed `check_kernel` and panicked in the oracle. F64 has no ftz form and no exact reference for a
-            // directed rounding (ROADMAP U43).
-            if !matches!(k[0], ElementKind::F32 | ElementKind::F32Strict) {
+            // The plan gate (`plan/admissibility.rs`) and cpu_c say f32/f32s only; a kernel never went through the gate, so this is
+            // the kernel's own rule. f64 takes a ROUNDING MODE only (ROADMAP U43: an exact integer reference,
+            // `numerics_f64`): not `ftz` (no f64 form on the targets with the flag) and not `approx` (no ulp bound is defined at
+            // f64, ROADMAP U43b), and only the operations a directed mode is defined for. The half types compute through f32
+            // and stay refused (U43b).
+            let is_f64 = k[0] == ElementKind::F64;
+            if !is_f64 && !matches!(k[0], ElementKind::F32 | ElementKind::F32Strict) {
                 return Err(TypeError::IllegalQualifier {
-                    why: "a rounding/ftz/approx qualifier needs f32 or f32s operands in v1 (f64 has no ftz form and no reference for a directed rounding yet; half types compute through f32)",
+                    why: "a rounding/ftz/approx qualifier needs f32, f32s or f64 operands (the half types compute through f32 and are not modelled as qualified operations yet, ROADMAP U43b)",
                 });
+            }
+            if is_f64 {
+                if n.ftz {
+                    return Err(TypeError::IllegalQualifier {
+                        why: "f64 has no ftz form (PTX denormal control for f64 does not exist)",
+                    });
+                }
+                if n.approx {
+                    return Err(TypeError::IllegalQualifier {
+                        why: "approx at f64: no ulp bound is defined at f64 yet (ROADMAP U43b)",
+                    });
+                }
+                let inner_op = match e {
+                    ScalarExpr::Qualified(inner, _) => {
+                        crate::ir::QualOp::of(inner).map(|(op, _)| op)
+                    }
+                    _ => None,
+                };
+                if !matches!(
+                    inner_op,
+                    Some(
+                        crate::ir::QualOp::Add
+                            | crate::ir::QualOp::Sub
+                            | crate::ir::QualOp::Mul
+                            | crate::ir::QualOp::Div
+                            | crate::ir::QualOp::Fma
+                            | crate::ir::QualOp::Sqrt
+                    )
+                ) {
+                    return Err(TypeError::IllegalQualifier {
+                        why: "a rounding qualifier at f64 wraps Add, Sub, Mul, Div, Fma or Sqrt only (the others are approx operations)",
+                    });
+                }
             }
             // a spelling hint (ROADMAP U37) is only on an `approx` node of the operation the intrinsic lowers to
             if let Some(sp) = n.spelling {
