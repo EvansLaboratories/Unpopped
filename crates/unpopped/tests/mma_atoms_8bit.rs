@@ -94,8 +94,7 @@ fn the_mixed_signedness_atoms_are_not_the_same_atom_as_their_swap() {
 #[test]
 fn the_fp6_and_fp4_k32_atoms_share_the_8_bit_placement() {
     // PTX 9.7.16.5.10 gives one A, B and C table to s8, u8, e4m3, e5m2, e3m2, e2m3 and e2m1 (Figures 91, 93, 94, 95), so the
-    // FP6 and FP4 atoms are placed by `k32`. Placement only: the oracle has no
-    // element size for F6E3M2 (`types.rs`: "oracle: unsupported dtype F6E3M2 (v1)"; F6E2M3 and F4E2M1 not run), so it cannot be run.
+    // FP6 and FP4 atoms are placed by `k32`.
     use ElementKind::{F4E2M1, F6E2M3, F6E3M2};
     for (atom, t) in [
         (MmaAtom::nvidia_m16n8k32_e3m2_f32(), F6E3M2),
@@ -104,4 +103,12 @@ fn the_fp6_and_fp4_k32_atoms_share_the_8_bit_placement() {
     ] {
         places(&atom, k32, (16, 8, 32), (t, t, F32));
     }
+}
+
+#[test]
+fn the_fp4_k32_atom_runs() {
+    // E2M1 fragments run in the oracle: the values are lattice points of the format, encoded by the test from the OCP MX
+    // definition (two to a byte, low nibble first). The FP6 atoms cannot run: `types.rs` has no element size for F6E3M2 or
+    // F6E2M3 ("oracle: unsupported dtype ... (v1)"), though `check_kernel` admits a Private fragment of either.
+    agrees(&MmaAtom::nvidia_m16n8k32_e2m1_f32(), k32);
 }

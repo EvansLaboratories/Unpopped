@@ -117,11 +117,27 @@ pub(crate) fn value(ty: ElementKind, seed: u32, i: u32) -> f64 {
         // fractions on each fp8 lattice (3 and 2 mantissa bits), so a decode of the wrong format changes the answer
         ElementKind::Fp8E4M3FN => f64::from(h % 31) / 8.0 - 1.875,
         ElementKind::Fp8E5M2 => f64::from(h % 17) / 4.0 - 2.0,
+        ElementKind::F4E2M1 => e2m1_value(h % 16),
         _ => f64::from(h % 9) - 4.0,
     }
 }
 
+/// Value of an `E2M1` pattern `bits` (sign, 2 exponent bits, 1 mantissa bit; no infinities or NaN), from the OCP MX definition.
+fn e2m1_value(bits: u32) -> f64 {
+    let (m, e) = (bits & 1, (bits >> 1) & 3);
+    let mag = if e == 0 {
+        f64::from(m) * 0.5
+    } else {
+        (1.0 + f64::from(m) / 2.0) * 2f64.powi(e as i32 - 1)
+    };
+    if bits >> 3 == 1 { -mag } else { mag }
+}
+
 fn encode(ty: ElementKind, x: f64) -> Vec<u8> {
+    if ty == ElementKind::F4E2M1 {
+        let bits = (0..16u32).find(|&b| e2m1_value(b) == x && !(x == 0.0 && b == 8));
+        return vec![bits.unwrap_or_else(|| panic!("{x} is not an E2M1 value")) as u8];
+    }
     match ty {
         I8 => (x as i8).to_le_bytes().to_vec(),
         U8 => (x as u8).to_le_bytes().to_vec(),
@@ -146,6 +162,15 @@ fn decode(ty: ElementKind, b: &[u8]) -> f64 {
 }
 
 fn buffer(ty: ElementKind, xs: &[f64]) -> TypedBuffer {
+    if ty == ElementKind::F4E2M1 {
+        // two to a byte, low nibble first (the oracle's sub-byte packing)
+        let nib: Vec<u8> = xs.iter().map(|&x| encode(ty, x)[0]).collect();
+        let bytes: Vec<u8> = nib
+            .chunks(2)
+            .map(|p| p[0] | (p.get(1).copied().unwrap_or(0) << 4))
+            .collect();
+        return TypedBuffer::from_packed_bytes(ty, &[xs.len() as i64], &bytes);
+    }
     let bytes = xs.iter().flat_map(|&x| encode(ty, x)).collect();
     TypedBuffer::new(ty, vec![xs.len() as i64], vec![1], bytes)
 }
