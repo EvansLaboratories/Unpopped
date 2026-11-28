@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.19` — tests: restore the oracle runs of the unsigned and mixed 8-bit k32 atoms; pin the 4-bit nibble order outside the harness
+
+Review findings (Pip, relayed by pm-kernels): the fold lost `agrees(&atom, k32)` for the u8, s8/u8 and u8/s8 `m16n8k32` atoms, so they were placed but no longer run; it is restored, and each loop of `tests/mma_atoms_8bit.rs` now asserts that every atom it names was run (`support::ran`). New `tests/mma_nibble_order.rs` fixes the 4-bit packing order on the byte `0x21` (element 0 is the low nibble) through the oracle's own load for I4, U4 and E2M1, and checks the harness packs the same bytes. Tests and harness only.
+
+---
+
 ## `0.63.18` — additive: `MmaAtom::with_groups` and the Volta f16 m8n8k4 atoms (four independent 8x8x4 MMAs per warp; U70)
 
 `MmaAtom` gains `groups` (1 for every existing atom) and a `(group, local lane) -> subgroup lane` map (`with_groups`, `groups()`, `subgroup_lanes()`, `group_lane()`; `non_exhaustive`, serde default), `check_mma` requires a launch subgroup of `lanes * groups`, and the oracle runs each group from its own lanes only. Constructors `MmaAtom::nvidia_m8n8k4_f16(Major, Major, acc)` with `Major { Row, Col }` per operand and an f16 or f32 accumulator (the oracle rounds a half-width accumulator once). The cpu-c emitter refuses a grouped atom by name. Layouts from PTX ISA 9.5 section 9.7.16.5.1 (Figures 49-55, single source); design `docs/design-mma-groups.md` (option A accepted by `unpopped`). Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.
