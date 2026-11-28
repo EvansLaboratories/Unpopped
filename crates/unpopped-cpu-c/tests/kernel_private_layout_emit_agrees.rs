@@ -64,7 +64,7 @@ fn counted(local: u32, body: Vec<Stmt>) -> Stmt {
 }
 
 /// Thread `t`: `p[i] = in[t*8 + i]` for `i` in `0..8`, a barrier, then `out[t*8 + j] = p[7 - j]`.
-fn kernel(alloc: AllocDecl) -> KernelFn {
+fn body() -> Block {
     let base = ScalarExpr::Mul(Box::new(tid()), Box::new(c(i64::from(PER))));
     let fill = counted(
         2,
@@ -107,6 +107,10 @@ fn kernel(alloc: AllocDecl) -> KernelFn {
             },
         ],
     );
+    Block(vec![fill, barrier, drain])
+}
+
+fn kernel(alloc: AllocDecl) -> KernelFn {
     let mut params = vec![
         Param::buffer("in", U32, BufferRole::Read, Some(1)),
         Param::buffer("out", U32, BufferRole::Write, Some(1)),
@@ -119,15 +123,9 @@ fn kernel(alloc: AllocDecl) -> KernelFn {
     );
     let mut locals = vec![LocalDecl::scalar(U32); 4];
     locals.extend((0..3).map(|_| LocalDecl::scalar(I32)));
-    KernelFn::new(
-        "privlay",
-        I32,
-        params,
-        locals,
-        Block(vec![fill, barrier, drain]),
-    )
-    .with_launch(LaunchShape::new([THREADS, 1, 1], [1, 1, 1]))
-    .with_allocs(vec![alloc])
+    KernelFn::new("privlay", I32, params, locals, body())
+        .with_launch(LaunchShape::new([THREADS, 1, 1], [1, 1, 1]))
+        .with_allocs(vec![alloc])
 }
 
 fn private() -> AllocDecl {
