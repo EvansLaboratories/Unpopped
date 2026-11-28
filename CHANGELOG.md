@@ -31,6 +31,12 @@ Four `MmaAtom` constructors as data (`mma_m8n8.rs`): `nvidia_m8n8k16_{s8,u8,s8_u
 
 ---
 
+## `0.63.12` — additive: tests and docs: WMMA and Apple 8x8 shapes as T2 tile products, docs/mma-atom-coverage.md (U7 theme 3)
+
+`tests/kernel_tile_mma_shapes.rs` runs the WMMA `m16n16k16`, `m8n32k16`, `m32n8k16` (f16, bf16 into f32), the WMMA f64 `m8n8k4` and the Apple 8x8x8 shapes (half, bfloat, float into float) as `TileLoad`/`TileMma`/`TileStore` over `MemorySpace::Tile` against a triple loop. PTX ISA 9.5 section 9.7.16.1 Table 44 p. 510 and 9.7.16.4.1 (layout unspecified); MSL 4.1 section 2.4 p. 38 and 6.8. `docs/mma-atom-coverage.md` records every dense `mma` shape as done, TODO, blocked or held. No source change.
+
+---
+
 ## `0.63.11` — docs, the participant-forms map (which shipped statements name participants) and the float collective NaN and signed-zero note
 
 `docs/note-participant-forms-map.md` maps the shipped statements against the participant-naming forms of the barrier hold, read-only: shipped `Named`/`NamedArrive` `count` is stated as a count of arriving threads with a trap on disagreement (NOT CLEARED, unchanged; the PM wording of 2026-11-27), and every held form is listed. `docs/design-float-collective-nan.md` records the NaN and signed-zero rules of the float `Max`/`Min`/`Sum` collectives, the per-target measurement duty (vulkane#189), the conformance vector, and that `MaxNum`/`MinNum` are not admitted. No code change.
