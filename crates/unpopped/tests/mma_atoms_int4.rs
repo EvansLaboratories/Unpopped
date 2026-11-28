@@ -5,13 +5,14 @@
 //! 9.7.16.5.11 (Figures 96-99, pp. 578-582). Patent column: US12314717B2, applies 519 B; wrapper read 2026-11-27; not a
 //! clearance; no attorney; findings not advice.
 
+use unpopped::kernel::{KernelError, check_kernel};
 use unpopped::mma::MmaAtom;
 use unpopped_vocab::ElementKind::{I4, I32, U4};
 
 #[path = "support/mma_run.rs"]
 #[allow(dead_code, reason = "shared helpers: each test file uses a subset")]
 mod support;
-use support::{logical, places, run};
+use support::{mma_kernel, places};
 
 /// m8n8k32: A `(gid, tig * 8 + i)`, B `(tig * 8 + i, gid)`, C `(gid, tig * 2 + i)`.
 fn k32_8(which: usize, lane: u32, i: u32) -> (u32, u32) {
@@ -78,12 +79,14 @@ fn the_oracle_cannot_yet_run_a_4_bit_fragment() {
     // `I4`/`U4` fragment and the atoms above are data only. If the oracle gains a way to fill one, this test fails: replace it
     // with `agrees` over each table.
     let atom = MmaAtom::nvidia_m8n8k32_int4_s32(I4, I4);
-    let got = run(&atom, k32_8, &logical(&atom));
+    let got = check_kernel(&mma_kernel(&atom));
     assert!(
-        matches!(
-            got,
-            Err(unpopped::oracle::kernel_eval::KernelTrap::Malformed(_))
-        ),
+        matches!(got, Err(KernelError::TypeMismatch { what }) if what.contains("sub-byte")),
         "{got:?}"
+    );
+    // control: the same harness kernel over an 8-bit atom is well formed
+    assert_eq!(
+        check_kernel(&mma_kernel(&MmaAtom::nvidia_m16n8k32_u8_s32())),
+        Ok(())
     );
 }
