@@ -10,7 +10,7 @@ use unpopped::kernel::{Block, BufferRole, KernelFn, LocalDecl, Param, Place, Stm
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
 use unpopped::oracle::kernel_launch::run_launch;
-use unpopped_vocab::ElementKind::{self, F32, F64, F128, I8, I32, I64};
+use unpopped_vocab::ElementKind::{self, F32, F64, F128, I8, I64};
 
 const DATA: &str = include_str!("data/soft_f128_vectors.txt");
 const ONE: u128 = 0x3fff << 112;
@@ -232,7 +232,7 @@ fn select_takes_one_arm_by_an_f128_comparison_or_an_f128_condition() {
             bx(x),
         )
     });
-    assert_eq!(run_binary(&k, &a, &b), vec![b[0], a[1], a[2], a[0 + 3]]);
+    assert_eq!(run_binary(&k, &a, &b), vec![b[0], a[1], a[2], a[3]]);
     // an F128 condition is taken when it is not zero (-0 is zero; a NaN is taken)
     let cond = [
         0u128,
@@ -451,4 +451,53 @@ fn an_f128_scalar_argument_is_the_exact_binary128_of_the_f64_given() {
     run_launch(&k, &mut args).unwrap_or_else(|e| panic!("{e:?}"));
     let want = (0x4000u128 << 112) | (1 << 109);
     assert_eq!(words(&out_bytes(&args, 1)), vec![want, want]);
+}
+
+#[test]
+fn narrowing_overflow_is_an_infinity_under_wrap_and_the_largest_finite_under_clamp_finite() {
+    // 2^200 overflows f32 (max about 2^128) but not f64; 2^2000 overflows both; an infinity stays an infinity under Wrap
+    let two_pow = |e: u128| (0x3fff + e) << 112;
+    let a = [
+        two_pow(200),
+        two_pow(2000),
+        0x7fff_u128 << 112,
+        0xffff_u128 << 112,
+        two_pow(200) | 1 << 127,
+    ];
+    let to_f32 = |sat| {
+        let k = convert(F128, F32, spec(F32, RoundMode::NearestEven, sat), a.len());
+        run_convert(&k, F128, F32, le16(&a), a.len())
+            .chunks(4)
+            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .collect::<Vec<f32>>()
+    };
+    assert_eq!(
+        to_f32(Saturation::Wrap),
+        vec![
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY
+        ]
+    );
+    assert_eq!(
+        to_f32(Saturation::ClampFinite),
+        vec![f32::MAX, f32::MAX, f32::MAX, f32::MIN, f32::MIN]
+    );
+    let to_f64 = |sat| {
+        let k = convert(F128, F64, spec(F64, RoundMode::NearestEven, sat), a.len());
+        run_convert(&k, F128, F64, le16(&a), a.len())
+            .chunks(8)
+            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+            .collect::<Vec<f64>>()
+    };
+    assert_eq!(to_f64(Saturation::Wrap)[0], 2f64.powi(200));
+    assert_eq!(to_f64(Saturation::Wrap)[1], f64::INFINITY);
+    assert_eq!(to_f64(Saturation::ClampFinite)[1], f64::MAX);
+    assert_eq!(
+        to_f64(Saturation::ClampFinite)[0],
+        2f64.powi(200),
+        "an in-range value is untouched by the clamp"
+    );
 }
