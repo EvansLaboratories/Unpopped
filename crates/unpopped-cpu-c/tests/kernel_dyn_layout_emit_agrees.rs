@@ -59,6 +59,23 @@ fn kernel(layout: &str) -> KernelFn {
     kernel_x(layout, EXTENT, false)
 }
 
+/// The parameters (two buffers and the scalars `m`, `n`, `ld` at locals 2 to 4) and the locals of the kernel.
+fn signature() -> (Vec<Param>, Vec<LocalDecl>) {
+    let mut locals = vec![LocalDecl::scalar(U32), LocalDecl::scalar(U32)];
+    locals.extend((0..3).map(|_| LocalDecl::scalar(I32)));
+    let mut params = vec![
+        Param::buffer("in", U32, BufferRole::Read, Some(1)),
+        Param::buffer("out", U32, BufferRole::Write, Some(1)),
+    ];
+    params.extend(
+        ["m", "n", "ld"]
+            .iter()
+            .zip(2u32..)
+            .map(|(nm, loc)| Param::scalar(*nm, I32, loc)),
+    );
+    (params, locals)
+}
+
 /// [`kernel`] over `n` elements, optionally under the byte swizzle (which needs `align_bytes` of the period).
 fn kernel_x(layout: &str, n: u32, swizzled: bool) -> KernelFn {
     let rev = ScalarExpr::Sub(
@@ -87,18 +104,7 @@ fn kernel_x(layout: &str, n: u32, swizzled: bool) -> KernelFn {
             value: ScalarExpr::Local(1),
         },
     ]);
-    let mut locals = vec![LocalDecl::scalar(U32), LocalDecl::scalar(U32)];
-    locals.extend((0..3).map(|_| LocalDecl::scalar(I32)));
-    let mut params = vec![
-        Param::buffer("in", U32, BufferRole::Read, Some(1)),
-        Param::buffer("out", U32, BufferRole::Write, Some(1)),
-    ];
-    params.extend(
-        ["m", "n", "ld"]
-            .iter()
-            .zip(2u32..)
-            .map(|(nm, loc)| Param::scalar(*nm, I32, loc)),
-    );
+    let (params, locals) = signature();
     let layout: DynLayout = layout.parse().expect("layout text");
     let mut alloc = AllocDecl::new("sh", MemorySpace::Shared, U32, Extent::Static(n));
     alloc = if swizzled {
