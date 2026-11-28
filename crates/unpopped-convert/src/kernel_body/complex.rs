@@ -88,6 +88,36 @@ impl<'s, 't> Walker<'s, 't> {
         if n.kind() != "call_expression" || lanes != 2 {
             return Ok(None);
         }
+        let Some((name, is_make)) = self.complex_callee(n, elem)? else {
+            return Ok(None);
+        };
+        let name = name.as_str();
+        let args = self.call_args(n);
+        if is_make {
+            let [r, i] = args.as_slice() else {
+                return self.not_yet(n, format!("`{name}` with {} argument(s)", args.len()));
+            };
+            return Ok(Some(self.complex_make(elem, [*r, *i])?));
+        }
+        let want = if name.starts_with("cuCconj") || name.starts_with("cuConj") {
+            1
+        } else {
+            2
+        };
+        if args.len() != want {
+            return self.not_yet(n, format!("`{name}` with {} argument(s)", args.len()));
+        }
+        let x = self.vector_value(args[0], (elem, 2))?;
+        let y = if want == 1 {
+            None
+        } else {
+            Some(self.vector_value(args[1], (elem, 2))?)
+        };
+        Ok(Some(complex_arith(name, &x, y.as_deref())))
+    }
+
+    /// The `cuComplex.h` callee of `n` and whether it is a `make_` constructor; `None` when it is not one of the lifted family.
+    fn complex_callee(&mut self, n: Node<'_>, elem: E) -> R<Option<(String, bool)>> {
         let Some(name) = n
             .child_by_field_name("function")
             .map(|f| self.short_callee(text(f, self.src)).to_string())
@@ -122,56 +152,47 @@ impl<'s, 't> Walker<'s, 't> {
                 format!("`{name}` gives {prec:?} lanes where {elem:?} lanes are wanted"),
             );
         }
-        let args = self.call_args(n);
-        if make.is_some() {
-            let [r, i] = args.as_slice() else {
-                return self.not_yet(n, format!("`{name}` with {} argument(s)", args.len()));
-            };
-            let mut out = Vec::new();
-            for a in [*r, *i] {
-                let (v, t) = self.expr(a)?;
-                out.push(self.convert(v, t, elem, a)?);
-            }
-            return Ok(Some(out));
+        Ok(Some((name.to_string(), make.is_some())))
+    }
+
+    /// `make_cuFloatComplex(r, i)`: the two lanes converted to the element type.
+    fn complex_make(&mut self, elem: E, parts: [Node<'_>; 2]) -> R<Vec<ScalarExpr>> {
+        let mut out = Vec::new();
+        for a in parts {
+            let (v, t) = self.expr(a)?;
+            out.push(self.convert(v, t, elem, a)?);
         }
-        let want = if name.starts_with("cuCconj") || name.starts_with("cuConj") {
-            1
-        } else {
-            2
-        };
-        if args.len() != want {
-            return self.not_yet(n, format!("`{name}` with {} argument(s)", args.len()));
-        }
-        let x = self.vector_value(args[0], (elem, 2))?;
-        let b = |e: &ScalarExpr| Box::new(e.clone());
-        let lanes = if want == 1 {
-            // cuConjf (cuComplex.h 98-100)
-            vec![x[0].clone(), ScalarExpr::Unary(UnaryOp::Neg, b(&x[1]))]
-        } else {
-            let y = self.vector_value(args[1], (elem, 2))?;
-            match name.trim_end_matches('f') {
-                // cuCaddf / cuCsubf (102-113)
-                "cuCadd" => vec![
-                    ScalarExpr::Add(b(&x[0]), b(&y[0])),
-                    ScalarExpr::Add(b(&x[1]), b(&y[1])),
-                ],
-                "cuCsub" => vec![
-                    ScalarExpr::Sub(b(&x[0]), b(&y[0])),
-                    ScalarExpr::Sub(b(&x[1]), b(&y[1])),
-                ],
-                // cuCmulf (121-128): plain operations, no fma
-                _ => vec![
-                    ScalarExpr::Sub(
-                        Box::new(ScalarExpr::Mul(b(&x[0]), b(&y[0]))),
-                        Box::new(ScalarExpr::Mul(b(&x[1]), b(&y[1]))),
-                    ),
-                    ScalarExpr::Add(
-                        Box::new(ScalarExpr::Mul(b(&x[0]), b(&y[1]))),
-                        Box::new(ScalarExpr::Mul(b(&x[1]), b(&y[0]))),
-                    ),
-                ],
-            }
-        };
-        Ok(Some(lanes))
+        Ok(out)
+    }
+}
+
+/// The lanes of a `cuComplex.h` arithmetic call on lane vectors `x` (and `y` for the binary ones): plain operations, no fma.
+fn complex_arith(name: &str, x: &[ScalarExpr], y: Option<&[ScalarExpr]>) -> Vec<ScalarExpr> {
+    let b = |e: &ScalarExpr| Box::new(e.clone());
+    let Some(y) = y else {
+        // cuConjf (cuComplex.h 98-100)
+        return vec![x[0].clone(), ScalarExpr::Unary(UnaryOp::Neg, b(&x[1]))];
+    };
+    match name.trim_end_matches('f') {
+        // cuCaddf / cuCsubf (102-113)
+        "cuCadd" => vec![
+            ScalarExpr::Add(b(&x[0]), b(&y[0])),
+            ScalarExpr::Add(b(&x[1]), b(&y[1])),
+        ],
+        "cuCsub" => vec![
+            ScalarExpr::Sub(b(&x[0]), b(&y[0])),
+            ScalarExpr::Sub(b(&x[1]), b(&y[1])),
+        ],
+        // cuCmulf (121-128): plain operations, no fma
+        _ => vec![
+            ScalarExpr::Sub(
+                Box::new(ScalarExpr::Mul(b(&x[0]), b(&y[0]))),
+                Box::new(ScalarExpr::Mul(b(&x[1]), b(&y[1]))),
+            ),
+            ScalarExpr::Add(
+                Box::new(ScalarExpr::Mul(b(&x[0]), b(&y[1]))),
+                Box::new(ScalarExpr::Mul(b(&x[1]), b(&y[0]))),
+            ),
+        ],
     }
 }
