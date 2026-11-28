@@ -11,7 +11,7 @@ use unpopped_vocab::ElementKind;
 #[path = "support/mma_run.rs"]
 #[allow(dead_code, reason = "shared helpers: each test file uses a subset")]
 mod support;
-use support::{agrees, fragments, logical, places, reference, run};
+use support::{agrees, fragments, logical, places, ran, reference, run};
 
 /// m16n8k32 8-bit (s8, u8, fp8): the `S32S8S8S32` layouts, shared by every signedness and fp8 pairing.
 fn k32(which: usize, lane: u32, i: u32) -> (u32, u32) {
@@ -37,39 +37,47 @@ use ElementKind::{F32, Fp8E4M3FN as E4, Fp8E5M2 as E5, I8, I32, U8};
 
 #[test]
 fn the_unsigned_and_mixed_8_bit_atoms_place_and_run() {
-    for (atom, a, b) in [
+    let atoms = [
         (MmaAtom::nvidia_m16n8k32_u8_s32(), U8, U8),
         (MmaAtom::nvidia_m16n8k32_s8_u8_s32(), I8, U8),
         (MmaAtom::nvidia_m16n8k32_u8_s8_s32(), U8, I8),
-    ] {
-        places(&atom, k32, (16, 8, 32), (a, b, I32));
+    ];
+    for (atom, a, b) in &atoms {
+        places(atom, k32, (16, 8, 32), (*a, *b, I32));
+        agrees(atom, k32);
     }
+    // every atom this test names was run, not only placed (a deleted `agrees` call fails here)
+    assert!(atoms.iter().all(|(atom, ..)| ran(atom.name())));
 }
 
 #[test]
 fn the_integer_k16_atoms_place_and_run() {
-    for (atom, a, b) in [
+    let atoms = [
         (MmaAtom::nvidia_m16n8k16_s8_s32(), I8, I8),
         (MmaAtom::nvidia_m16n8k16_u8_s32(), U8, U8),
         (MmaAtom::nvidia_m16n8k16_s8_u8_s32(), I8, U8),
         (MmaAtom::nvidia_m16n8k16_u8_s8_s32(), U8, I8),
-    ] {
-        places(&atom, k16, (16, 8, 16), (a, b, I32));
-        agrees(&atom, k16);
+    ];
+    for (atom, a, b) in &atoms {
+        places(atom, k16, (16, 8, 16), (*a, *b, I32));
+        agrees(atom, k16);
     }
+    assert!(atoms.iter().all(|(atom, ..)| ran(atom.name())));
 }
 
 #[test]
 fn the_fp8_atoms_place_and_run_including_a_different_type_for_b() {
-    for (atom, a, b) in [
+    let atoms = [
         (MmaAtom::nvidia_m16n8k32_e4m3_f32(), E4, E4),
         (MmaAtom::nvidia_m16n8k32_e5m2_f32(), E5, E5),
         (MmaAtom::nvidia_m16n8k32_e4m3_e5m2_f32(), E4, E5),
         (MmaAtom::nvidia_m16n8k32_e5m2_e4m3_f32(), E5, E4),
-    ] {
-        places(&atom, k32, (16, 8, 32), (a, b, F32));
-        agrees(&atom, k32);
+    ];
+    for (atom, a, b) in &atoms {
+        places(atom, k32, (16, 8, 32), (*a, *b, F32));
+        agrees(atom, k32);
     }
+    assert!(atoms.iter().all(|(atom, ..)| ran(atom.name())));
 }
 
 #[test]

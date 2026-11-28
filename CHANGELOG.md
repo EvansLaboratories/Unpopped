@@ -15,6 +15,30 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.20` — docs: design note for a layout whose modes may be kernel scalar parameters (CuTe 3 and 66)
+
+`docs/design-dynamic-layout.md`: a `DynLayout` bound to a static `Layout` at launch and checked by the existing enumerating checker; design only, no code, no patent read claimed.
+
+---
+
+## `0.63.19` — tests: restore the oracle runs of the unsigned and mixed 8-bit k32 atoms; pin the 4-bit nibble order outside the harness
+
+Review findings (Pip, relayed by pm-kernels): the fold lost `agrees(&atom, k32)` for the u8, s8/u8 and u8/s8 `m16n8k32` atoms, so they were placed but no longer run; it is restored, and each loop of `tests/mma_atoms_8bit.rs` now asserts that every atom it names was run (`support::ran`). New `tests/mma_nibble_order.rs` fixes the 4-bit packing order on the byte `0x21` (element 0 is the low nibble) through the oracle's own load for I4, U4 and E2M1, and checks the harness packs the same bytes. Tests and harness only.
+
+---
+
+## `0.63.18` — additive: `MmaAtom::with_groups` and the Volta f16 m8n8k4 atoms (four independent 8x8x4 MMAs per warp; U70)
+
+`MmaAtom` gains `groups` (1 for every existing atom) and a `(group, local lane) -> subgroup lane` map (`with_groups`, `groups()`, `subgroup_lanes()`, `group_lane()`; `non_exhaustive`, serde default), `check_mma` requires a launch subgroup of `lanes * groups`, and the oracle runs each group from its own lanes only. Constructors `MmaAtom::nvidia_m8n8k4_f16(Major, Major, acc)` with `Major { Row, Col }` per operand and an f16 or f32 accumulator (the oracle rounds a half-width accumulator once). The cpu-c emitter refuses a grouped atom by name. Layouts from PTX ISA 9.5 section 9.7.16.5.1 (Figures 49-55, single source); design `docs/design-mma-groups.md` (option A accepted by `unpopped`). Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.
+
+---
+
+## `0.63.17` — Pip's review of #498: a scheduled callee is pinned, a partial ScheduleSpec loads, and every changelog fragment is checked
+
+`tests/kernel_schedule_declines.rs` gains a test that a called function (not the entry) that sets a schedule field is declined by name by `lower_module` (the entry-only loop mutant fails it; the three earlier tests passed it). `ScheduleSpec` loads from a document that states only the fields it sets (`#[serde(default)]`, additive: the unstated fields are the defaults), pinned with a wrong-type control. `tests/changelog_fragments.rs` checks every `changelog.d/*.md` against the rule of `tools/stamp-version.py` (a first line `kind: ...`, a `---` line, a non-empty entry), with the broken fixtures and an in-memory scan as controls, so a malformed fragment fails on the PR that adds it, not at the stamp. No behaviour change beyond the loading.
+
+---
+
 ## `0.63.16` — Added: shared subnormal probes for measuring a device's exactness (`unpopped::exactness::probe::subnormal_probes`) (U59 slice 2)
 
 Non-breaking and additive. Unpopped never probes a device; an emitter lane's harness does. `subnormal_probes(dtype)` (`F32`, `F16`, `Bf16`) returns the operand sets such a harness should run, each with the bits a subnormal-preserving device must give: a subnormal **operand** with a subnormal result and with a **normal** result, a subnormal result from normal operands, subnormal add, **two-rounding** `a * b + c` (`ProbeOp::MulAdd`) and **fused** `fma` (`ProbeOp::Fma`) on the same operands (they differ: `s * 0.5 + s` is `s` unfused and `2 s` fused, so a harness must run the one it means), a product that underflows to a subnormal and is added back, and infinity, NaN and plain-normal controls so a mismatch there is told apart from a flush. Wanted by vulkane after its Metal measurement (f32 and bf16 flush subnormals, f16 preserves) found its shared pairs never reached a subnormal. Expectations come from exact `f64` arithmetic and one rounding, and `tests/exactness_probes.rs` checks each against the host's own arithmetic (native `f32`, the `half` crate) and that a simulated flushing device disagrees with every subnormal probe and no control. Rides after U59 slice 1 (`kernel_key`, `for_kernel`, `admit_kernel`).
