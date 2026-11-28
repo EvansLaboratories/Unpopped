@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.64.7` — ci, the CodeRipper portfolio workflow repinned to v0.48.14 (af3d6876)
+
+The `portfolio` job in `.github/workflows/verify.yml` moves from coderipper `467fd259` (installs CodeRipper 0.48.1) to `af3d6876` (tag `v0.48.14`, installs CodeRipper 0.48.12), the newest published tool. No rule is silenced and no code changes; if the newer tool reports a finding the portfolio check was blind to, it is answered on the PR, never configured away.
+
+---
+
 ## `0.64.6` — test-only: an exhaustive sweep of the dyn_layout launch-time bind against a brute-force predicate
 
 `kernel_dyn_layout_sweep`: over every (m, n, ld) in 0..=13 (2744 argument sets) the oracle accepts exactly the sets a hand-written double-loop predicate accepts (valid shape, size == extent, offsets distinct, cosize inside the extent), runs the 19 accepted ones to the identity value and traps the rest as `KernelTrap::DynLayout`. Three wrong predicates (no injectivity, no extent bound, no size rule) each disagree with the oracle somewhere; a column-major bind is swept the same way. No src edit.
