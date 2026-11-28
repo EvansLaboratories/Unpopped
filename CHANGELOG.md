@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.16` — Added: shared subnormal probes for measuring a device's exactness (`unpopped::exactness::probe::subnormal_probes`) (U59 slice 2)
+
+Non-breaking and additive. Unpopped never probes a device; an emitter lane's harness does. `subnormal_probes(dtype)` (`F32`, `F16`, `Bf16`) returns the operand sets such a harness should run, each with the bits a subnormal-preserving device must give: a subnormal **operand** with a subnormal result and with a **normal** result, a subnormal result from normal operands, subnormal add, **two-rounding** `a * b + c` (`ProbeOp::MulAdd`) and **fused** `fma` (`ProbeOp::Fma`) on the same operands (they differ: `s * 0.5 + s` is `s` unfused and `2 s` fused, so a harness must run the one it means), a product that underflows to a subnormal and is added back, and infinity, NaN and plain-normal controls so a mismatch there is told apart from a flush. Wanted by vulkane after its Metal measurement (f32 and bf16 flush subnormals, f16 preserves) found its shared pairs never reached a subnormal. Expectations come from exact `f64` arithmetic and one rounding, and `tests/exactness_probes.rs` checks each against the host's own arithmetic (native `f32`, the `half` crate) and that a simulated flushing device disagrees with every subnormal probe and no control. Rides after U59 slice 1 (`kernel_key`, `for_kernel`, `admit_kernel`).
+
+---
+
 ## `0.63.15` — docs: design note `docs/design-mma-groups.md` for a `groups` field on `MmaAtom` (ROADMAP U70, f16 `m8n8k4`)
 
 Docs only. Four independent 8-lane MMAs per warp (PTX ISA 9.5 section 9.7.16.5.1, Figures 49-55 cited by figure, text formulas read; single source); option A accepted by `unpopped`: additive `groups` plus a `(group, local lane) -> lane` map on `MmaAtom`, `MmaAtom` stays free-form. Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.
