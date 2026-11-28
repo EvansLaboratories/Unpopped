@@ -176,6 +176,16 @@ def main():
             r = to_int(a, mode)
             if r is not None:
                 conv.append(("int_" + mode, a, 0, r))
+    # f32 rounding must be ONE rounding from the exact binary128 value: a value a hair either side of an f32 tie is a tie in f64, so a path
+    # through f64 would round it by the tie rule (to even) instead of by the side it is on
+    for _ in range(100):
+        f32 = (rng.getrandbits(1) << 31) | (rng.randrange(1, 254) << 23) | rng.getrandbits(23)
+        lo = decode(f32, 8, 23)[1]
+        hi = decode(f32 + 1 if f32 & 0x7FFFFFFF < 0x7F7FFFFF else f32, 8, 23)[1]
+        mid = (lo + hi) / 2
+        for eps in (Fraction(1, 2**100), -Fraction(1, 2**100)):
+            x = mid * (1 + eps)
+            conv.append(("tof32", encode(x), 0, enc_signed(1 if x < 0 else 0, ("fin", x), 8, 23)))
     for _ in range(120):
         x = rng.choice([rng.getrandbits(64), rng.getrandbits(52), rng.getrandbits(23)])
         sign = rng.getrandbits(1)
