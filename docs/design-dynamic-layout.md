@@ -107,7 +107,7 @@ serializes as before. `DynLayout::bind` still returns the static `Layout` (the a
 
 **Emitters.** The oracle as above. cpu-c: the C offset gains the swizzle's XOR on the element-form offset, and its launch check gains the
 period-divides-extent test (status 4), checked against the oracle over the same sweep; a swizzle in a kernel that bypasses the layout is
-refused by name as a `dyn_layout` already is.
+refused by name as a `dyn_layout` already is. The serial C does not place memory, so cpu-c accepts the `align_bytes` a swizzled `dyn_layout` requires (a swizzle changes which element holds a value, not what the value is). The swizzle's exact shift constant is not observable through logical accesses (any bijection gives the same bytes, as for the static swizzle), so the mutants that matter break the bijection or the period rule.
 
 **Mutants to carry:** the divisibility test dropped (an extent of 48 must trap); the swizzle applied in bytes instead of elements; the
 `align_bytes` rule dropped.

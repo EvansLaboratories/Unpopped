@@ -5,6 +5,7 @@
 //! `KernelTrap::DynLayout`, and writes the oracle's bytes where it finishes. The seeded mutants zero one offset term of the emitted
 //! access (each term in turn) or skip the injectivity run, and each must change the status or the bytes.
 
+use unpopped::backend::Backend;
 use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
 use unpopped::ir::ScalarExpr;
 use unpopped::kernel::{
@@ -12,6 +13,7 @@ use unpopped::kernel::{
 };
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
 use unpopped::oracle::kernel_launch::run_launch;
+use unpopped_cpu_c::CpuC;
 use unpopped_vocab::ElementKind::{I32, U32};
 use unpopped_vocab::layout_algebra::{DynLayout, Swizzle};
 
@@ -145,6 +147,8 @@ fn oracle(k: &KernelFn, a: (i128, i128, i128)) -> Option<Vec<u8>> {
 /// Run `k` as C and as the oracle on every argument set; the statuses and bytes must agree. Returns `(accepted, refused)`.
 fn agree_all(tag: &str, k: &KernelFn, sets: &[(i128, i128, i128)]) -> (usize, usize) {
     assert_eq!(check_kernel(k), Ok(()), "well formed");
+    CpuC.lower_kernel(k)
+        .expect("the emitter spells this dyn_layout");
     let (mut ok, mut refused) = (0, 0);
     for (j, &a) in sets.iter().enumerate() {
         let Some(c) = run_c(&format!("{tag}_{j}"), k, &args(n_of(k), a)) else {
