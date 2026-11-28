@@ -699,6 +699,7 @@ fn check_stmt(
         | Stmt::CallTuple { .. }
         | Stmt::ExternCall { .. }
         | Stmt::Barrier { .. } => check_sync_stmt(k, st, sc, declared_here)?,
+        Stmt::Assume { cond } => scalar_cond(k, cond, sc)?,
         Stmt::If { cond, then, els } => {
             scalar_cond(k, cond, sc)?;
             check_block(k, then, sc)?;

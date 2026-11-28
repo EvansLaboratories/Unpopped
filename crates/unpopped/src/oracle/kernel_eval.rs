@@ -331,6 +331,7 @@ impl<'a> Machine<'a> {
             | Stmt::GridDepWait
             | Stmt::GridDepLaunchDependents
             | Stmt::ProxyFence { .. }
+            | Stmt::Assume { .. }
             | Stmt::Fence { .. } => {
                 self.exec_simple(st)?;
             }
@@ -466,6 +467,11 @@ impl<'a> Machine<'a> {
                 }
             }
             Stmt::AtomicRmw { .. } | Stmt::AtomicCas { .. } => self.exec_atomic(st)?,
+            Stmt::Assume { cond } => {
+                if !self.truthy(cond)? {
+                    return Err(KernelTrap::AssumptionViolated);
+                }
+            }
             Stmt::Fence { scope, order } => self.fence(*order, *scope),
             Stmt::ProxyFence { .. } => self.proxy_fence(),
             Stmt::GridDepWait | Stmt::GridDepLaunchDependents => {}

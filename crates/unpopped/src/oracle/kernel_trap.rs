@@ -101,4 +101,7 @@ pub enum KernelTrap {
     /// Every thread that has not finished waits on an `mbarrier` phase (or at a barrier) that no running thread can
     /// complete.
     MbarrierDeadlock,
+    /// A `Stmt::Assume` whose condition was false in a thread that reached it (ROADMAP U50: undefined behaviour on a device, a
+    /// typed trap in the oracle).
+    AssumptionViolated,
 }

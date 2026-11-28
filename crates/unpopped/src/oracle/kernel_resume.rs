@@ -213,6 +213,7 @@ impl<'a> Machine<'a> {
             | Stmt::GridDepWait
             | Stmt::GridDepLaunchDependents
             | Stmt::ProxyFence { .. }
+            | Stmt::Assume { .. }
             | Stmt::Fence { .. } => {
                 self.exec_simple(st)?;
             }
