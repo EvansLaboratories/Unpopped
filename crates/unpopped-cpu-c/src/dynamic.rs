@@ -15,7 +15,7 @@ use unpopped::kernel::{KernelFn, ParamKind};
 use crate::base::{ctype, refuse};
 
 /// The index of the scalar parameter bound to local `local`, if there is one.
-fn param_of_local(k: &KernelFn, local: u32) -> Option<usize> {
+pub(crate) fn param_of_local(k: &KernelFn, local: u32) -> Option<usize> {
     k.params
         .iter()
         .position(|p| matches!(p.kind, ParamKind::Scalar { local: l, .. } if l == local))

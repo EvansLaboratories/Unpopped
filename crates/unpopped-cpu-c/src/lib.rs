@@ -59,6 +59,7 @@ use unpopped_vocab::{ElementKind, TargetId};
 mod base;
 mod collective;
 mod collective_tuple;
+mod dyn_layout;
 mod dynamic;
 mod kernel;
 mod launch;

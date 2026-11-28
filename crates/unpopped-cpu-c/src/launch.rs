@@ -59,6 +59,14 @@ const MAX_THREADS: u32 = 1024;
 /// Blocks times threads that may be resident at once across a `Device` barrier.
 const MAX_RESIDENT: u64 = 1 << 16;
 
+/// A `dyn_layout` is spelled for a single-phase kernel of one device with no peer access (`dyn_layout::admit`).
+pub(crate) fn admit_dyn_layout(k: &KernelFn, in_module: bool) -> Result<(), LowerError> {
+    let info = LaunchInfo::of(k).expect("a launched kernel");
+    let single =
+        device_segments(&k.body.0).len() <= 1 && !reaches_peer(&k.body.0) && info.devices == 1;
+    crate::dyn_layout::admit(k, in_module, single)
+}
+
 /// Everything about a launched `k` this emitter cannot spell, refused before any text is written.
 pub(crate) fn admit_launch(k: &KernelFn) -> Result<(), LowerError> {
     let info = LaunchInfo::of(k).expect("admit_launch is called for a launched kernel");
@@ -154,14 +162,6 @@ fn admit_alloc(a: &AllocDecl) -> Result<(), LowerError> {
     if a.layout.is_some() || a.align_bytes.is_some() {
         return Err(refuse(format!(
             "allocation `{}` states a layout or an alignment; this emitter spells the identity layout only",
-            a.name
-        )));
-    }
-    // a layout whose leaves are scalar parameters is declined by name as well (`docs/design-dynamic-layout.md` section 5):
-    // emitting the offset as C arithmetic over the parameters is the follow-up row
-    if a.dyn_layout.is_some() {
-        return Err(refuse(format!(
-            "allocation `{}` states a `dyn_layout` (a layout with scalar-parameter leaves); this emitter spells the identity layout only",
             a.name
         )));
     }
@@ -312,6 +312,13 @@ impl Emitter<'_> {
                 self.line(&format!(
                     "for (int t = 0; t < {nt}; ++t) l{local}[t] = ({t})p{i};"
                 ));
+            }
+        }
+        for (i, a) in self.k.allocs.iter().enumerate() {
+            if let Some(d) = &a.dyn_layout {
+                for l in crate::dyn_layout::launch_check(self.k, i, a, d)? {
+                    self.line(&l);
+                }
             }
         }
         let bound = |a: usize| {
@@ -710,6 +717,17 @@ impl Emitter<'_> {
         self.line(&format!(
             "long long o{n} = (long long)({v}); if (o{n} < 0 || o{n} >= {extent}) return 1;"
         ));
+        if let Some(d) = &decl.dyn_layout {
+            // the launch-time check proved the bound layout injective and inside the extent, so the physical offset needs no check
+            for l in crate::dyn_layout::offset_lines(
+                self.k,
+                d,
+                (&format!("o{n}"), &format!("lq{n}"), &format!("po{n}")),
+            )? {
+                self.line(&l);
+            }
+            return Ok(format!("sh{alloc}[po{n}]"));
+        }
         // a Private array is one slice of `extent` elements per thread of the block
         Ok(if private {
             format!("sh{alloc}[(long long)t * {extent} + o{n}]")
