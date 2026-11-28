@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.14` — Docs: ROADMAP rows that waited for a consumer are re-dispositioned as unblocked and ranked lower (PM, 2026-11-26); U3 R2 to R4 get rows
+
+Issue #114 (IR union I3) was the only issue labelled blocked-on:consumer; it and the ROADMAP rows U2b, U15, U21, U24, U36, E3 and I7 that said "waits for a consumer", "parked: no consumer" or "when a consumer asks" now carry a dated re-disposition: unblocked work, ranked lower, never a reason to idle (CireSnave 2026-10-24, 2026-11-11, 2026-11-19). New rows U65 (ProgramModel / BlockSpmd lowering) and U66 (Constant allocation initializers); U21 records the patent-read gate (no chart exists) and how a Texture space and the plan's Tile space merge. Docs only, no gate.
+
+rockfish does not see the stop-before-arm problem (its hip-emit scans the body only). Docs only, no gate.
+
+---
+
 ## `0.63.13` — additive: NVIDIA block-scaled mma.sync atoms m16n8k32 mxf8f6f4 and m16n8k64 mxf4nvf4 (U7 theme 3)
 
 Two `MmaAtom` constructor families as data (`mma_blockscaled.rs`): `nvidia_m16n8k32_mxf8f6f4_f32(a, b)` (any of e4m3, e5m2, e3m2, e2m3, e2m1; ue8m0 scale per 32 k) and `nvidia_m16n8k64_mxf4nvf4_f32(sf, block)` (e2m1; ue8m0 per 16 or 32, ue4m3 per 16), f32 accumulator, scale operands via `with_block_scale`. SINGLE SOURCE: CUTLASS `mma_traits_sm120.hpp` and `mma_sm120.hpp` at `NVIDIA/cutlass` commit 5c179ede (BSD-3-Clause, notice kept in the module doc, sha256 recorded there); the PTX ISA 9.5 scale figures (46-48, section 9.7.16.3) are images and were not read, so the scale lane layout is not confirmed against them (the text agrees on which lanes supply SF_A and SF_B). Selectors fixed at 0. Placement-tested only. Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
