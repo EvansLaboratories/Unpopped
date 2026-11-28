@@ -460,39 +460,52 @@ impl<'s, 't> Walker<'s, 't> {
             };
         }
         let name = self.short_callee(text(f, self.src));
-        if let Some(r) = self.tile_reduce(n, name) {
+        if let Some(r) = self.intrinsic_call(n, name) {
             return r;
+        }
+        self.named_call(n, name)
+    }
+
+    /// A call to one of the closed intrinsic families (tile, shuffle, conversion, rounding, fast-math, half, complex, class).
+    fn intrinsic_call(&mut self, n: Node<'_>, name: &str) -> Option<R<(ScalarExpr, E)>> {
+        if let Some(r) = self.tile_reduce(n, name) {
+            return Some(r);
         }
         if let Some(r) = self.sync_shuffle(n, name) {
-            return r;
+            return Some(r);
         }
         if let Some(r) = self.convert_intrinsic(n, name) {
-            return r;
+            return Some(r);
         }
         if let Some(r) = self.rounded_arithmetic(n, name) {
-            return r;
+            return Some(r);
         }
         if let Some(r) = self.fast_math(n, name) {
-            return r;
+            return Some(r);
         }
         if let Some(r) = self.bitcast_intrinsic(n, name) {
-            return r;
+            return Some(r);
         }
         if let Some(r) = self.half_conversion(n, name) {
-            return r;
+            return Some(r);
         }
         if let Some(r) = self.half_intrinsic(n, name) {
-            return r;
+            return Some(r);
         }
         if let Some(r) = self.complex_scalar(n, name) {
-            return r;
+            return Some(r);
         }
         if let Some(r) = self.half2_lane(n, name) {
-            return r;
+            return Some(r);
         }
         if let Some(r) = self.float_class(n, name) {
-            return r;
+            return Some(r);
         }
+        None
+    }
+
+    /// A call by name: a function defined in the source (inlined), an atomic, a cast, `min`/`max`, `__ldg` or a math function.
+    fn named_call(&mut self, n: Node<'_>, name: &str) -> R<(ScalarExpr, E)> {
         if self.defines(name) {
             let mut body = Vec::new();
             let r = self.inline_call(n, name, &mut body)?;
