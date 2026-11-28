@@ -77,6 +77,23 @@ fn rewrite(sw: Node<'_>, src: &str) -> Option<String> {
         .child_by_field_name("condition")?
         .child_by_field_name("value")?;
     let body = sw.child_by_field_name("body")?;
+    let groups = collect_groups(body)?;
+    check_groups(&groups)?;
+    emit_chain(sw, cond, &groups, src)
+}
+
+/// The statements a group runs: its tail `break` is the switch's own exit and is dropped.
+fn kept_stmts<'a, 'b>(g: &'b Group<'a>) -> Option<&'b [Node<'a>]> {
+    let tail = g.stmts.last()?;
+    Some(if tail.kind() == "break_statement" {
+        &g.stmts[..g.stmts.len() - 1]
+    } else {
+        &g.stmts[..]
+    })
+}
+
+/// The `case` groups of a switch body, fallthrough labels merged; `None` for a shape the rewrite does not handle.
+fn collect_groups(body: Node<'_>) -> Option<Vec<Group<'_>>> {
     let mut c = body.walk();
     let cases: Vec<_> = body.named_children(&mut c).collect();
     let mut groups: Vec<Group<'_>> = Vec::new();
@@ -125,6 +142,11 @@ fn rewrite(sw: Node<'_>, src: &str) -> Option<String> {
     if !pending.is_empty() || pending_default || groups.is_empty() {
         return None;
     }
+    Some(groups)
+}
+
+/// Every `default` group is last and every other group ends the switch (or is last).
+fn check_groups(groups: &[Group<'_>]) -> Option<()> {
     // the `default` group is the last, and every other group ends the switch
     let last = groups.len() - 1;
     for (i, g) in groups.iter().enumerate() {
@@ -139,25 +161,21 @@ fn rewrite(sw: Node<'_>, src: &str) -> Option<String> {
         if !ends && i != last {
             return None;
         }
-        let kept = if tail.kind() == "break_statement" {
-            &g.stmts[..g.stmts.len() - 1]
-        } else {
-            &g.stmts[..]
-        };
+        let kept = kept_stmts(g)?;
         if kept.iter().any(|s| leaves_switch(*s)) {
             return None;
         }
     }
+    Some(())
+}
+
+/// The `if`/`else if` chain over a selector temporary that replaces the switch.
+fn emit_chain(sw: Node<'_>, cond: Node<'_>, groups: &[Group<'_>], src: &str) -> Option<String> {
     let sel = format!("__sw{}", sw.start_byte());
     let mut out = format!("{{ auto {sel} = ({}); ", text(cond, src));
     let mut first = true;
-    for g in &groups {
-        let tail = g.stmts.last()?;
-        let kept = if tail.kind() == "break_statement" {
-            &g.stmts[..g.stmts.len() - 1]
-        } else {
-            &g.stmts[..]
-        };
+    for g in groups {
+        let kept = kept_stmts(g)?;
         let body: Vec<&str> = kept.iter().map(|s| text(*s, src)).collect();
         if g.is_default {
             if first {
