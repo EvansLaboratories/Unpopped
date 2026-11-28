@@ -22,6 +22,24 @@
 //!
 //! `Constant` allocations have no initializer in [`AllocDecl`], so reading one is
 //! [`KernelTrap::Unsupported`] here, by name.
+//!
+//! # The oracle limit on forward progress between blocks
+//!
+//! The oracle is a deterministic sequential interpreter: **blocks run one after another in index order, each to its end or to a
+//! `Device` barrier** (with a `Device` barrier every block is resident and the barrier is a rendezvous of the whole grid).
+//! Hardware runs resident blocks concurrently, so a block that spins on a flag a LATER block sets completes there and cannot
+//! complete here. What the oracle reports for it depends on how the spin reads the flag:
+//!
+//! * a spin through an acquire-class atomic, with blocks still to run, is [`KernelTrap::CrossBlockWait`] (the wait detector keys
+//!   on the launch's `acquired` edge);
+//! * a **`Relaxed`** spin takes no acquire edge, so the same kernel shows [`KernelTrap::StepLimit`] after the step limit instead;
+//! * a spin on an EARLIER block's write is fine (that block already ran), as is any wait through a `Device` barrier.
+//!
+//! Neither trap says the kernel is wrong: it says this interpreter cannot interleave blocks. A kernel that needs forward progress
+//! between blocks without a `Device` barrier (a decoupled look-back scan, a persistent-block work queue, a stream-K fix-up wait)
+//! is outside what the oracle can run today; ROADMAP U76 is the lift (a resident-block scheduler that interleaves blocks at
+//! atomic and fence statements, deterministically seeded), and until it lands such a kernel is checked by `check_kernel` and by
+//! the emitters' own tests, not by an oracle run.
 
 use std::ops::Range;
 
