@@ -110,29 +110,9 @@ impl<'s, 't> Walker<'s, 't> {
         ) else {
             return self.not_yet(e, format!("the asm template `{}`", words.join(" ")));
         };
-        let (Some(dp), Some(sp)) = (self.ptr_expr(dst.value)?, self.ptr_expr(src.value)?) else {
-            return self.not_yet(
-                e,
-                "a `cp.async` whose operands are not shared/global pointers",
-            );
-        };
-        let Ok(bytes) = text(size.value, self.src).trim().parse::<i64>() else {
-            return self.not_yet(e, "a `cp.async` whose byte count is not a literal");
-        };
-        let (PBase::Alloc(alloc), PBase::Buffer(buffer)) = (dp.base, sp.base) else {
-            return self.not_yet(e, "a `cp.async` that is not shared-from-global");
-        };
-        // The copy is in the destination allocation's own element type (the checker wants the two places to agree, and the
-        // decode kernel's dynamic shared memory is `uint8_t` under `half*` pointers): byte counts become element counts.
-        let Some(elem) = self.allocs.get(alloc as usize).map(|a| a.elem) else {
-            return self.not_yet(e, "a `cp.async` into an unknown allocation");
-        };
-        let Some(esize) = byte_size(elem).filter(|s| *s > 0 && bytes % *s == 0) else {
-            return self.not_yet(
-                e,
-                "a `cp.async` byte count that is not a whole number of destination elements",
-            );
-        };
+        let (alloc, dp, buffer, sp, bytes) =
+            self.cp_async_endpoints(e, dst.value, src.value, size.value)?;
+        let (elem, esize) = self.cp_async_elem(e, alloc, bytes)?;
         let scaled = |v: ScalarExpr| -> ScalarExpr {
             if esize == 1 {
                 v
@@ -141,17 +121,10 @@ impl<'s, 't> Walker<'s, 't> {
             }
         };
         let valid = match rest.get(3).and_then(|w| operand(w)) {
-            Some(o) => {
-                let (v, vt) = self.expr(o.value)?;
-                let v = self.convert(v, vt, E::I32, o.value)?;
-                Some(ScalarExpr::Div(
-                    Box::new(v),
-                    Box::new(ScalarExpr::ConstInt(esize, E::I32)),
-                ))
-            }
+            Some(o) => Some(self.cp_async_valid(o.value, esize)?),
             None => None,
         };
-        let copy = Stmt::CopyAsync {
+        Ok(Stmt::CopyAsync {
             dst: Place::Alloc {
                 alloc,
                 index: scaled(dp.off),
@@ -165,8 +138,57 @@ impl<'s, 't> Walker<'s, 't> {
             valid,
             cache,
             l2_prefetch: l2,
+        })
+    }
+
+    /// The shared destination, the global source and the literal byte count of a `cp.async`.
+    fn cp_async_endpoints(
+        &mut self,
+        e: Node<'_>,
+        dst: Node<'_>,
+        src: Node<'_>,
+        size: Node<'_>,
+    ) -> R<(u32, PtrVal, u32, PtrVal, i64)> {
+        let (Some(dp), Some(sp)) = (self.ptr_expr(dst)?, self.ptr_expr(src)?) else {
+            return self.not_yet(
+                e,
+                "a `cp.async` whose operands are not shared/global pointers",
+            );
         };
-        Ok(copy)
+        let Ok(bytes) = text(size, self.src).trim().parse::<i64>() else {
+            return self.not_yet(e, "a `cp.async` whose byte count is not a literal");
+        };
+        let (PBase::Alloc(alloc), PBase::Buffer(buffer)) = (dp.base, sp.base) else {
+            return self.not_yet(e, "a `cp.async` that is not shared-from-global");
+        };
+        Ok((alloc, dp, buffer, sp, bytes))
+    }
+
+    /// The element type of the destination allocation and its byte size: the copy is in the allocation's own element type, so a
+    /// byte count must be a whole number of those elements.
+    fn cp_async_elem(&mut self, e: Node<'_>, alloc: u32, bytes: i64) -> R<(E, i64)> {
+        // The copy is in the destination allocation's own element type (the checker wants the two places to agree, and the
+        // decode kernel's dynamic shared memory is `uint8_t` under `half*` pointers): byte counts become element counts.
+        let Some(elem) = self.allocs.get(alloc as usize).map(|a| a.elem) else {
+            return self.not_yet(e, "a `cp.async` into an unknown allocation");
+        };
+        let Some(esize) = byte_size(elem).filter(|s| *s > 0 && bytes % *s == 0) else {
+            return self.not_yet(
+                e,
+                "a `cp.async` byte count that is not a whole number of destination elements",
+            );
+        };
+        Ok((elem, esize))
+    }
+
+    /// The valid-bytes operand of a `cp.async`, in destination elements.
+    fn cp_async_valid(&mut self, value: Node<'_>, esize: i64) -> R<ScalarExpr> {
+        let (v, vt) = self.expr(value)?;
+        let v = self.convert(v, vt, E::I32, value)?;
+        Ok(ScalarExpr::Div(
+            Box::new(v),
+            Box::new(ScalarExpr::ConstInt(esize, E::I32)),
+        ))
     }
 
     /// The condition of a predicated `cp.async`: `setp.ne.b32 p, %k, 0`.
