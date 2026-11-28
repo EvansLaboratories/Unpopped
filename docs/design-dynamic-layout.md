@@ -51,7 +51,7 @@ Each has its accepted control beside it in the tests. Refused by name: a `Param`
 zero bound extent; a bound shape whose size is not the extent; a bound layout that is not injective or whose cosize exceeds the
 extent; a bound layout over the enumeration cap ("too large to prove injective", as T1's checker says); both `layout` and
 `dyn_layout` on one allocation; a `DynLayout` on a non-`Shared` space (as T1); **a swizzle on a `DynLayout`** (the period must divide
-the extent, which is a value here: deferred until a row needs it, refused until then).
+the extent, which is a value here): **refused until section 8, which makes it a launch-time check**).
 The layout algebra is **not** applied to an unbound `DynLayout`: `DynLayout` has no `composition`, `zipped_divide` or `slice`; a
 caller binds first and gets T1b's `NotDivisible` refusal on a non-dividing tile.
 
@@ -79,5 +79,43 @@ caller binds first and gets T1b's `NotDivisible` refusal on a non-dividing tile.
 ## 7. Patent
 
 This adds a layout type and a launch-time check and **no statement**; no patent read is claimed for it.
+
+## 8. Addendum 2026-11-28: a swizzle on a `DynLayout` (a row now, at pm-kernels' [TASK] `next-rows`)
+
+Section 4 refused a swizzle on a `DynLayout` "until a row needs it". That reading lets the consumer decide whether the row exists; the row exists.
+Design only in this section; the build follows pm-kernels' go on the patent grep (below).
+
+**The rule that was static becomes a launch-time check.** For a static `Layout`, `check_alloc_layout` requires the swizzle's period (in
+elements, `1 << (base + |shift| + bits)` of the element-form swizzle) to **divide the extent**, so a swizzled offset cannot leave it. With a
+`DynLayout` the extent is a value (`Static(n)` or the argument of `Extent::Param`), so the same check runs at the launch on the bound value, in
+`bind_dyn_layouts`, **after** the size/range/injectivity run and before the first statement:
+
+| rule | where | refusal |
+|---|---|---|
+| swizzle base is at least the element width (and the width is a power of two) | `check_kernel` (needs no value) | `KernelError::AllocLayout` "the swizzle base is below the element width ..." (as T1) |
+| `align_bytes` is stated and a multiple of the swizzle's byte period | `check_kernel` (needs no value) | `KernelError::AllocLayout` (as T1) |
+| the period divides the **bound** extent | launch (oracle: `bind_dyn_layouts`; C: the launch check, status 4) | `KernelTrap::DynLayout { why: "the swizzle period does not divide the extent, so a swizzled offset could leave it" }` |
+
+**When it does not divide, the launch refuses by name; nothing is rounded, clamped or run.** (The `local_tile` lesson, #486: no silent over-reach.)
+Accepted control beside it in the tests: `swz(2,2,3)` on 4-byte elements has a 128-byte period (32 elements); an extent of 64 binds and runs
+(the reversal kernel of `tests/kernel_dyn_layout.rs` computes the same bytes as the unswizzled layout), an extent of 48 traps.
+
+**Representation (additive).** `DynLayout` gains `swizzle: Option<Swizzle>` (a byte swizzle, as `AllocLayout`), set by `DynLayout::with_swizzle`; its text is
+the canonical `swz(B,M,S)(shape:stride)` of `AllocLayout`, so an existing `dyn_layout` text is unchanged and a kernel without a swizzle
+serializes as before. `DynLayout::bind` still returns the static `Layout` (the algebra never sees a swizzle); the oracle builds
+`AllocLayout::new(bound).with_swizzle(sw)` and the existing `physical` does the rest. No new `AllocDecl` field, no `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+**Emitters.** The oracle as above. cpu-c: the C offset gains the swizzle's XOR on the element-form offset, and its launch check gains the
+period-divides-extent test (status 4), checked against the oracle over the same sweep; a swizzle in a kernel that bypasses the layout is
+refused by name as a `dyn_layout` already is.
+
+**Mutants to carry:** the divisibility test dropped (an extent of 48 must trap); the swizzle applied in bytes instead of elements; the
+`align_bytes` rule dropped.
+
+**Patent (before building).** `git grep -i swizzle origin/main -- docs/PATENT*` finds the U6 addendum (US20230289304A1, US12141082B2,
+US20240176663A1, US20210064987A1: each **outside as read** by the PM) and the U7 descriptor/swizzle re-read (US12204897B2, US12710961B2,
+US20230289398A1: outside as read; specifications and continuations not covered). None is a hold. This adds the existing `Swizzle` to a layout type
+and a launch-time divisibility check, **no hardware and no statement**; it is not a new read and no clearance is claimed. pm-kernels' go is asked
+before the build because the hits name patents.
 
 — lane: unpopped-leaves
