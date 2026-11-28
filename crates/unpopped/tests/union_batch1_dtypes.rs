@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Union batch 1 (KISS 0.24.0, board 501 and 515; plan E1a): the seven new dtype rows. Each has its token, width and kind (pinned
-//! against KISS's manifest in `unpopped-vocab`) and survives the text codec. Three (`F128`, `F8E3M4`, `F8UE4M3`) are **declined by
-//! name** wherever a kernel would compute them: `check_kernel` refuses a kernel that declares one (`DtypeNotComputed`); the four wide
-//! integers are computed since 0.61.3 (E2). A `Cast` into any of the seven is still the typed `IllegalCast`. Before this guard the oracle ran a `Load` of an `F128`/`I128`/`U128`/`F8*` buffer
+//! against KISS's manifest in `unpopped-vocab`) and survives the text codec. Two (`F8E3M4`, `F8UE4M3`) are **declined by name**
+//! wherever a kernel would compute them: `check_kernel` refuses a kernel that declares one (`DtypeNotComputed`); the four wide integers are
+//! computed since 0.61.3 (E2) and `F128` since E3 (`tests/kernel_f128.rs`). A float `Cast` into a wide integer is still the typed
+//! `IllegalCast`. Before this guard the oracle ran a `Load` of an `F128`/`I128`/`U128`/`F8*` buffer
 //! without holding a value of the type and panicked on `I256`/`U256` (probed 2026-11-26): the silent default this repository refuses.
 //! Each refusal sits beside its accepted control.
 
@@ -58,10 +59,11 @@ fn refused(dtype: ElementKind) -> Result<(), KernelError> {
 
 #[test]
 fn a_kernel_that_declares_a_batch_1_dtype_is_refused_by_name_and_the_control_passes() {
-    // the four wide integers are computed since E2 (`a_kernel_may_declare_a_wide_integer` below); the rest stay declined
+    // the four wide integers are computed since E2 and `F128` since E3 (`a_kernel_may_declare_a_wide_integer` below); the rest stay
+    // declined
     for (dt, name, _) in ROWS
         .into_iter()
-        .filter(|(dt, _, _)| !unpopped::types::is_wide_int(*dt))
+        .filter(|(dt, _, _)| !unpopped::types::is_wide_int(*dt) && *dt != ElementKind::F128)
     {
         // a buffer parameter, a local, a scalar parameter, an allocation, the compute type: each refused
         assert_eq!(
@@ -132,10 +134,11 @@ fn a_kernel_that_declares_a_batch_1_dtype_is_refused_by_name_and_the_control_pas
 
 #[test]
 fn a_kernel_may_declare_a_wide_integer() {
+    // E3: `F128` joins them (the soft binary128 runs in the oracle, `tests/kernel_f128.rs`)
     // E2: `I128`, `U128`, `I256`, `U256` are computed by the oracle, so every place the guard looked passes
     for (dt, name, _) in ROWS
         .into_iter()
-        .filter(|(dt, _, _)| unpopped::types::is_wide_int(*dt))
+        .filter(|(dt, _, _)| unpopped::types::is_wide_int(*dt) || *dt == ElementKind::F128)
     {
         assert_eq!(
             check_kernel(&load_from(dt, dt)),
@@ -169,17 +172,14 @@ fn a_kernel_may_declare_a_wide_integer() {
 }
 
 #[test]
-fn the_declined_set_is_exactly_f128_and_the_two_fp8_rows() {
+fn the_declined_set_is_exactly_the_two_fp8_rows() {
     // the one place the set is pinned: a change to which dtypes `check_kernel` computes flips this test
     let declined: Vec<ElementKind> = ROWS
         .into_iter()
         .map(|(dt, _, _)| dt)
         .filter(|dt| check_kernel(&load_from(*dt, ElementKind::F32)) == refused(*dt))
         .collect();
-    assert_eq!(
-        declined,
-        vec![ElementKind::F128, ElementKind::F8E3M4, ElementKind::F8UE4M3]
-    );
+    assert_eq!(declined, vec![ElementKind::F8E3M4, ElementKind::F8UE4M3]);
     // every other row passes the same kernel
     for (dt, name, _) in ROWS {
         if !declined.contains(&dt) {
@@ -215,11 +215,12 @@ fn the_6_bit_floats_are_not_declined_the_oracle_holds_them_in_an_8_bit_container
 }
 
 #[test]
-fn a_cast_into_a_wide_or_binary128_row_is_still_the_typed_illegal_cast() {
-    // `F8E3M4` and `F8UE4M3` became Cast endpoints in plan E1b (`tests/cast_fp8_union.rs`); the five wide rows stay refused
+fn a_float_cast_into_a_wide_integer_row_is_still_the_typed_illegal_cast() {
+    // `F8E3M4` and `F8UE4M3` became Cast endpoints in plan E1b (`tests/cast_fp8_union.rs`) and `F128` in E3 (`tests/kernel_f128.rs`); a
+    // float into a wide integer stays refused
     for (dt, name, _) in ROWS
         .into_iter()
-        .filter(|(dt, _, _)| !matches!(dt, ElementKind::F8E3M4 | ElementKind::F8UE4M3))
+        .filter(|(dt, _, _)| unpopped::types::is_wide_int(*dt))
     {
         let k = kernel(
             ElementKind::F32,

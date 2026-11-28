@@ -139,6 +139,9 @@ pub(super) fn raw_to_f64(bits: u128, dt: ElementKind) -> f64 {
         // KISS 0.24.0 union batch 1: an intermediate `Cast` result, carried as its raw code (plan E1b).
         ElementKind::F8E3M4 => crate::cast_ref::decode_ieee(bits, 3, 4),
         ElementKind::F8UE4M3 => crate::cast_ref::decode_ue4m3(bits),
+        // a binary128 projected into the `f64` domain (the nearest `f64`, one rounding): reached only by a path the checker
+        // already refuses; it must not panic, and a condition on an `F128` is decided by `F128` itself (`kernel_f128`)
+        ElementKind::F128 => crate::soft_f128::F128(bits).to_f64(),
         // an MX block scale (KISS-CLASSIFY 6.1-0013): decoded when it is read as a scale operand; the plan gate still refuses
         // it as a compute dtype
         ElementKind::F8E8M0 => crate::cast_ref::decode_e8m0(bits),
