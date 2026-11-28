@@ -37,6 +37,10 @@
 //! - [`MmaAtom::with_tf32_inputs`]: the `F32` operands are rounded to tf32 before the products (the compute rule of the
 //!   tf32 atoms; there is no tf32 `ElementKind`, PM ruling Q5).
 //!
+//! - [`MmaAtom::with_bit_op`]: the `B1` operands are combined bitwise (`and` or `xor`) and the products are counted
+//!   (`popc`) into one `I32` per `C` element: the compute rule of the 1-bit `mma.sync` atoms (PTX `.and.popc`,
+//!   `.xor.popc`; there is no statement for it, only the atom's flag).
+//!
 //! Shipped: the PTX `mma.sync.aligned` atoms `m16n8k16` (f16 and bf16 into f32), `m16n8k32` (s8 into s32) and `m16n8k8`
 //! (tf32 into f32, [`MmaAtom::nvidia_m16n8k8_tf32_f32`]).
 
@@ -64,6 +68,17 @@ pub enum MmaAtomError {
     BadFlag(&'static str),
     /// The atom already carries this flag.
     FlagTwice,
+}
+
+/// The bitwise operation of a 1-bit atom (`mma.sync ... .and.popc` / `.xor.popc`): `D[r, c] = C[r, c] +
+/// popc(A[r, :] op B[:, c])` over the `K` bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum BitOp {
+    /// `a & b`.
+    And,
+    /// `a ^ b`.
+    Xor,
 }
 
 /// What an extra operand of an atom is.
@@ -134,6 +149,9 @@ pub struct MmaAtom {
     /// the products: the `m16n8k8` tf32 atom's compute rule (U57; PM ruling Q5, no `ElementKind`).
     #[serde(default)]
     tf32_inputs: bool,
+    /// The 1-bit atoms' compute rule: count the set bits of `A op B` (`None` for every other atom).
+    #[serde(default)]
+    bit_op: Option<BitOp>,
 }
 
 impl MmaAtom {
@@ -171,6 +189,7 @@ impl MmaAtom {
             extras: Vec::new(),
             block: 0,
             tf32_inputs: false,
+            bit_op: None,
         };
         for (i, what) in ["A", "B", "C"].into_iter().enumerate() {
             atom.check_bijection(i, what)?;
@@ -340,6 +359,30 @@ impl MmaAtom {
     #[must_use]
     pub const fn tf32_inputs(&self) -> bool {
         self.tf32_inputs
+    }
+
+    /// Make this a 1-bit atom: `D = C + popc(A op B)` over the `K` bits (the compute rule of `mma.sync ... .and.popc` and
+    /// `.xor.popc`). The operands must be `B1` and the accumulator an integer.
+    ///
+    /// # Errors
+    /// [`MmaAtomError`] if the atom already has the flag, an operand is not `B1`, or the accumulator is not `I32`.
+    pub fn with_bit_op(mut self, op: BitOp) -> Result<Self, MmaAtomError> {
+        if self.bit_op.is_some() {
+            return Err(MmaAtomError::FlagTwice);
+        }
+        if self.a != ElementKind::B1 || self.b != ElementKind::B1 || self.acc != ElementKind::I32 {
+            return Err(MmaAtomError::BadFlag(
+                "a bit operation needs B1 operands and an I32 accumulator",
+            ));
+        }
+        self.bit_op = Some(op);
+        Ok(self)
+    }
+
+    /// The bitwise operation of a 1-bit atom (`None` for every other atom).
+    #[must_use]
+    pub const fn bit_op(&self) -> Option<BitOp> {
+        self.bit_op
     }
 
     fn push_extra(
