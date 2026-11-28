@@ -160,13 +160,13 @@ The agents listed what each remaining `No` row would take; this regroups them by
 
 All are ROADMAP rows owned by Unpopped that are scheduled, not held; none is started. Breaking ones batch into one release so emitters break once (the U36 ruling).
 
-- **S:** U24 (`multimem` refusals as gaps; one PR when a consumer asks, low rank).
+- **S:** U24 (`multimem` refusals as gaps; one PR when a consumer asks, low rank). **RE-DISPOSITIONED 2026-11-26 (PM via pm-kernels; CireSnave 2026-10-24, 2026-11-11, 2026-11-19): not a wait; unblocked work, ranked lower.**
 - **S-M:** U18 (unroll hint on `Stmt::For`; BREAKING, batches with U13 and U36).
 - **M:** U13 (`CopyAsync` predicated, zero-fill and cache-hint forms; BREAKING field), U15 (8- and 16-lane packed values; additive if new forms), U17 (programmatic dependent launch), U22 (launch grid as an expression of parameters; additive beside the static form), U23 (struct-typed scalar parameters).
-- **L:** U21 (texture and surface memory; waits on a consumer under the 2026-11-02 ruling).
+- **L:** U21 (texture and surface memory; waits on a consumer under the 2026-11-02 ruling). **RE-DISPOSITIONED 2026-11-26 (PM via pm-kernels; CireSnave 2026-10-24, 2026-11-11, 2026-11-19): not a wait; unblocked work, ranked lower.**
 - **XL:** U19 (C-family kernel-body frontend).
 - **Open, trigger-gated:** U7 later slices (`wgmma`/`tcgen05`), U8b, U8c, U9c (trigger met 2026-11-12 by Baracuda's CUDA frontend).
-- **Deferred by the PM:** U36 (asymmetric im2col padding), until a consumer needs it or the next release that breaks anyway.
+- **Deferred by the PM:** U36 (asymmetric im2col padding), until a consumer needs it or the next release that breaks anyway. **RE-DISPOSITIONED 2026-11-26 (PM via pm-kernels; CireSnave 2026-10-24, 2026-11-11, 2026-11-19): not a wait; unblocked work, ranked lower.**
 
 Held and not startable here: A5 backward attention, stochastic rounding, `Fp8FastAccum`, accumulate-into-C and a precision recipe list (CireSnave, boards 443/444), I1 and I5.
 
