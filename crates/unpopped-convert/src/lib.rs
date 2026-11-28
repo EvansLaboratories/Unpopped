@@ -1189,45 +1189,12 @@ impl<'a> Walk<'a> {
                     .ok_or_else(|| LiftError::Unrecognized("()".into()))?;
                 self.expr(inner)
             }
-            "binary_expression" => {
-                let l = self.field(n, "left")?;
-                let r = self.field(n, "right")?;
-                let op = self.field(n, "operator")?;
-                let (le, re) = (self.expr(l)?, self.expr(r)?);
-                Ok(match self.text(op) {
-                    "+" => ScalarExpr::Add(Box::new(le), Box::new(re)),
-                    "-" => ScalarExpr::Sub(Box::new(le), Box::new(re)),
-                    "*" => ScalarExpr::Mul(Box::new(le), Box::new(re)),
-                    "/" => ScalarExpr::Div(Box::new(le), Box::new(re)),
-                    // Comparisons — never reachable as a store's own value
-                    // without `conditional_expression` below, which is the
-                    // only place a Cmp* result gets consumed (as a Select
-                    // condition). Kept here rather than duplicated: the
-                    // grammar parses `a < b` as an ordinary binary_expression
-                    // whether it sits inside `? :` or not.
-                    "==" => ScalarExpr::Binary(BinaryOp::CmpEq, Box::new(le), Box::new(re)),
-                    "!=" => ScalarExpr::Binary(BinaryOp::CmpNe, Box::new(le), Box::new(re)),
-                    "<" => ScalarExpr::Binary(BinaryOp::CmpLt, Box::new(le), Box::new(re)),
-                    "<=" => ScalarExpr::Binary(BinaryOp::CmpLe, Box::new(le), Box::new(re)),
-                    ">" => ScalarExpr::Binary(BinaryOp::CmpGt, Box::new(le), Box::new(re)),
-                    ">=" => ScalarExpr::Binary(BinaryOp::CmpGe, Box::new(le), Box::new(re)),
-                    other => return Err(LiftError::Unrecognized(format!("operator '{other}'"))),
-                })
-            }
+            "binary_expression" => self.binary_expr(n),
             // `cond ? a : b` -> the IR's own ternary, ScalarExpr::Select —
             // already spec'd (KISS-CLASSIFY, the dropout-scaling use) and
             // already lowered by unpopped-cpu-c (F32/F32Strict/F64) and
             // unpopped-slang; no Backend/Lowering change needed here.
-            "conditional_expression" => {
-                let cond = self.field(n, "condition")?;
-                let cons = self.field(n, "consequence")?;
-                let alt = self.field(n, "alternative")?;
-                Ok(ScalarExpr::Select(
-                    Box::new(self.expr(cond)?),
-                    Box::new(self.expr(cons)?),
-                    Box::new(self.expr(alt)?),
-                ))
-            }
+            "conditional_expression" => self.conditional_expr(n),
             "unary_expression" => {
                 let op = self.field(n, "operator")?;
                 let a = self.field(n, "argument")?;
@@ -1236,29 +1203,7 @@ impl<'a> Walk<'a> {
                     other => Err(LiftError::Unrecognized(format!("unary '{other}'"))),
                 }
             }
-            "subscript_expression" => {
-                let base = self.text(self.field(n, "argument")?);
-                let k: u8 = self.names.input(base).ok_or_else(|| {
-                    if self.names.declared() {
-                        LiftError::UndeclaredResource(base.to_string())
-                    } else {
-                        LiftError::Unrecognized(format!(
-                            "read '{base}[..]' (not {}K)",
-                            self.names.in_prefix
-                        ))
-                    }
-                })?;
-                let idx = subscript_index(n, self.src)
-                    .ok_or_else(|| LiftError::Unrecognized("index".into()))?;
-                if idx != self.idx_var {
-                    return Err(LiftError::Unrecognized(format!(
-                        "non-elementwise index [{idx}] (expected [{}])",
-                        self.idx_var
-                    )));
-                }
-                self.max_input = Some(self.max_input.map_or(k, |m| m.max(k)));
-                Ok(ScalarExpr::Input(k))
-            }
+            "subscript_expression" => self.subscript_expr(n),
             "number_literal" => {
                 let t = self
                     .text(n)
@@ -1267,62 +1212,8 @@ impl<'a> Walk<'a> {
                     .map(ScalarExpr::Const)
                     .map_err(|_| LiftError::Unrecognized(format!("literal {t}")))
             }
-            "call_expression" => {
-                let fname = self.text(self.field(n, "function")?);
-                let args_node = self.field(n, "arguments")?;
-                let mut cursor = args_node.walk();
-                let args: Vec<Node> = args_node.named_children(&mut cursor).collect();
-                match args.len() {
-                    1 => {
-                        let op = (self.names.unary_fn)(fname)
-                            .ok_or_else(|| LiftError::Unrecognized(format!("call '{fname}(_)'")))?;
-                        Ok(ScalarExpr::Unary(op, Box::new(self.expr(args[0])?)))
-                    }
-                    2 => {
-                        let op = (self.names.binary_fn)(fname).ok_or_else(|| {
-                            LiftError::Unrecognized(format!("call '{fname}(_,_)'"))
-                        })?;
-                        Ok(ScalarExpr::Binary(
-                            op,
-                            Box::new(self.expr(args[0])?),
-                            Box::new(self.expr(args[1])?),
-                        ))
-                    }
-                    n => Err(LiftError::Unrecognized(format!(
-                        "call '{fname}' with {n} args"
-                    ))),
-                }
-            }
-            "identifier" => {
-                let name = self.text(n).to_string();
-                let bound = self
-                    .locals
-                    .iter()
-                    .find(|(bn, _)| *bn == name)
-                    .map(|(_, v)| *v);
-                match bound {
-                    Some(_) if self.resolving.contains(&name) => Err(LiftError::Unrecognized(
-                        format!("identifier '{name}' (self-referential binding)"),
-                    )),
-                    Some(value) => {
-                        self.resolving.push(name.clone());
-                        let result = self.expr(value);
-                        self.resolving.pop();
-                        result
-                    }
-                    None => {
-                        if let Some(k) = self.names.params.iter().position(|p| *p == name) {
-                            u8::try_from(k).map(ScalarExpr::Param).map_err(|_| {
-                                LiftError::BadResourceMap("more than 255 Params".into())
-                            })
-                        } else if self.names.declared() {
-                            Err(LiftError::UndeclaredResource(name))
-                        } else {
-                            Err(LiftError::Unrecognized(format!("identifier '{name}'")))
-                        }
-                    }
-                }
-            }
+            "call_expression" => self.call_expr(n),
+            "identifier" => self.identifier_expr(n),
             "cast_expression" => {
                 let ty = self.text(self.field(n, "type")?).trim();
                 if self.identity_casts.contains(&ty) {
@@ -1332,6 +1223,129 @@ impl<'a> Walk<'a> {
                 }
             }
             other => Err(LiftError::Unrecognized(format!("node '{other}'"))),
+        }
+    }
+
+    /// A binary operator or comparison.
+    fn binary_expr(&mut self, n: Node) -> Result<ScalarExpr, LiftError> {
+        let l = self.field(n, "left")?;
+        let r = self.field(n, "right")?;
+        let op = self.field(n, "operator")?;
+        let (le, re) = (self.expr(l)?, self.expr(r)?);
+        Ok(match self.text(op) {
+            "+" => ScalarExpr::Add(Box::new(le), Box::new(re)),
+            "-" => ScalarExpr::Sub(Box::new(le), Box::new(re)),
+            "*" => ScalarExpr::Mul(Box::new(le), Box::new(re)),
+            "/" => ScalarExpr::Div(Box::new(le), Box::new(re)),
+            // Comparisons — never reachable as a store's own value
+            // without `conditional_expression` below, which is the
+            // only place a Cmp* result gets consumed (as a Select
+            // condition). Kept here rather than duplicated: the
+            // grammar parses `a < b` as an ordinary binary_expression
+            // whether it sits inside `? :` or not.
+            "==" => ScalarExpr::Binary(BinaryOp::CmpEq, Box::new(le), Box::new(re)),
+            "!=" => ScalarExpr::Binary(BinaryOp::CmpNe, Box::new(le), Box::new(re)),
+            "<" => ScalarExpr::Binary(BinaryOp::CmpLt, Box::new(le), Box::new(re)),
+            "<=" => ScalarExpr::Binary(BinaryOp::CmpLe, Box::new(le), Box::new(re)),
+            ">" => ScalarExpr::Binary(BinaryOp::CmpGt, Box::new(le), Box::new(re)),
+            ">=" => ScalarExpr::Binary(BinaryOp::CmpGe, Box::new(le), Box::new(re)),
+            other => return Err(LiftError::Unrecognized(format!("operator '{other}'"))),
+        })
+    }
+
+    /// `cond ? a : b` as the IR ternary.
+    fn conditional_expr(&mut self, n: Node) -> Result<ScalarExpr, LiftError> {
+        let cond = self.field(n, "condition")?;
+        let cons = self.field(n, "consequence")?;
+        let alt = self.field(n, "alternative")?;
+        Ok(ScalarExpr::Select(
+            Box::new(self.expr(cond)?),
+            Box::new(self.expr(cons)?),
+            Box::new(self.expr(alt)?),
+        ))
+    }
+
+    /// An input read `in_k[idx]`.
+    fn subscript_expr(&mut self, n: Node) -> Result<ScalarExpr, LiftError> {
+        let base = self.text(self.field(n, "argument")?);
+        let k: u8 = self.names.input(base).ok_or_else(|| {
+            if self.names.declared() {
+                LiftError::UndeclaredResource(base.to_string())
+            } else {
+                LiftError::Unrecognized(format!(
+                    "read '{base}[..]' (not {}K)",
+                    self.names.in_prefix
+                ))
+            }
+        })?;
+        let idx =
+            subscript_index(n, self.src).ok_or_else(|| LiftError::Unrecognized("index".into()))?;
+        if idx != self.idx_var {
+            return Err(LiftError::Unrecognized(format!(
+                "non-elementwise index [{idx}] (expected [{}])",
+                self.idx_var
+            )));
+        }
+        self.max_input = Some(self.max_input.map_or(k, |m| m.max(k)));
+        Ok(ScalarExpr::Input(k))
+    }
+
+    /// A one- or two-argument call of a named unary or binary function.
+    fn call_expr(&mut self, n: Node) -> Result<ScalarExpr, LiftError> {
+        let fname = self.text(self.field(n, "function")?);
+        let args_node = self.field(n, "arguments")?;
+        let mut cursor = args_node.walk();
+        let args: Vec<Node> = args_node.named_children(&mut cursor).collect();
+        match args.len() {
+            1 => {
+                let op = (self.names.unary_fn)(fname)
+                    .ok_or_else(|| LiftError::Unrecognized(format!("call '{fname}(_)'")))?;
+                Ok(ScalarExpr::Unary(op, Box::new(self.expr(args[0])?)))
+            }
+            2 => {
+                let op = (self.names.binary_fn)(fname)
+                    .ok_or_else(|| LiftError::Unrecognized(format!("call '{fname}(_,_)'")))?;
+                Ok(ScalarExpr::Binary(
+                    op,
+                    Box::new(self.expr(args[0])?),
+                    Box::new(self.expr(args[1])?),
+                ))
+            }
+            n => Err(LiftError::Unrecognized(format!(
+                "call '{fname}' with {n} args"
+            ))),
+        }
+    }
+
+    /// A bound local (resolved by substitution), a parameter, or an undeclared name.
+    fn identifier_expr(&mut self, n: Node) -> Result<ScalarExpr, LiftError> {
+        let name = self.text(n).to_string();
+        let bound = self
+            .locals
+            .iter()
+            .find(|(bn, _)| *bn == name)
+            .map(|(_, v)| *v);
+        match bound {
+            Some(_) if self.resolving.contains(&name) => Err(LiftError::Unrecognized(format!(
+                "identifier '{name}' (self-referential binding)"
+            ))),
+            Some(value) => {
+                self.resolving.push(name.clone());
+                let result = self.expr(value);
+                self.resolving.pop();
+                result
+            }
+            None => {
+                if let Some(k) = self.names.params.iter().position(|p| *p == name) {
+                    u8::try_from(k)
+                        .map(ScalarExpr::Param)
+                        .map_err(|_| LiftError::BadResourceMap("more than 255 Params".into()))
+                } else if self.names.declared() {
+                    Err(LiftError::UndeclaredResource(name))
+                } else {
+                    Err(LiftError::Unrecognized(format!("identifier '{name}'")))
+                }
+            }
         }
     }
 
