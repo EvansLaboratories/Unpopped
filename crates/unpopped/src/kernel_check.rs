@@ -70,6 +70,9 @@ pub(crate) fn check_kernel_with(
     entry: bool,
 ) -> Result<(), KernelError> {
     check_launch(k)?;
+    if let Some(s) = &k.schedule {
+        crate::schedule::check_schedule(s).map_err(KernelError::Schedule)?;
+    }
     check_declared_dtypes(k)?;
     let n = k.locals.len();
     let mut sc = Scope {

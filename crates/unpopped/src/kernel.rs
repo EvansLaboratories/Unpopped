@@ -27,6 +27,7 @@ pub use crate::kernel_module::check_module;
 use crate::exec::{AllocDecl, LaunchShape, MemorySpace, Scope};
 use crate::ir::{ReduceOp, ScalarExpr};
 use crate::mma::MmaAtom;
+use crate::schedule::{ScheduleError, ScheduleSpec};
 use crate::types::{Ty, TypeError};
 
 /// What a buffer parameter may do. Checked by [`check_kernel`] against every `Load` and `Store`.
@@ -1635,6 +1636,14 @@ pub struct KernelFn {
     /// most one value (R5.7 D4b).
     #[serde(default)]
     pub results: Vec<u32>,
+    /// How the kernel is to be run (ROADMAP S2, `docs/design-tile-and-schedule-plan.md` section 3): the tile hierarchy, stage count,
+    /// work division, epilogue and cluster shape. Never what it computes: the oracle ignores it. An emitter **honours** every field
+    /// the spec sets or **declines it by name** ([`crate::schedule::ScheduleSpec::set_fields`]), never silently ignoring one;
+    /// `unpopped-cpu-c` honours none. `check_kernel` checks the spec ([`crate::schedule::check_schedule`]). The carrier gives
+    /// `WorkDivision::StreamK` and `Persistent` no meaning beyond their names: no emitter divides work by them (patent holds,
+    /// `docs/PATENT-SWEEP.md` G-S2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<Box<ScheduleSpec>>,
 }
 
 impl KernelFn {
@@ -1677,6 +1686,7 @@ impl KernelFn {
             allocs: Vec::new(),
             result: None,
             results: Vec::new(),
+            schedule: None,
         }
     }
 
@@ -1705,6 +1715,13 @@ impl KernelFn {
     /// Every value this function returns, in order: [`Self::result`] then [`Self::results`].
     pub fn all_results(&self) -> impl Iterator<Item = u32> + '_ {
         self.result.into_iter().chain(self.results.iter().copied())
+    }
+
+    /// The same kernel with the schedule `schedule` (ROADMAP S2; see [`Self::schedule`]).
+    #[must_use]
+    pub fn with_schedule(mut self, schedule: ScheduleSpec) -> Self {
+        self.schedule = Some(Box::new(schedule));
+        self
     }
 
     /// The same kernel with the allocations `allocs`.
@@ -1954,6 +1971,8 @@ pub enum KernelError {
         /// The rule, in words.
         why: &'static str,
     },
+    /// The kernel's [`KernelFn::schedule`] is not well formed (ROADMAP S2): the first violation `check_schedule` found.
+    Schedule(ScheduleError),
     /// A `Store` to a `Constant` allocation.
     WriteToConstant {
         /// The allocation index.
