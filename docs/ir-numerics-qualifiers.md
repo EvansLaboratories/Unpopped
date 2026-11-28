@@ -38,8 +38,9 @@ refused at the plan gate with a typed error naming the child. `Qualified` is not
 that pair is `PlanError::InadmissibleOpAtDtype` with both named. v1 is **f32 / f32-strict compute
 only**, **`Access::Elementwise` with a single output only**, and **not combined with `Cast`/`Bitcast`
 in one op** (the combination is unspecified, so it is a typed decline); f64 has no `ftz` form on the
-targets that have the flag (PTX denormal control for f64 does not exist), and directed f64 rounding
-needs a wider reference than this slice builds. Both are listed in section 8.
+targets that have the flag (PTX denormal control for f64 does not exist). A **kernel** takes a directed
+rounding at f64 (ROADMAP U43: `Add`, `Sub`, `Mul`, `Div`, `Fma`, `Sqrt` under `rz`/`rd`/`ru`, reference
+`numerics_f64`, exact integer arithmetic in a 256-bit frame); a plan still does not (section 8).
 
 ## 3. Rounding mode
 
@@ -180,8 +181,9 @@ change, since every lane's tests are written against this reference.
 
 ## 8. Not in this slice (and why)
 
-- f64 `ftz` (no target form) and f64 directed rounding (needs an exact-residual reference wider than
-  an f64 error-free transform gives for `Div`/`Sqrt`); f16/bf16 compute.
+- f64 `ftz` (no target form, a typed refusal); f64 `approx` (no ulp bound is defined at f64, ROADMAP U43b);
+  f64 directed rounding **in a plan** and its emitter spellings (`__dadd_rn`/`__dmul_rn`/`__ddiv_rn`/`__dsqrt_rn`/
+  `__fma_rn`: ROADMAP U43b); f16/bf16 compute. (The directed f64 reference itself, `numerics_f64`, is built: U43.)
 - Qualifiers on `Unary` ops other than the table (`Exp`, `Sin`, `Tanh`...): `Exp`/`Log`/`Sin`/`Cos`
   have `approx` forms (`__expf`, `__sinf`) whose error is absolute near zeros and large arguments
   and cannot be stated in the section 5 shape; they wait for a bound each, with the domain, from the

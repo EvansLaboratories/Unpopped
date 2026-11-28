@@ -169,13 +169,21 @@ pub(super) fn eval(e: &ScalarExpr, ev: &Eval<'_>) -> Val {
         // flush. f32/f32s compute only; the plan gate rejects the rest.
         ScalarExpr::Qualified(x, n) => {
             assert!(
-                matches!(ev.dtype, ElementKind::F32 | ElementKind::F32Strict),
+                matches!(
+                    ev.dtype,
+                    ElementKind::F32 | ElementKind::F32Strict | ElementKind::F64
+                ),
                 "oracle: Qualified at {:?} (the plan gate rejects this)",
                 ev.dtype
             );
             let (op, kids) = crate::ir::QualOp::of(x).expect(
                 "oracle: Qualified over a non-qualifiable node (the plan gate rejects this)",
             );
+            if ev.dtype == ElementKind::F64 {
+                // f64: a rounding mode only, exact integer reference (ROADMAP U43, `numerics_f64`)
+                let args: Vec<f64> = kids.iter().map(|k| eval(k, ev).f64()).collect();
+                return Val::Float(crate::numerics_f64::eval_qualified_f64(op, *n, &args));
+            }
             let args: Vec<f32> = kids
                 .iter()
                 .map(|k| round_to_compute(eval(k, ev).f64(), ev.dtype) as f32)

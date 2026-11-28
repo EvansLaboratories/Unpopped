@@ -402,7 +402,7 @@ pub(crate) fn check_qualified_admissibility(
     let ill = |detail: String| Err(PlanError::InadmissibleOpAtDtype { dtype, detail });
     if !matches!(dtype, ElementKind::F32 | ElementKind::F32Strict) {
         return ill(format!(
-            "op '{}': rounding/ftz/approx qualifiers need f32/f32s compute in v1 (f64 has no              ftz form and no exact reference for directed rounding yet)",
+            "op '{}': rounding/ftz/approx qualifiers need f32/f32s compute in a plan in v1 (a kernel takes a directed rounding at f64, ROADMAP U43; a plan waits on the emitters' f64 spellings, and f64 has no ftz form)",
             op.name
         ));
     }
