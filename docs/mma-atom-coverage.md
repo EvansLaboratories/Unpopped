@@ -13,14 +13,14 @@ State of the dense NVIDIA `mma.sync.aligned` shapes as data (`MmaAtom` construct
 | m16n8k4, k8, k16 | f64 -> f64 | done (#485) | `mma_f64.rs`; 9.7.16.5.6, .7, .8 (k16: Figures 83, 85, 86 pp. 564-567) |
 | m16n8k32 | s8 -> s32 | done (earlier) | `mma.rs` |
 | m16n8k32 | u8, s8/u8 mixed -> s32; e4m3, e5m2 incl. A != B -> f32 | done (#484) | `mma_sm80_8bit.rs`; 9.7.16.5.10 pp. 572-576 |
-| m16n8k16 | s8, u8, mixed -> s32 | done (#491) | `mma_sm80_8bit.rs`; 9.7.16.5.9 pp. 568-571 |
-| m8n8k16 | u8/s8 -> s32 | TODO, unblocked | 9.7.16.5.3 (section only) |
-| m8n8k4 | f16 -> f16/f32 (`.row`/`.col` variants) | TODO, unblocked | 9.7.16.5.1 (section only) |
-| m16n8k16 | e4m3, e5m2 -> f16/f32 | TODO, single source (PTX only; CUTLASS not read) | 9.7.16.5.9 |
-| m8n8k32, m16n8k32, m16n8k64 | u4/s4 -> s32 | TODO, unblocked (`S4`/`U4` exist in the vocab; element kind to confirm) | 9.7.16.5.4, .11 |
+| m16n8k16 | s8, u8, mixed -> s32 | in review (#491); single source | `mma_sm80_8bit.rs`; 9.7.16.5.9 pp. 568-571 |
+| m8n8k16 | u8/s8, mixed -> s32 | in review (#494); single source | 9.7.16.5.3, Figures 59-61 pp. 540-542 |
+| m8n8k4 | f16 -> f16/f32 (`.row`/`.col` variants) | TODO (scheduled, ranked last): f16 m8n8k4: four independent 8x8x4 MMAs per warp, not one: needs a `groups` field (or a quad-pair lane rule) on `MmaAtom`: design note owed; DECLINED BY NAME in the interim | 9.7.16.5.1 (pp. 531-536) |
+| m16n8k16 | e4m3, e5m2 incl. A != B -> f32 | in review (#497); single source (PTX only); the f16-accumulator form is not built | 9.7.16.5.9, Figures 87-89 pp. 568-571 |
+| m8n8k32, m16n8k32, m16n8k64 | u4/s4, mixed -> s32 | in review (#495); single source; placement-tested only until the sub-byte private-store change merges (the oracle could not fill an I4/U4 fragment), then oracle runs are owed | 9.7.16.5.4 pp. 542-545; .10 pp. 571-575; .11 pp. 577-582 |
 | m8n8k128, m16n8k128, m16n8k256 | b1 -> s32 (`.and` / `.xor` + popc) | HELD: a `bit_op: Option<BitOp{And,Xor}>` field on the `non_exhaustive` `MmaAtom` is additive (one atom type); the atoms wait on the bit-op hold (no packed/vector popc without a re-read, US10452398B2) until `patents-2` reads it; design only | 9.7.16.5.5, .12, .13 |
-| m16n8k32 | e3m2, e2m3, e2m1 -> f32 | TODO, unblocked: `ElementKind` already has `F6E2M3`, `F6E3M2`, `F4E2M1` (`element.rs`); check each dtype against the atom's accumulate rule | 9.7.16.5.10 |
-| m16n8k32, m16n8k64 | block scale, `.ue8m0` / `.ue4m3` | TODO: `ElementKind::F8E8M0` exists and the oracle `MmaAtom` carries block + `ScaleA`/`ScaleB` extras (`kernel_mma.rs`); the F8E8M0 decode (`unpopped-leaves`, commit 26b7800c) is vocab, not a blocker for the atom data; check main before the oracle run | 9.7.16.3 |
+| m16n8k32 | e3m2, e2m3, e2m1 -> f32 | in review (#496); single source; e2m1 runs in the oracle; e3m2/e2m3 placement-only (F6 declined by name until the oracle holds a 6-bit element); the `kind::f8f6f4` pairings across the five types beyond A = B are not built | 9.7.16.5.10 Figures 91, 93-95 |
+| m16n8k32 mxf8f6f4, m16n8k64 mxf4nvf4 | block scale `ue8m0` / `ue4m3`, f32 | in review (#499); SINGLE source (CUTLASS `mma_traits_sm120.hpp` at 5c179ede); PTX Figures 46-48 (images, printed pp. 516-517) unread: a person should read them; selectors fixed at 0; placement-only | 9.7.16.3 |
 | all `mma.sp` shapes | sparse A | HELD (no sparse atoms) | 9.7.16.6 |
 | wmma m16n16k16, m8n32k16, m32n8k16 | f16, bf16 | NOT an atom: PTX 9.7.16.4.1 leaves the fragment layout unspecified; modelled as an opaque tile (T2 `TileMma`), not an `MmaAtom` | 9.7.16.4 (p. 518 on) |
 | wmma | u8/s8, u4/s4, b1, tf32 | not expressible as a T2 tile today: a tile's element must be F16, BF16, F32 or F64 (`kernel_check/tile.rs`) | 9.7.16.4 |
