@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.30` — feat, a directed rounding at f64 in a kernel (ROADMAP U43): `numerics_f64` and the oracle
+
+A `Qualified` `Add`, `Sub`, `Mul`, `Div`, `Fma` or `Sqrt` over **f64** under `TowardZero`, `TowardNegInf` or `TowardPosInf` now passes `check_kernel` and runs in the oracle. The reference is the new `unpopped::numerics_f64` (`directed_f64`, `eval_qualified_f64`): exact integer arithmetic in a 256-bit frame and ONE directed rounding, independent of the host rounding mode, checked bit for bit against 734 rows of an independent Python exact-rational generator (`tools/gen_f64_directed_vectors.py`; subnormal results, overflow per IEEE 754 7.4, exact cancellation and signed zero included). `ftz` and `approx` at f64 and the half types stay a named `TypeError::IllegalQualifier`; a plan with an f64 qualifier is still refused at the plan gate; `unpopped-cpu-c` declines it by name. Emitters: an emitter with no f64 directed spelling must decline such a kernel by name (docs/emitter-migration-b1.md, U43). Additive. No operand-sign `RoundMode`. Verification: touched tests only (numerics_f64_directed, kernel_qualified_dtype, numerics_qualifiers, numerics_spelling, changelog_fragments, kernel_f128, union_batch1_dtypes, cpu-c kernel_qualified_f64_declines), clippy and fmt; the full gate was NOT run (oracle/** path).
+
+---
+
 ## `0.63.29` — docs, ROADMAP U72 to U75, the tile rules the WMMA and Apple shapes cannot meet yet
 
 ROADMAP gains U72 (an `F16` accumulator for `TileMma`), U73 (TF32 as a tile element), U74 (integer `TileMma`, `s8`/`u8`/`s4`/`u4` into `s32`) and U75 (1-bit tiles and atoms: the atoms are built, the packed/vector popc statement stays held, US10452398B2), from the coverage table of `unpopped-mma`'s #525 (`docs/mma-atom-coverage.md`). Each names its path; none is declined for lack of a consumer. No code change.
