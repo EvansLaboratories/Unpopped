@@ -14,6 +14,7 @@ implementation does **not** block the release: the oracle declines it by name un
 - **Accuracy tiers** come from NVIDIA's public CUDA C++ Programming Guide, appendix "5.6. Floating-Point Computation" (page dated "Last updated on Oct 31, 2026"), tables 53-62, **read by a delegated fetch
   agent that copied tables 54-62 verbatim and could only partly read table 53; I did not read the page myself**. Table 62 says its ULP figures are the maximum observed difference from the correctly rounded result and come from testing, **not
   guarantees**. Where no number was read, **`contract.rs` gets no number** (the tier is absent, never a guess).
+- **Second read, by a different method (pm-kernels, 2026-11-28):** the page's static HTML (247,341 bytes, "Last updated on Oct 31, 2026") downloaded and stripped of tags: **every tier below matches the raw rows**, and the table-53 zero-ULP sentence for `remainder` and `fdim` is readable there. The `contract.rs` row comments cite: "CUDA Programming Guide 5.6 (v13.5 page dated 2026-10-31), Table N; observed maxima, not guarantees; read raw HTML 2026-11-28", and carry the guide's sentence verbatim: the figures are "the maximum observed ... derived from extensive, though not exhaustive, testing. Therefore, they are not guaranteed".
 
 ## The set, with kind, plan-layer name, tier and oracle
 
@@ -24,9 +25,9 @@ implementation does **not** block the release: the oracle declines it by name un
 | `BinaryOp::Hypot` | `hypotf`/`hypot` | `BinaryKind::Hypot` | 3 / 2 | 55 Power Functions | computes (platform `hypot`; **not independent**, a libm) |
 | `BinaryOp::Rhypot` | `rhypotf`/`rhypot` (device-only) | none | 2 / 1 | 62 | computes as `1/hypot` (two roundings: stated) |
 | `BinaryOp::Ldexp` | `ldexp`, `scalbn`, `scalbln` | `BinaryKind::Ldexp` | **0 (exact)**: the guide's sentence "all the following functions have a maximum ULP error of zero" | 60 Floating-Point Manipulation | computes (exact scaling) |
-| `BinaryOp::RemIeee` | `remainderf`/`remainder` (IEEE, **not** the floored plan `Remainder`) | none | **NOT READ** (table 53 heading unreadable) | 53 | computes (exact: `x - n*y`, `n` = x/y rounded to even) |
-| `BinaryOp::Fdim` | `fdimf`/`fdim` | none | **NOT READ** | 53 | computes (`max(x - y, 0)`, one rounding) |
-| `BinaryOp::Jn`, `Yn` | `jnf`/`jn`, `ynf`/`yn` | none | absolute error only (`2.2e-6` float / `5e-12` double at n = 128; `yn` also `ceil(2 + 2.5n)` ULP for `|x| < n` float): **no ULP tier outside that domain** | 62 | **NotYet** |
+| `BinaryOp::RemIeee` | `remainderf`/`remainder` (IEEE, **not** the floored plan `Remainder`) | none | **0 (table-wide statement)**: Table 53's lead sentence "All the following functions have a maximum ULP error of zero"; no per-row figure; the guide computes it as `x - rint(x/y)*y` | 53 "Basic Operations" | computes (exact: `x - n*y`, `n` = x/y rounded to even) |
+| `BinaryOp::Fdim` | `fdimf`/`fdim` | none | **0 (table-wide statement)**, as `remainder` | 53 | computes (`max(x - y, 0)`, one rounding) |
+| `BinaryOp::Jn`, `Yn` | `jnf`/`jn`, `ynf`/`yn` | none | `jn`: absolute error only at n = 128 (`2.2e-6` float / `5e-12` double); `yn`: float `ceil(2 + 2.5n)` ULP for `|x| < n`, else absolute `2.2e-6`; double absolute `5e-12` for `|x| > 1.5n` and **no double ULP figure for `|x| <= 1.5n`: not stated** | 62 | **NotYet** |
 | `UnaryOp::J0`, `J1`, `Y0`, `Y1` | `j0f`... | none | 9 / 7 ULP for `|x| < 8`, absolute error beyond: ULP tier **only** on `|x| < 8` | 62 | **NotYet** |
 | `UnaryOp::Erfinv` | `erfinvf` | `UnaryKind::Erfinv` | 2 / 5 | 62 | **NotYet** |
 | `UnaryOp::Erfcinv` | `erfcinvf` | none | 4 / 6 | 62 | **NotYet** |
@@ -39,7 +40,7 @@ implementation does **not** block the release: the oracle declines it by name un
 
 Not members (separate rows, agreed): two-result functions (`sincos`, `sincospi`, `frexp`, `modf`, `remquo`), three-or-more-operand functions (`norm3d`, `norm4d`, `norm`, `rnorm*`), the integer-result casts (`lrint`, `lround`, `llrint`, `llround`).
 
-**One design question the table forces.** `ldexp`/`scalbn`/`scalbln`, `jn` and `yn` take an **integer** second argument, and `BinaryOp` has one element type. Options: (a) a new mixed-type binary node, a larger change than this release; (b) the second operand is the same float type and **must hold an integer value**, the walker casting the integer argument (exact for `|n| <= 2^24` in `f32`, `2^53` in `f64`), the oracle refusing a non-integer exponent with a trap. **Recommendation: (b)**, with the exact domain stated in the member's doc and a decline by name when the walker cannot prove the cast exact. (pm-kernels to confirm.)
+**One design question the table forces.** `ldexp`/`scalbn`/`scalbln`, `jn` and `yn` take an **integer** second argument, and `BinaryOp` has one element type. Options: (a) a new mixed-type binary node, a larger change than this release; (b) the second operand is the same float type and **must hold an integer value**, the walker casting the integer argument (exact for `|n| <= 2^24` in `f32`, `2^53` in `f64`), the oracle refusing a non-integer exponent with a trap. **Recommendation: (b)**, with the exact domain stated in the member's doc and a decline by name when the walker cannot prove the cast exact. **This is an IR-shape decision for the PM (pm-kernels takes it); neither is chosen here.**
 
 ## What the release touches
 
