@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.64.4` — additive: `DynLayout`, `AllocDecl::dyn_layout`, `KernelTrap::DynLayout`, `LayoutError::UnboundParam`
+
+A layout whose shape and stride leaves may be scalar parameters of the kernel (CuTe rows 3 and 66, `docs/design-dynamic-layout.md`). `unpopped_vocab::layout_algebra::{DynLayout, DynTuple, Dim}`: a family of static layouts indexed by a launch's arguments; `DynLayout::bind` returns an ordinary `Layout`, so the layout algebra stays static (there is no `composition` or `zipped_divide` on an unbound layout). `AllocDecl::dyn_layout` (canonical text `(?0,?1):(?2,1)`, absent when none, so a kernel without one keeps its text and revision hash). `check_kernel` checks the static half (a `Shared` allocation, one layout not two, every parameter an integer scalar parameter); the oracle binds at launch and runs the existing enumerating checker on the bound layout (size equals the extent, range, injective), trapping with the new non_exhaustive `KernelTrap::DynLayout` before the first statement. `unpopped-cpu-c` declines a `dyn_layout` by name. `AllocDecl`, `KernelTrap` and `LayoutError` are non_exhaustive, so additive; a swizzle on a `DynLayout` is refused (not offered). Patent: a layout type and a launch-time check, no statement; no patent read is claimed.
+
+---
+
 ## `0.64.3` — tests, residue tiling refusal by name and composition_within bounds
 
 The residue-tiling finding is split: `zipped_divide` still accepts a non-dividing tile (pinned), while `local_tile`, `inner_partition`, `outer_partition` and `local_partition` refuse it with `NotDivisible`, asserted by an exhaustive e1..24 x t1..8 sweep. `composition_within` is pinned: it accepts exactly the 972 in-extent cases and refuses the other 6084 with `ExceedsExtent`. Verified by two seeded mutants (threshold off by one, divisibility check removed), both caught by value.
