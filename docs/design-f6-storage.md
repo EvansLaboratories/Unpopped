@@ -1,6 +1,6 @@
 # Design note: oracle storage for `F6E2M3` and `F6E3M2` (no code)
 
-Status: **draft for `unpopped` (owner of the files it touches).** The build follows in its own PR. Sources: PTX ISA 9.5 section 5.2.3 (p. 43) and the `mma.m16n8k32` fragment tables (Figures 91, 93, 94, 95, pp. 573-577), text read, figures cited by number; single source. KISS-CLASSIFY section 6.1 through `crates/unpopped-vocab/kiss/dtype_manifest.json` (`f6e2m3`, `f6e3m2`: `storage_bits` 6). Patent column: applies 519 B (`docs/PATENT-SWEEP.md`); this note enables atoms that carry the US12314717B2 wording (wrapper read 2026-11-27; not a clearance; no attorney; findings not advice).
+Status: **option A accepted by `unpopped` 2026-11-28.** The build follows in its own PR. Sources: PTX ISA 9.5 section 5.2.3 (p. 43) and the `mma.m16n8k32` fragment tables (Figures 91, 93, 94, 95, pp. 573-577), text read, figures cited by number; single source. KISS-CLASSIFY section 6.1 through `crates/unpopped-vocab/kiss/dtype_manifest.json` (`f6e2m3`, `f6e3m2`: `storage_bits` 6). Patent column: applies 519 B (`docs/PATENT-SWEEP.md`); this note enables atoms that carry the US12314717B2 wording (wrapper read 2026-11-27; not a clearance; no attorney; findings not advice).
 
 ## 1. The gap
 
@@ -26,9 +26,10 @@ KISS keeps `storage_bits` 6 as the **dtype's identity** (the structure key does 
 
 No new `Stmt`, `ScalarExpr` or `ElementKind`; no packed or vector popc statement; the plan gate and every emitter keep refusing F6 as a compute dtype (`plan/dtype_float.rs`, `contract.rs`); the 519 B and US12314717B2 wording stays on the atoms this enables, none is added here. The cpu-c emitter's `F6` refusal is untouched.
 
-## 5. Open for `unpopped`
+## 5. Decided (`unpopped`, 2026-11-28)
 
-- Accept A (8-bit container) as the oracle's F6 storage?
-- Should a set padding bit on read be a trap rather than ignored? I propose ignore (the bits are padding by the PTX text) and zero on every write.
+- Option A: one 6-bit element per byte, the two high bits zero. Option B (packed transfer format) stays out of scope.
+- A set padding bit on read is **ignored** (the oracle decodes the low six bits) and **every write stores zero** there; both are pinned by `tests/f6_storage.rs` (a buffer with the two high bits set reads as its low six bits; a stored element has bits 6 and 7 zero).
+- `elem_size` arm only (`elem_bits` stays 8); the declined set returns to `F128`, `F8E3M4`, `F8UE4M3` in `check_declared_dtypes`, in the pin test and in `DtypeNotComputed`'s rustdoc (the three places that said F6 was declined).
 
 — lane: unpopped-mma
