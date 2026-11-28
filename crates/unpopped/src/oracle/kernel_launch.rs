@@ -509,7 +509,9 @@ fn bind_dyn_layouts(k: &KernelFn, args: &[KernelArg]) -> Result<KernelFn, Kernel
         let n = u32::try_from(alloc_len(k, args, a)?)
             .map_err(|_| bad("the allocation's extent does not fit a 32-bit count"))?;
         if layout.size() != i64::from(n) {
-            return Err(bad("the bound layout's size must equal the allocation's extent"));
+            return Err(bad(
+                "the bound layout's size must equal the allocation's extent",
+            ));
         }
         crate::kernel_check::check_layout_offsets(&layout, n).map_err(bad)?;
         out.allocs[i].layout = Some(crate::exec::AllocLayout::new(layout));

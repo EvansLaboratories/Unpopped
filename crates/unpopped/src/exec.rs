@@ -352,7 +352,9 @@ mod dyn_layout_text {
         }
     }
 
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<DynLayout>, D::Error> {
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<DynLayout>, D::Error> {
         Option::<String>::deserialize(d)?
             .map(|t| t.parse().map_err(serde::de::Error::custom))
             .transpose()
