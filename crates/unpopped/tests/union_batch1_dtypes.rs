@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! Union batch 1 (KISS 0.24.0, board 501 and 515; plan E1a): the seven new dtype rows are storage and key identity ONLY. Each has
-//! its token, width and kind (pinned against KISS's manifest in `unpopped-vocab`), survives the text codec, and is **declined by
-//! name** wherever a kernel would compute it: `check_kernel` refuses a kernel that declares one (`DtypeNotComputed`), and a `Cast`
-//! into one is still the typed `IllegalCast`. Before this guard the oracle ran a `Load` of an `F128`/`I128`/`U128`/`F8*` buffer
+//! Union batch 1 (KISS 0.24.0, board 501 and 515; plan E1a): the seven new dtype rows. Each has its token, width and kind (pinned
+//! against KISS's manifest in `unpopped-vocab`) and survives the text codec. Three (`F128`, `F8E3M4`, `F8UE4M3`) are **declined by
+//! name** wherever a kernel would compute them: `check_kernel` refuses a kernel that declares one (`DtypeNotComputed`); the four wide
+//! integers are computed since 0.61.3 (E2). A `Cast` into any of the seven is still the typed `IllegalCast`. Before this guard the oracle ran a `Load` of an `F128`/`I128`/`U128`/`F8*` buffer
 //! without holding a value of the type and panicked on `I256`/`U256` (probed 2026-11-26): the silent default this repository refuses.
 //! Each refusal sits beside its accepted control.
 
@@ -166,6 +166,56 @@ fn a_kernel_may_declare_a_wide_integer() {
             "{name} compute type"
         );
     }
+}
+
+#[test]
+fn the_declined_set_is_exactly_f128_and_the_two_fp8_rows() {
+    // the one place the set is pinned: a change to which dtypes `check_kernel` computes flips this test
+    let declined: Vec<ElementKind> = ROWS
+        .into_iter()
+        .map(|(dt, _, _)| dt)
+        .filter(|dt| check_kernel(&load_from(*dt, ElementKind::F32)) == refused(*dt))
+        .collect();
+    assert_eq!(
+        declined,
+        vec![ElementKind::F128, ElementKind::F8E3M4, ElementKind::F8UE4M3]
+    );
+    // every other row passes the same kernel
+    for (dt, name, _) in ROWS {
+        if !declined.contains(&dt) {
+            assert_eq!(check_kernel(&load_from(dt, dt)), Ok(()), "{name}");
+        }
+    }
+}
+
+#[test]
+fn a_6_bit_float_is_refused_by_name_because_the_oracle_has_no_storage_for_it() {
+    // probed 2026-11-27 by unpopped-mma: `check_kernel` admitted a `Private` allocation of `F6E2M3`/`F6E3M2` with a `Store` of a
+    // `ClampFinite` cast and a `Load`, and the oracle PANICKED ("unsupported dtype F6E2M3 (v1)"): an oracle never panics on a
+    // kernel the checker accepted. Declined by name until the oracle holds a 6-bit element (packing is a design point).
+    for dt in [ElementKind::F6E2M3, ElementKind::F6E3M2] {
+        let with_alloc =
+            kernel(ElementKind::I32, vec![], vec![], vec![]).with_allocs(vec![AllocDecl::new(
+                "frag",
+                MemorySpace::Private,
+                dt,
+                Extent::Static(4),
+            )]);
+        assert_eq!(check_kernel(&with_alloc), refused(dt), "{dt:?} allocation");
+        assert_eq!(
+            check_kernel(&load_from(dt, ElementKind::F32)),
+            refused(dt),
+            "{dt:?} buffer parameter"
+        );
+    }
+    // the control: the 4-bit float the oracle does hold still passes
+    let fp4 = kernel(ElementKind::I32, vec![], vec![], vec![]).with_allocs(vec![AllocDecl::new(
+        "frag",
+        MemorySpace::Private,
+        ElementKind::F4E2M1,
+        Extent::Static(4),
+    )]);
+    assert_eq!(check_kernel(&fp4), Ok(()));
 }
 
 #[test]
