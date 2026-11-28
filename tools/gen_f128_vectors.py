@@ -200,64 +200,99 @@ def rand_bits(rng):
 SPECIALS = [0, 1 << 127, 1, 2**FRAC_BITS - 1, (BIAS << FRAC_BITS), (BIAS << FRAC_BITS) | (1 << 127), INF, INF | (1 << 127), QNAN, MAXFIN]
 
 
-def main():
-    rng = Rng(0xE3128)
-    rows = []
+def operand_pairs(rng):
+    """Every pair of specials, random pairs, and near-cancellation / tie pairs (a and b of the same binade, opposite signs)."""
     pairs = [(a, b) for a in SPECIALS for b in SPECIALS]
     pairs += [(rand_bits(rng), rand_bits(rng)) for _ in range(70)]
-    # near-cancellation and tie cases: a and b of the same binade
     for _ in range(20):
         e = rng.randrange(1, 2**EXP_BITS - 1)
         f = rng.getrandbits(FRAC_BITS)
         a = (e << FRAC_BITS) | f
         b = (1 << 127) | (e << FRAC_BITS) | (f ^ rng.getrandbits(8))
         pairs.append((a, b))
-    for a, b in pairs:
-        for name in ("add", "sub", "mul", "div"):
-            rows.append((name, a, b, op(name, a, b)))
-    conv = []
+    return pairs
+
+
+def narrowing_rows(pairs):
+    """tof64 / tof32 and the five integer roundings of the first operands."""
+    out = []
     for a, _ in pairs[:45]:
         d = decode(a)
-        conv.append(("tof64", a, 0, 0xFFFFFFFFFFFFFFFF if False else (0x7FF8000000000000 if d[0] == "nan" else (enc_signed(a >> 127, d, 11, 52) if d[0] == "fin" else (0x7FF0000000000000 | (1 << 63 if d[1] < 0 else 0))))))
-        conv.append(("tof32", a, 0, 0x7FC00000 if d[0] == "nan" else (enc_signed(a >> 127, d, 8, 23) if d[0] == "fin" else (0x7F800000 | (1 << 31 if d[1] < 0 else 0)))))
+        if d[0] == "nan":
+            f64, f32 = 0x7FF8000000000000, 0x7FC00000
+        elif d[0] == "fin":
+            f64, f32 = enc_signed(a >> 127, d, 11, 52), enc_signed(a >> 127, d, 8, 23)
+        else:
+            f64 = 0x7FF0000000000000 | (1 << 63 if d[1] < 0 else 0)
+            f32 = 0x7F800000 | (1 << 31 if d[1] < 0 else 0)
+        out.append(("tof64", a, 0, f64))
+        out.append(("tof32", a, 0, f32))
         for mode in ("trunc", "floor", "ceil", "rne", "rna"):
             r = to_int(a, mode)
             if r is not None:
-                conv.append(("int_" + mode, a, 0, r))
-    # integer roundings need exact ties (n + 1/2) and values just either side of one, which random patterns almost never are
-    halves = [Fraction(2 * k + 1, 2) for k in range(-6, 6)] + [Fraction(2 * k + 1, 2) + eps for k in (-3, 2) for eps in (Fraction(1, 2**100), -Fraction(1, 2**100))]
+                out.append(("int_" + mode, a, 0, r))
+    return out
+
+
+def tie_rows(rng):
+    """Integer roundings at exact ties (n + 1/2) and a hair either side of one, and f32 roundings a hair either side of an f32 tie
+    (a tie in f64, so a path through f64 would round by the tie rule instead of by the side the value is on)."""
+    out = []
+    eps = Fraction(1, 2**100)
+    halves = [Fraction(2 * k + 1, 2) for k in range(-6, 6)] + [Fraction(2 * k + 1, 2) + e for k in (-3, 2) for e in (eps, -eps)]
     for x in halves:
         bits = encode(x)
         for mode in ("trunc", "floor", "ceil", "rne", "rna"):
-            conv.append(("int_" + mode, bits, 0, to_int(bits, mode)))
-    # f32 rounding must be ONE rounding from the exact binary128 value: a value a hair either side of an f32 tie is a tie in f64, so a path
-    # through f64 would round it by the tie rule (to even) instead of by the side it is on
+            out.append(("int_" + mode, bits, 0, to_int(bits, mode)))
     for _ in range(40):
         f32 = (rng.getrandbits(1) << 31) | (rng.randrange(1, 254) << 23) | rng.getrandbits(23)
         lo = decode(f32, 8, 23)[1]
         hi = decode(f32 + 1 if f32 & 0x7FFFFFFF < 0x7F7FFFFF else f32, 8, 23)[1]
         mid = (lo + hi) / 2
-        for eps in (Fraction(1, 2**100), -Fraction(1, 2**100)):
-            x = mid * (1 + eps)
-            conv.append(("tof32", encode(x), 0, enc_signed(1 if x < 0 else 0, ("fin", x), 8, 23)))
+        for e in (eps, -eps):
+            x = mid * (1 + e)
+            out.append(("tof32", encode(x), 0, enc_signed(1 if x < 0 else 0, ("fin", x), 8, 23)))
+    return out
+
+
+def widened(bits, ebits, fbits):
+    """The binary128 of an f64 / f32 bit pattern (exact; NaN is the canonical quiet NaN)."""
+    d = decode(bits, ebits, fbits)
+    if d[0] == "nan":
+        return 0x7FFF8000000000000000000000000000
+    if d[0] == "fin":
+        return enc_signed(bits >> (ebits + fbits), d, 15, 112)
+    return INF | (1 << 127 if d[1] < 0 else 0)
+
+
+def widening_rows(rng):
+    out = []
     for _ in range(50):
         x = rng.choice([rng.getrandbits(64), rng.getrandbits(52), rng.getrandbits(23)])
         sign = rng.getrandbits(1)
         e = rng.randrange(0, 2047) if rng.random() < 0.8 else rng.choice([0, 2046, 2047])
         bits64 = (sign << 63) | (e << 52) | (x & (2**52 - 1))
-        d = decode(bits64, 11, 52)
-        res = 0x7FFF8000000000000000000000000000 if d[0] == "nan" else (enc_signed(bits64 >> 63, d, 15, 112) if d[0] == "fin" else (INF | (1 << 127 if d[1] < 0 else 0)))
-        conv.append(("fromf64", bits64, 0, res))
+        out.append(("fromf64", bits64, 0, widened(bits64, 11, 52)))
         bits32 = (sign << 31) | (rng.randrange(0, 256) << 23) | (x & (2**23 - 1))
-        d = decode(bits32, 8, 23)
-        res = 0x7FFF8000000000000000000000000000 if d[0] == "nan" else (enc_signed(bits32 >> 31, d, 15, 112) if d[0] == "fin" else (INF | (1 << 127 if d[1] < 0 else 0)))
-        conv.append(("fromf32", bits32, 0, res))
-    print("# Generated by tools/gen_f128_vectors.py (seed 0xE3128): an independent Python reference, UNVERIFIED against a third-party library.")
-    print("# op a b expected: bit patterns in hex without leading zeros. add/sub/mul/div: binary128 (an expected NaN is the canonical quiet NaN 0x7fff8000...0).")
-    print("# tof64/tof32: the f64/f32 bits of a (RNE; NaN is the canonical quiet NaN); int_<mode>: the 256-bit two's complement of a rounded to an")
-    print("# integer under trunc/floor/ceil/rne/rna (only rows with |a| < 2^255); fromf64/fromf32: a is the f64/f32 bits, the expected is binary128.")
-    for name, a, b, r in rows + conv:
+        out.append(("fromf32", bits32, 0, widened(bits32, 8, 23)))
+    return out
+
+
+HEADER = """# Generated by tools/gen_f128_vectors.py (seed 0xE3128): an independent Python reference, UNVERIFIED against a third-party library.
+# op a b expected: bit patterns in hex without leading zeros. add/sub/mul/div: binary128 (an expected NaN is the canonical quiet NaN 0x7fff8000...0).
+# tof64/tof32: the f64/f32 bits of a (RNE; NaN is the canonical quiet NaN); int_<mode>: the 256-bit two's complement of a rounded to an
+# integer under trunc/floor/ceil/rne/rna (only rows with |a| < 2^255); fromf64/fromf32: a is the f64/f32 bits, the expected is binary128."""
+
+
+def main():
+    rng = Rng(0xE3128)
+    pairs = operand_pairs(rng)
+    rows = [(name, a, b, op(name, a, b)) for a, b in pairs for name in ("add", "sub", "mul", "div")]
+    rows += narrowing_rows(pairs) + tie_rows(rng) + widening_rows(rng)
+    print(HEADER)
+    for name, a, b, r in rows:
         print(f"{name} {a:x} {b:x} {r:x}")
+
 
 if __name__ == "__main__":
     main()
