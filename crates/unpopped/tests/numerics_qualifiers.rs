@@ -758,12 +758,26 @@ fn a_qualifier_needs_f32_operands_at_the_type_check_for_every_other_float() {
         infer(&q.0, ElementKind::F32Strict),
         Ok(ElementKind::F32Strict)
     );
-    // f64 has no ftz form and no reference for a directed rounding; the half types compute through f32: all are named errors, not a
-    // panic in the oracle (`oracle/expr_eval.rs`, which asserts f32/f32s).
-    for dtype in [ElementKind::F64, ElementKind::F16, ElementKind::Bf16] {
+    // ROADMAP U43: f64 types under a directed rounding (an exact integer reference, `numerics_f64`); a PLAN still does not admit it
+    // (`plan/admissibility.rs`), so the oracle never sees one from a plan. The half types compute through f32: a named error, not a
+    // panic in the oracle (`oracle/expr_eval.rs`).
+    assert_eq!(infer(&q.0, ElementKind::F64), Ok(ElementKind::F64));
+    for dtype in [ElementKind::F16, ElementKind::Bf16] {
         assert!(
             matches!(infer(&q.0, dtype), Err(TypeError::IllegalQualifier { .. })),
             "{dtype:?}"
         );
     }
+    // f64 has no ftz form: the same operation with ftz is refused by name
+    let flush = ScalarExpr::Qualified(
+        Box::new((input(0) + input(1)).0),
+        Numerics {
+            ftz: true,
+            ..Numerics::default()
+        },
+    );
+    assert!(matches!(
+        infer(&flush, ElementKind::F64),
+        Err(TypeError::IllegalQualifier { .. })
+    ));
 }

@@ -100,6 +100,7 @@ mod mma_m8n8k4;
 mod mma_sm80;
 mod mma_sm80_8bit;
 pub mod numerics;
+pub mod numerics_f64;
 pub mod optimize;
 pub mod oracle;
 pub mod pattern;
