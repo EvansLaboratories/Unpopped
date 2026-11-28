@@ -15,6 +15,18 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.23` — U68, Fp8E4M3FN and Fp8E5M2 are kernel-layer Cast endpoints
+
+`types::is_cast_float_endpoint` lists the two OCP FP8 formats and `float_format` gives `Fp8E5M2` its `(5, 2)` layout, so a kernel `Cast` to and from `F32` (and the other float and integer endpoints) is defined: `Fp8E5M2` goes through the IEEE-shaped encoder (bias 15, infinity and NaN, largest finite `0x7B` = 57344; `ClampFinite` stops at 57344 instead of the infinity), and `Fp8E4M3FN` through a new `cast_ref::encode_e4m3fn` (bias 7, no infinity, one NaN pattern per sign `S.1111.111`, largest finite `0x7E` = 448, smallest subnormal `0x01` = 2^-9). For `Fp8E4M3FN`, `Wrap` makes an overflow (an infinity included) the NaN of its sign, `ClampFinite` the largest finite value of its sign, and a directed rounding mode pointing away from the overflow stops at 448; a NaN keeps its sign. **The IR rule, UNVERIFIED against a vendor conversion** (a vendor instruction that differs is the vendor's to declare). A kernel could already load and store 8-bit float buffers byte for byte; only the `Cast` was `IllegalCast`. Additive: a refusal loosened. `unpopped-cpu-c` has no spelling and declines a kernel with such a `Cast` by name. Verified by `tests/kernel_fp8_cast.rs` (hand-worked codes, all 256 codes decoded by the oracle's own independent FP8 decoder and re-encoded by `cast_ref`, ties-to-even, overflow, the directed modes; 5 seeded mutants caught) and cpu-c's `kernel_fp8_cast_declines.rs`.
+
+---
+
+## `0.63.22` — additive: NVIDIA mma.sync 1-bit atoms m8n8k128, m16n8k128, m16n8k256 with `.and.popc` / `.xor.popc` (U7 theme 3)
+
+`MmaAtom::nvidia_{m8n8k128,m16n8k128,m16n8k256}_b1_s32(BitOp)` as data, plus the additive `BitOp { And, Xor }` and `MmaAtom::with_bit_op` / `bit_op()` (`None` for every existing atom, `MmaAtom` is `non_exhaustive`); the oracle counts the set bits of `A op B` into one s32 per C element and the atoms run in it. Layouts from PTX ISA 9.5 sections 9.7.16.5.5, 9.7.16.5.12, 9.7.16.5.13 (single source). Patent: outside as read for the b1 mma atom (US10452398B2 cl 1: per-field vector popcount decoder, packed destination register: the atom accumulates popc into one s32 per C element); the packed/vector popc statement stays held; findings not advice. Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+---
+
 ## `0.63.21` — docs: design note `docs/design-f6-storage.md` for oracle storage of F6E2M3 and F6E3M2 (8-bit container)
 
 Docs only. The oracle has no container for a 6-bit float, which is why `check_kernel` declines them by name and the e3m2/e2m3 `mma.sync` atoms are placement-only. Proposal: one element per byte, the six value bits low and the two high bits zero, as PTX ISA 9.5 s5.2.3 (p. 43) and the m16n8k32 fragment tables (Figures 91, 93-95) hold them; packed 6-bit stays a bulk-copy format. Single source. Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.

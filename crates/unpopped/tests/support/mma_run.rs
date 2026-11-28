@@ -10,7 +10,7 @@ use unpopped::mma::MmaAtom;
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
 use unpopped::oracle::kernel_launch::run_launch;
-use unpopped_vocab::ElementKind::{self, Bf16, F16, F32, F64, I4, I8, I32, U4, U8, U32};
+use unpopped_vocab::ElementKind::{self, B1, Bf16, F16, F32, F64, I4, I8, I32, U4, U8, U32};
 use unpopped_vocab::{Fp8E4M3FN, Fp8E5M2};
 
 /// `(row, col)` of value `i` of `lane` for operand 0/1/2 = A/B/C.
@@ -114,6 +114,7 @@ pub(crate) fn value(ty: ElementKind, seed: u32, i: u32) -> f64 {
     match ty {
         I8 => f64::from(h % 256) - 128.0,
         U8 => f64::from(h % 256),
+        B1 => f64::from(h % 2),
         // fractions on each fp8 lattice (3 and 2 mantissa bits), so a decode of the wrong format changes the answer
         ElementKind::Fp8E4M3FN => f64::from(h % 31) / 8.0 - 1.875,
         ElementKind::Fp8E5M2 => f64::from(h % 17) / 4.0 - 2.0,
@@ -167,6 +168,7 @@ fn encode(ty: ElementKind, x: f64) -> Vec<u8> {
         return vec![bits.unwrap_or_else(|| panic!("{x} is not a {ty:?} value")) as u8];
     }
     match ty {
+        B1 => vec![x as u8 & 1],
         I8 => (x as i8).to_le_bytes().to_vec(),
         U8 => (x as u8).to_le_bytes().to_vec(),
         I32 => (x as i32).to_le_bytes().to_vec(),
@@ -190,6 +192,18 @@ pub(crate) fn decode(ty: ElementKind, b: &[u8]) -> f64 {
 }
 
 pub(crate) fn buffer(ty: ElementKind, xs: &[f64]) -> TypedBuffer {
+    if ty == B1 {
+        // eight to a byte, lowest bit first (the oracle's sub-byte packing)
+        let bytes: Vec<u8> = xs
+            .chunks(8)
+            .map(|c| {
+                c.iter()
+                    .enumerate()
+                    .fold(0u8, |b, (i, &x)| b | ((x as u8 & 1) << i))
+            })
+            .collect();
+        return TypedBuffer::from_packed_bytes(ty, &[xs.len() as i64], &bytes);
+    }
     if matches!(ty, ElementKind::F4E2M1 | I4 | U4) {
         // two to a byte, low nibble first (the oracle's sub-byte packing)
         let nib: Vec<u8> = xs.iter().map(|&x| encode(ty, x)[0]).collect();
