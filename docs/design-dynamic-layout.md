@@ -158,24 +158,24 @@ stride `{1}`): an affine address `base + i * stride`. A layout's offset (colexic
 passing the bare pointer would **bypass the layout silently**. Today `dyn_layout::admit` refuses by name any kernel with a layout and a call (the `bypasses_the_layout` walker).
 
 **Design (what to build, in order).**
-1. **A layout descriptor beside the buffer, only where needed.** At emit time, over the whole module, find every callee buffer parameter that some call site binds
+1. **Layout parameters beside the buffer, only where needed.** At emit time, over the whole module, find every callee buffer parameter that some call site binds
    to a laid-out allocation (directly or through a nested `CallArg::Buffer` forward). Only those parameters get a companion argument
-   `const unpopped_layout *lay<i>` (a small C struct of the flattened `shape[]`, `stride[]`, `modes`, and the element-form swizzle's `src` mask and `shift`; **XOR-bit data
+   `const unpopped_layout_params *lay<i>` (a small C struct of the flattened `shape[]`, `stride[]`, `modes`, and the element-form swizzle's `src` mask and `shift`; **XOR-bit data
    only**), `NULL` for an identity binding; every other parameter and every other callee is emitted exactly as today. The callee's access through such a parameter calls one
-   inline offset routine over the descriptor (the same arithmetic `dyn_layout::offset_lines` emits for the entry); a forward to a nested callee passes the descriptor on.
-2. **The descriptor is built at the call site from the allocation**: static layouts from constants, a `dyn_layout`'s leaves from the entry's scalar parameters (the same C
+   inline offset routine over the layout parameters (the same arithmetic `dyn_layout::offset_lines` emits for the entry); a forward to a nested callee passes the layout parameters on.
+2. **The layout parameters are built at the call site from the allocation**: static layouts from constants, a `dyn_layout`'s leaves from the entry's scalar parameters (the same C
    expressions `offset_lines` already spells). The launch-time proof (size, range, injectivity, period) stays once, at the top of the entry, exactly where it is.
 3. **Tests (red first):** a module whose callee fills and another that mirrors an allocation under (a) a static layout, (b) a `dyn_layout` over an argument sweep including
-   a refused bind (status 4), (c) a swizzled one, the C against the oracle; mutants: the descriptor dropped (bytes change), one stride leaf of the descriptor wrong, the swizzle
-   XOR in the descriptor path turned into an OR (breaks the bijection), a forward to a nested callee that passes `NULL`.
+   a refused bind (status 4), (c) a swizzled one, the C against the oracle; mutants: the layout parameters dropped (bytes change), one stride leaf of them wrong, the swizzle
+   XOR in the layout-parameter path turned into an OR (breaks the bijection), a forward to a nested callee that passes `NULL`.
 
 **Refusals by name that stay.** A `Private` allocation passed to a callee (already refused: one array per thread has no shared binding); a callee with allocations of its own
 (`a callee with allocations`, unchanged); a layout in a kernel with a Device barrier, a peer access or several devices (unchanged); `Mma`/`MatrixLoad`/`MatrixStore` over a laid-out
 array (they address the storage, not the layout; unchanged); a callee parameter of rank other than 1 bound to an allocation (`alloc_fits`, unchanged).
 
 **Additive.** cpu-c only (the ABI of the generated C is internal to it); no `Stmt`, `ScalarExpr`, `ElementKind`, `ParamKind` or `CallArg` change; the oracle needs none.
-**Patent.** The same conditions as section 8 (pm-kernels' cluster ruling 2026-11-28, findings not advice, not a clearance, outside as read): the descriptor is a small struct of
-integers and XOR-bit constants passed to an offset function: **no lookup table, no tensor-map or descriptor *object* of the hardware kind, no cache of maps, no emitted copy or transfer**.
-If a design needs any of those, stop and ask pm-kernels. (The word "descriptor" here is a C struct of layout integers, not a TMA tensor map.)
+**Patent.** The same conditions as section 8 (pm-kernels' cluster ruling 2026-11-28, findings not advice, not a clearance, outside as read): the layout parameters are a small struct of
+integers and XOR-bit constants passed to an offset function: **no lookup table, no tensor-map or tensor-descriptor object of the hardware kind, no cache of maps, no emitted copy or transfer**.
+If a design needs any of those, stop and ask pm-kernels. (They are named layout parameters, not a descriptor: a C struct of layout integers, **not** a tensor descriptor or TMA map, per pm-kernels' naming note.)
 
 — lane: unpopped-leaves
