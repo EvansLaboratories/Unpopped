@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.64.2` — docs, the oracle limit on forward progress between blocks, ROADMAP U76
+
+`oracle/kernel_launch.rs` now documents that blocks run sequentially in index order, so a spin on a later block's write is `KernelTrap::CrossBlockWait` (acquire-class spin) or `StepLimit` (a `Relaxed` spin) where hardware completes, and what a kernel that needs inter-block progress can use today. ROADMAP U76 schedules the resident-block interleaving scheduler. No code change.
+
+---
+
 ## `0.64.1` — additive: `Layout::composition_within`, `check_launch_limits`, `ExecId::SubgroupCount`, `KernelFn::spec_consts`; fix: `local_tile` refuses a non-dividing tile
 
 Five leaves, one commit each. **Fix (behaviour change, not a signature change):** `Layout::{inner_partition, outer_partition, local_tile, local_partition}` return `LayoutError::NotDivisible` when a tiler's size does not divide its mode, instead of rounding the tile count up (4 into 6 reached offset 49 of 36); no caller outside `unpopped-vocab` existed (grep at origin/main). **Added:** `Layout::composition_within` and the non_exhaustive `LayoutError::ExceedsExtent` (refuses `cosize(rhs) > size(lhs)`; `Layout::composition` is unchanged and now documents its extension rule). `kernel_interface::check_launch_limits(kernel, &TargetCapabilities)` and the non_exhaustive `LaunchLimitError` (block threads against `max_threads_per_block`, subgroup range against `warp_size`). `ExecId::SubgroupCount` (non_exhaustive `ExecId`; the oracle reads it, cpu-c declines by name). `KernelFn::spec_consts` (`SpecConst`, `SpecValue`, `with_spec_const`, `KernelError::BadSpecConst`): the oracle binds the default, cpu-c declines by name; an empty list is not serialized so a kernel without one keeps its revision hash; also documents `BarrierKind::Named`/`NamedArrive` `count` (doc only). SpecConst patent wording: outside as read vs GB2516358A; no spec-constant patent found: not a clearance. Each leaf has red-first tests and seeded mutants that were caught.
