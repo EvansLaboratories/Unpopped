@@ -15,6 +15,18 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.21` — docs: design note `docs/design-f6-storage.md` for oracle storage of F6E2M3 and F6E3M2 (8-bit container)
+
+Docs only. The oracle has no container for a 6-bit float, which is why `check_kernel` declines them by name and the e3m2/e2m3 `mma.sync` atoms are placement-only. Proposal: one element per byte, the six value bits low and the two high bits zero, as PTX ISA 9.5 s5.2.3 (p. 43) and the m16n8k32 fragment tables (Figures 91, 93-95) hold them; packed 6-bit stays a bulk-copy format. Single source. Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.
+
+---
+
+## `0.63.20` — docs: design note for a layout whose modes may be kernel scalar parameters (CuTe 3 and 66)
+
+`docs/design-dynamic-layout.md`: a `DynLayout` bound to a static `Layout` at launch and checked by the existing enumerating checker; design only, no code, no patent read claimed.
+
+---
+
 ## `0.63.19` — tests: restore the oracle runs of the unsigned and mixed 8-bit k32 atoms; pin the 4-bit nibble order outside the harness
 
 Review findings (Pip, relayed by pm-kernels): the fold lost `agrees(&atom, k32)` for the u8, s8/u8 and u8/s8 `m16n8k32` atoms, so they were placed but no longer run; it is restored, and each loop of `tests/mma_atoms_8bit.rs` now asserts that every atom it names was run (`support::ran`). New `tests/mma_nibble_order.rs` fixes the 4-bit packing order on the byte `0x21` (element 0 is the low nibble) through the oracle's own load for I4, U4 and E2M1, and checks the harness packs the same bytes. Tests and harness only.
