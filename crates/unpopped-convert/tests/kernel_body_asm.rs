@@ -71,7 +71,9 @@ fn ex2_lg2_rcp_lift_as_qualified_approximations() {
             Numerics {
                 round: RoundMode::NearestEven,
                 ftz,
-                approx: true
+                approx: true,
+                // an `asm` template names no intrinsic
+                spelling: None,
             },
             "{tmpl}"
         );

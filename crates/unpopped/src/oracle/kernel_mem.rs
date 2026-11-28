@@ -359,7 +359,7 @@ impl ThreadCtx<'_> {
                 Some(o) => self.peers.get_ref(o).shared[alloc as usize].as_ref(),
                 None => self.block.shared[alloc as usize].as_ref(),
             },
-            MemorySpace::Private => self.private[alloc as usize].as_ref(),
+            MemorySpace::Private | MemorySpace::Tile => self.private[alloc as usize].as_ref(),
             _ => None,
         }
     }
@@ -371,7 +371,7 @@ impl ThreadCtx<'_> {
                 Some(o) => self.peers.get(o).shared[alloc as usize].as_mut(),
                 None => self.block.shared[alloc as usize].as_mut(),
             },
-            MemorySpace::Private => self.private[alloc as usize].as_mut(),
+            MemorySpace::Private | MemorySpace::Tile => self.private[alloc as usize].as_mut(),
             _ => None,
         }
     }

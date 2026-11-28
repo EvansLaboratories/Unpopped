@@ -27,6 +27,7 @@ pub use crate::kernel_module::check_module;
 use crate::exec::{AllocDecl, LaunchShape, MemorySpace, Scope};
 use crate::ir::{ReduceOp, ScalarExpr};
 use crate::mma::MmaAtom;
+use crate::schedule::{ScheduleError, ScheduleSpec};
 use crate::types::{Ty, TypeError};
 
 /// What a buffer parameter may do. Checked by [`check_kernel`] against every `Load` and `Store`.
@@ -821,6 +822,65 @@ pub enum Stmt {
         /// The `Private` allocation (index into [`KernelFn::allocs`]) holding this lane's `2 * count` elements.
         src: u32,
     },
+    /// Load a tile (ROADMAP T2, `docs/design-opaque-tile-mma.md`): the `rows x cols` elements of the [`MemorySpace::Tile`]
+    /// allocation `d` are read from `src`: element `(r, c)` is the element at `src + (origin[0] + r) * elements_per_row +
+    /// origin[1] + c`, in `src`'s allocation or buffer (`src` is a `Place::Alloc` of a `Shared` allocation or a one-index
+    /// `Place::Logical`; its index names the element the offsets count from). Every element is an ordinary logged load. A
+    /// tile is held by the whole subgroup and no element of it is addressable, so the statement is reached in uniform control
+    /// (a divergent one is `BarrierDivergent`) and every lane of the subgroup executes it identically. The element type of
+    /// `src` is the tile's.
+    ///
+    /// **Patent:** lifted by CireSnave 2026-11-26 (board 519 B) as his risk call: the PM did not support it with a reading; not
+    /// a clearance; no attorney; the Intel/NVIDIA tile-instruction method and medium claims (US11086623B2 = app 16/487,787,
+    /// US11288069B2 = 16/487,755, US10884734B2 = 16/459,191) remain NEEDS MORE as read. There is no `transpose` option and no
+    /// transpose statement: US12405770B2 claims 8 and 15 are NEEDS MORE against one (findings, `docs/PATENT-SWEEP.md`).
+    TileLoad {
+        /// The tile (index into [`KernelFn::allocs`], a [`MemorySpace::Tile`] allocation).
+        d: u32,
+        /// The element the offsets count from.
+        src: Place,
+        /// The distance in elements between two rows of the source.
+        elements_per_row: ScalarExpr,
+        /// The row and the column of the source the tile starts at.
+        origin: [ScalarExpr; 2],
+    },
+    /// `d = a * b + c` over tiles: `a` is `m x k`, `b` is `k x n`, `c` and `d` are `m x n` (`d` may be `c`). The element of
+    /// `D` is the sum of `C` and the `k` products, the products exact, summed in ascending `k` and rounded **once** to the
+    /// accumulator type (the contract of [`Stmt::Mma`]), so a device that sums in another order or at another width is compared
+    /// within a tolerance, never by bytes. `a` and `b` have one element type and `c` and `d` another (`F32`, or `F64` over `F64`).
+    /// Uniform control, like [`Stmt::TileLoad`]. The tile patent text on [`Stmt::TileLoad`] applies.
+    TileMma {
+        /// The result tile.
+        d: u32,
+        /// The left operand.
+        a: u32,
+        /// The right operand.
+        b: u32,
+        /// The accumulator.
+        c: u32,
+    },
+    /// Set every element of the tile `d` to `value` (converted to the tile's element type with the rounding of an `Assign`).
+    /// Uniform control. The tile patent text on [`Stmt::TileLoad`] applies.
+    TileFill {
+        /// The tile.
+        d: u32,
+        /// The value.
+        value: ScalarExpr,
+    },
+    /// Store the tile `a` to `dst`, the inverse of [`Stmt::TileLoad`]: element `(r, c)` goes to `dst + (origin[0] + r) *
+    /// elements_per_row + origin[1] + c`. The subgroup's first lane performs the writes (one logged writer, as on hardware
+    /// where one operation stores the tile); uniform control. Every element of the tile must have been written (by a load,
+    /// a fill or an MMA). The tile patent text on [`Stmt::TileLoad`] applies.
+    TileStore {
+        /// The tile.
+        a: u32,
+        /// The element the offsets count from.
+        dst: Place,
+        /// The distance in elements between two rows of the destination.
+        elements_per_row: ScalarExpr,
+        /// The row and the column of the destination the tile starts at.
+        origin: [ScalarExpr; 2],
+    },
     /// `fence.proxy.async.shared::cta` (ROADMAP U8c, slice 0): order this thread's earlier **generic-proxy** writes to
     /// `Shared` memory before later **async-proxy** reads of the same memory by [`Stmt::Wgmma`], [`Stmt::Tcgen05Mma`]
     /// and the like. PTX ISA 9.5: "Accessing the same memory location across multiple proxies needs a cross-proxy
@@ -1411,6 +1471,12 @@ pub enum CollectiveKind {
     /// up to **32 lanes** and a scope of more is a typed oracle trap (**design**: the result is a `U32`; PTX ISA 9.5
     /// `vote.sync.ballot.b32` is also a `.b32` mask of the warp's 32 lanes).
     Vote(VoteKind),
+    /// Each lane receives a `U32` mask whose bit `i` is set when lane `i`'s value is **bit-for-bit equal** to this lane's (a
+    /// float compares by its bit pattern, so `NaN` matches an identical `NaN` and `0.0` does not match `-0.0`). A
+    /// **Subgroup** operation of up to 32 lanes, as `Ballot` (a Block is refused, a larger scope is a typed oracle trap).
+    /// Source: PTX ISA, `match.any.sync.type` ("the mask of threads whose operand `a` equals this thread's"); CUDA
+    /// `__match_any_sync`.
+    MatchAny,
     /// Every lane receives the fold of the scope's values under `op`.
     Reduce(ReduceOp),
     /// Every lane receives the prefix fold up to itself (before itself when `exclusive`).
@@ -1570,6 +1636,14 @@ pub struct KernelFn {
     /// most one value (R5.7 D4b).
     #[serde(default)]
     pub results: Vec<u32>,
+    /// How the kernel is to be run (ROADMAP S2, `docs/design-tile-and-schedule-plan.md` section 3): the tile hierarchy, stage count,
+    /// work division, epilogue and cluster shape. Never what it computes: the oracle ignores it. An emitter **honours** every field
+    /// the spec sets or **declines it by name** ([`crate::schedule::ScheduleSpec::set_fields`]), never silently ignoring one;
+    /// `unpopped-cpu-c` honours none. `check_kernel` checks the spec ([`crate::schedule::check_schedule`]). The carrier gives
+    /// `WorkDivision::StreamK` and `Persistent` no meaning beyond their names: no emitter divides work by them (patent holds,
+    /// `docs/PATENT-SWEEP.md` G-S2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<Box<ScheduleSpec>>,
 }
 
 impl KernelFn {
@@ -1612,6 +1686,7 @@ impl KernelFn {
             allocs: Vec::new(),
             result: None,
             results: Vec::new(),
+            schedule: None,
         }
     }
 
@@ -1640,6 +1715,13 @@ impl KernelFn {
     /// Every value this function returns, in order: [`Self::result`] then [`Self::results`].
     pub fn all_results(&self) -> impl Iterator<Item = u32> + '_ {
         self.result.into_iter().chain(self.results.iter().copied())
+    }
+
+    /// The same kernel with the schedule `schedule` (ROADMAP S2; see [`Self::schedule`]).
+    #[must_use]
+    pub fn with_schedule(mut self, schedule: ScheduleSpec) -> Self {
+        self.schedule = Some(Box::new(schedule));
+        self
     }
 
     /// The same kernel with the allocations `allocs`.
@@ -1850,9 +1932,11 @@ pub enum KernelError {
     /// A launch with a zero extent, or a subgroup range that is empty or starts at 0.
     BadLaunch,
     /// A kernel declares (as its compute type, a parameter, a local or an allocation) a dtype that is recognised but not
-    /// computed yet: `F128`, `I128`, `U128`, `I256`, `U256`, `F8E3M4`, `F8UE4M3` (union batch 1, KISS 0.24.0; plan E1a). It is
-    /// declined by name, never run: the oracle holds no value of these types until the casts, the wide integer and the software
-    /// binary128 land (plan E1b, E2, E3).
+    /// computed: exactly `F128`, `F8E3M4`, `F8UE4M3` (union batch 1, KISS 0.24.0; plan E1a) and the two 6-bit floats `F6E2M3` and `F6E3M2` (the oracle has no storage for a 6-bit element, so a kernel that declared one panicked it; packing is a design point). It is declined by name, never run:
+    /// the oracle holds no value of these types (`F128` waits for the software binary128 wired into the oracle, E3 slice 2).
+    /// `I128`, `U128`, `I256` and `U256` are **computed since 0.61.3** (E2) and pass `check_kernel`; whether an emitter lowers
+    /// them is the emitter's to refuse by name (`docs/emitter-migration-b1.md`). The set is pinned by
+    /// `tests/union_batch1_dtypes.rs::the_declined_set_is_exactly_f128_and_the_two_fp8_rows` and `a_6_bit_float_is_refused_by_name_because_the_oracle_has_no_storage_for_it`. A `Cast` into an MX element (`F4E2M1`, `F6*`) needs `Saturation::ClampFinite`, else `IllegalCast`.
     DtypeNotComputed {
         /// The dtype.
         dtype: ElementKind,
@@ -1870,6 +1954,25 @@ pub enum KernelError {
         /// The allocation index.
         alloc: u32,
     },
+    /// An allocation's `layout` or `align_bytes` breaks a rule of `docs/design-swizzled-allocation.md` (the reason is named): a layout
+    /// only on `Shared` with a `Static` extent equal to its size, an injective layout inside the extent, a swizzle whose period
+    /// divides the byte extent and whose base is at least the element width, and a swizzled allocation aligned to the period.
+    AllocLayout {
+        /// The allocation index.
+        alloc: u32,
+        /// The rule, in words.
+        why: &'static str,
+    },
+    /// A tile allocation or tile statement breaks a rule (the reason is named): a `Tile` space and a tile shape agree, a tile
+    /// statement names a tile of the right shape and element types, and no ordinary access reaches a tile.
+    Tile {
+        /// The allocation index (or the first tile the statement names).
+        alloc: u32,
+        /// The rule, in words.
+        why: &'static str,
+    },
+    /// The kernel's [`KernelFn::schedule`] is not well formed (ROADMAP S2): the first violation `check_schedule` found.
+    Schedule(ScheduleError),
     /// A `Store` to a `Constant` allocation.
     WriteToConstant {
         /// The allocation index.

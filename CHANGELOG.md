@@ -15,6 +15,150 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.7` — C-recipes for Triton rows 2, 13 and 26 (tests only)
+
+New `crates/unpopped/tests/kernel_c_recipes_triton.rs` (7 tests, all PASS): Triton row 2 (block tensors: `arange`, `full`, `flip`, `cat` of a half with a flipped half, `interleave`/`join`, `split`), row 13 (`tl.gather` over a register tile: a `Private` array of 8 read at a computed index, per row) and row 26 (`tl.swizzle2d` on a 6x4 grid with group size 4, including the shortened last group, checked to be a permutation). Each is layout and index arithmetic over `Shared`/`Private` allocations: no statement, no `Tile` allocation, no tile-granular operation. Each has a hand-written reference and a mutant that changes a value (not a trap): no flip, a cat that does not flip, swapped interleave operands, odd-first split, an arange from 1, an index read one column late, a last group that is not shortened. Rows 10 to 12 (descriptors, TMA) are not recipes. No source change.
+
+---
+
+## `0.63.6` — layout algebra composition bounds tests (tests only)
+
+New `crates/unpopped-vocab/tests/layout_algebra_composition_bounds.rs`: exhaustive over `A = e:d` and `B = t:s` (extent 1..=12, stride 1..=3; extent 1..=14, stride 1..=14), a composition whose right operand stays inside `A`'s extent is accepted, reads the right element, and stays in `A`'s image. A right operand that reaches past `size(A)` is never refused: it reads `A` extended at its last stride and addresses offsets `A` does not hold (`1:1 o 2:1` reaches offset 1 of a one-element operand). That is pinned as behaviour by a test, not endorsed as safe and not fixed; the unpopped lane ruled 2026-11-28 that composition keeps the CuTe reading (the left's last mode extended) and that unpopped-leaves adds an additive checked composition refusing a right operand past `size(A)`; this pin stays as behaviour and the checked function joins the sweep when it merges. The checker runs against the real operation and a broken one (ignores `A`'s stride) and must fail on the broken one. No source change.
+
+---
+
+## `0.63.5` — a kernel that declares `F6E2M3` or `F6E3M2` is refused by name (the oracle panicked on it, since 0.34.3); the `DtypeNotComputed` set stated once and pinned
+
+The rustdoc of `KernelError::DtypeNotComputed` and `types::is_union_batch1`, the header of `tests/union_batch1_dtypes.rs` and `docs/design-union-batch1-consumer.md` still said all seven union-batch-1 dtypes are declined; since 0.61.3 (E2) `check_kernel` computes `I128`, `U128`, `I256` and `U256` (reported by bonefish and vulkane). The text now states the real set, and a new test, `the_declined_set_is_exactly_f128_and_the_two_fp8_rows`, pins it so a change to the set flips a test. `docs/emitter-migration-b1.md` gains a 0.62 note: an emitter that does not lower a wide integer must refuse it by name before emitting, and the carry-flag emit hold (Intel US11531542B2) stands. No behaviour change.
+
+Found by `unpopped-mma`'s probe: `check_kernel` admitted a kernel-layer program that declares an `F6E2M3` or `F6E3M2` allocation, parameter or local (for example a `Private` allocation with a `Store` of a `ClampFinite` cast and a `Load`), and the oracle PANICKED ("oracle: unsupported dtype F6E2M3 (v1)": it had no storage arm for a 6-bit element). **First affected version: 0.34.3 (measured 2026-11-27 by running the same probe on the tags 0.34.3, 0.40.0 and 0.56.1; 0.34.3 is the first tag that has `check_kernel` and allocations, and the F6 rows predate it), and every release since up to and including 0.63.3.** Scope: only kernel-layer programs that declare an F6 allocation, parameter or local; plan-layer MX element use is unaffected. A crash, not memory unsafety and not a wrong result. An oracle never panics on a kernel the checker accepted, so `check_kernel` now declines the two 6-bit floats by name wherever a kernel declares one with `KernelError::DtypeNotComputed { dtype }`, until the oracle holds a 6-bit element (packed or one per byte is a design point). `F4E2M1` was affected the same way before its own fix (probed: it panics at 0.34.3, 0.40.0, 0.56.1 and 0.57.0 and runs at 0.58.0, the adjacent tag, so its fix first shipped in 0.58.0; `git log -S` on its `elem_size` arm finds #403, the U8c stack) and on current main it runs. A `Cast` into an MX element needs `Saturation::ClampFinite`, else `IllegalCast`. A refusal added where a panic was: no API change. Red first: the new test failed on `main` with the allocation admitted.
+
+---
+
+## `0.63.4` — layout algebra bounds tests (tests only)
+
+New `crates/unpopped-vocab/tests/layout_algebra_bounds.rs`: exhaustive over extents 1..=24, tiles 1..=8 and dividend strides, an accepted `zipped_divide` or `local_tile` reads every coordinate below the dividend's extent at the right offset and in bounds, and the coordinates that leave the extent are exactly the padding of a tile that does not divide it (`i + t*j >= e`), which only an inexact tiling has. Each checker runs against the real operation and a broken one (a tile one short, a tile number one late) and must fail on the broken one. One test pins a finding, not a fix (the unpopped lane decides whether it is a defect): a 4-tile over a 6-element extent is accepted and its last coordinate addresses offset 7 of 6, so a consumer must predicate; it flips deliberately if the vocab ever refuses or clamps a residue tiling. No source change.
+
+---
+
+## `0.63.3` — S2, `KernelFn::schedule`, the carrier for a `ScheduleSpec`, and cpu-c's decline by name
+
+`KernelFn` gains `schedule: Option<Box<ScheduleSpec>>` (serde default, omitted when `None`) and `with_schedule(spec)`. `KernelFn` is `non_exhaustive`, so this is additive: a document without the field loads with `None`, and `KernelError::Schedule(ScheduleError)` (`non_exhaustive`) is the new case `check_kernel` gives when `check_schedule` refuses the spec. A schedule says how a kernel is run, never what it computes, so the oracle ignores it. The rule from `docs/design-tile-and-schedule-plan.md`: an emitter honours every field a spec sets or declines it by name, never silently ignoring one. `unpopped-cpu-c` honours none: a kernel (or a module function) that sets a field is declined with an error that names it (`tile`, `warp tile`, `instruction tile`, `stage count`, `shared-memory carveout`, `work division`, `epilogue schedule`, `cluster shape`); an empty `ScheduleSpec::default()` lowers.
+
+The carrier gives `WorkDivision::StreamK` and `Persistent` no meaning beyond their names, and no emitter divides work by them: the stream-K division and work-request/cluster-launch-control holds of `docs/PATENT-SWEEP.md` (G-S2) are untouched. Verified by `tests/kernel_schedule_carrier.rs` (`check_kernel` agrees with `check_schedule` on every schedule fixture, the oracle ignores a fully set schedule, the serde default) and cpu-c's `kernel_schedule_declines.rs` (each field alone is declined under its own name, a module function too, with controls that lower). `Fixture` carries a reasoned `large_enum_variant` allow: `KernelFn` grew by one pointer.
+
+---
+
+## `0.63.2` — `launch_cases` second slice: strided/offset/flipped/broadcast input views and launch geometry (additive)
+
+`unpopped::launch_cases()` gains seven cases, appended after the four existing ones (no existing case, name or public signature changes). Three read an input through a view: `view_transposed_i32` (column-major storage), `view_pitched_i32` (row pitch 8 with a base offset on each input) and `view_flipped_broadcast_i32` (a negative stride against a stride-0 row broadcast). Four fix launch geometry: `launch_odd_block_u32` (block 3, grid 5), `launch_idle_threads_u32` (more threads than elements), `launch_single_thread_i32`, and `launch_subgroup_range_f32` (a launch that requires a subgroup size in 8..=32). Integers are compared exactly; the one `F32` case is a single operation, so 0 ULPs. Each case is checked and run by the oracle; a unit test reads the view cases densely (strides and base offset ignored) and requires the output to change, so an emitter that ignores a view is caught. `unpopped-cpu-c`'s `launch_cases_agree` runs all eleven against the compiled C and passes. Tests and corpus data only; no new `Stmt`, `Place` or field.
+
+---
+
+## `0.63.1` — docs, the 0.63.0 migration text: wide integers accepted since 0.61.3, the Numerics literal (U37), the union-batch-1 note reconciled
+
+`docs/emitter-migration-b1.md` gains a 0.62 note (`check_kernel` accepts `I128`, `U128`, `I256`, `U256` since 0.61.3, so an emitter that does not lower them must refuse by name before emitting, and the carry-flag emit hold stands) and a U37 section (how a `Numerics` struct literal moves: end it with `..Numerics::default()`; find them with `git grep -n 'Numerics {'`; what `ApproxSpelling` means for a CUDA emitter). `docs/design-union-batch1-consumer.md` states the real set `check_kernel` declines (`F128`, `F8E3M4`, `F8UE4M3`). No code change.
+
+---
+
+## `0.63.0` — **BREAKING**: U37, `Numerics::spelling`, the exact-spelling hint on an approximate node
+
+`Numerics` gains `spelling: Option<ApproxSpelling>` (serde default, omitted when `None`), so a struct literal `Numerics { .. }` without `..Numerics::default()` stops compiling (`Numerics` is not `non_exhaustive`; `Numerics::default()` and the `Expr::rounded/ftz/approx` builders are unchanged). `ApproxSpelling` (`non_exhaustive`: `Expf`, `Exp10f`, `Log2f`, `Logf`, `Log10f`, `Fdividef`, each with `token()` and the `op()` it annotates) names the CUDA fast-math intrinsic a lifted node came from: the C-family walker lifts `__expf(x)` to `ex2.approx(x * log2 e)` and so lost the token, which a CUDA re-emit could not reproduce. The walker now sets it; the `asm` lift (`ex2.approx` written out) and every hand-built node carry `None`.
+
+The hint is not a meaning: the oracle, the plan gate and every rule but one ignore it. The one rule: `check_kernel` refuses a spelling on a node that is not `approx` or whose operation is not the intrinsic's (`TypeError::IllegalQualifier`). A re-emit prints the token only for a node whose operand and surrounding scale are exactly the walker's; otherwise it prints the exact function or the sequence. `__sinf`, `__cosf`, `__tanf` and `__powf` still decline (no approximate form in the IR). Verified by `tests/numerics_spelling.rs` (admitted and refused with controls, every spelling's operation takes `approx`, serde and the pre-field document) and the convert test `each_intrinsic_names_itself_on_its_approx_node`.
+
+---
+
+## `0.62.4` — C-recipes batch 2: CuTe 3/15/17/30/40/66, ThunderKittens 1/2/3/5/39, Slang 25/26 (tests only)
+
+`tests/kernel_c_recipes_tiles.rs` and `tests/kernel_c_recipes_tiled.rs` run register tiles and layout swaps, register and shared vectors, a fragment-layout tile move, a hierarchical-layout tensor, runtime-extent views, a swizzled and a tiled shared atom, a `TiledMma` as thread-value layouts (with a permutation tiler), `autovec_copy`/`fill`/`clear`/`axpby`, cooperative-matrix map/transpose/reduce and the three clamp modes on the oracle as index arithmetic over `Shared` and `Private` allocations, with no view statement. Each has a hand-written reference and a value-changing mutant. One finding is recorded as a test: a dynamic (runtime) mode cannot be stated in the static `Layout` algebra.
+
+---
+
+## `0.62.3` — C-recipes for CuTe 22-27/31/47 and ThunderKittens 6/38 (tests only)
+
+`tests/kernel_c_recipes.rs`: slice, `local_tile`, `local_partition`, TV-layout composition, `partition_A/B/C`, a layout-driven GEMM, `partition_S/D` with `retile`, identity-tensor predication, subtile views and `swap_layout` run on the oracle as index arithmetic (`unpopped-vocab` layouts evaluated as `/ % * +`) over `Shared` allocations carrying a T1 layout, with no view statement. Each result is compared with a hand-written element formula and has a value-changing mutant. Two findings are recorded by name: `local_tile` does not refuse a non-dividing tile (the last tile leaves the extent), and an opaque `Tile` allocation has no element to index (checker `KernelError::Tile`).
+
+---
+
+## `0.62.2` — additive: NVIDIA mma.sync f64 atoms m16n8k4, m16n8k8, m16n8k16 (U7 theme 3)
+
+Three `MmaAtom` constructors as data (`mma_f64.rs`): `nvidia_m16n8k4_f64_f64`, `nvidia_m16n8k8_f64_f64`, `nvidia_m16n8k16_f64_f64`. Layouts from the public PTX ISA 9.5 (sections 9.7.16.5.6, .7, .8; pages in the module doc) and CUTLASS `mma_traits_sm90.hpp` (`main` 5c179ede). `m16n8k16` is checked against PTX Figures 83 (A, pp. 564-565), 85 (B, p. 566) and 86 (C, p. 567); the A column formula continues across a page break (col = 2i + tig for even i, 2i - 2 + tig for odd i). `tests/mma_atoms_f64.rs` checks each against `(row, col)` formulas and runs it in the oracle. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+---
+
+## `0.62.1` — additive: NVIDIA mma.sync m16n8k32 u8, mixed s8/u8 and fp8 atoms (U7 theme 3)
+
+Seven `MmaAtom` constructors as data (`mma_sm80_8bit.rs`): `nvidia_m16n8k32_{u8,s8_u8,u8_s8}_s32` and `nvidia_m16n8k32_{e4m3,e5m2,e4m3_e5m2,e5m2_e4m3}_f32`, four of them with `A != B` in type. Layout read from the public PTX ISA 9.5 section 9.7.16.5.10 (pp. 572-576) and cross-checked against CUTLASS `mma_traits_sm80.hpp` and `mma_traits_sm89.hpp` (`main` 5c179ede). `tests/mma_atoms_8bit.rs` checks each against `(row, col)` formulas and runs it in the oracle; fp8 values are lattice fractions per format. No `Stmt`, `ScalarExpr` or `ElementKind` change. Patent column: US12314717B2, the 4x element-size method claim: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.
+
+---
+
+## `0.62.0` — **BREAKING**: T2, opaque matrix tiles (`MemorySpace::Tile`, `Stmt::TileLoad`/`TileMma`/`TileFill`/`TileStore`)
+
+`Stmt` gains four variants and `MemorySpace` a fifth case, so an exhaustive `match` on `Stmt` stops compiling (`MemorySpace` is `non_exhaustive`: a wildcard arm hides `Tile`, so every emitter states a decline for it; `docs/emitter-migration-b1.md`). `AllocDecl` gains `tile: Option<TileShape>` (serde default, omitted when `None`; `AllocDecl::tile(name, elem, rows, cols)` builds a tile) and `KernelError::Tile { alloc, why }` names each rule.
+
+A tile is `rows x cols` elements (`F16`, `Bf16`, `F32`, `F64`) that no ordinary access reaches; the program cannot name an element. `TileLoad`/`TileStore` move a tile to and from a `Shared` allocation place or a one-index buffer place with a row stride and an origin; `TileFill` sets every element; `TileMma` is `D = A.B + C` with `(m x k)(k x n) + (m x n)`, the products exact, summed in ascending `k` and rounded once to the accumulator (`F32`, or `F64` over `F64`), the contract of `Stmt::Mma`. All four are reached in uniform control (a divergent one is `BarrierDivergent`). The oracle keeps a tile like a `Private` array that every lane fills identically, and the subgroup's first lane performs a `TileStore`, so the race log sees one writer. There is no `transpose` option and no transpose statement (patent hold: US12405770B2 claims 8 and 15 are NEEDS MORE against one), and no `satf` flag. cpu-c declines a `Tile` allocation and each statement by name; the board 519 B text is on the statements' doc comments.
+
+Verified by `tests/kernel_tile.rs` (a rectangular product with an origin and a row stride against a hand-written one, an in-place accumulate, the uninitialised tile, each checker rule with an accepted control, divergent control, serde) and cpu-c's `kernel_tile_declines.rs`; the four fixtures are in `fixtures.rs`; 5 seeded mutants caught.
+
+---
+
+## `0.61.13` — E3, a software IEEE binary128 (`soft_f128::F128`), not yet wired into the oracle
+
+Adds `unpopped::soft_f128::F128` (a `u128` bit pattern): add, sub, mul and div each rounded once to nearest even from the exact result (the division remainder is folded in as a sticky bit), `partial_cmp`, `from_f64`/`to_f64`, `from_w256` (integer conversion with one rounding), NaN/infinity/zero/subnormal handling, and `W256::bit_length`. It uses integer words, not double-double (double-double is NOT CLEARED, HP US5631859A claim 1). Additive: new module, no existing public item changes. The oracle does not use it yet (a later slice wires `F128` kernels); fma and sqrt follow. Verified by 8 tests including a random f64 cross-check of the four operations and a division tie-breaking test, and 7 seeded mutants caught.
+
+---
+
+## `0.61.12` — additive: NVIDIA mma.sync atoms m16n8k8 f16/bf16, m16n8k4 tf32, m8n8k4 f64 (U7 theme 3)
+
+Four `MmaAtom` constructors as data (`mma_sm80.rs`): `nvidia_m16n8k8_{f16,bf16}_f32`, `nvidia_m16n8k4_tf32_f32` (carries the tf32 flag) and `nvidia_m8n8k4_f64_f64`. Layouts read from the public PTX ISA 9.5 (sections 9.7.16.5.7, 9.7.16.5.6, 9.7.16.5.2; pages in the module doc) and cross-checked against CUTLASS `mma_traits_sm80.hpp` (`main` 5c179ede). `tests/mma_atoms_sm80.rs` checks each against `(row, col)` formulas from the PTX text and runs it in the oracle. `wmma` shapes are not built: PTX 9.7.16.4.1 leaves the wmma fragment layout unspecified. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+---
+
+## `0.61.11` — T1, a layout and a swizzle on an allocation (`AllocDecl::layout`, `align_bytes`)
+
+`AllocDecl` gains `layout: Option<AllocLayout>` and `align_bytes: Option<u32>` (both `serde(default)`, omitted when `None`; `AllocDecl::new` is unchanged, `with_layout` and `with_align_bytes` set them). An `AllocLayout` is a `unpopped_vocab::layout_algebra::Layout` and an optional byte-address `Swizzle` (the PTX form, `swz(3,4,3)` for the 128-byte mode), written as one canonical string: `(8,8):(1,8)` or `swz(2,2,3)((8,8):(1,8))`.
+
+`check_kernel` gains `KernelError::AllocLayout { alloc, why }` for the rules of `docs/design-swizzled-allocation.md` section 3: a layout only on a `Shared` allocation with a `Static` extent equal to its size; every offset below the extent; no two logical indices sharing an offset (enumerated up to 4 Mi elements); a swizzle whose base is at or above the element width and whose period divides the extent; a swizzled allocation with an `align_bytes` that is a multiple of the period; `align_bytes` a power of two.
+
+The oracle maps a `Place::Alloc` index to the physical element (`layout`, then the swizzle read over elements); the access, the race log, the initialised flags and the async queue all key on the physical element, so a layout permutes storage and changes no result of a kernel that uses `Place::Alloc`. `Place::AllocRaw` names physical bytes, so it sees the permutation (logical index `0x80` of `swz(3,4,3)(1024:1)` over `U8` lands at byte `0x90`). cpu-c declines a layout or an alignment by name.
+
+Additive: `AllocDecl` is `non_exhaustive`, `KernelError` is `non_exhaustive`, a document without the fields loads with `None`. No new statement, so no patent hold is touched (the layout algebra is "outside as read", `docs/PATENT-SWEEP.md`). Verified by `tests/kernel_alloc_layout.rs` (permutation invariance over four layouts with and without a swizzle, the hand-worked `AllocRaw` byte, each rule with its accepted control, the serde round trip and the pre-field document) and cpu-c's `kernel_alloc_layout_declines.rs`.
+
+---
+
+## `0.61.10` — tests: device-scope semaphore probe (survey row 9)
+
+Pins what the oracle does with an `AtomicCas(Acquire, Device)` spin across blocks: a producer in the earlier block completes (`out[0]=42`); a consumer in the earlier block is `CrossBlockWait`; an unreleased spin is `CrossBlockWait` while a block remains and `StepLimit` when the spinner is the last block. Weakening Acquire to Relaxed turns the completing case into `DataRace` and the waiting case into `StepLimit`. Tests only, no source change; verified by `cargo test -p unpopped --test kernel_device_semaphore`.
+
+`kernel_gemm_mixed_dtype`: `D(I32) = acc + Cast(C(I16))`, operands `I8` widened to `I16` for the product and to `I32` for the sum, built from ordinary ops only (KISS 771 Q3: no `c` role hint). Oracle-compared against a host loop; three type mutants (product narrowed to `I8`, sum kept in `I16`, addend dropped) each change the value on `-128 * -128` data.
+
+— lane: unpopped-conformance
+
+`kernel_int_where`: the index-masking idiom as an integer `Select` in the oracle, the condition a loaded `U8` mask tested `!= 0` (values 1, 2, 255) or a comparison; host-loop reference; swapped arms change the value at every width. Tests only.
+
+— lane: unpopped-conformance
+
+`kernel_wide_int_idioms`: the widening multiply, an `I128` accumulator over `I64` products, and the `U128` x `U128` -> `U256` product, each a kernel of ordinary ops compared with Rust's `u128`/`i128` or an independent 32-bit-limb schoolbook; each has a one-width-too-small mutant that changes the value. Oracle only; no carry-chain lowering. Stacked on `lane/e2-wide-int-r3`.
+
+— lane: unpopped-conformance
+
+---
+
+## `0.61.9` — the oracle decodes an `F8E8M0` MX block scale (CUDA audit row 60)
+
+The oracle reads an `F8E8M0` buffer as the scale `2^(code - 127)` with `0xFF` as NaN (no zero, no infinity), through `cast_ref::decode_e8m0` and an arm in `raw_to_f64`; `types::elem_size` gives it its storage width, one byte. It is still a scale type, never a compute dtype: the plan gate refuses it as one. Sources: OCP Microscaling Formats (MX) Specification v1.0 (section number not re-read) and the ONNX float8 note's E8M0 table. Additive: no signature or IR change.
+
+Added `Layout::{inner_partition, outer_partition, local_tile, local_partition, retile}` in `unpopped-vocab::layout_algebra`: the tile of a `zipped_divide` at a rest coordinate, the strided share at a tile coordinate (a thread), and a rank-changing reshape (`self` composed with the column-major layout of the target; refused when the sizes differ or the modes do not align). Pure functions: no IR, no statement, no view. Groupings worked from the definitions of `zipped_divide` and `slice`, UNVERIFIED against `cute/tensor_impl.hpp`. Patent wording: no patent found on slice/local_tile/partition/layout algebra (a null, not a clearance); the retile needs-more is lifted for US20210064987A1 only (outside as read; findings not advice).
+
+---
+
+## `0.61.8` — `CollectiveKind::MatchAny` (PTX `match.any.sync`)
+
+Added `CollectiveKind::MatchAny`: each lane gets a `U32` mask of the subgroup lanes whose value has the same bits as its own (a float compares by bit pattern). Subgroup only, at most 32 lanes (a Block is refused by name, a larger scope is a typed oracle trap). Source: PTX ISA `match.any.sync`; CUDA `__match_any_sync`. `CollectiveKind` is `#[non_exhaustive]`, so additive. Pinned by `match_any_gives_each_lane_the_mask_of_lanes_with_the_same_bits` and the cpu-c differential `match_any_agrees_on_integers_and_on_float_bit_patterns`.
+
+---
+
 ## `0.61.7` — Docs: PATENT-SWEEP, US20230315655A1 file-wrapper chart (patents-2)
 
 Docs only. `docs/PATENT-SWEEP.md` gains the file-wrapper chart of application 17/691,303 (allowed 2026-11-18) against the remote store-and-arrive limb, per Unpopped statement, verdict words only. No code changes.

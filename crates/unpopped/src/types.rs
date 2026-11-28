@@ -215,9 +215,9 @@ pub const fn is_cast_float_endpoint(t: ElementKind) -> bool {
 }
 
 /// A dtype of union batch 1 (KISS 0.24.0, §6.1-0017 to -0020; board 501 and 515): `F128`, `I128`, `U128`, `I256`, `U256`,
-/// `F8E3M4`, `F8UE4M3`. **Storage and key identity only** until the casts (plan E1b), the wide oracle integer (E2) and a
-/// software binary128 (E3) land: `check_kernel` refuses a kernel that declares one (`KernelError::DtypeNotComputed`), so the
-/// oracle never meets a value it cannot hold.
+/// `F8E3M4`, `F8UE4M3`. **Storage and key identity** for all seven; the wide integers `I128`, `U128`, `I256`, `U256` are also
+/// computed by the oracle since 0.61.3 (E2). `check_kernel` refuses a kernel that declares one of the other three (`F128`,
+/// `F8E3M4`, `F8UE4M3`) with `KernelError::DtypeNotComputed`, so the oracle never meets a value it cannot hold.
 #[must_use]
 pub const fn is_union_batch1(t: ElementKind) -> bool {
     matches!(
@@ -943,6 +943,20 @@ fn node_ty(
                     why: "a rounding/ftz/approx qualifier needs f32 or f32s operands in v1 (f64 has no ftz form and no reference for a directed rounding yet; half types compute through f32)",
                 });
             }
+            // a spelling hint (ROADMAP U37) is only on an `approx` node of the operation the intrinsic lowers to
+            if let Some(sp) = n.spelling {
+                let inner_op = match e {
+                    ScalarExpr::Qualified(inner, _) => {
+                        crate::ir::QualOp::of(inner).map(|(op, _)| op)
+                    }
+                    _ => None,
+                };
+                if !n.approx || inner_op != Some(sp.op()) {
+                    return Err(TypeError::IllegalQualifier {
+                        why: "a spelling hint on a node that is not an approx node of the intrinsic's operation",
+                    });
+                }
+            }
             Ok(k[0])
         }
         // `infer_ty` answers these itself; reaching here is an internal misuse, reported
@@ -1177,7 +1191,7 @@ pub(crate) fn elem_size(dt: ElementKind) -> usize {
         // Union batch 1 (KISS 0.24.0): storage widths only (§6.1-0017 to -0020); no operation computes them yet.
         ElementKind::F128 | ElementKind::I128 | ElementKind::U128 => 16,
         ElementKind::I256 | ElementKind::U256 => 32,
-        ElementKind::F8E3M4 | ElementKind::F8UE4M3 => 1,
+        ElementKind::F8E3M4 | ElementKind::F8UE4M3 | ElementKind::F8E8M0 => 1,
         // Sub-byte dtypes share a byte. `elem_size` is the CONTAINER width here,
         // not the element width — use `elem_bits` for the latter and
         // `packed_bytes` for allocation.
