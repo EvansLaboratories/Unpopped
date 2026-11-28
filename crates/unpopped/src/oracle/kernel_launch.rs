@@ -532,7 +532,23 @@ fn bind_dyn_layouts(k: &KernelFn, args: &[KernelArg]) -> Result<KernelFn, Kernel
             ));
         }
         crate::kernel_check::check_layout_offsets(&layout, n).map_err(bad)?;
-        out.allocs[i].layout = Some(crate::exec::AllocLayout::new(layout));
+        let mut laid = crate::exec::AllocLayout::new(layout);
+        if let Some(sw) = d.swizzle() {
+            // the period must divide the bound extent, or a swizzled offset could leave it (the static rule, on the value)
+            let width = u32::try_from(crate::types::elem_size(a.elem)).unwrap_or(0);
+            let in_elems = sw
+                .in_elements(width)
+                .map_err(|_| bad("the swizzle base is below the element width"))?;
+            let period =
+                1u64 << (in_elems.base() + in_elems.shift().unsigned_abs() + in_elems.bits());
+            if u64::from(n) % period != 0 {
+                return Err(bad(
+                    "the swizzle period does not divide the extent, so a swizzled offset could leave it",
+                ));
+            }
+            laid = laid.with_swizzle(sw);
+        }
+        out.allocs[i].layout = Some(laid);
         out.allocs[i].dyn_layout = None;
     }
     Ok(out)

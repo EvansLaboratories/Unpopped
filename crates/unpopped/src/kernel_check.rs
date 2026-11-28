@@ -328,6 +328,24 @@ fn check_dyn_layout(
             return bad("a dyn_layout parameter names no integer scalar parameter of the kernel");
         }
     }
+    // a byte swizzle (section 8): the rules that need no value are checked here, the period against the extent at the launch
+    if let Some(sw) = d.swizzle() {
+        let width = u32::try_from(types::elem_size(a.elem)).unwrap_or(0);
+        if sw.in_elements(width).is_err() {
+            return bad(
+                "the swizzle base is below the element width (or the width is not a power of two)",
+            );
+        }
+        let period_bytes = 1u64 << (sw.base() + sw.shift().unsigned_abs() + sw.bits());
+        match a.align_bytes {
+            Some(al) if u64::from(al) % period_bytes == 0 => {}
+            _ => {
+                return bad(
+                    "a swizzled allocation states an align_bytes that is a multiple of the swizzle period",
+                );
+            }
+        }
+    }
     Ok(())
 }
 
