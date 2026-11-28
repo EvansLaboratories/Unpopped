@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! The 4x element-size NVIDIA `mma.sync.aligned.m16n8k32` atoms as data (ROADMAP U7 theme 3): u8, mixed s8/u8 and the fp8
 //! atoms, including pairings with `A != B` in type, and the integer `m16n8k16` atoms (s8, u8, mixed; PTX ISA 9.5 section
-//! 9.7.16.5.9, A pp. 568-569 Figure 87, B p. 569 Figure 88, C p. 569 Figure 89; second source CUTLASS `mma_traits_sm80.hpp`
-//! `SM80_16x8x16_S32{S8S8,U8U8,S8U8,U8S8}S32_TN`). Additive: constructors only, no new statement, flag or element kind.
+//! 9.7.16.5.9, A Figure 87 p. 568 (formula continues p. 569), B Figure 88 p. 570, C Figure 89 p. 571; single source: CUTLASS was
+//! not read for this shape). Additive: constructors only, no new statement, flag or element kind.
 //!
 //! **Source.** PTX ISA 9.5 section 9.7.16.5.10 (text of the public PDF, outside every repo): A pp. 572-573 (Figure 91), B
 //! pp. 574-576 (Figures 93, 94), C p. 575 (Figure 95); one table serves `.s8`, `.u8`, `.e4m3`, `.e5m2` (the page also
