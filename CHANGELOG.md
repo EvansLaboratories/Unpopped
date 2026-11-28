@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.29` — docs, ROADMAP U72 to U75, the tile rules the WMMA and Apple shapes cannot meet yet
+
+ROADMAP gains U72 (an `F16` accumulator for `TileMma`), U73 (TF32 as a tile element), U74 (integer `TileMma`, `s8`/`u8`/`s4`/`u4` into `s32`) and U75 (1-bit tiles and atoms: the atoms are built, the packed/vector popc statement stays held, US10452398B2), from the coverage table of `unpopped-mma`'s #525 (`docs/mma-atom-coverage.md`). Each names its path; none is declined for lack of a consumer. No code change.
+
+---
+
 ## `0.63.28` — test: WMMA (f16, bf16, f64) and Apple simdgroup 8x8x8 shapes run as T2 tile conformance kernels (additive)
 
 `tests/kernel_tile_shapes.rs` runs WMMA m16n16k16, m8n32k16, m32n8k16 (f16, bf16 over f32) and m8n8k4 (f64) and Apple 8x8x8 (half, bfloat, float) through `TileLoad`/`TileMma`/`TileStore` on the oracle against a hand-written product, with A, B, C inside padded buffers (stride and origin checked, D's border sentinel must survive) and two value mutants per shape (C dropped; A at the wrong origin) that must disagree. `docs/mma-atom-coverage.md` records what the tile rules do not admit (f16 accumulator, tf32, integer and b1 WMMA) as ROADMAP candidates. `encode_float` into an F6 buffer now panics with a named reason instead of the generic unsupported-dtype text (unreachable today). Verified: `cargo test -p unpopped --test kernel_tile_shapes --test kernel_tile`, clippy clean.
