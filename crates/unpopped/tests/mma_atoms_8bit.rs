@@ -106,9 +106,15 @@ fn the_fp6_and_fp4_k32_atoms_share_the_8_bit_placement() {
 }
 
 #[test]
-fn the_fp4_k32_atom_runs() {
-    // E2M1 fragments run in the oracle: the values are lattice points of the format, encoded by the test from the OCP MX
-    // definition (two to a byte, low nibble first). The FP6 atoms cannot run: `types.rs` has no element size for F6E3M2 or
-    // F6E2M3 ("oracle: unsupported dtype ... (v1)"), though `check_kernel` admits a Private fragment of either.
-    agrees(&MmaAtom::nvidia_m16n8k32_e2m1_f32(), k32);
+fn the_fp6_and_fp4_k32_atoms_run() {
+    // E2M1 fragments run in the oracle (two to a byte, low nibble first) and so do E3M2 and E2M3 since f6-oracle-storage: one
+    // element per byte, the two high bits zero (`docs/design-f6-storage.md`). The values are lattice points of each format,
+    // encoded by the test from the OCP MX definition.
+    for atom in [
+        MmaAtom::nvidia_m16n8k32_e3m2_f32(),
+        MmaAtom::nvidia_m16n8k32_e2m3_f32(),
+        MmaAtom::nvidia_m16n8k32_e2m1_f32(),
+    ] {
+        agrees(&atom, k32);
+    }
 }
