@@ -232,11 +232,18 @@ fn template_callee(f: Node<'_>) -> Option<Node<'_>> {
     }
 }
 
-/// The call sites to rewrite this round, as `(start, end, instance name)`, in source order.
-fn call_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize, String)> {
-    let mut templates: HashMap<String, Node<'_>> = HashMap::new();
-    let mut specs: HashMap<String, (Node<'_>, Node<'_>)> = HashMap::new();
-    let mut calls: Vec<Node<'_>> = Vec::new();
+/// Function templates by name, explicit specialisations by key, and the calls with explicit template arguments.
+fn collect_template_defs<'t>(
+    tree: &'t Tree,
+    src: &str,
+) -> (
+    HashMap<String, Node<'t>>,
+    HashMap<String, (Node<'t>, Node<'t>)>,
+    Vec<Node<'t>>,
+) {
+    let mut templates: HashMap<String, Node<'t>> = HashMap::new();
+    let mut specs: HashMap<String, (Node<'t>, Node<'t>)> = HashMap::new();
+    let mut calls: Vec<Node<'t>> = Vec::new();
     let mut stack = vec![tree.root_node()];
     while let Some(n) = stack.pop() {
         match n.kind() {
@@ -271,9 +278,20 @@ fn call_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize
         let mut c = n.walk();
         stack.extend(n.children(&mut c));
     }
+    (templates, specs, calls)
+}
+
+/// The class templates of the file (primaries and partial specialisations), to read a member alias of one.
+fn collect_class_templates<'t>(
+    tree: &'t Tree,
+    src: &str,
+) -> (
+    HashMap<String, ClassTemplate<'t>>,
+    HashMap<String, Vec<ClassTemplate<'t>>>,
+) {
     // the class templates of the file, to read a member alias (`typename WelfordAcc<float>::type`) of one
-    let mut class_primary: HashMap<String, ClassTemplate<'_>> = HashMap::new();
-    let mut class_specs: HashMap<String, Vec<ClassTemplate<'_>>> = HashMap::new();
+    let mut class_primary: HashMap<String, ClassTemplate<'t>> = HashMap::new();
+    let mut class_specs: HashMap<String, Vec<ClassTemplate<'t>>> = HashMap::new();
     let mut walk = vec![tree.root_node()];
     while let Some(n) = walk.pop() {
         if n.kind() == "template_declaration" {
@@ -283,6 +301,13 @@ fn call_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize
         let mut c = n.walk();
         walk.extend(n.children(&mut c));
     }
+    (class_primary, class_specs)
+}
+
+/// The call sites to rewrite this round, as `(start, end, instance name)`, in source order.
+fn call_edits(tree: &Tree, src: &str, inst: &mut Instances) -> Vec<(usize, usize, String)> {
+    let (templates, specs, calls) = collect_template_defs(tree, src);
+    let (class_primary, class_specs) = collect_class_templates(tree, src);
     let mut edits = Vec::new();
     for call in calls {
         let Some(f) = call.child_by_field_name("function") else {
