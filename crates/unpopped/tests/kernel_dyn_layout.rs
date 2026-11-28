@@ -193,7 +193,11 @@ fn check_kernel_refuses_each_static_violation_and_accepts_its_control() {
     assert!(refused(&kernel(constant)).contains("only on a Shared or Private"));
     let mut private = ok;
     private.space = MemorySpace::Private;
-    assert_eq!(check_kernel(&kernel(private.clone())), Ok(()), "a Private dyn_layout is accepted");
+    assert_eq!(
+        check_kernel(&kernel(private.clone())),
+        Ok(()),
+        "a Private dyn_layout is accepted"
+    );
     let sw = Swizzle::new(2, 2, 3).unwrap();
     let swizzled = private
         .with_dyn_layout(dynl("(?2,?3):(?4,1)").with_swizzle(sw))
