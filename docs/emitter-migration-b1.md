@@ -42,3 +42,18 @@ What the oracle computes over an `F128`: `Add`, `Sub`, `Mul`, `Div`, `Unary(Neg)
 ## U43: `check_kernel` takes a directed rounding at f64
 
 A `Qualified` node over **f64** operands now passes `check_kernel` and runs in the oracle when its qualifier is a rounding mode (`TowardZero`, `TowardNegInf`, `TowardPosInf` or `NearestEven`) and it wraps `Add`, `Sub`, `Mul`, `Div`, `Fma` or `Sqrt` (the reference is `numerics_f64::eval_qualified_f64`, exact integer arithmetic and one rounding). `ftz` and `approx` at f64 and a half-type operand stay a named `TypeError::IllegalQualifier`; a **plan** is still refused at the plan gate. **An emitter that has no f64 directed spelling MUST decline such a kernel by name**: `unpopped-cpu-c` does (`kernel_qualified_f64_declines.rs`; C99 reaches a directed mode only through `fesetround`). The spellings (`__dadd_rn` and the family) are ROADMAP U43b.
+
+## B1 spellers-Result: `cfamily::unary_f32` / `unary_f64` return `Result<String, SpellError>` (BREAKING: a signature change)
+
+| Item | Where | Kind |
+|---|---|---|
+| `unary_f32(op, x) -> Result<String, SpellError>`, `unary_f64(op, x) -> Result<String, SpellError>` | `unpopped::cfamily` | **signature change**: they returned `String`; every call stops compiling until it handles the `Result` |
+| `SpellError::IntegerBitOp(UnaryOp)` | `unpopped::cfamily::SpellError` (`non_exhaustive`, `Debug`/`Clone`/`Copy`/`PartialEq`/`Eq`, `Display`, `Error`) | new type, one case |
+
+**What changed.** The two spellers PANICKED on `UnaryOp::Popc`, `Clz` and `Brev` (integer bit operations: a float operand never reaches them, because the typing gate refuses it first); they now return `Err(SpellError::IntegerBitOp(op))` instead of panicking. Every other operation spells exactly as before, byte for byte. `binary_f32`, `binary_f64` and `binary_int` still panic on an operation they do not spell (the plan gate backstops them); they are unchanged.
+
+**The migration line.** At each call, `unary_f32(op, x)?` if the caller already returns a `Result` whose error you can convert from `SpellError`, otherwise map the error into your own declined-op path, which is where the operation belongs anyway: `unary_f32(op, x).map_err(|_| /* your decline for this op */)`. `Err` is not reachable for a float operand today (the typing gate refuses `Popc`/`Clz`/`Brev` on a float first), so the arm costs nothing at run time and turns a latent panic into a refusal that names the operation. **Declines by name:** `unpopped-cpu-c` maps it to `Decline::UnsupportedDtypeForOp` with the `SpellError`'s text ("c-family lowering: `Popc` is an integer bit operation, refused by the typing gate"); each other emitter should do the same (a `Decline` that says which operation), never `unwrap`, never a fallback spelling.
+
+**Who calls these (measured at each repo's origin/main, 2026-11-28).** `baracuda-cuda-emit/src/cuda.rs` lines 45 and 54 (the delegating arms of its own wrappers `unary_f32` / `unary_f64`; the wrappers have about 28 call sites in that file; the compiler lists them); `bonefish-sycl-emit/src/lib.rs` lines 488 and 489 (imported from `unpopped::cfamily` at line 50). Doc comments in `cuda.rs` (line 4398) and `baracuda-cuda-emit/tests/contract.rs` (line 1951) say these functions panic: reword them. Fuel's same-named items (`run_unary_f32`, `register_unary_f32`, `unary_f32_kernel!`) are its own and are not affected (fuel has no use of `unpopped::cfamily`).
+
+**Version.** Breaking: pre-1.0 the version bump is the second number (the PM's to allocate).

@@ -33,6 +33,28 @@ use crate::ir::{ArithOp, BinaryOp, ScalarExpr, UnaryOp, is_admissible_int_reduct
 use crate::plan::KernelPlan;
 use unpopped_vocab::{AxisMask, ElementKind};
 
+/// A c-family speller was asked for an (op, dtype) pair the typing gate refuses: a typed error in place of the panic the
+/// spellers used to raise (B1). `non_exhaustive`: a later refusal is a new variant, not a break.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SpellError {
+    /// An integer bit operation (`Popc`, `Clz`, `Brev`) reached a float speller.
+    IntegerBitOp(UnaryOp),
+}
+
+impl std::fmt::Display for SpellError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IntegerBitOp(op) => write!(
+                f,
+                "c-family lowering: {op:?} is an integer bit operation, refused by the typing gate"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SpellError {}
+
 /// The C **storage** type for a dtype, or `None` if this module can't spell it.
 ///
 /// For a narrow float (FP8, f16, bf16) this is the carrier, not a compute type:
@@ -772,13 +794,12 @@ pub fn cast_scalar(from: ElementKind, to: ElementKind, expr: &str) -> String {
 /// byte-identity golden — including Baracuda's physical CUDA corpus. It belongs
 /// with a coordinated golden regen, not with a quiet cleanup.
 ///
-/// # Panics
-/// On `UnaryOp::Popc`, `UnaryOp::Clz` and `UnaryOp::Brev` (integer bit operations, which have no f32 spelling):
-/// the message is "c-family lowering: {op:?} is an integer bit operation, refused by the typing gate".
-/// Type checking refuses these first (`TypeError::IntegerOnlyOperand`, on the kernel path and the plan path), so a
-/// checked kernel or plan never reaches this panic; only a caller that spells an unchecked `UnaryOp` does.
-pub fn unary_f32(op: UnaryOp, x: String) -> String {
-    match op {
+/// # Errors
+/// [`SpellError::IntegerBitOp`] for `UnaryOp::Popc`, `UnaryOp::Clz` and `UnaryOp::Brev` (integer bit operations, which
+/// have no f32 spelling). Type checking refuses these first (`TypeError::IntegerOnlyOperand`, on the kernel path and the
+/// plan path), so a checked kernel or plan never reaches this error; only a caller that spells an unchecked `UnaryOp` does.
+pub fn unary_f32(op: UnaryOp, x: String) -> Result<String, SpellError> {
+    Ok(match op {
         UnaryOp::Neg => format!("(-{x})"),
         UnaryOp::Abs => format!("fabsf({x})"),
         UnaryOp::Sqr => format!("({x}*{x})"),
@@ -832,22 +853,17 @@ pub fn unary_f32(op: UnaryOp, x: String) -> String {
         UnaryOp::Lgamma => format!("lgammaf({x})"),
         // an integer bit operation has no float spelling: the typing gate refuses it on a float (`UnaryOp::is_bit_op`)
         UnaryOp::Popc | UnaryOp::Clz | UnaryOp::Brev => {
-            panic!(
-                "c-family lowering: {op:?} is an integer bit operation, refused by the typing gate"
-            )
+            return Err(SpellError::IntegerBitOp(op));
         }
-    }
+    })
 }
 
 /// Same as [`unary_f32`] but with f64 math-function names and double literals.
 ///
-/// # Panics
-/// On `UnaryOp::Popc`, `UnaryOp::Clz` and `UnaryOp::Brev` (integer bit operations, which have no f64 spelling):
-/// the message is "c-family lowering: {op:?} is an integer bit operation, refused by the typing gate".
-/// Type checking refuses these first (`TypeError::IntegerOnlyOperand`, on the kernel path and the plan path), so a
-/// checked kernel or plan never reaches this panic; only a caller that spells an unchecked `UnaryOp` does.
-pub fn unary_f64(op: UnaryOp, x: String) -> String {
-    match op {
+/// # Errors
+/// [`SpellError::IntegerBitOp`], as for [`unary_f32`].
+pub fn unary_f64(op: UnaryOp, x: String) -> Result<String, SpellError> {
+    Ok(match op {
         UnaryOp::Neg => format!("(-{x})"),
         UnaryOp::Abs => format!("fabs({x})"),
         UnaryOp::Sqr => format!("({x}*{x})"),
@@ -891,11 +907,9 @@ pub fn unary_f64(op: UnaryOp, x: String) -> String {
         UnaryOp::Lgamma => format!("lgamma({x})"),
         // an integer bit operation has no float spelling: the typing gate refuses it on a float (`UnaryOp::is_bit_op`)
         UnaryOp::Popc | UnaryOp::Clz | UnaryOp::Brev => {
-            panic!(
-                "c-family lowering: {op:?} is an integer bit operation, refused by the typing gate"
-            )
+            return Err(SpellError::IntegerBitOp(op));
         }
-    }
+    })
 }
 
 /// Non-infix binary op in f32 math.
