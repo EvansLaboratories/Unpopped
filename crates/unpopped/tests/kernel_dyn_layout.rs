@@ -14,7 +14,7 @@ use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
 use unpopped::oracle::kernel_launch::run_launch;
 use unpopped_vocab::ElementKind::{I32, U32};
-use unpopped_vocab::layout_algebra::DynLayout;
+use unpopped_vocab::layout_algebra::{DynLayout, Swizzle};
 
 fn tid() -> ScalarExpr {
     ScalarExpr::Exec(ExecId::ThreadIdx(0))
@@ -208,4 +208,64 @@ fn a_dyn_layout_is_serialized_as_text_and_absent_when_there_is_none() {
     // the document of the plain kernel loads with no dyn_layout
     let back: KernelFn = serde_json::from_str(&serde_json::to_string(&plain).unwrap()).unwrap();
     assert!(back.allocs[0].dyn_layout.is_none());
+}
+
+/// `swz(2,2,3)` on 4-byte elements has a 128-byte period: 32 elements, so it needs an extent that is a multiple of 32 and a 128-byte
+/// aligned base (`docs/design-dynamic-layout.md` section 8).
+fn swizzled(text: &str, extent: u32) -> AllocDecl {
+    let sw = Swizzle::new(2, 2, 3).unwrap();
+    shared(Extent::Static(extent))
+        .with_dyn_layout(dynl(text).with_swizzle(sw))
+        .with_align_bytes(128)
+}
+
+#[test]
+fn a_swizzled_dyn_layout_runs_when_the_period_divides_the_bound_extent_and_traps_when_it_does_not()
+{
+    // control: extent 64 = 2 periods; the swizzle permutes the storage, so the reversal kernel computes the same bytes
+    let k = kernel(swizzled("(?2,?3):(?4,1)", 64));
+    for args in [(8, 8, 8), (4, 16, 16)] {
+        assert_eq!(launch(&k, args), Ok(want()), "{args:?}");
+    }
+    // extent 48 is not a multiple of the 32-element period: the (8,6) bind has size 48, is injective and inside the extent, and
+    // is refused only by the swizzle rule, before the first statement
+    let k = kernel(swizzled("(?2,?3):(?4,1)", 48));
+    assert!(why_of(launch(&k, (8, 6, 6))).contains("swizzle period does not divide"));
+    // control for the cause: without the swizzle the same bind is accepted (the kernel then reads past the 48 elements, a different trap)
+    let plain = kernel(shared(Extent::Static(48)).with_dyn_layout(dynl("(?2,?3):(?4,1)")));
+    assert!(matches!(
+        launch(&plain, (8, 6, 6)),
+        Err(KernelTrap::AllocOutOfBounds { .. })
+    ));
+}
+
+#[test]
+fn a_dynamic_extent_under_a_swizzle_is_checked_on_its_value() {
+    let sw = Swizzle::new(2, 2, 3).unwrap();
+    let decl = shared(Extent::Param(2))
+        .with_dyn_layout(dynl("?2:1").with_swizzle(sw))
+        .with_align_bytes(128);
+    let k = kernel(decl);
+    assert_eq!(check_kernel(&k), Ok(()));
+    assert_eq!(launch(&k, (64, 0, 0)), Ok(want()));
+    assert!(why_of(launch(&k, (48, 0, 0))).contains("swizzle period does not divide"));
+}
+
+#[test]
+fn check_kernel_refuses_the_swizzle_rules_that_need_no_value() {
+    // a swizzle base below the element width (U32 is 4 bytes: base 1 mixes bits inside one element)
+    let low = Swizzle::new(2, 1, 3).unwrap();
+    let a = shared(Extent::Static(64))
+        .with_dyn_layout(dynl("(?2,?3):(?4,1)").with_swizzle(low))
+        .with_align_bytes(128);
+    assert!(refused(&kernel(a)).contains("below the element width"));
+    // no align_bytes on a swizzled allocation
+    let sw = Swizzle::new(2, 2, 3).unwrap();
+    let a = shared(Extent::Static(64)).with_dyn_layout(dynl("(?2,?3):(?4,1)").with_swizzle(sw));
+    assert!(refused(&kernel(a)).contains("align_bytes"));
+    // control: the aligned one is accepted
+    assert_eq!(
+        check_kernel(&kernel(swizzled("(?2,?3):(?4,1)", 64))),
+        Ok(())
+    );
 }

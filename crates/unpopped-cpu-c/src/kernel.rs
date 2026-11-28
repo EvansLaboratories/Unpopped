@@ -49,6 +49,7 @@ fn admit(k: &KernelFn, in_module: bool) -> Result<(), LowerError> {
     }
     if k.launch.is_some() {
         crate::launch::admit_launch(k)?;
+        crate::launch::admit_dyn_layout(k, in_module)?;
     } else if !k.allocs.is_empty() {
         return Err(refuse("an allocation without a launch shape"));
     }

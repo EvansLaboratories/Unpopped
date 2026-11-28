@@ -2,7 +2,7 @@
 //! `DynLayout` (`docs/design-dynamic-layout.md`): a layout whose leaves may be scalar parameters, bound to a static `Layout` at
 //! launch. The static `Layout` still refuses a symbolic mode, by design; a `DynLayout` parses the same text and binds it.
 
-use unpopped_vocab::layout_algebra::{Dim, DynLayout, DynTuple, Layout, LayoutError};
+use unpopped_vocab::layout_algebra::{Dim, DynLayout, DynTuple, Layout, LayoutError, Swizzle};
 
 const NAMES: &[(&str, u32)] = &[("m", 0), ("n", 1), ("lda", 2)];
 
@@ -67,4 +67,31 @@ fn the_canonical_text_round_trips_and_names_resolve_to_it() {
     assert!("(?01):(1)".parse::<DynLayout>().is_err());
     assert!("(k):(1)".parse::<DynLayout>().is_err());
     assert!(DynLayout::parse_with("(m,n)", NAMES).is_err());
+}
+
+#[test]
+fn a_byte_swizzle_rides_on_the_layout_without_changing_what_binds() {
+    let sw = Swizzle::new(2, 2, 3).unwrap();
+    let d = dynl("(m,n):(lda,1)").with_swizzle(sw);
+    assert_eq!(d.swizzle(), Some(sw));
+    // the bound layout is the static one: the swizzle is the consumer's to apply
+    let bound = d.bind(&[(0, 8), (1, 8), (2, 8)]).unwrap();
+    assert_eq!(bound, "(8,8):(8,1)".parse::<Layout>().unwrap());
+    // the canonical text is `swz(B,M,S)(shape:stride)` and round-trips; a layout without a swizzle prints as before
+    let text = d.to_string();
+    assert_eq!(text, "swz(2,2,3)((?0,?1):(?2,1))");
+    assert_eq!(text.parse::<DynLayout>().unwrap(), d);
+    assert_eq!(dynl("(m,n):(lda,1)").to_string(), "(?0,?1):(?2,1)");
+    // names resolve under a swizzle too; a second swizzle, a bad swizzle and a missing layout are refused
+    assert_eq!(
+        DynLayout::parse_with("swz(2,2,3)((m,n):(lda,1))", NAMES).unwrap(),
+        d
+    );
+    assert!(
+        "swz(2,2,3)(swz(2,2,3)((?0):(1)))"
+            .parse::<DynLayout>()
+            .is_err()
+    );
+    assert!("swz(3,2,2)((?0):(1))".parse::<DynLayout>().is_err());
+    assert!("swz(2,2,3)".parse::<DynLayout>().is_err());
 }

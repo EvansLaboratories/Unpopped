@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! A `dyn_layout` on an allocation (a layout with scalar-parameter leaves, `docs/design-dynamic-layout.md`) is declined by name by
-//! `unpopped-cpu-c`, which spells the identity layout only: never silently ignored. The same kernel without the field lowers.
+//! A `dyn_layout` is spelled by `unpopped-cpu-c` for a single-phase kernel (`tests/kernel_dyn_layout_emit_agrees.rs`) and declined by name
+//! where the emitter would address the storage without the layout: a Device barrier (the multi-phase body), a callee, a fragment move.
 
 use unpopped::backend::Backend;
 use unpopped::exec::{AllocDecl, ExecId, Extent, LaunchShape, MemorySpace, Scope};
@@ -71,14 +71,17 @@ fn kernel(alloc: AllocDecl) -> KernelFn {
 }
 
 #[test]
-fn a_dyn_layout_declines_by_name_and_the_plain_allocation_lowers() {
+fn a_dyn_layout_lowers_in_a_plain_kernel_and_declines_by_name_where_it_would_be_bypassed() {
     let plain = AllocDecl::new("sh", MemorySpace::Shared, U32, Extent::Static(64));
-    assert!(CpuC.lower_kernel(&kernel(plain.clone())).is_ok());
     let dynamic = plain.with_dyn_layout("(?2,?3):(?3,1)".parse::<DynLayout>().unwrap());
-    let k = kernel(dynamic);
+    let k = kernel(dynamic.clone());
     assert_eq!(check_kernel(&k), Ok(()), "well formed");
-    let err = CpuC
-        .lower_kernel(&k)
-        .expect_err("cpu_c spells the identity layout only");
+    // control: the single-phase kernel lowers
+    CpuC.lower_kernel(&k).expect("a dyn_layout is spelled");
+    // a Device barrier makes the body multi-phase, whose block loops this emitter does not give the launch check
+    let mut phased = kernel(dynamic);
+    phased.body.0.insert(1, Stmt::barrier(Scope::Device));
+    assert_eq!(check_kernel(&phased), Ok(()), "well formed");
+    let err = CpuC.lower_kernel(&phased).expect_err("declined");
     assert!(format!("{err:?}").contains("dyn_layout"), "{err:?}");
 }
