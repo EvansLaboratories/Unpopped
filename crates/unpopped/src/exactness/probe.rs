@@ -128,6 +128,35 @@ fn probe(name: &'static str, dtype: ElementKind, op: ProbeOp, operands: &[f64]) 
     }
 }
 
+/// The two controls with a special operand: `inf + 1 = inf` and `NaN * 2 = NaN` (neither involves a subnormal).
+fn special_controls(dtype: ElementKind, (mbits, ebits): (i32, u32)) -> [SubnormalProbe; 2] {
+    let inf_bits = ((1u64 << ebits) - 1) << mbits;
+    let nan_bits = inf_bits | (1 << (mbits - 1));
+    let control = |name, op, operands, expected| SubnormalProbe {
+        name,
+        dtype,
+        op,
+        operands,
+        expected,
+        subnormal_operand: false,
+        subnormal_result: false,
+    };
+    [
+        control(
+            "control_infinity",
+            ProbeOp::Add,
+            vec![inf_bits, encode(dtype, 1.0)],
+            Expected::Bits(inf_bits),
+        ),
+        control(
+            "control_nan",
+            ProbeOp::Mul,
+            vec![nan_bits, encode(dtype, 2.0)],
+            Expected::Nan,
+        ),
+    ]
+}
+
 /// The probes for `dtype`, or `None` for a dtype that has none.
 ///
 /// With `s` the smallest subnormal, `n` the smallest normal and `big` a larger subnormal (`3 s`):
@@ -149,8 +178,6 @@ pub fn subnormal_probes(dtype: ElementKind) -> Option<Vec<SubnormalProbe>> {
     let s = f64::powi(2.0, emin - mbits);
     let n = f64::powi(2.0, emin);
     let big = 3.0 * s;
-    let inf_bits = ((1u64 << ebits) - 1) << mbits;
-    let nan_bits = inf_bits | (1 << (mbits - 1));
     let mut v = vec![
         probe(
             "mul_add_subnormal_operand",
@@ -186,23 +213,6 @@ pub fn subnormal_probes(dtype: ElementKind) -> Option<Vec<SubnormalProbe>> {
         ),
         probe("control_normal", dtype, ProbeOp::MulAdd, &[1.5, 2.0, 1.0]),
     ];
-    v.push(SubnormalProbe {
-        name: "control_infinity",
-        dtype,
-        op: ProbeOp::Add,
-        operands: vec![inf_bits, encode(dtype, 1.0)],
-        expected: Expected::Bits(inf_bits),
-        subnormal_operand: false,
-        subnormal_result: false,
-    });
-    v.push(SubnormalProbe {
-        name: "control_nan",
-        dtype,
-        op: ProbeOp::Mul,
-        operands: vec![nan_bits, encode(dtype, 2.0)],
-        expected: Expected::Nan,
-        subnormal_operand: false,
-        subnormal_result: false,
-    });
+    v.extend(special_controls(dtype, (mbits, ebits)));
     Some(v)
 }
