@@ -247,3 +247,43 @@ fn a_buffer_of_6_bit_elements_is_one_byte_each_with_the_padding_ignored_on_read_
         );
     }
 }
+
+#[test]
+fn a_same_type_copy_of_garbage_padding_stores_the_canonical_element() {
+    // a Load of a byte with bits 6-7 set into a local, then a Store of that local verbatim (no Cast): the local holds the
+    // canonical element, so "ignore on read, zero on write" holds for copies too
+    for ty in [F6E2M3, F6E3M2] {
+        let k = KernelFn::new(
+            "f6_copy",
+            F32,
+            vec![
+                Param::buffer("in", ty, BufferRole::Read, Some(1)),
+                Param::buffer("out", ty, BufferRole::ReadWrite, Some(1)),
+            ],
+            vec![LocalDecl::scalar(ty)],
+            Block(vec![
+                Stmt::Load {
+                    local: 0,
+                    place: at(0),
+                },
+                Stmt::Store {
+                    place: at(1),
+                    value: ScalarExpr::Local(0),
+                },
+            ]),
+        )
+        .with_launch(LaunchShape::new([64, 1, 1], [1, 1, 1]));
+        let dirty: Vec<u8> = (0..64u8).map(|c| c | 0xC0).collect();
+        let args = run(
+            &k,
+            vec![
+                KernelArg::Buffer(TypedBuffer::new(ty, vec![64], vec![1], dirty)),
+                KernelArg::Buffer(TypedBuffer::new(ty, vec![64], vec![1], vec![0xFF; 64])),
+            ],
+        );
+        let KernelArg::Buffer(out) = &args[1] else {
+            unreachable!()
+        };
+        assert_eq!(out.bytes, (0..64u8).collect::<Vec<_>>(), "{ty:?}");
+    }
+}
