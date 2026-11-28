@@ -1,6 +1,6 @@
 # Design note: `groups` on `MmaAtom` for f16 `m8n8k4` (U70; no code)
 
-Status: **draft for `unpopped` (owner of U70) before any PR.** Docs only. Sources: PTX ISA 9.5 section 9.7.16.5.1 (pp. 531-536), text formulas read; Figures 49-55 are images and are cited by figure, not read. Single source. Patent column: this note describes a layout rule, applies 519 B and US12314717B2 as in `docs/mma-atom-coverage.md`; not a clearance; no attorney; findings not advice.
+Status: **A accepted by `unpopped` (owner of ROADMAP U70) 2026-11-28.** Docs only; the build follows in its own PR. Sources: PTX ISA 9.5 section 9.7.16.5.1 (pp. 531-536), text formulas read; Figures 49-55 are images and are cited by figure, not read. Single source. Patent column: this note describes a layout rule, applies 519 B and US12314717B2 as in `docs/mma-atom-coverage.md`; not a clearance; no attorney; findings not advice.
 
 ## 1. What the instruction is
 
@@ -43,10 +43,12 @@ The formulas use only `laneid % 4` and the high/low half, so **all four groups s
 4. Constructors: `nvidia_m8n8k4_f16` with `.row/.col` per operand and `.f16/.f32` accumulator (A and B each row or col, so the layout choice is a parameter, as for `m16n8k8` bf16 vs tf32) and tests per PTX formula in the `(row, col)` style of `tests/mma_atoms_*.rs`.
 5. Emitters: an emitter sees `lanes`, `groups` and the map as data; no emitter change is needed to keep declining (the field is `None`-like for existing atoms).
 
-## 5. Open for `unpopped`
+## 5. Decided (`unpopped`, 2026-11-28)
 
-- Accept A (field plus map) or keep C?
-- Does the lane map belong on `MmaAtom` or on the launch's subgroup description (`with_subgroup`)? It is per instruction, so I put it on the atom.
-- Name: `groups` is the proposed name; `quad_pairs` would fit this instruction only.
+- Option A: `groups: u32` plus a `(group, local lane) -> lane` flat map, additive, `MmaAtom` stays `non_exhaustive`.
+- The map lives on the **atom** (it is per instruction); the launch states only the subgroup size, which `check_mma` requires to equal `lanes * groups`.
+- Name: `groups`.
+- **`MmaAtom` stays free-form** (no validated shape table, which would duplicate the constructors). The constructors carry the PTX meaning; a hand-built atom is a model, and `check_mma`'s launch rule plus `MmaAtom::new`'s bijection check are the only guards. (This answers the probe in ROADMAP U70: `MmaAtom::new` admits a hand-built 8-lane `8x8x4` f16 atom and `check_kernel` runs it over an 8-lane subgroup as one MMA, which is not what `mma.m8n8k4` does.)
+- Build order for the follow-up PR: `groups = 1` plus the identity map on every shipped atom (no behaviour change, proved by the existing atom tests); the oracle split/scatter with a cross-group isolation test (different data per group); the `m8n8k4` constructors with `.row`/`.col` per operand; the 519 B / US12314717B2 wording on the atom as on the others. Full gate.
 
 — lane: unpopped-mma
