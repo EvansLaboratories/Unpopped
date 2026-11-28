@@ -265,8 +265,13 @@ fn check_alloc_layout(
     }
     let Some(l) = &a.layout else { return Ok(()) };
     // 1. space: a layout (and a swizzle) belongs to a `Shared` array; the other spaces keep the identity until a row asks
-    if a.space != MemorySpace::Shared {
-        return bad("a layout is only on a Shared allocation");
+    if !matches!(a.space, MemorySpace::Shared | MemorySpace::Private) {
+        return bad(
+            "a layout is only on a Shared or Private allocation (a Global array is a buffer's own shape and stride)",
+        );
+    }
+    if a.space == MemorySpace::Private && l.swizzle.is_some() {
+        return bad("a swizzle is a shared-memory bank pattern: a Private array has no banks");
     }
     // 2. size: a Static extent equal to the layout's size (a Param extent is not known here)
     let Extent::Static(n) = a.extent else {
@@ -317,8 +322,13 @@ fn check_dyn_layout(
     if a.layout.is_some() {
         return bad("an allocation carries a layout or a dyn_layout, not both");
     }
-    if a.space != MemorySpace::Shared {
-        return bad("a dyn_layout is only on a Shared allocation");
+    if !matches!(a.space, MemorySpace::Shared | MemorySpace::Private) {
+        return bad(
+            "a dyn_layout is only on a Shared or Private allocation (a Global array is a buffer's own shape and stride)",
+        );
+    }
+    if a.space == MemorySpace::Private && d.swizzle().is_some() {
+        return bad("a swizzle is a shared-memory bank pattern: a Private array has no banks");
     }
     for local in d.params() {
         let integer = k

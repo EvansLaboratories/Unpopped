@@ -187,10 +187,18 @@ fn check_kernel_refuses_each_static_violation_and_accepts_its_control() {
         .clone()
         .with_layout("(8,8):(8,1)".parse::<AllocLayout>().unwrap());
     assert!(refused(&kernel(both)).contains("not both"));
-    // not on a Shared allocation
+    // not on a Constant allocation (a Private one is accepted since section 9; a swizzle on it is not)
+    let mut constant = ok.clone();
+    constant.space = MemorySpace::Constant;
+    assert!(refused(&kernel(constant)).contains("only on a Shared or Private"));
     let mut private = ok;
     private.space = MemorySpace::Private;
-    assert!(refused(&kernel(private)).contains("only on a Shared"));
+    assert_eq!(check_kernel(&kernel(private.clone())), Ok(()), "a Private dyn_layout is accepted");
+    let sw = Swizzle::new(2, 2, 3).unwrap();
+    let swizzled = private
+        .with_dyn_layout(dynl("(?2,?3):(?4,1)").with_swizzle(sw))
+        .with_align_bytes(128);
+    assert!(refused(&kernel(swizzled)).contains("no banks"));
 }
 
 #[test]
