@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! **The NVIDIA `mma.sync.aligned` 4-bit integer atoms (`m8n8k32`, `m16n8k32`, `m16n8k64`; s4, u4, mixed) of ROADMAP U7
-//! theme 3 put every fragment element where the PTX ISA says** (placement only: the oracle cannot run a 4-bit fragment yet, see the last test). Layouts: `(row, col)` formulas
+//! theme 3 put every fragment element where the PTX ISA says** (placed, and run in the oracle against a plain triple loop). Layouts: `(row, col)` formulas
 //! from PTX ISA 9.5 sections 9.7.16.5.4 (Figures 62-64, pp. 543-545), 9.7.16.5.10 (Figures 90, 92, 95, pp. 571-575) and
 //! 9.7.16.5.11 (Figures 96-99, pp. 578-582). Patent column: US12314717B2, applies 519 B; wrapper read 2026-11-27; not a
 //! clearance; no attorney; findings not advice.
 
-use unpopped::kernel::{KernelError, check_kernel};
+use unpopped::kernel::check_kernel;
 use unpopped::mma::MmaAtom;
 use unpopped_vocab::ElementKind::{I4, I32, U4};
 
 #[path = "support/mma_run.rs"]
 #[allow(dead_code, reason = "shared helpers: each test file uses a subset")]
 mod support;
-use support::{mma_kernel, places};
+use support::{agrees, mma_kernel, places};
 
 /// m8n8k32: A `(gid, tig * 8 + i)`, B `(tig * 8 + i, gid)`, C `(gid, tig * 2 + i)`.
 fn k32_8(which: usize, lane: u32, i: u32) -> (u32, u32) {
@@ -73,20 +73,25 @@ fn the_m16n8k64_int4_atoms_place() {
 }
 
 #[test]
-fn the_oracle_cannot_yet_run_a_4_bit_fragment() {
-    // A fragment is a `Private` allocation of the atom's element type, and a kernel may not `Store` a sub-byte element
-    // (`kernel_check.rs`, ROADMAP U9b ruled 2026-11-05: a read-modify-write of a byte two threads share), so nothing can fill an
-    // `I4`/`U4` fragment and the atoms above are data only. If the oracle gains a way to fill one, this test fails: replace it
-    // with `agrees` over each table.
-    let atom = MmaAtom::nvidia_m8n8k32_int4_s32(I4, I4);
-    let got = check_kernel(&mma_kernel(&atom));
-    assert!(
-        matches!(got, Err(KernelError::TypeMismatch { what }) if what.contains("sub-byte")),
-        "{got:?}"
-    );
-    // control: the same harness kernel over an 8-bit atom is well formed
+fn the_int4_atoms_run_in_the_oracle() {
+    // A fragment is a `Private` allocation of 4-bit elements; a `Store` into one is allowed since #506, so the oracle fills it,
+    // runs `Stmt::Mma` and the D fragments equal the plain triple loop placed through the same table.
+    for (a, b) in PAIRS {
+        agrees(&MmaAtom::nvidia_m8n8k32_int4_s32(a, b), k32_8);
+        agrees(&MmaAtom::nvidia_m16n8k32_int4_s32(a, b), k32_16);
+        agrees(&MmaAtom::nvidia_m16n8k64_int4_s32(a, b), k64);
+    }
+}
+
+#[test]
+fn the_harness_kernels_are_well_formed() {
+    // the harness kernels check, 8-bit control and 4-bit.
     assert_eq!(
         check_kernel(&mma_kernel(&MmaAtom::nvidia_m16n8k32_u8_s32())),
+        Ok(())
+    );
+    assert_eq!(
+        check_kernel(&mma_kernel(&MmaAtom::nvidia_m8n8k32_int4_s32(I4, U4))),
         Ok(())
     );
 }

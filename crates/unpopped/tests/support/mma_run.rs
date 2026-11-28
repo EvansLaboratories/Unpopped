@@ -10,7 +10,7 @@ use unpopped::mma::MmaAtom;
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
 use unpopped::oracle::kernel_launch::run_launch;
-use unpopped_vocab::ElementKind::{self, Bf16, F16, F32, F64, I8, I32, U8, U32};
+use unpopped_vocab::ElementKind::{self, Bf16, F16, F32, F64, I4, I8, I32, U4, U8, U32};
 use unpopped_vocab::{Fp8E4M3FN, Fp8E5M2};
 
 /// `(row, col)` of value `i` of `lane` for operand 0/1/2 = A/B/C.
@@ -118,6 +118,9 @@ pub(crate) fn value(ty: ElementKind, seed: u32, i: u32) -> f64 {
         ElementKind::Fp8E4M3FN => f64::from(h % 31) / 8.0 - 1.875,
         ElementKind::Fp8E5M2 => f64::from(h % 17) / 4.0 - 2.0,
         ElementKind::F4E2M1 => e2m1_value(h % 16),
+        // the full 4-bit ranges, so a signed/unsigned mix-up changes the answer
+        I4 => f64::from(h % 16) - 8.0,
+        U4 => f64::from(h % 16),
         _ => f64::from(h % 9) - 4.0,
     }
 }
@@ -134,6 +137,9 @@ fn e2m1_value(bits: u32) -> f64 {
 }
 
 fn encode(ty: ElementKind, x: f64) -> Vec<u8> {
+    if matches!(ty, I4 | U4) {
+        return vec![(x as i32 & 0xF) as u8];
+    }
     if ty == ElementKind::F4E2M1 {
         let bits = (0..16u32).find(|&b| e2m1_value(b) == x && !(x == 0.0 && b == 8));
         return vec![bits.unwrap_or_else(|| panic!("{x} is not an E2M1 value")) as u8];
@@ -162,7 +168,7 @@ fn decode(ty: ElementKind, b: &[u8]) -> f64 {
 }
 
 fn buffer(ty: ElementKind, xs: &[f64]) -> TypedBuffer {
-    if ty == ElementKind::F4E2M1 {
+    if matches!(ty, ElementKind::F4E2M1 | I4 | U4) {
         // two to a byte, low nibble first (the oracle's sub-byte packing)
         let nib: Vec<u8> = xs.iter().map(|&x| encode(ty, x)[0]).collect();
         let bytes: Vec<u8> = nib
