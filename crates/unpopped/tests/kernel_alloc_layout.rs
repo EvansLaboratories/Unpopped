@@ -248,7 +248,11 @@ fn a_layout_needs_a_shared_static_allocation_of_its_own_size() {
     // 1. space: a layout belongs to a Shared or a Private allocation (a Private array is one per thread; docs/design-dynamic-layout.md section 9)
     let private = AllocDecl::new("p", MemorySpace::Private, U32, Extent::Static(64))
         .with_layout(layout("(8,8):(1,8)"));
-    assert_eq!(check_kernel(&kernel(private.clone())), Ok(()), "a Private layout is accepted");
+    assert_eq!(
+        check_kernel(&kernel(private.clone())),
+        Ok(()),
+        "a Private layout is accepted"
+    );
     // but a swizzle is a shared-memory bank pattern: refused by name on a Private array
     let swz = Swizzle::new(2, 2, 3).unwrap();
     let swizzled = AllocDecl::new("p", MemorySpace::Private, U32, Extent::Static(64))
