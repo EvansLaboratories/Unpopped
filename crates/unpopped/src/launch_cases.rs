@@ -38,6 +38,7 @@
 //! }
 //! ```
 
+use crate::exec::SubgroupSize;
 use crate::ir::{Expr, OpDef, ScalarExpr, UnaryOp, input};
 use crate::kernel::KernelFn;
 use crate::kernel_lift::lift_elementwise_opdef_launched;
@@ -45,6 +46,7 @@ use crate::oracle::TypedBuffer;
 use crate::oracle::kernel_eval::KernelArg;
 use crate::oracle::kernel_launch::run_launch;
 use unpopped_vocab::ElementKind;
+use unpopped_vocab::ElementKind::{I32, U32};
 
 /// One launched kernel with its arguments and the oracle's result.
 #[derive(Clone, Debug)]
@@ -99,13 +101,30 @@ fn case(
     (block, grid): (u32, u32),
     ulps: u64,
 ) -> LaunchCase {
+    let ins = [dense(dtype, shape, 1, false), dense(dtype, shape, 2, false)];
+    case_over(op, dtype, body, shape, (block, grid), ulps, ins)
+}
+
+/// [`case`] with the two input buffers given, so an input can be a strided, offset, flipped or broadcast view of its storage
+/// (the kernel reads through the bound buffer's own shape, strides and base offset). The output is always dense.
+fn case_over(
+    op: &str,
+    dtype: ElementKind,
+    body: ScalarExpr,
+    shape: &[i64],
+    launch: (u32, u32),
+    ulps: u64,
+    ins: [TypedBuffer; 2],
+) -> LaunchCase {
+    let (block, grid) = launch;
     let rank = u8::try_from(shape.len()).expect("rank fits u8");
     let opdef = OpDef::elementwise(op, 2, &[dtype], Expr(body));
     let kernel = lift_elementwise_opdef_launched(&opdef, dtype, rank, block, grid)
         .expect("the corpus's kernels lift");
+    let [in0, in1] = ins;
     let mut args: Vec<KernelArg> = vec![
-        KernelArg::Buffer(dense(dtype, shape, 1, false)),
-        KernelArg::Buffer(dense(dtype, shape, 2, false)),
+        KernelArg::Buffer(in0),
+        KernelArg::Buffer(in1),
         KernelArg::Buffer(dense(dtype, shape, 0, true)),
     ];
     args.extend(shape.iter().map(|&e| KernelArg::Int(i128::from(e))));
@@ -122,6 +141,25 @@ fn case(
         expected: vec![(out, result)],
         ulps,
     }
+}
+
+/// A view of `len` storage elements (from `seed`): logical `shape` read at `strides` from element `base`.
+fn view(
+    dtype: ElementKind,
+    shape: &[i64],
+    strides: &[i64],
+    base: i64,
+    len: usize,
+    seed: u32,
+) -> TypedBuffer {
+    let mut b = TypedBuffer::new(
+        dtype,
+        shape.to_vec(),
+        strides.to_vec(),
+        pattern(dtype, len, seed),
+    );
+    b.base_offset = base;
+    b
 }
 
 fn bx(e: ScalarExpr) -> Box<ScalarExpr> {
@@ -169,12 +207,94 @@ pub fn launch_cases() -> Vec<LaunchCase> {
         case(
             "add",
             ElementKind::U32,
-            ScalarExpr::Add(bx(a), bx(b)),
+            ScalarExpr::Add(bx(a.clone()), bx(b.clone())),
             &[37],
             (16, 3),
             0,
         ),
+        // ---- the second slice (appended; nothing above changes): views and launch geometry ----
+        //
+        // A transposed first input: logical `[4, 6]` read from column-major storage (strides `[1, 4]`).
+        case_over(
+            "view_transposed",
+            I32,
+            ScalarExpr::Sub(bx(a.clone()), bx(b.clone())),
+            &[4, 6],
+            (8, 2),
+            0,
+            [
+                view(I32, &[4, 6], &[1, 4], 0, 24, 1),
+                dense(I32, &[4, 6], 2, false),
+            ],
+        ),
+        // A pitched sub-view: rows 8 apart, the first input starting at element 2 and the second at 1 (`base_offset`).
+        case_over(
+            "view_pitched",
+            I32,
+            ScalarExpr::Add(bx(a.clone()), bx(b.clone())),
+            &[3, 5],
+            (4, 3),
+            0,
+            [
+                view(I32, &[3, 5], &[8, 1], 2, 24, 1),
+                view(I32, &[3, 5], &[8, 1], 1, 24, 2),
+            ],
+        ),
+        // A flipped last axis (negative stride, from the row's end) against a row broadcast (stride 0).
+        case_over(
+            "view_flipped_broadcast",
+            I32,
+            ScalarExpr::Sub(bx(a.clone()), bx(b.clone())),
+            &[4, 5],
+            (16, 1),
+            0,
+            [
+                view(I32, &[4, 5], &[5, -1], 4, 20, 1),
+                view(I32, &[4, 5], &[0, 1], 0, 5, 2),
+            ],
+        ),
+        // Launch geometry: a block that is not a power of two, fewer threads than elements (grid-stride wraps).
+        case(
+            "launch_odd_block",
+            U32,
+            ScalarExpr::Add(bx(a.clone()), bx(b.clone())),
+            &[37],
+            (3, 5),
+            0,
+        ),
+        // More threads than elements: the idle threads must write nothing.
+        case(
+            "launch_idle_threads",
+            U32,
+            ScalarExpr::Sub(bx(a.clone()), bx(b.clone())),
+            &[5],
+            (32, 4),
+            0,
+        ),
+        // One thread does it all.
+        case(
+            "launch_single_thread",
+            I32,
+            ScalarExpr::Add(bx(a.clone()), bx(b.clone())),
+            &[2, 9],
+            (1, 1),
+            0,
+        ),
+        // A subgroup-size range on the launch (no barrier or shuffle, so every size in it gives the one result).
+        subgroup_case(
+            "launch_subgroup_range",
+            ScalarExpr::Add(bx(a), bx(b)),
+            (8, 32),
+        ),
     ]
+}
+
+/// A one-operation `F32` case over `[64]` (block 64, grid 2) whose launch requires a subgroup size in `range`.
+fn subgroup_case(op: &str, body: ScalarExpr, range: (u32, u32)) -> LaunchCase {
+    let mut c = case(op, ElementKind::F32, body, &[64], (64, 2), 0);
+    let launch = c.kernel.launch.as_mut().expect("a launched kernel");
+    launch.subgroup = Some(SubgroupSize::new(range.0, range.1));
+    c
 }
 
 #[cfg(test)]
@@ -189,6 +309,50 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), cases.len());
         assert!(cases.iter().all(|c| !c.expected.is_empty()));
+    }
+
+    #[test]
+    fn every_viewed_input_is_read_through_its_view_not_the_dense_storage() {
+        // The value mutant of the view cases, one input at a time: read that input's storage densely (strides and base offset
+        // ignored) and the output must change, so an emitter that ignores any one view is caught, and a case whose view is
+        // really dense (or only one of whose inputs is a view) cannot pass for more than it is.
+        let mut viewed = 0;
+        for c in launch_cases() {
+            for input in 0..2 {
+                let mut args = c.args.clone();
+                let KernelArg::Buffer(b) = &mut args[input] else {
+                    unreachable!()
+                };
+                let dense_strides = dense(b.dtype, &b.shape, 0, true).strides;
+                if b.strides == dense_strides && b.base_offset == 0 {
+                    continue;
+                }
+                viewed += 1;
+                b.strides = dense_strides;
+                b.base_offset = 0;
+                let need = b.shape.iter().product::<i64>() as usize * 4;
+                b.bytes.resize(need.max(b.bytes.len()), 0);
+                run_launch(&c.kernel, &mut args).expect("the dense reading runs");
+                let KernelArg::Buffer(got) = &args[2] else {
+                    unreachable!()
+                };
+                assert_ne!(got.bytes, c.expected[0].1.bytes, "{} input {input}", c.name);
+            }
+        }
+        assert_eq!(viewed, 5, "transposed 1, pitched 2, flipped/broadcast 2");
+    }
+
+    #[test]
+    fn the_subgroup_case_carries_its_range_and_the_others_do_not() {
+        for c in launch_cases() {
+            let sg = c.kernel.launch.expect("launched").subgroup;
+            assert_eq!(
+                sg.is_some(),
+                c.name == "launch_subgroup_range_f32",
+                "{}",
+                c.name
+            );
+        }
     }
 
     #[test]

@@ -4,7 +4,8 @@
 //! oracle evaluates within a few ulp. Oracle runs against Rust references; the form is asserted from the lifted IR.
 
 use unpopped::exec::LaunchShape;
-use unpopped::kernel::KernelFn;
+use unpopped::ir::{ApproxSpelling, ScalarExpr};
+use unpopped::kernel::{KernelFn, Stmt};
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::KernelArg;
 use unpopped::oracle::kernel_launch::run_launch;
@@ -78,4 +79,53 @@ fn a_wrong_argument_count_or_a_name_not_in_the_set_declines() {
     assert!(lift(&one("__expf(in[0], in[1])")).is_err());
     assert!(lift(&one("__fdividef(in[0])")).is_err());
     assert!(lift(&one("__sinf(in[0])")).is_err());
+}
+
+/// Every spelling carried by a `Qualified` node of `e`, outermost first.
+fn spellings(e: &ScalarExpr, out: &mut Vec<Option<ApproxSpelling>>) {
+    match e {
+        ScalarExpr::Qualified(inner, n) => {
+            out.push(n.spelling);
+            spellings(inner, out);
+        }
+        ScalarExpr::Mul(a, b) | ScalarExpr::Div(a, b) => {
+            spellings(a, out);
+            spellings(b, out);
+        }
+        ScalarExpr::Unary(_, x) => spellings(x, out),
+        _ => {}
+    }
+}
+
+#[test]
+fn each_intrinsic_names_itself_on_its_approx_node() {
+    // ROADMAP U37: the walker keeps the source token on the node, so a CUDA re-emit can print it
+    let cases = [
+        ("__expf(in[0])", ApproxSpelling::Expf),
+        ("__exp10f(in[0])", ApproxSpelling::Exp10f),
+        ("__log2f(in[0])", ApproxSpelling::Log2f),
+        ("__logf(in[0])", ApproxSpelling::Logf),
+        ("__log10f(in[0])", ApproxSpelling::Log10f),
+        ("__fdividef(in[0], in[1])", ApproxSpelling::Fdividef),
+    ];
+    for (call, want) in cases {
+        let k = lift(&one(call)).unwrap_or_else(|e| panic!("{call}: {e:?}"));
+        let mut got = Vec::new();
+        for st in &k.body.0 {
+            if let Stmt::Store { value, .. } = st {
+                spellings(value, &mut got);
+            }
+        }
+        assert_eq!(got, vec![Some(want)], "{call}");
+        assert_eq!(want.token(), call.split('(').next().unwrap(), "{call}");
+    }
+    // the control: an exact function carries no qualified node, so no spelling
+    let exact = lift(&one("expf(in[0])")).expect("expf lifts");
+    let mut none = Vec::new();
+    for st in &exact.body.0 {
+        if let Stmt::Store { value, .. } = st {
+            spellings(value, &mut none);
+        }
+    }
+    assert!(none.is_empty(), "{none:?}");
 }

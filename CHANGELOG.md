@@ -15,6 +15,162 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.19` — tests: restore the oracle runs of the unsigned and mixed 8-bit k32 atoms; pin the 4-bit nibble order outside the harness
+
+Review findings (Pip, relayed by pm-kernels): the fold lost `agrees(&atom, k32)` for the u8, s8/u8 and u8/s8 `m16n8k32` atoms, so they were placed but no longer run; it is restored, and each loop of `tests/mma_atoms_8bit.rs` now asserts that every atom it names was run (`support::ran`). New `tests/mma_nibble_order.rs` fixes the 4-bit packing order on the byte `0x21` (element 0 is the low nibble) through the oracle's own load for I4, U4 and E2M1, and checks the harness packs the same bytes. Tests and harness only.
+
+---
+
+## `0.63.18` — additive: `MmaAtom::with_groups` and the Volta f16 m8n8k4 atoms (four independent 8x8x4 MMAs per warp; U70)
+
+`MmaAtom` gains `groups` (1 for every existing atom) and a `(group, local lane) -> subgroup lane` map (`with_groups`, `groups()`, `subgroup_lanes()`, `group_lane()`; `non_exhaustive`, serde default), `check_mma` requires a launch subgroup of `lanes * groups`, and the oracle runs each group from its own lanes only. Constructors `MmaAtom::nvidia_m8n8k4_f16(Major, Major, acc)` with `Major { Row, Col }` per operand and an f16 or f32 accumulator (the oracle rounds a half-width accumulator once). The cpu-c emitter refuses a grouped atom by name. Layouts from PTX ISA 9.5 section 9.7.16.5.1 (Figures 49-55, single source); design `docs/design-mma-groups.md` (option A accepted by `unpopped`). Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.
+
+---
+
+## `0.63.17` — Pip's review of #498: a scheduled callee is pinned, a partial ScheduleSpec loads, and every changelog fragment is checked
+
+`tests/kernel_schedule_declines.rs` gains a test that a called function (not the entry) that sets a schedule field is declined by name by `lower_module` (the entry-only loop mutant fails it; the three earlier tests passed it). `ScheduleSpec` loads from a document that states only the fields it sets (`#[serde(default)]`, additive: the unstated fields are the defaults), pinned with a wrong-type control. `tests/changelog_fragments.rs` checks every `changelog.d/*.md` against the rule of `tools/stamp-version.py` (a first line `kind: ...`, a `---` line, a non-empty entry), with the broken fixtures and an in-memory scan as controls, so a malformed fragment fails on the PR that adds it, not at the stamp. No behaviour change beyond the loading.
+
+---
+
+## `0.63.16` — Added: shared subnormal probes for measuring a device's exactness (`unpopped::exactness::probe::subnormal_probes`) (U59 slice 2)
+
+Non-breaking and additive. Unpopped never probes a device; an emitter lane's harness does. `subnormal_probes(dtype)` (`F32`, `F16`, `Bf16`) returns the operand sets such a harness should run, each with the bits a subnormal-preserving device must give: a subnormal **operand** with a subnormal result and with a **normal** result, a subnormal result from normal operands, subnormal add, **two-rounding** `a * b + c` (`ProbeOp::MulAdd`) and **fused** `fma` (`ProbeOp::Fma`) on the same operands (they differ: `s * 0.5 + s` is `s` unfused and `2 s` fused, so a harness must run the one it means), a product that underflows to a subnormal and is added back, and infinity, NaN and plain-normal controls so a mismatch there is told apart from a flush. Wanted by vulkane after its Metal measurement (f32 and bf16 flush subnormals, f16 preserves) found its shared pairs never reached a subnormal. Expectations come from exact `f64` arithmetic and one rounding, and `tests/exactness_probes.rs` checks each against the host's own arithmetic (native `f32`, the `half` crate) and that a simulated flushing device disagrees with every subnormal probe and no control. Rides after U59 slice 1 (`kernel_key`, `for_kernel`, `admit_kernel`).
+
+---
+
+## `0.63.15` — docs: design note `docs/design-mma-groups.md` for a `groups` field on `MmaAtom` (ROADMAP U70, f16 `m8n8k4`)
+
+Docs only. Four independent 8-lane MMAs per warp (PTX ISA 9.5 section 9.7.16.5.1, Figures 49-55 cited by figure, text formulas read; single source); option A accepted by `unpopped`: additive `groups` plus a `(group, local lane) -> lane` map on `MmaAtom`, `MmaAtom` stays free-form. Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.
+
+---
+
+## `0.63.14` — Docs: ROADMAP rows that waited for a consumer are re-dispositioned as unblocked and ranked lower (PM, 2026-11-26); U3 R2 to R4 get rows
+
+Issue #114 (IR union I3) was the only issue labelled blocked-on:consumer; it and the ROADMAP rows U2b, U15, U21, U24, U36, E3 and I7 that said "waits for a consumer", "parked: no consumer" or "when a consumer asks" now carry a dated re-disposition: unblocked work, ranked lower, never a reason to idle (CireSnave 2026-10-24, 2026-11-11, 2026-11-19). New rows U65 (ProgramModel / BlockSpmd lowering) and U66 (Constant allocation initializers); U21 records the patent-read gate (no chart exists) and how a Texture space and the plan's Tile space merge. Docs only, no gate.
+
+rockfish does not see the stop-before-arm problem (its hip-emit scans the body only). Docs only, no gate.
+
+---
+
+## `0.63.13` — additive: NVIDIA block-scaled mma.sync atoms m16n8k32 mxf8f6f4 and m16n8k64 mxf4nvf4 (U7 theme 3)
+
+Two `MmaAtom` constructor families as data (`mma_blockscaled.rs`): `nvidia_m16n8k32_mxf8f6f4_f32(a, b)` (any of e4m3, e5m2, e3m2, e2m3, e2m1; ue8m0 scale per 32 k) and `nvidia_m16n8k64_mxf4nvf4_f32(sf, block)` (e2m1; ue8m0 per 16 or 32, ue4m3 per 16), f32 accumulator, scale operands via `with_block_scale`. SINGLE SOURCE: CUTLASS `mma_traits_sm120.hpp` and `mma_sm120.hpp` at `NVIDIA/cutlass` commit 5c179ede (BSD-3-Clause, notice kept in the module doc, sha256 recorded there); the PTX ISA 9.5 scale figures (46-48, section 9.7.16.3) are images and were not read, so the scale lane layout is not confirmed against them (the text agrees on which lanes supply SF_A and SF_B). Selectors fixed at 0. Placement-tested only. Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+Three `MmaAtom` constructors as data (`mma_sm80_8bit.rs`): `nvidia_m16n8k32_{e3m2,e2m3,e2m1}_f32`, f32 accumulator. PTX ISA 9.5 section 9.7.16.5.10 (Figures 91, 93, 94, 95, pp. 572-576): one fragment table serves them and the 8-bit types; shape introduced in PTX ISA 8.7. Single source (CUTLASS not read). The e2m1 atom runs in the oracle; e3m2 and e2m3 are placement-tested only (the oracle has no element size for F6: `types.rs` "unsupported dtype ... (v1)"). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+Four `MmaAtom` constructors as data (`mma_fp8_k16.rs`): `nvidia_m16n8k16_{e4m3,e5m2,e4m3_e5m2,e5m2_e4m3}_f32`, f32 accumulator (the f16 accumulator form is not built). Layouts from the public PTX ISA 9.5 section 9.7.16.5.9 (Figure 87 p. 568, Figure 88 p. 570, Figure 89 p. 571; the fp8 types share the u8/s8 tables); single source (CUTLASS not read). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+Three `MmaAtom` constructors as data (`mma_int4.rs`): `nvidia_m8n8k32_int4_s32`, `nvidia_m16n8k32_int4_s32`, `nvidia_m16n8k64_int4_s32`, each taking the A and B element (`I4` or `U4`). Layouts from the public PTX ISA 9.5 sections 9.7.16.5.4 (pp. 543-545), 9.7.16.5.10 (pp. 571-575) and 9.7.16.5.11 (pp. 578-582); single source (CUTLASS not read). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. Tested by placement against the PTX `(row, col)` formulas only: the oracle cannot run a 4-bit fragment (a kernel may not Store a sub-byte element). No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+Four `MmaAtom` constructors as data (`mma_sm80_8bit.rs`): `nvidia_m16n8k16_{s8,u8,s8_u8,u8_s8}_s32`. Layouts from the public PTX ISA 9.5 section 9.7.16.5.9 (Figure 87 p. 568, Figure 88 p. 570, Figure 89 p. 571); single source (CUTLASS not read for this shape). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+Four `MmaAtom` constructors as data (`mma_m8n8.rs`): `nvidia_m8n8k16_{s8,u8,s8_u8,u8_s8}_s32`. Layouts from the public PTX ISA 9.5 section 9.7.16.5.3 (A Figure 59 pp. 539-540, B Figure 60 pp. 540-541, C Figure 61 p. 542); single source (CUTLASS not re-read). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+---
+
+## `0.63.12` — additive: tests and docs: WMMA and Apple 8x8 shapes as T2 tile products, docs/mma-atom-coverage.md (U7 theme 3)
+
+`tests/kernel_tile_mma_shapes.rs` runs the WMMA `m16n16k16`, `m8n32k16`, `m32n8k16` (f16, bf16 into f32), the WMMA f64 `m8n8k4` and the Apple 8x8x8 shapes (half, bfloat, float into float) as `TileLoad`/`TileMma`/`TileStore` over `MemorySpace::Tile` against a triple loop. PTX ISA 9.5 section 9.7.16.1 Table 44 p. 510 and 9.7.16.4.1 (layout unspecified); MSL 4.1 section 2.4 p. 38 and 6.8. `docs/mma-atom-coverage.md` records every dense `mma` shape as done, TODO, blocked or held. No source change.
+
+---
+
+## `0.63.11` — docs, the participant-forms map (which shipped statements name participants) and the float collective NaN and signed-zero note
+
+`docs/note-participant-forms-map.md` maps the shipped statements against the participant-naming forms of the barrier hold, read-only: shipped `Named`/`NamedArrive` `count` is stated as a count of arriving threads with a trap on disagreement (NOT CLEARED, unchanged; the PM wording of 2026-11-27), and every held form is listed. `docs/design-float-collective-nan.md` records the NaN and signed-zero rules of the float `Max`/`Min`/`Sum` collectives, the per-target measurement duty (vulkane#189), the conformance vector, and that `MaxNum`/`MinNum` are not admitted. No code change.
+
+---
+
+## `0.63.10` — docs, the tile and schedule plan section 9 (G-T2/G-T3 gate text), the T2 transpose hold, ROADMAP U69 to U71, a cute row 43 correction
+
+`docs/design-tile-and-schedule-plan.md` section 9 carries the board 519 B text verbatim for G-T2 and the G-T3 retile lift (US20210064987A1 only, not a clearance of other retile art); `docs/design-opaque-tile-mma.md` marks the `transpose` fields held (US12405770B2 claims 8 and 15 NEEDS MORE); ROADMAP gains U69 (a dynamic-mode layout, design note first, owner unpopped-leaves), U70 (the f16 m8n8k4 atom: four MMAs per warp, scheduled, declined by name in the interim) and U71 (`Layout::composition_within`, the checked composition); `docs/ir-union-evidence/rescore-2026-11-25/cute.md` row 43 no longer says the tensor-map family claims were not read (read since: the sweep section, claims only, not a clearance). No code change.
+
+---
+
+## `0.63.9` — a sub-byte (`I4`, `U4`) `Store` into a `Private` allocation is allowed (ROADMAP U9b, the narrow rule for MMA fragments of 4-bit elements)
+
+`check_kernel` refused every `Store` of a sub-byte element (the U9b ruling of 2026-11-05: a read-modify-write of a byte two threads share). That reason does not reach a `Private` allocation, which is one thread's own storage, so a `Store` of an `I4` or `U4` into a `Place::Alloc` of a `Private` allocation now passes, and the oracle writes the nibble without disturbing its neighbour. A `Store` into a `Shared` allocation or a global buffer stays refused (`TypeMismatch`, "outside a Private allocation"; the text still says such buffers are read-only in kernels). This is what an `MmaAtom` fragment of 4-bit elements needs to run in the oracle. Additive: a refusal loosened, nothing else changes. Verified by `tests/kernel_subbyte_private_store.rs` (wrapping, and the neighbour in the same byte undisturbed, for `I4` and `U4`; the `Shared` refusal as the control).
+
+---
+
+## `0.63.8` — docs: PATENT-SWEEP G-T2 addendum 7, US12314717B2 claim 25 element-size relation and the open construction question
+
+Docs only; no earlier verdict edited.
+
+---
+
+## `0.63.7` — C-recipes for Triton rows 2, 13 and 26 (tests only)
+
+New `crates/unpopped/tests/kernel_c_recipes_triton.rs` (7 tests, all PASS): Triton row 2 (block tensors: `arange`, `full`, `flip`, `cat` of a half with a flipped half, `interleave`/`join`, `split`), row 13 (`tl.gather` over a register tile: a `Private` array of 8 read at a computed index, per row) and row 26 (`tl.swizzle2d` on a 6x4 grid with group size 4, including the shortened last group, checked to be a permutation). Each is layout and index arithmetic over `Shared`/`Private` allocations: no statement, no `Tile` allocation, no tile-granular operation. Each has a hand-written reference and a mutant that changes a value (not a trap): no flip, a cat that does not flip, swapped interleave operands, odd-first split, an arange from 1, an index read one column late, a last group that is not shortened. Rows 10 to 12 (descriptors, TMA) are not recipes. No source change.
+
+---
+
+## `0.63.6` — layout algebra composition bounds tests (tests only)
+
+New `crates/unpopped-vocab/tests/layout_algebra_composition_bounds.rs`: exhaustive over `A = e:d` and `B = t:s` (extent 1..=12, stride 1..=3; extent 1..=14, stride 1..=14), a composition whose right operand stays inside `A`'s extent is accepted, reads the right element, and stays in `A`'s image. A right operand that reaches past `size(A)` is never refused: it reads `A` extended at its last stride and addresses offsets `A` does not hold (`1:1 o 2:1` reaches offset 1 of a one-element operand). That is pinned as behaviour by a test, not endorsed as safe and not fixed; the unpopped lane ruled 2026-11-28 that composition keeps the CuTe reading (the left's last mode extended) and that unpopped-leaves adds an additive checked composition refusing a right operand past `size(A)`; this pin stays as behaviour and the checked function joins the sweep when it merges. The checker runs against the real operation and a broken one (ignores `A`'s stride) and must fail on the broken one. No source change.
+
+---
+
+## `0.63.5` — a kernel that declares `F6E2M3` or `F6E3M2` is refused by name (the oracle panicked on it, since 0.34.3); the `DtypeNotComputed` set stated once and pinned
+
+The rustdoc of `KernelError::DtypeNotComputed` and `types::is_union_batch1`, the header of `tests/union_batch1_dtypes.rs` and `docs/design-union-batch1-consumer.md` still said all seven union-batch-1 dtypes are declined; since 0.61.3 (E2) `check_kernel` computes `I128`, `U128`, `I256` and `U256` (reported by bonefish and vulkane). The text now states the real set, and a new test, `the_declined_set_is_exactly_f128_and_the_two_fp8_rows`, pins it so a change to the set flips a test. `docs/emitter-migration-b1.md` gains a 0.62 note: an emitter that does not lower a wide integer must refuse it by name before emitting, and the carry-flag emit hold (Intel US11531542B2) stands. No behaviour change.
+
+Found by `unpopped-mma`'s probe: `check_kernel` admitted a kernel-layer program that declares an `F6E2M3` or `F6E3M2` allocation, parameter or local (for example a `Private` allocation with a `Store` of a `ClampFinite` cast and a `Load`), and the oracle PANICKED ("oracle: unsupported dtype F6E2M3 (v1)": it had no storage arm for a 6-bit element). **First affected version: 0.34.3 (measured 2026-11-27 by running the same probe on the tags 0.34.3, 0.40.0 and 0.56.1; 0.34.3 is the first tag that has `check_kernel` and allocations, and the F6 rows predate it), and every release since up to and including 0.63.3.** Scope: only kernel-layer programs that declare an F6 allocation, parameter or local; plan-layer MX element use is unaffected. A crash, not memory unsafety and not a wrong result. An oracle never panics on a kernel the checker accepted, so `check_kernel` now declines the two 6-bit floats by name wherever a kernel declares one with `KernelError::DtypeNotComputed { dtype }`, until the oracle holds a 6-bit element (packed or one per byte is a design point). `F4E2M1` was affected the same way before its own fix (probed: it panics at 0.34.3, 0.40.0, 0.56.1 and 0.57.0 and runs at 0.58.0, the adjacent tag, so its fix first shipped in 0.58.0; `git log -S` on its `elem_size` arm finds #403, the U8c stack) and on current main it runs. A `Cast` into an MX element needs `Saturation::ClampFinite`, else `IllegalCast`. A refusal added where a panic was: no API change. Red first: the new test failed on `main` with the allocation admitted.
+
+---
+
+## `0.63.4` — layout algebra bounds tests (tests only)
+
+New `crates/unpopped-vocab/tests/layout_algebra_bounds.rs`: exhaustive over extents 1..=24, tiles 1..=8 and dividend strides, an accepted `zipped_divide` or `local_tile` reads every coordinate below the dividend's extent at the right offset and in bounds, and the coordinates that leave the extent are exactly the padding of a tile that does not divide it (`i + t*j >= e`), which only an inexact tiling has. Each checker runs against the real operation and a broken one (a tile one short, a tile number one late) and must fail on the broken one. One test pins a finding, not a fix (the unpopped lane decides whether it is a defect): a 4-tile over a 6-element extent is accepted and its last coordinate addresses offset 7 of 6, so a consumer must predicate; it flips deliberately if the vocab ever refuses or clamps a residue tiling. No source change.
+
+---
+
+## `0.63.3` — S2, `KernelFn::schedule`, the carrier for a `ScheduleSpec`, and cpu-c's decline by name
+
+`KernelFn` gains `schedule: Option<Box<ScheduleSpec>>` (serde default, omitted when `None`) and `with_schedule(spec)`. `KernelFn` is `non_exhaustive`, so this is additive: a document without the field loads with `None`, and `KernelError::Schedule(ScheduleError)` (`non_exhaustive`) is the new case `check_kernel` gives when `check_schedule` refuses the spec. A schedule says how a kernel is run, never what it computes, so the oracle ignores it. The rule from `docs/design-tile-and-schedule-plan.md`: an emitter honours every field a spec sets or declines it by name, never silently ignoring one. `unpopped-cpu-c` honours none: a kernel (or a module function) that sets a field is declined with an error that names it (`tile`, `warp tile`, `instruction tile`, `stage count`, `shared-memory carveout`, `work division`, `epilogue schedule`, `cluster shape`); an empty `ScheduleSpec::default()` lowers.
+
+The carrier gives `WorkDivision::StreamK` and `Persistent` no meaning beyond their names, and no emitter divides work by them: the stream-K division and work-request/cluster-launch-control holds of `docs/PATENT-SWEEP.md` (G-S2) are untouched. Verified by `tests/kernel_schedule_carrier.rs` (`check_kernel` agrees with `check_schedule` on every schedule fixture, the oracle ignores a fully set schedule, the serde default) and cpu-c's `kernel_schedule_declines.rs` (each field alone is declined under its own name, a module function too, with controls that lower). `Fixture` carries a reasoned `large_enum_variant` allow: `KernelFn` grew by one pointer.
+
+---
+
+## `0.63.2` — `launch_cases` second slice: strided/offset/flipped/broadcast input views and launch geometry (additive)
+
+`unpopped::launch_cases()` gains seven cases, appended after the four existing ones (no existing case, name or public signature changes). Three read an input through a view: `view_transposed_i32` (column-major storage), `view_pitched_i32` (row pitch 8 with a base offset on each input) and `view_flipped_broadcast_i32` (a negative stride against a stride-0 row broadcast). Four fix launch geometry: `launch_odd_block_u32` (block 3, grid 5), `launch_idle_threads_u32` (more threads than elements), `launch_single_thread_i32`, and `launch_subgroup_range_f32` (a launch that requires a subgroup size in 8..=32). Integers are compared exactly; the one `F32` case is a single operation, so 0 ULPs. Each case is checked and run by the oracle; a unit test reads the view cases densely (strides and base offset ignored) and requires the output to change, so an emitter that ignores a view is caught. `unpopped-cpu-c`'s `launch_cases_agree` runs all eleven against the compiled C and passes. Tests and corpus data only; no new `Stmt`, `Place` or field.
+
+---
+
+## `0.63.1` — docs, the 0.63.0 migration text: wide integers accepted since 0.61.3, the Numerics literal (U37), the union-batch-1 note reconciled
+
+`docs/emitter-migration-b1.md` gains a 0.62 note (`check_kernel` accepts `I128`, `U128`, `I256`, `U256` since 0.61.3, so an emitter that does not lower them must refuse by name before emitting, and the carry-flag emit hold stands) and a U37 section (how a `Numerics` struct literal moves: end it with `..Numerics::default()`; find them with `git grep -n 'Numerics {'`; what `ApproxSpelling` means for a CUDA emitter). `docs/design-union-batch1-consumer.md` states the real set `check_kernel` declines (`F128`, `F8E3M4`, `F8UE4M3`). No code change.
+
+---
+
+## `0.63.0` — **BREAKING**: U37, `Numerics::spelling`, the exact-spelling hint on an approximate node
+
+`Numerics` gains `spelling: Option<ApproxSpelling>` (serde default, omitted when `None`), so a struct literal `Numerics { .. }` without `..Numerics::default()` stops compiling (`Numerics` is not `non_exhaustive`; `Numerics::default()` and the `Expr::rounded/ftz/approx` builders are unchanged). `ApproxSpelling` (`non_exhaustive`: `Expf`, `Exp10f`, `Log2f`, `Logf`, `Log10f`, `Fdividef`, each with `token()` and the `op()` it annotates) names the CUDA fast-math intrinsic a lifted node came from: the C-family walker lifts `__expf(x)` to `ex2.approx(x * log2 e)` and so lost the token, which a CUDA re-emit could not reproduce. The walker now sets it; the `asm` lift (`ex2.approx` written out) and every hand-built node carry `None`.
+
+The hint is not a meaning: the oracle, the plan gate and every rule but one ignore it. The one rule: `check_kernel` refuses a spelling on a node that is not `approx` or whose operation is not the intrinsic's (`TypeError::IllegalQualifier`). A re-emit prints the token only for a node whose operand and surrounding scale are exactly the walker's; otherwise it prints the exact function or the sequence. `__sinf`, `__cosf`, `__tanf` and `__powf` still decline (no approximate form in the IR). Verified by `tests/numerics_spelling.rs` (admitted and refused with controls, every spelling's operation takes `approx`, serde and the pre-field document) and the convert test `each_intrinsic_names_itself_on_its_approx_node`.
+
+---
+
+## `0.62.4` — C-recipes batch 2: CuTe 3/15/17/30/40/66, ThunderKittens 1/2/3/5/39, Slang 25/26 (tests only)
+
+`tests/kernel_c_recipes_tiles.rs` and `tests/kernel_c_recipes_tiled.rs` run register tiles and layout swaps, register and shared vectors, a fragment-layout tile move, a hierarchical-layout tensor, runtime-extent views, a swizzled and a tiled shared atom, a `TiledMma` as thread-value layouts (with a permutation tiler), `autovec_copy`/`fill`/`clear`/`axpby`, cooperative-matrix map/transpose/reduce and the three clamp modes on the oracle as index arithmetic over `Shared` and `Private` allocations, with no view statement. Each has a hand-written reference and a value-changing mutant. One finding is recorded as a test: a dynamic (runtime) mode cannot be stated in the static `Layout` algebra.
+
+---
+
+## `0.62.3` — C-recipes for CuTe 22-27/31/47 and ThunderKittens 6/38 (tests only)
+
+`tests/kernel_c_recipes.rs`: slice, `local_tile`, `local_partition`, TV-layout composition, `partition_A/B/C`, a layout-driven GEMM, `partition_S/D` with `retile`, identity-tensor predication, subtile views and `swap_layout` run on the oracle as index arithmetic (`unpopped-vocab` layouts evaluated as `/ % * +`) over `Shared` allocations carrying a T1 layout, with no view statement. Each result is compared with a hand-written element formula and has a value-changing mutant. Two findings are recorded by name: `local_tile` does not refuse a non-dividing tile (the last tile leaves the extent), and an opaque `Tile` allocation has no element to index (checker `KernelError::Tile`).
+
+---
+
+## `0.62.2` — additive: NVIDIA mma.sync f64 atoms m16n8k4, m16n8k8, m16n8k16 (U7 theme 3)
+
+Three `MmaAtom` constructors as data (`mma_f64.rs`): `nvidia_m16n8k4_f64_f64`, `nvidia_m16n8k8_f64_f64`, `nvidia_m16n8k16_f64_f64`. Layouts from the public PTX ISA 9.5 (sections 9.7.16.5.6, .7, .8; pages in the module doc) and CUTLASS `mma_traits_sm90.hpp` (`main` 5c179ede). `m16n8k16` is checked against PTX Figures 83 (A, pp. 564-565), 85 (B, p. 566) and 86 (C, p. 567); the A column formula continues across a page break (col = 2i + tig for even i, 2i - 2 + tig for odd i). `tests/mma_atoms_f64.rs` checks each against `(row, col)` formulas and runs it in the oracle. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+---
+
 ## `0.62.1` — additive: NVIDIA mma.sync m16n8k32 u8, mixed s8/u8 and fp8 atoms (U7 theme 3)
 
 Seven `MmaAtom` constructors as data (`mma_sm80_8bit.rs`): `nvidia_m16n8k32_{u8,s8_u8,u8_s8}_s32` and `nvidia_m16n8k32_{e4m3,e5m2,e4m3_e5m2,e5m2_e4m3}_f32`, four of them with `A != B` in type. Layout read from the public PTX ISA 9.5 section 9.7.16.5.10 (pp. 572-576) and cross-checked against CUTLASS `mma_traits_sm80.hpp` and `mma_traits_sm89.hpp` (`main` 5c179ede). `tests/mma_atoms_8bit.rs` checks each against `(row, col)` formulas and runs it in the oracle; fp8 values are lattice fractions per format. No `Stmt`, `ScalarExpr` or `ElementKind` change. Patent column: US12314717B2, the 4x element-size method claim: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.

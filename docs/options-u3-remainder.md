@@ -1,6 +1,6 @@
 # Options note: what remains of U3 (ROADMAP U3, gaps 3.1, 3.2, 3.3, 3.18)
 
-Status: **ruled 2026-11-02; R1's shape is built (0.41.0, #241), the rest waits for a consumer.** Written as an options note, with nothing built, before the rulings below. Asked by the PM (2026-11-02): the U3 remainder as a note, after the U4 note
+Status: **ruled 2026-11-02; R1's shape is built (0.41.0, #241), the rest waits for a consumer.** **RE-DISPOSITIONED 2026-11-26 (PM, CireSnave's standing rules of 2026-10-24, 2026-11-11 and 2026-11-19): R2 to R4 no longer wait for a consumer; they are unblocked work ranked lower (ROADMAP U9c, U21, U65, U66).** Written as an options note, with nothing built, before the rulings below. Asked by the PM (2026-11-02): the U3 remainder as a note, after the U4 note
 (`docs/options-u4-sync-and-atomics.md`, ruled the same day: break `Stmt` once, stage the semantics). Read at
 `origin/main` `59d25bd` (0.40.20) plus the unmerged U4 note branch; sibling counts are `git grep` over each repo's
 `origin/main`.

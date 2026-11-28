@@ -29,9 +29,10 @@ pub(super) fn check_mma(k: &KernelFn, st: &Stmt) -> Result<(), KernelError> {
     let Some(launch) = k.launch.as_ref() else {
         return Err(KernelError::ExecWithoutLaunch);
     };
-    if !matches!(launch.subgroup, Some(s) if s.min == atom.lanes() && s.max == atom.lanes()) {
+    if !matches!(launch.subgroup, Some(s) if s.min == atom.subgroup_lanes() && s.max == atom.subgroup_lanes())
+    {
         return Err(refuse(
-            "a launch whose subgroup size is not exactly the atom's lane count",
+            "a launch whose subgroup size is not exactly the atom's lane count times its groups",
         ));
     }
     let (ta, tb, tacc) = atom.dtypes();

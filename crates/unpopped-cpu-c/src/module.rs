@@ -41,6 +41,9 @@ use crate::kernel::{function_text, with_prelude};
 pub fn lower_module(m: &Module, entry: u32) -> Result<GeneratedKernel, LowerError> {
     check_module(m, entry).map_err(|e| refuse(format!("the module is ill-formed: {e:?}")))?;
     let k = &m.fns[entry as usize];
+    for f in &m.fns {
+        crate::kernel::admit_schedule(f)?;
+    }
     if k.launch.is_some() {
         refuse_callee_barriers(m, entry)?;
     }
