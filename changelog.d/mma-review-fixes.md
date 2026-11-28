@@ -1,3 +1,0 @@
-kind: tests: restore the oracle runs of the unsigned and mixed 8-bit k32 atoms; pin the 4-bit nibble order outside the harness
----
-Review findings (Pip, relayed by pm-kernels): the fold lost `agrees(&atom, k32)` for the u8, s8/u8 and u8/s8 `m16n8k32` atoms, so they were placed but no longer run; it is restored, and each loop of `tests/mma_atoms_8bit.rs` now asserts that every atom it names was run (`support::ran`). New `tests/mma_nibble_order.rs` fixes the 4-bit packing order on the byte `0x21` (element 0 is the low nibble) through the oracle's own load for I4, U4 and E2M1, and checks the harness packs the same bytes. Tests and harness only.
