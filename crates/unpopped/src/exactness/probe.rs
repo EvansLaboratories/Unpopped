@@ -19,6 +19,7 @@ use unpopped_vocab::ElementKind;
 
 /// The operation a probe runs.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ProbeOp {
     /// `a * b` (two operands).
     Mul,
@@ -34,6 +35,7 @@ pub enum ProbeOp {
 
 /// What a probe's result must be on a device that preserves subnormals.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum Expected {
     /// These exact bits.
     Bits(u64),

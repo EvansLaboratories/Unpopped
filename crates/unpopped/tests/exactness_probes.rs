@@ -58,6 +58,8 @@ fn run(p: &SubnormalProbe, flush: bool) -> u64 {
         ProbeOp::MulAdd => decode(p.dtype, encode(p.dtype, ops[0] * ops[1])) + ops[2],
         // one rounding: the host's fused multiply-add (exact in `f32` for these sets at the narrow dtypes)
         ProbeOp::Fma => ops[0].mul_add(ops[1], ops[2]),
+        // `ProbeOp` is `non_exhaustive`: a probe kind this host model does not know is a test to extend, not to skip
+        other => panic!("the host model has no arithmetic for {other:?}"),
     };
     // the intermediate a flushing device would also flush (a product that underflows before the add)
     let exact = if flush
@@ -80,6 +82,7 @@ fn agrees(p: &SubnormalProbe, got: u64) -> bool {
     match p.expected {
         Expected::Bits(b) => got == b,
         Expected::Nan => decode(p.dtype, got).is_nan(),
+        other => panic!("no agreement rule for {other:?}"),
     }
 }
 
