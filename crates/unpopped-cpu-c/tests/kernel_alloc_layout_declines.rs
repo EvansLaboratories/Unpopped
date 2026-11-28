@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! A layout or an alignment on an allocation (ROADMAP T1) is declined by name by `unpopped-cpu-c`, which spells the identity layout
-//! only (`docs/design-swizzled-allocation.md` section 6): never silently ignored. The same kernel without the field lowers.
+//! A static layout on an allocation (ROADMAP T1) is spelled by `unpopped-cpu-c` (`kernel_alloc_layout_emit_agrees.rs`); an alignment on
+//! its own, and a layout in a kernel whose body would bypass it (a Device barrier), are declined by name, never silently ignored.
 
 use unpopped::backend::Backend;
 use unpopped::exec::{AllocDecl, AllocLayout, ExecId, Extent, LaunchShape, MemorySpace, Scope};
@@ -59,24 +59,23 @@ fn kernel(alloc: AllocDecl) -> KernelFn {
 }
 
 #[test]
-fn a_layout_or_an_alignment_declines_by_name_and_the_plain_allocation_lowers() {
+fn a_layout_lowers_an_alignment_alone_declines_by_name_and_a_bypassed_layout_declines() {
     let plain = AllocDecl::new("sh", MemorySpace::Shared, U32, Extent::Static(64));
     assert!(CpuC.lower_kernel(&kernel(plain.clone())).is_ok());
+    // since the static layout is spelled (kernel_alloc_layout_emit_agrees.rs) a layout lowers; an alignment on its own is still declined
     let laid_out = plain.clone().with_layout(AllocLayout::new(
         "(8,8):(1,8)".parse::<AllocLayout>().unwrap().layout,
     ));
-    for (what, decl) in [
-        ("layout", laid_out),
-        ("alignment", plain.with_align_bytes(128)),
-    ] {
-        let k = kernel(decl);
-        assert_eq!(check_kernel(&k), Ok(()), "{what} is well formed");
-        let err = CpuC
-            .lower_kernel(&k)
-            .expect_err("cpu_c spells the identity layout only");
-        assert!(
-            format!("{err:?}").contains("layout or an alignment"),
-            "{what}: {err:?}"
-        );
-    }
+    CpuC.lower_kernel(&kernel(laid_out.clone()))
+        .expect("a static layout is spelled");
+    let k = kernel(plain.with_align_bytes(128));
+    assert_eq!(check_kernel(&k), Ok(()), "well formed");
+    let err = CpuC.lower_kernel(&k).expect_err("an alignment alone");
+    assert!(format!("{err:?}").contains("alignment"), "{err:?}");
+    // a Device barrier makes the body multi-phase, which this emitter does not give the layout: declined by name
+    let mut phased = kernel(laid_out);
+    phased.body.0.insert(1, Stmt::barrier(Scope::Device));
+    assert_eq!(check_kernel(&phased), Ok(()), "well formed");
+    let err = CpuC.lower_kernel(&phased).expect_err("declined");
+    assert!(format!("{err:?}").contains("layout"), "{err:?}");
 }
