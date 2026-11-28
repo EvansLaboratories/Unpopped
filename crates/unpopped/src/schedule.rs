@@ -97,8 +97,10 @@ pub struct EpilogueSchedule {
     pub subtile: Option<[u32; 2]>,
 }
 
-/// A schedule: how a kernel is run. See the module documentation.
+/// A schedule: how a kernel is run. See the module documentation. A stored schedule may state only the fields it sets: every
+/// field not present loads as [`ScheduleSpec::default`]'s (the emitter chooses).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ScheduleSpec {
     /// The tile shape hierarchy, when stated.
     pub tile: Option<TileHierarchy>,

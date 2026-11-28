@@ -96,6 +96,7 @@ mod mma_f64;
 mod mma_fp8_k16;
 mod mma_int4;
 mod mma_m8n8;
+mod mma_m8n8k4;
 mod mma_sm80;
 mod mma_sm80_8bit;
 pub mod numerics;
