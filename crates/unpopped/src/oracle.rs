@@ -107,6 +107,7 @@ mod kernel_async;
 mod kernel_call;
 mod kernel_collective;
 pub mod kernel_eval;
+mod kernel_f128;
 mod kernel_matrix;
 mod kernel_mbar;
 mod kernel_mma;
