@@ -12,7 +12,7 @@ use super::accum_policy::tf32;
 use super::kernel_eval::{KernelTrap, Machine, wrap};
 use super::{Val, int_val};
 use crate::kernel::Stmt;
-use crate::mma::{ExtraRole, MmaAtom};
+use crate::mma::{BitOp, ExtraRole, MmaAtom};
 use crate::types;
 use unpopped_vocab::ElementKind;
 
@@ -76,6 +76,8 @@ struct Matrices<'a> {
     scales: Option<Scales<'a>>,
     /// Round `A` and `B` to tf32 before the products (the tf32 atoms).
     tf32: bool,
+    /// The 1-bit atoms' bitwise operation (`And` is the plain product of the 0/1 values).
+    bit_op: Option<BitOp>,
     m: usize,
     k: usize,
 }
@@ -114,7 +116,14 @@ impl Matrices<'_> {
         let Self { a, b, c, m, k, .. } = *self;
         if types::int_range(acc).is_some() {
             let sum: i128 = (0..k)
-                .map(|i| a[row + m * i].i128() * b[i + k * col].i128())
+                .map(|i| {
+                    let (x, y) = (a[row + m * i].i128(), b[i + k * col].i128());
+                    // a 1-bit atom counts the set bits of `x op y` (`x` and `y` are 0 or 1)
+                    match self.bit_op {
+                        Some(BitOp::Xor) => x ^ y,
+                        _ => x * y,
+                    }
+                })
                 .sum::<i128>()
                 + c[row + m * col].i128();
             return int_val(wrap(acc, sum), acc);
@@ -212,6 +221,7 @@ fn compute_group(lanes: &[MmaContribution]) -> Result<Vec<Vec<Val>>, KernelTrap>
             block: *block,
         }),
         tf32: atom.tf32_inputs(),
+        bit_op: atom.bit_op(),
         m,
         k,
     };

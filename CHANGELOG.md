@@ -15,6 +15,38 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.24` — additive: oracle: F6E2M3 and F6E3M2 are held in an 8-bit container and no longer declined by `check_kernel`; the e3m2/e2m3 mma atoms run
+
+The oracle stores an F6 element as one byte, the six value bits low and the two high bits zero (PTX ISA 9.5 s5.2.3 p. 43; `docs/design-f6-storage.md`): a read takes the low six bits (the local holds the canonical element, so a same-type copy of a byte with garbage padding stores zero there too), every write stores zero above them. `types::elem_size` gains the arm (`elem_bits` stays 8, not sub-byte); `check_declared_dtypes` declines exactly `F128`, `F8E3M4`, `F8UE4M3` again (the `DtypeNotComputed` rustdoc and `tests/union_batch1_dtypes.rs` follow). `tests/f6_storage.rs`: every code of both formats round-trips through a `Private` fragment and a buffer, clamps at the largest finite value, and pins both padding rules, with `F4E2M1` as the control. The `nvidia_m16n8k32_{e3m2,e2m3}_f32` atoms now run in the oracle. Single source (PTX). Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No new `Stmt`, `ScalarExpr` or `ElementKind`.
+
+Additive: a kernel `check_kernel` refused with `DtypeNotComputed` for declaring an F6 type (the 0.63.5 hotfix) is now accepted and runs; nothing that was accepted changes behaviour, and no public item is removed or changed.
+
+---
+
+## `0.63.23` — U68, Fp8E4M3FN and Fp8E5M2 are kernel-layer Cast endpoints
+
+`types::is_cast_float_endpoint` lists the two OCP FP8 formats and `float_format` gives `Fp8E5M2` its `(5, 2)` layout, so a kernel `Cast` to and from `F32` (and the other float and integer endpoints) is defined: `Fp8E5M2` goes through the IEEE-shaped encoder (bias 15, infinity and NaN, largest finite `0x7B` = 57344; `ClampFinite` stops at 57344 instead of the infinity), and `Fp8E4M3FN` through a new `cast_ref::encode_e4m3fn` (bias 7, no infinity, one NaN pattern per sign `S.1111.111`, largest finite `0x7E` = 448, smallest subnormal `0x01` = 2^-9). For `Fp8E4M3FN`, `Wrap` makes an overflow (an infinity included) the NaN of its sign, `ClampFinite` the largest finite value of its sign, and a directed rounding mode pointing away from the overflow stops at 448; a NaN keeps its sign. **The IR rule, UNVERIFIED against a vendor conversion** (a vendor instruction that differs is the vendor's to declare). A kernel could already load and store 8-bit float buffers byte for byte; only the `Cast` was `IllegalCast`. Additive: a refusal loosened. `unpopped-cpu-c` has no spelling and declines a kernel with such a `Cast` by name. Verified by `tests/kernel_fp8_cast.rs` (hand-worked codes, all 256 codes decoded by the oracle's own independent FP8 decoder and re-encoded by `cast_ref`, ties-to-even, overflow, the directed modes; 5 seeded mutants caught) and cpu-c's `kernel_fp8_cast_declines.rs`.
+
+---
+
+## `0.63.22` — additive: NVIDIA mma.sync 1-bit atoms m8n8k128, m16n8k128, m16n8k256 with `.and.popc` / `.xor.popc` (U7 theme 3)
+
+`MmaAtom::nvidia_{m8n8k128,m16n8k128,m16n8k256}_b1_s32(BitOp)` as data, plus the additive `BitOp { And, Xor }` and `MmaAtom::with_bit_op` / `bit_op()` (`None` for every existing atom, `MmaAtom` is `non_exhaustive`); the oracle counts the set bits of `A op B` into one s32 per C element and the atoms run in it. Layouts from PTX ISA 9.5 sections 9.7.16.5.5, 9.7.16.5.12, 9.7.16.5.13 (single source). Patent: outside as read for the b1 mma atom (US10452398B2 cl 1: per-field vector popcount decoder, packed destination register: the atom accumulates popc into one s32 per C element); the packed/vector popc statement stays held; findings not advice. Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+---
+
+## `0.63.21` — docs: design note `docs/design-f6-storage.md` for oracle storage of F6E2M3 and F6E3M2 (8-bit container)
+
+Docs only. The oracle has no container for a 6-bit float, which is why `check_kernel` declines them by name and the e3m2/e2m3 `mma.sync` atoms are placement-only. Proposal: one element per byte, the six value bits low and the two high bits zero, as PTX ISA 9.5 s5.2.3 (p. 43) and the m16n8k32 fragment tables (Figures 91, 93-95) hold them; packed 6-bit stays a bulk-copy format. Single source. Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.
+
+---
+
+## `0.63.20` — docs: design note for a layout whose modes may be kernel scalar parameters (CuTe 3 and 66)
+
+`docs/design-dynamic-layout.md`: a `DynLayout` bound to a static `Layout` at launch and checked by the existing enumerating checker; design only, no code, no patent read claimed.
+
+---
+
 ## `0.63.19` — tests: restore the oracle runs of the unsigned and mixed 8-bit k32 atoms; pin the 4-bit nibble order outside the harness
 
 Review findings (Pip, relayed by pm-kernels): the fold lost `agrees(&atom, k32)` for the u8, s8/u8 and u8/s8 `m16n8k32` atoms, so they were placed but no longer run; it is restored, and each loop of `tests/mma_atoms_8bit.rs` now asserts that every atom it names was run (`support::ran`). New `tests/mma_nibble_order.rs` fixes the 4-bit packing order on the byte `0x21` (element 0 is the low nibble) through the oracle's own load for I4, U4 and E2M1, and checks the harness packs the same bytes. Tests and harness only.

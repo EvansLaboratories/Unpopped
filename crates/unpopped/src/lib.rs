@@ -90,6 +90,7 @@ pub mod launch_cases;
 pub mod lift;
 pub mod link;
 pub mod mma;
+mod mma_b1;
 mod mma_blockscaled;
 mod mma_f64;
 mod mma_fp8_k16;

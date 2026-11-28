@@ -209,7 +209,12 @@ pub const fn is_cast_float_endpoint(t: ElementKind) -> bool {
     is_cast_float(t)
         || matches!(
             t,
-            ElementKind::F16 | ElementKind::Bf16 | ElementKind::F8E3M4 | ElementKind::F8UE4M3
+            ElementKind::F16
+                | ElementKind::Bf16
+                | ElementKind::F8E3M4
+                | ElementKind::F8UE4M3
+                | ElementKind::Fp8E4M3FN
+                | ElementKind::Fp8E5M2
         )
         || is_mx_element(t)
 }
@@ -265,6 +270,9 @@ pub const fn float_format(t: ElementKind) -> Option<(u32, u32)> {
         ElementKind::Bf16 => Some((8, 7)),
         // KISS 0.24.0 §6.1-0019: IEEE-style FP8 E3M4 (sign 1, exponent 3, mantissa 4, bias 3, infinity and NaN).
         ElementKind::F8E3M4 => Some((3, 4)),
+        // OCP FP8 E5M2 (ROADMAP U68): IEEE-shaped, bias 15, infinity and NaN. (`Fp8E4M3FN` is not here: its all-ones exponent is
+        // finite and its one NaN is `S.1111.111`, so it has its own encoder, `cast_ref::encode_e4m3fn`.)
+        ElementKind::Fp8E5M2 => Some((5, 2)),
         ElementKind::F4E2M1 => Some((2, 1)),
         ElementKind::F6E2M3 => Some((2, 3)),
         ElementKind::F6E3M2 => Some((3, 2)),
@@ -389,7 +397,7 @@ pub fn check_cast(from: ElementKind, spec: CastSpec) -> Result<(), TypeError> {
     }
     if !known(from) || !known(to) {
         return bad(
-            "a Cast endpoint outside {f4e2m1, f6e2m3, f6e3m2, f8e3m4, f8ue4m3, f16, bf16, f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32, u64} is not defined yet",
+            "a Cast endpoint outside {f4e2m1, f6e2m3, f6e3m2, f8e3m4, f8ue4m3, fp8e4m3fn, fp8e5m2, f16, bf16, f32, f32s, f64, i8, i16, i32, i64, u8, u16, u32, u64} is not defined yet",
         );
     }
     // An MX element has no infinity or NaN to overflow into: a conversion into one
@@ -1192,6 +1200,11 @@ pub(crate) fn elem_size(dt: ElementKind) -> usize {
         ElementKind::F128 | ElementKind::I128 | ElementKind::U128 => 16,
         ElementKind::I256 | ElementKind::U256 => 32,
         ElementKind::F8E3M4 | ElementKind::F8UE4M3 | ElementKind::F8E8M0 => 1,
+        // An OCP MX 6-bit float lives in an 8-bit container, one element per byte, the six value bits low and the two high
+        // bits zero (PTX ISA 9.5 s5.2.3, p. 43; `docs/design-f6-storage.md`): a read decodes the low six bits, every write
+        // stores zero above them. `elem_bits` is therefore 8 and the type is not sub-byte (KISS `storage_bits` 6 is its
+        // identity, not the oracle's container).
+        ElementKind::F6E2M3 | ElementKind::F6E3M2 => 1,
         // Sub-byte dtypes share a byte. `elem_size` is the CONTAINER width here,
         // not the element width — use `elem_bits` for the latter and
         // `packed_bytes` for allocation.
