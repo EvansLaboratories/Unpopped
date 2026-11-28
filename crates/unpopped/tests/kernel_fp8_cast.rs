@@ -100,6 +100,11 @@ fn decode(from: ElementKind, codes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
+/// `2^e` as an `f32` (exact), so the tests name the powers of two they mean instead of a long decimal.
+fn two_pow(e: i32) -> f32 {
+    2f32.powi(e)
+}
+
 const NEAREST: RoundMode = RoundMode::NearestEven;
 const WRAP: Saturation = Saturation::Wrap;
 const CLAMP: Saturation = Saturation::ClampFinite;
@@ -151,7 +156,7 @@ fn e4m3fn_overflow_is_nan_unless_clamped_and_has_no_infinity() {
 #[test]
 fn e5m2_encodes_with_ieee_infinity_and_nan() {
     // 1.0 = 0x3C; 57344 = 0x7B; 2^-14 = 0x04 (smallest normal); 2^-16 = 0x01; -2 = 0xC0
-    let v = [1.0, 57344.0, 0.00006103515625, 0.0000152587890625, -2.0];
+    let v = [1.0, 57344.0, two_pow(-14), two_pow(-16), -2.0];
     assert_eq!(
         encode(Fp8E5M2, NEAREST, WRAP, &v),
         vec![0x3C, 0x7B, 0x04, 0x01, 0xC0]
@@ -205,7 +210,7 @@ fn the_decoder_values_are_the_formats_documented_extremes() {
     );
     assert_eq!(
         decode(Fp8E5M2, &[0x7B, 0x01, 0x04, 0x7C]),
-        vec![57344.0, 0.0000152587890625, 0.00006103515625, f32::INFINITY]
+        vec![57344.0, two_pow(-16), two_pow(-14), f32::INFINITY]
     );
 }
 
