@@ -204,6 +204,12 @@ fn swizzle2d_ref(ij: i64) -> i64 {
     (off_i + r % size_g) * SIZE_J + r / size_g
 }
 
+/// `(off_i + rm % size_g) * size_j + rm / size_g` over the locals `off_i`, `size_g` and `rm`.
+fn swizzled_index(off_i: u32, size_g: u32, rm: u32) -> ScalarExpr {
+    let new_i = add(l(off_i), trem(l(rm), l(size_g)));
+    add(mul(new_i, u(SIZE_J)), tdiv(l(rm), l(size_g)))
+}
+
 /// Thread `ij` stores `in[ij]` at `swizzle2d(ij)`. `clamp` false is the mutant: the last group is not shortened, so its
 /// elements land on a different, still collision-free, set of offsets (a mutant that collides traps instead of changing a value).
 fn swizzle_kernel(clamp: bool) -> KernelFn {
@@ -239,13 +245,7 @@ fn swizzle_kernel(clamp: bool) -> KernelFn {
             init: sub(ij, mul(l(group), u(SIZE_G * SIZE_J))),
         },
         Stmt::Store {
-            place: at(
-                1,
-                add(
-                    mul(add(l(off_i), trem(l(rm), l(size_g))), u(SIZE_J)),
-                    tdiv(l(rm), l(size_g)),
-                ),
-            ),
+            place: at(1, swizzled_index(off_i, size_g, rm)),
             value: l(6),
         },
     ];
