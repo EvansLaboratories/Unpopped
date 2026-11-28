@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.3` — S2, `KernelFn::schedule`, the carrier for a `ScheduleSpec`, and cpu-c's decline by name
+
+`KernelFn` gains `schedule: Option<Box<ScheduleSpec>>` (serde default, omitted when `None`) and `with_schedule(spec)`. `KernelFn` is `non_exhaustive`, so this is additive: a document without the field loads with `None`, and `KernelError::Schedule(ScheduleError)` (`non_exhaustive`) is the new case `check_kernel` gives when `check_schedule` refuses the spec. A schedule says how a kernel is run, never what it computes, so the oracle ignores it. The rule from `docs/design-tile-and-schedule-plan.md`: an emitter honours every field a spec sets or declines it by name, never silently ignoring one. `unpopped-cpu-c` honours none: a kernel (or a module function) that sets a field is declined with an error that names it (`tile`, `warp tile`, `instruction tile`, `stage count`, `shared-memory carveout`, `work division`, `epilogue schedule`, `cluster shape`); an empty `ScheduleSpec::default()` lowers.
+
+The carrier gives `WorkDivision::StreamK` and `Persistent` no meaning beyond their names, and no emitter divides work by them: the stream-K division and work-request/cluster-launch-control holds of `docs/PATENT-SWEEP.md` (G-S2) are untouched. Verified by `tests/kernel_schedule_carrier.rs` (`check_kernel` agrees with `check_schedule` on every schedule fixture, the oracle ignores a fully set schedule, the serde default) and cpu-c's `kernel_schedule_declines.rs` (each field alone is declined under its own name, a module function too, with controls that lower). `Fixture` carries a reasoned `large_enum_variant` allow: `KernelFn` grew by one pointer.
+
+---
+
 ## `0.63.2` — `launch_cases` second slice: strided/offset/flipped/broadcast input views and launch geometry (additive)
 
 `unpopped::launch_cases()` gains seven cases, appended after the four existing ones (no existing case, name or public signature changes). Three read an input through a view: `view_transposed_i32` (column-major storage), `view_pitched_i32` (row pitch 8 with a base offset on each input) and `view_flipped_broadcast_i32` (a negative stride against a stride-0 row broadcast). Four fix launch geometry: `launch_odd_block_u32` (block 3, grid 5), `launch_idle_threads_u32` (more threads than elements), `launch_single_thread_i32`, and `launch_subgroup_range_f32` (a launch that requires a subgroup size in 8..=32). Integers are compared exactly; the one `F32` case is a single operation, so 0 ULPs. Each case is checked and run by the oracle; a unit test reads the view cases densely (strides and base offset ignored) and requires the output to change, so an emitter that ignores a view is caught. `unpopped-cpu-c`'s `launch_cases_agree` runs all eleven against the compiled C and passes. Tests and corpus data only; no new `Stmt`, `Place` or field.
