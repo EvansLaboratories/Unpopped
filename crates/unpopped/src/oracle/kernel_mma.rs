@@ -221,7 +221,12 @@ fn compute_group(lanes: &[MmaContribution]) -> Result<Vec<Vec<Val>>, KernelTrap>
             d.push(logical.element((row, col), acc));
         }
     }
-    (0..lanes.len())
+    read_back(atom, lanes.len(), &d)
+}
+
+/// Each lane's D fragment, read from the logical `d` through the C/D layout.
+fn read_back(atom: &MmaAtom, lanes: usize, d: &[Val]) -> Result<Vec<Vec<Val>>, KernelTrap> {
+    (0..lanes)
         .map(|lane| {
             (0..atom.values(2))
                 .map(|v| {
