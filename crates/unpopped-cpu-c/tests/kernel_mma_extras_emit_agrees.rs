@@ -285,3 +285,20 @@ fn an_extra_operand_missing_from_the_statement_is_refused() {
     }
     assert!(unpopped_cpu_c::CpuC.lower_kernel(&k).is_err());
 }
+
+#[test]
+fn an_atom_that_runs_independent_groups_is_refused_by_name() {
+    use unpopped::backend::Backend;
+    // two groups of the toy's 4 lanes in one 8-lane subgroup: no emitter spells that yet
+    let grouped = toy(E::I8, E::I32).with_groups(2, &leaf(8)).unwrap();
+    let k =
+        kernel(&grouped).with_launch(LaunchShape::new([8, 1, 1], [1, 1, 1]).with_subgroup(8, 8));
+    let got = unpopped_cpu_c::CpuC.lower_kernel(&k);
+    assert!(format!("{got:?}").contains("independent groups"), "{got:?}");
+    // control: the same kernel over the ungrouped atom lowers
+    assert!(
+        unpopped_cpu_c::CpuC
+            .lower_kernel(&kernel(&toy(E::I8, E::I32)))
+            .is_ok()
+    );
+}

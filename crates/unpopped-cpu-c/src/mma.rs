@@ -74,6 +74,11 @@ impl Emitter<'_> {
         else {
             unreachable!("mma is called for an Mma");
         };
+        if atom.groups() != 1 {
+            return Err(refuse(
+                "an MMA atom that runs independent groups of lanes in one subgroup (no emitter spells it yet)",
+            ));
+        }
         let roles: Vec<(ExtraRole, ElementKind)> = atom.extras().collect();
         if extra.len() != roles.len() {
             return Err(refuse("an MMA whose extra operands are not the atom's"));

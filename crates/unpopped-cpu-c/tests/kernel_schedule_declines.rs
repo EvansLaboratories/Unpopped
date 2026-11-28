@@ -128,3 +128,41 @@ fn a_module_function_that_sets_a_field_is_declined_too() {
         .expect_err("a module function with a schedule");
     assert!(format!("{err:?}").contains(name), "{err:?}");
 }
+
+/// An entry that calls a callee, the callee carrying `schedule` (and the entry none).
+fn module_with_scheduled_callee(schedule: Option<ScheduleSpec>) -> Module {
+    let entry = KernelFn::new(
+        "entry",
+        F32,
+        vec![],
+        vec![],
+        Block(vec![Stmt::Call {
+            callee: 1,
+            args: vec![],
+            result: None,
+        }]),
+    )
+    .with_launch(LaunchShape::new([8, 1, 1], [1, 1, 1]));
+    let mut callee = KernelFn::new("callee", F32, vec![], vec![], Block(vec![]));
+    if let Some(s) = schedule {
+        callee = callee.with_schedule(s);
+    }
+    Module::new(vec![entry, callee])
+}
+
+#[test]
+fn a_called_function_that_sets_a_field_is_declined_not_lowered_silently() {
+    // Pip's review of #498: the decline must reach every function of the module, not only the entry
+    let (_, full, _) = schedule_fixtures().remove(0);
+    let name = full.set_fields()[0].name();
+    assert!(
+        lower_module(&module_with_scheduled_callee(None), 0).is_ok(),
+        "the control: the same call graph with no schedule lowers"
+    );
+    let err = lower_module(&module_with_scheduled_callee(Some(full)), 0)
+        .expect_err("a scheduled callee is declined");
+    assert!(
+        format!("{err:?}").contains(name),
+        "{err:?} should name `{name}`"
+    );
+}
