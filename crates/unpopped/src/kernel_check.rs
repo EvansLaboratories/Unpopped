@@ -70,6 +70,9 @@ pub(crate) fn check_kernel_with(
     entry: bool,
 ) -> Result<(), KernelError> {
     check_launch(k)?;
+    if let Some(s) = &k.schedule {
+        crate::schedule::check_schedule(s).map_err(KernelError::Schedule)?;
+    }
     check_declared_dtypes(k)?;
     let n = k.locals.len();
     let mut sc = Scope {
@@ -104,8 +107,12 @@ pub(crate) fn check_kernel_with(
 /// hold. Covers the compute type, every parameter (buffer element, scalar, struct field), every local and every allocation.
 fn check_declared_dtypes(k: &KernelFn) -> Result<(), KernelError> {
     let refuse = |dtype| Err(KernelError::DtypeNotComputed { dtype });
-    // the four wide integers are computed (ROADMAP E2); the rest of union batch 1 is declined by name
-    let declined = |t: ElementKind| types::is_union_batch1(t) && !types::is_wide_int(t);
+    // the four wide integers are computed (ROADMAP E2); the rest of union batch 1 is declined by name, and so are the two 6-bit
+    // floats, which the checker once admitted and the oracle could not hold (it panicked on a Private F6 allocation)
+    let declined = |t: ElementKind| {
+        (types::is_union_batch1(t) && !types::is_wide_int(t))
+            || matches!(t, ElementKind::F6E2M3 | ElementKind::F6E3M2)
+    };
     if declined(k.compute) {
         return refuse(k.compute);
     }
@@ -793,16 +800,23 @@ fn check_store(
             what: "a multicast Store of an element other than I32, U32, F32, F16 or Bf16",
         });
     }
-    if types::is_subbyte_int(elem) {
-        // a sub-byte Store is a read-modify-write of a byte two threads share (ROADMAP U9b, ruled 2026-11-05)
+    if types::is_subbyte_int(elem) && !is_private_alloc_place(k, place) {
+        // a sub-byte Store is a read-modify-write of a byte two threads share (ROADMAP U9b, ruled 2026-11-05); a `Private`
+        // allocation is one thread's, so no byte is shared and the store is allowed (an MMA fragment of 4-bit elements)
         return Err(KernelError::TypeMismatch {
-            what: "a Store of a sub-byte element (sub-byte buffers are read-only in kernels)",
+            what: "a Store of a sub-byte element outside a Private allocation (shared and global sub-byte buffers are read-only in kernels)",
         });
     }
     if check_expr(k, value, sc)? != Ty::Scalar(elem) {
         return Err(KernelError::TypeMismatch { what: "Store" });
     }
     Ok(())
+}
+
+/// Whether `place` is an element of a `Private` allocation (one thread's own storage).
+fn is_private_alloc_place(k: &KernelFn, place: &Place) -> bool {
+    matches!(place, Place::Alloc { alloc, .. }
+        if k.allocs.get(*alloc as usize).is_some_and(|a| a.space == MemorySpace::Private))
 }
 
 /// The parts of an `AtomicRmw` on a multicast place other than its place and operand.
