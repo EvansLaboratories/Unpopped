@@ -158,13 +158,14 @@ fn admit_alloc(a: &AllocDecl) -> Result<(), LowerError> {
             a.name, a.space
         )));
     }
-    // a layout or an alignment is declined by name, never silently ignored (`docs/design-swizzled-allocation.md` section 6)
+    // an alignment on its own is declined by name, never silently ignored (`docs/design-swizzled-allocation.md` section 6); a layout is spelled
     // (the one alignment that is spelled is the one a swizzled `dyn_layout` requires: the serial C does not place memory, and the
     // swizzle changes which element holds a value, not what the value is; the oracle likewise reads no alignment)
-    let swizzled_dyn = a.dyn_layout.as_ref().is_some_and(|d| d.swizzle().is_some());
-    if a.layout.is_some() || (a.align_bytes.is_some() && !swizzled_dyn) {
+    let swizzled = a.dyn_layout.as_ref().is_some_and(|d| d.swizzle().is_some())
+        || a.layout.as_ref().is_some_and(|l| l.swizzle.is_some());
+    if a.align_bytes.is_some() && !swizzled {
         return Err(refuse(format!(
-            "allocation `{}` states a layout or an alignment; this emitter spells the identity layout only",
+            "allocation `{}` states an alignment; this emitter places no memory and spells the alignment of a swizzled layout only",
             a.name
         )));
     }
@@ -720,8 +721,14 @@ impl Emitter<'_> {
         self.line(&format!(
             "long long o{n} = (long long)({v}); if (o{n} < 0 || o{n} >= {extent}) return 1;"
         ));
-        if let Some(d) = &decl.dyn_layout {
-            // the launch-time check proved the bound layout injective and inside the extent, so the physical offset needs no check
+        let laid = match (&decl.dyn_layout, &decl.layout) {
+            (Some(d), _) => Some(d.clone()),
+            (None, Some(l)) => Some(crate::dyn_layout::static_as_dyn(l)?),
+            (None, None) => None,
+        };
+        if let Some(d) = &laid {
+            // the launch-time check (or, for a static layout, `check_kernel`) proved the layout injective and inside the extent, so
+            // the physical offset needs no check
             for l in crate::dyn_layout::offset_lines(
                 self.k,
                 d,
