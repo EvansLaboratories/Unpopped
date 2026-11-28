@@ -15,6 +15,34 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.13` — additive: NVIDIA block-scaled mma.sync atoms m16n8k32 mxf8f6f4 and m16n8k64 mxf4nvf4 (U7 theme 3)
+
+Two `MmaAtom` constructor families as data (`mma_blockscaled.rs`): `nvidia_m16n8k32_mxf8f6f4_f32(a, b)` (any of e4m3, e5m2, e3m2, e2m3, e2m1; ue8m0 scale per 32 k) and `nvidia_m16n8k64_mxf4nvf4_f32(sf, block)` (e2m1; ue8m0 per 16 or 32, ue4m3 per 16), f32 accumulator, scale operands via `with_block_scale`. SINGLE SOURCE: CUTLASS `mma_traits_sm120.hpp` and `mma_sm120.hpp` at `NVIDIA/cutlass` commit 5c179ede (BSD-3-Clause, notice kept in the module doc, sha256 recorded there); the PTX ISA 9.5 scale figures (46-48, section 9.7.16.3) are images and were not read, so the scale lane layout is not confirmed against them (the text agrees on which lanes supply SF_A and SF_B). Selectors fixed at 0. Placement-tested only. Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+Three `MmaAtom` constructors as data (`mma_sm80_8bit.rs`): `nvidia_m16n8k32_{e3m2,e2m3,e2m1}_f32`, f32 accumulator. PTX ISA 9.5 section 9.7.16.5.10 (Figures 91, 93, 94, 95, pp. 572-576): one fragment table serves them and the 8-bit types; shape introduced in PTX ISA 8.7. Single source (CUTLASS not read). The e2m1 atom runs in the oracle; e3m2 and e2m3 are placement-tested only (the oracle has no element size for F6: `types.rs` "unsupported dtype ... (v1)"). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+Four `MmaAtom` constructors as data (`mma_fp8_k16.rs`): `nvidia_m16n8k16_{e4m3,e5m2,e4m3_e5m2,e5m2_e4m3}_f32`, f32 accumulator (the f16 accumulator form is not built). Layouts from the public PTX ISA 9.5 section 9.7.16.5.9 (Figure 87 p. 568, Figure 88 p. 570, Figure 89 p. 571; the fp8 types share the u8/s8 tables); single source (CUTLASS not read). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+Three `MmaAtom` constructors as data (`mma_int4.rs`): `nvidia_m8n8k32_int4_s32`, `nvidia_m16n8k32_int4_s32`, `nvidia_m16n8k64_int4_s32`, each taking the A and B element (`I4` or `U4`). Layouts from the public PTX ISA 9.5 sections 9.7.16.5.4 (pp. 543-545), 9.7.16.5.10 (pp. 571-575) and 9.7.16.5.11 (pp. 578-582); single source (CUTLASS not read). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. Tested by placement against the PTX `(row, col)` formulas only: the oracle cannot run a 4-bit fragment (a kernel may not Store a sub-byte element). No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+Four `MmaAtom` constructors as data (`mma_sm80_8bit.rs`): `nvidia_m16n8k16_{s8,u8,s8_u8,u8_s8}_s32`. Layouts from the public PTX ISA 9.5 section 9.7.16.5.9 (Figure 87 p. 568, Figure 88 p. 570, Figure 89 p. 571); single source (CUTLASS not read for this shape). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+Four `MmaAtom` constructors as data (`mma_m8n8.rs`): `nvidia_m8n8k16_{s8,u8,s8_u8,u8_s8}_s32`. Layouts from the public PTX ISA 9.5 section 9.7.16.5.3 (A Figure 59 pp. 539-540, B Figure 60 pp. 540-541, C Figure 61 p. 542); single source (CUTLASS not re-read). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+---
+
+## `0.63.12` — additive: tests and docs: WMMA and Apple 8x8 shapes as T2 tile products, docs/mma-atom-coverage.md (U7 theme 3)
+
+`tests/kernel_tile_mma_shapes.rs` runs the WMMA `m16n16k16`, `m8n32k16`, `m32n8k16` (f16, bf16 into f32), the WMMA f64 `m8n8k4` and the Apple 8x8x8 shapes (half, bfloat, float into float) as `TileLoad`/`TileMma`/`TileStore` over `MemorySpace::Tile` against a triple loop. PTX ISA 9.5 section 9.7.16.1 Table 44 p. 510 and 9.7.16.4.1 (layout unspecified); MSL 4.1 section 2.4 p. 38 and 6.8. `docs/mma-atom-coverage.md` records every dense `mma` shape as done, TODO, blocked or held. No source change.
+
+---
+
+## `0.63.11` — docs, the participant-forms map (which shipped statements name participants) and the float collective NaN and signed-zero note
+
+`docs/note-participant-forms-map.md` maps the shipped statements against the participant-naming forms of the barrier hold, read-only: shipped `Named`/`NamedArrive` `count` is stated as a count of arriving threads with a trap on disagreement (NOT CLEARED, unchanged; the PM wording of 2026-11-27), and every held form is listed. `docs/design-float-collective-nan.md` records the NaN and signed-zero rules of the float `Max`/`Min`/`Sum` collectives, the per-target measurement duty (vulkane#189), the conformance vector, and that `MaxNum`/`MinNum` are not admitted. No code change.
+
+---
+
 ## `0.63.10` — docs, the tile and schedule plan section 9 (G-T2/G-T3 gate text), the T2 transpose hold, ROADMAP U69 to U71, a cute row 43 correction
 
 `docs/design-tile-and-schedule-plan.md` section 9 carries the board 519 B text verbatim for G-T2 and the G-T3 retile lift (US20210064987A1 only, not a clearance of other retile art); `docs/design-opaque-tile-mma.md` marks the `transpose` fields held (US12405770B2 claims 8 and 15 NEEDS MORE); ROADMAP gains U69 (a dynamic-mode layout, design note first, owner unpopped-leaves), U70 (the f16 m8n8k4 atom: four MMAs per warp, scheduled, declined by name in the interim) and U71 (`Layout::composition_within`, the checked composition); `docs/ir-union-evidence/rescore-2026-11-25/cute.md` row 43 no longer says the tensor-map family claims were not read (read since: the sweep section, claims only, not a clearance). No code change.

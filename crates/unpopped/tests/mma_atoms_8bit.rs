@@ -23,6 +23,16 @@ fn k32(which: usize, lane: u32, i: u32) -> (u32, u32) {
     }
 }
 
+/// m16n8k16 integer (PTX 9.7.16.5.9, Figures 87-89): A `(gid + 8 * (i / 4), tig * 4 + i % 4)`, B `(tig * 4 + i, gid)`.
+fn k16(which: usize, lane: u32, i: u32) -> (u32, u32) {
+    let (gid, tig) = (lane >> 2, lane % 4);
+    match which {
+        0 => (gid + 8 * (i / 4), tig * 4 + (i % 4)),
+        1 => (tig * 4 + i, gid),
+        _ => (gid + 8 * (i / 2), tig * 2 + (i % 2)),
+    }
+}
+
 use ElementKind::{F32, Fp8E4M3FN as E4, Fp8E5M2 as E5, I8, I32, U8};
 
 #[test]
@@ -33,7 +43,19 @@ fn the_unsigned_and_mixed_8_bit_atoms_place_and_run() {
         (MmaAtom::nvidia_m16n8k32_u8_s8_s32(), U8, I8),
     ] {
         places(&atom, k32, (16, 8, 32), (a, b, I32));
-        agrees(&atom, k32);
+    }
+}
+
+#[test]
+fn the_integer_k16_atoms_place_and_run() {
+    for (atom, a, b) in [
+        (MmaAtom::nvidia_m16n8k16_s8_s32(), I8, I8),
+        (MmaAtom::nvidia_m16n8k16_u8_s32(), U8, U8),
+        (MmaAtom::nvidia_m16n8k16_s8_u8_s32(), I8, U8),
+        (MmaAtom::nvidia_m16n8k16_u8_s8_s32(), U8, I8),
+    ] {
+        places(&atom, k16, (16, 8, 16), (a, b, I32));
+        agrees(&atom, k16);
     }
 }
 
@@ -67,4 +89,26 @@ fn the_mixed_signedness_atoms_are_not_the_same_atom_as_their_swap() {
         right,
         "the swapped atom reads B as signed and A as unsigned"
     );
+}
+
+#[test]
+fn the_fp6_and_fp4_k32_atoms_share_the_8_bit_placement() {
+    // PTX 9.7.16.5.10 gives one A, B and C table to s8, u8, e4m3, e5m2, e3m2, e2m3 and e2m1 (Figures 91, 93, 94, 95), so the
+    // FP6 and FP4 atoms are placed by `k32`.
+    use ElementKind::{F4E2M1, F6E2M3, F6E3M2};
+    for (atom, t) in [
+        (MmaAtom::nvidia_m16n8k32_e3m2_f32(), F6E3M2),
+        (MmaAtom::nvidia_m16n8k32_e2m3_f32(), F6E2M3),
+        (MmaAtom::nvidia_m16n8k32_e2m1_f32(), F4E2M1),
+    ] {
+        places(&atom, k32, (16, 8, 32), (t, t, F32));
+    }
+}
+
+#[test]
+fn the_fp4_k32_atom_runs() {
+    // E2M1 fragments run in the oracle: the values are lattice points of the format, encoded by the test from the OCP MX
+    // definition (two to a byte, low nibble first). The FP6 atoms cannot run: `types.rs` has no element size for F6E3M2 or
+    // F6E2M3 ("oracle: unsupported dtype ... (v1)"), though `check_kernel` admits a Private fragment of either.
+    agrees(&MmaAtom::nvidia_m16n8k32_e2m1_f32(), k32);
 }
