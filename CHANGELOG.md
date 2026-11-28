@@ -15,6 +15,42 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.11` — docs, the participant-forms map (which shipped statements name participants) and the float collective NaN and signed-zero note
+
+`docs/note-participant-forms-map.md` maps the shipped statements against the participant-naming forms of the barrier hold, read-only: shipped `Named`/`NamedArrive` `count` is stated as a count of arriving threads with a trap on disagreement (NOT CLEARED, unchanged; the PM wording of 2026-11-27), and every held form is listed. `docs/design-float-collective-nan.md` records the NaN and signed-zero rules of the float `Max`/`Min`/`Sum` collectives, the per-target measurement duty (vulkane#189), the conformance vector, and that `MaxNum`/`MinNum` are not admitted. No code change.
+
+---
+
+## `0.63.10` — docs, the tile and schedule plan section 9 (G-T2/G-T3 gate text), the T2 transpose hold, ROADMAP U69 to U71, a cute row 43 correction
+
+`docs/design-tile-and-schedule-plan.md` section 9 carries the board 519 B text verbatim for G-T2 and the G-T3 retile lift (US20210064987A1 only, not a clearance of other retile art); `docs/design-opaque-tile-mma.md` marks the `transpose` fields held (US12405770B2 claims 8 and 15 NEEDS MORE); ROADMAP gains U69 (a dynamic-mode layout, design note first, owner unpopped-leaves), U70 (the f16 m8n8k4 atom: four MMAs per warp, scheduled, declined by name in the interim) and U71 (`Layout::composition_within`, the checked composition); `docs/ir-union-evidence/rescore-2026-11-25/cute.md` row 43 no longer says the tensor-map family claims were not read (read since: the sweep section, claims only, not a clearance). No code change.
+
+---
+
+## `0.63.9` — a sub-byte (`I4`, `U4`) `Store` into a `Private` allocation is allowed (ROADMAP U9b, the narrow rule for MMA fragments of 4-bit elements)
+
+`check_kernel` refused every `Store` of a sub-byte element (the U9b ruling of 2026-11-05: a read-modify-write of a byte two threads share). That reason does not reach a `Private` allocation, which is one thread's own storage, so a `Store` of an `I4` or `U4` into a `Place::Alloc` of a `Private` allocation now passes, and the oracle writes the nibble without disturbing its neighbour. A `Store` into a `Shared` allocation or a global buffer stays refused (`TypeMismatch`, "outside a Private allocation"; the text still says such buffers are read-only in kernels). This is what an `MmaAtom` fragment of 4-bit elements needs to run in the oracle. Additive: a refusal loosened, nothing else changes. Verified by `tests/kernel_subbyte_private_store.rs` (wrapping, and the neighbour in the same byte undisturbed, for `I4` and `U4`; the `Shared` refusal as the control).
+
+---
+
+## `0.63.8` — docs: PATENT-SWEEP G-T2 addendum 7, US12314717B2 claim 25 element-size relation and the open construction question
+
+Docs only; no earlier verdict edited.
+
+---
+
+## `0.63.7` — C-recipes for Triton rows 2, 13 and 26 (tests only)
+
+New `crates/unpopped/tests/kernel_c_recipes_triton.rs` (7 tests, all PASS): Triton row 2 (block tensors: `arange`, `full`, `flip`, `cat` of a half with a flipped half, `interleave`/`join`, `split`), row 13 (`tl.gather` over a register tile: a `Private` array of 8 read at a computed index, per row) and row 26 (`tl.swizzle2d` on a 6x4 grid with group size 4, including the shortened last group, checked to be a permutation). Each is layout and index arithmetic over `Shared`/`Private` allocations: no statement, no `Tile` allocation, no tile-granular operation. Each has a hand-written reference and a mutant that changes a value (not a trap): no flip, a cat that does not flip, swapped interleave operands, odd-first split, an arange from 1, an index read one column late, a last group that is not shortened. Rows 10 to 12 (descriptors, TMA) are not recipes. No source change.
+
+---
+
+## `0.63.6` — layout algebra composition bounds tests (tests only)
+
+New `crates/unpopped-vocab/tests/layout_algebra_composition_bounds.rs`: exhaustive over `A = e:d` and `B = t:s` (extent 1..=12, stride 1..=3; extent 1..=14, stride 1..=14), a composition whose right operand stays inside `A`'s extent is accepted, reads the right element, and stays in `A`'s image. A right operand that reaches past `size(A)` is never refused: it reads `A` extended at its last stride and addresses offsets `A` does not hold (`1:1 o 2:1` reaches offset 1 of a one-element operand). That is pinned as behaviour by a test, not endorsed as safe and not fixed; the unpopped lane ruled 2026-11-28 that composition keeps the CuTe reading (the left's last mode extended) and that unpopped-leaves adds an additive checked composition refusing a right operand past `size(A)`; this pin stays as behaviour and the checked function joins the sweep when it merges. The checker runs against the real operation and a broken one (ignores `A`'s stride) and must fail on the broken one. No source change.
+
+---
+
 ## `0.63.5` — a kernel that declares `F6E2M3` or `F6E3M2` is refused by name (the oracle panicked on it, since 0.34.3); the `DtypeNotComputed` set stated once and pinned
 
 The rustdoc of `KernelError::DtypeNotComputed` and `types::is_union_batch1`, the header of `tests/union_batch1_dtypes.rs` and `docs/design-union-batch1-consumer.md` still said all seven union-batch-1 dtypes are declined; since 0.61.3 (E2) `check_kernel` computes `I128`, `U128`, `I256` and `U256` (reported by bonefish and vulkane). The text now states the real set, and a new test, `the_declined_set_is_exactly_f128_and_the_two_fp8_rows`, pins it so a change to the set flips a test. `docs/emitter-migration-b1.md` gains a 0.62 note: an emitter that does not lower a wide integer must refuse it by name before emitting, and the carry-flag emit hold (Intel US11531542B2) stands. No behaviour change.
