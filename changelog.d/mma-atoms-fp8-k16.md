@@ -1,3 +1,3 @@
 kind: additive: NVIDIA mma.sync fp8 atoms m16n8k16 e4m3, e5m2, mixed (U7 theme 3)
-
+---
 Four `MmaAtom` constructors as data (`mma_fp8_k16.rs`): `nvidia_m16n8k16_{e4m3,e5m2,e4m3_e5m2,e5m2_e4m3}_f32`, f32 accumulator (the f16 accumulator form is not built). Layouts from the public PTX ISA 9.5 section 9.7.16.5.9 (Figure 87 p. 568, Figure 88 p. 570, Figure 89 p. 571; the fp8 types share the u8/s8 tables); single source (CUTLASS not read). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
