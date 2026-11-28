@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.10` — docs, the tile and schedule plan section 9 (G-T2/G-T3 gate text), the T2 transpose hold, ROADMAP U69 to U71, a cute row 43 correction
+
+`docs/design-tile-and-schedule-plan.md` section 9 carries the board 519 B text verbatim for G-T2 and the G-T3 retile lift (US20210064987A1 only, not a clearance of other retile art); `docs/design-opaque-tile-mma.md` marks the `transpose` fields held (US12405770B2 claims 8 and 15 NEEDS MORE); ROADMAP gains U69 (a dynamic-mode layout, design note first, owner unpopped-leaves), U70 (the f16 m8n8k4 atom: four MMAs per warp, scheduled, declined by name in the interim) and U71 (`Layout::composition_within`, the checked composition); `docs/ir-union-evidence/rescore-2026-11-25/cute.md` row 43 no longer says the tensor-map family claims were not read (read since: the sweep section, claims only, not a clearance). No code change.
+
+---
+
 ## `0.63.9` — a sub-byte (`I4`, `U4`) `Store` into a `Private` allocation is allowed (ROADMAP U9b, the narrow rule for MMA fragments of 4-bit elements)
 
 `check_kernel` refused every `Store` of a sub-byte element (the U9b ruling of 2026-11-05: a read-modify-write of a byte two threads share). That reason does not reach a `Private` allocation, which is one thread's own storage, so a `Store` of an `I4` or `U4` into a `Place::Alloc` of a `Private` allocation now passes, and the oracle writes the nibble without disturbing its neighbour. A `Store` into a `Shared` allocation or a global buffer stays refused (`TypeMismatch`, "outside a Private allocation"; the text still says such buffers are read-only in kernels). This is what an `MmaAtom` fragment of 4-bit elements needs to run in the oracle. Additive: a refusal loosened, nothing else changes. Verified by `tests/kernel_subbyte_private_store.rs` (wrapping, and the neighbour in the same byte undisturbed, for `I4` and `U4`; the `Shared` refusal as the control).
