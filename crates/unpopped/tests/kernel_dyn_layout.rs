@@ -33,9 +33,9 @@ fn dynl(text: &str) -> DynLayout {
 
 /// `out[t] = sh[63 - t]` after every thread stored `in[t]` to `sh[t]`: 64 threads, one shared array of 64, three integer scalar
 /// parameters (locals 2, 3, 4 = `m`, `n`, `ld`) that a `dyn_layout` may name.
-fn kernel(alloc: AllocDecl) -> KernelFn {
+fn body() -> Block {
     let rev = ScalarExpr::Sub(Box::new(ScalarExpr::ConstInt(63, U32)), Box::new(tid()));
-    let body = vec![
+    Block(vec![
         Stmt::Load {
             local: 0,
             place: at(0, tid()),
@@ -62,7 +62,10 @@ fn kernel(alloc: AllocDecl) -> KernelFn {
             place: at(1, tid()),
             value: ScalarExpr::Local(1),
         },
-    ];
+    ])
+}
+
+fn kernel(alloc: AllocDecl) -> KernelFn {
     KernelFn::new(
         "dynlay",
         I32,
@@ -80,7 +83,7 @@ fn kernel(alloc: AllocDecl) -> KernelFn {
             LocalDecl::scalar(I32),
             LocalDecl::scalar(I32),
         ],
-        Block(body),
+        body(),
     )
     .with_launch(LaunchShape::new([64, 1, 1], [1, 1, 1]))
     .with_allocs(vec![alloc])

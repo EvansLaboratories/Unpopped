@@ -12,12 +12,43 @@ use unpopped_cpu_c::CpuC;
 use unpopped_vocab::ElementKind::{self, I32, U32};
 use unpopped_vocab::layout_algebra::DynLayout;
 
-fn kernel(alloc: AllocDecl) -> KernelFn {
+fn body() -> Block {
     let tid = || ScalarExpr::Exec(ExecId::ThreadIdx(0));
     let at = |buffer| Place::Logical {
         buffer,
         coords: vec![tid()],
     };
+    Block(vec![
+        Stmt::Load {
+            local: 0,
+            place: at(0),
+        },
+        Stmt::Store {
+            place: Place::Alloc {
+                alloc: 0,
+                index: tid(),
+            },
+            value: ScalarExpr::Local(0),
+        },
+        Stmt::Barrier {
+            scope: Scope::Block,
+            kind: BarrierKind::Full,
+        },
+        Stmt::Load {
+            local: 1,
+            place: Place::Alloc {
+                alloc: 0,
+                index: tid(),
+            },
+        },
+        Stmt::Store {
+            place: at(1),
+            value: ScalarExpr::Local(1),
+        },
+    ])
+}
+
+fn kernel(alloc: AllocDecl) -> KernelFn {
     KernelFn::new(
         "layout",
         ElementKind::I32,
@@ -33,34 +64,7 @@ fn kernel(alloc: AllocDecl) -> KernelFn {
             LocalDecl::scalar(I32),
             LocalDecl::scalar(I32),
         ],
-        Block(vec![
-            Stmt::Load {
-                local: 0,
-                place: at(0),
-            },
-            Stmt::Store {
-                place: Place::Alloc {
-                    alloc: 0,
-                    index: tid(),
-                },
-                value: ScalarExpr::Local(0),
-            },
-            Stmt::Barrier {
-                scope: Scope::Block,
-                kind: BarrierKind::Full,
-            },
-            Stmt::Load {
-                local: 1,
-                place: Place::Alloc {
-                    alloc: 0,
-                    index: tid(),
-                },
-            },
-            Stmt::Store {
-                place: at(1),
-                value: ScalarExpr::Local(1),
-            },
-        ]),
+        body(),
     )
     .with_launch(LaunchShape::new([64, 1, 1], [1, 1, 1]))
     .with_allocs(vec![alloc])
