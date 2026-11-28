@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.64.0` — feat!, U50 `Stmt::Assume` (BREAKING), a value fact the oracle checks (`KernelTrap::AssumptionViolated`)
+
+`Stmt` gains `Assume { cond }` (`tl.assume`, `multiple_of`): each thread that reaches it states that `cond` holds; undefined behaviour on a device when false, a typed trap in the oracle (`KernelTrap::AssumptionViolated`, `non_exhaustive`), so a front end that lowers a fact gets it checked on every oracle run. It reads and writes nothing, orders nothing and is uniform-safe. **Breaking: `Stmt` is exhaustive, so every exhaustive `match` on it must name the new variant** (docs/emitter-migration-b1.md, U50): an emitter may lower it to an optimiser hint or ignore it (`unpopped-cpu-c` ignores it) and must not rely on it otherwise. `max_contiguous` / `max_constancy` (several lanes) are ROADMAP U50b. Verification: touched tests (kernel_assume 6, cpu-c kernel_assume 1, the fixture guards), clippy and fmt; the full gate was NOT run (oracle/** path).
+
+---
+
 ## `0.63.30` — feat, a directed rounding at f64 in a kernel (ROADMAP U43): `numerics_f64` and the oracle
 
 A `Qualified` `Add`, `Sub`, `Mul`, `Div`, `Fma` or `Sqrt` over **f64** under `TowardZero`, `TowardNegInf` or `TowardPosInf` now passes `check_kernel` and runs in the oracle. The reference is the new `unpopped::numerics_f64` (`directed_f64`, `eval_qualified_f64`): exact integer arithmetic in a 256-bit frame and ONE directed rounding, independent of the host rounding mode, checked bit for bit against 734 rows of an independent Python exact-rational generator (`tools/gen_f64_directed_vectors.py`; subnormal results, overflow per IEEE 754 7.4, exact cancellation and signed zero included). `ftz` and `approx` at f64 and the half types stay a named `TypeError::IllegalQualifier`; a plan with an f64 qualifier is still refused at the plan gate; `unpopped-cpu-c` declines it by name. Emitters: an emitter with no f64 directed spelling must decline such a kernel by name (docs/emitter-migration-b1.md, U43). Additive. No operand-sign `RoundMode`. Verification: touched tests only (numerics_f64_directed, kernel_qualified_dtype, numerics_qualifiers, numerics_spelling, changelog_fragments, kernel_f128, union_batch1_dtypes, cpu-c kernel_qualified_f64_declines), clippy and fmt; the full gate was NOT run (oracle/** path).
