@@ -1,3 +1,0 @@
-kind: additive: NVIDIA mma.sync e3m2, e2m3, e2m1 atoms m16n8k32 (U7 theme 3)
----
-Three `MmaAtom` constructors as data (`mma_sm80_8bit.rs`): `nvidia_m16n8k32_{e3m2,e2m3,e2m1}_f32`, f32 accumulator. PTX ISA 9.5 section 9.7.16.5.10 (Figures 91, 93, 94, 95, pp. 572-576): one fragment table serves them and the 8-bit types; shape introduced in PTX ISA 8.7. Single source (CUTLASS not read). The e2m1 atom runs in the oracle; e3m2 and e2m3 are placement-tested only (the oracle has no element size for F6: `types.rs` "unsupported dtype ... (v1)"). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
