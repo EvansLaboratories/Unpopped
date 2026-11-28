@@ -15,6 +15,14 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.5` — the dtype set `check_kernel` computes is stated once and pinned: `DtypeNotComputed` is exactly F128, F8E3M4, F8UE4M3
+
+The rustdoc of `KernelError::DtypeNotComputed` and `types::is_union_batch1`, the header of `tests/union_batch1_dtypes.rs` and `docs/design-union-batch1-consumer.md` still said all seven union-batch-1 dtypes are declined; since 0.61.3 (E2) `check_kernel` computes `I128`, `U128`, `I256` and `U256` (reported by bonefish and vulkane). The text now states the real set, and a new test, `the_declined_set_is_exactly_f128_and_the_two_fp8_rows`, pins it so a change to the set flips a test. `docs/emitter-migration-b1.md` gains a 0.62 note: an emitter that does not lower a wide integer must refuse it by name before emitting, and the carry-flag emit hold (Intel US11531542B2) stands. No behaviour change.
+
+Found by `unpopped-mma`'s probe: `check_kernel` admitted a `Private` allocation of `F6E2M3` or `F6E3M2` with a `Store` of a `ClampFinite` cast and a `Load`, and the oracle PANICKED ("unsupported dtype F6E2M3 (v1)": it has no storage arm for a 6-bit element). An oracle never panics on a kernel the checker accepted, so `check_kernel` now declines the two 6-bit floats by name wherever a kernel declares one (compute type, parameter, local, allocation), until the oracle holds a 6-bit element (packed or one per byte is a design point). `F4E2M1` is unaffected (the oracle holds it). The declared set is stated once, on `KernelError::DtypeNotComputed`, and pinned by `tests/union_batch1_dtypes.rs`: `F128`, `F8E3M4`, `F8UE4M3`, `F6E2M3`, `F6E3M2`; a `Cast` into an MX element needs `Saturation::ClampFinite`, else `IllegalCast`. A refusal added where a panic was: a hotfix for an oracle panic, no API change. Red first: the new test failed on `main` with the allocation admitted.
+
+---
+
 ## `0.63.4` — layout algebra bounds tests (tests only)
 
 New `crates/unpopped-vocab/tests/layout_algebra_bounds.rs`: exhaustive over extents 1..=24, tiles 1..=8 and dividend strides, an accepted `zipped_divide` or `local_tile` reads every coordinate below the dividend's extent at the right offset and in bounds, and the coordinates that leave the extent are exactly the padding of a tile that does not divide it (`i + t*j >= e`), which only an inexact tiling has. Each checker runs against the real operation and a broken one (a tile one short, a tile number one late) and must fail on the broken one. One test pins a finding, not a fix (the unpopped lane decides whether it is a defect): a 4-tile over a 6-element extent is accepted and its last coordinate addresses offset 7 of 6, so a consumer must predicate; it flips deliberately if the vocab ever refuses or clamps a residue tiling. No source change.
