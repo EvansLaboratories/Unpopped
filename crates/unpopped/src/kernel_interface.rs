@@ -582,14 +582,14 @@ pub fn check_launch_limits(
             limit: target.max_threads_per_block,
         });
     }
-    if let Some(range) = launch.subgroup
-        && !(range.min..=range.max).contains(&target.warp_size)
-    {
-        return Err(LaunchLimitError::SubgroupSize {
-            min: range.min,
-            max: range.max,
-            warp_size: target.warp_size,
-        });
+    if let Some(range) = launch.subgroup {
+        if !(range.min..=range.max).contains(&target.warp_size) {
+            return Err(LaunchLimitError::SubgroupSize {
+                min: range.min,
+                max: range.max,
+                warp_size: target.warp_size,
+            });
+        }
     }
     Ok(threads)
 }
