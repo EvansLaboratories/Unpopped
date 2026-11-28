@@ -9,16 +9,34 @@
 //! enumeration cap (4 Mi, as `check_layout_offsets`), and no two indices sharing an offset (a byte map of `extent` entries).
 
 use unpopped::backend::LowerError;
-use unpopped::exec::AllocDecl;
+use unpopped::exec::{AllocDecl, AllocLayout};
 use unpopped::kernel::{KernelFn, Stmt};
 use unpopped_vocab::ElementKind;
-use unpopped_vocab::layout_algebra::{Dim, DynLayout, DynTuple};
+use unpopped_vocab::layout_algebra::{Dim, DynLayout, DynTuple, IntTuple};
 
 use crate::base::refuse;
 use crate::dynamic::{extent_expr, param_of_local};
 
 /// The status a launch returns when a `dyn_layout` does not bind to a layout the checker accepts.
 pub(crate) const STATUS: i32 = 4;
+
+fn lift(t: &IntTuple) -> DynTuple {
+    match t {
+        IntTuple::Int(v) => DynTuple::Leaf(Dim::Static(*v)),
+        IntTuple::Tuple(x) => DynTuple::Tuple(x.iter().map(lift).collect()),
+    }
+}
+
+/// A static allocation layout as the dynamic one with no parameter leaf, so one offset spelling serves both
+/// (`check_kernel` has already proved the static layout injective and inside the extent, so no launch check is emitted for it).
+pub(crate) fn static_as_dyn(l: &AllocLayout) -> Result<DynLayout, LowerError> {
+    let d = DynLayout::new(lift(l.layout.shape()), lift(l.layout.stride()))
+        .map_err(|_| refuse("a static layout this emitter cannot lift"))?;
+    Ok(match l.swizzle {
+        Some(sw) => d.with_swizzle(sw),
+        None => d,
+    })
+}
 
 fn leaves(t: &DynTuple, out: &mut Vec<Dim>) {
     match t {
@@ -166,29 +184,32 @@ fn bypasses_the_layout(b: &[Stmt]) -> bool {
 
 /// What this emitter cannot spell about a `dyn_layout`, refused before any text is written (a no-op for a kernel with none).
 pub(crate) fn admit(k: &KernelFn, in_module: bool, single_phase: bool) -> Result<(), LowerError> {
-    let Some(first) = k.allocs.iter().position(|a| a.dyn_layout.is_some()) else {
+    let Some(first) = k
+        .allocs
+        .iter()
+        .position(|a| a.dyn_layout.is_some() || a.layout.is_some())
+    else {
         return Ok(());
     };
     let name = &k.allocs[first].name;
     if in_module {
         return Err(refuse(format!(
-            "allocation `{name}` states a `dyn_layout` in a callee"
+            "allocation `{name}` states a `layout` or `dyn_layout` in a callee"
         )));
     }
     if !single_phase {
         return Err(refuse(format!(
-            "allocation `{name}` states a `dyn_layout` in a kernel with a Device barrier, a peer access or several devices"
+            "allocation `{name}` states a `layout` or `dyn_layout` in a kernel with a Device barrier, a peer access or several devices"
         )));
     }
     if bypasses_the_layout(&k.body.0) {
         return Err(refuse(format!(
-            "allocation `{name}` states a `dyn_layout` in a kernel that moves fragments or calls a callee (they address the storage, not the layout)"
+            "allocation `{name}` states a `layout` or `dyn_layout` in a kernel that moves fragments or calls a callee (they address the storage, not the layout)"
         )));
     }
-    for a in k.allocs.iter().filter(|a| a.dyn_layout.is_some()) {
-        let d = a.dyn_layout.as_ref().expect("filtered");
+    for a in k.allocs.iter().filter_map(|a| a.dyn_layout.as_ref()) {
         // every parameter leaf must name a plain scalar parameter (a struct field is not spelled)
-        flat(k, d)?;
+        flat(k, a)?;
     }
     Ok(())
 }

@@ -245,10 +245,23 @@ fn empty_kernel(alloc: AllocDecl) -> KernelFn {
 fn a_layout_needs_a_shared_static_allocation_of_its_own_size() {
     let ok = shared_u32(64).with_layout(layout("(8,8):(1,8)"));
     assert_eq!(check_kernel(&kernel(ok)), Ok(()));
-    // 1. space: a layout belongs to a Shared allocation
+    // 1. space: a layout belongs to a Shared or a Private allocation (a Private array is one per thread; docs/design-dynamic-layout.md section 9)
     let private = AllocDecl::new("p", MemorySpace::Private, U32, Extent::Static(64))
         .with_layout(layout("(8,8):(1,8)"));
-    assert!(refused(&kernel(private)).contains("Shared"));
+    assert_eq!(
+        check_kernel(&kernel(private.clone())),
+        Ok(()),
+        "a Private layout is accepted"
+    );
+    // but a swizzle is a shared-memory bank pattern: refused by name on a Private array
+    let swz = Swizzle::new(2, 2, 3).unwrap();
+    let swizzled = AllocDecl::new("p", MemorySpace::Private, U32, Extent::Static(64))
+        .with_layout(layout("(8,8):(1,8)").with_swizzle(swz))
+        .with_align_bytes(128);
+    assert!(refused(&kernel(swizzled)).contains("no banks"));
+    let constant = AllocDecl::new("c", MemorySpace::Constant, U32, Extent::Static(64))
+        .with_layout(layout("(8,8):(1,8)"));
+    assert!(refused(&kernel(constant)).contains("Shared or Private"));
     // 2. size: the layout's size equals the extent, and a dynamic extent is refused with a layout
     let small = shared_u32(32).with_layout(layout("(8,8):(1,8)"));
     assert!(refused(&kernel(small)).contains("size"));
