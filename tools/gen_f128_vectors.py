@@ -224,6 +224,12 @@ def main():
             r = to_int(a, mode)
             if r is not None:
                 conv.append(("int_" + mode, a, 0, r))
+    # integer roundings need exact ties (n + 1/2) and values just either side of one, which random patterns almost never are
+    halves = [Fraction(2 * k + 1, 2) for k in range(-6, 6)] + [Fraction(2 * k + 1, 2) + eps for k in (-3, 2) for eps in (Fraction(1, 2**100), -Fraction(1, 2**100))]
+    for x in halves:
+        bits = encode(x)
+        for mode in ("trunc", "floor", "ceil", "rne", "rna"):
+            conv.append(("int_" + mode, bits, 0, to_int(bits, mode)))
     # f32 rounding must be ONE rounding from the exact binary128 value: a value a hair either side of an f32 tie is a tie in f64, so a path
     # through f64 would round it by the tie rule (to even) instead of by the side it is on
     for _ in range(40):
