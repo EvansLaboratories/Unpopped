@@ -46,19 +46,51 @@ fn slot(space: MemorySpace, sub: ElementKind, i: i64) -> (AllocDecl, Place) {
     )
 }
 
-/// `out[t] = widen(frag[0]) * 100 + widen(frag[1])` after `frag[1] = (sub) x[t]` then `frag[0] = (sub) (x[t] + 1)`: the two
-/// elements share one byte, so the second store must leave the first alone.
-fn kernel(space: MemorySpace, sub: ElementKind) -> KernelFn {
+/// `widen(local 1) * 100 + widen(local 2)`.
+fn weighted_sum() -> ScalarExpr {
+    let hundred = ScalarExpr::ConstInt(100, I32);
+    ScalarExpr::Add(
+        Box::new(ScalarExpr::Mul(
+            Box::new(widen(ScalarExpr::Local(1))),
+            Box::new(hundred),
+        )),
+        Box::new(widen(ScalarExpr::Local(2))),
+    )
+}
+
+/// The body: `frag[1] = (sub) x[t]`, then `frag[0] = (sub) (x[t] + 1)`, then both read back into locals 1 and 2 and combined into
+/// `out[t]`. The two elements share one byte, so the second store must leave the first alone.
+fn body(sub: ElementKind, (first, second): (Place, Place)) -> Block {
     let at = |buffer| Place::Logical {
         buffer,
         coords: vec![tid()],
     };
-    let (decl, first) = slot(space, sub, 0);
-    let (_, second) = slot(space, sub, 1);
     let plus_one = ScalarExpr::Add(
         Box::new(ScalarExpr::Local(0)),
         Box::new(ScalarExpr::ConstInt(1, I32)),
     );
+    let store = |place: &Place, value| Stmt::Store {
+        place: place.clone(),
+        value,
+    };
+    let load = |local, place: &Place| Stmt::Load {
+        local,
+        place: place.clone(),
+    };
+    Block(vec![
+        load(0, &at(0)),
+        store(&second, narrow(ScalarExpr::Local(0), sub)),
+        store(&first, narrow(plus_one, sub)),
+        load(1, &first),
+        load(2, &second),
+        store(&at(1), weighted_sum()),
+    ])
+}
+
+/// `out[t] = widen(frag[0]) * 100 + widen(frag[1])` over a fragment of `sub` elements in `space`.
+fn kernel(space: MemorySpace, sub: ElementKind) -> KernelFn {
+    let (decl, first) = slot(space, sub, 0);
+    let (_, second) = slot(space, sub, 1);
     KernelFn::new(
         "frag",
         I32,
@@ -71,38 +103,7 @@ fn kernel(space: MemorySpace, sub: ElementKind) -> KernelFn {
             LocalDecl::scalar(sub),
             LocalDecl::scalar(sub),
         ],
-        Block(vec![
-            Stmt::Load {
-                local: 0,
-                place: at(0),
-            },
-            Stmt::Store {
-                place: second.clone(),
-                value: narrow(ScalarExpr::Local(0), sub),
-            },
-            Stmt::Store {
-                place: first.clone(),
-                value: narrow(plus_one, sub),
-            },
-            Stmt::Load {
-                local: 1,
-                place: first,
-            },
-            Stmt::Load {
-                local: 2,
-                place: second,
-            },
-            Stmt::Store {
-                place: at(1),
-                value: ScalarExpr::Add(
-                    Box::new(ScalarExpr::Mul(
-                        Box::new(widen(ScalarExpr::Local(1))),
-                        Box::new(ScalarExpr::ConstInt(100, I32)),
-                    )),
-                    Box::new(widen(ScalarExpr::Local(2))),
-                ),
-            },
-        ]),
+        body(sub, (first, second)),
     )
     .with_launch(LaunchShape::new([8, 1, 1], [1, 1, 1]))
     .with_allocs(vec![decl])
