@@ -123,4 +123,22 @@ adds a type and a launch-time divisibility check: no hardware, no asynchronous t
 cache of maps; (2) no emitted statement performs a swizzled copy or transfer: it is an offset function only (an XOR on the element offset). If a design
 needs either (1) or (2), stop and ask pm-kernels.
 
+## 9. Addendum 2026-11-28: a layout (static or dynamic) on a `Private` allocation; what a `Global` one is (pm-kernels' [TASK] `next-rows`)
+
+Sections 3 and 4 and T1 put a layout on a `Shared` allocation only ("the other spaces keep the identity until a row asks"). The row asks. Design only in this section.
+
+| space | layout (static or `dyn_layout`) | why |
+|---|---|---|
+| `Shared` | accepted (T1, section 3) | one array per block |
+| **`Private`** | **accepted without a swizzle** | one array **per thread** (`extent` elements each, lifetime the kernel); the layout maps the thread's own index to its own physical element, so no two threads ever share a physical element and no race is possible; injectivity inside one thread's extent is what keeps two of its indices from aliasing |
+| `Private` **with a swizzle** | **refused by name**: "a swizzle is a shared-memory bank pattern; a per-thread array has no banks, so this IR gives it no meaning" | not defined, not guessed |
+| `Global` | **refused by name, already**: `KernelError::AllocSpace` (a kernel does not declare global memory); a global array is a **buffer parameter**, whose shape and strides are already run-time values of its argument | nothing to add: the dynamic-stride case is the buffer ABI, which exists |
+| `Constant`, `Tensor`, `Tile` | refused by name ("a layout is only on a Shared or Private allocation") | `Constant` has no initializer; `Tensor` and `Tile` are not addressable element arrays |
+
+**What changes.** The space check of `check_alloc_layout` and `check_dyn_layout` accepts `Shared` or `Private` (the text of the refusal names both and says why `Global` is not one), and a swizzle on a `Private` allocation is refused with the reason above; everything else (size equals the extent, range, injectivity, the parameter rules, the launch-time bind) is unchanged because it is about one array of `extent` elements, and a `Private` array is that, once per thread. The oracle already keys storage and the race log on the physical element per thread, so it needs no change beyond the check. cpu-c: a `Private` array is `sh<i>[t * extent + offset]`, so the offset arithmetic replaces the bare index inside the thread's slice; the launch check is unchanged.
+
+**Aliasing and lifetime.** A `Private` layout aliases nothing across threads by construction (separate storage) and nothing within a thread (injective); it lives and dies with the thread's run; nothing is carried between threads or blocks. A `Global` layout of a buffer is not introduced.
+
+**Patent.** The same conditions as section 8 (pm-kernels' cluster ruling 2026-11-28, findings not advice, not a clearance, outside as read): XOR-bit data only (and this row **refuses** the swizzle on `Private`), no lookup-table encoding, no tensor-map or descriptor object, no cache of maps, no emitted statement that copies or transfers: an offset function only. No hardware and no statement is added. If a design needs any of those, stop and ask pm-kernels.
+
 — lane: unpopped-leaves

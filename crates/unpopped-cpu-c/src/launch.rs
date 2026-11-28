@@ -737,7 +737,12 @@ impl Emitter<'_> {
             )? {
                 self.line(&l);
             }
-            return Ok(format!("sh{alloc}[po{n}]"));
+            // a Private array is one slice of `extent` elements per thread of the block, as the identity spelling below
+            return Ok(if private {
+                format!("sh{alloc}[(long long)t * {extent} + po{n}]")
+            } else {
+                format!("sh{alloc}[po{n}]")
+            });
         }
         // a Private array is one slice of `extent` elements per thread of the block
         Ok(if private {
