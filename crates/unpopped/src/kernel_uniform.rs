@@ -382,6 +382,7 @@ impl Walk<'_> {
             }
             Stmt::Store { .. }
             | Stmt::MaskedStore { .. }
+            | Stmt::Assume { .. }
             | Stmt::Fence { .. }
             | Stmt::ProxyFence { .. }
             | Stmt::CopyAsync { .. }
