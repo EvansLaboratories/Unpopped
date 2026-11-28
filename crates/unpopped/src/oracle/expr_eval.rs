@@ -551,6 +551,11 @@ pub(super) fn encode_float(f: f64, out: ElementKind) -> u128 {
         ElementKind::U64 => u128::from(f as u64),
         ElementKind::I4 | ElementKind::U4 => u128::from((f as i8 as u8) & 0x0f),
         ElementKind::B1 => u128::from(u8::from(f != 0.0)),
+        // an F6 buffer is written from a canonical 6-bit pattern (`Val::Raw`, `docs/design-f6-storage.md`); a `Val::Float`
+        // has no rounding mode here, so reaching this is a defect in the caller (unreachable today)
+        ElementKind::F6E2M3 | ElementKind::F6E3M2 => panic!(
+            "oracle: encode_float to {out:?}: a Val::Float has no rounding mode for an F6 element; cast it first"
+        ),
         other => panic!("oracle: encode_float to unsupported dtype {other:?}"),
     }
 }
