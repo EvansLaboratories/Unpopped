@@ -6,30 +6,58 @@
 //! operands from every binade region, including ties and near-cancellation. Each operation is a row; a mutant of any one is caught
 //! by its own rows.
 
+use unpopped::ir::RoundMode;
 use unpopped::soft_f128::F128;
 
 const DATA: &str = include_str!("data/soft_f128_vectors.txt");
 const QNAN: u128 = 0x7fff_8000_0000_0000_0000_0000_0000_0000;
 
-fn rows() -> Vec<(&'static str, u128, u128, u128)> {
+/// `(op, a, b, expected)`; an `int_*` row's expected value has 256 bits (the two's complement), so it is held as hex text.
+fn rows() -> Vec<(&'static str, u128, u128, String)> {
     DATA.lines()
         .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
         .map(|l| {
             let mut it = l.split_whitespace();
             let op = it.next().expect("op");
             let mut hex = || u128::from_str_radix(it.next().expect("field"), 16).expect("hex");
-            let (a, b, r) = (hex(), hex(), hex());
-            (op, a, b, r)
+            let (a, b) = (hex(), hex());
+            (op, a, b, it.next().expect("expected").to_string())
         })
         .collect()
 }
 
-fn apply(op: &str, a: F128, b: F128) -> F128 {
+/// The hex text of what the implementation gives for the row `(op, a, b)`.
+fn apply(op: &str, a: u128, b: u128) -> String {
+    let (x, y) = (F128(a), F128(b));
+    let f128 = |v: F128| format!("{:032x}", v.0);
     match op {
-        "add" => a.add_rne(b),
-        "sub" => a.sub_rne(b),
-        "mul" => a.mul_rne(b),
-        "div" => a.div_rne(b),
+        "add" => f128(x.add_rne(y)),
+        "sub" => f128(x.sub_rne(y)),
+        "mul" => f128(x.mul_rne(y)),
+        "div" => f128(x.div_rne(y)),
+        "tof64" => format!("{:032x}", u128::from(x.to_f64().to_bits())),
+        "tof32" => format!("{:032x}", u128::from(x.to_f32().to_bits())),
+        "fromf64" => f128(F128::from_f64(f64::from_bits(a as u64))),
+        "fromf32" => f128(F128::from_f32(f32::from_bits(a as u32))),
+        m if m.starts_with("int_") => {
+            let mode = match &m[4..] {
+                "trunc" => RoundMode::TowardZero,
+                "floor" => RoundMode::TowardNegInf,
+                "ceil" => RoundMode::TowardPosInf,
+                "rne" => RoundMode::NearestEven,
+                "rna" => RoundMode::NearestAway,
+                other => panic!("unknown mode {other}"),
+            };
+            let w = x
+                .to_i256(mode)
+                .expect("the generator only emits in-range rows");
+            let b = w.to_le_bytes();
+            format!(
+                "{:032x}{:032x}",
+                u128::from_le_bytes(b[16..32].try_into().unwrap()),
+                u128::from_le_bytes(b[..16].try_into().unwrap())
+            )
+        }
         other => panic!("unknown op {other}"),
     }
 }
@@ -38,18 +66,15 @@ fn apply(op: &str, a: F128, b: F128) -> F128 {
 fn every_vector_matches_the_independent_reference() {
     let rows = rows();
     assert!(
-        rows.len() > 1400,
+        rows.len() > 2800,
         "the data file is read: {} rows",
         rows.len()
     );
     let mut bad = Vec::new();
     for (op, a, b, want) in &rows {
-        let got = apply(op, F128(*a), F128(*b)).0;
-        // a NaN result is the canonical quiet NaN on both sides
+        let got = apply(op, *a, *b);
         if got != *want {
-            bad.push(format!(
-                "{op} {a:032x} {b:032x}: got {got:032x}, want {want:032x}"
-            ));
+            bad.push(format!("{op} {a:032x} {b:032x}: got {got}, want {want}"));
         }
     }
     assert!(
@@ -64,23 +89,48 @@ fn every_vector_matches_the_independent_reference() {
 #[test]
 fn the_vectors_cover_each_operation_and_the_special_classes() {
     let rows = rows();
+    let qnan = format!("{QNAN:032x}");
     for op in ["add", "sub", "mul", "div"] {
         let of: Vec<_> = rows.iter().filter(|r| r.0 == op).collect();
         assert!(of.len() > 350, "{op}: {} rows", of.len());
-        assert!(of.iter().any(|r| r.3 == QNAN), "{op} has a NaN result row");
+        assert!(of.iter().any(|r| r.3 == qnan), "{op} has a NaN result row");
         assert!(
-            of.iter()
-                .any(|r| r.3 >> 112 & 0x7fff == 0x7fff && r.3 & ((1 << 112) - 1) == 0),
+            of.iter().any(|r| inf_bits(&r.3)),
             "{op} has an infinity result row"
         );
         assert!(
-            of.iter()
-                .any(|r| r.3 >> 112 & 0x7fff == 0 && r.3 & ((1 << 112) - 1) != 0),
+            of.iter().any(|r| subnormal_bits(&r.3)),
             "{op} has a subnormal result row"
         );
         assert!(
-            of.iter().any(|r| r.3 << 1 == 0),
+            of.iter().any(|r| r.3.chars().all(|c| c == '0')),
             "{op} has a zero result row"
         );
     }
+    for op in [
+        "tof64",
+        "tof32",
+        "fromf64",
+        "fromf32",
+        "int_trunc",
+        "int_floor",
+        "int_ceil",
+        "int_rne",
+        "int_rna",
+    ] {
+        assert!(
+            rows.iter().filter(|r| r.0 == op).count() > 50,
+            "{op} has rows"
+        );
+    }
+}
+
+fn inf_bits(hex: &str) -> bool {
+    let v = u128::from_str_radix(hex, 16).unwrap();
+    v >> 112 & 0x7fff == 0x7fff && v & ((1 << 112) - 1) == 0
+}
+
+fn subnormal_bits(hex: &str) -> bool {
+    let v = u128::from_str_radix(hex, 16).unwrap();
+    v >> 112 & 0x7fff == 0 && v & ((1 << 112) - 1) != 0
 }

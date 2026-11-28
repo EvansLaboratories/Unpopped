@@ -16,41 +16,80 @@ QNAN = INF | (1 << (FRAC_BITS - 1))
 MAXFIN = ((2**EXP_BITS - 2) << FRAC_BITS) | (2**FRAC_BITS - 1)
 
 
-def decode(bits):
-    sign = -1 if bits >> 127 else 1
-    e = (bits >> FRAC_BITS) & (2**EXP_BITS - 1)
-    f = bits & (2**FRAC_BITS - 1)
-    if e == 2**EXP_BITS - 1:
+def decode(bits, ebits=EXP_BITS, fbits=FRAC_BITS):
+    bias = 2 ** (ebits - 1) - 1
+    sign = -1 if bits >> (ebits + fbits) else 1
+    e = (bits >> fbits) & (2**ebits - 1)
+    f = bits & (2**fbits - 1)
+    if e == 2**ebits - 1:
         return ("inf", sign) if f == 0 else ("nan", 0)
     if e == 0:
-        return ("fin", sign * Fraction(f, 2**FRAC_BITS) * Fraction(2) ** EMIN)
-    return ("fin", sign * (1 + Fraction(f, 2**FRAC_BITS)) * Fraction(2) ** (e - BIAS))
+        return ("fin", sign * Fraction(f, 2**fbits) * Fraction(2) ** (1 - bias))
+    return ("fin", sign * (1 + Fraction(f, 2**fbits)) * Fraction(2) ** (e - bias))
 
 
-def encode(x):
-    """The binary128 bits of the exact rational x, round to nearest even."""
+def encode(x, ebits=EXP_BITS, fbits=FRAC_BITS):
+    """The IEEE bits of (ebits, fbits) of the exact rational x, round to nearest even."""
+    bias = 2 ** (ebits - 1) - 1
+    emin = 1 - bias
+    inf = (2**ebits - 1) << fbits
     if x == 0:
         return 0
-    sign = 1 << 127 if x < 0 else 0
+    sign = 1 << (ebits + fbits) if x < 0 else 0
     ax = abs(x)
-    # find e with 2^e <= ax < 2^(e+1)
     e = ax.numerator.bit_length() - ax.denominator.bit_length()
     if Fraction(2) ** e > ax:
         e -= 1
-    e = max(e, EMIN)
-    q = ax / Fraction(2) ** (e - FRAC_BITS)       # in units of the last place
+    e = max(e, emin)
+    q = ax / Fraction(2) ** (e - fbits)       # in units of the last place
     n = q.numerator // q.denominator
     r = q - n
     if r > Fraction(1, 2) or (r == Fraction(1, 2) and n % 2 == 1):
         n += 1
-    if n >= 2 ** (FRAC_BITS + 1):                  # carried into the next binade
+    if n >= 2 ** (fbits + 1):                  # carried into the next binade
         n //= 2
         e += 1
-    if e > BIAS:
-        return sign | INF
-    if n < 2**FRAC_BITS:                           # subnormal (only when e == EMIN)
+    if e > bias:
+        return sign | inf
+    if n < 2**fbits:                           # subnormal (only when e == emin)
         return sign | n
-    return sign | ((e + BIAS) << FRAC_BITS) | (n - 2**FRAC_BITS)
+    return sign | ((e + bias) << fbits) | (n - 2**fbits)
+
+
+def enc_signed(neg, d, ebits, fbits):
+    """Encode a decoded finite value, keeping the sign of a zero (the rational 0 has none)."""
+    if d[1] == 0:
+        return (1 << (ebits + fbits)) if neg else 0
+    return encode(d[1], ebits, fbits)
+
+
+def to_int(bits, mode):
+    """The 256-bit two's-complement of the f128 value rounded to an integer under `mode`, or None (NaN, infinity, |x| >= 2^255)."""
+    d = decode(bits)
+    if d[0] != "fin":
+        return None
+    x = d[1]
+    fl = x.numerator // x.denominator
+    frac = x - fl
+    if mode == "trunc":
+        n = fl + 1 if (x < 0 and frac != 0) else fl
+    elif mode == "floor":
+        n = fl
+    elif mode == "ceil":
+        n = fl + (1 if frac != 0 else 0)
+    elif mode == "rne":
+        n = fl + (1 if (frac > Fraction(1, 2) or (frac == Fraction(1, 2) and fl % 2 == 1)) else 0)
+    elif mode == "rna":
+        # ties away from zero
+        if frac > Fraction(1, 2) or (frac == Fraction(1, 2) and x > 0):
+            n = fl + 1
+        else:
+            n = fl
+    else:
+        raise ValueError(mode)
+    if abs(n) >= 2**255:
+        return None
+    return n % 2**256
 
 
 def op(name, a, b):
@@ -128,10 +167,33 @@ def main():
     for a, b in pairs:
         for name in ("add", "sub", "mul", "div"):
             rows.append((name, a, b, op(name, a, b)))
+    conv = []
+    for a, _ in pairs[:200]:
+        d = decode(a)
+        conv.append(("tof64", a, 0, 0xFFFFFFFFFFFFFFFF if False else (0x7FF8000000000000 if d[0] == "nan" else (enc_signed(a >> 127, d, 11, 52) if d[0] == "fin" else (0x7FF0000000000000 | (1 << 63 if d[1] < 0 else 0))))))
+        conv.append(("tof32", a, 0, 0x7FC00000 if d[0] == "nan" else (enc_signed(a >> 127, d, 8, 23) if d[0] == "fin" else (0x7F800000 | (1 << 31 if d[1] < 0 else 0)))))
+        for mode in ("trunc", "floor", "ceil", "rne", "rna"):
+            r = to_int(a, mode)
+            if r is not None:
+                conv.append(("int_" + mode, a, 0, r))
+    for _ in range(120):
+        x = rng.choice([rng.getrandbits(64), rng.getrandbits(52), rng.getrandbits(23)])
+        sign = rng.getrandbits(1)
+        e = rng.randrange(0, 2047) if rng.random() < 0.8 else rng.choice([0, 2046, 2047])
+        bits64 = (sign << 63) | (e << 52) | (x & (2**52 - 1))
+        d = decode(bits64, 11, 52)
+        res = 0x7FFF8000000000000000000000000000 if d[0] == "nan" else (enc_signed(bits64 >> 63, d, 15, 112) if d[0] == "fin" else (INF | (1 << 127 if d[1] < 0 else 0)))
+        conv.append(("fromf64", bits64, 0, res))
+        bits32 = (sign << 31) | (rng.randrange(0, 256) << 23) | (x & (2**23 - 1))
+        d = decode(bits32, 8, 23)
+        res = 0x7FFF8000000000000000000000000000 if d[0] == "nan" else (enc_signed(bits32 >> 31, d, 15, 112) if d[0] == "fin" else (INF | (1 << 127 if d[1] < 0 else 0)))
+        conv.append(("fromf32", bits32, 0, res))
     print("# Generated by tools/gen_f128_vectors.py (seed 0xE3128): an independent Python reference, UNVERIFIED against a third-party library.")
-    print("# op a b expected: binary128 bit patterns in hex; an expected NaN is the canonical quiet NaN (0x7fff8000...0).")
-    for name, a, b, r in rows:
-        print(f"{name} {a:032x} {b:032x} {r:032x}")
+    print("# op a b expected: bit patterns in hex. add/sub/mul/div: binary128 (an expected NaN is the canonical quiet NaN 0x7fff8000...0).")
+    print("# tof64/tof32: the f64/f32 bits of a (RNE; NaN is the canonical quiet NaN); int_<mode>: the 256-bit two's complement of a rounded to an")
+    print("# integer under trunc/floor/ceil/rne/rna (only rows with |a| < 2^255); fromf64/fromf32: a is the f64/f32 bits, the expected is binary128.")
+    for name, a, b, r in rows + conv:
+        print(f"{name} {a:032x} {b:032x} {r:0{64 if name.startswith('int_') else 32}x}")
 
 if __name__ == "__main__":
     main()
