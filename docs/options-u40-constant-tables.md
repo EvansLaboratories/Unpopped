@@ -47,3 +47,13 @@ then one row per emitter; vulkane first since it asked. Lanes: **vulkane** spell
 **fishstringer-slang-emit** and **cpu-c** each spell or decline by name; **rockfish/openclownfish/bonefish** decline by name. B stays
 available as an interim for a caller that binds its own buffers. No exhaustive-enum widening (`AllocDecl` is a `#[non_exhaustive]`
 struct; one optional field).
+
+## Shape decided and built (2026-11-28, `unpopped-leaves`, at pm-kernels' [TASK] `next-rows`: U66 and U40 are one row)
+
+Option A, as recommended. `AllocDecl::init: Option<Vec<i128>>`, `#[serde(default, skip_serializing_if = "Option::is_none")]`, set by `AllocDecl::with_init`. **One value per element, by logical index; an
+integer element takes its value, a float element its bit pattern as a non-negative integer** (so the field is `Eq`, a negative zero and a NaN payload survive, and no float parsing is involved).
+`check_kernel` (`KernelError::AllocInit`, non_exhaustive): only `Constant` or `Private` carry one (a `Shared` one has no initializer in any target), a `Static` extent, length equal to the extent, each value in the element's
+range (an integer in `int_range`, a float's bits below `2^(8*width)`), no layout beside it (undefined together until a row asks), and a store into a `Constant` stays refused (`WriteToConstant`). Oracle: a `Constant` table is one read-only block-level
+instance with every element initialized; a `Private` table is every thread's own copy; a `Constant` allocation **without** `init` is still unreadable (`Unsupported`). `unpopped-cpu-c` spells both (a `static const` array of the element's
+width, copied into the block's storage or into every thread's slice) and declines by name in a callee, in a kernel with a Device barrier, a peer access or several devices, and a `Constant` allocation with no values: never a zeroed table. The other emitters keep their own
+decline until each opts in. The walker half (U40-2, lifting `__constant__`/`static const` literal arrays) is **not** built here. Additive: `AllocDecl` and `KernelError` are `non_exhaustive`.

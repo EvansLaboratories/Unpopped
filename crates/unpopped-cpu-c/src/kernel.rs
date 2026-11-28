@@ -654,7 +654,7 @@ pub(crate) fn with_prelude(kernel_name: &str, body: &str) -> String {
     if body.contains("calloc(") {
         src.push_str("#include <stdlib.h>\n");
     }
-    if body.contains("memcmp(") {
+    if body.contains("memcmp(") || body.contains("memcpy(") {
         src.push_str("#include <string.h>\n");
     }
     src.push('\n');

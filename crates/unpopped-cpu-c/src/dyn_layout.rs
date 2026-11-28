@@ -67,7 +67,7 @@ fn flat(k: &KernelFn, d: &DynLayout) -> Result<Vec<(String, String)>, LowerError
 /// The element-form swizzle of `d` for `elem`, with its period in elements (`None` for a layout without a swizzle). The swizzle is
 /// XOR-bit data only: the offset is XORed with a shifted mask of its own bits, nothing is looked up and nothing is transferred.
 /// The byte width of the element types this emitter gives a `dyn_layout` swizzle (the others are refused by name).
-fn width_of(elem: ElementKind) -> Result<u32, LowerError> {
+pub(crate) fn width_of(elem: ElementKind) -> Result<u32, LowerError> {
     match elem {
         ElementKind::I8 | ElementKind::U8 | ElementKind::Bool => Ok(1),
         ElementKind::F16 | ElementKind::Bf16 | ElementKind::I16 | ElementKind::U16 => Ok(2),

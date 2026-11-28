@@ -64,6 +64,16 @@ pub(crate) fn admit_dyn_layout(k: &KernelFn, in_module: bool) -> Result<(), Lowe
     let info = LaunchInfo::of(k).expect("a launched kernel");
     let single =
         device_segments(&k.body.0).len() <= 1 && !reaches_peer(&k.body.0) && info.devices == 1;
+    // an initial table (U40/U66) is declared in the per-block thread-loop body, not in the grid storage a Device barrier or a peer
+    // access uses, and a callee has none: declined by name there, never a zeroed table
+    if let Some(a) = k.allocs.iter().find(|a| a.init.is_some()) {
+        if in_module || !single {
+            return Err(refuse(format!(
+                "allocation `{}` states an initial table in a callee or in a kernel with a Device barrier, a peer access or several devices",
+                a.name
+            )));
+        }
+    }
     crate::dyn_layout::admit(k, in_module, single)
 }
 
@@ -152,7 +162,9 @@ fn reaches_peer(b: &[Stmt]) -> bool {
 }
 
 fn admit_alloc(a: &AllocDecl) -> Result<(), LowerError> {
-    if !matches!(a.space, MemorySpace::Shared | MemorySpace::Private) {
+    // a `Constant` allocation is a table: spelled when it has its values, declined by name when it has none
+    let table = a.space == MemorySpace::Constant && a.init.is_some();
+    if !table && !matches!(a.space, MemorySpace::Shared | MemorySpace::Private) {
         return Err(refuse(format!(
             "allocation `{}` is {:?}; only Shared and Private are spelled",
             a.name, a.space
@@ -552,6 +564,39 @@ impl Emitter<'_> {
                 self.line(&format!(
                     "for (long long z = 0; z < {len}; ++z) sh{i}[z] = 0;"
                 ));
+            } else if let Some(values) = &a.init {
+                // an initial table (U40/U66): the bit patterns in an unsigned array of the element's width, copied into the block's
+                // array (a `Private` one into every thread's slice), so a float's NaN payload and an integer's sign are the checker's
+                let w = crate::dyn_layout::width_of(a.elem)?;
+                let ut = match w {
+                    1 => "unsigned char",
+                    2 => "unsigned short",
+                    4 => "unsigned int",
+                    _ => "unsigned long long",
+                };
+                let mask = if w == 8 {
+                    u128::from(u64::MAX)
+                } else {
+                    (1u128 << (8 * w)) - 1
+                };
+                let lits: Vec<String> = values
+                    .iter()
+                    .map(|v| format!("{}ull", (*v as u128) & mask))
+                    .collect();
+                self.line(&format!(
+                    "static const {ut} init{i}[{}] = {{{}}};",
+                    values.len(),
+                    lits.join(", ")
+                ));
+                self.line(&format!("{t} sh{i}[{len}];"));
+                if a.space == MemorySpace::Private {
+                    self.line(&format!(
+                        "for (int z = 0; z < {}; ++z) memcpy(&sh{i}[(long long)z * {n}], init{i}, sizeof init{i});",
+                        self.info_threads()
+                    ));
+                } else {
+                    self.line(&format!("memcpy(sh{i}, init{i}, sizeof init{i});"));
+                }
             } else {
                 self.line(&format!("{t} sh{i}[{len}] = {{0}};"));
             }
