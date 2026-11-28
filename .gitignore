@@ -10,3 +10,5 @@ Cargo.lock.bak
 # `git add -A` cannot sweep the 500KB+ binary into a commit.
 /supertool
 
+
+__pycache__/
