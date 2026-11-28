@@ -112,10 +112,15 @@ refused by name as a `dyn_layout` already is.
 **Mutants to carry:** the divisibility test dropped (an extent of 48 must trap); the swizzle applied in bytes instead of elements; the
 `align_bytes` rule dropped.
 
-**Patent (before building).** `git grep -i swizzle origin/main -- docs/PATENT*` finds the U6 addendum (US20230289304A1, US12141082B2,
-US20240176663A1, US20210064987A1: each **outside as read** by the PM) and the U7 descriptor/swizzle re-read (US12204897B2, US12710961B2,
-US20230289398A1: outside as read; specifications and continuations not covered). None is a hold. This adds the existing `Swizzle` to a layout type
-and a launch-time divisibility check, **no hardware and no statement**; it is not a new read and no clearance is claimed. pm-kernels' go is asked
-before the build because the hits name patents.
+**Patent.** Cluster ruling by pm-kernels (2026-11-28, findings not advice, not a clearance, no attorney), read at origin/main: `docs/PATENT-SWEEP.md`
+U6 addendum (lines 86-104): US20230289304A1, US12141082B2, US20240176663A1 and US20210064987A1 are each **outside as read, findings not advice, not a
+clearance** (US12141082B2: the PM read all five independent claims; they need memory-access hardware circuits transferring data. US20240176663A1: tensor
+acceleration circuits and tensor maps in a cache, low-medium confidence, current claims unread: **re-read when it grants**, a task for the patents lane,
+on the board row and not this lane's). U7 re-read (lines 680-696): swizzle appears 0 times in US12204897B2 and US12710961B2; US20230289398A1 has two
+"descriptor" hits in a work-distributor claim, not a swizzle. The static XOR `Swizzle` already ships (published prior art, CuTe). A swizzle on a `DynLayout`
+adds a type and a launch-time divisibility check: no hardware, no asynchronous transfer, no statement. **Conditions, kept true in the code:**
+(1) the swizzle stays XOR-bit data (`Swizzle { bits, base, shift }`): no lookup-table (8x8) encoding of the pattern, no tensor-map or descriptor object, no
+cache of maps; (2) no emitted statement performs a swizzled copy or transfer: it is an offset function only (an XOR on the element offset). If a design
+needs either (1) or (2), stop and ask pm-kernels.
 
 — lane: unpopped-leaves
