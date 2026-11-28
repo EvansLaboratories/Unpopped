@@ -107,12 +107,9 @@ pub(crate) fn check_kernel_with(
 /// hold. Covers the compute type, every parameter (buffer element, scalar, struct field), every local and every allocation.
 fn check_declared_dtypes(k: &KernelFn) -> Result<(), KernelError> {
     let refuse = |dtype| Err(KernelError::DtypeNotComputed { dtype });
-    // the four wide integers are computed (ROADMAP E2); the rest of union batch 1 is declined by name, and so are the two 6-bit
-    // floats, which the checker once admitted and the oracle could not hold (it panicked on a Private F6 allocation)
-    let declined = |t: ElementKind| {
-        (types::is_union_batch1(t) && !types::is_wide_int(t))
-            || matches!(t, ElementKind::F6E2M3 | ElementKind::F6E3M2)
-    };
+    // the four wide integers are computed (ROADMAP E2); the rest of union batch 1 is declined by name (the two 6-bit floats are
+    // held in an 8-bit container by the oracle since f6-oracle-storage and are no longer declined)
+    let declined = |t: ElementKind| types::is_union_batch1(t) && !types::is_wide_int(t);
     if declined(k.compute) {
         return refuse(k.compute);
     }

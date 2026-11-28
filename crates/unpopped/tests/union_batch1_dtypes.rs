@@ -189,11 +189,15 @@ fn the_declined_set_is_exactly_f128_and_the_two_fp8_rows() {
 }
 
 #[test]
-fn a_6_bit_float_is_refused_by_name_because_the_oracle_has_no_storage_for_it() {
-    // probed 2026-11-27 by unpopped-mma: `check_kernel` admitted a `Private` allocation of `F6E2M3`/`F6E3M2` with a `Store` of a
-    // `ClampFinite` cast and a `Load`, and the oracle PANICKED ("unsupported dtype F6E2M3 (v1)"): an oracle never panics on a
-    // kernel the checker accepted. Declined by name until the oracle holds a 6-bit element (packing is a design point).
-    for dt in [ElementKind::F6E2M3, ElementKind::F6E3M2] {
+fn the_6_bit_floats_are_not_declined_the_oracle_holds_them_in_an_8_bit_container() {
+    // `check_kernel` declined `F6E2M3`/`F6E3M2` by name (#501) while the oracle had no storage for a 6-bit element; it holds one
+    // since f6-oracle-storage (`docs/design-f6-storage.md`, `tests/f6_storage.rs` runs them), so a Private allocation and a
+    // buffer parameter of either pass, like the 4-bit float control.
+    for dt in [
+        ElementKind::F6E2M3,
+        ElementKind::F6E3M2,
+        ElementKind::F4E2M1,
+    ] {
         let with_alloc =
             kernel(ElementKind::I32, vec![], vec![], vec![]).with_allocs(vec![AllocDecl::new(
                 "frag",
@@ -201,21 +205,13 @@ fn a_6_bit_float_is_refused_by_name_because_the_oracle_has_no_storage_for_it() {
                 dt,
                 Extent::Static(4),
             )]);
-        assert_eq!(check_kernel(&with_alloc), refused(dt), "{dt:?} allocation");
+        assert_eq!(check_kernel(&with_alloc), Ok(()), "{dt:?} allocation");
         assert_eq!(
-            check_kernel(&load_from(dt, ElementKind::F32)),
-            refused(dt),
+            check_kernel(&load_from(dt, dt)),
+            Ok(()),
             "{dt:?} buffer parameter"
         );
     }
-    // the control: the 4-bit float the oracle does hold still passes
-    let fp4 = kernel(ElementKind::I32, vec![], vec![], vec![]).with_allocs(vec![AllocDecl::new(
-        "frag",
-        MemorySpace::Private,
-        ElementKind::F4E2M1,
-        Extent::Static(4),
-    )]);
-    assert_eq!(check_kernel(&fp4), Ok(()));
 }
 
 #[test]
