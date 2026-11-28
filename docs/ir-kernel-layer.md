@@ -329,7 +329,7 @@ nothing here answers its five questions.)
    types; `check_kernel` with the nine known-bad mutations and their positive controls.
 3. (landed, 0.31.3) The interpreter and its direct tests (loops, `Break`, `Continue`, `Return`, `ZeroStep`, wrap of the counter).
 4. `lift_elementwise_opdef` + the differential against `oracle::evaluate` (landed, 0.31.3); then Reduction, Scan, Contraction, Im2Col, Window and RowReduce (landed or in the gate; fused posts of the first three are open).
-5. Effects (`effects(&KernelFn)`), once a consumer asks; it is stated here so the shape is agreed, not built.
+5. Effects (`effects(&KernelFn)`), once a consumer asks; it is stated here so the shape is agreed, not built. **RE-DISPOSITIONED 2026-11-26 (PM via pm-kernels; CireSnave 2026-10-24, 2026-11-11, 2026-11-19): not a wait; unblocked work, ranked lower.**
 
 ## Buffer roles and the barrier-uniformity check (2026-11-22, U19 slice 5)
 
