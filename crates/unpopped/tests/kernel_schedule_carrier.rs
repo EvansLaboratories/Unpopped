@@ -95,3 +95,24 @@ fn the_field_round_trips_and_a_document_without_it_loads_with_none() {
     assert_eq!(loaded.schedule, None);
     assert_eq!(ScheduleSpec::default().set_fields(), vec![]);
 }
+
+#[test]
+fn a_partial_schedule_loads_with_the_unstated_fields_at_their_defaults() {
+    // Pip's review of #498: a spec that states only the fields it sets used to fail to load
+    let only_cluster: ScheduleSpec = serde_json::from_str(r#"{"cluster":[2,1,1]}"#).unwrap();
+    assert_eq!(
+        only_cluster,
+        ScheduleSpec {
+            cluster: Some([2, 1, 1]),
+            ..ScheduleSpec::default()
+        }
+    );
+    assert_eq!(
+        serde_json::from_str::<ScheduleSpec>("{}").unwrap(),
+        ScheduleSpec::default()
+    );
+    // a stated field still wins, and a wrong type is still a load error (the control: not everything loads)
+    let staged: ScheduleSpec = serde_json::from_str(r#"{"stages":{"Fixed":3}}"#).unwrap();
+    assert_eq!(staged.stages, unpopped::schedule::StageCount::Fixed(3));
+    assert!(serde_json::from_str::<ScheduleSpec>(r#"{"cluster":"two"}"#).is_err());
+}
