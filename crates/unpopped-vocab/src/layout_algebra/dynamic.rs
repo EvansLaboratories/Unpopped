@@ -10,7 +10,7 @@
 //! (`(?0,?1):(?2,1)`). [`DynLayout::parse_with`] also takes names (`(m,n):(lda,1)`), resolved through a table the caller supplies;
 //! the printed form always uses `?N`, so `parse(print(x)) == x`.
 
-use super::{IntTuple, Layout, LayoutError, MAX_DEPTH};
+use super::{IntTuple, Layout, LayoutError, MAX_DEPTH, Swizzle};
 use std::fmt;
 use std::str::FromStr;
 
@@ -79,6 +79,7 @@ impl DynTuple {
 pub struct DynLayout {
     shape: DynTuple,
     stride: DynTuple,
+    swizzle: Option<Swizzle>,
 }
 
 impl DynLayout {
@@ -120,7 +121,26 @@ impl DynLayout {
                 Ok(())
             }
         })?;
-        Ok(Self { shape, stride })
+        Ok(Self {
+            shape,
+            stride,
+            swizzle: None,
+        })
+    }
+
+    /// The same layout under the byte swizzle `swizzle` (`docs/design-dynamic-layout.md` section 8): XOR-bit data, as for an
+    /// static allocation layout. [`DynLayout::bind`] still returns the static layout; the consumer applies the
+    /// swizzle to its offsets and checks, at the launch, that its period divides the extent.
+    #[must_use]
+    pub fn with_swizzle(mut self, swizzle: Swizzle) -> Self {
+        self.swizzle = Some(swizzle);
+        self
+    }
+
+    /// The byte swizzle, if any.
+    #[must_use]
+    pub fn swizzle(&self) -> Option<Swizzle> {
+        self.swizzle
     }
 
     /// The shape.
@@ -162,6 +182,22 @@ impl DynLayout {
     ///
     /// [`LayoutError::Parse`] for a malformed text or a name `names` lacks, then [`DynLayout::new`]'s errors.
     pub fn parse_with(text: &str, names: &[(&str, u32)]) -> Result<Self, LayoutError> {
+        if text.starts_with("swz(") {
+            // `swz(B,M,S)(shape:stride)`: the swizzle has no nested parenthesis, so its text ends at the first `)`
+            let end = text
+                .find(')')
+                .ok_or(LayoutError::Parse("expected `)` after the swizzle"))?;
+            let swizzle: Swizzle = text[..=end].parse()?;
+            let inner = text[end + 1..]
+                .strip_prefix('(')
+                .and_then(|r| r.strip_suffix(')'))
+                .ok_or(LayoutError::Parse("expected `(layout)` after the swizzle"))?;
+            let layout = Self::parse_with(inner, names)?;
+            if layout.swizzle.is_some() {
+                return Err(LayoutError::Parse("a second swizzle"));
+            }
+            return Ok(layout.with_swizzle(swizzle));
+        }
         let mut p = Parser {
             bytes: text.as_bytes(),
             at: 0,
@@ -290,6 +326,9 @@ impl fmt::Display for DynTuple {
 
 impl fmt::Display for DynLayout {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.shape, self.stride)
+        match self.swizzle {
+            Some(sw) => write!(f, "{sw}({}:{})", self.shape, self.stride),
+            None => write!(f, "{}:{}", self.shape, self.stride),
+        }
     }
 }
