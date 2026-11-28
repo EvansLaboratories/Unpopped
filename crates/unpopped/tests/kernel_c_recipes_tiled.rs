@@ -3,7 +3,7 @@
 //! (swizzle and a composed layout over a shared tile), CuTe 30 (a `TiledMma` as thread-value layouts, with a permutation
 //! tiler), CuTe 40 (`autovec_copy`, `fill`, `clear`, `axpby`), Slang 25 and 26 (cooperative-matrix arithmetic and clamp modes).
 //! Layouts from `unpopped-vocab` evaluated as index arithmetic; no view statement; no `Tile` allocation. Each result is
-//! compared with a hand-written reference and has a value-changing mutant. Two `declines_` tests record what a recipe cannot say.
+//! compared with a hand-written reference and has a value-changing mutant. One `declines_` test records what a recipe cannot say.
 
 #[path = "c_recipes/harness.rs"]
 mod harness;
@@ -98,18 +98,25 @@ fn cute_3_66_dynamic_extents_and_leading_dimension() {
     );
 }
 
-/// FINDING for CuTe 3 and 66: the recipe indexes a dynamic view, but the layout ALGEBRA cannot be applied to one. `Layout` holds
-/// static `i64` modes; a mode that names a runtime value does not parse, so tiling and partitioning a dynamic view needs one
-/// layout per runtime value (a host-side specialisation), not a layout the kernel carries.
+/// CuTe 3 and 66, after #536: a mode that names a runtime value is a `DynLayout`, bound at launch to the static `Layout` the algebra
+/// takes. (Before #536 the same text was refused; `Layout` itself still refuses a symbolic mode.)
 #[test]
-fn declines_a_dynamic_mode_in_the_layout_algebra_by_name() {
+fn dyn_layout_binds_runtime_modes_to_a_static_layout() {
+    use unpopped_vocab::layout_algebra::DynLayout;
+    let names = [("lda", 2), ("m", 3), ("n", 4)];
+    let d = DynLayout::parse_with("(m,n):(lda,1)", &names)
+        .expect("symbolic modes parse as a DynLayout");
     assert!(
         "(m,n):(lda,1)".parse::<Layout>().is_err(),
-        "a symbolic mode is refused"
+        "Layout itself stays static"
     );
+    let bound = d.bind(&[(2, 8), (3, 5), (4, 6)]).expect("binds");
+    assert_eq!(bound, "(5,6):(8,1)".parse::<Layout>().unwrap());
+    let other = d.bind(&[(2, 7), (3, 6), (4, 7)]).expect("binds");
+    assert_ne!(bound, other, "a different launch binds a different layout");
     assert!(
-        "(5,6):(8,1)".parse::<Layout>().is_ok(),
-        "control: the same layout with static modes"
+        d.bind(&[(2, 8), (3, 5)]).is_err(),
+        "an unbound parameter is refused"
     );
 }
 

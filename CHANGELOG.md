@@ -15,6 +15,24 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.64.7` — ci, the CodeRipper portfolio workflow repinned to v0.48.14 (af3d6876)
+
+The `portfolio` job in `.github/workflows/verify.yml` moves from coderipper `467fd259` (installs CodeRipper 0.48.1) to `af3d6876` (tag `v0.48.14`, installs CodeRipper 0.48.12), the newest published tool. No rule is silenced and no code changes; if the newer tool reports a finding the portfolio check was blind to, it is answered on the PR, never configured away.
+
+---
+
+## `0.64.6` — test-only: an exhaustive sweep of the dyn_layout launch-time bind against a brute-force predicate
+
+`kernel_dyn_layout_sweep`: over every (m, n, ld) in 0..=13 (2744 argument sets) the oracle accepts exactly the sets a hand-written double-loop predicate accepts (valid shape, size == extent, offsets distinct, cosize inside the extent), runs the 19 accepted ones to the identity value and traps the rest as `KernelTrap::DynLayout`. Three wrong predicates (no injectivity, no extent bound, no size rule) each disagree with the oracle somewhere; a column-major bind is swept the same way. No src edit.
+
+---
+
+## `0.64.5` — test-only: the CuTe 3/66 dynamic-mode pin flipped to DynLayout (after #536)
+
+`kernel_c_recipes_tiled`: the "dynamic mode declined by name" test became `dyn_layout_binds_runtime_modes_to_a_static_layout`: `(m,n):(lda,1)` parses as a `DynLayout`, binds to `(5,6):(8,1)` and to a different layout at another launch, an unbound parameter is refused, and `Layout` itself stays static. `cargo test -p unpopped --test kernel_c_recipes_tiled` 9 passed; clippy clean.
+
+---
+
 ## `0.64.4` — additive: `DynLayout`, `AllocDecl::dyn_layout`, `KernelTrap::DynLayout`, `LayoutError::UnboundParam`
 
 A layout whose shape and stride leaves may be scalar parameters of the kernel (CuTe rows 3 and 66, `docs/design-dynamic-layout.md`). `unpopped_vocab::layout_algebra::{DynLayout, DynTuple, Dim}`: a family of static layouts indexed by a launch's arguments; `DynLayout::bind` returns an ordinary `Layout`, so the layout algebra stays static (there is no `composition` or `zipped_divide` on an unbound layout). `AllocDecl::dyn_layout` (canonical text `(?0,?1):(?2,1)`, absent when none, so a kernel without one keeps its text and revision hash). `check_kernel` checks the static half (a `Shared` allocation, one layout not two, every parameter an integer scalar parameter); the oracle binds at launch and runs the existing enumerating checker on the bound layout (size equals the extent, range, injective), trapping with the new non_exhaustive `KernelTrap::DynLayout` before the first statement. `unpopped-cpu-c` declines a `dyn_layout` by name. `AllocDecl`, `KernelTrap` and `LayoutError` are non_exhaustive, so additive; a swizzle on a `DynLayout` is refused (not offered). Patent: a layout type and a launch-time check, no statement; no patent read is claimed.
