@@ -8,6 +8,7 @@ use super::{Fixed, R, Sym, Walker, text};
 use std::collections::HashMap;
 use tree_sitter::Node;
 use unpopped::kernel::Stmt;
+use unpopped_vocab::ElementKind;
 
 use super::globals::{fold, fold_with};
 use unpopped::ir::ScalarExpr;
@@ -143,6 +144,22 @@ impl<'s, 't> Walker<'s, 't> {
         else {
             return Ok(false);
         };
+        let Some(values) = self.constant_trips(n, op, ty, (start, bound), update)? else {
+            return Ok(false);
+        };
+        self.unroll_values(n, (&name, ty), body, values, out)?;
+        Ok(true)
+    }
+
+    /// The counter values a constant `for` takes, in order; `None` when the loop's condition is not a comparison this models.
+    fn constant_trips(
+        &mut self,
+        n: Node<'_>,
+        op: Node<'_>,
+        ty: ElementKind,
+        (start, bound): (i128, i128),
+        update: Update,
+    ) -> R<Option<Vec<i128>>> {
         // the counter has its type's range: an unsigned counter that steps below zero wraps (C), so `for (unsigned i = 3; i >= 0;
         // --i)` never ends and is refused by the trip limit below, not run as four trips; a bound outside the type's range is
         // compared after C's conversion, which is not modelled
@@ -178,8 +195,20 @@ impl<'s, 't> Walker<'s, 't> {
             }
         }
         if holds(v).is_none() {
-            return Ok(false);
+            return Ok(None);
         }
+        Ok(Some(values))
+    }
+
+    /// One copy of the body per counter value, the counter bound as a constant.
+    fn unroll_values(
+        &mut self,
+        n: Node<'_>,
+        (name, ty): (&str, ElementKind),
+        body: Node<'_>,
+        values: Vec<i128>,
+        out: &mut Vec<Stmt>,
+    ) -> R<()> {
         for value in values {
             let Ok(c) = i64::try_from(value) else {
                 return self.not_yet(n, "a loop variable outside the 64-bit range");
@@ -194,11 +223,11 @@ impl<'s, 't> Walker<'s, 't> {
             self.scopes
                 .last_mut()
                 .expect("a scope is open")
-                .insert(name.clone(), Sym::Scalar(local, ty, Fixed::Counter));
+                .insert(name.to_string(), Sym::Scalar(local, ty, Fixed::Counter));
             let b = self.block_of(body);
             self.scopes.pop();
             out.extend(b?.0);
         }
-        Ok(true)
+        Ok(())
     }
 }
