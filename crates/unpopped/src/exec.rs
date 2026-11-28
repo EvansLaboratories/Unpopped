@@ -338,6 +338,36 @@ pub struct AllocDecl {
     /// The shape of a [`MemorySpace::Tile`] allocation (`None` on every other space; `check_kernel` requires the two to agree).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tile: Option<TileShape>,
+    /// A layout whose shape and stride leaves may be scalar parameters of the kernel (ROADMAP row CuTe 3/66,
+    /// `docs/design-dynamic-layout.md`): bound to a static [`Layout`] at launch, then checked exactly as [`AllocDecl::layout`] is.
+    /// Never both. Written as the canonical text (`(?0,?1):(?2,1)`); absent for every allocation that has none.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "dyn_layout_text"
+    )]
+    pub dyn_layout: Option<unpopped_vocab::layout_algebra::DynLayout>,
+}
+
+/// The text form of an optional [`DynLayout`](unpopped_vocab::layout_algebra::DynLayout) in a document.
+mod dyn_layout_text {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use unpopped_vocab::layout_algebra::DynLayout;
+
+    pub(super) fn serialize<S: Serializer>(v: &Option<DynLayout>, s: S) -> Result<S::Ok, S::Error> {
+        match v {
+            Some(d) => s.collect_str(d),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<DynLayout>, D::Error> {
+        Option::<String>::deserialize(d)?
+            .map(|t| t.parse().map_err(serde::de::Error::custom))
+            .transpose()
+    }
 }
 
 /// The shape of an opaque tile: `rows` by `cols` elements of the allocation's element type (ROADMAP T2). A `TileMma` multiplies
@@ -454,6 +484,7 @@ impl AllocDecl {
             layout: None,
             align_bytes: None,
             tile: None,
+            dyn_layout: None,
         }
     }
 
@@ -474,6 +505,13 @@ impl AllocDecl {
     #[must_use]
     pub fn with_layout(mut self, layout: AllocLayout) -> Self {
         self.layout = Some(layout);
+        self
+    }
+
+    /// The same allocation with a layout whose leaves may be scalar parameters (bound at launch; see [`AllocDecl::dyn_layout`]).
+    #[must_use]
+    pub fn with_dyn_layout(mut self, layout: unpopped_vocab::layout_algebra::DynLayout) -> Self {
+        self.dyn_layout = Some(layout);
         self
     }
 

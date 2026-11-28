@@ -215,7 +215,7 @@ fn check_allocs(k: &KernelFn) -> Result<(), KernelError> {
         if !ok {
             return Err(KernelError::AllocExtent { alloc });
         }
-        check_alloc_layout(a, alloc)?;
+        check_alloc_layout(k, a, alloc)?;
         tile::check_tile_alloc(a, alloc)?;
     }
     Ok(())
@@ -226,7 +226,7 @@ const LAYOUT_ENUMERATION_CAP: i64 = 1 << 22;
 
 /// 3 and 4. range and injective, by one enumeration: every offset lies below the extent and no two logical indices share an
 /// offset (the swizzle is a bijection, so injectivity is the layout's alone).
-fn check_layout_offsets(
+pub(crate) fn check_layout_offsets(
     layout: &unpopped_vocab::layout_algebra::Layout,
     extent: u32,
 ) -> Result<(), &'static str> {
@@ -249,12 +249,19 @@ fn check_layout_offsets(
 
 /// The rules of `docs/design-swizzled-allocation.md` section 3 for one allocation's `align_bytes` and `layout`, each with its
 /// accepted control in `tests/kernel_alloc_layout.rs`.
-fn check_alloc_layout(a: &crate::exec::AllocDecl, alloc: u32) -> Result<(), KernelError> {
+fn check_alloc_layout(
+    k: &KernelFn,
+    a: &crate::exec::AllocDecl,
+    alloc: u32,
+) -> Result<(), KernelError> {
     let bad = |why: &'static str| Err(KernelError::AllocLayout { alloc, why });
     if let Some(al) = a.align_bytes {
         if al == 0 || !al.is_power_of_two() {
             return bad("align_bytes is a power of two");
         }
+    }
+    if let Some(d) = &a.dyn_layout {
+        return check_dyn_layout(k, a, d, alloc);
     }
     let Some(l) = &a.layout else { return Ok(()) };
     // 1. space: a layout (and a swizzle) belongs to a `Shared` array; the other spaces keep the identity until a row asks
@@ -294,6 +301,34 @@ fn check_alloc_layout(a: &crate::exec::AllocDecl, alloc: u32) -> Result<(), Kern
             "a swizzled allocation states an align_bytes that is a multiple of the swizzle period",
         ),
     }
+}
+
+/// The static half of the rules of `docs/design-dynamic-layout.md` section 3 for a `dyn_layout`: the launch binds the arguments and
+/// runs the enumerating checker ([`check_layout_offsets`]) on the bound layout, so nothing here needs a value. Every parameter leaf
+/// names an integer scalar parameter, and the allocation carries one layout, on a `Shared` space (a swizzle is not offered: its
+/// period must divide an extent that is a value here, so it is refused until a row needs it).
+fn check_dyn_layout(
+    k: &KernelFn,
+    a: &crate::exec::AllocDecl,
+    d: &unpopped_vocab::layout_algebra::DynLayout,
+    alloc: u32,
+) -> Result<(), KernelError> {
+    let bad = |why: &'static str| Err(KernelError::AllocLayout { alloc, why });
+    if a.layout.is_some() {
+        return bad("an allocation carries a layout or a dyn_layout, not both");
+    }
+    if a.space != MemorySpace::Shared {
+        return bad("a dyn_layout is only on a Shared allocation");
+    }
+    for local in d.params() {
+        let integer = k
+            .argument_of_local(local)
+            .is_some_and(|(_, _, ty)| types::int_range(ty).is_some());
+        if !integer {
+            return bad("a dyn_layout parameter names no integer scalar parameter of the kernel");
+        }
+    }
+    Ok(())
 }
 
 /// A specialization constant names a distinct scalar parameter and carries a default of that parameter's kind (an integer in
