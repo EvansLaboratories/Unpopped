@@ -125,3 +125,29 @@ fn a_composition_reaching_past_the_left_extent_is_accepted_and_leaves_its_image(
         "the grid must reach the class: {c:?}"
     );
 }
+
+/// The checked composition accepts exactly the compositions that stay in `A`'s extent (`s*(t-1) < e`) and refuses every other
+/// one by name; for the accepted ones it equals the unchecked composition.
+#[test]
+fn composition_within_accepts_exactly_the_in_extent_cases() {
+    let (mut accepted, mut refused) = (0usize, 0usize);
+    for e in 1..=12i64 {
+        for d in 1..=3i64 {
+            for t in 1..=14i64 {
+                for s in 1..=14i64 {
+                    let a = Layout::leaf(e, d).unwrap();
+                    let b = Layout::leaf(t, s).unwrap();
+                    let r = a.composition_within(&b);
+                    if s * (t - 1) < e {
+                        assert_eq!(r, a.composition(&b), "{a} o {b}");
+                        accepted += 1;
+                    } else {
+                        assert_eq!(r, Err(LayoutError::ExceedsExtent), "{a} o {b}");
+                        refused += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!((accepted, refused), (972, 6084));
+}

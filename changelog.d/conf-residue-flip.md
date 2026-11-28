@@ -1,0 +1,1 @@
+Tests: the residue-tiling finding is split (zipped_divide still accepts; local_tile/inner/outer/local_partition refuse NotDivisible, exhaustive sweep) and `composition_within` is pinned (accepts exactly the 972 in-extent cases, refuses the 6084 with ExceedsExtent).
