@@ -10,7 +10,7 @@
 //!
 //! The rules and the reasoning are in `docs/ir-typed-expressions.md`.
 
-use crate::ir::{BinaryOp, CastSpec, RoundMode, Saturation, ScalarExpr};
+use crate::ir::{BinaryOp, CastSpec, RoundMode, Saturation, ScalarExpr, UnaryOp};
 use unpopped_vocab::ElementKind;
 
 /// Why an expression does not type-check.
@@ -102,6 +102,13 @@ pub enum TypeError {
     /// A [`ScalarExpr::Local`] was typed with no kernel to say what the local is: a local has
     /// meaning only inside a `kernel::KernelFn` (use [`infer_ty_in`]).
     LocalOutsideKernel,
+    /// An `F128` operand of a node the oracle does not compute (ROADMAP E3): `F128` is added, subtracted, multiplied, divided,
+    /// negated, made absolute, compared, selected and cast, and nothing else (no fused multiply-add, no square root, no
+    /// transcendental, no minimum or maximum, no bit operation, no packing, no qualifier).
+    F128Operation {
+        /// The node kind, e.g. `"Fma"`.
+        node: &'static str,
+    },
     /// A [`ScalarExpr::Qualified`] whose rounding mode its operation does not take, or whose operands are not f32/f32s.
     IllegalQualifier {
         /// Why it is rejected.
@@ -221,8 +228,8 @@ pub const fn is_cast_float_endpoint(t: ElementKind) -> bool {
 
 /// A dtype of union batch 1 (KISS 0.24.0, §6.1-0017 to -0020; board 501 and 515): `F128`, `I128`, `U128`, `I256`, `U256`,
 /// `F8E3M4`, `F8UE4M3`. **Storage and key identity** for all seven; the wide integers `I128`, `U128`, `I256`, `U256` are also
-/// computed by the oracle since 0.61.3 (E2). `check_kernel` refuses a kernel that declares one of the other three (`F128`,
-/// `F8E3M4`, `F8UE4M3`) with `KernelError::DtypeNotComputed`, so the oracle never meets a value it cannot hold.
+/// computed by the oracle since 0.61.3 (E2). `F128` is computed since the E3 oracle wiring (the soft binary128, `oracle/kernel_f128.rs`). `check_kernel` refuses a kernel that declares
+/// one of the other two (`F8E3M4`, `F8UE4M3`) with `KernelError::DtypeNotComputed`, so the oracle never meets a value it cannot hold.
 #[must_use]
 pub const fn is_union_batch1(t: ElementKind) -> bool {
     matches!(
@@ -354,6 +361,50 @@ pub const fn int_range(t: ElementKind) -> Option<(i128, i128)> {
     })
 }
 
+/// A `Cast` into or out of `F128` (ROADMAP E3), the conversions `soft_f128` computes: `F128` to `F128`, `F32`, `F32Strict`, `F64` and the
+/// narrow integers; `F32`, `F32Strict`, `F64` and every integer (wide ones included) into `F128`. Anything else (the 16-bit and 8-bit
+/// floats, the MX elements, a wide integer as a destination) is refused by name.
+fn check_f128_cast(from: ElementKind, spec: CastSpec) -> Result<(), TypeError> {
+    let bad = |why: &'static str| Err(TypeError::IllegalCast { from, spec, why });
+    let to = spec.to;
+    let float = |t: ElementKind| {
+        matches!(
+            t,
+            ElementKind::F32 | ElementKind::F32Strict | ElementKind::F64
+        )
+    };
+    match (from == ElementKind::F128, to == ElementKind::F128) {
+        // into F128: an exact widening of a float, or an integer (rounded to nearest even when it has more than 113 bits)
+        (false, true) if float(from) => match spec.sat {
+            Saturation::Wrap | Saturation::ClampFinite => Ok(()),
+            _ => bad("float to f128 takes Wrap or ClampFinite"),
+        },
+        (false, true) if is_kernel_int(from) => match spec.sat {
+            Saturation::Wrap => Ok(()),
+            _ => bad("integer to f128 takes Saturation::Wrap (no out-of-range case)"),
+        },
+        (true, true) => match spec.sat {
+            Saturation::Wrap | Saturation::ClampFinite => Ok(()),
+            _ => bad("f128 to f128 takes Wrap or ClampFinite"),
+        },
+        // out of F128: a float rounds to nearest even (one rounding), the only mode the soft binary128 narrows by
+        (true, false) if float(to) => match (spec.round, spec.sat) {
+            (RoundMode::NearestEven, Saturation::Wrap | Saturation::ClampFinite) => Ok(()),
+            _ => {
+                bad("f128 to a narrower float takes RoundMode::NearestEven and Wrap or ClampFinite")
+            }
+        },
+        // an integer: rounded under any of the five modes, saturating, a NaN to 0
+        (true, false) if is_cast_int(to) => match spec.sat {
+            Saturation::Clamp => Ok(()),
+            _ => bad("f128 to integer is saturating: use Saturation::Clamp"),
+        },
+        _ => bad(
+            "an f128 Cast is defined between f128, f32, f32s, f64 and the integers only (the 16-bit and 8-bit floats, the MX elements and a wide integer as a destination are not defined yet)",
+        ),
+    }
+}
+
 /// Check that `from -> spec.to` with `spec.round` / `spec.sat` is a conversion this
 /// version defines.
 ///
@@ -369,6 +420,9 @@ pub fn check_cast(from: ElementKind, spec: CastSpec) -> Result<(), TypeError> {
     let bad = |why: &'static str| Err(TypeError::IllegalCast { from, spec, why });
     let to = spec.to;
     let known = |t| is_cast_float_endpoint(t) || is_cast_int(t);
+    if from == ElementKind::F128 || to == ElementKind::F128 {
+        return check_f128_cast(from, spec);
+    }
     // A wide integer converts to and from the integers only, by wrap or clamp: a float or sub-byte endpoint has no
     // reference conversion yet (E2), so it is refused by name.
     if is_wide_int(from) || is_wide_int(to) {
@@ -819,6 +873,30 @@ pub(crate) const fn node_name(e: &ScalarExpr) -> &'static str {
     }
 }
 
+/// The nodes an `F128` operand may feed (ROADMAP E3): the arithmetic the soft binary128 computes, the six comparisons, negation
+/// and absolute value, `Select` and `Cast` (whose own table is [`check_cast`]), and only in a kernel body. Anything else is refused
+/// by name, so the oracle never meets an `F128` operation it cannot compute.
+fn check_f128_node(e: &ScalarExpr, k: &[ElementKind], mode: TyMode) -> Result<(), TypeError> {
+    let ok = mode == TyMode::Kernel
+        && match e {
+            ScalarExpr::Add(..)
+            | ScalarExpr::Sub(..)
+            | ScalarExpr::Mul(..)
+            | ScalarExpr::Div(..)
+            | ScalarExpr::Cast(..) => true,
+            // the arms are F128 (a condition of any type is tested `!= 0`); an F128 condition over other arms is refused
+            ScalarExpr::Select(..) => k[1] == ElementKind::F128 && k[2] == ElementKind::F128,
+            ScalarExpr::Binary(op, ..) => op.is_cmp(),
+            ScalarExpr::Unary(op, _) => matches!(op, UnaryOp::Neg | UnaryOp::Abs),
+            _ => false,
+        };
+    if ok {
+        Ok(())
+    } else {
+        Err(TypeError::F128Operation { node: node_name(e) })
+    }
+}
+
 /// The scalar typing rules for one node given the element types of its operands (`k`, in
 /// [`operands`] order). The single rule table: scalar expressions use it directly and
 /// lane-wise packed operators use it on the lane types.
@@ -849,6 +927,9 @@ fn node_ty(
             Ok(t)
         }
     };
+    if k.contains(&ElementKind::F128) {
+        check_f128_node(e, k, mode)?;
+    }
     match e {
         ScalarExpr::Input(_)
         | ScalarExpr::Const(_)
@@ -1117,6 +1198,10 @@ pub(crate) fn is_typed_beyond(e: &ScalarExpr, compute: Option<ElementKind>) -> b
 /// know when they must decline a directed mode.
 #[must_use]
 pub fn rounding_matters(from: ElementKind, to: ElementKind) -> bool {
+    // an F128 conversion is never exact in general (a narrowing rounds; an integer of more than 113 bits rounds)
+    if from == ElementKind::F128 || to == ElementKind::F128 {
+        return true;
+    }
     let significand = |t: ElementKind| float_format(t).map_or(0, |(_, m)| m + 1);
     match (is_cast_float_endpoint(from), is_cast_float_endpoint(to)) {
         // Exact only when the destination has at least the source's exponent range AND
@@ -1200,6 +1285,11 @@ pub(crate) fn elem_size(dt: ElementKind) -> usize {
         ElementKind::F128 | ElementKind::I128 | ElementKind::U128 => 16,
         ElementKind::I256 | ElementKind::U256 => 32,
         ElementKind::F8E3M4 | ElementKind::F8UE4M3 | ElementKind::F8E8M0 => 1,
+        // An OCP MX 6-bit float lives in an 8-bit container, one element per byte, the six value bits low and the two high
+        // bits zero (PTX ISA 9.5 s5.2.3, p. 43; `docs/design-f6-storage.md`): a read decodes the low six bits, every write
+        // stores zero above them. `elem_bits` is therefore 8 and the type is not sub-byte (KISS `storage_bits` 6 is its
+        // identity, not the oracle's container).
+        ElementKind::F6E2M3 | ElementKind::F6E3M2 => 1,
         // Sub-byte dtypes share a byte. `elem_size` is the CONTAINER width here,
         // not the element width — use `elem_bits` for the latter and
         // `packed_bytes` for allocation.

@@ -1932,11 +1932,11 @@ pub enum KernelError {
     /// A launch with a zero extent, or a subgroup range that is empty or starts at 0.
     BadLaunch,
     /// A kernel declares (as its compute type, a parameter, a local or an allocation) a dtype that is recognised but not
-    /// computed: exactly `F128`, `F8E3M4`, `F8UE4M3` (union batch 1, KISS 0.24.0; plan E1a) and the two 6-bit floats `F6E2M3` and `F6E3M2` (the oracle has no storage for a 6-bit element, so a kernel that declared one panicked it; packing is a design point). It is declined by name, never run:
-    /// the oracle holds no value of these types (`F128` waits for the software binary128 wired into the oracle, E3 slice 2).
+    /// computed: exactly `F8E3M4` and `F8UE4M3` (union batch 1, KISS 0.24.0; plan E1a; `F128` is computed since the E3 oracle wiring, `docs/emitter-migration-b1.md`). It is declined by name, never run (the two 6-bit floats `F6E2M3` and `F6E3M2` are NOT declined: the oracle holds each in an 8-bit container since f6-oracle-storage, `docs/design-f6-storage.md`):
+    /// the oracle holds no value of these types.
     /// `I128`, `U128`, `I256` and `U256` are **computed since 0.61.3** (E2) and pass `check_kernel`; whether an emitter lowers
     /// them is the emitter's to refuse by name (`docs/emitter-migration-b1.md`). The set is pinned by
-    /// `tests/union_batch1_dtypes.rs::the_declined_set_is_exactly_f128_and_the_two_fp8_rows` and `a_6_bit_float_is_refused_by_name_because_the_oracle_has_no_storage_for_it`. A `Cast` into an MX element (`F4E2M1`, `F6*`) needs `Saturation::ClampFinite`, else `IllegalCast`.
+    /// `tests/union_batch1_dtypes.rs::the_declined_set_is_exactly_the_two_fp8_rows`; the 6-bit floats run (`tests/f6_storage.rs`). A `Cast` into an MX element (`F4E2M1`, `F6*`) needs `Saturation::ClampFinite`, else `IllegalCast`.
     DtypeNotComputed {
         /// The dtype.
         dtype: ElementKind,
