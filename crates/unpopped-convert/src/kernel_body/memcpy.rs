@@ -5,7 +5,7 @@
 //! local, the size is `sizeof` that local (or its byte count), the source a pointer into a buffer or array. A vector, struct or
 //! array destination, a size that is not the local's, or a source that is not a pointer declines by name.
 
-use super::pointer::byte_size;
+use super::pointer::{PtrVal, byte_size};
 use super::{Fixed, R, Sym, Walker, text};
 use tree_sitter::Node;
 use unpopped::ir::{BinaryOp, ScalarExpr};
@@ -33,6 +33,41 @@ impl<'s, 't> Walker<'s, 't> {
         let [dst, src, size] = args.as_slice() else {
             return self.not_yet(call, "a `memcpy` with other than three arguments");
         };
+        let (name, local, ty, bytes) = self.memcpy_target(call, dst, *size)?;
+        let Some(mut p) = self.ptr_expr(*src)? else {
+            return self.not_yet(*src, "a `memcpy` from something that is not a pointer");
+        };
+        // the value is assembled from byte loads, little-endian: `memcpy` is allowed an unaligned source (a field at an even offset of
+        // a packed block), which a wide aligned load would trap on
+        let wide = match bytes {
+            4 => E::U32,
+            8 => E::U64,
+            _ => {
+                return self.not_yet(
+                    call,
+                    format!("a `memcpy` into `{name}` of {bytes} bytes (4 and 8 lift)"),
+                );
+            }
+        };
+        (p.pointee, p.lanes) = (E::U8, 1);
+        self.flush(out);
+        let bits = self.memcpy_bytes(&p, bytes, wide, *src, out)?;
+        let value = if ty == wide {
+            bits
+        } else {
+            ScalarExpr::Bitcast(Box::new(bits), ty)
+        };
+        out.push(Stmt::Assign { local, value });
+        Ok(())
+    }
+
+    /// Validates `memcpy(&x, src, n)`: returns the scalar local `x` (name, local, type) and its byte size.
+    fn memcpy_target(
+        &mut self,
+        call: Node<'_>,
+        dst: &Node<'_>,
+        size: Node<'_>,
+    ) -> R<(String, u32, E, i64)> {
         let target = (dst.kind() == "pointer_expression"
             && dst
                 .child_by_field_name("operator")
@@ -65,7 +100,7 @@ impl<'s, 't> Walker<'s, 't> {
                 format!("a `memcpy` into `{name}`, whose size is unknown"),
             );
         };
-        let stated = text(*size, self.src).split_whitespace().collect::<String>();
+        let stated = text(size, self.src).split_whitespace().collect::<String>();
         let ok = stated == format!("sizeof({name})")
             || stated
                 == format!(
@@ -78,27 +113,22 @@ impl<'s, 't> Walker<'s, 't> {
             || stated.parse::<i64>().ok() == Some(bytes);
         if !ok {
             return self.not_yet(
-                *size,
+                size,
                 format!("a `memcpy` of `{stated}` bytes into `{name}`, which is {bytes}"),
             );
         }
-        let Some(mut p) = self.ptr_expr(*src)? else {
-            return self.not_yet(*src, "a `memcpy` from something that is not a pointer");
-        };
-        // the value is assembled from byte loads, little-endian: `memcpy` is allowed an unaligned source (a field at an even offset of
-        // a packed block), which a wide aligned load would trap on
-        let wide = match bytes {
-            4 => E::U32,
-            8 => E::U64,
-            _ => {
-                return self.not_yet(
-                    call,
-                    format!("a `memcpy` into `{name}` of {bytes} bytes (4 and 8 lift)"),
-                );
-            }
-        };
-        (p.pointee, p.lanes) = (E::U8, 1);
-        self.flush(out);
+        Ok((name.to_string(), local, ty, bytes))
+    }
+
+    /// The little-endian value assembled from `bytes` byte loads at `p`, widened to `wide`.
+    fn memcpy_bytes(
+        &mut self,
+        p: &PtrVal,
+        bytes: i64,
+        wide: E,
+        src: Node<'_>,
+        out: &mut Vec<Stmt>,
+    ) -> R<ScalarExpr> {
         let mut acc: Option<ScalarExpr> = None;
         for k in 0..bytes {
             let mut q = p.clone();
@@ -106,10 +136,10 @@ impl<'s, 't> Walker<'s, 't> {
                 Box::new(p.off.clone()),
                 Box::new(ScalarExpr::ConstInt(k, E::I64)),
             );
-            let (place, _) = self.pointer_place(&q, None, *src)?;
+            let (place, _) = self.pointer_place(&q, None, src)?;
             let byte = self.new_local(E::U8);
             out.push(Stmt::Load { local: byte, place });
-            let widened = self.convert(ScalarExpr::Local(byte), E::U8, wide, *src)?;
+            let widened = self.convert(ScalarExpr::Local(byte), E::U8, wide, src)?;
             let placed = if k == 0 {
                 widened
             } else {
@@ -124,15 +154,9 @@ impl<'s, 't> Walker<'s, 't> {
                 Some(prev) => ScalarExpr::Binary(BinaryOp::BitOr, Box::new(prev), Box::new(placed)),
             });
         }
-        let Some(bits) = acc else {
-            return self.not_yet(call, "a `memcpy` of no bytes");
-        };
-        let value = if ty == wide {
-            bits
-        } else {
-            ScalarExpr::Bitcast(Box::new(bits), ty)
-        };
-        out.push(Stmt::Assign { local, value });
-        Ok(())
+        match acc {
+            Some(bits) => Ok(bits),
+            None => self.not_yet(src, "a `memcpy` of no bytes"),
+        }
     }
 }
