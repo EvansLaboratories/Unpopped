@@ -4,11 +4,10 @@
 
 Exact rational arithmetic (fractions.Fraction) rounded to binary128 by a separate implementation (round to nearest, ties to even),
 sharing no code with crates/unpopped/src/soft_f128.rs. Provenance: written by the unpopped lane for this test (no third-party code, no copied vectors; the only dependency is the
-Python standard library, `fractions` and `random`), under the repository's licence. UNVERIFIED against a third-party binary128 library
+Python standard library, `fractions` only), under the repository's licence. UNVERIFIED against a third-party binary128 library
 (none is installed here): the check is two independent implementations agreeing, not a vendor's vectors. Seeded, so the output is reproducible:
     python tools/gen_f128_vectors.py > crates/unpopped/tests/data/soft_f128_vectors.txt
 """
-import random
 from fractions import Fraction
 
 EXP_BITS, FRAC_BITS, BIAS = 15, 112, 16383
@@ -94,47 +93,95 @@ def to_int(bits, mode):
     return n % 2**256
 
 
+def _inf(sign):
+    return INF | (1 << 127 if sign < 0 else 0)
+
+
+def _add(a, b, da, db, subtract):
+    if subtract:
+        db = (db[0], -db[1])
+    if da[0] == "inf" and db[0] == "inf":
+        return _inf(da[1]) if da[1] == db[1] else QNAN
+    if da[0] == "inf":
+        return _inf(da[1])
+    if db[0] == "inf":
+        return _inf(db[1])
+    s = da[1] + db[1]
+    if s == 0:
+        # an exact zero sum is +0 unless both operands are -0 (RNE); `b` is the second operand as given
+        b_neg = (b >> 127 == 1) != subtract
+        return (1 << 127) if (a >> 127 == 1 and b_neg and da[1] == 0 and db[1] == 0) else 0
+    return encode(s)
+
+
+def _mul(a, b, da, db):
+    zero = lambda d: d[0] == "fin" and d[1] == 0
+    if (da[0] == "inf" and zero(db)) or (db[0] == "inf" and zero(da)):
+        return QNAN
+    neg = (a >> 127) ^ (b >> 127)
+    if da[0] == "inf" or db[0] == "inf":
+        return INF | (neg << 127)
+    p = da[1] * db[1]
+    return (neg << 127) if p == 0 else encode(p)
+
+
+def _div(a, b, da, db):
+    neg = (a >> 127) ^ (b >> 127)
+    if da[0] == "inf" and db[0] == "inf":
+        return QNAN
+    if da[0] == "inf":
+        return INF | (neg << 127)
+    if db[0] == "inf":
+        return neg << 127
+    if db[1] == 0:
+        return QNAN if da[1] == 0 else INF | (neg << 127)
+    q = da[1] / db[1]
+    return (neg << 127) if q == 0 else encode(q)
+
+
 def op(name, a, b):
     da, db = decode(a), decode(b)
     if da[0] == "nan" or db[0] == "nan":
         return QNAN
-    inf = lambda s: INF | (1 << 127 if s < 0 else 0)
-    if name in ("add", "sub"):
-        if name == "sub":
-            db = (db[0], -db[1])
-        if da[0] == "inf" and db[0] == "inf":
-            return inf(da[1]) if da[1] == db[1] else QNAN
-        if da[0] == "inf":
-            return inf(da[1])
-        if db[0] == "inf":
-            return inf(db[1])
-        s = da[1] + db[1]
-        if s == 0:
-            # an exact zero sum is +0 unless both operands are -0 (RNE)
-            negz = (a >> 127 == 1 and ((b >> 127 == 1) if name == "add" else (b >> 127 == 0)))
-            return (1 << 127) if negz and da[1] == 0 and db[1] == 0 else 0
-        return encode(s)
-    if name == "mul":
-        if (da[0] == "inf" and db[0] == "fin" and db[1] == 0) or (db[0] == "inf" and da[0] == "fin" and da[1] == 0):
-            return QNAN
-        neg = (a >> 127) ^ (b >> 127)
-        if da[0] == "inf" or db[0] == "inf":
-            return INF | (neg << 127)
-        p = da[1] * db[1]
-        return (neg << 127) if p == 0 else encode(p)
-    if name == "div":
-        neg = (a >> 127) ^ (b >> 127)
-        if da[0] == "inf" and db[0] == "inf":
-            return QNAN
-        if da[0] == "inf":
-            return INF | (neg << 127)
-        if db[0] == "inf":
-            return neg << 127
-        if db[1] == 0:
-            return QNAN if da[1] == 0 else INF | (neg << 127)
-        q = da[1] / db[1]
-        return (neg << 127) if q == 0 else encode(q)
-    raise ValueError(name)
+    table = {
+        "add": lambda: _add(a, b, da, db, False),
+        "sub": lambda: _add(a, b, da, db, True),
+        "mul": lambda: _mul(a, b, da, db),
+        "div": lambda: _div(a, b, da, db),
+    }
+    return table[name]()
+
+
+class Rng:
+    """splitmix64, seeded: a reproducible test-data generator (not for security); the `random` module is not used."""
+
+    def __init__(self, seed):
+        self.state = seed & (2**64 - 1)
+
+    def _next(self):
+        self.state = (self.state + 0x9E3779B97F4A7C15) & (2**64 - 1)
+        z = self.state
+        z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & (2**64 - 1)
+        z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & (2**64 - 1)
+        return z ^ (z >> 31)
+
+    def getrandbits(self, k):
+        out, got = 0, 0
+        while got < k:
+            out |= self._next() << got
+            got += 64
+        return out & (2**k - 1)
+
+    def randrange(self, lo, hi=None):
+        if hi is None:
+            lo, hi = 0, lo
+        return lo + self.getrandbits((hi - lo).bit_length() + 64) % (hi - lo)
+
+    def random(self):
+        return self.getrandbits(53) / 2**53
+
+    def choice(self, seq):
+        return seq[self.randrange(len(seq))]
 
 
 def rand_bits(rng):
@@ -154,7 +201,7 @@ SPECIALS = [0, 1 << 127, 1, 2**FRAC_BITS - 1, (BIAS << FRAC_BITS), (BIAS << FRAC
 
 
 def main():
-    rng = random.Random(0xE3128)
+    rng = Rng(0xE3128)
     rows = []
     pairs = [(a, b) for a in SPECIALS for b in SPECIALS]
     pairs += [(rand_bits(rng), rand_bits(rng)) for _ in range(70)]
