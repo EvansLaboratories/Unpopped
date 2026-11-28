@@ -93,107 +93,146 @@ impl<'s, 't> Walker<'s, 't> {
         let mut c = n.walk();
         let decls: Vec<_> = n.children_by_field_name("declarator", &mut c).collect();
         for d in decls {
-            let (id, value) = match d.kind() {
-                "init_declarator" => (
-                    d.child_by_field_name("declarator"),
-                    d.child_by_field_name("value"),
-                ),
-                _ => (Some(d), None),
-            };
-            let Some(id) = id else {
-                return self.not_yet(d, "a declarator of an unexpected shape");
-            };
-            if id.kind() != "identifier" {
-                return self.not_yet(id, format!("a `{}` declarator", id.kind()));
-            }
-            // `T x;` is indeterminate in C until it is written; the IR needs a value, so it starts at zero (a refinement: a
-            // read before the write is undefined in C)
-            if let Some(v) = value
-                && let Some(mut p) = self.shared_address(v)?
-            {
-                // the integer a `cp.async` takes: a symbolic shared pointer, fixed now
-                self.flush(out);
-                p.off = self.pin_offset(p.off, out);
-                self.scopes
-                    .last_mut()
-                    .expect("a scope is open")
-                    .insert(text(id, self.src).to_string(), Sym::Pointer(p));
-                continue;
-            }
-            let is_bool = n
-                .child_by_field_name("type")
-                .is_some_and(|t| text(t, self.src) == "bool");
-            let mut ty = declared.unwrap_or(E::I32);
-            let e = match value {
-                // `bool b = e;` is `e != 0`: normalised, so a value other than 0 or 1 still gives 1
-                Some(v) if is_bool => {
-                    // `e != 0` is the compute type's 1 or 0 (a comparison), cast to a byte. Not a `Select` of two byte
-                    // constants: an integer `Select` with a float-typed condition passes `check_kernel` but the oracle
-                    // refuses it ("comparison of a non-integer operand").
-                    let (e, et) = self.expr(v)?;
-                    let zero = self.zero_of(et, v)?;
-                    let nonzero = ScalarExpr::Binary(BinaryOp::CmpNe, Box::new(e), Box::new(zero));
-                    // the comparison is 0 or 1 at the compute type: from a float it narrows to a byte exactly, from an integer it
-                    // wraps (the oracle's integer evaluator reads only a wrapping cast)
-                    let int_compute = int_range(self.compute).is_some();
-                    ScalarExpr::Cast(
-                        Box::new(nonzero),
-                        CastSpec {
-                            to: E::U8,
-                            round: if int_compute {
-                                RoundMode::NearestEven
-                            } else {
-                                RoundMode::TowardZero
-                            },
-                            sat: if int_compute {
-                                Saturation::Wrap
-                            } else {
-                                Saturation::Clamp
-                            },
-                        },
-                    )
-                }
-                Some(v) => {
-                    let (e, et) = self.expr(v)?;
-                    if declared.is_none() {
-                        ty = et;
-                    }
-                    self.convert(e, et, ty, v)?
-                }
-                None if declared.is_none() => {
-                    return self.not_yet(d, "an `auto` declaration with no initialiser");
-                }
-                None => self.zero_of(ty, d)?,
-            };
-            // a scalar whose address is taken (`unsigned char* p = (unsigned char*)&zero;`) lives in memory: a `Private` allocation of
-            // one element, so a byte pointer into it reads and writes the same bytes as the name does
-            if (int_range(ty).is_some() || matches!(ty, E::F16 | E::Bf16 | E::F32 | E::F64))
-                && self.address_escapes(text(id, self.src))
-                && super::pointer::byte_size(ty).is_some()
-            {
-                self.flush(out);
-                self.vector_alloc_declaration(text(id, self.src), (ty, 1), vec![e], out)?;
-                continue;
-            }
-            self.flush(out);
-            let local = self.new_local(ty);
-            self.scopes.last_mut().expect("a scope is open").insert(
-                text(id, self.src).to_string(),
-                Sym::Scalar(local, ty, Fixed::No),
-            );
-            // a `const` integer local with a known initialiser is a constant a loop can unroll over
-            if value.is_some()
-                && int_range(ty).is_some()
-                && (0..n.child_count()).filter_map(|i| n.child(i)).any(|k| {
-                    k.kind() == "type_qualifier"
-                        && matches!(text(k, self.src), "const" | "constexpr")
-                })
-                && let Some(v) = self.launch_fold(&e)
-            {
-                self.known.insert(local, v);
-            }
-            out.push(Stmt::Let { local, init: e });
+            self.scalar_declarator(n, declared, d, out)?;
         }
+        Ok(())
+    }
+
+    /// One declarator of a scalar declaration.
+    fn scalar_declarator(
+        &mut self,
+        n: Node<'_>,
+        declared: Option<E>,
+        d: Node<'_>,
+        out: &mut Vec<Stmt>,
+    ) -> R<()> {
+        let (id, value) = match d.kind() {
+            "init_declarator" => (
+                d.child_by_field_name("declarator"),
+                d.child_by_field_name("value"),
+            ),
+            _ => (Some(d), None),
+        };
+        let Some(id) = id else {
+            return self.not_yet(d, "a declarator of an unexpected shape");
+        };
+        if id.kind() != "identifier" {
+            return self.not_yet(id, format!("a `{}` declarator", id.kind()));
+        }
+        // `T x;` is indeterminate in C until it is written; the IR needs a value, so it starts at zero (a refinement: a
+        // read before the write is undefined in C)
+        if let Some(v) = value
+            && let Some(mut p) = self.shared_address(v)?
+        {
+            // the integer a `cp.async` takes: a symbolic shared pointer, fixed now
+            self.flush(out);
+            p.off = self.pin_offset(p.off, out);
+            self.scopes
+                .last_mut()
+                .expect("a scope is open")
+                .insert(text(id, self.src).to_string(), Sym::Pointer(p));
+            return Ok(());
+        }
+        let (ty, e) = self.scalar_initialiser(n, d, declared, value)?;
+        self.bind_scalar(n, id, value, ty, e, out)
+    }
+
+    /// The type and initial value of a scalar declarator: converted initialiser, normalised bool, or zero.
+    fn scalar_initialiser(
+        &mut self,
+        n: Node<'_>,
+        d: Node<'_>,
+        declared: Option<E>,
+        value: Option<Node<'_>>,
+    ) -> R<(E, ScalarExpr)> {
+        let is_bool = n
+            .child_by_field_name("type")
+            .is_some_and(|t| text(t, self.src) == "bool");
+        let mut ty = declared.unwrap_or(E::I32);
+        let e = match value {
+            // `bool b = e;` is `e != 0`: normalised, so a value other than 0 or 1 still gives 1
+            Some(v) if is_bool => self.bool_normalised(v)?,
+            Some(v) => {
+                let (e, et) = self.expr(v)?;
+                if declared.is_none() {
+                    ty = et;
+                }
+                self.convert(e, et, ty, v)?
+            }
+            None if declared.is_none() => {
+                return self.not_yet(d, "an `auto` declaration with no initialiser");
+            }
+            None => self.zero_of(ty, d)?,
+        };
+        Ok((ty, e))
+    }
+
+    /// `bool b = v;` is `v != 0`, normalised so a value other than 0 or 1 still gives 1.
+    fn bool_normalised(&mut self, v: Node<'_>) -> R<ScalarExpr> {
+        // `e != 0` is the compute type's 1 or 0 (a comparison), cast to a byte. Not a `Select` of two byte
+        // constants: an integer `Select` with a float-typed condition passes `check_kernel` but the oracle
+        // refuses it ("comparison of a non-integer operand").
+        let (e, et) = self.expr(v)?;
+        let zero = self.zero_of(et, v)?;
+        let nonzero = ScalarExpr::Binary(BinaryOp::CmpNe, Box::new(e), Box::new(zero));
+        // the comparison is 0 or 1 at the compute type: from a float it narrows to a byte exactly, from an integer it
+        // wraps (the oracle's integer evaluator reads only a wrapping cast)
+        let int_compute = int_range(self.compute).is_some();
+        Ok(ScalarExpr::Cast(
+            Box::new(nonzero),
+            CastSpec {
+                to: E::U8,
+                round: if int_compute {
+                    RoundMode::NearestEven
+                } else {
+                    RoundMode::TowardZero
+                },
+                sat: if int_compute {
+                    Saturation::Wrap
+                } else {
+                    Saturation::Clamp
+                },
+            },
+        ))
+    }
+
+    /// Binds a scalar declarator's name: in memory when its address escapes, else a `Let` local.
+    fn bind_scalar(
+        &mut self,
+        n: Node<'_>,
+        id: Node<'_>,
+        value: Option<Node<'_>>,
+        ty: E,
+        e: ScalarExpr,
+        out: &mut Vec<Stmt>,
+    ) -> R<()> {
+        // a scalar whose address is taken (`unsigned char* p = (unsigned char*)&zero;`) lives in memory: a `Private` allocation of
+        // one element, so a byte pointer into it reads and writes the same bytes as the name does
+        if (int_range(ty).is_some() || matches!(ty, E::F16 | E::Bf16 | E::F32 | E::F64))
+            && self.address_escapes(text(id, self.src))
+            && super::pointer::byte_size(ty).is_some()
+        {
+            self.flush(out);
+            self.vector_alloc_declaration(text(id, self.src), (ty, 1), vec![e], out)?;
+            return Ok(());
+        }
+        self.flush(out);
+        let local = self.new_local(ty);
+        self.scopes.last_mut().expect("a scope is open").insert(
+            text(id, self.src).to_string(),
+            Sym::Scalar(local, ty, Fixed::No),
+        );
+        // a `const` integer local with a known initialiser is a constant a loop can unroll over
+        if value.is_some()
+            && int_range(ty).is_some()
+            && (0..n.child_count()).filter_map(|i| n.child(i)).any(|k| {
+                k.kind() == "type_qualifier" && matches!(text(k, self.src), "const" | "constexpr")
+            })
+            && let Some(v) = self.launch_fold(&e)
+        {
+            self.known.insert(local, v);
+        }
+        out.push(Stmt::Let { local, init: e });
         Ok(())
     }
 
