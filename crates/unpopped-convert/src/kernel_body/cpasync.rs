@@ -73,9 +73,36 @@ impl<'s, 't> Walker<'s, 't> {
             .split("L2::")
             .nth(1)
             .and_then(|s| s.trim_end_matches('B').parse::<u32>().ok());
+        let rest = &words[ci + 1..];
+        let copy = self.cp_async_copy(e, words, rest, ins, cache, l2)?;
+        let predicated = words.contains(&"@p") && words.contains(&"setp.ne.b32");
+        if !predicated {
+            out.append(&mut self.hoisted);
+            out.push(copy);
+            return Ok(());
+        }
+        let cond = self.cp_async_predicate(e, words, ins)?;
+        out.append(&mut self.hoisted);
+        out.push(Stmt::If {
+            cond,
+            then: Block(vec![copy]),
+            els: Block(vec![]),
+        });
+        Ok(())
+    }
+
+    /// The unpredicated `CopyAsync` of a `cp.async` template: destination, source, byte count and optional valid-bytes.
+    fn cp_async_copy(
+        &mut self,
+        e: Node<'_>,
+        words: &[&str],
+        rest: &[&str],
+        ins: &[Operand<'_>],
+        cache: CacheHint,
+        l2: Option<u32>,
+    ) -> R<Stmt> {
         let reg = |w: &str| w.trim_matches(['[', ']', '%']).parse::<usize>().ok();
         let operand = |w: &str| reg(w).and_then(|k| ins.get(k));
-        let rest = &words[ci + 1..];
         let (Some(dst), Some(src), Some(size)) = (
             rest.first().and_then(|w| operand(w)),
             rest.get(1).and_then(|w| operand(w)),
@@ -139,12 +166,18 @@ impl<'s, 't> Walker<'s, 't> {
             cache,
             l2_prefetch: l2,
         };
-        let predicated = words.contains(&"@p") && words.contains(&"setp.ne.b32");
-        if !predicated {
-            out.append(&mut self.hoisted);
-            out.push(copy);
-            return Ok(());
-        }
+        Ok(copy)
+    }
+
+    /// The condition of a predicated `cp.async`: `setp.ne.b32 p, %k, 0`.
+    fn cp_async_predicate(
+        &mut self,
+        e: Node<'_>,
+        words: &[&str],
+        ins: &[Operand<'_>],
+    ) -> R<ScalarExpr> {
+        let reg = |w: &str| w.trim_matches(['[', ']', '%']).parse::<usize>().ok();
+        let operand = |w: &str| reg(w).and_then(|k| ins.get(k));
         let Some(k) = words
             .iter()
             .position(|w| *w == "setp.ne.b32")
@@ -158,13 +191,10 @@ impl<'s, 't> Walker<'s, 't> {
         };
         let (p, pt) = self.expr(k.value)?;
         let zero = self.zero_of(pt, k.value)?;
-        let cond = ScalarExpr::Binary(BinaryOp::CmpNe, Box::new(p), Box::new(zero));
-        out.append(&mut self.hoisted);
-        out.push(Stmt::If {
-            cond,
-            then: Block(vec![copy]),
-            els: Block(vec![]),
-        });
-        Ok(())
+        Ok(ScalarExpr::Binary(
+            BinaryOp::CmpNe,
+            Box::new(p),
+            Box::new(zero),
+        ))
     }
 }
