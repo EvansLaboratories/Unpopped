@@ -46,7 +46,8 @@ enum Mutant {
     WrongOriginA,
 }
 
-fn kernel(s: &Shape, mutant: Mutant) -> KernelFn {
+/// The statements of the kernel: load A, B and C (or fill C with zero), `TileMma`, store D.
+fn statements(s: &Shape, mutant: Mutant) -> Vec<Stmt> {
     let ld = |cols: u32| u(i64::from(cols) + PAD);
     let load = |d: u32, buffer: u32, cols: u32, origin: i64| Stmt::TileLoad {
         d,
@@ -62,7 +63,7 @@ fn kernel(s: &Shape, mutant: Mutant) -> KernelFn {
     } else {
         load(2, 2, s.n, 1)
     };
-    let body = vec![
+    vec![
         load(
             0,
             0,
@@ -83,7 +84,11 @@ fn kernel(s: &Shape, mutant: Mutant) -> KernelFn {
             elements_per_row: ld(s.n),
             origin: [u(1), u(1)],
         },
-    ];
+    ]
+}
+
+fn kernel(s: &Shape, mutant: Mutant) -> KernelFn {
+    let body = statements(s, mutant);
     KernelFn::new(
         s.name,
         s.acc,
