@@ -106,7 +106,9 @@ impl fmt::Display for LayoutError {
             Self::NonPositiveCotarget(v) => write!(f, "cotarget {v} is not >= 1"),
             Self::BadSwizzle => write!(f, "swizzle parameters are not a valid bijection"),
             Self::Parse(why) => write!(f, "not a canonical layout text: {why}"),
-            Self::ExceedsExtent => write!(f, "composition reaches past the size of the left layout"),
+            Self::ExceedsExtent => {
+                write!(f, "composition reaches past the size of the left layout")
+            }
         }
     }
 }

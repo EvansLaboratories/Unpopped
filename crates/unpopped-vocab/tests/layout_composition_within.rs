@@ -9,8 +9,26 @@ fn lay(t: &str) -> Layout {
     t.parse().unwrap_or_else(|e| panic!("{t}: {e}"))
 }
 
-const LHS: &[&str] = &["8:1", "8:2", "(4,2):(1,4)", "(2,3):(1,2)", "(4,4):(1,8)", "6:3"];
-const RHS: &[&str] = &["2:1", "4:1", "4:2", "2:4", "(2,2):(1,2)", "3:1", "8:1", "4:3", "2:8", "(2,2):(1,4)"];
+const LHS: &[&str] = &[
+    "8:1",
+    "8:2",
+    "(4,2):(1,4)",
+    "(2,3):(1,2)",
+    "(4,4):(1,8)",
+    "6:3",
+];
+const RHS: &[&str] = &[
+    "2:1",
+    "4:1",
+    "4:2",
+    "2:4",
+    "(2,2):(1,2)",
+    "3:1",
+    "8:1",
+    "4:3",
+    "2:8",
+    "(2,2):(1,4)",
+];
 
 #[test]
 fn within_agrees_inside_the_extent_and_refuses_past_it() {
@@ -38,13 +56,19 @@ fn within_agrees_inside_the_extent_and_refuses_past_it() {
         }
     }
     // positive controls: the sweep reaches each arm
-    assert!(agreed > 0 && refused > 0 && over_reach_accepted > 0, "{agreed} {refused} {over_reach_accepted}");
+    assert!(
+        agreed > 0 && refused > 0 && over_reach_accepted > 0,
+        "{agreed} {refused} {over_reach_accepted}"
+    );
 }
 
 #[test]
 fn a_hand_worked_over_reach() {
     // 4:1 o 8:1 = 8:1 (reads 4:1 extended to index 7); within refuses it, and accepts 4:1 o 4:1
     assert_eq!(lay("4:1").composition(&lay("8:1")), Ok(lay("8:1")));
-    assert_eq!(lay("4:1").composition_within(&lay("8:1")), Err(LayoutError::ExceedsExtent));
+    assert_eq!(
+        lay("4:1").composition_within(&lay("8:1")),
+        Err(LayoutError::ExceedsExtent)
+    );
     assert_eq!(lay("4:1").composition_within(&lay("4:1")), Ok(lay("4:1")));
 }
