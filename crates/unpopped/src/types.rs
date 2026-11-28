@@ -1192,6 +1192,11 @@ pub(crate) fn elem_size(dt: ElementKind) -> usize {
         ElementKind::F128 | ElementKind::I128 | ElementKind::U128 => 16,
         ElementKind::I256 | ElementKind::U256 => 32,
         ElementKind::F8E3M4 | ElementKind::F8UE4M3 | ElementKind::F8E8M0 => 1,
+        // An OCP MX 6-bit float lives in an 8-bit container, one element per byte, the six value bits low and the two high
+        // bits zero (PTX ISA 9.5 s5.2.3, p. 43; `docs/design-f6-storage.md`): a read decodes the low six bits, every write
+        // stores zero above them. `elem_bits` is therefore 8 and the type is not sub-byte (KISS `storage_bits` 6 is its
+        // identity, not the oracle's container).
+        ElementKind::F6E2M3 | ElementKind::F6E3M2 => 1,
         // Sub-byte dtypes share a byte. `elem_size` is the CONTAINER width here,
         // not the element width — use `elem_bits` for the latter and
         // `packed_bytes` for allocation.
