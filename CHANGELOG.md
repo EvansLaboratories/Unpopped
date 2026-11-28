@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.18` — additive: `MmaAtom::with_groups` and the Volta f16 m8n8k4 atoms (four independent 8x8x4 MMAs per warp; U70)
+
+`MmaAtom` gains `groups` (1 for every existing atom) and a `(group, local lane) -> subgroup lane` map (`with_groups`, `groups()`, `subgroup_lanes()`, `group_lane()`; `non_exhaustive`, serde default), `check_mma` requires a launch subgroup of `lanes * groups`, and the oracle runs each group from its own lanes only. Constructors `MmaAtom::nvidia_m8n8k4_f16(Major, Major, acc)` with `Major { Row, Col }` per operand and an f16 or f32 accumulator (the oracle rounds a half-width accumulator once). The cpu-c emitter refuses a grouped atom by name. Layouts from PTX ISA 9.5 section 9.7.16.5.1 (Figures 49-55, single source); design `docs/design-mma-groups.md` (option A accepted by `unpopped`). Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.
+
+---
+
 ## `0.63.17` — Pip's review of #498: a scheduled callee is pinned, a partial ScheduleSpec loads, and every changelog fragment is checked
 
 `tests/kernel_schedule_declines.rs` gains a test that a called function (not the entry) that sets a schedule field is declined by name by `lower_module` (the entry-only loop mutant fails it; the three earlier tests passed it). `ScheduleSpec` loads from a document that states only the fields it sets (`#[serde(default)]`, additive: the unstated fields are the defaults), pinned with a wrong-type control. `tests/changelog_fragments.rs` checks every `changelog.d/*.md` against the rule of `tools/stamp-version.py` (a first line `kind: ...`, a `---` line, a non-empty entry), with the broken fixtures and an in-memory scan as controls, so a malformed fragment fails on the PR that adds it, not at the stamp. No behaviour change beyond the loading.
