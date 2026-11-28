@@ -27,6 +27,10 @@ impl Machine<'_> {
             ExecId::LaneId => c.thread_lin % c.subgroup,
             ExecId::SubgroupId => c.thread_lin / c.subgroup,
             ExecId::SubgroupSize => c.subgroup,
+            ExecId::SubgroupCount => {
+                let threads: u32 = c.launch.block.iter().product();
+                threads.div_ceil(c.subgroup)
+            }
             ExecId::DeviceRank => c.device,
             ExecId::DeviceCount => c.launch.devices,
             ExecId::ClusterCtaRank => c.launch.cluster.map_or(0, |cl| {
@@ -139,6 +143,25 @@ impl Machine<'_> {
             .ok()
             .filter(|i| *i < len)
             .ok_or(KernelTrap::AllocOutOfBounds { alloc })?;
+        // a layout permutes the storage: the access, the race log, the initialised flags and the async queue all key on the
+        // PHYSICAL element, so two logical elements never alias and a swizzle never hides or creates a race
+        let decl = &self.alloc_k.allocs[alloc as usize];
+        if decl.dyn_layout.is_some() {
+            return Err(KernelTrap::Unsupported(
+                "a dyn_layout is bound at the launch entry only, not in a called kernel",
+            ));
+        }
+        let i = match &decl.layout {
+            Some(l) => {
+                let width = u32::try_from(types::elem_size(decl.elem)).unwrap_or(0);
+                l.physical(i as i64, width)
+                    .ok()
+                    .and_then(|p| usize::try_from(p).ok())
+                    .filter(|p| *p < len)
+                    .ok_or(KernelTrap::AllocOutOfBounds { alloc })?
+            }
+            None => i,
+        };
         if c.peer.is_none() && c.asyncq.covers(alloc, i) {
             return Err(KernelTrap::AsyncRace { alloc });
         }

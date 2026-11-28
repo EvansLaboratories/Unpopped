@@ -31,13 +31,16 @@
 
 use std::fmt;
 
+mod dynamic;
 mod ordered;
 mod slice;
 mod structural;
 mod swizzle;
 mod text;
+mod tile;
 mod variants;
 
+pub use dynamic::{Dim, DynLayout, DynTuple};
 pub use slice::SliceCrd;
 pub use swizzle::{ComposedLayout, Swizzle};
 
@@ -83,6 +86,11 @@ pub enum LayoutError {
     BadSwizzle,
     /// Text that is not the canonical form of a layout or swizzle (see the `text` module); the reason.
     Parse(&'static str),
+    /// [`DynLayout::bind`] was not given a value for this parameter local.
+    UnboundParam(u32),
+    /// [`Layout::composition_within`]: the right layout reaches an index at or past `size(self)`, which plain
+    /// [`Layout::composition`] would read by extending `self` at its last stride.
+    ExceedsExtent,
 }
 
 impl fmt::Display for LayoutError {
@@ -102,6 +110,10 @@ impl fmt::Display for LayoutError {
             Self::NonPositiveCotarget(v) => write!(f, "cotarget {v} is not >= 1"),
             Self::BadSwizzle => write!(f, "swizzle parameters are not a valid bijection"),
             Self::Parse(why) => write!(f, "not a canonical layout text: {why}"),
+            Self::UnboundParam(p) => write!(f, "dynamic layout parameter ?{p} has no value"),
+            Self::ExceedsExtent => {
+                write!(f, "composition reaches past the size of the left layout")
+            }
         }
     }
 }
@@ -497,10 +509,25 @@ impl Layout {
     /// [`LayoutError::NotDivisible`] when CuTe's divisibility condition is not
     /// met; that condition is sufficient, not necessary, so some expressible
     /// compositions are declined (`(4,2):(1,4) ∘ 2:3` is one).
+    ///
+    /// **Extension rule (CuTe's reading, kept).** The last mode of `self` is extendable: an `rhs` whose image reaches an
+    /// index `>= size(self)` is accepted and `self` is read past its end at its last stride (see [`Layout::call`]).
+    /// The result is therefore **not** bounded by `size(self)`; the consumer bounds it (an allocation's layout is
+    /// checked for range and injectivity by `check_alloc_layout`). Use [`Layout::composition_within`] to refuse the
+    /// over-reach instead.
     pub fn composition(&self, rhs: &Layout) -> Result<Layout, LayoutError> {
         let a = self.flat_modes();
         let (shape, stride) = compose_tree(&a, &rhs.shape, &rhs.stride)?;
         Layout::new(shape, stride)
+    }
+
+    /// [`Layout::composition`] that refuses to extend `self`: [`LayoutError::ExceedsExtent`] when the largest index
+    /// `rhs` produces (`cosize(rhs) - 1`) is `>= size(self)`. Otherwise identical to `composition`, which it calls.
+    pub fn composition_within(&self, rhs: &Layout) -> Result<Layout, LayoutError> {
+        if rhs.cosize() > self.size() {
+            return Err(LayoutError::ExceedsExtent);
+        }
+        self.composition(rhs)
     }
 
     /// The layout `R` that fills in what `self` leaves out of `[0, cotarget)`.

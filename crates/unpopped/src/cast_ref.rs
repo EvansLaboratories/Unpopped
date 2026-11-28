@@ -22,12 +22,12 @@ use crate::ir::{CastSpec, RoundMode, Saturation};
 use crate::types::{float_format, int_range, is_cast_float_endpoint, is_mx_element, typed_bits};
 use unpopped_vocab::ElementKind;
 
-/// Whether `t` is one of the IEEE-shaped narrow floats (the 16-bit floats and `F8E3M4`), which the generic IEEE helpers below
+/// Whether `t` is one of the IEEE-shaped narrow floats (the 16-bit floats, `F8E3M4` and the OCP `Fp8E5M2`), which the generic IEEE helpers below
 /// encode.
 fn is_half(t: ElementKind) -> bool {
     matches!(
         t,
-        ElementKind::F16 | ElementKind::Bf16 | ElementKind::F8E3M4
+        ElementKind::F16 | ElementKind::Bf16 | ElementKind::F8E3M4 | ElementKind::Fp8E5M2
     )
 }
 
@@ -146,6 +146,53 @@ pub(crate) fn encode_ue4m3(x: f64, mode: RoundMode) -> u128 {
     // positive: the sign bit of the (4, 3) layout is the exponent's top bit here, so encode with the MX helper at (4, 3) and
     // clamp to the largest finite code, which is one below the NaN code
     encode_mx(x, 4, 3, mode).min(0x7E)
+}
+
+/// The `Fp8E4M3FN` code of `x` (OCP FP8 E4M3 "finite": sign 1, exponent 4, mantissa 3, bias 7, NO infinity, ONE NaN pattern per
+/// sign `S.1111.111`, largest finite `0x7E` = 448, smallest subnormal `0x01` = 2^-9; ROADMAP U68). Rounds under `mode`. A NaN keeps its
+/// sign (`0x7F` / `0xFF`). An overflow (a finite value that rounds past 448, or an infinity) is **`clamp_finite`**: the largest finite
+/// value of its sign (`0x7E` / `0xFE`); otherwise it is NaN when the mode rounds toward the overflow side (nearest does), and the
+/// largest finite value when a directed mode points away from it. **The IR's rule, UNVERIFIED against a vendor conversion.**
+pub(crate) fn encode_e4m3fn(x: f64, mode: RoundMode, clamp_finite: bool) -> u128 {
+    let sign = u128::from(x.is_sign_negative()) << 7;
+    if x.is_nan() {
+        return sign | 0x7F;
+    }
+    // the generic 8-bit encoder saturates at the all-ones code `0x7F` (480 as an MX value): that code is where this format's
+    // overflow lands, and `0x7E` is the largest finite value
+    let code = encode_mx(x, 4, 3, mode);
+    if code & 0x7F != 0x7F {
+        return code;
+    }
+    if clamp_finite || !overflows_to_infinity(mode, x.is_sign_negative()) {
+        sign | 0x7E
+    } else {
+        sign | 0x7F
+    }
+}
+
+/// The value of the `Fp8E4M3FN` code `bits` (low 8 bits): `S.1111.111` is NaN (sign kept), every other code finite.
+#[cfg(test)]
+pub(crate) fn decode_e4m3fn(bits: u128) -> f64 {
+    let b = bits & 0xFF;
+    let neg = b & 0x80 != 0;
+    if b & 0x7F == 0x7F {
+        return f64::NAN.copysign(if neg { -1.0 } else { 1.0 });
+    }
+    decode_mx(b, 4, 3)
+}
+
+/// The value of the `F8E8M0` code `bits`: the MX block scale `2^(code - 127)` (exponent only, bias 127, unsigned), with `0xFF`
+/// as NaN. There is no zero and no infinity: code `0` is `2^-127`, the smallest scale. Sources: OCP Microscaling Formats
+/// (MX) Specification v1.0 (the E8M0 scale; section number not re-read here) and the ONNX `float8` note's E8M0 table
+/// (bias 127, `0xFF` NaN, no infinity, minimum `00000000` = `2^-127`). Only the low 8 bits of `bits` are read.
+pub(crate) fn decode_e8m0(bits: u128) -> f64 {
+    let b = (bits & 0xFF) as u32;
+    if b == 0xFF {
+        return f64::NAN;
+    }
+    // 2^(b - 127) is a normal f64 for every b in 0..=254 (the exponent field is b + 896)
+    f64::from_bits(u64::from(b + 896) << 52)
 }
 
 /// The value of the `F8UE4M3` code `bits` (`0x7F` is NaN; a code with bit 7 set is outside the format and decodes as NaN here).
@@ -270,6 +317,7 @@ pub(crate) fn bits_of(x: Num, t: ElementKind) -> u128 {
             encode_mx(f, e, m, RoundMode::NearestEven)
         }
         (Num::F(f), ElementKind::F8UE4M3) => encode_ue4m3(f, RoundMode::NearestEven),
+        (Num::F(f), ElementKind::Fp8E4M3FN) => encode_e4m3fn(f, RoundMode::NearestEven, false),
         // A value HELD as a 16-bit float is already on its grid, so any mode agrees.
         (Num::F(f), t) if is_half(t) => {
             let (e, m) = float_format(t).expect("a half has a format");
@@ -298,6 +346,7 @@ pub(crate) fn num_of(bits: u128, t: ElementKind) -> Num {
             Num::F(decode_mx(bits, e, m))
         }
         ElementKind::F8UE4M3 => Num::F(decode_ue4m3(bits)),
+        ElementKind::Fp8E4M3FN => Num::F(decode_e4m3fn(bits)),
         ElementKind::I8 => Num::I(i128::from(bits as u8 as i8)),
         ElementKind::I16 => Num::I(i128::from(bits as u16 as i16)),
         ElementKind::I32 => Num::I(i128::from(bits as u32 as i32)),
@@ -515,6 +564,9 @@ pub(crate) fn cast_bits(x: Num, from: ElementKind, spec: CastSpec) -> u128 {
                     encode_mx(f, e, m, spec.round)
                 }
                 ElementKind::F8UE4M3 => encode_ue4m3(f, spec.round),
+                ElementKind::Fp8E4M3FN => {
+                    encode_e4m3fn(f, spec.round, spec.sat == Saturation::ClampFinite)
+                }
                 _ => {
                     let max = f64::from(f32::MAX);
                     let r = if spec.sat == Saturation::ClampFinite && !f.is_nan() {
@@ -558,6 +610,7 @@ pub(crate) fn cast_bits(x: Num, from: ElementKind, spec: CastSpec) -> u128 {
                     encode_mx(int_to_f64_sticky(i), e, m, spec.round)
                 }
                 ElementKind::F8UE4M3 => encode_ue4m3(int_to_f64_sticky(i), spec.round),
+                ElementKind::Fp8E4M3FN => encode_e4m3fn(int_to_f64_sticky(i), spec.round, false),
                 _ => u128::from(int_to_f32(i, spec.round).to_bits()),
             }
         }

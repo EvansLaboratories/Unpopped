@@ -35,6 +35,10 @@ const U8: ElementKind = ElementKind::U8;
 /// A fixture: a kernel `check_kernel` accepts, or a module `check_module` accepts at `entry`.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a fixture is a test value: boxing `Kernel` would change what a consumer's `Fixture::Kernel(k)` pattern binds"
+)]
 pub enum Fixture {
     /// A single kernel, checked with `check_kernel`.
     Kernel(KernelFn),
@@ -106,6 +110,7 @@ variants! {
     MulticastLoadReduce { .. },
     GridDepWait,
     GridDepLaunchDependents,
+    Assume { .. },
     Fence { .. },
     Collective { .. },
     CollectiveTuple { .. },
@@ -116,6 +121,10 @@ variants! {
     MbarCompleteTx { .. },
     MbarWait { .. },
     MatrixStore { .. },
+    TileLoad { .. },
+    TileMma { .. },
+    TileFill { .. },
+    TileStore { .. },
     ProxyFence { .. },
     Wgmma { .. },
     WgmmaCommit,
@@ -483,6 +492,22 @@ fn grid_dep_launch_dependents() -> KernelFn {
     .with_launch(block32())
 }
 
+/// `Assume`: a value fact that holds (a thread index is below 32), so the oracle does not trap.
+fn assume() -> KernelFn {
+    f32_kernel(
+        "assume",
+        &[],
+        vec![Stmt::Assume {
+            cond: ScalarExpr::Binary(
+                BinaryOp::CmpLt,
+                Box::new(ScalarExpr::Exec(ExecId::ThreadIdx(0))),
+                Box::new(ScalarExpr::ConstInt(32, ElementKind::U32)),
+            ),
+        }],
+    )
+    .with_launch(block32())
+}
+
 /// `Fence`: a block-scope acquire-release fence.
 fn fence() -> KernelFn {
     f32_kernel(
@@ -687,6 +712,73 @@ fn matrix_store() -> KernelFn {
         alloc("tile", MemorySpace::Shared, F16, 64),
         alloc("frag", MemorySpace::Private, F16, 2),
     ])
+}
+
+/// A 2 x 2 `F32` opaque tile (ROADMAP T2).
+fn tile(name: &str) -> AllocDecl {
+    AllocDecl::tile(name, F32, 2, 2)
+}
+
+/// The tile statements' kernel: launch, a tile `0`, a `Shared` `F32` array `1` and the tiles `2..4` for an MMA.
+fn tile_kernel(name: &str, body: Vec<Stmt>) -> KernelFn {
+    f32_kernel(name, &[], body)
+        .with_launch(warp())
+        .with_allocs(vec![
+            tile("t"),
+            alloc("s", MemorySpace::Shared, F32, 16),
+            tile("a"),
+            tile("b"),
+        ])
+}
+
+/// `TileLoad`: read a 2 x 2 tile from a `Shared` array with a row stride of 4. Needs a launch and a `Tile` allocation.
+fn tile_load() -> KernelFn {
+    tile_kernel(
+        "tile_load",
+        vec![Stmt::TileLoad {
+            d: 0,
+            src: alloc_at(1, u(0)),
+            elements_per_row: u(4),
+            origin: [u(0), u(0)],
+        }],
+    )
+}
+
+/// `TileMma`: `t = a * b + t` over 2 x 2 `F32` tiles.
+fn tile_mma() -> KernelFn {
+    tile_kernel(
+        "tile_mma",
+        vec![Stmt::TileMma {
+            d: 0,
+            a: 2,
+            b: 3,
+            c: 0,
+        }],
+    )
+}
+
+/// `TileFill`: set every element of a tile.
+fn tile_fill() -> KernelFn {
+    tile_kernel(
+        "tile_fill",
+        vec![Stmt::TileFill {
+            d: 0,
+            value: c(1.0),
+        }],
+    )
+}
+
+/// `TileStore`: write a 2 x 2 tile to a `Shared` array with a row stride of 4.
+fn tile_store() -> KernelFn {
+    tile_kernel(
+        "tile_store",
+        vec![Stmt::TileStore {
+            a: 0,
+            dst: alloc_at(1, u(0)),
+            elements_per_row: u(4),
+            origin: [u(0), u(0)],
+        }],
+    )
 }
 
 /// `ProxyFence`: `fence.proxy.async.shared::cta`.
@@ -1025,6 +1117,7 @@ pub fn fixtures() -> Vec<(&'static str, Fixture)> {
         ("MulticastLoadReduce", k(multicast_load_reduce())),
         ("GridDepWait", k(grid_dep_wait())),
         ("GridDepLaunchDependents", k(grid_dep_launch_dependents())),
+        ("Assume", k(assume())),
         ("Fence", k(fence())),
         ("Collective", k(collective())),
         ("CollectiveTuple", collective_tuple()),
@@ -1035,6 +1128,10 @@ pub fn fixtures() -> Vec<(&'static str, Fixture)> {
         ("MbarCompleteTx", k(mbar_complete_tx())),
         ("MbarWait", k(mbar_wait())),
         ("MatrixStore", k(matrix_store())),
+        ("TileLoad", k(tile_load())),
+        ("TileMma", k(tile_mma())),
+        ("TileFill", k(tile_fill())),
+        ("TileStore", k(tile_store())),
         ("ProxyFence", k(proxy_fence())),
         ("Wgmma", k(wgmma())),
         ("WgmmaCommit", k(wgmma_commit())),
@@ -1131,6 +1228,7 @@ pub fn needs(name: &str) -> &'static str {
         "Collective" => "warp launch",
         "Mma" => "warp launch, register fragments",
         "MatrixLoad" | "MatrixStore" => "warp launch, shared tile",
+        "TileLoad" | "TileMma" | "TileFill" | "TileStore" => "launch, tile allocations",
         "MbarInit" | "MbarArrive" | "MbarCompleteTx" | "MbarWait" => "launch, mbarrier",
         "CopyAsync" => "launch, shared tile",
         "CopyBulk" | "CopyUnpack" => "launch, shared tile, mbarrier",
@@ -1180,8 +1278,8 @@ mod tests {
         // the order is the enum's
         let names: Vec<&str> = all.iter().map(|(n, _)| *n).collect();
         assert_eq!(names, ALL);
-        // the positive control: the enum has 46 variants on this base
-        assert_eq!(ALL.len(), 46, "the Stmt variants this list was written for");
+        // the positive control: the enum has 51 variants on this base
+        assert_eq!(ALL.len(), 51, "the Stmt variants this list was written for");
     }
 
     #[test]

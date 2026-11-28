@@ -66,14 +66,14 @@ Format: rows | the trigger | does the consumer exist today (yes/no, where) | wha
 
 - CUDA 38, 39, 42; CuTe 36, 42; CUTLASS 25; Triton 18 | ROADMAP U7 S3 and U8b: no PTX sparse or scaled constructor, and the `ldmatrix`/`stmatrix`/`mma.sp` lane tables stay held, until the lane tables are checked against a second independent source | **a source, not a consumer, is what is missing, and it may exist:** candidate sources (named from memory, not checked for this note): CUTLASS's `cute/atom/mma_traits_sm80.hpp` family and LLVM's NVPTX tests; and Baracuda can produce one by running emitted code under `ptxas` or hardware (2b line 5) | PM ruling that the Unpopped lane may read those sources itself (work, not an ask to another lane), and Baracuda's report from 2b line 5.
 
-### 2d. "No consumer yet; revive only if an emitter must keep a 128-bit vector as one access" (U15, parked 2026-11-21): 8 rows
+### 2d. "No consumer yet; revive only if an emitter must keep a 128-bit vector as one access" (U15, parked 2026-11-21): 8 rows **RE-DISPOSITIONED 2026-11-26 (PM via pm-kernels; CireSnave 2026-10-24, 2026-11-11, 2026-11-19): not a wait; unblocked work, ranked lower.**
 
 - CUDA 59; CuTe 20, 48; CUTLASS 83; Mojo 52, 53, 54; ThunderKittens 55 | packed locals and SIMD values (8- and 16-lane packed values within 128 bits are built, 0.56.x; what is parked is the lowering that keeps a vector as one access) | **not today:** `baracuda-cuda-emit` has not asked for vector-as-one-access (`float4` loads) | Baracuda states whether it needs it; the claims of US11262989B2, US9052888B2 and WO2013070616A1 are read first (PATENT-SWEEP U15, NOT CLEARED, unread).
 
 ### 2e. Other triggers
 
 - CuTe 62, CUTLASS 61, Triton 31 | U17: "a two-launch oracle is the follow-up if a consumer needs the ordering checked" | no: the oracle has one launch and PDL is a host-side edge | a consumer (Fuel dispatch or a Baracuda host harness) asks for cross-launch ordering to be checked; 1 to 2 PRs.
-- Slang 8, 9 | U21 textures and bindless: "waits on a consumer" | no: Fuel uses 0 of 192 kernels, FlashInfer 0 (ROADMAP U21) | Fuel or fishstringer names a texture kernel it needs.
+- Slang 8, 9 | U21 textures and bindless: "waits on a consumer" | no: Fuel uses 0 of 192 kernels, FlashInfer 0 (ROADMAP U21) | Fuel or fishstringer names a texture kernel it needs. **RE-DISPOSITIONED 2026-11-26 (PM via pm-kernels; CireSnave 2026-10-24, 2026-11-11, 2026-11-19): not a wait; unblocked work, ranked lower.**
 - Slang 5; Triton 2, 13 | U3 remainder: `ProgramModel`/`BlockSpmd` lowering, append/consume buffers, block tensors and `tl.gather`, "each when a consumer needs it" | no: no Triton front end exists in the portfolio | a Triton-source frontend lane (not started) or fishstringer asks.
 - CUDA 4 | U40 constant tables: "a lifted kernel or a lane needs a table" | possibly: the U19 census is measurable | the lane measures how many census kernels carry a `__constant__` table; the lane can fire this itself.
 - CUDA 15, 79 | `setmaxnreg` and warp-specialization launch attributes, "ride on `LaunchShape` fields when a backend needs them" | no: the Baracuda emitter does not spell them | Baracuda records `setmaxnreg` among its requirements (2b line 1).

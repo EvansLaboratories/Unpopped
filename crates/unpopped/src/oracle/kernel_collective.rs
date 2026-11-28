@@ -32,6 +32,7 @@ use unpopped_vocab::ElementKind;
 pub(super) enum Plan {
     Shuffle(ShuffleMode),
     Vote(VoteKind),
+    MatchAny,
     Reduce(ReduceOp),
     Scan(ReduceOp, bool),
     Broadcast,
@@ -71,6 +72,7 @@ pub(super) fn results(
             .map(|i| lanes[lanes[i as usize].operand.rem_euclid(n) as usize].value)
             .collect(),
         Plan::Vote(kind) => vote(kind, lanes)?,
+        Plan::MatchAny => match_any(lanes)?,
         Plan::Reduce(op) => {
             let all = fold(op, ty, lanes.iter().map(|l| l.value))?;
             vec![all; lanes.len()]
@@ -112,6 +114,31 @@ fn truthy(v: Val, ty: ElementKind) -> bool {
     } else {
         v.f64() != 0.0
     }
+}
+
+/// Lane `i` gets the mask of the lanes whose value has the same bits as lane `i`'s (`match.any.sync`).
+fn match_any(lanes: &[Contribution]) -> Result<Vec<Val>, KernelTrap> {
+    if lanes.len() > 32 {
+        return Err(KernelTrap::Unsupported("a match over more than 32 lanes"));
+    }
+    let bits = |l: &Contribution| -> i128 {
+        if types::int_range(l.ty).is_some() {
+            l.value.i128()
+        } else {
+            i128::from(l.value.f64().to_bits())
+        }
+    };
+    Ok(lanes
+        .iter()
+        .map(|me| {
+            let mask = lanes
+                .iter()
+                .enumerate()
+                .filter(|(_, o)| bits(o) == bits(me))
+                .fold(0, |m, (j, _)| m | (1_i128 << j));
+            int_val(mask, ElementKind::U32)
+        })
+        .collect())
 }
 
 fn vote(kind: VoteKind, lanes: &[Contribution]) -> Result<Vec<Val>, KernelTrap> {
@@ -211,7 +238,8 @@ fn combine(op: ReduceOp, ty: ElementKind, a: Val, b: Val) -> Result<Val, KernelT
             ReduceOp::Sum => wrap(ty, x + y),
             ReduceOp::Max => x.max(y),
             ReduceOp::Min => x.min(y),
-            ReduceOp::Prod => wrap(ty, x * y),
+            // the product of two 64-bit values can exceed i128; the low bits are all `wrap` keeps
+            ReduceOp::Prod => wrap(ty, x.wrapping_mul(y)),
             ReduceOp::And => x & y,
             ReduceOp::Or => x | y,
             ReduceOp::Xor => x ^ y,
@@ -343,6 +371,7 @@ impl Machine<'_> {
             }
             CollectiveKind::Broadcast { lane } => (Plan::Broadcast, self.eval_expr(lane)?.i128()),
             CollectiveKind::Vote(v) => (Plan::Vote(*v), 0),
+            CollectiveKind::MatchAny => (Plan::MatchAny, 0),
             CollectiveKind::Reduce(op) => (Plan::Reduce(*op), 0),
             CollectiveKind::Scan { op, exclusive } => (Plan::Scan(*op, *exclusive), 0),
             CollectiveKind::ReduceWith { combine } => (Plan::ReduceWith(*combine), 0),

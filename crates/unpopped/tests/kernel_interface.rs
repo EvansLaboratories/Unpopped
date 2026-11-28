@@ -154,3 +154,118 @@ fn a_generated_kernel_carries_its_interface_and_the_revision_does_not_see_it() {
         Some(SubgroupSize::new(32, 32))
     );
 }
+
+// ---- ROADMAP row (CUDA 95): the static and dynamic `Shared` size against a target's per-block limit ----
+
+#[test]
+fn shared_bytes_sums_static_and_dynamic_allocations_and_skips_other_spaces() {
+    use unpopped::kernel_interface::shared_bytes;
+    // tile: 100 f32 = 400; fixed: 16 u32 = 64 (static); halves: 10 f16 = 20; the Private `scratch` is not shared memory
+    assert_eq!(shared_bytes(&kernel(), &[100, 10]), Ok(484));
+    // the static part alone when the dynamic counts are zero
+    assert_eq!(shared_bytes(&kernel(), &[0, 0]), Ok(64));
+}
+
+#[test]
+fn a_missing_dynamic_count_and_an_overflow_are_errors_not_zero() {
+    use unpopped::kernel_interface::{SharedSizeError, shared_bytes};
+    assert_eq!(
+        shared_bytes(&kernel(), &[100]),
+        Err(SharedSizeError::DynamicCountMissing {
+            alloc: "halves".to_string()
+        })
+    );
+    assert_eq!(
+        shared_bytes(&kernel(), &[u64::MAX, 0]),
+        Err(SharedSizeError::Overflow)
+    );
+}
+
+#[test]
+fn a_sub_byte_element_is_refused_by_name() {
+    use unpopped::kernel_interface::{SharedSizeError, shared_bytes};
+    let k = KernelFn::new("packed", F32, vec![], vec![], Block(vec![])).with_allocs(vec![
+        AllocDecl::new(
+            "nibbles",
+            MemorySpace::Shared,
+            unpopped_vocab::ElementKind::U4,
+            Extent::Static(8),
+        ),
+    ]);
+    assert_eq!(
+        shared_bytes(&k, &[]),
+        Err(SharedSizeError::UnsizedElement {
+            alloc: "nibbles".to_string(),
+            elem: unpopped_vocab::ElementKind::U4
+        })
+    );
+}
+
+#[test]
+fn the_limit_is_the_targets_row_and_sm89_is_below_sm80() {
+    use unpopped::capability::cuda_capabilities;
+    use unpopped::kernel_interface::{SharedSizeError, check_shared_size};
+    let (t80, t89) = (
+        cuda_capabilities(8, 0).expect("sm80"),
+        cuda_capabilities(8, 9).expect("sm89"),
+    );
+    // 131840 bytes: the figure from `TargetCapabilities`' doc (fits sm_80's 166912, not sm_89's 101376); 32960 f32 = 131840
+    let k = kernel();
+    let counts = [32_960u64, 0];
+    let want = 32_960 * 4 + 64;
+    assert_eq!(check_shared_size(&k, &counts, &t80), Ok(want));
+    assert_eq!(
+        check_shared_size(&k, &counts, &t89),
+        Err(SharedSizeError::OverLimit {
+            bytes: want,
+            limit: t89.max_shared_mem_per_block
+        })
+    );
+    // control: exactly at the limit passes
+    let at = (u64::from(t89.max_shared_mem_per_block) - 64) / 4;
+    assert_eq!(check_shared_size(&k, &[at, 0], &t89), Ok(at * 4 + 64));
+}
+
+#[test]
+fn a_launch_is_checked_against_the_targets_thread_and_subgroup_limits() {
+    use unpopped::capability::cuda_capabilities;
+    use unpopped::kernel_interface::{LaunchLimitError, check_launch_limits};
+    let t = cuda_capabilities(8, 9).expect("sm89");
+    let with = |block: [u32; 3]| kernel().with_launch(LaunchShape::new(block, [1, 1, 1]));
+    let mut none = kernel();
+    none.launch = None;
+    assert_eq!(
+        check_launch_limits(&none, &t),
+        Err(LaunchLimitError::NoLaunch)
+    );
+    // 32 x 32 = 1024 threads: exactly the limit passes (the control); 1025 does not
+    assert_eq!(check_launch_limits(&with([32, 32, 1]), &t), Ok(1024));
+    assert_eq!(
+        check_launch_limits(&with([1025, 1, 1]), &t),
+        Err(LaunchLimitError::OverThreads {
+            threads: 1025,
+            limit: t.max_threads_per_block
+        })
+    );
+    assert_eq!(
+        check_launch_limits(&with([0, 4, 1]), &t),
+        Err(LaunchLimitError::EmptyBlock)
+    );
+    assert_eq!(
+        check_launch_limits(&with([u32::MAX, u32::MAX, u32::MAX]), &t),
+        Err(LaunchLimitError::Overflow)
+    );
+    // a subgroup range that excludes the target's warp size (32), and one that includes it
+    let mut sg = LaunchShape::new([64, 1, 1], [1, 1, 1]);
+    sg.subgroup = Some(SubgroupSize::new(64, 64));
+    assert_eq!(
+        check_launch_limits(&kernel().with_launch(sg), &t),
+        Err(LaunchLimitError::SubgroupSize {
+            min: 64,
+            max: 64,
+            warp_size: t.warp_size
+        })
+    );
+    sg.subgroup = Some(SubgroupSize::new(16, 64));
+    assert_eq!(check_launch_limits(&kernel().with_launch(sg), &t), Ok(64));
+}

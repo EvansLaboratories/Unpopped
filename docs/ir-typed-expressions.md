@@ -203,7 +203,7 @@ overflow or a NaN has nowhere to go, and the IR defines where, exactly as it doe
 | `Bitcast` of an MX element | No row: the typed bit widths are byte-multiples only. |
 
 **NaN to `+0` is the IR's rule, not a hardware fact.** What the vendors' conversion instructions do with a
-NaN here is UNVERIFIED (no PTX or Vulkan check has been made; that waits for a consumer). An emitter that
+NaN here is UNVERIFIED (no PTX or Vulkan check has been made; that waits for a consumer). An emitter that **RE-DISPOSITIONED 2026-11-26 (PM via pm-kernels; CireSnave 2026-10-24, 2026-11-11, 2026-11-19): not a wait; unblocked work, ranked lower.**
 cannot reproduce the rule exactly MUST DECLINE, never approximate. No emitter spells these casts today (CpuC has no
 C type for them and declines; Slang is unchanged).
 
@@ -216,3 +216,17 @@ type with a typed reason rather than letting the oracle's buffer sizing panic.
 every mode over a few thousand probes, plus the saturation, NaN, `-0` and clamp-edge cases; `typed_expressions` tests the
 legality table and the oracle end to end. Seeded mutations (accept `Wrap`, NaN to max, no clamp on carry,
 drop the sign) each turn a test red.
+
+## 11. Casts into and out of the OCP FP8 formats (`Fp8E4M3FN`, `Fp8E5M2`; ROADMAP U68)
+
+The two 8-bit floats are cast endpoints at the kernel layer (a kernel could always load and store their buffers byte for byte; only the `Cast` was `IllegalCast`). **What is verified and what is not.**
+
+| | rule | status |
+|---|---|---|
+| `Fp8E5M2` encode and decode | IEEE-shaped (5 exponent bits, 2 mantissa bits, bias 15, infinity and NaN, largest finite `0x7B` = 57344); `Wrap` follows the rounding mode (nearest-even overflows to infinity), every rounding mode is defined | follows the IEEE rules the other narrow floats follow; the codes are checked against the format's definition |
+| `Fp8E5M2` with `ClampFinite` | an overflow (an infinity included) lands on the largest finite value of its sign | **the IR's rule, UNVERIFIED against a vendor conversion** (the usual saturating mode) |
+| `Fp8E4M3FN` decode | bias 7, no infinity, one NaN per sign (`S.1111.111`), largest finite `0x7E` = 448 | checked against the format's definition by two independent decoders (the oracle's `float_codec` and `cast_ref`) |
+| `Fp8E4M3FN` encode, in range | round under the mode (ties to even), subnormals down to `0x01` = 2^-9 | checked against hand-worked codes |
+| `Fp8E4M3FN` overflow | `Wrap`: the NaN of its sign (there is no infinity); `ClampFinite`: 448 of its sign; a directed mode pointing away from the overflow stops at 448; a NaN keeps its sign | **the IR's rule, UNVERIFIED against a vendor conversion**: a vendor instruction that differs is a wrong-VALUE difference for a consumer that trusts the oracle; an emitter that cannot match the rule declines |
+
+The plan layer's own FP8 store codec (`oracle/float_codec.rs`, used for an FP8 plan output) **saturates `Fp8E4M3FN` to 448 on every overflow**; the kernel `Cast` with `Wrap` gives the NaN. The two are different paths with different stated rules, not one rule: a consumer that converts at both layers must say which it means (`ClampFinite` is the kernel-layer spelling of the plan layer's behaviour).

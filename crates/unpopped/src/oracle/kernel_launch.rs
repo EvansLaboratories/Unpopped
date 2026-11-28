@@ -22,6 +22,24 @@
 //!
 //! `Constant` allocations have no initializer in [`AllocDecl`], so reading one is
 //! [`KernelTrap::Unsupported`] here, by name.
+//!
+//! # The oracle limit on forward progress between blocks
+//!
+//! The oracle is a deterministic sequential interpreter: **blocks run one after another in index order, each to its end or to a
+//! `Device` barrier** (with a `Device` barrier every block is resident and the barrier is a rendezvous of the whole grid).
+//! Hardware runs resident blocks concurrently, so a block that spins on a flag a LATER block sets completes there and cannot
+//! complete here. What the oracle reports for it depends on how the spin reads the flag:
+//!
+//! * a spin through an acquire-class atomic, with blocks still to run, is [`KernelTrap::CrossBlockWait`] (the wait detector keys
+//!   on the launch's `acquired` edge);
+//! * a **`Relaxed`** spin takes no acquire edge, so the same kernel shows [`KernelTrap::StepLimit`] after the step limit instead;
+//! * a spin on an EARLIER block's write is fine (that block already ran), as is any wait through a `Device` barrier.
+//!
+//! Neither trap says the kernel is wrong: it says this interpreter cannot interleave blocks. A kernel that needs forward progress
+//! between blocks without a `Device` barrier (a decoupled look-back scan, a persistent-block work queue, a stream-K fix-up wait)
+//! is outside what the oracle can run today; ROADMAP U76 is the lift (a resident-block scheduler that interleaves blocks at
+//! atomic and fence statements, deterministically seeded), and until it lands such a kernel is checked by `check_kernel` and by
+//! the emitters' own tests, not by an oracle run.
 
 use std::ops::Range;
 
@@ -225,6 +243,14 @@ fn launch_checked(
             "one argument per parameter, for every device of the launch",
         ));
     }
+    // a `dyn_layout` is bound here, from the first device's arguments, to the static layout the rest of the run uses
+    let bound;
+    let k = if k.allocs.iter().any(|a| a.dyn_layout.is_some()) {
+        bound = bind_dyn_layouts(k, &args[..np])?;
+        &bound
+    } else {
+        k
+    };
     let launch = resolve_launch(k, &args[..np], launch)?;
     let sg = pick_subgroup(&launch, subgroup)?;
     let lens = k
@@ -475,6 +501,43 @@ fn int_argument(arg: &KernelArg, field: Option<usize>) -> Option<i128> {
     }
 }
 
+/// `k` with every `dyn_layout` replaced by the static layout it binds to under `args` (`docs/design-dynamic-layout.md` section 3):
+/// every parameter takes its integer argument, the bound layout's size must equal the extent, and the enumerating checker of
+/// `check_kernel` runs on it (range and injectivity), so a violation traps before the first statement and nothing is checked twice.
+fn bind_dyn_layouts(k: &KernelFn, args: &[KernelArg]) -> Result<KernelFn, KernelTrap> {
+    let mut out = k.clone();
+    for (i, a) in k.allocs.iter().enumerate() {
+        let Some(d) = &a.dyn_layout else { continue };
+        let alloc = i as u32;
+        let bad = |why: &'static str| KernelTrap::DynLayout { alloc, why };
+        let values = d
+            .params()
+            .into_iter()
+            .map(|local| {
+                k.argument_of_local(local)
+                    .and_then(|(p, f, _)| int_argument(&args[p], f))
+                    .and_then(|v| i64::try_from(v).ok())
+                    .map(|v| (local, v))
+                    .ok_or(bad("a parameter of the layout has no integer argument"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let layout = d.bind(&values).map_err(|_| {
+            bad("a bound leaf is not a valid shape (positive) or stride (non-negative)")
+        })?;
+        let n = u32::try_from(alloc_len(k, args, a)?)
+            .map_err(|_| bad("the allocation's extent does not fit a 32-bit count"))?;
+        if layout.size() != i64::from(n) {
+            return Err(bad(
+                "the bound layout's size must equal the allocation's extent",
+            ));
+        }
+        crate::kernel_check::check_layout_offsets(&layout, n).map_err(bad)?;
+        out.allocs[i].layout = Some(crate::exec::AllocLayout::new(layout));
+        out.allocs[i].dyn_layout = None;
+    }
+    Ok(out)
+}
+
 /// The element count of `a`, resolving a dynamic extent from its scalar argument.
 fn alloc_len(k: &KernelFn, args: &[KernelArg], a: &AllocDecl) -> Result<usize, KernelTrap> {
     let bad = KernelTrap::ArgMismatch("a dynamic extent needs a positive integer argument");
@@ -499,7 +562,8 @@ fn instances(k: &KernelFn, lens: &[usize], space: MemorySpace) -> Vec<Option<All
         .map(|(a, &n)| {
             // tensor memory is one instance per block, stored beside `Shared`
             let here = a.space == space
-                || (space == MemorySpace::Shared && a.space == MemorySpace::Tensor);
+                || (space == MemorySpace::Shared && a.space == MemorySpace::Tensor)
+                || (space == MemorySpace::Private && a.space == MemorySpace::Tile);
             here.then(|| AllocMem::new(a.elem, n))
         })
         .collect()

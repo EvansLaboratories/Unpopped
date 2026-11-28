@@ -9,6 +9,7 @@ mod matrix;
 mod mbar;
 mod mma;
 mod tcgen05;
+mod tile;
 mod wgmma;
 
 use unpopped_vocab::ElementKind;
@@ -17,7 +18,7 @@ use crate::exec::{Extent, GridDim, MemorySpace, Scope as ExecScope};
 use crate::ir::ScalarExpr;
 use crate::kernel::{
     AtomicOp, BarrierKind, Block, BufferRole, CallArg, KernelError, KernelFn, MemoryOrder, Param,
-    ParamKind, Place, Stmt,
+    ParamKind, Place, SpecValue, Stmt,
 };
 use crate::kernel_extern::ExternSig;
 use crate::types::{self, Ty};
@@ -69,6 +70,9 @@ pub(crate) fn check_kernel_with(
     entry: bool,
 ) -> Result<(), KernelError> {
     check_launch(k)?;
+    if let Some(s) = &k.schedule {
+        crate::schedule::check_schedule(s).map_err(KernelError::Schedule)?;
+    }
     check_declared_dtypes(k)?;
     let n = k.locals.len();
     let mut sc = Scope {
@@ -93,6 +97,7 @@ pub(crate) fn check_kernel_with(
         }
     }
     check_allocs(k)?;
+    check_spec_consts(k)?;
     check_block(k, &k.body, &mut sc)?;
     let barrier_callees: Vec<bool> = sc.callees.iter().map(|c| c.barrier).collect();
     crate::kernel_uniform::check_barriers(k, &barrier_callees, &sc.externs, entry)
@@ -103,8 +108,12 @@ pub(crate) fn check_kernel_with(
 /// hold. Covers the compute type, every parameter (buffer element, scalar, struct field), every local and every allocation.
 fn check_declared_dtypes(k: &KernelFn) -> Result<(), KernelError> {
     let refuse = |dtype| Err(KernelError::DtypeNotComputed { dtype });
-    // the four wide integers are computed (ROADMAP E2); the rest of union batch 1 is declined by name
-    let declined = |t: ElementKind| types::is_union_batch1(t) && !types::is_wide_int(t);
+    // the four wide integers are computed (ROADMAP E2) and so is `F128` (ROADMAP E3: the soft binary128 of `oracle/kernel_f128.rs`,
+    // which runs every node `types::check_f128_node` admits and nothing else); the rest of union batch 1 is declined by name (the two
+    // 6-bit floats are held in an 8-bit container by the oracle since f6-oracle-storage and are no longer declined)
+    let declined = |t: ElementKind| {
+        types::is_union_batch1(t) && !types::is_wide_int(t) && t != ElementKind::F128
+    };
     if declined(k.compute) {
         return refuse(k.compute);
     }
@@ -205,6 +214,142 @@ fn check_allocs(k: &KernelFn) -> Result<(), KernelError> {
         };
         if !ok {
             return Err(KernelError::AllocExtent { alloc });
+        }
+        check_alloc_layout(k, a, alloc)?;
+        tile::check_tile_alloc(a, alloc)?;
+    }
+    Ok(())
+}
+
+/// The largest layout the checker proves injective by enumerating it (4 Mi elements, far above any shared array).
+const LAYOUT_ENUMERATION_CAP: i64 = 1 << 22;
+
+/// 3 and 4. range and injective, by one enumeration: every offset lies below the extent and no two logical indices share an
+/// offset (the swizzle is a bijection, so injectivity is the layout's alone).
+pub(crate) fn check_layout_offsets(
+    layout: &unpopped_vocab::layout_algebra::Layout,
+    extent: u32,
+) -> Result<(), &'static str> {
+    if layout.size() > LAYOUT_ENUMERATION_CAP {
+        return Err("the layout is too large to prove injective");
+    }
+    let mut seen = vec![false; extent as usize];
+    for i in 0..layout.size() {
+        let Ok(o) = layout.call(i) else {
+            return Err("the layout is not defined over its own size");
+        };
+        match usize::try_from(o).ok().and_then(|o| seen.get_mut(o)) {
+            Some(slot) if !*slot => *slot = true,
+            Some(_) => return Err("the layout is not injective: two indices share an offset"),
+            None => return Err("the layout's cosize exceeds the allocation's extent"),
+        }
+    }
+    Ok(())
+}
+
+/// The rules of `docs/design-swizzled-allocation.md` section 3 for one allocation's `align_bytes` and `layout`, each with its
+/// accepted control in `tests/kernel_alloc_layout.rs`.
+fn check_alloc_layout(
+    k: &KernelFn,
+    a: &crate::exec::AllocDecl,
+    alloc: u32,
+) -> Result<(), KernelError> {
+    let bad = |why: &'static str| Err(KernelError::AllocLayout { alloc, why });
+    if let Some(al) = a.align_bytes {
+        if al == 0 || !al.is_power_of_two() {
+            return bad("align_bytes is a power of two");
+        }
+    }
+    if let Some(d) = &a.dyn_layout {
+        return check_dyn_layout(k, a, d, alloc);
+    }
+    let Some(l) = &a.layout else { return Ok(()) };
+    // 1. space: a layout (and a swizzle) belongs to a `Shared` array; the other spaces keep the identity until a row asks
+    if a.space != MemorySpace::Shared {
+        return bad("a layout is only on a Shared allocation");
+    }
+    // 2. size: a Static extent equal to the layout's size (a Param extent is not known here)
+    let Extent::Static(n) = a.extent else {
+        return bad("a layout needs a Static extent (a dynamic extent is not known at check time)");
+    };
+    if i64::from(n) != l.layout.size() {
+        return bad("the layout's size must equal the allocation's extent");
+    }
+    if let Err(why) = check_layout_offsets(&l.layout, n) {
+        return bad(why);
+    }
+    let Some(sw) = l.swizzle else { return Ok(()) };
+    // swizzle rules: the element width must not be above the swizzle base, the period must divide the extent, and the base
+    // address must be a multiple of the period (the pattern is anchored at address zero)
+    let width = u32::try_from(types::elem_size(a.elem)).unwrap_or(0);
+    let Ok(in_elems) = sw.in_elements(width) else {
+        return bad(
+            "the swizzle base is below the element width (or the width is not a power of two)",
+        );
+    };
+    let period_elems =
+        1u64 << (in_elems.base() + in_elems.shift().unsigned_abs() + in_elems.bits());
+    if u64::from(n) % period_elems != 0 {
+        return bad(
+            "the swizzle period does not divide the extent, so a swizzled offset could leave it",
+        );
+    }
+    let period_bytes = 1u64 << (sw.base() + sw.shift().unsigned_abs() + sw.bits());
+    match a.align_bytes {
+        Some(al) if u64::from(al) % period_bytes == 0 => Ok(()),
+        _ => bad(
+            "a swizzled allocation states an align_bytes that is a multiple of the swizzle period",
+        ),
+    }
+}
+
+/// The static half of the rules of `docs/design-dynamic-layout.md` section 3 for a `dyn_layout`: the launch binds the arguments and
+/// runs the enumerating checker ([`check_layout_offsets`]) on the bound layout, so nothing here needs a value. Every parameter leaf
+/// names an integer scalar parameter, and the allocation carries one layout, on a `Shared` space (a swizzle is not offered: its
+/// period must divide an extent that is a value here, so it is refused until a row needs it).
+fn check_dyn_layout(
+    k: &KernelFn,
+    a: &crate::exec::AllocDecl,
+    d: &unpopped_vocab::layout_algebra::DynLayout,
+    alloc: u32,
+) -> Result<(), KernelError> {
+    let bad = |why: &'static str| Err(KernelError::AllocLayout { alloc, why });
+    if a.layout.is_some() {
+        return bad("an allocation carries a layout or a dyn_layout, not both");
+    }
+    if a.space != MemorySpace::Shared {
+        return bad("a dyn_layout is only on a Shared allocation");
+    }
+    for local in d.params() {
+        let integer = k
+            .argument_of_local(local)
+            .is_some_and(|(_, _, ty)| types::int_range(ty).is_some());
+        if !integer {
+            return bad("a dyn_layout parameter names no integer scalar parameter of the kernel");
+        }
+    }
+    Ok(())
+}
+
+/// A specialization constant names a distinct scalar parameter and carries a default of that parameter's kind (an integer in
+/// the type's range for an integer type, a float for a floating one).
+fn check_spec_consts(k: &KernelFn) -> Result<(), KernelError> {
+    for (i, c) in k.spec_consts.iter().enumerate() {
+        let index = i as u32;
+        let ty = match k.params.get(c.param as usize).map(|p| &p.kind) {
+            Some(ParamKind::Scalar { ty, .. }) => *ty,
+            _ => return Err(KernelError::BadSpecConst { index }),
+        };
+        if k.spec_consts[..i].iter().any(|d| d.param == c.param) {
+            return Err(KernelError::BadSpecConst { index });
+        }
+        let ok = match (c.default, types::int_range(ty)) {
+            (SpecValue::Int(v), Some((lo, hi))) => (lo..=hi).contains(&v),
+            (SpecValue::Float(_), None) => true,
+            _ => false,
+        };
+        if !ok {
+            return Err(KernelError::BadSpecConst { index });
         }
     }
     Ok(())
@@ -318,6 +463,10 @@ fn check_sync_stmt(
             collective::check_collective_tuple(k, st, sc, declared_here)?;
         }
         Stmt::Mma { .. } => mma::check_mma(k, st)?,
+        Stmt::TileLoad { .. }
+        | Stmt::TileMma { .. }
+        | Stmt::TileFill { .. }
+        | Stmt::TileStore { .. } => tile::check_tile(k, st, sc)?,
         Stmt::Wgmma { .. } => wgmma::check_wgmma(k, st, sc)?,
         Stmt::WgmmaCommit | Stmt::WgmmaWait { .. } => {}
         Stmt::GridDepWait | Stmt::GridDepLaunchDependents => {}
@@ -597,6 +746,10 @@ fn check_stmt(
         | Stmt::MbarCompleteTx { .. }
         | Stmt::MbarWait { .. }
         | Stmt::MatrixStore { .. }
+        | Stmt::TileLoad { .. }
+        | Stmt::TileMma { .. }
+        | Stmt::TileFill { .. }
+        | Stmt::TileStore { .. }
         | Stmt::CopyBulk { .. }
         | Stmt::CopyUnpack { .. }
         | Stmt::CopyAsync { .. }
@@ -606,6 +759,7 @@ fn check_stmt(
         | Stmt::CallTuple { .. }
         | Stmt::ExternCall { .. }
         | Stmt::Barrier { .. } => check_sync_stmt(k, st, sc, declared_here)?,
+        Stmt::Assume { cond } => scalar_cond(k, cond, sc)?,
         Stmt::If { cond, then, els } => {
             scalar_cond(k, cond, sc)?;
             check_block(k, then, sc)?;
@@ -707,16 +861,23 @@ fn check_store(
             what: "a multicast Store of an element other than I32, U32, F32, F16 or Bf16",
         });
     }
-    if types::is_subbyte_int(elem) {
-        // a sub-byte Store is a read-modify-write of a byte two threads share (ROADMAP U9b, ruled 2026-11-05)
+    if types::is_subbyte_int(elem) && !is_private_alloc_place(k, place) {
+        // a sub-byte Store is a read-modify-write of a byte two threads share (ROADMAP U9b, ruled 2026-11-05); a `Private`
+        // allocation is one thread's, so no byte is shared and the store is allowed (an MMA fragment of 4-bit elements)
         return Err(KernelError::TypeMismatch {
-            what: "a Store of a sub-byte element (sub-byte buffers are read-only in kernels)",
+            what: "a Store of a sub-byte element outside a Private allocation (shared and global sub-byte buffers are read-only in kernels)",
         });
     }
     if check_expr(k, value, sc)? != Ty::Scalar(elem) {
         return Err(KernelError::TypeMismatch { what: "Store" });
     }
     Ok(())
+}
+
+/// Whether `place` is an element of a `Private` allocation (one thread's own storage).
+fn is_private_alloc_place(k: &KernelFn, place: &Place) -> bool {
+    matches!(place, Place::Alloc { alloc, .. }
+        if k.allocs.get(*alloc as usize).is_some_and(|a| a.space == MemorySpace::Private))
 }
 
 /// The parts of an `AtomicRmw` on a multicast place other than its place and operand.
@@ -1200,6 +1361,12 @@ fn check_alloc_raw_place(
                 what: "an ordinary access to tensor memory",
             });
         }
+        MemorySpace::Tile => {
+            return Err(KernelError::Tile {
+                alloc,
+                why: "an ordinary access to a Tile (only the tile statements reach one)",
+            });
+        }
         MemorySpace::Constant => {
             return Err(KernelError::TypeMismatch {
                 what: "an AllocRaw place on a Constant allocation",
@@ -1267,6 +1434,12 @@ fn check_alloc_place(
     if a.space == MemorySpace::Tensor {
         return Err(KernelError::Tcgen05Unsupported {
             what: "an ordinary access to tensor memory",
+        });
+    }
+    if a.space == MemorySpace::Tile {
+        return Err(KernelError::Tile {
+            alloc,
+            why: "an ordinary access to a Tile (only the tile statements reach one)",
         });
     }
     if a.space == MemorySpace::Shared && k.launch.is_none() {

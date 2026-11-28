@@ -42,6 +42,11 @@ fn admit(k: &KernelFn, in_module: bool) -> Result<(), LowerError> {
     if !in_module {
         check_kernel(k).map_err(|e| refuse(format!("kernel `{}` is ill-formed: {e:?}", k.name)))?;
     }
+    if !k.spec_consts.is_empty() {
+        return Err(refuse(
+            "a specialization constant (`KernelFn::spec_consts`): this emitter does not bake one into the C signature yet",
+        ));
+    }
     if k.launch.is_some() {
         crate::launch::admit_launch(k)?;
     } else if !k.allocs.is_empty() {
@@ -218,7 +223,10 @@ impl Emitter<'_> {
             Stmt::Barrier { .. } => return Err(refuse("a Barrier needs a launch (U3 row 4)")),
             Stmt::AtomicRmw { .. } => self.atomic_rmw(s)?,
             Stmt::AtomicCas { .. } => self.atomic_cas(s)?,
-            Stmt::Fence { .. }
+            // an `Assume` is a fact for an optimiser, undefined behaviour when false: the serial C ignores it (a correct kernel
+            // cannot tell), the oracle is what checks it
+            Stmt::Assume { .. }
+            | Stmt::Fence { .. }
             | Stmt::ProxyFence { .. }
             | Stmt::AsyncCommit
             | Stmt::AsyncWait { .. }
@@ -256,6 +264,14 @@ impl Emitter<'_> {
                 results,
             } => self.extern_stmt(*decl, args, results)?,
             Stmt::Mma { .. } => return Err(refuse("a Stmt::Mma is block-level only")),
+            Stmt::TileLoad { .. }
+            | Stmt::TileMma { .. }
+            | Stmt::TileFill { .. }
+            | Stmt::TileStore { .. } => {
+                return Err(refuse(
+                    "an opaque-tile statement (TileLoad, TileMma, TileFill, TileStore; ROADMAP T2) is not spelled by this emitter",
+                ));
+            }
             Stmt::MatrixLoad { .. } => {
                 return Err(refuse("a Stmt::MatrixLoad is block-level only"));
             }
@@ -605,8 +621,24 @@ fn infix(
     Ok(Spelling::Spelled(format!("({a} {} {b})", op.c_operator())))
 }
 
+/// This emitter honours no schedule field (ROADMAP S2): a kernel that sets one is declined by the field's name, never run with
+/// the field silently ignored.
+pub(crate) fn admit_schedule(k: &KernelFn) -> Result<(), LowerError> {
+    let Some(spec) = &k.schedule else {
+        return Ok(());
+    };
+    match spec.set_fields().first() {
+        Some(field) => Err(refuse(format!(
+            "the kernel sets the schedule field `{}`; this emitter honours no schedule field and declines rather than ignore it",
+            field.name()
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// Lower `k` to a C function. See the module docs for the contract.
 pub(crate) fn lower_kernel(k: &KernelFn) -> Result<GeneratedKernel, LowerError> {
+    admit_schedule(k)?;
     let name = format!("unpopped_cpu_kernel_{}", ident(&k.name));
     let text = function_text(k, (None, &name, false))?;
     Ok(GeneratedKernel::new(name, with_prelude(&k.name, &text))
@@ -620,6 +652,9 @@ pub(crate) fn with_prelude(kernel_name: &str, body: &str) -> String {
     let _ = writeln!(src, "// kernel: {kernel_name}\n#include <math.h>");
     if body.contains("calloc(") {
         src.push_str("#include <stdlib.h>\n");
+    }
+    if body.contains("memcmp(") {
+        src.push_str("#include <string.h>\n");
     }
     src.push('\n');
     src.push_str(typed::TYPED_HELPERS);

@@ -52,6 +52,12 @@ pub(super) fn check_collective(
             }
             ElementKind::U32
         }
+        CollectiveKind::MatchAny => {
+            if matches!(scope, ExecScope::Block) {
+                return Err(refuse("a match over a Block (it is a Subgroup operation)"));
+            }
+            ElementKind::U32
+        }
         CollectiveKind::Reduce(op) => fold_op(*op, t).map(|()| t)?,
         CollectiveKind::Scan { op, .. } => fold_op(*op, t).map(|()| t)?,
         CollectiveKind::ReduceWith { combine } | CollectiveKind::ScanWith { combine } => {

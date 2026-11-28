@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 use unpopped_vocab::ElementKind;
+use unpopped_vocab::layout_algebra::{ComposedLayout, Layout, LayoutError, Swizzle};
 
 /// A level of the execution hierarchy. A `Barrier` synchronizes one of these.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -50,6 +51,9 @@ pub enum ExecId {
     SubgroupId,
     /// Lanes per subgroup.
     SubgroupSize,
+    /// Subgroups in the block: the block's threads divided by the subgroup size, rounded up (WGSL `num_subgroups`, MSL
+    /// `simdgroups_per_threadgroup`).
+    SubgroupCount,
     /// Index of the device the thread runs on, `0..devices` (`0` in a launch of one device).
     DeviceRank,
     /// Devices of the launch (`LaunchShape::devices`; `1` for a launch of one device).
@@ -80,6 +84,7 @@ impl ExecId {
             Self::LaneId
             | Self::SubgroupId
             | Self::SubgroupSize
+            | Self::SubgroupCount
             | Self::DeviceRank
             | Self::DeviceCount
             | Self::ClusterCtaRank
@@ -92,7 +97,11 @@ impl ExecId {
     pub const fn needs_subgroup(self) -> bool {
         matches!(
             self,
-            Self::LaneId | Self::SubgroupId | Self::SubgroupSize | Self::WarpgroupId
+            Self::LaneId
+                | Self::SubgroupId
+                | Self::SubgroupSize
+                | Self::SubgroupCount
+                | Self::WarpgroupId
         )
     }
 
@@ -107,6 +116,7 @@ impl ExecId {
             Self::LaneId => "LaneId",
             Self::SubgroupId => "SubgroupId",
             Self::SubgroupSize => "SubgroupSize",
+            Self::SubgroupCount => "SubgroupCount",
             Self::DeviceRank => "DeviceRank",
             Self::DeviceCount => "DeviceCount",
             Self::ClusterCtaRank => "ClusterCtaRank",
@@ -287,6 +297,11 @@ pub enum MemorySpace {
     /// `128 * columns` elements and addressed `lane * columns + column`. Only the `tcgen05` statements reach it: an
     /// ordinary load, store or atomic on it is refused.
     Tensor,
+    /// An opaque matrix tile (ROADMAP T2, `docs/design-opaque-tile-mma.md`): `rows * cols` elements that no ordinary access
+    /// reaches (a load, a store or an atomic on it is refused); only the tile statements ([`crate::kernel::Stmt::TileLoad`],
+    /// `TileMma`, `TileFill`, `TileStore`) read and write it, and the program cannot name an element. The declaration carries
+    /// its shape in [`AllocDecl::tile`].
+    Tile,
 }
 
 /// How many elements an allocation holds.
@@ -312,6 +327,144 @@ pub struct AllocDecl {
     pub elem: ElementKind,
     /// Element count.
     pub extent: Extent,
+    /// How a logical index maps to a physical element (ROADMAP T1, `docs/design-swizzled-allocation.md`). `None` is the identity,
+    /// today's meaning, so a document written before the field loads unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<AllocLayout>,
+    /// The alignment of the allocation's base address in bytes (a power of two). A swizzle pattern is anchored at address zero, so
+    /// a swizzled allocation states an alignment that is a multiple of the swizzle's period.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align_bytes: Option<u32>,
+    /// The shape of a [`MemorySpace::Tile`] allocation (`None` on every other space; `check_kernel` requires the two to agree).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile: Option<TileShape>,
+    /// A layout whose shape and stride leaves may be scalar parameters of the kernel (ROADMAP row CuTe 3/66,
+    /// `docs/design-dynamic-layout.md`): bound to a static [`Layout`] at launch, then checked exactly as [`AllocDecl::layout`] is.
+    /// Never both. Written as the canonical text (`(?0,?1):(?2,1)`); absent for every allocation that has none.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "dyn_layout_text"
+    )]
+    pub dyn_layout: Option<unpopped_vocab::layout_algebra::DynLayout>,
+}
+
+/// The text form of an optional [`DynLayout`](unpopped_vocab::layout_algebra::DynLayout) in a document.
+mod dyn_layout_text {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use unpopped_vocab::layout_algebra::DynLayout;
+
+    pub(super) fn serialize<S: Serializer>(v: &Option<DynLayout>, s: S) -> Result<S::Ok, S::Error> {
+        match v {
+            Some(d) => s.collect_str(d),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<DynLayout>, D::Error> {
+        Option::<String>::deserialize(d)?
+            .map(|t| t.parse().map_err(serde::de::Error::custom))
+            .transpose()
+    }
+}
+
+/// The shape of an opaque tile: `rows` by `cols` elements of the allocation's element type (ROADMAP T2). A `TileMma` multiplies
+/// an `m x k` tile by a `k x n` tile into an `m x n` tile, so the shapes are checked against each other, not against a table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct TileShape {
+    /// Rows.
+    pub rows: u32,
+    /// Columns.
+    pub cols: u32,
+}
+
+impl TileShape {
+    /// A tile of `rows` by `cols` elements.
+    #[must_use]
+    pub const fn new(rows: u32, cols: u32) -> Self {
+        Self { rows, cols }
+    }
+}
+
+/// A layout, and optionally a swizzle, on an allocation: `index -> swizzle(layout(index))`, the swizzle in **bytes** (the PTX form
+/// `swz(3,4,3)` for the 128-byte mode). Written as one canonical string, `(shape:stride)` or `swz(B,M,S)((shape:stride))`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AllocLayout {
+    /// Logical index to element offset.
+    pub layout: Layout,
+    /// The byte-address swizzle applied to the offset, if any.
+    pub swizzle: Option<Swizzle>,
+}
+
+impl AllocLayout {
+    /// A layout with no swizzle.
+    #[must_use]
+    pub fn new(layout: Layout) -> Self {
+        Self {
+            layout,
+            swizzle: None,
+        }
+    }
+
+    /// The same layout under the byte swizzle `swizzle`.
+    #[must_use]
+    pub fn with_swizzle(mut self, swizzle: Swizzle) -> Self {
+        self.swizzle = Some(swizzle);
+        self
+    }
+
+    /// The physical element of logical index `index` for elements of `elem_bytes` bytes: the layout, then the swizzle read over
+    /// elements ([`Swizzle::in_elements`]).
+    ///
+    /// # Errors
+    ///
+    /// The [`LayoutError`] of the layout or the swizzle (an index outside the layout, or a swizzle base below the element width).
+    pub fn physical(&self, index: i64, elem_bytes: u32) -> Result<i64, LayoutError> {
+        let off = self.layout.call(index)?;
+        match self.swizzle {
+            Some(s) => s.in_elements(elem_bytes)?.apply(off),
+            None => Ok(off),
+        }
+    }
+}
+
+impl std::fmt::Display for AllocLayout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.swizzle {
+            Some(s) => write!(f, "{}", ComposedLayout::new(s, self.layout.clone())),
+            None => write!(f, "{}", self.layout),
+        }
+    }
+}
+
+impl std::str::FromStr for AllocLayout {
+    type Err = LayoutError;
+
+    fn from_str(text: &str) -> Result<Self, LayoutError> {
+        if text.starts_with("swz(") {
+            let c: ComposedLayout = text.parse()?;
+            Ok(Self::new(c.layout().clone()).with_swizzle(c.swizzle()))
+        } else {
+            Ok(Self::new(text.parse()?))
+        }
+    }
+}
+
+impl Serialize for AllocLayout {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for AllocLayout {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(d)?;
+        text.parse().map_err(serde::de::Error::custom)
+    }
 }
 
 impl AllocDecl {
@@ -328,6 +481,44 @@ impl AllocDecl {
             space,
             elem,
             extent,
+            layout: None,
+            align_bytes: None,
+            tile: None,
+            dyn_layout: None,
         }
+    }
+
+    /// An opaque tile of `rows` by `cols` elements of `elem` ([`MemorySpace::Tile`], extent `rows * cols`).
+    #[must_use]
+    pub fn tile(name: impl Into<String>, elem: ElementKind, rows: u32, cols: u32) -> Self {
+        let mut a = Self::new(
+            name,
+            MemorySpace::Tile,
+            elem,
+            Extent::Static(rows.saturating_mul(cols)),
+        );
+        a.tile = Some(TileShape::new(rows, cols));
+        a
+    }
+
+    /// The same allocation with `layout` (and its swizzle).
+    #[must_use]
+    pub fn with_layout(mut self, layout: AllocLayout) -> Self {
+        self.layout = Some(layout);
+        self
+    }
+
+    /// The same allocation with a layout whose leaves may be scalar parameters (bound at launch; see [`AllocDecl::dyn_layout`]).
+    #[must_use]
+    pub fn with_dyn_layout(mut self, layout: unpopped_vocab::layout_algebra::DynLayout) -> Self {
+        self.dyn_layout = Some(layout);
+        self
+    }
+
+    /// The same allocation with its base address aligned to `bytes` (a power of two; checked by `check_kernel`).
+    #[must_use]
+    pub fn with_align_bytes(mut self, bytes: u32) -> Self {
+        self.align_bytes = Some(bytes);
+        self
     }
 }

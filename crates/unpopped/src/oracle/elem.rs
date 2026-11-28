@@ -89,6 +89,10 @@ pub(super) fn write_wide(bytes: &mut [u8], i: usize, dt: ElementKind, w: crate::
 pub(super) fn load_val(bytes: &[u8], i: usize, dt: ElementKind) -> Val {
     if crate::wide_int::wide_int_bits(dt).is_some() {
         Val::Wide(read_wide(bytes, i, dt), dt)
+    } else if matches!(dt, ElementKind::F6E2M3 | ElementKind::F6E3M2) {
+        // an F6 element is the low six bits of its byte container; the two high bits are padding (PTX ISA 9.5 s5.2.3,
+        // `docs/design-f6-storage.md`): a local holds the canonical element, so a same-type copy stores zero there too
+        Val::Raw(read_elem(bytes, i, dt) & 0x3F, dt)
     } else {
         Val::Raw(read_elem(bytes, i, dt), dt)
     }

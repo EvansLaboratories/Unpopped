@@ -12,7 +12,7 @@ use super::accum_policy::tf32;
 use super::kernel_eval::{KernelTrap, Machine, wrap};
 use super::{Val, int_val};
 use crate::kernel::Stmt;
-use crate::mma::{ExtraRole, MmaAtom};
+use crate::mma::{BitOp, ExtraRole, MmaAtom};
 use crate::types;
 use unpopped_vocab::ElementKind;
 
@@ -76,6 +76,8 @@ struct Matrices<'a> {
     scales: Option<Scales<'a>>,
     /// Round `A` and `B` to tf32 before the products (the tf32 atoms).
     tf32: bool,
+    /// The 1-bit atoms' bitwise operation (`And` is the plain product of the 0/1 values).
+    bit_op: Option<BitOp>,
     m: usize,
     k: usize,
 }
@@ -114,7 +116,14 @@ impl Matrices<'_> {
         let Self { a, b, c, m, k, .. } = *self;
         if types::int_range(acc).is_some() {
             let sum: i128 = (0..k)
-                .map(|i| a[row + m * i].i128() * b[i + k * col].i128())
+                .map(|i| {
+                    let (x, y) = (a[row + m * i].i128(), b[i + k * col].i128());
+                    // a 1-bit atom counts the set bits of `x op y` (`x` and `y` are 0 or 1)
+                    match self.bit_op {
+                        Some(BitOp::Xor) => x ^ y,
+                        _ => x * y,
+                    }
+                })
                 .sum::<i128>()
                 + c[row + m * col].i128();
             return int_val(wrap(acc, sum), acc);
@@ -140,10 +149,11 @@ impl Matrices<'_> {
         let sum = (0..k)
             .map(product)
             .fold(c[row + m * col].f64(), |s, p| s + p);
-        Val::Float(if acc == ElementKind::F32 {
-            f64::from(sum as f32)
-        } else {
-            sum
+        Val::Float(match acc {
+            ElementKind::F32 => f64::from(sum as f32),
+            // a half-width accumulator (the Volta f16 atoms): one rounding of the exact sum, like the others
+            ElementKind::F16 | ElementKind::Bf16 => super::round_to_compute(sum, acc),
+            _ => sum,
         })
     }
 }
@@ -151,11 +161,35 @@ impl Matrices<'_> {
 /// Every lane's D fragment, in lane order.
 pub(super) fn compute(lanes: &[MmaContribution]) -> Result<Vec<Vec<Val>>, KernelTrap> {
     let atom = &lanes[0].atom;
-    if lanes.len() != atom.lanes() as usize {
+    if lanes.len() != atom.subgroup_lanes() as usize {
         return Err(KernelTrap::Unsupported(
-            "an MMA over a subgroup that is not the atom's lane count",
+            "an MMA over a subgroup that is not the atom's lane count times its groups",
         ));
     }
+    if atom.groups() == 1 {
+        return compute_group(lanes);
+    }
+    // independent MMAs side by side: each group computes from its own lanes only and writes only its own lanes
+    let mut out = vec![Vec::new(); lanes.len()];
+    for group in 0..atom.groups() {
+        let members: Vec<usize> = (0..atom.lanes())
+            .map(|local| {
+                atom.group_lane(group, local)
+                    .map(|l| l as usize)
+                    .ok_or(SLOT)
+            })
+            .collect::<Result<_, _>>()?;
+        let mine: Vec<MmaContribution> = members.iter().map(|&l| lanes[l].clone()).collect();
+        for (&l, frag) in members.iter().zip(compute_group(&mine)?) {
+            out[l] = frag;
+        }
+    }
+    Ok(out)
+}
+
+/// One MMA over the `atom.lanes()` lanes of one group, in local lane order.
+fn compute_group(lanes: &[MmaContribution]) -> Result<Vec<Vec<Val>>, KernelTrap> {
+    let atom = &lanes[0].atom;
     let (m, n, k) = atom.mnk();
     let (m, n, k) = (m as usize, n as usize, k as usize);
     let mut a = gather(atom, 0, lanes)?;
@@ -187,6 +221,7 @@ pub(super) fn compute(lanes: &[MmaContribution]) -> Result<Vec<Vec<Val>>, Kernel
             block: *block,
         }),
         tf32: atom.tf32_inputs(),
+        bit_op: atom.bit_op(),
         m,
         k,
     };
@@ -196,7 +231,12 @@ pub(super) fn compute(lanes: &[MmaContribution]) -> Result<Vec<Vec<Val>>, Kernel
             d.push(logical.element((row, col), acc));
         }
     }
-    (0..lanes.len())
+    read_back(atom, lanes.len(), &d)
+}
+
+/// Each lane's D fragment, read from the logical `d` through the C/D layout.
+fn read_back(atom: &MmaAtom, lanes: usize, d: &[Val]) -> Result<Vec<Vec<Val>>, KernelTrap> {
+    (0..lanes)
         .map(|lane| {
             (0..atom.values(2))
                 .map(|v| {

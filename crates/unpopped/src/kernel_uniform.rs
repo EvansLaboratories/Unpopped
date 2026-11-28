@@ -382,6 +382,7 @@ impl Walk<'_> {
             }
             Stmt::Store { .. }
             | Stmt::MaskedStore { .. }
+            | Stmt::Assume { .. }
             | Stmt::Fence { .. }
             | Stmt::ProxyFence { .. }
             | Stmt::CopyAsync { .. }
@@ -411,7 +412,11 @@ impl Walk<'_> {
             Stmt::Mma { .. }
             | Stmt::Wgmma { .. }
             | Stmt::MatrixLoad { .. }
-            | Stmt::MatrixStore { .. } => {
+            | Stmt::MatrixStore { .. }
+            | Stmt::TileLoad { .. }
+            | Stmt::TileMma { .. }
+            | Stmt::TileFill { .. }
+            | Stmt::TileStore { .. } => {
                 if self.check && (div || *poisoned) {
                     return Err(KernelError::BarrierDivergent);
                 }
