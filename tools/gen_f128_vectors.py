@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT OR Apache-2.0
 """Independent binary128 reference for tests/soft_f128_vectors.rs (ROADMAP E3).
 
 Exact rational arithmetic (fractions.Fraction) rounded to binary128 by a separate implementation (round to nearest, ties to even),
-sharing no code with crates/unpopped/src/soft_f128.rs. UNVERIFIED against a third-party binary128 library (none is installed
-here): the check is two independent implementations agreeing, not a vendor's vectors. Seeded, so the output is reproducible:
+sharing no code with crates/unpopped/src/soft_f128.rs. Provenance: written by the unpopped lane for this test (no third-party code, no copied vectors; the only dependency is the
+Python standard library, `fractions` and `random`), under the repository's licence. UNVERIFIED against a third-party binary128 library
+(none is installed here): the check is two independent implementations agreeing, not a vendor's vectors. Seeded, so the output is reproducible:
     python tools/gen_f128_vectors.py > crates/unpopped/tests/data/soft_f128_vectors.txt
 """
 import random
