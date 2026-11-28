@@ -17,17 +17,22 @@ use unpopped_vocab::ElementKind;
 
 /// `out[0] = Qualified(1.0 + 2.0)` with the rounding toward zero, computed at `compute`.
 fn kernel(compute: ElementKind) -> KernelFn {
-    let sum = ScalarExpr::Add(
-        Box::new(ScalarExpr::Const(1.0)),
-        Box::new(ScalarExpr::Const(2.0)),
-    );
-    let qualified = ScalarExpr::Qualified(
-        Box::new(sum),
+    kernel_with(
+        compute,
         Numerics {
             round: RoundMode::TowardZero,
             ..Numerics::default()
         },
+    )
+}
+
+/// The same kernel under any qualifier.
+fn kernel_with(compute: ElementKind, n: Numerics) -> KernelFn {
+    let sum = ScalarExpr::Add(
+        Box::new(ScalarExpr::Const(1.0)),
+        Box::new(ScalarExpr::Const(2.0)),
     );
+    let qualified = ScalarExpr::Qualified(Box::new(sum), n);
     KernelFn::new(
         "q",
         compute,
@@ -62,8 +67,8 @@ fn the_f32_kernel_checks_and_runs() {
 }
 
 #[test]
-fn f64_and_half_kernels_are_a_named_check_error_not_an_oracle_panic() {
-    for compute in [ElementKind::F64, ElementKind::F16, ElementKind::Bf16] {
+fn half_kernels_are_a_named_check_error_not_an_oracle_panic() {
+    for compute in [ElementKind::F16, ElementKind::Bf16] {
         let r = check_kernel(&kernel(compute));
         assert!(
             matches!(
@@ -73,4 +78,107 @@ fn f64_and_half_kernels_are_a_named_check_error_not_an_oracle_panic() {
             "{compute:?}: {r:?}"
         );
     }
+}
+
+fn illegal(k: &KernelFn) -> Option<&'static str> {
+    match check_kernel(k) {
+        Err(KernelError::Type(TypeError::IllegalQualifier { why })) => Some(why),
+        _ => None,
+    }
+}
+
+/// ROADMAP U43: a directed rounding at f64 checks and runs (an exact integer reference, `numerics_f64`); `1.0 + 2.0` is exact, so the
+/// value is the same in every mode, and a case that is NOT exact is in `tests/numerics_f64_directed.rs`.
+#[test]
+fn an_f64_directed_kernel_checks_and_runs_in_every_mode() {
+    for round in [
+        RoundMode::TowardZero,
+        RoundMode::TowardNegInf,
+        RoundMode::TowardPosInf,
+        RoundMode::NearestEven,
+    ] {
+        let k = kernel_with(
+            ElementKind::F64,
+            Numerics {
+                round,
+                ..Numerics::default()
+            },
+        );
+        check_kernel(&k).unwrap_or_else(|e| panic!("{round:?}: {e:?}"));
+        let mut args = vec![KernelArg::Buffer(TypedBuffer::from_f64(&[1], &[0.0]))];
+        run_launch(&k, &mut args).expect("runs");
+        let KernelArg::Buffer(o) = &args[0] else {
+            panic!()
+        };
+        assert_eq!(o.to_f64_vec(), vec![3.0], "{round:?}");
+    }
+}
+
+/// `x + y` where the exact sum is `1 + 2^-60`: the three directions differ, the kernel carries the oracle's answer.
+#[test]
+fn an_f64_directed_kernel_rounds_in_the_stated_direction() {
+    for (round, want) in [
+        (RoundMode::TowardZero, 1.0),
+        (RoundMode::TowardNegInf, 1.0),
+        (
+            RoundMode::TowardPosInf,
+            f64::from_bits(1.0f64.to_bits() + 1),
+        ),
+    ] {
+        let sum = ScalarExpr::Add(
+            Box::new(ScalarExpr::Const(1.0)),
+            Box::new(ScalarExpr::Const(2f64.powi(-60))),
+        );
+        let mut k = kernel_with(
+            ElementKind::F64,
+            Numerics {
+                round,
+                ..Numerics::default()
+            },
+        );
+        let Stmt::Store { value, .. } = &mut k.body.0[0] else {
+            panic!()
+        };
+        *value = ScalarExpr::Qualified(
+            Box::new(sum),
+            Numerics {
+                round,
+                ..Numerics::default()
+            },
+        );
+        check_kernel(&k).expect("checks");
+        let mut args = vec![KernelArg::Buffer(TypedBuffer::from_f64(&[1], &[0.0]))];
+        run_launch(&k, &mut args).expect("runs");
+        let KernelArg::Buffer(o) = &args[0] else {
+            panic!()
+        };
+        assert_eq!(o.to_f64_vec(), vec![want], "{round:?}");
+    }
+}
+
+#[test]
+fn f64_ftz_and_approx_and_ties_away_are_named_refusals_beside_the_directed_control() {
+    let ftz = Numerics {
+        ftz: true,
+        ..Numerics::default()
+    };
+    let approx = Numerics {
+        approx: true,
+        ..Numerics::default()
+    };
+    let away = Numerics {
+        round: RoundMode::NearestAway,
+        ..Numerics::default()
+    };
+    let why = illegal(&kernel_with(ElementKind::F64, ftz)).expect("ftz at f64 is refused");
+    assert!(why.contains("ftz"), "{why}");
+    let why = illegal(&kernel_with(ElementKind::F64, approx)).expect("approx at f64 is refused");
+    assert!(why.contains("approx at f64"), "{why}");
+    assert!(illegal(&kernel_with(ElementKind::F64, away)).is_some());
+    // the control: the same kernel with a directed mode is not refused
+    let ok = Numerics {
+        round: RoundMode::TowardZero,
+        ..Numerics::default()
+    };
+    assert!(illegal(&kernel_with(ElementKind::F64, ok)).is_none());
 }
