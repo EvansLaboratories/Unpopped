@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.2` — `launch_cases` second slice: strided/offset/flipped/broadcast input views and launch geometry (additive)
+
+`unpopped::launch_cases()` gains seven cases, appended after the four existing ones (no existing case, name or public signature changes). Three read an input through a view: `view_transposed_i32` (column-major storage), `view_pitched_i32` (row pitch 8 with a base offset on each input) and `view_flipped_broadcast_i32` (a negative stride against a stride-0 row broadcast). Four fix launch geometry: `launch_odd_block_u32` (block 3, grid 5), `launch_idle_threads_u32` (more threads than elements), `launch_single_thread_i32`, and `launch_subgroup_range_f32` (a launch that requires a subgroup size in 8..=32). Integers are compared exactly; the one `F32` case is a single operation, so 0 ULPs. Each case is checked and run by the oracle; a unit test reads the view cases densely (strides and base offset ignored) and requires the output to change, so an emitter that ignores a view is caught. `unpopped-cpu-c`'s `launch_cases_agree` runs all eleven against the compiled C and passes. Tests and corpus data only; no new `Stmt`, `Place` or field.
+
+---
+
 ## `0.63.1` — docs, the 0.63.0 migration text: wide integers accepted since 0.61.3, the Numerics literal (U37), the union-batch-1 note reconciled
 
 `docs/emitter-migration-b1.md` gains a 0.62 note (`check_kernel` accepts `I128`, `U128`, `I256`, `U256` since 0.61.3, so an emitter that does not lower them must refuse by name before emitting, and the carry-flag emit hold stands) and a U37 section (how a `Numerics` struct literal moves: end it with `..Numerics::default()`; find them with `git grep -n 'Numerics {'`; what `ApproxSpelling` means for a CUDA emitter). `docs/design-union-batch1-consumer.md` states the real set `check_kernel` declines (`F128`, `F8E3M4`, `F8UE4M3`). No code change.
