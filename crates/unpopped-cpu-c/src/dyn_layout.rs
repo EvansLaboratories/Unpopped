@@ -11,6 +11,7 @@
 use unpopped::backend::LowerError;
 use unpopped::exec::AllocDecl;
 use unpopped::kernel::{KernelFn, Stmt};
+use unpopped_vocab::ElementKind;
 use unpopped_vocab::layout_algebra::{Dim, DynLayout, DynTuple};
 
 use crate::base::refuse;
@@ -45,10 +46,39 @@ fn flat(k: &KernelFn, d: &DynLayout) -> Result<Vec<(String, String)>, LowerError
         .collect()
 }
 
+/// The element-form swizzle of `d` for `elem`, with its period in elements (`None` for a layout without a swizzle). The swizzle is
+/// XOR-bit data only: the offset is XORed with a shifted mask of its own bits, nothing is looked up and nothing is transferred.
+/// The byte width of the element types this emitter gives a `dyn_layout` swizzle (the others are refused by name).
+fn width_of(elem: ElementKind) -> Result<u32, LowerError> {
+    match elem {
+        ElementKind::I8 | ElementKind::U8 | ElementKind::Bool => Ok(1),
+        ElementKind::F16 | ElementKind::Bf16 | ElementKind::I16 | ElementKind::U16 => Ok(2),
+        ElementKind::F32 | ElementKind::I32 | ElementKind::U32 => Ok(4),
+        ElementKind::F64 | ElementKind::I64 | ElementKind::U64 => Ok(8),
+        other => Err(refuse(format!(
+            "a dyn_layout swizzle on {other:?} elements"
+        ))),
+    }
+}
+
+fn swizzle_of(d: &DynLayout, elem: ElementKind) -> Result<Option<(i64, i32, u64)>, LowerError> {
+    let Some(sw) = d.swizzle() else {
+        return Ok(None);
+    };
+    let width = width_of(elem)?;
+    let e = sw
+        .in_elements(width)
+        .map_err(|_| refuse("a dyn_layout swizzle whose base is below the element width"))?;
+    let src = ((1i64 << e.bits()) - 1) << (e.base() + e.shift().max(0).unsigned_abs());
+    let period = 1u64 << (e.base() + e.shift().unsigned_abs() + e.bits());
+    Ok(Some((src, e.shift(), period)))
+}
+
 /// The statements that set `out` (a fresh `long long`) to the physical offset of the logical index in `idx`; `tmp` is scratch.
 pub(crate) fn offset_lines(
     k: &KernelFn,
     d: &DynLayout,
+    elem: ElementKind,
     (idx, tmp, out): (&str, &str, &str),
 ) -> Result<Vec<String>, LowerError> {
     let modes = flat(k, d)?;
@@ -59,6 +89,15 @@ pub(crate) fn offset_lines(
         } else {
             lines.push(format!("{out} += ({tmp} % {s}) * {t}; {tmp} /= {s};"));
         }
+    }
+    if let Some((src, shift, _)) = swizzle_of(d, elem)? {
+        // `Swizzle::apply`: `x ^ ((x & src) >> shift)`, or `<<` for a negative shift
+        let moved = if shift >= 0 {
+            format!("(({out} & {src}LL) >> {shift})")
+        } else {
+            format!("(({out} & {src}LL) << {})", -shift)
+        };
+        lines.push(format!("{out} ^= {moved};"));
     }
     Ok(lines)
 }
@@ -86,6 +125,10 @@ pub(crate) fn launch_check(
         l.push(format!("sz{i} *= {s}; if (sz{i} > ext{i}) return {r};"));
     }
     l.push(format!("if (sz{i} != ext{i}) return {r};"));
+    if let Some((_, _, period)) = swizzle_of(d, a.elem)? {
+        // the static rule on the bound extent: a swizzled offset must not leave it
+        l.push(format!("if (ext{i} % {period}LL != 0) return {r};"));
+    }
     l.push(format!(
         "unsigned char *seen{i} = (unsigned char *)calloc((size_t)ext{i}, 1); if (!seen{i}) return 3;"
     ));
@@ -95,6 +138,7 @@ pub(crate) fn launch_check(
     l.extend(offset_lines(
         k,
         d,
+        a.elem,
         (&format!("q{i}"), &format!("t{i}"), &format!("po{i}")),
     )?);
     l.push(format!(

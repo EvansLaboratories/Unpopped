@@ -13,7 +13,7 @@ use unpopped::kernel::{
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
 use unpopped::oracle::kernel_launch::run_launch;
 use unpopped_vocab::ElementKind::{I32, U32};
-use unpopped_vocab::layout_algebra::DynLayout;
+use unpopped_vocab::layout_algebra::{DynLayout, Swizzle};
 
 #[path = "support/cc.rs"]
 mod cc;
@@ -29,6 +29,10 @@ use kernel_data::{dense, zeroed};
 use kernel_run::{run_c, run_c_mutated};
 
 const EXTENT: u32 = 12;
+/// `swz(2,2,3)` on 4-byte elements: a 128-byte period of 32 elements, so the swizzled kernels use multiples of 32.
+fn swz() -> Swizzle {
+    Swizzle::new(2, 2, 3).unwrap()
+}
 /// The status the C returns for a launch whose `dyn_layout` does not bind to an accepted layout.
 const STATUS: i32 = 4;
 
@@ -50,8 +54,13 @@ fn alloc_at(i: ScalarExpr) -> Place {
 /// `sh[t] = in[t]`, a barrier, then `out[t] = sh[EXTENT - 1 - t]`: a reversal through the allocation's layout, so a layout whose
 /// offset map is wrong (two indices on one offset) changes the bytes.
 fn kernel(layout: &str) -> KernelFn {
+    kernel_x(layout, EXTENT, false)
+}
+
+/// [`kernel`] over `n` elements, optionally under the byte swizzle (which needs `align_bytes` of the period).
+fn kernel_x(layout: &str, n: u32, swizzled: bool) -> KernelFn {
     let rev = ScalarExpr::Sub(
-        Box::new(ScalarExpr::ConstInt(i64::from(EXTENT) - 1, U32)),
+        Box::new(ScalarExpr::ConstInt(i64::from(n) - 1, U32)),
         Box::new(tid()),
     );
     let body = Block(vec![
@@ -89,15 +98,21 @@ fn kernel(layout: &str) -> KernelFn {
             .map(|(nm, loc)| Param::scalar(*nm, I32, loc)),
     );
     let layout: DynLayout = layout.parse().expect("layout text");
-    let alloc = AllocDecl::new("sh", MemorySpace::Shared, U32, Extent::Static(EXTENT))
-        .with_dyn_layout(layout);
+    let mut alloc = AllocDecl::new("sh", MemorySpace::Shared, U32, Extent::Static(n));
+    alloc = if swizzled {
+        alloc
+            .with_dyn_layout(layout.with_swizzle(swz()))
+            .with_align_bytes(128)
+    } else {
+        alloc.with_dyn_layout(layout)
+    };
     KernelFn::new("dynemit", I32, params, locals, body)
-        .with_launch(LaunchShape::new([EXTENT, 1, 1], [1, 1, 1]))
+        .with_launch(LaunchShape::new([n, 1, 1], [1, 1, 1]))
         .with_allocs(vec![alloc])
 }
 
-fn args((m, n, ld): (i128, i128, i128)) -> Vec<KernelArg> {
-    let len = i64::from(EXTENT);
+fn args(elements: u32, (m, n, ld): (i128, i128, i128)) -> Vec<KernelArg> {
+    let len = i64::from(elements);
     vec![
         KernelArg::Buffer(dense(U32, &[len], 5)),
         KernelArg::Buffer(zeroed(U32, &[len])),
@@ -107,9 +122,14 @@ fn args((m, n, ld): (i128, i128, i128)) -> Vec<KernelArg> {
     ]
 }
 
+/// The elements the kernel was built over (its block size).
+fn n_of(k: &KernelFn) -> u32 {
+    k.launch.expect("a launched kernel").block[0]
+}
+
 /// `None` when the oracle traps with `DynLayout`, else the bytes of `out`.
 fn oracle(k: &KernelFn, a: (i128, i128, i128)) -> Option<Vec<u8>> {
-    let mut v = args(a);
+    let mut v = args(n_of(k), a);
     match run_launch(k, &mut v) {
         Ok(()) => {
             let KernelArg::Buffer(b) = &v[1] else {
@@ -127,7 +147,7 @@ fn agree_all(tag: &str, k: &KernelFn, sets: &[(i128, i128, i128)]) -> (usize, us
     assert_eq!(check_kernel(k), Ok(()), "well formed");
     let (mut ok, mut refused) = (0, 0);
     for (j, &a) in sets.iter().enumerate() {
-        let Some(c) = run_c(&format!("{tag}_{j}"), k, &args(a)) else {
+        let Some(c) = run_c(&format!("{tag}_{j}"), k, &args(n_of(k), a)) else {
             return (0, 0);
         };
         match oracle(k, a) {
@@ -224,7 +244,7 @@ fn each_offset_term_of_the_access_and_the_injectivity_run_are_observable() {
     let k = kernel("(?2,?3):(?4,1)");
     let a = (3, 4, 4);
     let want = oracle(&k, a).expect("an accepted bind");
-    let Some(plain) = run_c("dyn_mut_plain", &k, &args(a)) else {
+    let Some(plain) = run_c("dyn_mut_plain", &k, &args(EXTENT, a)) else {
         return;
     };
     assert_eq!(
@@ -237,7 +257,7 @@ fn each_offset_term_of_the_access_and_the_injectivity_run_are_observable() {
         let c = run_c_mutated(
             &format!("dyn_mut_term{term}"),
             &k,
-            &args(a),
+            &args(EXTENT, a),
             zero_access_term(term),
         )
         .expect("compiler present");
@@ -249,9 +269,9 @@ fn each_offset_term_of_the_access_and_the_injectivity_run_are_observable() {
     // skipping the injectivity run: a non-injective bind (ld = 3 over (3,4)) must then run instead of returning status 4
     let bad = (3, 4, 3);
     assert!(oracle(&k, bad).is_none());
-    let honest = run_c("dyn_mut_bad", &k, &args(bad)).expect("compiler present");
+    let honest = run_c("dyn_mut_bad", &k, &args(EXTENT, bad)).expect("compiler present");
     assert_eq!(honest.status, STATUS);
-    let skipped = run_c_mutated("dyn_mut_skip", &k, &args(bad), |src| {
+    let skipped = run_c_mutated("dyn_mut_skip", &k, &args(EXTENT, bad), |src| {
         let anchor = "if (po0 >= ext0 || seen0[po0]) {";
         assert_eq!(src.matches(anchor).count(), 1, "anchor");
         src.replace(anchor, "if (po0 >= ext0 || 0) {")
@@ -260,5 +280,67 @@ fn each_offset_term_of_the_access_and_the_injectivity_run_are_observable() {
     assert_ne!(
         skipped.status, STATUS,
         "skipping the injectivity run changed nothing"
+    );
+}
+
+#[test]
+fn a_swizzled_dyn_layout_agrees_with_the_oracle_and_refuses_a_period_that_does_not_divide() {
+    // extent 64 (two 32-element periods) and 96 (three): accepted binds run to the oracle's bytes; a non-injective bind, a size that is
+    // not the extent, and extent 48 (not a multiple of the period: refused by the swizzle rule alone) return status 4
+    let (mut ok, mut refused) = (0, 0);
+    for (n, sets) in [
+        (64u32, vec![(8, 8, 8), (4, 16, 16), (8, 8, 3), (8, 4, 8)]),
+        (96, vec![(8, 12, 12)]),
+        (48, vec![(8, 6, 6)]),
+    ] {
+        let k = kernel_x("(?2,?3):(?4,1)", n, true);
+        let (o, r) = agree_all(&format!("dyn_swz{n}"), &k, &sets);
+        ok += o;
+        refused += r;
+    }
+    assert!(
+        (ok >= 3 && refused >= 3) || ok + refused == 0,
+        "{ok} {refused}"
+    );
+}
+
+/// The k-th occurrence in the source of the XOR that applies the swizzle (0 is the launch check's, 1 the access's) becomes an OR,
+/// which is not a bijection: two logical elements then share a physical offset.
+fn xor_to_or(k: usize) -> impl FnOnce(String) -> String {
+    move |src| {
+        let at: Vec<usize> = src.match_indices(" ^= ").map(|(i, _)| i).collect();
+        assert!(
+            at.len() > k,
+            "the mutant's anchor was not found ({} xor lines)",
+            at.len()
+        );
+        let i = at[k];
+        format!("{} |= {}", &src[..i], &src[i + 4..])
+    }
+}
+
+#[test]
+fn the_swizzle_xor_of_the_check_and_of_the_access_are_each_observable() {
+    let k = kernel_x("(?2,?3):(?4,1)", 64, true);
+    let a = (8, 8, 8);
+    let want = oracle(&k, a).expect("an accepted bind");
+    let Some(plain) = run_c("dyn_swz_plain", &k, &args(64, a)) else {
+        return;
+    };
+    assert_eq!(
+        (plain.status, &plain.outs[0]),
+        (0, &want),
+        "the unmutated C"
+    );
+    // the check's XOR as an OR: the proof sees a collision and refuses a bind the oracle accepts
+    let c =
+        run_c_mutated("dyn_swz_mut0", &k, &args(64, a), xor_to_or(0)).expect("compiler present");
+    assert_eq!(c.status, STATUS, "the check's XOR is observable");
+    // the access's XOR as an OR: two elements share an offset, so the bytes change
+    let c =
+        run_c_mutated("dyn_swz_mut1", &k, &args(64, a), xor_to_or(1)).expect("compiler present");
+    assert!(
+        c.status != 0 || c.outs[0] != want,
+        "the access's XOR is observable"
     );
 }

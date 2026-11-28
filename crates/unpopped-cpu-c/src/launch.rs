@@ -159,7 +159,10 @@ fn admit_alloc(a: &AllocDecl) -> Result<(), LowerError> {
         )));
     }
     // a layout or an alignment is declined by name, never silently ignored (`docs/design-swizzled-allocation.md` section 6)
-    if a.layout.is_some() || a.align_bytes.is_some() {
+    // (the one alignment that is spelled is the one a swizzled `dyn_layout` requires: the serial C does not place memory, and the
+    // swizzle changes which element holds a value, not what the value is; the oracle likewise reads no alignment)
+    let swizzled_dyn = a.dyn_layout.as_ref().is_some_and(|d| d.swizzle().is_some());
+    if a.layout.is_some() || (a.align_bytes.is_some() && !swizzled_dyn) {
         return Err(refuse(format!(
             "allocation `{}` states a layout or an alignment; this emitter spells the identity layout only",
             a.name
@@ -722,6 +725,7 @@ impl Emitter<'_> {
             for l in crate::dyn_layout::offset_lines(
                 self.k,
                 d,
+                decl.elem,
                 (&format!("o{n}"), &format!("lq{n}"), &format!("po{n}")),
             )? {
                 self.line(&l);
