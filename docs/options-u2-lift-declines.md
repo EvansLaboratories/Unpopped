@@ -4,7 +4,7 @@ Status: **D3 built in 0.42.6; D4 dropped (PM, 2026-11-03: KISS wins, `RowSort` s
 ThinkersJournal/KISS#766 and #767) built on the recommended reading; D5 is built (the scan in 0.42.11, the window in 0.42.12; every input full-width dense on a non-innermost axis); D6 waits for a consumer.** Asked by the PM (`[TASK]` 2026-11-02:
 "(b) U2 remainder and (c) U1 remainder follow" U5). Read at `origin/main` `72b8e37` (0.42.3), updated at `04b0bce` (0.42.7). The ROADMAP U2 row lists five forms the kernel-layer lift of an `OpDef` declines because the plan
 or the oracle does not define them yet ("the lift has nothing to agree with until the plan and the oracle define them"), and an
-effects model that is "computed when a consumer asks". This note says what each should mean, in the order I would build them.
+effects model that is "computed when a consumer asks". This note says what each should mean, in the order I would build them. **RE-DISPOSITIONED 2026-11-26 (PM via pm-kernels; CireSnave 2026-10-24, 2026-11-11, 2026-11-19): not a wait; unblocked work, ranked lower.**
 
 ## What is declined, and where
 
@@ -59,6 +59,6 @@ D3, D2, D1 (small, each ~ the size of the `MaxNum` slice: gate, oracle, lift, a 
 ## Needs a ruling
 
 1. D1's exclusive lane 0: `NaN` (recommended) or `0`.
-2. D6: wait for a consumer (recommended).
+2. D6: wait for a consumer (recommended). **RE-DISPOSITIONED 2026-11-26 (PM via pm-kernels; CireSnave 2026-10-24, 2026-11-11, 2026-11-19): not a wait; unblocked work, ranked lower.**
 
 D3 is built. D2 needs no ruling and is built next. D1 is built on the recommended reading unless the PM rules or KISS#766 answers differently. D5 needs none.
