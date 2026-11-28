@@ -1,0 +1,3 @@
+kind: docs: design note `docs/design-f6-storage.md` for oracle storage of F6E2M3 and F6E3M2 (8-bit container)
+---
+Docs only. The oracle has no container for a 6-bit float, which is why `check_kernel` declines them by name and the e3m2/e2m3 `mma.sync` atoms are placement-only. Proposal: one element per byte, the six value bits low and the two high bits zero, as PTX ISA 9.5 s5.2.3 (p. 43) and the m16n8k32 fragment tables (Figures 91, 93-95) hold them; packed 6-bit stays a bulk-copy format. Single source. Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.
