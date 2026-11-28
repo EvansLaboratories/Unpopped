@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Union batch 1 (KISS 0.24.0, board 501 and 515; plan E1a): the seven new dtype rows. Each has its token, width and kind (pinned
-//! against KISS's manifest in `unpopped-vocab`) and survives the text codec. Three (`F128`, `F8E3M4`, `F8UE4M3`) are **declined by
-//! name** wherever a kernel would compute them: `check_kernel` refuses a kernel that declares one (`DtypeNotComputed`); the four wide
-//! integers are computed since 0.61.3 (E2). A `Cast` into any of the seven is still the typed `IllegalCast`. Before this guard the oracle ran a `Load` of an `F128`/`I128`/`U128`/`F8*` buffer
+//! against KISS's manifest in `unpopped-vocab`) and survives the text codec. Two (`F8E3M4`, `F8UE4M3`) are **declined by name**
+//! wherever a kernel would compute them: `check_kernel` refuses a kernel that declares one (`DtypeNotComputed`); the four wide integers are
+//! computed since 0.61.3 (E2) and `F128` since E3 (`tests/kernel_f128.rs`). A float `Cast` into a wide integer is still the typed
+//! `IllegalCast`. Before this guard the oracle ran a `Load` of an `F128`/`I128`/`U128`/`F8*` buffer
 //! without holding a value of the type and panicked on `I256`/`U256` (probed 2026-11-26): the silent default this repository refuses.
 //! Each refusal sits beside its accepted control.
 
