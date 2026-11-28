@@ -1,6 +1,6 @@
 [package]
 name = "unpopped-convert"
-version = "0.63.26"
+version = "0.63.27"
 description = "The shared tree-sitter walkers that lift C-family kernel source into Unpopped's neutral IR: a `Frontend` value carries what a language contributes (kernel marker, residue list, buffer naming, a `parse` function) and `lift_elementwise`, `lift_reduction`, `lift_scan` and `lift` do the one CST walk for every language. No grammar is bundled: CUDA's parser is `baracuda-cuda-parse`, Slang's is `vulkane-slang-parse`. Split out of `unpopped` (its former `convert` feature) so the stable core no longer names the parser technology."
 readme = "README.md"
 edition.workspace = true
