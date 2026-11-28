@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.6` — layout algebra composition bounds tests (tests only)
+
+New `crates/unpopped-vocab/tests/layout_algebra_composition_bounds.rs`: exhaustive over `A = e:d` and `B = t:s` (extent 1..=12, stride 1..=3; extent 1..=14, stride 1..=14), a composition whose right operand stays inside `A`'s extent is accepted, reads the right element, and stays in `A`'s image. A right operand that reaches past `size(A)` is never refused: it reads `A` extended at its last stride and addresses offsets `A` does not hold (`1:1 o 2:1` reaches offset 1 of a one-element operand). That is pinned as behaviour by a test, not endorsed as safe and not fixed; the unpopped lane ruled 2026-11-28 that composition keeps the CuTe reading (the left's last mode extended) and that unpopped-leaves adds an additive checked composition refusing a right operand past `size(A)`; this pin stays as behaviour and the checked function joins the sweep when it merges. The checker runs against the real operation and a broken one (ignores `A`'s stride) and must fail on the broken one. No source change.
+
+---
+
 ## `0.63.5` — a kernel that declares `F6E2M3` or `F6E3M2` is refused by name (the oracle panicked on it, since 0.34.3); the `DtypeNotComputed` set stated once and pinned
 
 The rustdoc of `KernelError::DtypeNotComputed` and `types::is_union_batch1`, the header of `tests/union_batch1_dtypes.rs` and `docs/design-union-batch1-consumer.md` still said all seven union-batch-1 dtypes are declined; since 0.61.3 (E2) `check_kernel` computes `I128`, `U128`, `I256` and `U256` (reported by bonefish and vulkane). The text now states the real set, and a new test, `the_declined_set_is_exactly_f128_and_the_two_fp8_rows`, pins it so a change to the set flips a test. `docs/emitter-migration-b1.md` gains a 0.62 note: an emitter that does not lower a wide integer must refuse it by name before emitting, and the carry-flag emit hold (Intel US11531542B2) stands. No behaviour change.
