@@ -107,6 +107,10 @@ impl Layout {
     }
 
     /// `((tile_0, tile_1, ..), (rest_0, rest_1, ..))` (CuTe `zipped_divide`).
+    ///
+    /// **A tile that does not divide its mode is accepted**, as CuTe's primitive does: the number of tiles is rounded up, so the
+    /// last tile's image reaches past the layout (4 over 6 reaches offset 7 of 6). A caller that needs an exact tiling uses
+    /// [`Layout::zipped_divide_exact`], which refuses it.
     pub fn zipped_divide(&self, tilers: &[Layout]) -> Result<Layout, LayoutError> {
         zipped(&pairs(self, tilers, Layout::logical_divide)?)
     }

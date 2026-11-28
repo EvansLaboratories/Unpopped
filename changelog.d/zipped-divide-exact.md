@@ -1,0 +1,3 @@
+kind: additive: `Layout::zipped_divide_exact`
+---
+`Layout::zipped_divide_exact`: `zipped_divide` for an exact tiling, `LayoutError::NotDivisible` when a tiler's size does not divide its mode (the primitive rounds the number of tiles up, so its last tile reaches past the layout: 4 over 6 reaches offset 7 of 6). `zipped_divide` keeps accepting a residue, as CuTe's primitive does, and its rustdoc now says so and names the sibling. Additive; agreed with `unpopped` over refusing on the primitive (a breaking cut with no caller asking for it that the sibling does not serve). Sweep test over 144 (extent, tile, stride) cases with positive controls on both arms; two mutants caught.
