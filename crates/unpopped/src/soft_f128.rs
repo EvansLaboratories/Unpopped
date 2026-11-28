@@ -13,6 +13,7 @@
 //! Only the operations a kernel needs first are here (add, subtract, multiply, divide, negate, absolute value, compare, and
 //! the conversions to and from `f64` and the integers). Fused multiply-add and square root are later rows.
 
+use crate::ir::RoundMode;
 use crate::wide_int::W256;
 use core::cmp::Ordering;
 
@@ -374,6 +375,79 @@ impl F128 {
                 )
             }
         }
+    }
+
+    /// The nearest `f32` (ties to even, ONE rounding from the exact value, never through `f64`; overflow gives infinity). A NaN gives
+    /// the canonical `f32` quiet NaN.
+    #[must_use]
+    pub fn to_f32(self) -> f32 {
+        match classify(self.0) {
+            Class::Nan => f32::NAN,
+            Class::Inf(neg) => {
+                if neg {
+                    f32::NEG_INFINITY
+                } else {
+                    f32::INFINITY
+                }
+            }
+            Class::Zero(neg) => {
+                if neg {
+                    -0.0
+                } else {
+                    0.0
+                }
+            }
+            Class::Finite { neg, exp, sig } => {
+                f32::from_bits(
+                    pack(neg, W256::from_u128(sig), exp - FRAC_BITS as i32, 23, 8) as u32,
+                )
+            }
+        }
+    }
+
+    /// The exact `F128` of an `f32` (every `f32`, subnormals included, is a binary128 value). A NaN gives the canonical NaN.
+    #[must_use]
+    pub fn from_f32(x: f32) -> Self {
+        Self::from_f64(f64::from(x))
+    }
+
+    /// The value rounded to an integer under `mode`, as a 256-bit two's-complement word, or `None` for a NaN, an infinity or a
+    /// magnitude of `2^255` and above (the caller saturates by the sign of `self`). A zero, `-0` included, is `0`.
+    #[must_use]
+    pub fn to_i256(self, mode: RoundMode) -> Option<W256> {
+        let (neg, exp, sig) = match classify(self.0) {
+            Class::Nan | Class::Inf(_) => return None,
+            Class::Zero(_) => return Some(W256::ZERO),
+            Class::Finite { neg, exp, sig } => (neg, exp, sig),
+        };
+        let shift = FRAC_BITS as i32 - exp;
+        let mag = if shift <= 0 {
+            if -shift > 142 {
+                return None;
+            }
+            W256::from_u128(sig).shift_left((-shift) as u32)
+        } else {
+            let shift = shift as u32;
+            let (kept, rem, half) = if shift >= 128 {
+                // the value is below 0.5 (sig < 2^113 <= 2^(shift - 1)): nothing kept, a nonzero remainder under the half
+                (0u128, 1u128, 2u128)
+            } else {
+                (
+                    sig >> shift,
+                    sig & ((1u128 << shift) - 1),
+                    1u128 << (shift - 1),
+                )
+            };
+            let up = match mode {
+                RoundMode::NearestEven => rem > half || (rem == half && kept & 1 == 1),
+                RoundMode::NearestAway => rem >= half,
+                RoundMode::TowardZero => false,
+                RoundMode::TowardNegInf => rem != 0 && neg,
+                RoundMode::TowardPosInf => rem != 0 && !neg,
+            };
+            W256::from_u128(kept + u128::from(up))
+        };
+        Some(if neg { mag.wrapping_neg() } else { mag })
     }
 
     /// The integer `w`, read as signed or unsigned, rounded to nearest even (an unsigned `w` up to `2^256 - 1`).
