@@ -943,6 +943,20 @@ fn node_ty(
                     why: "a rounding/ftz/approx qualifier needs f32 or f32s operands in v1 (f64 has no ftz form and no reference for a directed rounding yet; half types compute through f32)",
                 });
             }
+            // a spelling hint (ROADMAP U37) is only on an `approx` node of the operation the intrinsic lowers to
+            if let Some(sp) = n.spelling {
+                let inner_op = match e {
+                    ScalarExpr::Qualified(inner, _) => {
+                        crate::ir::QualOp::of(inner).map(|(op, _)| op)
+                    }
+                    _ => None,
+                };
+                if !n.approx || inner_op != Some(sp.op()) {
+                    return Err(TypeError::IllegalQualifier {
+                        why: "a spelling hint on a node that is not an approx node of the intrinsic's operation",
+                    });
+                }
+            }
             Ok(k[0])
         }
         // `infer_ty` answers these itself; reaching here is an internal misuse, reported
