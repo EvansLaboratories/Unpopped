@@ -98,7 +98,7 @@ what its reference means, and the note says so in the docs of the type.
 - **Not MLIR or front-end metaprogramming.** Mojo's `__mlir_op` and Triton's `ir_override` replace a compiler stage; D3 of the design
   doc keeps metaprogramming out of the IR. They are declined, with this sentence as the reason.
 - **Not link-time constants.** Slang's `extern static const` is a named constant resolved at link. It is a different feature (a `Param`
-  that is fixed at link) and is not in I11; filed as a follow-up only if a consumer asks.
+  that is fixed at link) and is not in I11; filed as a follow-up only if a consumer asks. **RE-DISPOSITIONED 2026-11-26 (PM via pm-kernels; CireSnave 2026-10-24, 2026-11-11, 2026-11-19): not a wait; unblocked work, ranked lower.**
 - **Not a way around the numeric contract.** The declared result types are `ElementKind`s, so every value that comes back is typed
   and the existing kernel checker types its uses.
 

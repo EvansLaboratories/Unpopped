@@ -109,3 +109,11 @@ fn the_two_bit_operations_differ_and_the_flag_is_checked() {
     let s8 = MmaAtom::nvidia_m16n8k32_s8_s32();
     assert!(s8.with_bit_op(BitOp::And).is_err());
 }
+
+#[test]
+fn the_harness_packs_b1_lowest_bit_first_like_the_oracle() {
+    // the byte 0b0000_0101 holds elements 0 and 2 set (KISS packing: LSB = lowest logical index, pinned in
+    // `sub_byte_packing.rs`); the harness must pack the same bits for the same elements
+    let xs = [1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    assert_eq!(support::buffer(B1, &xs).raw_bytes(), &[0b0000_0101]);
+}

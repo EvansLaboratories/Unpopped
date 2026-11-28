@@ -52,6 +52,8 @@
 //! here and nowhere else, and an unreadable line is a counted [`LineError`], never a panic and
 //! never silently dropped. Design: `docs/design-per-device-decline.md`.
 
+pub mod probe;
+
 use std::collections::BTreeMap;
 
 use serde_json::{Map, Value, json};
