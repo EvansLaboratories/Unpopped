@@ -141,4 +141,41 @@ Sections 3 and 4 and T1 put a layout on a `Shared` allocation only ("the other s
 
 **Patent.** The same conditions as section 8 (pm-kernels' cluster ruling 2026-11-28, findings not advice, not a clearance, outside as read): XOR-bit data only (and this row **refuses** the swizzle on `Private`), no lookup-table encoding, no tensor-map or descriptor object, no cache of maps, no emitted statement that copies or transfers: an offset function only. No hardware and no statement is added. If a design needs any of those, stop and ask pm-kernels.
 
+## 10. Addendum 2026-11-28: a layout (static or dynamic) on an allocation that is passed to a callee (pm-kernels' [TASK] `next-rows`, item 4)
+
+Design only. A missing consumer is not a reason to exclude the row (EXPECTATIONS 6.31).
+
+**What already holds in the IR and the oracle (measured, `tests/kernel_module_layout.rs`).** A callee never sees a layout: it declares a one-dimensional
+buffer parameter (`alloc_fits`: rank 1) and reads and writes it by logical index; the entry's `CallArg::Alloc(a)` binds that parameter to the
+allocation, and the oracle's `alloc_bound` turns the callee's access into the entry's `Place::Alloc` access, so **the allocation's layout, static or the
+launch-bound `dyn_layout`, applies to the callee's accesses exactly as to the entry's**. The test fills an array through a callee and reads it
+back through `Place::Alloc` over a non-identity layout (`(2,4):(4,1)` and `(?1,?2):(?2,1)` bound to `(2,4)`): the two agree only because both apply the layout; a bind the
+launch refuses traps `KernelTrap::DynLayout` before the call. So the IR needs no change and no new `ParamKind`: **what crosses the call, in the IR, is
+the logical index only**; the rank (1) and the profile of the layout are the allocation's and static; the extents and strides stay the entry's own parameters.
+
+**The gap is cpu-c's C ABI.** The serial C passes a buffer as `(ptr, shape, stride, base)`, so a rank-1 allocation reaches a callee as `sh<i>, ash<i>, ast<i>, 0LL` (shape `{n}`,
+stride `{1}`): an affine address `base + i * stride`. A layout's offset (colexicographic coordinates times strides, then a swizzle's XOR) is not affine, so
+passing the bare pointer would **bypass the layout silently**. Today `dyn_layout::admit` refuses by name any kernel with a layout and a call (the `bypasses_the_layout` walker).
+
+**Design (what to build, in order).**
+1. **A layout descriptor beside the buffer, only where needed.** At emit time, over the whole module, find every callee buffer parameter that some call site binds
+   to a laid-out allocation (directly or through a nested `CallArg::Buffer` forward). Only those parameters get a companion argument
+   `const unpopped_layout *lay<i>` (a small C struct of the flattened `shape[]`, `stride[]`, `modes`, and the element-form swizzle's `src` mask and `shift`; **XOR-bit data
+   only**), `NULL` for an identity binding; every other parameter and every other callee is emitted exactly as today. The callee's access through such a parameter calls one
+   inline offset routine over the descriptor (the same arithmetic `dyn_layout::offset_lines` emits for the entry); a forward to a nested callee passes the descriptor on.
+2. **The descriptor is built at the call site from the allocation**: static layouts from constants, a `dyn_layout`'s leaves from the entry's scalar parameters (the same C
+   expressions `offset_lines` already spells). The launch-time proof (size, range, injectivity, period) stays once, at the top of the entry, exactly where it is.
+3. **Tests (red first):** a module whose callee fills and another that mirrors an allocation under (a) a static layout, (b) a `dyn_layout` over an argument sweep including
+   a refused bind (status 4), (c) a swizzled one, the C against the oracle; mutants: the descriptor dropped (bytes change), one stride leaf of the descriptor wrong, the swizzle
+   XOR in the descriptor path turned into an OR (breaks the bijection), a forward to a nested callee that passes `NULL`.
+
+**Refusals by name that stay.** A `Private` allocation passed to a callee (already refused: one array per thread has no shared binding); a callee with allocations of its own
+(`a callee with allocations`, unchanged); a layout in a kernel with a Device barrier, a peer access or several devices (unchanged); `Mma`/`MatrixLoad`/`MatrixStore` over a laid-out
+array (they address the storage, not the layout; unchanged); a callee parameter of rank other than 1 bound to an allocation (`alloc_fits`, unchanged).
+
+**Additive.** cpu-c only (the ABI of the generated C is internal to it); no `Stmt`, `ScalarExpr`, `ElementKind`, `ParamKind` or `CallArg` change; the oracle needs none.
+**Patent.** The same conditions as section 8 (pm-kernels' cluster ruling 2026-11-28, findings not advice, not a clearance, outside as read): the descriptor is a small struct of
+integers and XOR-bit constants passed to an offset function: **no lookup table, no tensor-map or descriptor *object* of the hardware kind, no cache of maps, no emitted copy or transfer**.
+If a design needs any of those, stop and ask pm-kernels. (The word "descriptor" here is a C struct of layout integers, not a TMA tensor map.)
+
 — lane: unpopped-leaves
