@@ -5,7 +5,7 @@
 //!
 //! The offset is the layout's own: the colexicographic coordinates of the index over the flattened shape (the last mode takes the
 //! rest), each times its stride, summed. The proof, with the oracle's order of refusals collapsed into one status: every shape leaf
-//! at least 1 and no stride negative, the shape's size equal to the extent, the cosize inside the extent, the extent within the
+//! at least 1 and no stride negative, the shape's size equal to the extent, every offset (so the cosize) inside the extent, the extent within the
 //! enumeration cap (4 Mi, as `check_layout_offsets`), and no two indices sharing an offset (a byte map of `extent` entries).
 
 use unpopped::backend::LowerError;
@@ -75,7 +75,7 @@ pub(crate) fn launch_check(
     let r = STATUS;
     let mut l = vec![
         format!("{{ /* dyn_layout of allocation {i} */"),
-        format!("long long ext{i} = {ext}; long long sz{i} = 1; long long cs{i} = 1;"),
+        format!("long long ext{i} = {ext}; long long sz{i} = 1;"),
         format!("if (ext{i} < 1 || ext{i} > 4194304LL) return {r};"),
     ];
     for (s, t) in &modes {
@@ -83,9 +83,7 @@ pub(crate) fn launch_check(
         l.push(format!(
             "if ({s} < 1 || {t} < 0 || {s} > ext{i} || ({s} > 1 && {t} > ext{i})) return {r};"
         ));
-        l.push(format!(
-            "sz{i} *= {s}; if (sz{i} > ext{i}) return {r}; cs{i} += ({s} - 1) * {t}; if (cs{i} > ext{i}) return {r};"
-        ));
+        l.push(format!("sz{i} *= {s}; if (sz{i} > ext{i}) return {r};"));
     }
     l.push(format!("if (sz{i} != ext{i}) return {r};"));
     l.push(format!(
