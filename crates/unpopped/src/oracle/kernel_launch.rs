@@ -225,6 +225,14 @@ fn launch_checked(
             "one argument per parameter, for every device of the launch",
         ));
     }
+    // a `dyn_layout` is bound here, from the first device's arguments, to the static layout the rest of the run uses
+    let bound;
+    let k = if k.allocs.iter().any(|a| a.dyn_layout.is_some()) {
+        bound = bind_dyn_layouts(k, &args[..np])?;
+        &bound
+    } else {
+        k
+    };
     let launch = resolve_launch(k, &args[..np], launch)?;
     let sg = pick_subgroup(&launch, subgroup)?;
     let lens = k
@@ -473,6 +481,41 @@ fn int_argument(arg: &KernelArg, field: Option<usize>) -> Option<i128> {
         },
         _ => None,
     }
+}
+
+/// `k` with every `dyn_layout` replaced by the static layout it binds to under `args` (`docs/design-dynamic-layout.md` section 3):
+/// every parameter takes its integer argument, the bound layout's size must equal the extent, and the enumerating checker of
+/// `check_kernel` runs on it (range and injectivity), so a violation traps before the first statement and nothing is checked twice.
+fn bind_dyn_layouts(k: &KernelFn, args: &[KernelArg]) -> Result<KernelFn, KernelTrap> {
+    let mut out = k.clone();
+    for (i, a) in k.allocs.iter().enumerate() {
+        let Some(d) = &a.dyn_layout else { continue };
+        let alloc = i as u32;
+        let bad = |why: &'static str| KernelTrap::DynLayout { alloc, why };
+        let values = d
+            .params()
+            .into_iter()
+            .map(|local| {
+                k.argument_of_local(local)
+                    .and_then(|(p, f, _)| int_argument(&args[p], f))
+                    .and_then(|v| i64::try_from(v).ok())
+                    .map(|v| (local, v))
+                    .ok_or(bad("a parameter of the layout has no integer argument"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let layout = d.bind(&values).map_err(|_| {
+            bad("a bound leaf is not a valid shape (positive) or stride (non-negative)")
+        })?;
+        let n = u32::try_from(alloc_len(k, args, a)?)
+            .map_err(|_| bad("the allocation's extent does not fit a 32-bit count"))?;
+        if layout.size() != i64::from(n) {
+            return Err(bad("the bound layout's size must equal the allocation's extent"));
+        }
+        crate::kernel_check::check_layout_offsets(&layout, n).map_err(bad)?;
+        out.allocs[i].layout = Some(crate::exec::AllocLayout::new(layout));
+        out.allocs[i].dyn_layout = None;
+    }
+    Ok(out)
 }
 
 /// The element count of `a`, resolving a dynamic extent from its scalar argument.

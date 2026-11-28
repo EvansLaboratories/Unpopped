@@ -46,6 +46,15 @@ pub enum KernelTrap {
         /// The allocation index.
         alloc: u32,
     },
+    /// A launch's `dyn_layout` does not bind to a layout the checker accepts (`docs/design-dynamic-layout.md` section 3): a parameter
+    /// without an integer argument, a bound leaf that is not a valid shape or stride, a size that is not the extent, a layout
+    /// that is not injective or that exceeds the extent, or one too large to prove injective. Raised before the first statement.
+    DynLayout {
+        /// The allocation index.
+        alloc: u32,
+        /// The rule, in words.
+        why: &'static str,
+    },
     /// A block ran past the step limit after an acquire-class atomic while later blocks had not yet run. The
     /// oracle runs blocks in order, so a wait on a later block's write can never be satisfied: this is that wait, named,
     /// not a hang (`docs/question-u4-memory-model.md`, sub-question 1; the `Device` barrier model of S6 would run it).

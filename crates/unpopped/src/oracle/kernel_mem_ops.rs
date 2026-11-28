@@ -142,6 +142,11 @@ impl Machine<'_> {
         // a layout permutes the storage: the access, the race log, the initialised flags and the async queue all key on the
         // PHYSICAL element, so two logical elements never alias and a swizzle never hides or creates a race
         let decl = &self.alloc_k.allocs[alloc as usize];
+        if decl.dyn_layout.is_some() {
+            return Err(KernelTrap::Unsupported(
+                "a dyn_layout is bound at the launch entry only, not in a called kernel",
+            ));
+        }
         let i = match &decl.layout {
             Some(l) => {
                 let width = u32::try_from(types::elem_size(decl.elem)).unwrap_or(0);
