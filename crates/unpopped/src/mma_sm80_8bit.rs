@@ -130,6 +130,25 @@ impl MmaAtom {
         Self::m16n8k32_fp8(ElementKind::Fp8E5M2, ElementKind::Fp8E4M3FN, "e5m2e4m3")
     }
 
+    /// `mma.sync.aligned.m16n8k32` with e3m2 inputs and an f32 accumulator (PTX ISA 8.7; one fragment table serves every
+    /// 8-bit-container type, PTX 9.7.16.5.10 Figures 91, 93, 94, 95).
+    #[must_use]
+    pub fn nvidia_m16n8k32_e3m2_f32() -> Self {
+        Self::m16n8k32_fp8(ElementKind::F6E3M2, ElementKind::F6E3M2, "e3m2")
+    }
+
+    /// `m16n8k32` with e2m3 inputs and an f32 accumulator.
+    #[must_use]
+    pub fn nvidia_m16n8k32_e2m3_f32() -> Self {
+        Self::m16n8k32_fp8(ElementKind::F6E2M3, ElementKind::F6E2M3, "e2m3")
+    }
+
+    /// `m16n8k32` with e2m1 inputs and an f32 accumulator.
+    #[must_use]
+    pub fn nvidia_m16n8k32_e2m1_f32() -> Self {
+        Self::m16n8k32_fp8(ElementKind::F4E2M1, ElementKind::F4E2M1, "e2m1")
+    }
+
     fn m16n8k32_fp8(a: ElementKind, b: ElementKind, tag: &str) -> Self {
         let name = format!("nvidia.mma.sync.m16n8k32.{tag}.f32");
         Self::m16n8k32_with(a, b, ElementKind::F32, &name)
