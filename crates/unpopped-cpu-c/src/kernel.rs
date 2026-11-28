@@ -42,6 +42,11 @@ fn admit(k: &KernelFn, in_module: bool) -> Result<(), LowerError> {
     if !in_module {
         check_kernel(k).map_err(|e| refuse(format!("kernel `{}` is ill-formed: {e:?}", k.name)))?;
     }
+    if !k.spec_consts.is_empty() {
+        return Err(refuse(
+            "a specialization constant (`KernelFn::spec_consts`): this emitter does not bake one into the C signature yet",
+        ));
+    }
     if k.launch.is_some() {
         crate::launch::admit_launch(k)?;
     } else if !k.allocs.is_empty() {
@@ -218,7 +223,10 @@ impl Emitter<'_> {
             Stmt::Barrier { .. } => return Err(refuse("a Barrier needs a launch (U3 row 4)")),
             Stmt::AtomicRmw { .. } => self.atomic_rmw(s)?,
             Stmt::AtomicCas { .. } => self.atomic_cas(s)?,
-            Stmt::Fence { .. }
+            // an `Assume` is a fact for an optimiser, undefined behaviour when false: the serial C ignores it (a correct kernel
+            // cannot tell), the oracle is what checks it
+            Stmt::Assume { .. }
+            | Stmt::Fence { .. }
             | Stmt::ProxyFence { .. }
             | Stmt::AsyncCommit
             | Stmt::AsyncWait { .. }

@@ -643,6 +643,18 @@ pub enum Stmt {
     /// once every block of this grid has executed it or exited. It is a scheduling hint: it orders nothing, and a
     /// dependent still [`Stmt::GridDepWait`]s before it reads this grid's results. The oracle and the serial C ignore it.
     GridDepLaunchDependents,
+    /// `tl.assume(cond)` (ROADMAP U50, PM ruling Q10 A): a **value fact**. Each thread that reaches it states that `cond` holds (taken as
+    /// an `If` condition is: a nonzero value, a NaN counts as true, `-0.0` as false); a thread for which it does not has undefined
+    /// behaviour on a device. The oracle makes that **testable**: a false `cond` is `KernelTrap::AssumptionViolated`, so a front end that
+    /// lowers `tl.assume`, `multiple_of(x, n)` (`assume x % n == 0`) or a range fact gets a kernel whose facts are checked on every
+    /// oracle run. It reads no memory and writes none, orders nothing and defines no local, so it is uniform-safe at any depth; an
+    /// emitter MAY use it as an optimisation hint (`__builtin_assume`, `llvm.assume`) and MUST NOT rely on it for anything else
+    /// (`unpopped-cpu-c` ignores it). `max_contiguous` / `max_constancy` relate the values of several lanes, which a per-thread
+    /// condition cannot state: ROADMAP U50b.
+    Assume {
+        /// The fact, any scalar expression `check_kernel` accepts as an `If` condition.
+        cond: ScalarExpr,
+    },
     /// A memory fence of `scope` with `order`. Since 0.42.8 the oracle runs it as the C++ fence rules do: a release
     /// fence (`Release`, `AcqRel`, `SeqCst`) before a relaxed atomic publishes what the thread knew; an acquire fence
     /// (`Acquire`, `AcqRel`, `SeqCst`) after a relaxed atomic read takes in what that read saw. `check_kernel` refuses a
@@ -1430,7 +1442,7 @@ pub enum BarrierKind {
     Named {
         /// Which barrier, 0 to 15.
         id: u32,
-        /// How many threads must arrive before it opens.
+        /// A count of arriving threads; threads that disagree on it trap (`KernelTrap::BarrierMismatch`).
         count: u32,
     },
     /// `bar.arrive id, count`: arrive at the named barrier without waiting (a producer signalling a consumer that waits
@@ -1438,7 +1450,7 @@ pub enum BarrierKind {
     NamedArrive {
         /// Which barrier, 0 to 15.
         id: u32,
-        /// How many threads must arrive before it opens.
+        /// A count of arriving threads; threads that disagree on it trap (`KernelTrap::BarrierMismatch`).
         count: u32,
     },
 }
@@ -1644,6 +1656,41 @@ pub struct KernelFn {
     /// `docs/PATENT-SWEEP.md` G-S2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule: Option<Box<ScheduleSpec>>,
+    /// Scalar parameters whose value is fixed when the kernel is built (a specialization constant), not passed at launch.
+    /// Empty for every kernel that has none; an empty list is not serialized, so a kernel without one keeps its text and its
+    /// revision hash.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spec_consts: Vec<SpecConst>,
+}
+
+/// The value a [`SpecConst`] takes when nothing overrides it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum SpecValue {
+    /// For an integer scalar parameter.
+    Int(i128),
+    /// For a floating-point scalar parameter.
+    Float(f64),
+}
+
+/// A scalar parameter that is a specialization constant: the program is built for one value of it, so it is not among the
+/// launch arguments. The oracle binds the default; an emitter either bakes the default into the program or declines by name.
+/// Vocabulary only: this adds no statement and no expression, the parameter is read as its local like any other scalar.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SpecConst {
+    /// Index into [`KernelFn::params`] of a [`ParamKind::Scalar`] parameter.
+    pub param: u32,
+    /// Its value.
+    pub default: SpecValue,
+}
+
+impl SpecConst {
+    /// A specialization constant for the scalar parameter `param`.
+    #[must_use]
+    pub fn new(param: u32, default: SpecValue) -> Self {
+        Self { param, default }
+    }
 }
 
 impl KernelFn {
@@ -1687,7 +1734,15 @@ impl KernelFn {
             result: None,
             results: Vec::new(),
             schedule: None,
+            spec_consts: Vec::new(),
         }
+    }
+
+    /// The same kernel with scalar parameter `param` a specialization constant of value `default` (see [`SpecConst`]).
+    #[must_use]
+    pub fn with_spec_const(mut self, param: u32, default: SpecValue) -> Self {
+        self.spec_consts.push(SpecConst::new(param, default));
+        self
     }
 
     /// The same kernel launched with `launch`.
@@ -1973,6 +2028,12 @@ pub enum KernelError {
     },
     /// The kernel's [`KernelFn::schedule`] is not well formed (ROADMAP S2): the first violation `check_schedule` found.
     Schedule(ScheduleError),
+    /// A specialization constant that names no scalar parameter, names one twice, or whose default is not of the parameter's
+    /// kind (an integer default for a floating parameter, a float for an integer, or an integer outside the type's range).
+    BadSpecConst {
+        /// The index into [`KernelFn::spec_consts`].
+        index: u32,
+    },
     /// A `Store` to a `Constant` allocation.
     WriteToConstant {
         /// The allocation index.
