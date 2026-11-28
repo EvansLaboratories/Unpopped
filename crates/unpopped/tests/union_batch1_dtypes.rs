@@ -189,6 +189,36 @@ fn the_declined_set_is_exactly_f128_and_the_two_fp8_rows() {
 }
 
 #[test]
+fn a_6_bit_float_is_refused_by_name_because_the_oracle_has_no_storage_for_it() {
+    // probed 2026-11-27 by unpopped-mma: `check_kernel` admitted a `Private` allocation of `F6E2M3`/`F6E3M2` with a `Store` of a
+    // `ClampFinite` cast and a `Load`, and the oracle PANICKED ("unsupported dtype F6E2M3 (v1)"): an oracle never panics on a
+    // kernel the checker accepted. Declined by name until the oracle holds a 6-bit element (packing is a design point).
+    for dt in [ElementKind::F6E2M3, ElementKind::F6E3M2] {
+        let with_alloc =
+            kernel(ElementKind::I32, vec![], vec![], vec![]).with_allocs(vec![AllocDecl::new(
+                "frag",
+                MemorySpace::Private,
+                dt,
+                Extent::Static(4),
+            )]);
+        assert_eq!(check_kernel(&with_alloc), refused(dt), "{dt:?} allocation");
+        assert_eq!(
+            check_kernel(&load_from(dt, ElementKind::F32)),
+            refused(dt),
+            "{dt:?} buffer parameter"
+        );
+    }
+    // the control: the 4-bit float the oracle does hold still passes
+    let fp4 = kernel(ElementKind::I32, vec![], vec![], vec![]).with_allocs(vec![AllocDecl::new(
+        "frag",
+        MemorySpace::Private,
+        ElementKind::F4E2M1,
+        Extent::Static(4),
+    )]);
+    assert_eq!(check_kernel(&fp4), Ok(()));
+}
+
+#[test]
 fn a_cast_into_a_wide_or_binary128_row_is_still_the_typed_illegal_cast() {
     // `F8E3M4` and `F8UE4M3` became Cast endpoints in plan E1b (`tests/cast_fp8_union.rs`); the five wide rows stay refused
     for (dt, name, _) in ROWS
