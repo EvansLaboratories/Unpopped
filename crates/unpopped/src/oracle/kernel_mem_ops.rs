@@ -27,6 +27,10 @@ impl Machine<'_> {
             ExecId::LaneId => c.thread_lin % c.subgroup,
             ExecId::SubgroupId => c.thread_lin / c.subgroup,
             ExecId::SubgroupSize => c.subgroup,
+            ExecId::SubgroupCount => {
+                let threads: u32 = c.launch.block.iter().product();
+                threads.div_ceil(c.subgroup)
+            }
             ExecId::DeviceRank => c.device,
             ExecId::DeviceCount => c.launch.devices,
             ExecId::ClusterCtaRank => c.launch.cluster.map_or(0, |cl| {

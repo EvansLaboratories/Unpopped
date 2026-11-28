@@ -152,6 +152,7 @@ fn every_exec_id_checks_under_a_launch_with_a_subgroup() {
         ExecId::LaneId,
         ExecId::SubgroupId,
         ExecId::SubgroupSize,
+        ExecId::SubgroupCount,
     ];
     for id in ids {
         assert_eq!(check_kernel(&kernel(reading(id))), Ok(()), "{id:?}");
@@ -177,7 +178,12 @@ fn an_exec_axis_above_two_is_refused() {
 
 #[test]
 fn a_subgroup_id_needs_a_launch_that_names_a_subgroup() {
-    for id in [ExecId::LaneId, ExecId::SubgroupId, ExecId::SubgroupSize] {
+    for id in [
+        ExecId::LaneId,
+        ExecId::SubgroupId,
+        ExecId::SubgroupSize,
+        ExecId::SubgroupCount,
+    ] {
         let mut k = kernel(reading(id));
         k.launch = Some(LaunchShape::new([16, 1, 1], [1, 1, 1]));
         assert_eq!(

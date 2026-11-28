@@ -21,9 +21,27 @@ fn pin(coord: &[i64]) -> SliceCrd {
 }
 
 impl Layout {
+    /// Every tiler's size divides the size of its mode: `zipped_divide` would otherwise round the number of tiles up, and the
+    /// last tile would reach past the layout. A tiling with a ragged edge is not expressed here (a mask over the identity
+    /// tensor is the recipe). [`LayoutError::ProfileMismatch`] unless there is one tiler per mode.
+    fn require_dividing_tiles(&self, tilers: &[Layout]) -> Result<(), LayoutError> {
+        let modes = self.modes();
+        if modes.len() != tilers.len() {
+            return Err(LayoutError::ProfileMismatch);
+        }
+        for (m, t) in modes.iter().zip(tilers) {
+            let tile = t.size();
+            if tile <= 0 || m.size() % tile != 0 {
+                return Err(LayoutError::NotDivisible);
+            }
+        }
+        Ok(())
+    }
+
     /// Pin the REST coordinate `coord` (one entry per tiler) of `zipped_divide(tilers)`: the layout of one tile and its
     /// offset. [`LayoutError::ProfileMismatch`] unless `coord` has one entry per tiler; [`LayoutError::OutOfRange`] for a
-    /// coordinate past the number of tiles.
+    /// coordinate past the number of tiles; [`LayoutError::NotDivisible`] when a tiler's size does not divide its mode (no tile is
+    /// rounded up).
     pub fn inner_partition(
         &self,
         tilers: &[Layout],
@@ -32,6 +50,7 @@ impl Layout {
         if coord.len() != tilers.len() {
             return Err(LayoutError::ProfileMismatch);
         }
+        self.require_dividing_tiles(tilers)?;
         let z = self.zipped_divide(tilers)?;
         z.slice(&SliceCrd::Tuple(vec![SliceCrd::All, pin(coord)]))
     }
@@ -46,6 +65,7 @@ impl Layout {
         if coord.len() != tilers.len() {
             return Err(LayoutError::ProfileMismatch);
         }
+        self.require_dividing_tiles(tilers)?;
         let z = self.zipped_divide(tilers)?;
         z.slice(&SliceCrd::Tuple(vec![pin(coord), SliceCrd::All]))
     }

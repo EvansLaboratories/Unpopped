@@ -274,30 +274,24 @@ fn cute_47_identity_tensor_predicate_masks_the_residue() {
     );
 }
 
-/// FINDING for CuTe 47: `local_tile` does NOT refuse a tile that does not divide the extent (4 into 6): it rounds the rest mode
-/// up, so the last tile's image leaves the matrix (largest offset 49 in a 36-element view). The vocabulary carries no residue
-/// and no predicate, which is why the recipe above builds the identity-tensor mask itself.
+/// CuTe 47, flipped by the NotDivisible fix: `local_tile` REFUSES a tile that does not divide the extent (4 into 6) instead of
+/// rounding the rest mode up (it used to end at offset 49 in a 36-element view). The vocabulary carries no residue and no
+/// predicate, which is why the recipe above builds the identity-tensor mask itself.
 #[test]
-fn a_local_tile_over_a_residue_leaves_the_extent_and_needs_a_predicate() {
+fn a_local_tile_over_a_residue_is_refused_and_a_dividing_tile_stays_inside() {
     let six = lay("(6,6):(6,1)");
-    let reach = |t: &str, c: [i64; 2]| {
-        let (piece, off) = six.local_tile(&[lay(t), lay(t)], &c).unwrap();
-        off + piece
+    assert_eq!(
+        six.local_tile(&[lay("4:1"), lay("4:1")], &[1, 1]),
+        Err(unpopped_vocab::layout_algebra::LayoutError::NotDivisible)
+    );
+    let (piece, off) = six.local_tile(&[lay("3:1"), lay("3:1")], &[1, 1]).unwrap();
+    let reach = off
+        + piece
             .flat_modes()
             .iter()
             .map(|(s, d)| (s - 1) * d)
-            .sum::<i64>()
-    };
-    assert_eq!(
-        reach("4:1", [1, 1]),
-        28 + 3 * 6 + 3,
-        "last 4-tile ends at 49"
-    );
-    assert!(reach("4:1", [1, 1]) >= 36, "past the 36 elements");
-    assert!(
-        reach("3:1", [1, 1]) < 36,
-        "control: 3 divides 6 and stays inside"
-    );
+            .sum::<i64>();
+    assert!(reach < 36, "control: 3 divides 6 and stays inside");
 }
 
 // ---- ThunderKittens 38: swap_layout between addressable layouts; declined on an opaque tile -----------------------------

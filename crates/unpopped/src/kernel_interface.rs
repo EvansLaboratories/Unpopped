@@ -527,6 +527,73 @@ pub fn check_shared_size(
     Ok(bytes)
 }
 
+/// Why a kernel's launch shape does not fit a target ([`check_launch_limits`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LaunchLimitError {
+    /// The kernel has no launch shape, so there is no block to size.
+    NoLaunch,
+    /// A block axis is zero: the block has no thread.
+    EmptyBlock,
+    /// The threads of a block do not fit `u64`.
+    Overflow,
+    /// The block has more threads than the target allows.
+    OverThreads {
+        /// Threads in the block (the product of the three axes).
+        threads: u64,
+        /// [`TargetCapabilities::max_threads_per_block`].
+        limit: u32,
+    },
+    /// The kernel requires a subgroup size range that does not contain the target's.
+    SubgroupSize {
+        /// The smallest size the kernel accepts.
+        min: u32,
+        /// The largest size the kernel accepts.
+        max: u32,
+        /// [`TargetCapabilities::warp_size`].
+        warp_size: u32,
+    },
+}
+
+/// Does `kernel`'s launch shape fit one block of the target? Returns the threads per block.
+///
+/// Checks the block's total thread count against [`TargetCapabilities::max_threads_per_block`] and a required subgroup size
+/// range against [`TargetCapabilities::warp_size`]. Not modelled: the per-axis block limits, the grid limits, the cluster
+/// size limit, and occupancy (registers per thread and shared memory per SM); pass the row of the actual target.
+///
+/// # Errors
+/// [`LaunchLimitError`].
+pub fn check_launch_limits(
+    kernel: &KernelFn,
+    target: &TargetCapabilities,
+) -> Result<u64, LaunchLimitError> {
+    let launch = kernel.launch.as_ref().ok_or(LaunchLimitError::NoLaunch)?;
+    if launch.block.contains(&0) {
+        return Err(LaunchLimitError::EmptyBlock);
+    }
+    let threads = launch
+        .block
+        .iter()
+        .try_fold(1u64, |acc, &d| acc.checked_mul(u64::from(d)))
+        .ok_or(LaunchLimitError::Overflow)?;
+    if threads > u64::from(target.max_threads_per_block) {
+        return Err(LaunchLimitError::OverThreads {
+            threads,
+            limit: target.max_threads_per_block,
+        });
+    }
+    if let Some(range) = launch.subgroup {
+        if !(range.min..=range.max).contains(&target.warp_size) {
+            return Err(LaunchLimitError::SubgroupSize {
+                min: range.min,
+                max: range.max,
+                warp_size: target.warp_size,
+            });
+        }
+    }
+    Ok(threads)
+}
+
 /// **The U23 patent guard, as a compile-time check** (`docs/PATENT-SWEEP.md`, U23 section; PM 2026-11-17). `Param`,
 /// `ParamKind` and `ParamsBlock` carry a layout and no storage decision: no thread-set, memory-kind or copy-count annotation, and no
 /// choice of where data lives by which threads read it (US20230305845A1, pending, claims 1, 9, 15, 21, 27). Each type is

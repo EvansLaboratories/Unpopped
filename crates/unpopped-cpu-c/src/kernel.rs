@@ -42,6 +42,11 @@ fn admit(k: &KernelFn, in_module: bool) -> Result<(), LowerError> {
     if !in_module {
         check_kernel(k).map_err(|e| refuse(format!("kernel `{}` is ill-formed: {e:?}", k.name)))?;
     }
+    if !k.spec_consts.is_empty() {
+        return Err(refuse(
+            "a specialization constant (`KernelFn::spec_consts`): this emitter does not bake one into the C signature yet",
+        ));
+    }
     if k.launch.is_some() {
         crate::launch::admit_launch(k)?;
     } else if !k.allocs.is_empty() {
