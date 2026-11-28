@@ -269,8 +269,18 @@ pub(crate) fn run(atom: &MmaAtom, table: Table, l: &Logical) -> Result<Vec<f64>,
         .collect())
 }
 
+/// The names of the atoms `agrees` has run in this test binary, so a test can assert that every atom it claims to cover
+/// was actually run (a deleted `agrees` call is then a red test, not a silent loss of coverage).
+static RAN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Whether `agrees` has run the atom called `name` in this test binary.
+pub(crate) fn ran(name: &str) -> bool {
+    RAN.lock().unwrap().iter().any(|n| n == name)
+}
+
 /// Run and compare with the reference D placed through the same table.
 pub(crate) fn agrees(atom: &MmaAtom, table: Table) {
+    RAN.lock().unwrap().push(atom.name().to_owned());
     let l = logical(atom);
     let (m, ..) = atom.mnk();
     let want = fragments(table, 2, m, atom.values(2), &reference(atom, &l, |x| x));
