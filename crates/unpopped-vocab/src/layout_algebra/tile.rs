@@ -38,6 +38,14 @@ impl Layout {
         Ok(())
     }
 
+    /// [`Layout::zipped_divide`] for an exact tiling: the same `((tile_0, ..), (rest_0, ..))`, but [`LayoutError::NotDivisible`] when
+    /// a tiler's size does not divide its mode, where `zipped_divide` rounds the number of tiles up and the last tile reaches past
+    /// the layout. [`LayoutError::ProfileMismatch`] unless there is one tiler per mode.
+    pub fn zipped_divide_exact(&self, tilers: &[Layout]) -> Result<Layout, LayoutError> {
+        self.require_dividing_tiles(tilers)?;
+        self.zipped_divide(tilers)
+    }
+
     /// Pin the REST coordinate `coord` (one entry per tiler) of `zipped_divide(tilers)`: the layout of one tile and its
     /// offset. [`LayoutError::ProfileMismatch`] unless `coord` has one entry per tiler; [`LayoutError::OutOfRange`] for a
     /// coordinate past the number of tiles; [`LayoutError::NotDivisible`] when a tiler's size does not divide its mode (no tile is
