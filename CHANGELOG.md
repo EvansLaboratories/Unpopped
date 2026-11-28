@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.15` — docs: design note `docs/design-mma-groups.md` for a `groups` field on `MmaAtom` (ROADMAP U70, f16 `m8n8k4`)
+
+Docs only. Four independent 8-lane MMAs per warp (PTX ISA 9.5 section 9.7.16.5.1, Figures 49-55 cited by figure, text formulas read; single source); option A accepted by `unpopped`: additive `groups` plus a `(group, local lane) -> lane` map on `MmaAtom`, `MmaAtom` stays free-form. Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.
+
+---
+
 ## `0.63.14` — Docs: ROADMAP rows that waited for a consumer are re-dispositioned as unblocked and ranked lower (PM, 2026-11-26); U3 R2 to R4 get rows
 
 Issue #114 (IR union I3) was the only issue labelled blocked-on:consumer; it and the ROADMAP rows U2b, U15, U21, U24, U36, E3 and I7 that said "waits for a consumer", "parked: no consumer" or "when a consumer asks" now carry a dated re-disposition: unblocked work, ranked lower, never a reason to idle (CireSnave 2026-10-24, 2026-11-11, 2026-11-19). New rows U65 (ProgramModel / BlockSpmd lowering) and U66 (Constant allocation initializers); U21 records the patent-read gate (no chart exists) and how a Texture space and the plan's Tile space merge. Docs only, no gate.
