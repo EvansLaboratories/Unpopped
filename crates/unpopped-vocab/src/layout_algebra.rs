@@ -31,6 +31,7 @@
 
 use std::fmt;
 
+mod dynamic;
 mod ordered;
 mod slice;
 mod structural;
@@ -39,6 +40,7 @@ mod text;
 mod tile;
 mod variants;
 
+pub use dynamic::{Dim, DynLayout, DynTuple};
 pub use slice::SliceCrd;
 pub use swizzle::{ComposedLayout, Swizzle};
 
@@ -84,6 +86,8 @@ pub enum LayoutError {
     BadSwizzle,
     /// Text that is not the canonical form of a layout or swizzle (see the `text` module); the reason.
     Parse(&'static str),
+    /// [`DynLayout::bind`] was not given a value for this parameter local.
+    UnboundParam(u32),
     /// [`Layout::composition_within`]: the right layout reaches an index at or past `size(self)`, which plain
     /// [`Layout::composition`] would read by extending `self` at its last stride.
     ExceedsExtent,
@@ -106,6 +110,7 @@ impl fmt::Display for LayoutError {
             Self::NonPositiveCotarget(v) => write!(f, "cotarget {v} is not >= 1"),
             Self::BadSwizzle => write!(f, "swizzle parameters are not a valid bijection"),
             Self::Parse(why) => write!(f, "not a canonical layout text: {why}"),
+            Self::UnboundParam(p) => write!(f, "dynamic layout parameter ?{p} has no value"),
             Self::ExceedsExtent => {
                 write!(f, "composition reaches past the size of the left layout")
             }

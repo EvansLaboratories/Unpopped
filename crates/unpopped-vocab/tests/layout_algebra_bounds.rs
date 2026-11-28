@@ -185,15 +185,15 @@ fn a_local_tile_one_tile_late_is_caught() {
     assert!(e.contains("got"), "{e}");
 }
 
-/// The finding, pinned: a residue tiling IS accepted and DOES address past the dividend's image (the padding coordinates), so a
-/// consumer must predicate on `i + t*j < e`. This test must flip, deliberately, the day the vocab refuses a residue tiling
-/// (or clamps it); until then it is the only place the over-reach is asserted as a fact.
+/// The finding, pinned in two halves. `zipped_divide` (the raw CuTe operation) still ACCEPTS a residue tiling and its padding
+/// coordinates DO address past the dividend's image, so a caller of it must predicate on `i + t*j < e`. The partition entry
+/// points (`local_tile`, `inner_partition`, `outer_partition`, `local_partition`) REFUSE it by name since the leaves fix.
 #[test]
-fn a_residue_tiling_is_accepted_and_its_padding_leaves_the_extent() {
+fn a_residue_tiling_is_accepted_by_zipped_divide_and_its_padding_leaves_the_extent() {
     let a = Layout::leaf(6, 1).unwrap();
     let z = a
         .zipped_divide(&[Layout::leaf(4, 1).unwrap()])
-        .expect("accepted today");
+        .expect("zipped_divide rounds the rest mode up");
     let m = z.modes();
     assert_eq!((m[0].size(), m[1].size()), (4, 2));
     let last = z.crd2idx(&IntTuple::ints([3, 1])).unwrap();
@@ -204,4 +204,40 @@ fn a_residue_tiling_is_accepted_and_its_padding_leaves_the_extent() {
         c.over_reach > 0,
         "the grid must hit the residue class: {c:?}"
     );
+}
+
+#[test]
+fn the_partition_entry_points_refuse_a_residue_tiling_by_name() {
+    let a = Layout::leaf(6, 1).unwrap();
+    let tile = [Layout::leaf(4, 1).unwrap()];
+    for j in 0..2 {
+        assert_eq!(a.local_tile(&tile, &[j]), Err(LayoutError::NotDivisible));
+        assert_eq!(
+            a.inner_partition(&tile, &[j]),
+            Err(LayoutError::NotDivisible)
+        );
+        assert_eq!(
+            a.outer_partition(&tile, &[j]),
+            Err(LayoutError::NotDivisible)
+        );
+    }
+    assert_eq!(a.local_partition(&tile, 0), Err(LayoutError::NotDivisible));
+    // positive control: the dividing tile 3 over 6 is accepted by the same entry point
+    assert!(a.local_tile(&[Layout::leaf(3, 1).unwrap()], &[1]).is_ok());
+}
+
+/// Every residue tiling in the grid is refused and every exact one accepted (the exhaustive e1..24 x t1..8 sweep).
+#[test]
+fn local_tile_refuses_exactly_the_non_dividing_tiles() {
+    for e in 1..=24i64 {
+        for t in 1..=8i64 {
+            let a = Layout::leaf(e, 1).unwrap();
+            let r = a.local_tile(&[Layout::leaf(t, 1).unwrap()], &[0]);
+            if e % t == 0 {
+                assert!(r.is_ok(), "{e}/{t}: {r:?}");
+            } else {
+                assert_eq!(r, Err(LayoutError::NotDivisible), "{e}/{t}");
+            }
+        }
+    }
 }

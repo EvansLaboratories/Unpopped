@@ -157,6 +157,14 @@ fn admit_alloc(a: &AllocDecl) -> Result<(), LowerError> {
             a.name
         )));
     }
+    // a layout whose leaves are scalar parameters is declined by name as well (`docs/design-dynamic-layout.md` section 5):
+    // emitting the offset as C arithmetic over the parameters is the follow-up row
+    if a.dyn_layout.is_some() {
+        return Err(refuse(format!(
+            "allocation `{}` states a `dyn_layout` (a layout with scalar-parameter leaves); this emitter spells the identity layout only",
+            a.name
+        )));
+    }
     ctype(a.elem, &format!("allocation `{}`", a.name)).map(|_| ())
 }
 
