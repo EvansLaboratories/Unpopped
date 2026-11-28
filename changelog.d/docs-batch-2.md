@@ -1,0 +1,3 @@
+kind: docs, the participant-forms map (which shipped statements name participants) and the float collective NaN and signed-zero note
+---
+`docs/note-participant-forms-map.md` maps the shipped statements against the participant-naming forms of the barrier hold, read-only: shipped `Named`/`NamedArrive` `count` is stated as a count of arriving threads with a trap on disagreement (NOT CLEARED, unchanged; the PM wording of 2026-11-27), and every held form is listed. `docs/design-float-collective-nan.md` records the NaN and signed-zero rules of the float `Max`/`Min`/`Sum` collectives, the per-target measurement duty (vulkane#189), the conformance vector, and that `MaxNum`/`MinNum` are not admitted. No code change.
