@@ -800,16 +800,23 @@ fn check_store(
             what: "a multicast Store of an element other than I32, U32, F32, F16 or Bf16",
         });
     }
-    if types::is_subbyte_int(elem) {
-        // a sub-byte Store is a read-modify-write of a byte two threads share (ROADMAP U9b, ruled 2026-11-05)
+    if types::is_subbyte_int(elem) && !is_private_alloc_place(k, place) {
+        // a sub-byte Store is a read-modify-write of a byte two threads share (ROADMAP U9b, ruled 2026-11-05); a `Private`
+        // allocation is one thread's, so no byte is shared and the store is allowed (an MMA fragment of 4-bit elements)
         return Err(KernelError::TypeMismatch {
-            what: "a Store of a sub-byte element (sub-byte buffers are read-only in kernels)",
+            what: "a Store of a sub-byte element outside a Private allocation (shared and global sub-byte buffers are read-only in kernels)",
         });
     }
     if check_expr(k, value, sc)? != Ty::Scalar(elem) {
         return Err(KernelError::TypeMismatch { what: "Store" });
     }
     Ok(())
+}
+
+/// Whether `place` is an element of a `Private` allocation (one thread's own storage).
+fn is_private_alloc_place(k: &KernelFn, place: &Place) -> bool {
+    matches!(place, Place::Alloc { alloc, .. }
+        if k.allocs.get(*alloc as usize).is_some_and(|a| a.space == MemorySpace::Private))
 }
 
 /// The parts of an `AtomicRmw` on a multicast place other than its place and operand.

@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.9` — a sub-byte (`I4`, `U4`) `Store` into a `Private` allocation is allowed (ROADMAP U9b, the narrow rule for MMA fragments of 4-bit elements)
+
+`check_kernel` refused every `Store` of a sub-byte element (the U9b ruling of 2026-11-05: a read-modify-write of a byte two threads share). That reason does not reach a `Private` allocation, which is one thread's own storage, so a `Store` of an `I4` or `U4` into a `Place::Alloc` of a `Private` allocation now passes, and the oracle writes the nibble without disturbing its neighbour. A `Store` into a `Shared` allocation or a global buffer stays refused (`TypeMismatch`, "outside a Private allocation"; the text still says such buffers are read-only in kernels). This is what an `MmaAtom` fragment of 4-bit elements needs to run in the oracle. Additive: a refusal loosened, nothing else changes. Verified by `tests/kernel_subbyte_private_store.rs` (wrapping, and the neighbour in the same byte undisturbed, for `I4` and `U4`; the `Shared` refusal as the control).
+
+---
+
 ## `0.63.8` — docs: PATENT-SWEEP G-T2 addendum 7, US12314717B2 claim 25 element-size relation and the open construction question
 
 Docs only; no earlier verdict edited.
