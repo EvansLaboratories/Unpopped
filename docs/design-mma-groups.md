@@ -29,7 +29,7 @@ The formulas use only `laneid % 4` and the high/low half, so **all four groups s
 
 ## 3. Options
 
-**A. `groups` field with an explicit lane decomposition (recommended).** `#[non_exhaustive]`, additive: `groups: u32` (1 for every existing atom) and a flat `(shape, stride)` map from `(group, local lane)` to the subgroup lane, in the same form the layouts use. For f16 m8n8k4: lane = `lo + 4 * group + 16 * hi`, so shape `(4, 4, 2)`, stride `(1, 4, 16)` read as `(lo, group, hi)`, with `local = lo + 4 * hi`. The atom keeps `lanes = 8` and all layouts stay 8-lane layouts, checked by the existing bijection. Data, not code: other multi-group instructions (any future one) are a new map, not a new rule.
+**A. `groups` field with an explicit lane decomposition (recommended).** `#[non_exhaustive]`, additive: `groups: u32` (1 for every existing atom) and a flat `(shape, stride)` map from `(group, local lane)` to the subgroup lane, in the same form the layouts use. For f16 m8n8k4: subgroup lane = `lo + 16 * hi + 4 * group` with `local = lo + 4 * hi`, so the domain `local + 8 * group` reads as `(lo, hi, group)`: shape `(4, 2, 4)`, stride `(1, 16, 4)`. The atom keeps `lanes = 8` and all layouts stay 8-lane layouts, checked by the existing bijection. Data, not code: other multi-group instructions (any future one) are a new map, not a new rule.
 
 **B. A rule keyed on the atom (quad-pair special case in the oracle).** Rejected: it hard-codes one instruction in `check_kernel` and the oracle, and an emitter cannot read it from data.
 
