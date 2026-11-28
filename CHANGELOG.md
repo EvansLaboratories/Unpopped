@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.26` — test: WMMA (f16, bf16, f64) and Apple simdgroup 8x8x8 shapes run as T2 tile conformance kernels (additive)
+
+`tests/kernel_tile_shapes.rs` runs WMMA m16n16k16, m8n32k16, m32n8k16 (f16, bf16 over f32) and m8n8k4 (f64) and Apple 8x8x8 (half, bfloat, float) through `TileLoad`/`TileMma`/`TileStore` on the oracle against a hand-written product, with A, B, C inside padded buffers (stride and origin checked, D's border sentinel must survive) and two value mutants per shape (C dropped; A at the wrong origin) that must disagree. `docs/mma-atom-coverage.md` records what the tile rules do not admit (f16 accumulator, tf32, integer and b1 WMMA) as ROADMAP candidates. `encode_float` into an F6 buffer now panics with a named reason instead of the generic unsupported-dtype text (unreachable today). Verified: `cargo test -p unpopped --test kernel_tile_shapes --test kernel_tile`, clippy clean.
+
+---
+
 ## `0.63.25` — E3 slice 2a, `soft_f128` conversions (`to_f32`, `from_f32`, `to_i256`) and 1,339 vectors against an independent reference
 
 `F128` gains `to_f32` (one rounding from the exact value, never through `f64`: a path through `f64` double-rounds a value a hair either side of an `f32` tie, which the vectors pin), `from_f32` (exact), and `to_i256(mode)` (the value rounded to an integer under any of the five rounding modes as a 256-bit two's-complement word, or `None` for a NaN, an infinity or a magnitude of 2^255 and above, for the caller to saturate). Additive: new methods, nothing existing changes, `F128` is still not a kernel dtype (`check_kernel` keeps declining it until the oracle runs it end to end: slice 2b wires Load, Store, arithmetic, compare, `Select` and `Cast` and flips that in one commit).
