@@ -2018,6 +2018,14 @@ pub enum KernelError {
         /// The rule, in words.
         why: &'static str,
     },
+    /// An allocation's `init` breaks a rule of `docs/options-u40-constant-tables.md` (the reason is named): only a `Constant` or `Private`
+    /// allocation of a `Static` extent carries one, one value per element, each representable in the element type.
+    AllocInit {
+        /// The allocation index.
+        alloc: u32,
+        /// The rule, in words.
+        why: &'static str,
+    },
     /// A tile allocation or tile statement breaks a rule (the reason is named): a `Tile` space and a tile shape agree, a tile
     /// statement names a tile of the right shape and element types, and no ordinary access reaches a tile.
     Tile {

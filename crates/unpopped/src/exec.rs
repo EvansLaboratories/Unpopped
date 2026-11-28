@@ -347,6 +347,13 @@ pub struct AllocDecl {
         with = "dyn_layout_text"
     )]
     pub dyn_layout: Option<unpopped_vocab::layout_algebra::DynLayout>,
+    /// The values a table starts with (ROADMAP U40 and U66, `docs/options-u40-constant-tables.md`): `__constant__ T t[N] = {...}`,
+    /// `static const T t[N] = {...}`. One entry per element, **by logical index**: an integer element takes its value, a float element
+    /// its **bit pattern** as a non-negative integer (so the field is `Eq` and a NaN payload is kept). `None` for every allocation
+    /// that has none, so a kernel without one serializes as before and keeps its revision hash. Only `Constant` and `Private`
+    /// allocations carry one (`check_kernel`); an emitter that does not spell it must decline by name, never emit a zeroed table.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub init: Option<Vec<i128>>,
 }
 
 /// The text form of an optional [`DynLayout`](unpopped_vocab::layout_algebra::DynLayout) in a document.
@@ -485,6 +492,7 @@ impl AllocDecl {
             align_bytes: None,
             tile: None,
             dyn_layout: None,
+            init: None,
         }
     }
 
@@ -512,6 +520,14 @@ impl AllocDecl {
     #[must_use]
     pub fn with_dyn_layout(mut self, layout: unpopped_vocab::layout_algebra::DynLayout) -> Self {
         self.dyn_layout = Some(layout);
+        self
+    }
+
+    /// The same allocation starting with `values` (one per element, by logical index: an integer's value, a float's bit pattern); see
+    /// [`AllocDecl::init`].
+    #[must_use]
+    pub fn with_init(mut self, values: Vec<i128>) -> Self {
+        self.init = Some(values);
         self
     }
 

@@ -155,6 +155,20 @@ impl AllocMem {
             init: vec![false; len],
         }
     }
+
+    /// An instance that starts with `values` (`AllocDecl::init`: an integer's value, a float's bit pattern, one per element), every
+    /// element initialized; without `values` it is [`AllocMem::new`]. `check_kernel` proved the length and the range.
+    pub(super) fn from_init(dtype: ElementKind, len: usize, values: Option<&[i128]>) -> Self {
+        let mut m = Self::new(dtype, len);
+        if let Some(values) = values {
+            let w = elem_bits(dtype) / 8;
+            for (i, v) in values.iter().enumerate().take(len) {
+                m.bytes[i * w..(i + 1) * w].copy_from_slice(&v.to_le_bytes()[..w]);
+                m.init[i] = true;
+            }
+        }
+        m
+    }
 }
 
 /// One block's `Shared` instances (indexed by allocation id), their access log, and the barrier
@@ -354,7 +368,9 @@ impl ThreadCtx<'_> {
 
     pub(super) fn mem(&self, alloc: u32, space: MemorySpace) -> Option<&AllocMem> {
         match space {
-            MemorySpace::Tensor => self.block.shared[alloc as usize].as_ref(),
+            MemorySpace::Tensor | MemorySpace::Constant => {
+                self.block.shared[alloc as usize].as_ref()
+            }
             MemorySpace::Shared => match self.peer {
                 Some(o) => self.peers.get_ref(o).shared[alloc as usize].as_ref(),
                 None => self.block.shared[alloc as usize].as_ref(),
@@ -366,7 +382,9 @@ impl ThreadCtx<'_> {
 
     pub(super) fn mem_mut(&mut self, alloc: u32, space: MemorySpace) -> Option<&mut AllocMem> {
         match space {
-            MemorySpace::Tensor => self.block.shared[alloc as usize].as_mut(),
+            MemorySpace::Tensor | MemorySpace::Constant => {
+                self.block.shared[alloc as usize].as_mut()
+            }
             MemorySpace::Shared => match self.peer {
                 Some(o) => self.peers.get(o).shared[alloc as usize].as_mut(),
                 None => self.block.shared[alloc as usize].as_mut(),

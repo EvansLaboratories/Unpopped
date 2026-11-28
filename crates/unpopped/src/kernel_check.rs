@@ -216,6 +216,7 @@ fn check_allocs(k: &KernelFn) -> Result<(), KernelError> {
             return Err(KernelError::AllocExtent { alloc });
         }
         check_alloc_layout(k, a, alloc)?;
+        check_alloc_init(a, alloc)?;
         tile::check_tile_alloc(a, alloc)?;
     }
     Ok(())
@@ -306,6 +307,54 @@ fn check_alloc_layout(
             "a swizzled allocation states an align_bytes that is a multiple of the swizzle period",
         ),
     }
+}
+
+/// The rules of `docs/options-u40-constant-tables.md` (option A) for an allocation's `init`: a `Constant` or `Private` allocation of a `Static`
+/// extent, one value per element, each representable in the element type (an integer in its range, a float's bit pattern in its width), and
+/// no layout beside it (the table is read by logical index; a layout would need its own rule, so it is refused until a row asks).
+fn check_alloc_init(a: &crate::exec::AllocDecl, alloc: u32) -> Result<(), KernelError> {
+    let bad = |why: &'static str| Err(KernelError::AllocInit { alloc, why });
+    let Some(values) = &a.init else {
+        return Ok(());
+    };
+    if !matches!(a.space, MemorySpace::Constant | MemorySpace::Private) {
+        return bad(
+            "an initial table is only on a Constant or Private allocation (no target has an initializer for Shared)",
+        );
+    }
+    let Extent::Static(n) = a.extent else {
+        return bad("an initial table needs a Static extent");
+    };
+    if values.len() != n as usize {
+        return bad("an initial table has one value per element of the extent");
+    }
+    if a.layout.is_some() || a.dyn_layout.is_some() {
+        return bad("an initial table and a layout on one allocation are not defined together");
+    }
+    let width = types::elem_size(a.elem);
+    let fits = if let Some((lo, hi)) = types::int_range(a.elem) {
+        values.iter().all(|v| (lo..=hi).contains(v))
+    } else if matches!(
+        a.elem,
+        ElementKind::F16
+            | ElementKind::Bf16
+            | ElementKind::F32
+            | ElementKind::F32Strict
+            | ElementKind::F64
+    ) {
+        let max = 1i128 << (8 * width);
+        values.iter().all(|v| (0..max).contains(v))
+    } else {
+        return bad(
+            "an initial table of an element type this checker does not hold (a sub-byte, wide or exotic element)",
+        );
+    };
+    if !fits {
+        return bad(
+            "an initial value is not representable in the element type (an integer in range, a float as its bit pattern)",
+        );
+    }
+    Ok(())
 }
 
 /// The static half of the rules of `docs/design-dynamic-layout.md` section 3 for a `dyn_layout`: the launch binds the arguments and

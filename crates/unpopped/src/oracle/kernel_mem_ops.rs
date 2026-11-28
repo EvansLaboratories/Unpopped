@@ -123,9 +123,9 @@ impl Machine<'_> {
     /// The checked element index of `index` into allocation `alloc`.
     pub(super) fn alloc_index(&self, alloc: u32, index: &ScalarExpr) -> Result<usize, KernelTrap> {
         let space = self.alloc_k.allocs[alloc as usize].space;
-        if space == MemorySpace::Constant {
+        if space == MemorySpace::Constant && self.alloc_k.allocs[alloc as usize].init.is_none() {
             return Err(KernelTrap::Unsupported(
-                "a Constant allocation (AllocDecl has no initializer, so none can be read here)",
+                "a Constant allocation with no `init` (a table with no values cannot be read here)",
             ));
         }
         let Ty::Scalar(t) = types::infer_ty_in(index, self.k.compute, &self.local_tys)
