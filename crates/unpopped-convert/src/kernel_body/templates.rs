@@ -339,6 +339,26 @@ fn local_alias_arg(
     if ident.is_empty() || !ident.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return None;
     }
+    let written = alias_written(call, ident, src)?;
+    let Some((head, member)) = written
+        .trim_start_matches("typename ")
+        .trim()
+        .rsplit_once("::")
+    else {
+        return Some(written);
+    };
+    let (class, inner) = head.trim().split_once('<')?;
+    let given: Vec<String> = inner
+        .strip_suffix('>')?
+        .split(',')
+        .map(|g| g.trim().to_string())
+        .collect();
+    let (ct, subs) = pick_class_template(class.trim(), &given, (primary, specs), src)?;
+    member_alias(ct, member.trim(), &subs, src)
+}
+
+/// The text of the `using ident = ...;` written before `call` in its enclosing function.
+fn alias_written(call: Node<'_>, ident: &str, src: &str) -> Option<String> {
     let mut p = call.parent();
     let func = loop {
         match p {
@@ -362,25 +382,25 @@ fn local_alias_arg(
         let mut c = n.walk();
         stack.extend(n.children(&mut c));
     }
-    let written = written?;
-    let Some((head, member)) = written
-        .trim_start_matches("typename ")
-        .trim()
-        .rsplit_once("::")
-    else {
-        return Some(written);
-    };
-    let (class, inner) = head.trim().split_once('<')?;
-    let given: Vec<String> = inner
-        .strip_suffix('>')?
-        .split(',')
-        .map(|g| g.trim().to_string())
-        .collect();
+    written
+}
+
+/// The class template (a partial specialisation by best fixed-argument match, else the primary) for `class<given...>` and its
+/// parameter substitutions.
+fn pick_class_template<'a>(
+    class: &str,
+    given: &[String],
+    (primary, specs): (
+        &'a HashMap<String, ClassTemplate<'a>>,
+        &'a HashMap<String, Vec<ClassTemplate<'a>>>,
+    ),
+    src: &str,
+) -> Option<(&'a ClassTemplate<'a>, Vec<(String, String)>)> {
     let mut best: Option<(&ClassTemplate<'_>, Vec<(String, String)>, usize)> = None;
-    for sp in specs.get(class.trim()).into_iter().flatten() {
+    for sp in specs.get(class).into_iter().flatten() {
         let (_, params) = params_of_decl(sp.decl, src).ok().flatten()?;
         let pattern = sp.pattern.as_deref()?;
-        if let Some((subs, fixed)) = match_pattern(&params, pattern, &given)
+        if let Some((subs, fixed)) = match_pattern(&params, pattern, given)
             && best.as_ref().is_none_or(|b| fixed > b.2)
         {
             best = Some((sp, subs, fixed));
@@ -389,11 +409,21 @@ fn local_alias_arg(
     let (ct, subs) = match best {
         Some((ct, subs, _)) => (ct, subs),
         None => {
-            let ct = primary.get(class.trim())?;
+            let ct = primary.get(class)?;
             let (_, params) = params_of_decl(ct.decl, src).ok().flatten()?;
-            (ct, bind_explicit(&params, &given)?)
+            (ct, bind_explicit(&params, given)?)
         }
     };
+    Some((ct, subs))
+}
+
+/// The type the class body gives `member` (a `using` or `typedef`), with the parameters substituted.
+fn member_alias(
+    ct: &ClassTemplate<'_>,
+    member: &str,
+    subs: &[(String, String)],
+    src: &str,
+) -> Option<String> {
     let body = ct.spec.child_by_field_name("body")?;
     let mut c = body.walk();
     for k in body.named_children(&mut c) {
@@ -406,9 +436,9 @@ fn local_alias_arg(
             _ => continue,
         };
         if let (Some(name), Some(ty)) = (name, ty)
-            && text(name, src) == member.trim()
+            && text(name, src) == member
         {
-            return Some(substitute(text(ty, src).trim(), &subs));
+            return Some(substitute(text(ty, src).trim(), subs));
         }
     }
     None
