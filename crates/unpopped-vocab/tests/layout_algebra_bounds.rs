@@ -34,6 +34,33 @@ fn need(ok: bool, what: impl FnOnce() -> String) -> Result<(), String> {
     if ok { Ok(()) } else { Err(what()) }
 }
 
+/// Every coordinate `(i, j)` of the tiling `z` of `a` by `t`: a real element (`i + t*j < e`) is the right one and in bounds; a
+/// spare coordinate exists only for an inexact tiling. Returns how many spare coordinates address past `a`'s image.
+fn check_coordinates(a: &Layout, z: &Layout, t: i64, rest: i64) -> Result<usize, String> {
+    let e = a.size();
+    let mut over = 0;
+    for i in 0..t {
+        for j in 0..rest {
+            let got = z
+                .crd2idx(&IntTuple::ints([i, j]))
+                .map_err(|x| format!("{a} / {t}: {x}"))?;
+            let lin = i + t * j;
+            if lin < e {
+                let want = a.call(lin).unwrap();
+                need(got == want && got < hi(a), || {
+                    format!("{a} / {t}: ({i},{j}) got {got} want {want}")
+                })?;
+            } else {
+                need(e % t != 0, || {
+                    format!("{a} / {t}: exact tiling has a spare coordinate ({i},{j})")
+                })?;
+                over += usize::from(got >= hi(a));
+            }
+        }
+    }
+    Ok(over)
+}
+
 fn check_zipped(f: &Divide) -> Result<Census, String> {
     let mut c = Census::default();
     for e in 1..=24i64 {
@@ -61,29 +88,7 @@ fn check_zipped(f: &Divide) -> Result<Census, String> {
                 } else {
                     c.residue += 1;
                 }
-                for i in 0..t {
-                    for j in 0..rest {
-                        let got = z
-                            .crd2idx(&IntTuple::ints([i, j]))
-                            .map_err(|x| format!("{a} / {t}: {x}"))?;
-                        let lin = i + t * j;
-                        if lin < e {
-                            // A real element: in bounds and the right one.
-                            let want = a.call(lin).unwrap();
-                            need(got == want && got < hi(&a), || {
-                                format!("{a} / {t}: ({i},{j}) got {got} want {want}")
-                            })?;
-                        } else {
-                            // Only an inexact tiling has coordinates past the extent.
-                            need(e % t != 0, || {
-                                format!("{a} / {t}: exact tiling has a spare coordinate ({i},{j})")
-                            })?;
-                            if got >= hi(&a) {
-                                c.over_reach += 1;
-                            }
-                        }
-                    }
-                }
+                c.over_reach += check_coordinates(&a, &z, t, rest)?;
             }
         }
     }
