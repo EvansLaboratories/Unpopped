@@ -37,6 +37,13 @@
 //! - [`MmaAtom::with_tf32_inputs`]: the `F32` operands are rounded to tf32 before the products (the compute rule of the
 //!   tf32 atoms; there is no tf32 `ElementKind`, PM ruling Q5).
 //!
+//! - [`MmaAtom::with_bit_op`]: the `B1` operands are combined bitwise (`and` or `xor`) and the products are counted
+//!   (`popc`) into one `I32` per `C` element: the compute rule of the 1-bit `mma.sync` atoms (PTX `.and.popc`,
+//!   `.xor.popc`; there is no statement for it, only the atom's flag).
+//! - [`MmaAtom::with_groups`]: the atom is one of `groups` independent MMAs that one subgroup runs side by side (the
+//!   Volta f16 `m8n8k4`: four 8-lane MMAs per warp). A `(group, local lane) -> subgroup lane` map says which lanes form
+//!   which group; every layout stays an `lanes`-lane layout. `groups == 1` (every other atom) is the identity.
+//!
 //! Shipped: the PTX `mma.sync.aligned` atoms `m16n8k16` (f16 and bf16 into f32), `m16n8k32` (s8 into s32) and `m16n8k8`
 //! (tf32 into f32, [`MmaAtom::nvidia_m16n8k8_tf32_f32`]).
 
@@ -64,6 +71,27 @@ pub enum MmaAtomError {
     BadFlag(&'static str),
     /// The atom already carries this flag.
     FlagTwice,
+}
+
+/// The bitwise operation of a 1-bit atom (`mma.sync ... .and.popc` / `.xor.popc`): `D[r, c] = C[r, c] +
+/// popc(A[r, :] op B[:, c])` over the `K` bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum BitOp {
+    /// `a & b`.
+    And,
+    /// `a ^ b`.
+    Xor,
+}
+
+/// Whether an operand of `m8n8k4` is read row-major or column-major (the PTX `.row`/`.col`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Major {
+    /// `.row`.
+    Row,
+    /// `.col`.
+    Col,
 }
 
 /// What an extra operand of an atom is.
@@ -134,6 +162,19 @@ pub struct MmaAtom {
     /// the products: the `m16n8k8` tf32 atom's compute rule (U57; PM ruling Q5, no `ElementKind`).
     #[serde(default)]
     tf32_inputs: bool,
+    /// The 1-bit atoms' compute rule: count the set bits of `A op B` (`None` for every other atom).
+    #[serde(default)]
+    bit_op: Option<BitOp>,
+    /// How many independent MMAs the subgroup runs side by side (1 for every atom but the Volta `m8n8k4`).
+    #[serde(default = "one")]
+    groups: u32,
+    /// `(local lane + lanes * group) -> subgroup lane`; empty when `groups == 1` (the identity).
+    #[serde(default)]
+    group_map: Modes,
+}
+
+const fn one() -> u32 {
+    1
 }
 
 impl MmaAtom {
@@ -171,6 +212,9 @@ impl MmaAtom {
             extras: Vec::new(),
             block: 0,
             tf32_inputs: false,
+            bit_op: None,
+            groups: 1,
+            group_map: Vec::new(),
         };
         for (i, what) in ["A", "B", "C"].into_iter().enumerate() {
             atom.check_bijection(i, what)?;
@@ -336,10 +380,100 @@ impl MmaAtom {
         Ok(self)
     }
 
+    /// Make this atom one of `groups` independent MMAs of one subgroup. `map` sends `local lane + lanes * group` (the
+    /// fastest mode first) to the subgroup lane; it must be a bijection onto `0..lanes * groups`.
+    ///
+    /// # Errors
+    /// [`MmaAtomError`] if the atom already has groups, `groups < 2`, or `map` is not such a bijection.
+    pub fn with_groups(mut self, groups: u32, map: &Layout) -> Result<Self, MmaAtomError> {
+        if self.groups != 1 {
+            return Err(MmaAtomError::FlagTwice);
+        }
+        if groups < 2 {
+            return Err(MmaAtomError::BadFlag("groups needs at least two groups"));
+        }
+        let total = u64::from(self.lanes) * u64::from(groups);
+        if u64::try_from(map.size()).ok() != Some(total) {
+            return Err(MmaAtomError::BadLayout(
+                "a lane map whose size is not lanes * groups",
+            ));
+        }
+        let mut seen = vec![false; total as usize];
+        for idx in 0..total {
+            let lane = map
+                .call(idx as i64)
+                .ok()
+                .and_then(|v| usize::try_from(v).ok())
+                .filter(|v| *v < seen.len())
+                .ok_or(MmaAtomError::NotABijection("the group lane map"))?;
+            if std::mem::replace(&mut seen[lane], true) {
+                return Err(MmaAtomError::NotABijection("the group lane map"));
+            }
+        }
+        self.groups = groups;
+        self.group_map = map.flat_modes();
+        Ok(self)
+    }
+
+    /// The number of independent MMAs one subgroup runs side by side (1 unless [`with_groups`](Self::with_groups)).
+    #[must_use]
+    pub const fn groups(&self) -> u32 {
+        self.groups
+    }
+
+    /// The lanes the subgroup needs for this atom: `lanes * groups`.
+    #[must_use]
+    pub const fn subgroup_lanes(&self) -> u32 {
+        self.lanes * self.groups
+    }
+
+    /// The subgroup lane that is lane `local` of group `group`, or `None` when either is out of range.
+    #[must_use]
+    pub fn group_lane(&self, group: u32, local: u32) -> Option<u32> {
+        if group >= self.groups || local >= self.lanes {
+            return None;
+        }
+        if self.groups == 1 {
+            return Some(local);
+        }
+        let leaves: Result<Vec<Layout>, _> = self
+            .group_map
+            .iter()
+            .map(|&(s, d)| Layout::leaf(s, d))
+            .collect();
+        let map = Layout::from_modes(&leaves.ok()?).ok()?;
+        let idx = i64::from(local) + i64::from(self.lanes) * i64::from(group);
+        u32::try_from(map.call(idx).ok()?).ok()
+    }
+
     /// Whether `A` and `B` are rounded to tf32 before the products.
     #[must_use]
     pub const fn tf32_inputs(&self) -> bool {
         self.tf32_inputs
+    }
+
+    /// Make this a 1-bit atom: `D = C + popc(A op B)` over the `K` bits (the compute rule of `mma.sync ... .and.popc` and
+    /// `.xor.popc`). The operands must be `B1` and the accumulator an integer.
+    ///
+    /// # Errors
+    /// [`MmaAtomError`] if the atom already has the flag, an operand is not `B1`, or the accumulator is not `I32`.
+    pub fn with_bit_op(mut self, op: BitOp) -> Result<Self, MmaAtomError> {
+        if self.bit_op.is_some() {
+            return Err(MmaAtomError::FlagTwice);
+        }
+        if self.a != ElementKind::B1 || self.b != ElementKind::B1 || self.acc != ElementKind::I32 {
+            return Err(MmaAtomError::BadFlag(
+                "a bit operation needs B1 operands and an I32 accumulator",
+            ));
+        }
+        self.bit_op = Some(op);
+        Ok(self)
+    }
+
+    /// The bitwise operation of a 1-bit atom (`None` for every other atom).
+    #[must_use]
+    pub const fn bit_op(&self) -> Option<BitOp> {
+        self.bit_op
     }
 
     fn push_extra(

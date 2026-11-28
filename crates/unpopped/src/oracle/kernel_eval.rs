@@ -29,6 +29,7 @@
 //! unfused `f32`) is therefore NOT discriminated by value, only by the shape of the IR (`tests/kernel_body_complex.rs` pins
 //! the shape). A per-operation mode for bit-exact device tests is ROADMAP U45.
 
+use super::kernel_f128::scalar_float;
 use super::kernel_mem::{AccessKind, ThreadCtx};
 pub use super::kernel_trap::KernelTrap;
 use super::wide_ops::{
@@ -282,7 +283,7 @@ impl<'a> Machine<'a> {
                                 self.locals[f.local as usize] = Some(int_val(*x, f.ty));
                             }
                             KernelArg::Float(x) if types::int_range(f.ty).is_none() => {
-                                self.locals[f.local as usize] = Some(Val::Float(*x));
+                                self.locals[f.local as usize] = Some(scalar_float(f.ty, *x));
                             }
                             _ => {
                                 return Err(KernelTrap::ArgMismatch(
@@ -301,7 +302,7 @@ impl<'a> Machine<'a> {
                 (ParamKind::Scalar { ty, local }, KernelArg::Float(v))
                     if types::int_range(*ty).is_none() =>
                 {
-                    self.locals[*local as usize] = Some(Val::Float(*v));
+                    self.locals[*local as usize] = Some(scalar_float(*ty, *v));
                 }
                 _ => {
                     return Err(KernelTrap::ArgMismatch(
@@ -593,6 +594,9 @@ impl<'a> Machine<'a> {
     }
 
     pub(super) fn truthy(&mut self, cond: &ScalarExpr) -> Result<bool, KernelTrap> {
+        if self.is_f128(cond) {
+            return self.f128_taken(cond);
+        }
         Ok(match self.eval_expr(cond)? {
             Val::Raw(b, dt) if types::int_range(dt).is_some() => raw_to_i128(b, dt) != 0,
             v => super::round_to_compute(v.f64(), self.k.compute) != 0.0,
@@ -844,7 +848,7 @@ impl<'a> Machine<'a> {
         }
     }
 
-    fn local_val(&self, i: u32) -> Val {
+    pub(super) fn local_val(&self, i: u32) -> Val {
         self.locals[i as usize].expect("check_kernel guarantees a local is set before it is read")
     }
 
@@ -853,6 +857,9 @@ impl<'a> Machine<'a> {
             .map_err(|_| KernelTrap::Unsupported("ill-typed expression"))?
         {
             Ty::Packed(..) => Err(KernelTrap::Unsupported("packed value")),
+            // a binary128 value (`F128`, ROADMAP E3) is computed by the soft binary128, never in `f64`; a `Cast` out of one is too
+            Ty::Scalar(ElementKind::F128) => self.eval_f128(e),
+            Ty::Scalar(_) if self.is_f128_source_cast(e) => self.f128_cast_out(e),
             Ty::Scalar(t) if types::is_subbyte_int(t) => {
                 Ok(Val::Raw((self.eval_subbyte(e, t)? as u128) & 0xf, t))
             }
@@ -909,6 +916,8 @@ impl<'a> Machine<'a> {
             ScalarExpr::ConstInt(v, _) => wrap(t, i128::from(*v)),
             ScalarExpr::Local(i) => self.int_local(*i)?,
             ScalarExpr::Exec(id) => wrap(t, self.exec_val(*id)?),
+            // an F128 source: rounded under the mode, saturated into the integer range, a NaN to 0 (`kernel_f128`)
+            ScalarExpr::Cast(x, spec) if self.is_f128(x) => self.f128_cast_to_int(x, spec)?,
             // a wide source: the conversion is `wide_ops::wide_cast` (wrap or clamp), the result a narrow integer
             ScalarExpr::Cast(x, spec) if self.wide_ty_of(x).is_some() => {
                 let from = self.wide_ty_of(x).expect("guarded");
@@ -984,6 +993,9 @@ impl<'a> Machine<'a> {
 
     /// A comparison of two integer operands: `1` or `0`.
     fn eval_cmp(&self, op: BinaryOp, a: &ScalarExpr, b: &ScalarExpr) -> Result<i128, KernelTrap> {
+        if self.is_f128(a) {
+            return Ok(i128::from(self.f128_cmp(op, a, b)?));
+        }
         if self.wide_ty_of(a).is_some() {
             let ((x, t), (y, _)) = (self.wide_operand(a)?, self.wide_operand(b)?);
             return Ok(i128::from(wide_compare(op, x, y, t).expect("a comparison")));
@@ -1110,7 +1122,7 @@ impl<'a> Machine<'a> {
     }
 
     /// An integer operand evaluated at its own inferred type.
-    fn eval_operand_int(&self, e: &ScalarExpr) -> Result<i128, KernelTrap> {
+    pub(super) fn eval_operand_int(&self, e: &ScalarExpr) -> Result<i128, KernelTrap> {
         match types::infer_ty_in(e, self.k.compute, &self.local_tys) {
             Ok(Ty::Scalar(t)) if types::is_subbyte_int(t) => self.eval_subbyte(e, t),
             Ok(Ty::Scalar(t)) if types::int_range(t).is_some() => self.eval_int(e, t),

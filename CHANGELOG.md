@@ -15,6 +15,154 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.27` — tools, `tools/gate-locked.sh` is first come first served (a ticket queue), with `--status`
+
+The gate lock (`C:/cb/gate.lock`, an atomic `mkdir`) was won by whoever polled first after a release (every 30 s), so a waiter could starve for hours behind lanes that polled better (seven mma gates, leaves and E3 queued behind one lock, 2026-11-28). A caller now takes a ticket (`mkdir C:/cb/gate-queue/<epoch ms>-<pid>-<worktree>`) and only the lowest live ticket may try the lock; a ticket whose pid is dead or whose heartbeat is older than 3 h is removed by the next poller and logged; the ticket is dropped on taking the lock and on exit, interrupt and termination; an unusable queue directory means no queue (never blocked); `tools/gate-locked.sh --status` prints the holder and the numbered queue. The lock itself is unchanged, so a worktree whose copy of the script predates this change still races for the lock and can overtake a ticketed waiter: the fix reaches a lane when it has merged `main`. Verified by `tools/test-gate.sh` (the older of two waiters runs first although the newer polls far more often; three waiters in order; dead and heartbeat-stale tickets; a live older ticket holds the line; a killed waiter leaves no ticket; a dead holder; an unusable queue directory; `--status`), with a take-any-ticket mutant the same assertions catch. Tools and docs only: no code path of the crates.
+
+---
+
+## `0.63.26` — E3 slice 2b, `F128` (binary128) is a kernel dtype the oracle computes
+
+`check_kernel` accepts a kernel that declares `F128` and the oracle runs it with `soft_f128` (`oracle/kernel_f128.rs`; the value is `Val::Raw(bits, F128)`, so a `Load`, a `Store` and a local copy move the 16 bytes verbatim): `Add`, `Sub`, `Mul`, `Div` (one rounding to nearest even each), `Unary(Neg)`, `Unary(Abs)`, the six comparisons (a result of `1` or `0` in `F128`; a NaN is unordered, `+0 == -0`), `Select` (an `F128` condition is taken when it is not zero, a NaN included), and `Cast` to and from `F32`, `F32Strict`, `F64` and the integers (to a float: nearest-even only, `ClampFinite` stops an overflow at the largest finite value; to an integer: any of the five rounding modes, `Saturation::Clamp`, a NaN is 0; from an integer: exact, rounded to nearest even beyond 113 bits). **Every other node over an `F128` operand is refused by name** (`TypeError::F128Operation`: `Fma`, `Sqrt`, the other unary and binary operators, `Qualified`, `Bitcast`, packing, a `Select` whose arms are not `F128`), a `Cast` to the 16-bit and 8-bit floats, the MX elements or a wide integer is `IllegalCast`, and a collective, an atomic or a raw access over an `F128` is refused by the existing type rules: nothing outside the computed set reaches the oracle (the F6 lesson). A scalar `F128` argument bound from an `f64` is exact. The one switch is atomic: `DtypeNotComputed` drops `F128` and the pinned set test (`the_declined_set_is_exactly_the_two_fp8_rows`) changes in the same change; **additive**: a refusal loosened, one new `TypeError` case (`non_exhaustive`). `unpopped-cpu-c` declines an `F128` kernel by name (`kernel_f128_declines.rs`); `docs/emitter-migration-b1.md` carries the note every other emitter needs. The binary128 is integer words (not double-double, NOT CLEARED); NaN is the canonical quiet NaN. Verified by `tests/kernel_f128.rs` (every operation of the 1,339 vectors of the independent Python reference through a kernel, the comparisons and NaN/zero cases, copy, neg/abs, select, every cast direction and mode, saturation, a scalar argument; **UNVERIFIED against a third-party binary128 library**), `tests/kernel_f128_refusals.rs` (each refusal beside a control), `tests/union_batch1_dtypes.rs` (the pinned set), and 21 seeded mutants caught (swapped operands, a cmp swapped, NaN handling, select arms, neg/abs, the condition, signed/unsigned integer sources, each clamp, the NaN-to-integer rule, and the checker admitting `Fma`, a mixed `Select` or a directed narrowing).
+
+---
+
+## `0.63.25` — E3 slice 2a, `soft_f128` conversions (`to_f32`, `from_f32`, `to_i256`) and 1,339 vectors against an independent reference
+
+`F128` gains `to_f32` (one rounding from the exact value, never through `f64`: a path through `f64` double-rounds a value a hair either side of an `f32` tie, which the vectors pin), `from_f32` (exact), and `to_i256(mode)` (the value rounded to an integer under any of the five rounding modes as a 256-bit two's-complement word, or `None` for a NaN, an infinity or a magnitude of 2^255 and above, for the caller to saturate). Additive: new methods, nothing existing changes, `F128` is still not a kernel dtype (`check_kernel` keeps declining it until the oracle runs it end to end: slice 2b wires Load, Store, arithmetic, compare, `Select` and `Cast` and flips that in one commit).
+
+`tests/soft_f128_vectors.rs` checks every operation against `tests/data/soft_f128_vectors.txt`, produced by `tools/gen_f128_vectors.py`, a separate implementation (exact rational arithmetic, round to nearest even, sharing no code with `soft_f128.rs`): add, sub, mul and div over every pair of 10 specials (zeros, subnormals, the largest finite value, infinities, NaN) and 90 seeded random pairs from every binade region (ties and near-cancellation included), `tof64`, `tof32` (with 80 rows a hair either side of an `f32` tie), `fromf64`, `fromf32` and the five integer roundings. **Provenance:** the generator and the data are the unpopped lane's own work (no third-party code and no copied vectors; the Python standard library only, `fractions`, with its own seeded splitmix64 generator: the `random` module is not used), under the repository's licence (`MIT OR Apache-2.0`, stated in the script). **UNVERIFIED against a third-party binary128 library** (none is installed here): the check is two independent implementations agreeing. Both agreed on the first run of the arithmetic rows; the 26 first differences in the conversion rows were the generator losing the sign of a zero, fixed there. 9 seeded mutants caught (the ties-away mutant needed 12 exact half-integer rows and 8 either side of one) (a swapped or un-negated subtraction, the tie rule rounding up or down, the far-operand cutoff, a zero-sum sign, the `f32` path through `f64`, floor and ceil swapped, ties-away as ties-even, a sub-half remainder, a flipped `from_f32` sign).
+
+---
+
+## `0.63.24` — additive: oracle: F6E2M3 and F6E3M2 are held in an 8-bit container and no longer declined by `check_kernel`; the e3m2/e2m3 mma atoms run
+
+The oracle stores an F6 element as one byte, the six value bits low and the two high bits zero (PTX ISA 9.5 s5.2.3 p. 43; `docs/design-f6-storage.md`): a read takes the low six bits (the local holds the canonical element, so a same-type copy of a byte with garbage padding stores zero there too), every write stores zero above them. `types::elem_size` gains the arm (`elem_bits` stays 8, not sub-byte); `check_declared_dtypes` declines exactly `F128`, `F8E3M4`, `F8UE4M3` again (the `DtypeNotComputed` rustdoc and `tests/union_batch1_dtypes.rs` follow). `tests/f6_storage.rs`: every code of both formats round-trips through a `Private` fragment and a buffer, clamps at the largest finite value, and pins both padding rules, with `F4E2M1` as the control. The `nvidia_m16n8k32_{e3m2,e2m3}_f32` atoms now run in the oracle. Single source (PTX). Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No new `Stmt`, `ScalarExpr` or `ElementKind`.
+
+Additive: a kernel `check_kernel` refused with `DtypeNotComputed` for declaring an F6 type (the 0.63.5 hotfix) is now accepted and runs; nothing that was accepted changes behaviour, and no public item is removed or changed.
+
+---
+
+## `0.63.23` — U68, Fp8E4M3FN and Fp8E5M2 are kernel-layer Cast endpoints
+
+`types::is_cast_float_endpoint` lists the two OCP FP8 formats and `float_format` gives `Fp8E5M2` its `(5, 2)` layout, so a kernel `Cast` to and from `F32` (and the other float and integer endpoints) is defined: `Fp8E5M2` goes through the IEEE-shaped encoder (bias 15, infinity and NaN, largest finite `0x7B` = 57344; `ClampFinite` stops at 57344 instead of the infinity), and `Fp8E4M3FN` through a new `cast_ref::encode_e4m3fn` (bias 7, no infinity, one NaN pattern per sign `S.1111.111`, largest finite `0x7E` = 448, smallest subnormal `0x01` = 2^-9). For `Fp8E4M3FN`, `Wrap` makes an overflow (an infinity included) the NaN of its sign, `ClampFinite` the largest finite value of its sign, and a directed rounding mode pointing away from the overflow stops at 448; a NaN keeps its sign. **The IR rule, UNVERIFIED against a vendor conversion** (a vendor instruction that differs is the vendor's to declare). A kernel could already load and store 8-bit float buffers byte for byte; only the `Cast` was `IllegalCast`. Additive: a refusal loosened. `unpopped-cpu-c` has no spelling and declines a kernel with such a `Cast` by name. Verified by `tests/kernel_fp8_cast.rs` (hand-worked codes, all 256 codes decoded by the oracle's own independent FP8 decoder and re-encoded by `cast_ref`, ties-to-even, overflow, the directed modes; 5 seeded mutants caught) and cpu-c's `kernel_fp8_cast_declines.rs`.
+
+---
+
+## `0.63.22` — additive: NVIDIA mma.sync 1-bit atoms m8n8k128, m16n8k128, m16n8k256 with `.and.popc` / `.xor.popc` (U7 theme 3)
+
+`MmaAtom::nvidia_{m8n8k128,m16n8k128,m16n8k256}_b1_s32(BitOp)` as data, plus the additive `BitOp { And, Xor }` and `MmaAtom::with_bit_op` / `bit_op()` (`None` for every existing atom, `MmaAtom` is `non_exhaustive`); the oracle counts the set bits of `A op B` into one s32 per C element and the atoms run in it. Layouts from PTX ISA 9.5 sections 9.7.16.5.5, 9.7.16.5.12, 9.7.16.5.13 (single source). Patent: outside as read for the b1 mma atom (US10452398B2 cl 1: per-field vector popcount decoder, packed destination register: the atom accumulates popc into one s32 per C element); the packed/vector popc statement stays held; findings not advice. Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+---
+
+## `0.63.21` — docs: design note `docs/design-f6-storage.md` for oracle storage of F6E2M3 and F6E3M2 (8-bit container)
+
+Docs only. The oracle has no container for a 6-bit float, which is why `check_kernel` declines them by name and the e3m2/e2m3 `mma.sync` atoms are placement-only. Proposal: one element per byte, the six value bits low and the two high bits zero, as PTX ISA 9.5 s5.2.3 (p. 43) and the m16n8k32 fragment tables (Figures 91, 93-95) hold them; packed 6-bit stays a bulk-copy format. Single source. Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.
+
+---
+
+## `0.63.20` — docs: design note for a layout whose modes may be kernel scalar parameters (CuTe 3 and 66)
+
+`docs/design-dynamic-layout.md`: a `DynLayout` bound to a static `Layout` at launch and checked by the existing enumerating checker; design only, no code, no patent read claimed.
+
+---
+
+## `0.63.19` — tests: restore the oracle runs of the unsigned and mixed 8-bit k32 atoms; pin the 4-bit nibble order outside the harness
+
+Review findings (Pip, relayed by pm-kernels): the fold lost `agrees(&atom, k32)` for the u8, s8/u8 and u8/s8 `m16n8k32` atoms, so they were placed but no longer run; it is restored, and each loop of `tests/mma_atoms_8bit.rs` now asserts that every atom it names was run (`support::ran`). New `tests/mma_nibble_order.rs` fixes the 4-bit packing order on the byte `0x21` (element 0 is the low nibble) through the oracle's own load for I4, U4 and E2M1, and checks the harness packs the same bytes. Tests and harness only.
+
+---
+
+## `0.63.18` — additive: `MmaAtom::with_groups` and the Volta f16 m8n8k4 atoms (four independent 8x8x4 MMAs per warp; U70)
+
+`MmaAtom` gains `groups` (1 for every existing atom) and a `(group, local lane) -> subgroup lane` map (`with_groups`, `groups()`, `subgroup_lanes()`, `group_lane()`; `non_exhaustive`, serde default), `check_mma` requires a launch subgroup of `lanes * groups`, and the oracle runs each group from its own lanes only. Constructors `MmaAtom::nvidia_m8n8k4_f16(Major, Major, acc)` with `Major { Row, Col }` per operand and an f16 or f32 accumulator (the oracle rounds a half-width accumulator once). The cpu-c emitter refuses a grouped atom by name. Layouts from PTX ISA 9.5 section 9.7.16.5.1 (Figures 49-55, single source); design `docs/design-mma-groups.md` (option A accepted by `unpopped`). Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.
+
+---
+
+## `0.63.17` — Pip's review of #498: a scheduled callee is pinned, a partial ScheduleSpec loads, and every changelog fragment is checked
+
+`tests/kernel_schedule_declines.rs` gains a test that a called function (not the entry) that sets a schedule field is declined by name by `lower_module` (the entry-only loop mutant fails it; the three earlier tests passed it). `ScheduleSpec` loads from a document that states only the fields it sets (`#[serde(default)]`, additive: the unstated fields are the defaults), pinned with a wrong-type control. `tests/changelog_fragments.rs` checks every `changelog.d/*.md` against the rule of `tools/stamp-version.py` (a first line `kind: ...`, a `---` line, a non-empty entry), with the broken fixtures and an in-memory scan as controls, so a malformed fragment fails on the PR that adds it, not at the stamp. No behaviour change beyond the loading.
+
+---
+
+## `0.63.16` — Added: shared subnormal probes for measuring a device's exactness (`unpopped::exactness::probe::subnormal_probes`) (U59 slice 2)
+
+Non-breaking and additive. Unpopped never probes a device; an emitter lane's harness does. `subnormal_probes(dtype)` (`F32`, `F16`, `Bf16`) returns the operand sets such a harness should run, each with the bits a subnormal-preserving device must give: a subnormal **operand** with a subnormal result and with a **normal** result, a subnormal result from normal operands, subnormal add, **two-rounding** `a * b + c` (`ProbeOp::MulAdd`) and **fused** `fma` (`ProbeOp::Fma`) on the same operands (they differ: `s * 0.5 + s` is `s` unfused and `2 s` fused, so a harness must run the one it means), a product that underflows to a subnormal and is added back, and infinity, NaN and plain-normal controls so a mismatch there is told apart from a flush. Wanted by vulkane after its Metal measurement (f32 and bf16 flush subnormals, f16 preserves) found its shared pairs never reached a subnormal. Expectations come from exact `f64` arithmetic and one rounding, and `tests/exactness_probes.rs` checks each against the host's own arithmetic (native `f32`, the `half` crate) and that a simulated flushing device disagrees with every subnormal probe and no control. Rides after U59 slice 1 (`kernel_key`, `for_kernel`, `admit_kernel`).
+
+---
+
+## `0.63.15` — docs: design note `docs/design-mma-groups.md` for a `groups` field on `MmaAtom` (ROADMAP U70, f16 `m8n8k4`)
+
+Docs only. Four independent 8-lane MMAs per warp (PTX ISA 9.5 section 9.7.16.5.1, Figures 49-55 cited by figure, text formulas read; single source); option A accepted by `unpopped`: additive `groups` plus a `(group, local lane) -> lane` map on `MmaAtom`, `MmaAtom` stays free-form. Applies 519 B; US12314717B2 wrapper read 2026-11-27; not a clearance; no attorney; findings not advice.
+
+---
+
+## `0.63.14` — Docs: ROADMAP rows that waited for a consumer are re-dispositioned as unblocked and ranked lower (PM, 2026-11-26); U3 R2 to R4 get rows
+
+Issue #114 (IR union I3) was the only issue labelled blocked-on:consumer; it and the ROADMAP rows U2b, U15, U21, U24, U36, E3 and I7 that said "waits for a consumer", "parked: no consumer" or "when a consumer asks" now carry a dated re-disposition: unblocked work, ranked lower, never a reason to idle (CireSnave 2026-10-24, 2026-11-11, 2026-11-19). New rows U65 (ProgramModel / BlockSpmd lowering) and U66 (Constant allocation initializers); U21 records the patent-read gate (no chart exists) and how a Texture space and the plan's Tile space merge. Docs only, no gate.
+
+rockfish does not see the stop-before-arm problem (its hip-emit scans the body only). Docs only, no gate.
+
+---
+
+## `0.63.13` — additive: NVIDIA block-scaled mma.sync atoms m16n8k32 mxf8f6f4 and m16n8k64 mxf4nvf4 (U7 theme 3)
+
+Two `MmaAtom` constructor families as data (`mma_blockscaled.rs`): `nvidia_m16n8k32_mxf8f6f4_f32(a, b)` (any of e4m3, e5m2, e3m2, e2m3, e2m1; ue8m0 scale per 32 k) and `nvidia_m16n8k64_mxf4nvf4_f32(sf, block)` (e2m1; ue8m0 per 16 or 32, ue4m3 per 16), f32 accumulator, scale operands via `with_block_scale`. SINGLE SOURCE: CUTLASS `mma_traits_sm120.hpp` and `mma_sm120.hpp` at `NVIDIA/cutlass` commit 5c179ede (BSD-3-Clause, notice kept in the module doc, sha256 recorded there); the PTX ISA 9.5 scale figures (46-48, section 9.7.16.3) are images and were not read, so the scale lane layout is not confirmed against them (the text agrees on which lanes supply SF_A and SF_B). Selectors fixed at 0. Placement-tested only. Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+Three `MmaAtom` constructors as data (`mma_sm80_8bit.rs`): `nvidia_m16n8k32_{e3m2,e2m3,e2m1}_f32`, f32 accumulator. PTX ISA 9.5 section 9.7.16.5.10 (Figures 91, 93, 94, 95, pp. 572-576): one fragment table serves them and the 8-bit types; shape introduced in PTX ISA 8.7. Single source (CUTLASS not read). The e2m1 atom runs in the oracle; e3m2 and e2m3 are placement-tested only (the oracle has no element size for F6: `types.rs` "unsupported dtype ... (v1)"). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+Four `MmaAtom` constructors as data (`mma_fp8_k16.rs`): `nvidia_m16n8k16_{e4m3,e5m2,e4m3_e5m2,e5m2_e4m3}_f32`, f32 accumulator (the f16 accumulator form is not built). Layouts from the public PTX ISA 9.5 section 9.7.16.5.9 (Figure 87 p. 568, Figure 88 p. 570, Figure 89 p. 571; the fp8 types share the u8/s8 tables); single source (CUTLASS not read). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+Three `MmaAtom` constructors as data (`mma_int4.rs`): `nvidia_m8n8k32_int4_s32`, `nvidia_m16n8k32_int4_s32`, `nvidia_m16n8k64_int4_s32`, each taking the A and B element (`I4` or `U4`). Layouts from the public PTX ISA 9.5 sections 9.7.16.5.4 (pp. 543-545), 9.7.16.5.10 (pp. 571-575) and 9.7.16.5.11 (pp. 578-582); single source (CUTLASS not read). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. Tested by placement against the PTX `(row, col)` formulas only: the oracle cannot run a 4-bit fragment (a kernel may not Store a sub-byte element). No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+Four `MmaAtom` constructors as data (`mma_sm80_8bit.rs`): `nvidia_m16n8k16_{s8,u8,s8_u8,u8_s8}_s32`. Layouts from the public PTX ISA 9.5 section 9.7.16.5.9 (Figure 87 p. 568, Figure 88 p. 570, Figure 89 p. 571); single source (CUTLASS not read for this shape). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+Four `MmaAtom` constructors as data (`mma_m8n8.rs`): `nvidia_m8n8k16_{s8,u8,s8_u8,u8_s8}_s32`. Layouts from the public PTX ISA 9.5 section 9.7.16.5.3 (A Figure 59 pp. 539-540, B Figure 60 pp. 540-541, C Figure 61 p. 542); single source (CUTLASS not re-read). Patent column US12314717B2: applies 519 B; wrapper read 2026-11-27; not a clearance; no attorney; findings not advice. No `Stmt`, `ScalarExpr` or `ElementKind` change.
+
+---
+
+## `0.63.12` — additive: tests and docs: WMMA and Apple 8x8 shapes as T2 tile products, docs/mma-atom-coverage.md (U7 theme 3)
+
+`tests/kernel_tile_mma_shapes.rs` runs the WMMA `m16n16k16`, `m8n32k16`, `m32n8k16` (f16, bf16 into f32), the WMMA f64 `m8n8k4` and the Apple 8x8x8 shapes (half, bfloat, float into float) as `TileLoad`/`TileMma`/`TileStore` over `MemorySpace::Tile` against a triple loop. PTX ISA 9.5 section 9.7.16.1 Table 44 p. 510 and 9.7.16.4.1 (layout unspecified); MSL 4.1 section 2.4 p. 38 and 6.8. `docs/mma-atom-coverage.md` records every dense `mma` shape as done, TODO, blocked or held. No source change.
+
+---
+
+## `0.63.11` — docs, the participant-forms map (which shipped statements name participants) and the float collective NaN and signed-zero note
+
+`docs/note-participant-forms-map.md` maps the shipped statements against the participant-naming forms of the barrier hold, read-only: shipped `Named`/`NamedArrive` `count` is stated as a count of arriving threads with a trap on disagreement (NOT CLEARED, unchanged; the PM wording of 2026-11-27), and every held form is listed. `docs/design-float-collective-nan.md` records the NaN and signed-zero rules of the float `Max`/`Min`/`Sum` collectives, the per-target measurement duty (vulkane#189), the conformance vector, and that `MaxNum`/`MinNum` are not admitted. No code change.
+
+---
+
+## `0.63.10` — docs, the tile and schedule plan section 9 (G-T2/G-T3 gate text), the T2 transpose hold, ROADMAP U69 to U71, a cute row 43 correction
+
+`docs/design-tile-and-schedule-plan.md` section 9 carries the board 519 B text verbatim for G-T2 and the G-T3 retile lift (US20210064987A1 only, not a clearance of other retile art); `docs/design-opaque-tile-mma.md` marks the `transpose` fields held (US12405770B2 claims 8 and 15 NEEDS MORE); ROADMAP gains U69 (a dynamic-mode layout, design note first, owner unpopped-leaves), U70 (the f16 m8n8k4 atom: four MMAs per warp, scheduled, declined by name in the interim) and U71 (`Layout::composition_within`, the checked composition); `docs/ir-union-evidence/rescore-2026-11-25/cute.md` row 43 no longer says the tensor-map family claims were not read (read since: the sweep section, claims only, not a clearance). No code change.
+
+---
+
+## `0.63.9` — a sub-byte (`I4`, `U4`) `Store` into a `Private` allocation is allowed (ROADMAP U9b, the narrow rule for MMA fragments of 4-bit elements)
+
+`check_kernel` refused every `Store` of a sub-byte element (the U9b ruling of 2026-11-05: a read-modify-write of a byte two threads share). That reason does not reach a `Private` allocation, which is one thread's own storage, so a `Store` of an `I4` or `U4` into a `Place::Alloc` of a `Private` allocation now passes, and the oracle writes the nibble without disturbing its neighbour. A `Store` into a `Shared` allocation or a global buffer stays refused (`TypeMismatch`, "outside a Private allocation"; the text still says such buffers are read-only in kernels). This is what an `MmaAtom` fragment of 4-bit elements needs to run in the oracle. Additive: a refusal loosened, nothing else changes. Verified by `tests/kernel_subbyte_private_store.rs` (wrapping, and the neighbour in the same byte undisturbed, for `I4` and `U4`; the `Shared` refusal as the control).
+
+---
+
+## `0.63.8` — docs: PATENT-SWEEP G-T2 addendum 7, US12314717B2 claim 25 element-size relation and the open construction question
+
+Docs only; no earlier verdict edited.
+
+---
+
+## `0.63.7` — C-recipes for Triton rows 2, 13 and 26 (tests only)
+
+New `crates/unpopped/tests/kernel_c_recipes_triton.rs` (7 tests, all PASS): Triton row 2 (block tensors: `arange`, `full`, `flip`, `cat` of a half with a flipped half, `interleave`/`join`, `split`), row 13 (`tl.gather` over a register tile: a `Private` array of 8 read at a computed index, per row) and row 26 (`tl.swizzle2d` on a 6x4 grid with group size 4, including the shortened last group, checked to be a permutation). Each is layout and index arithmetic over `Shared`/`Private` allocations: no statement, no `Tile` allocation, no tile-granular operation. Each has a hand-written reference and a mutant that changes a value (not a trap): no flip, a cat that does not flip, swapped interleave operands, odd-first split, an arange from 1, an index read one column late, a last group that is not shortened. Rows 10 to 12 (descriptors, TMA) are not recipes. No source change.
+
+---
+
+## `0.63.6` — layout algebra composition bounds tests (tests only)
+
+New `crates/unpopped-vocab/tests/layout_algebra_composition_bounds.rs`: exhaustive over `A = e:d` and `B = t:s` (extent 1..=12, stride 1..=3; extent 1..=14, stride 1..=14), a composition whose right operand stays inside `A`'s extent is accepted, reads the right element, and stays in `A`'s image. A right operand that reaches past `size(A)` is never refused: it reads `A` extended at its last stride and addresses offsets `A` does not hold (`1:1 o 2:1` reaches offset 1 of a one-element operand). That is pinned as behaviour by a test, not endorsed as safe and not fixed; the unpopped lane ruled 2026-11-28 that composition keeps the CuTe reading (the left's last mode extended) and that unpopped-leaves adds an additive checked composition refusing a right operand past `size(A)`; this pin stays as behaviour and the checked function joins the sweep when it merges. The checker runs against the real operation and a broken one (ignores `A`'s stride) and must fail on the broken one. No source change.
+
+---
+
 ## `0.63.5` — a kernel that declares `F6E2M3` or `F6E3M2` is refused by name (the oracle panicked on it, since 0.34.3); the `DtypeNotComputed` set stated once and pinned
 
 The rustdoc of `KernelError::DtypeNotComputed` and `types::is_union_batch1`, the header of `tests/union_batch1_dtypes.rs` and `docs/design-union-batch1-consumer.md` still said all seven union-batch-1 dtypes are declined; since 0.61.3 (E2) `check_kernel` computes `I128`, `U128`, `I256` and `U256` (reported by bonefish and vulkane). The text now states the real set, and a new test, `the_declined_set_is_exactly_f128_and_the_two_fp8_rows`, pins it so a change to the set flips a test. `docs/emitter-migration-b1.md` gains a 0.62 note: an emitter that does not lower a wide integer must refuse it by name before emitting, and the carry-flag emit hold (Intel US11531542B2) stands. No behaviour change.

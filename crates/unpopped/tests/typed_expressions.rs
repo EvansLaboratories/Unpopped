@@ -122,7 +122,8 @@ fn the_conversion_table_accepts_what_it_claims() {
 
 #[test]
 fn endpoints_outside_the_table_are_refused_by_name() {
-    for bad in [ElementKind::Fp8E4M3FN, ElementKind::Bool] {
+    // `Fp8E4M3FN` and `Fp8E5M2` left this list when they became cast endpoints (ROADMAP U68)
+    for bad in [ElementKind::Complex64, ElementKind::Bool] {
         match check_cast(F32, cast(bad)) {
             Err(TypeError::IllegalCast { why, .. }) => {
                 assert!(why.contains("outside"), "the reason must say why: {why}");

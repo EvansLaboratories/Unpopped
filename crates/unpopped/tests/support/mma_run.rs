@@ -10,7 +10,7 @@ use unpopped::mma::MmaAtom;
 use unpopped::oracle::TypedBuffer;
 use unpopped::oracle::kernel_eval::{KernelArg, KernelTrap};
 use unpopped::oracle::kernel_launch::run_launch;
-use unpopped_vocab::ElementKind::{self, Bf16, F16, F32, F64, I8, I32, U8, U32};
+use unpopped_vocab::ElementKind::{self, B1, Bf16, F16, F32, F64, I4, I8, I32, U4, U8, U32};
 use unpopped_vocab::{Fp8E4M3FN, Fp8E5M2};
 
 /// `(row, col)` of value `i` of `lane` for operand 0/1/2 = A/B/C.
@@ -114,15 +114,61 @@ pub(crate) fn value(ty: ElementKind, seed: u32, i: u32) -> f64 {
     match ty {
         I8 => f64::from(h % 256) - 128.0,
         U8 => f64::from(h % 256),
+        B1 => f64::from(h % 2),
         // fractions on each fp8 lattice (3 and 2 mantissa bits), so a decode of the wrong format changes the answer
         ElementKind::Fp8E4M3FN => f64::from(h % 31) / 8.0 - 1.875,
         ElementKind::Fp8E5M2 => f64::from(h % 17) / 4.0 - 2.0,
+        ElementKind::F4E2M1 | ElementKind::F6E2M3 | ElementKind::F6E3M2 => {
+            let (e, m) = mx_format(ty).expect("an MX element");
+            mx_value(h % (1 << (1 + e + m)), e, m)
+        }
+        // the full 4-bit ranges, so a signed/unsigned mix-up changes the answer
+        I4 => f64::from(h % 16) - 8.0,
+        U4 => f64::from(h % 16),
         _ => f64::from(h % 9) - 4.0,
     }
 }
 
-fn encode(ty: ElementKind, x: f64) -> Vec<u8> {
+/// `(exponent bits, mantissa bits)` of an OCP MX element format, or `None`.
+fn mx_format(ty: ElementKind) -> Option<(u32, u32)> {
     match ty {
+        ElementKind::F4E2M1 => Some((2, 1)),
+        ElementKind::F6E2M3 => Some((2, 3)),
+        ElementKind::F6E3M2 => Some((3, 2)),
+        _ => None,
+    }
+}
+
+/// Value of the OCP MX pattern `bits` (sign, `e` exponent bits, `m` mantissa bits; no infinities or NaN), from the OCP MX
+/// definition (written here, not taken from `cast_ref`).
+fn mx_value(bits: u32, e: u32, m: u32) -> f64 {
+    let (exp, man) = ((bits >> m) & ((1 << e) - 1), bits & ((1 << m) - 1));
+    let bias = (1i32 << (e - 1)) - 1;
+    let mag = if exp == 0 {
+        f64::from(man) * 2f64.powi(1 - bias - m as i32)
+    } else {
+        (1.0 + f64::from(man) / f64::from(1u32 << m)) * 2f64.powi(exp as i32 - bias)
+    };
+    if (bits >> (e + m)) & 1 == 1 {
+        -mag
+    } else {
+        mag
+    }
+}
+
+fn encode(ty: ElementKind, x: f64) -> Vec<u8> {
+    if matches!(ty, I4 | U4) {
+        return vec![(x as i32 & 0xF) as u8];
+    }
+    if let Some((e, m)) = mx_format(ty) {
+        // the code whose value is `x` (negative zero is encoded as the positive-zero code); a 6-bit code is one byte, the
+        // two high bits zero (the oracle's container), a 4-bit code is packed two to a byte by `buffer`
+        let sign = 1 << (e + m);
+        let bits = (0..2 * sign).find(|&b| mx_value(b, e, m) == x && !(x == 0.0 && b == sign));
+        return vec![bits.unwrap_or_else(|| panic!("{x} is not a {ty:?} value")) as u8];
+    }
+    match ty {
+        B1 => vec![x as u8 & 1],
         I8 => (x as i8).to_le_bytes().to_vec(),
         U8 => (x as u8).to_le_bytes().to_vec(),
         I32 => (x as i32).to_le_bytes().to_vec(),
@@ -136,7 +182,7 @@ fn encode(ty: ElementKind, x: f64) -> Vec<u8> {
     }
 }
 
-fn decode(ty: ElementKind, b: &[u8]) -> f64 {
+pub(crate) fn decode(ty: ElementKind, b: &[u8]) -> f64 {
     match ty {
         I32 => f64::from(i32::from_le_bytes(b.try_into().unwrap())),
         F32 => f64::from(f32::from_le_bytes(b.try_into().unwrap())),
@@ -145,7 +191,28 @@ fn decode(ty: ElementKind, b: &[u8]) -> f64 {
     }
 }
 
-fn buffer(ty: ElementKind, xs: &[f64]) -> TypedBuffer {
+pub(crate) fn buffer(ty: ElementKind, xs: &[f64]) -> TypedBuffer {
+    if ty == B1 {
+        // eight to a byte, lowest bit first (the oracle's sub-byte packing)
+        let bytes: Vec<u8> = xs
+            .chunks(8)
+            .map(|c| {
+                c.iter()
+                    .enumerate()
+                    .fold(0u8, |b, (i, &x)| b | ((x as u8 & 1) << i))
+            })
+            .collect();
+        return TypedBuffer::from_packed_bytes(ty, &[xs.len() as i64], &bytes);
+    }
+    if matches!(ty, ElementKind::F4E2M1 | I4 | U4) {
+        // two to a byte, low nibble first (the oracle's sub-byte packing)
+        let nib: Vec<u8> = xs.iter().map(|&x| encode(ty, x)[0]).collect();
+        let bytes: Vec<u8> = nib
+            .chunks(2)
+            .map(|p| p[0] | (p.get(1).copied().unwrap_or(0) << 4))
+            .collect();
+        return TypedBuffer::from_packed_bytes(ty, &[xs.len() as i64], &bytes);
+    }
     let bytes = xs.iter().flat_map(|&x| encode(ty, x)).collect();
     TypedBuffer::new(ty, vec![xs.len() as i64], vec![1], bytes)
 }
@@ -216,8 +283,18 @@ pub(crate) fn run(atom: &MmaAtom, table: Table, l: &Logical) -> Result<Vec<f64>,
         .collect())
 }
 
+/// The names of the atoms `agrees` has run in this test binary, so a test can assert that every atom it claims to cover
+/// was actually run (a deleted `agrees` call is then a red test, not a silent loss of coverage).
+static RAN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Whether `agrees` has run the atom called `name` in this test binary.
+pub(crate) fn ran(name: &str) -> bool {
+    RAN.lock().unwrap().iter().any(|n| n == name)
+}
+
 /// Run and compare with the reference D placed through the same table.
 pub(crate) fn agrees(atom: &MmaAtom, table: Table) {
+    RAN.lock().unwrap().push(atom.name().to_owned());
     let l = logical(atom);
     let (m, ..) = atom.mnk();
     let want = fragments(table, 2, m, atom.values(2), &reference(atom, &l, |x| x));
