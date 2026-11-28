@@ -546,96 +546,115 @@ impl<'s, 't> Walker<'s, 't> {
         let mut c = n.walk();
         let decls: Vec<_> = n.children_by_field_name("declarator", &mut c).collect();
         for d in decls {
-            // `T name[N] = { ... }`: a private array with an initialiser list
-            let (d, init) = if d.kind() == "init_declarator" {
-                let inner = d.child_by_field_name("declarator").unwrap_or(d);
-                (inner, d.child_by_field_name("value"))
-            } else {
-                (d, None)
-            };
-            let (Some(id), Some(size)) = (
-                d.child_by_field_name("declarator"),
-                d.child_by_field_name("size"),
-            ) else {
-                return self.not_yet(
-                    d,
-                    format!("{what} declarator that is not a sized array `T name[N]`"),
-                );
-            };
-            // `T name[M][K]`: nested array declarators, the innermost written first; the allocation is the row-major product
-            let (mut id, mut sizes) = (id, vec![size]);
-            while id.kind() == "array_declarator" {
-                let (Some(inner), Some(s)) = (
-                    id.child_by_field_name("declarator"),
-                    id.child_by_field_name("size"),
-                ) else {
-                    return self.not_yet(id, format!("{what} declarator of an unexpected shape"));
-                };
-                sizes.push(s);
-                id = inner;
-            }
-            sizes.reverse();
-            let mut dims = Vec::new();
-            for s in &sizes {
-                let Some(extent) = self.fold_size(*s)? else {
-                    return self.not_yet(
-                        *s,
-                        format!("{what} whose size is not a positive integer literal"),
-                    );
-                };
-                dims.push(extent);
-            }
-            let Some(count) = dims
-                .iter()
-                .try_fold(u32::from(lanes), |a, &d| a.checked_mul(d))
-            else {
-                return self.not_yet(d, format!("{what} with more than u32::MAX elements"));
-            };
-            if lanes > 1 && (dims.len() > 1 || init.is_some()) {
-                return self.not_yet(
-                    d,
-                    format!("{what} of vectors with more than one dimension or an initialiser"),
-                );
-            }
-            if dims.len() > 1 && init.is_some() {
-                return self.not_yet(
-                    d,
-                    format!("{what} with more than one dimension and an initialiser"),
-                );
-            }
-            if id.kind() != "identifier" {
-                return self.not_yet(id, format!("{what} declarator that is not a plain name"));
-            }
-            let name = text(id, self.src).to_string();
-            self.allocs.push(AllocDecl::new(
-                name.clone(),
-                space,
-                ty,
-                Extent::Static(count),
-            ));
-            let index = u32::try_from(self.allocs.len() - 1).unwrap_or(u32::MAX);
-            if dims.len() > 1 {
-                self.alloc_dims.insert(index, dims);
-            }
-            let sym = if lanes > 1 {
-                // an array of vectors is a pointer whose pointee is the vector: `d[i]` is then a vector read or write
-                Sym::Pointer(PtrVal {
-                    base: PBase::Alloc(index),
-                    pointee: ty,
-                    lanes,
-                    off: ScalarExpr::ConstInt(0, E::I64),
-                })
-            } else {
-                Sym::Alloc(index, ty)
-            };
-            self.scopes
-                .last_mut()
-                .expect("a scope is open")
-                .insert(name, sym);
-            if let Some(list) = init {
-                self.array_initialiser((index, ty, count), list, space, out)?;
-            }
+            self.array_declarator(d, (ty, space, lanes), what, out)?;
         }
         Ok(())
+    }
+
+    /// One declarator of an array declaration; `kind` is its element type, memory space and vector lanes.
+    fn array_declarator(
+        &mut self,
+        d: Node<'_>,
+        kind: (E, MemorySpace, u8),
+        what: &str,
+        out: &mut Vec<Stmt>,
+    ) -> R<()> {
+        let (ty, space, lanes) = kind;
+        // `T name[N] = { ... }`: a private array with an initialiser list
+        let (d, init) = if d.kind() == "init_declarator" {
+            let inner = d.child_by_field_name("declarator").unwrap_or(d);
+            (inner, d.child_by_field_name("value"))
+        } else {
+            (d, None)
+        };
+        let (id, dims) = self.array_shape(d, what)?;
+        let Some(count) = dims
+            .iter()
+            .try_fold(u32::from(lanes), |a, &d| a.checked_mul(d))
+        else {
+            return self.not_yet(d, format!("{what} with more than u32::MAX elements"));
+        };
+        if lanes > 1 && (dims.len() > 1 || init.is_some()) {
+            return self.not_yet(
+                d,
+                format!("{what} of vectors with more than one dimension or an initialiser"),
+            );
+        }
+        if dims.len() > 1 && init.is_some() {
+            return self.not_yet(
+                d,
+                format!("{what} with more than one dimension and an initialiser"),
+            );
+        }
+        if id.kind() != "identifier" {
+            return self.not_yet(id, format!("{what} declarator that is not a plain name"));
+        }
+        let name = text(id, self.src).to_string();
+        self.allocs.push(AllocDecl::new(
+            name.clone(),
+            space,
+            ty,
+            Extent::Static(count),
+        ));
+        let index = u32::try_from(self.allocs.len() - 1).unwrap_or(u32::MAX);
+        if dims.len() > 1 {
+            self.alloc_dims.insert(index, dims);
+        }
+        let sym = if lanes > 1 {
+            // an array of vectors is a pointer whose pointee is the vector: `d[i]` is then a vector read or write
+            Sym::Pointer(PtrVal {
+                base: PBase::Alloc(index),
+                pointee: ty,
+                lanes,
+                off: ScalarExpr::ConstInt(0, E::I64),
+            })
+        } else {
+            Sym::Alloc(index, ty)
+        };
+        self.scopes
+            .last_mut()
+            .expect("a scope is open")
+            .insert(name, sym);
+        if let Some(list) = init {
+            self.array_initialiser((index, ty, count), list, space, out)?;
+        }
+        Ok(())
+    }
+
+    /// The name node and row-major extents of an array declarator `T name[M][K]`.
+    fn array_shape<'n>(&mut self, d: Node<'n>, what: &str) -> R<(Node<'n>, Vec<u32>)> {
+        let (Some(id), Some(size)) = (
+            d.child_by_field_name("declarator"),
+            d.child_by_field_name("size"),
+        ) else {
+            return self.not_yet(
+                d,
+                format!("{what} declarator that is not a sized array `T name[N]`"),
+            );
+        };
+        // `T name[M][K]`: nested array declarators, the innermost written first; the allocation is the row-major product
+        let (mut id, mut sizes) = (id, vec![size]);
+        while id.kind() == "array_declarator" {
+            let (Some(inner), Some(s)) = (
+                id.child_by_field_name("declarator"),
+                id.child_by_field_name("size"),
+            ) else {
+                return self.not_yet(id, format!("{what} declarator of an unexpected shape"));
+            };
+            sizes.push(s);
+            id = inner;
+        }
+        sizes.reverse();
+        let mut dims = Vec::new();
+        for s in &sizes {
+            let Some(extent) = self.fold_size(*s)? else {
+                return self.not_yet(
+                    *s,
+                    format!("{what} whose size is not a positive integer literal"),
+                );
+            };
+            dims.push(extent);
+        }
+        Ok((id, dims))
     }
 }
