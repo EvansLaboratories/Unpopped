@@ -136,7 +136,7 @@ fn encode(ty: ElementKind, x: f64) -> Vec<u8> {
     }
 }
 
-fn decode(ty: ElementKind, b: &[u8]) -> f64 {
+pub(crate) fn decode(ty: ElementKind, b: &[u8]) -> f64 {
     match ty {
         I32 => f64::from(i32::from_le_bytes(b.try_into().unwrap())),
         F32 => f64::from(f32::from_le_bytes(b.try_into().unwrap())),
@@ -145,7 +145,7 @@ fn decode(ty: ElementKind, b: &[u8]) -> f64 {
     }
 }
 
-fn buffer(ty: ElementKind, xs: &[f64]) -> TypedBuffer {
+pub(crate) fn buffer(ty: ElementKind, xs: &[f64]) -> TypedBuffer {
     let bytes = xs.iter().flat_map(|&x| encode(ty, x)).collect();
     TypedBuffer::new(ty, vec![xs.len() as i64], vec![1], bytes)
 }
