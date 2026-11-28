@@ -113,7 +113,7 @@ run_queue_order() { # script: a holder, then an OLDER slow-polling waiter and a 
   tagged A 1; ( GATE_WAIT_SECS=6 bash "$S" > "$T/a.out" 2>&1 ) & AP=$!   # older ticket, polls every 6 s
   sleep 1
   tagged B 1; ( GATE_WAIT_SECS=1 bash "$S" > "$T/b.out" 2>&1 ) & BP=$!   # newer ticket, polls every second
-  wait $HP $AP $BP
+  wait "$HP" "$AP" "$BP"
 }
 echo "== queue: two waiters (the older takes the lock first, although the newer polls far more often)"
 run_queue_order "$HERE/gate-locked.sh"
@@ -123,6 +123,7 @@ check "the older waiter started first" "[ \"$sa\" -lt \"$sb\" ]"
 check "the newer waiter started after the older one ended" "[ \"$sb\" -ge \"$ea\" ]"
 check "the newer waiter was told its position" "grep -q 'waiting in the queue, position 2 of 2' '$T/b.out'"
 echo "== MUTATION 3: any waiter may take the lock (the head-of-line test removed); the same assertions must fail"
+# shellcheck disable=SC2016  # the pattern is a literal source line: its $ must not expand
 cp "$HERE/gate-locked.sh" "$T/gl-mut.sh"; sed -i 's/if \[ "\$first" != "\$TICKET" \]; then/if false; then/' "$T/gl-mut.sh"
 if cmp -s "$HERE/gate-locked.sh" "$T/gl-mut.sh"; then bad "mutation 3 applied"; else ok "mutation 3 applied"; fi
 cp "$T/gl-mut.sh" "$HERE/gl-mut.tmp.sh"
@@ -134,7 +135,7 @@ rm -rf "$L" "$T/queue"
 tagged H 4; ( GATE_WAIT_SECS=1 bash "$HERE/gate-locked.sh" > "$T/h.out" 2>&1 ) & HP=$!
 sleep 1
 for w in 1 2 3; do tagged W$w 1; ( GATE_WAIT_SECS=$((4 - w)) bash "$HERE/gate-locked.sh" > "$T/w$w.out" 2>&1 ) & eval "WP$w=$!"; sleep 0.7; done
-wait $HP $WP1 $WP2 $WP3
+wait "$HP" "$WP1" "$WP2" "$WP3"
 s1=$(startof "$T/w1.out"); s2=$(startof "$T/w2.out"); s3=$(startof "$T/w3.out")
 check "three waiters ran in the order they arrived" "[ -n \"$s1\" ] && [ \"$s1\" -lt \"$s2\" ] && [ \"$s2\" -lt \"$s3\" ]"
 check "the queue is empty afterwards" "[ -z \"\$(ls -A '$T/queue' 2>/dev/null)\" ] && [ ! -d '$L' ]"

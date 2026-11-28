@@ -29,9 +29,9 @@ live_tickets() {
     pid=$(echo "$t" | cut -d- -f2)
     hb=$(cat "$QUEUE/$t/hb" 2>/dev/null || echo 0)
     if ! kill -0 "$pid" 2>/dev/null; then
-      echo "gate-locked: removed a dead ticket $t (pid $pid is dead)" >&2; rm -rf "$QUEUE/$t"
+      echo "gate-locked: removed a dead ticket $t (pid $pid is dead)" >&2; rm -rf "${QUEUE:?}/$t"
     elif [ $((now - hb)) -gt "$TTL" ]; then
-      echo "gate-locked: removed a stale ticket $t (no heartbeat for more than ${TTL}s)" >&2; rm -rf "$QUEUE/$t"
+      echo "gate-locked: removed a stale ticket $t (no heartbeat for more than ${TTL}s)" >&2; rm -rf "${QUEUE:?}/$t"
     else
       echo "$t"
     fi
@@ -59,8 +59,8 @@ LABEL=$(basename "$WT" | tr -c 'A-Za-z0-9._\n' '_' | cut -c1-40)
 TICKET="$(date +%s%3N)-$$-$LABEL"
 
 release() {
-  rm -rf "$QUEUE/$TICKET"
-  if [ "$(sed -n 1p "$LOCK/owner" 2>/dev/null)" = "$$" ]; then rm -rf "$LOCK"; fi
+  rm -rf "${QUEUE:?}/${TICKET:?}"
+  if [ "$(sed -n 1p "$LOCK/owner" 2>/dev/null)" = "$$" ]; then rm -rf "${LOCK:?}"; fi
 }
 trap release EXIT
 trap 'exit 130' INT
@@ -88,16 +88,16 @@ while :; do
   opid=$(sed -n 1p "$LOCK/owner" 2>/dev/null); ostart=$(sed -n 3p "$LOCK/owner" 2>/dev/null); now=$(date +%s)
   if [ -z "$opid" ]; then
     # the owner file is written a moment after mkdir: give a creator a few seconds, then call it stale
-    sleep 3; [ -z "$(sed -n 1p "$LOCK/owner" 2>/dev/null)" ] && { echo "gate-locked: stale lock (no owner), taking over"; rm -rf "$LOCK"; }
+    sleep 3; [ -z "$(sed -n 1p "$LOCK/owner" 2>/dev/null)" ] && { echo "gate-locked: stale lock (no owner), taking over"; rm -rf "${LOCK:?}"; }
     continue
   fi
-  if ! kill -0 "$opid" 2>/dev/null; then echo "gate-locked: stale lock (owner pid $opid is dead), taking over"; rm -rf "$LOCK"; continue; fi
-  if [ -n "$ostart" ] && [ $((now - ostart)) -gt "$STALE" ]; then echo "gate-locked: stale lock (owner $opid older than ${STALE}s), taking over"; rm -rf "$LOCK"; continue; fi
+  if ! kill -0 "$opid" 2>/dev/null; then echo "gate-locked: stale lock (owner pid $opid is dead), taking over"; rm -rf "${LOCK:?}"; continue; fi
+  if [ -n "$ostart" ] && [ $((now - ostart)) -gt "$STALE" ]; then echo "gate-locked: stale lock (owner $opid older than ${STALE}s), taking over"; rm -rf "${LOCK:?}"; continue; fi
   echo "gate-locked: waiting for the gate lock held by pid $opid ($(sed -n 2p "$LOCK/owner" 2>/dev/null)), next in the queue, checking again in ${WAIT}s"
   sleep "$WAIT"
 done
 printf '%s\n%s\n%s\n' "$$" "$PWD" "$(date +%s)" > "$LOCK/owner"
-rm -rf "$QUEUE/$TICKET"
+rm -rf "${QUEUE:?}/${TICKET:?}"
 echo "gate-locked: lock taken by pid $$ at $(date +%H:%M:%S)"
 bash -c "$CMD" _ "$@"
 rc=$?
