@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.1` — docs, the 0.63.0 migration text: wide integers accepted since 0.61.3, the Numerics literal (U37), the union-batch-1 note reconciled
+
+`docs/emitter-migration-b1.md` gains a 0.62 note (`check_kernel` accepts `I128`, `U128`, `I256`, `U256` since 0.61.3, so an emitter that does not lower them must refuse by name before emitting, and the carry-flag emit hold stands) and a U37 section (how a `Numerics` struct literal moves: end it with `..Numerics::default()`; find them with `git grep -n 'Numerics {'`; what `ApproxSpelling` means for a CUDA emitter). `docs/design-union-batch1-consumer.md` states the real set `check_kernel` declines (`F128`, `F8E3M4`, `F8UE4M3`). No code change.
+
+---
+
 ## `0.63.0` — **BREAKING**: U37, `Numerics::spelling`, the exact-spelling hint on an approximate node
 
 `Numerics` gains `spelling: Option<ApproxSpelling>` (serde default, omitted when `None`), so a struct literal `Numerics { .. }` without `..Numerics::default()` stops compiling (`Numerics` is not `non_exhaustive`; `Numerics::default()` and the `Expr::rounded/ftz/approx` builders are unchanged). `ApproxSpelling` (`non_exhaustive`: `Expf`, `Exp10f`, `Log2f`, `Logf`, `Log10f`, `Fdividef`, each with `token()` and the `op()` it annotates) names the CUDA fast-math intrinsic a lifted node came from: the C-family walker lifts `__expf(x)` to `ex2.approx(x * log2 e)` and so lost the token, which a CUDA re-emit could not reproduce. The walker now sets it; the `asm` lift (`ex2.approx` written out) and every hand-built node carry `None`.
