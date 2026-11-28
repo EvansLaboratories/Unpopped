@@ -165,76 +165,76 @@ fn a_value_past_the_largest_finite_clamps_in_the_container() {
     }
 }
 
+/// `out[tid] = convert(in[tid])` over 64 threads: a buffer of `src` elements read into a local of type `src`, `convert`ed
+/// (a `Cast`, or nothing for a verbatim copy) and stored into a buffer of `dst` elements.
+fn copy_kernel(
+    src: ElementKind,
+    dst: ElementKind,
+    convert: impl Fn(ScalarExpr) -> ScalarExpr,
+) -> KernelFn {
+    KernelFn::new(
+        "f6_copy",
+        F32,
+        vec![
+            Param::buffer("in", src, BufferRole::Read, Some(1)),
+            Param::buffer("out", dst, BufferRole::ReadWrite, Some(1)),
+        ],
+        vec![LocalDecl::scalar(src)],
+        Block(vec![
+            Stmt::Load {
+                local: 0,
+                place: at(0),
+            },
+            Stmt::Store {
+                place: at(1),
+                value: convert(ScalarExpr::Local(0)),
+            },
+        ]),
+    )
+    .with_launch(LaunchShape::new([64, 1, 1], [1, 1, 1]))
+}
+
+/// The `out` buffer after running `k` over 64 elements of `input` (an `in` buffer of `src`) into an `out` buffer of `dst`
+/// that starts as `fill`.
+fn run_copy(k: &KernelFn, input: TypedBuffer, out: TypedBuffer) -> TypedBuffer {
+    let args = run(k, vec![KernelArg::Buffer(input), KernelArg::Buffer(out)]);
+    let KernelArg::Buffer(out) = &args[1] else {
+        unreachable!("out is a buffer")
+    };
+    out.clone()
+}
+
+fn bytes_of(ty: ElementKind, bytes: Vec<u8>) -> TypedBuffer {
+    TypedBuffer::new(ty, vec![64], vec![1], bytes)
+}
+
 #[test]
-fn a_buffer_of_6_bit_elements_is_one_byte_each_with_the_padding_ignored_on_read_and_zero_on_write()
-{
+fn a_6_bit_buffer_element_with_padding_set_reads_as_its_low_six_bits() {
     for ty in [F6E2M3, F6E3M2] {
         let (e, m) = fmt(ty);
-        // read: every code with the two padding bits SET reads as the code without them
-        let padded: Vec<u8> = (0..64u8).map(|c| c | 0xC0).collect();
-        let k = KernelFn::new(
-            "f6_read",
-            F32,
-            vec![
-                Param::buffer("in", ty, BufferRole::Read, Some(1)),
-                Param::buffer("out", F32, BufferRole::ReadWrite, Some(1)),
-            ],
-            vec![LocalDecl::scalar(ty)],
-            Block(vec![
-                Stmt::Load {
-                    local: 0,
-                    place: at(0),
-                },
-                Stmt::Store {
-                    place: at(1),
-                    value: cast(ScalarExpr::Local(0), F32),
-                },
-            ]),
-        )
-        .with_launch(LaunchShape::new([64, 1, 1], [1, 1, 1]));
-        let args = run(
+        let k = copy_kernel(ty, F32, |x| cast(x, F32));
+        let padded = (0..64u8).map(|c| c | 0xC0).collect();
+        let out = run_copy(
             &k,
-            vec![
-                KernelArg::Buffer(TypedBuffer::new(ty, vec![64], vec![1], padded)),
-                KernelArg::Buffer(TypedBuffer::from_f32(&[64], &[0.0; 64])),
-            ],
+            bytes_of(ty, padded),
+            TypedBuffer::from_f32(&[64], &[0.0; 64]),
         );
-        let KernelArg::Buffer(out) = &args[1] else {
-            unreachable!()
-        };
         let want: Vec<f32> = (0..64).map(|c| mx(c, e, m) as f32).collect();
-        assert_eq!(f32s(out), want, "{ty:?} read with padding set");
-        // write: a store into a buffer of the type writes zero in bits 6 and 7
-        let w = KernelFn::new(
-            "f6_write",
-            F32,
-            vec![
-                Param::buffer("in", F32, BufferRole::Read, Some(1)),
-                Param::buffer("out", ty, BufferRole::ReadWrite, Some(1)),
-            ],
-            vec![LocalDecl::scalar(F32)],
-            Block(vec![
-                Stmt::Load {
-                    local: 0,
-                    place: at(0),
-                },
-                Stmt::Store {
-                    place: at(1),
-                    value: cast(ScalarExpr::Local(0), ty),
-                },
-            ]),
-        )
-        .with_launch(LaunchShape::new([64, 1, 1], [1, 1, 1]));
-        let args = run(
-            &w,
-            vec![
-                KernelArg::Buffer(TypedBuffer::from_f32(&[64], &want)),
-                KernelArg::Buffer(TypedBuffer::new(ty, vec![64], vec![1], vec![0xFF; 64])),
-            ],
+        assert_eq!(f32s(&out), want, "{ty:?} read with padding set");
+    }
+}
+
+#[test]
+fn a_store_into_a_6_bit_buffer_is_one_byte_with_the_padding_bits_zero() {
+    for ty in [F6E2M3, F6E3M2] {
+        let (e, m) = fmt(ty);
+        let k = copy_kernel(F32, ty, |x| cast(x, ty));
+        let values: Vec<f32> = (0..64).map(|c| mx(c, e, m) as f32).collect();
+        let out = run_copy(
+            &k,
+            TypedBuffer::from_f32(&[64], &values),
+            bytes_of(ty, vec![0xFF; 64]),
         );
-        let KernelArg::Buffer(out) = &args[1] else {
-            unreachable!()
-        };
         assert_eq!(out.bytes.len(), 64, "{ty:?}: one byte per element");
         assert!(
             out.bytes.iter().all(|b| b >> 6 == 0),
@@ -242,7 +242,7 @@ fn a_buffer_of_6_bit_elements_is_one_byte_each_with_the_padding_ignored_on_read_
         );
         assert_eq!(
             out.bytes,
-            (0..64u8).map(|c| c).collect::<Vec<_>>(),
+            (0..64u8).collect::<Vec<_>>(),
             "{ty:?}: the byte is the code"
         );
     }
@@ -253,37 +253,9 @@ fn a_same_type_copy_of_garbage_padding_stores_the_canonical_element() {
     // a Load of a byte with bits 6-7 set into a local, then a Store of that local verbatim (no Cast): the local holds the
     // canonical element, so "ignore on read, zero on write" holds for copies too
     for ty in [F6E2M3, F6E3M2] {
-        let k = KernelFn::new(
-            "f6_copy",
-            F32,
-            vec![
-                Param::buffer("in", ty, BufferRole::Read, Some(1)),
-                Param::buffer("out", ty, BufferRole::ReadWrite, Some(1)),
-            ],
-            vec![LocalDecl::scalar(ty)],
-            Block(vec![
-                Stmt::Load {
-                    local: 0,
-                    place: at(0),
-                },
-                Stmt::Store {
-                    place: at(1),
-                    value: ScalarExpr::Local(0),
-                },
-            ]),
-        )
-        .with_launch(LaunchShape::new([64, 1, 1], [1, 1, 1]));
-        let dirty: Vec<u8> = (0..64u8).map(|c| c | 0xC0).collect();
-        let args = run(
-            &k,
-            vec![
-                KernelArg::Buffer(TypedBuffer::new(ty, vec![64], vec![1], dirty)),
-                KernelArg::Buffer(TypedBuffer::new(ty, vec![64], vec![1], vec![0xFF; 64])),
-            ],
-        );
-        let KernelArg::Buffer(out) = &args[1] else {
-            unreachable!()
-        };
+        let k = copy_kernel(ty, ty, |x| x);
+        let dirty = (0..64u8).map(|c| c | 0xC0).collect();
+        let out = run_copy(&k, bytes_of(ty, dirty), bytes_of(ty, vec![0xFF; 64]));
         assert_eq!(out.bytes, (0..64u8).collect::<Vec<_>>(), "{ty:?}");
     }
 }
