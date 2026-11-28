@@ -1,3 +1,3 @@
 kind: additive: tests and docs: WMMA and Apple 8x8 shapes as T2 tile products, docs/mma-atom-coverage.md (U7 theme 3)
-
+---
 `tests/kernel_tile_mma_shapes.rs` runs the WMMA `m16n16k16`, `m8n32k16`, `m32n8k16` (f16, bf16 into f32), the WMMA f64 `m8n8k4` and the Apple 8x8x8 shapes (half, bfloat, float into float) as `TileLoad`/`TileMma`/`TileStore` over `MemorySpace::Tile` against a triple loop. PTX ISA 9.5 section 9.7.16.1 Table 44 p. 510 and 9.7.16.4.1 (layout unspecified); MSL 4.1 section 2.4 p. 38 and 6.8. `docs/mma-atom-coverage.md` records every dense `mma` shape as done, TODO, blocked or held. No source change.
