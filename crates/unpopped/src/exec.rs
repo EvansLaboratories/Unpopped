@@ -51,6 +51,9 @@ pub enum ExecId {
     SubgroupId,
     /// Lanes per subgroup.
     SubgroupSize,
+    /// Subgroups in the block: the block's threads divided by the subgroup size, rounded up (WGSL `num_subgroups`, MSL
+    /// `simdgroups_per_threadgroup`).
+    SubgroupCount,
     /// Index of the device the thread runs on, `0..devices` (`0` in a launch of one device).
     DeviceRank,
     /// Devices of the launch (`LaunchShape::devices`; `1` for a launch of one device).
@@ -81,6 +84,7 @@ impl ExecId {
             Self::LaneId
             | Self::SubgroupId
             | Self::SubgroupSize
+            | Self::SubgroupCount
             | Self::DeviceRank
             | Self::DeviceCount
             | Self::ClusterCtaRank
@@ -93,7 +97,11 @@ impl ExecId {
     pub const fn needs_subgroup(self) -> bool {
         matches!(
             self,
-            Self::LaneId | Self::SubgroupId | Self::SubgroupSize | Self::WarpgroupId
+            Self::LaneId
+                | Self::SubgroupId
+                | Self::SubgroupSize
+                | Self::SubgroupCount
+                | Self::WarpgroupId
         )
     }
 
@@ -108,6 +116,7 @@ impl ExecId {
             Self::LaneId => "LaneId",
             Self::SubgroupId => "SubgroupId",
             Self::SubgroupSize => "SubgroupSize",
+            Self::SubgroupCount => "SubgroupCount",
             Self::DeviceRank => "DeviceRank",
             Self::DeviceCount => "DeviceCount",
             Self::ClusterCtaRank => "ClusterCtaRank",

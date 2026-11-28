@@ -296,6 +296,8 @@ fn every_exec_id_reads_its_value() {
         (ExecId::LaneId, Box::new(move |_, t| t as u32 % sg)),
         (ExecId::SubgroupId, Box::new(move |_, t| t as u32 / sg)),
         (ExecId::SubgroupSize, Box::new(move |_, _| sg)),
+        // 24 threads in subgroups of 2
+        (ExecId::SubgroupCount, Box::new(|_, _| 12)),
     ];
     for (id, want) in cases {
         let k = id_kernel(id, shape);
@@ -439,4 +441,27 @@ fn a_constant_read_is_declined_by_name() {
         run_launch(&constant, &mut args(1)),
         Err(KernelTrap::Unsupported(m)) if m.contains("Constant")
     ));
+}
+
+#[test]
+fn the_subgroup_count_rounds_up_for_a_block_that_is_not_a_multiple() {
+    // 5 threads in subgroups of 2: three subgroups (the last one partial); the 6-thread control gives three as well
+    for (threads, want) in [(5u32, 3.0f32), (6, 3.0), (4, 2.0)] {
+        let shape = LaunchShape::new([threads, 1, 1], [1, 1, 1]).with_subgroup(2, 2);
+        let k = id_kernel(ExecId::SubgroupCount, shape);
+        let mut a = vec![
+            KernelArg::Buffer(TypedBuffer::from_f32(&[1], &[0.0])),
+            KernelArg::Buffer(TypedBuffer::from_f32(
+                &[i64::from(threads)],
+                &vec![0.0; threads as usize],
+            )),
+            KernelArg::Int(0),
+        ];
+        run_launch(&k, &mut a).expect("runs");
+        assert!(
+            out_f32(&a).iter().all(|v| *v == want),
+            "{threads}: {:?}",
+            out_f32(&a)
+        );
+    }
 }

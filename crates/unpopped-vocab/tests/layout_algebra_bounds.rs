@@ -108,7 +108,12 @@ fn check_local_tile(f: &Tile) -> Result<Census, String> {
                 let rest = (e + t - 1) / t;
                 for j in 0..rest {
                     let Ok((l, off)) = f(&a, std::slice::from_ref(&tile), &[j]) else {
-                        c.refused += 1;
+                        // a residue tiling is refused by name (NotDivisible): counted as a residue case
+                        if e % t == 0 {
+                            c.refused += 1;
+                        } else {
+                            c.residue += 1;
+                        }
                         continue;
                     };
                     need(l.size() == t, || {
@@ -170,7 +175,8 @@ fn tile_off_by_one(a: &Layout, t: &[Layout], c: &[i64]) -> Result<(Layout, i64),
 #[test]
 fn local_tile_reads_every_real_element_in_bounds_and_only_the_padding_leaves() {
     let c = check_local_tile(&|a, t, c| a.local_tile(t, c)).unwrap();
-    assert!(c.exact + c.residue > 0, "{c:?}");
+    // since the NotDivisible fix a residue tiling is refused, so nothing addresses past the extent
+    assert!(c.exact > 0 && c.residue > 0 && c.over_reach == 0, "{c:?}");
 }
 
 #[test]

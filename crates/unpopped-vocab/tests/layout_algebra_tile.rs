@@ -128,3 +128,39 @@ fn retile_re_expresses_the_same_elements_over_another_shape() {
         Err(LayoutError::ProfileMismatch)
     );
 }
+
+#[test]
+fn a_tile_that_does_not_divide_the_shape_is_refused_not_rounded_up() {
+    // 6 elements tiled by 4: rounding up would make a second tile reach past the layout (offset 49 of 36 in a (6,6) frame)
+    let a = lay("(6,6):(1,6)");
+    let t = [lay("4:1"), lay("2:1")];
+    for coord in [[0, 0], [1, 0], [1, 1]] {
+        assert_eq!(
+            a.local_tile(&t, &coord),
+            Err(LayoutError::NotDivisible),
+            "{coord:?}"
+        );
+        assert_eq!(
+            a.inner_partition(&t, &coord),
+            Err(LayoutError::NotDivisible)
+        );
+        assert_eq!(
+            a.outer_partition(&t, &coord),
+            Err(LayoutError::NotDivisible)
+        );
+    }
+    // a residue of one is a residue too (5 by 4)
+    assert_eq!(
+        lay("(5,6):(1,5)").local_tile(&t, &[0, 0]),
+        Err(LayoutError::NotDivisible)
+    );
+    // a thread grid that does not divide the extent is refused too (4 threads over 6 elements)
+    assert_eq!(
+        a.local_partition(&[lay("4:1"), lay("1:1")], 0),
+        Err(LayoutError::NotDivisible)
+    );
+    // controls: dividing tiles still work, including one exactly the size of the shape (a single tile)
+    assert!(a.local_tile(&[lay("3:1"), lay("2:1")], &[1, 2]).is_ok());
+    assert!(a.local_tile(&[lay("6:1"), lay("6:1")], &[0, 0]).is_ok());
+    assert!(a.local_partition(&[lay("2:1"), lay("3:1")], 5).is_ok());
+}
