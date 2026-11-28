@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.4` — layout algebra bounds tests (tests only)
+
+New `crates/unpopped-vocab/tests/layout_algebra_bounds.rs`: exhaustive over extents 1..=24, tiles 1..=8 and dividend strides, an accepted `zipped_divide` or `local_tile` reads every coordinate below the dividend's extent at the right offset and in bounds, and the coordinates that leave the extent are exactly the padding of a tile that does not divide it (`i + t*j >= e`), which only an inexact tiling has. Each checker runs against the real operation and a broken one (a tile one short, a tile number one late) and must fail on the broken one. One test pins a finding, not a fix (the unpopped lane decides whether it is a defect): a 4-tile over a 6-element extent is accepted and its last coordinate addresses offset 7 of 6, so a consumer must predicate; it flips deliberately if the vocab ever refuses or clamps a residue tiling. No source change.
+
+---
+
 ## `0.63.3` — S2, `KernelFn::schedule`, the carrier for a `ScheduleSpec`, and cpu-c's decline by name
 
 `KernelFn` gains `schedule: Option<Box<ScheduleSpec>>` (serde default, omitted when `None`) and `with_schedule(spec)`. `KernelFn` is `non_exhaustive`, so this is additive: a document without the field loads with `None`, and `KernelError::Schedule(ScheduleError)` (`non_exhaustive`) is the new case `check_kernel` gives when `check_schedule` refuses the spec. A schedule says how a kernel is run, never what it computes, so the oracle ignores it. The rule from `docs/design-tile-and-schedule-plan.md`: an emitter honours every field a spec sets or declines it by name, never silently ignoring one. `unpopped-cpu-c` honours none: a kernel (or a module function) that sets a field is declined with an error that names it (`tile`, `warp tile`, `instruction tile`, `stage count`, `shared-memory carveout`, `work division`, `epilogue schedule`, `cluster shape`); an empty `ScheduleSpec::default()` lowers.
