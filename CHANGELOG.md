@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.64.6` — test-only: an exhaustive sweep of the dyn_layout launch-time bind against a brute-force predicate
+
+`kernel_dyn_layout_sweep`: over every (m, n, ld) in 0..=13 (2744 argument sets) the oracle accepts exactly the sets a hand-written double-loop predicate accepts (valid shape, size == extent, offsets distinct, cosize inside the extent), runs the 19 accepted ones to the identity value and traps the rest as `KernelTrap::DynLayout`. Three wrong predicates (no injectivity, no extent bound, no size rule) each disagree with the oracle somewhere; a column-major bind is swept the same way. No src edit.
+
+---
+
 ## `0.64.5` — test-only: the CuTe 3/66 dynamic-mode pin flipped to DynLayout (after #536)
 
 `kernel_c_recipes_tiled`: the "dynamic mode declined by name" test became `dyn_layout_binds_runtime_modes_to_a_static_layout`: `(m,n):(lda,1)` parses as a `DynLayout`, binds to `(5,6):(8,1)` and to a different layout at another launch, an unbound parameter is refused, and `Layout` itself stays static. `cargo test -p unpopped --test kernel_c_recipes_tiled` 9 passed; clippy clean.

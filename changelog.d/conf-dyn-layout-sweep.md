@@ -1,3 +1,0 @@
-kind: test-only: an exhaustive sweep of the dyn_layout launch-time bind against a brute-force predicate
----
-`kernel_dyn_layout_sweep`: over every (m, n, ld) in 0..=13 (2744 argument sets) the oracle accepts exactly the sets a hand-written double-loop predicate accepts (valid shape, size == extent, offsets distinct, cosize inside the extent), runs the 19 accepted ones to the identity value and traps the rest as `KernelTrap::DynLayout`. Three wrong predicates (no injectivity, no extent bound, no size rule) each disagree with the oracle somewhere; a column-major bind is swept the same way. No src edit.
