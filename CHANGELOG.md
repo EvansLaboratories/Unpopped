@@ -15,6 +15,12 @@ behaviour change, and a version check cannot see a tree that never bumped.
 
 ---
 
+## `0.63.28` — test: WMMA (f16, bf16, f64) and Apple simdgroup 8x8x8 shapes run as T2 tile conformance kernels (additive)
+
+`tests/kernel_tile_shapes.rs` runs WMMA m16n16k16, m8n32k16, m32n8k16 (f16, bf16 over f32) and m8n8k4 (f64) and Apple 8x8x8 (half, bfloat, float) through `TileLoad`/`TileMma`/`TileStore` on the oracle against a hand-written product, with A, B, C inside padded buffers (stride and origin checked, D's border sentinel must survive) and two value mutants per shape (C dropped; A at the wrong origin) that must disagree. `docs/mma-atom-coverage.md` records what the tile rules do not admit (f16 accumulator, tf32, integer and b1 WMMA) as ROADMAP candidates. `encode_float` into an F6 buffer now panics with a named reason instead of the generic unsupported-dtype text (unreachable today). Verified: `cargo test -p unpopped --test kernel_tile_shapes --test kernel_tile`, clippy clean.
+
+---
+
 ## `0.63.27` — tools, `tools/gate-locked.sh` is first come first served (a ticket queue), with `--status`
 
 The gate lock (`C:/cb/gate.lock`, an atomic `mkdir`) was won by whoever polled first after a release (every 30 s), so a waiter could starve for hours behind lanes that polled better (seven mma gates, leaves and E3 queued behind one lock, 2026-11-28). A caller now takes a ticket (`mkdir C:/cb/gate-queue/<epoch ms>-<pid>-<worktree>`) and only the lowest live ticket may try the lock; a ticket whose pid is dead or whose heartbeat is older than 3 h is removed by the next poller and logged; the ticket is dropped on taking the lock and on exit, interrupt and termination; an unusable queue directory means no queue (never blocked); `tools/gate-locked.sh --status` prints the holder and the numbered queue. The lock itself is unchanged, so a worktree whose copy of the script predates this change still races for the lock and can overtake a ticketed waiter: the fix reaches a lane when it has merged `main`. Verified by `tools/test-gate.sh` (the older of two waiters runs first although the newer polls far more often; three waiters in order; dead and heartbeat-stale tickets; a live older ticket holds the line; a killed waiter leaves no ticket; a dead holder; an unusable queue directory; `--status`), with a take-any-ticket mutant the same assertions catch. Tools and docs only: no code path of the crates.
